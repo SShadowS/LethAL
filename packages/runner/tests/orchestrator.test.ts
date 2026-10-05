@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -27,9 +27,16 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { hashPackage, hashTargetSource, testAppHashFor } from "../src/baseline-snapshot";
+// R205: namespace import so a test can fail one source read through `readTargetSource`'s seam.
+import * as baselineSnapshotModule from "../src/baseline-snapshot";
+import {
+  SourceSnapshotUnreadableError,
+  hashPackage,
+  hashTargetSource,
+  testAppHashFor,
+} from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
-import { afterLeaseAcquiredFor, withEnvTeardown } from "../src/cli";
+import { type RunCliConfig, afterLeaseAcquiredFor, runFromCli, withEnvTeardown } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { EnvToolClient, EnvToolError, EnvToolNotStartedError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
@@ -4844,6 +4851,190 @@ describe("runSession — Layer 5A deployment identity", () => {
     store.close();
   });
 
+  // R205 pin-and-warn: `runFromCli` reads the source once, before anything else does, and the
+  // session builds THAT snapshot. An edit landing after it (here inside selector-id validation,
+  // which runs between the snapshot and `runSession`) is never built, and the last-batch re-read
+  // warns naming every changed path. Real `runFromCli` and real `runSession`; the wrapper only adds
+  // an event sink and reads the store before `runFromCli` closes it.
+  async function runCliOn(dirs: { projectDir: string; testDir: string; instrumentedDir: string }) {
+    const root = join(dirs.projectDir, "..");
+    const configPath = join(root, "lethal.config.json");
+    writeFileSync(configPath, "{}");
+    const parsed: RunCliConfig = {
+      mode: "run",
+      projectDir: dirs.projectDir,
+      testDir: dirs.testDir,
+      backendKind: "al-runner",
+      dbPath: ":memory:",
+      configPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    };
+    const events: RunEvent[] = [];
+    let sourceSha: string | null | undefined;
+    return {
+      events,
+      sourceSha: () => sourceSha,
+      run: (edit: () => void) =>
+        runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => edit(),
+          buildBackend: async () => new PhaseBackend(),
+          runSession: async (cfg) => {
+            const report = await runSession({
+              ...cfg,
+              instrumentedDir: dirs.instrumentedDir,
+              emit: [...(cfg.emit ?? []), (e) => events.push(e)],
+            });
+            sourceSha = (
+              cfg.store.db.query("SELECT source_sha256 FROM runs LIMIT 1").get() as {
+                source_sha256: string | null;
+              }
+            ).source_sha256;
+            return report;
+          },
+        }),
+    };
+  }
+  const sourceWarnings = (events: readonly RunEvent[]) =>
+    events.flatMap((e) =>
+      e.type === "warning" && e.code === "source-changed-during-run" ? [e.message] : [],
+    );
+
+  test("R205: an edit after runFromCli's snapshot is not built, and the warning names every changed path", async () => {
+    const dirs = await makeProject();
+    const p = dirs.projectDir;
+    writeFileSync(join(p, "SandboxNoOp.Codeunit.al"), NO_MUTANTS_AL);
+    const pinnedAppJson = JSON.stringify({
+      ...JSON.parse(APP_JSON),
+      preprocessorSymbols: ["PINNED"],
+    });
+    writeFileSync(join(p, "app.json"), pinnedAppJson);
+    const cli = await runCliOn(dirs);
+    const report = await cli.run(() => {
+      writeFileSync(join(p, "Added.Codeunit.al"), NO_MUTANTS_AL.replace("79002", "79004"));
+      unlinkSync(join(p, "SandboxNoOp.Codeunit.al"));
+      writeFileSync(
+        join(p, "SandboxLogic.Codeunit.al"),
+        TARGET_AL.replace("    begin\n", "    begin\n        // EDITED-AFTER-SNAPSHOT\n"),
+      );
+      writeFileSync(
+        join(p, "app.json"),
+        JSON.stringify({
+          ...JSON.parse(pinnedAppJson),
+          name: "EDITED",
+          preprocessorSymbols: ["EDITED"],
+        }),
+      );
+    });
+    const built = (await readdir(dirs.instrumentedDir, { recursive: true }))
+      .map(String)
+      .filter((f) => f.endsWith("SandboxLogic.Codeunit.al"));
+    expect(built.length).toBeGreaterThan(0);
+    for (const f of built) {
+      const dir = join(dirs.instrumentedDir, f, "..");
+      expect(readFileSync(join(dirs.instrumentedDir, f), "utf8")).not.toContain(
+        "EDITED-AFTER-SNAPSHOT",
+      );
+      expect(readFileSync(join(dir, "SandboxNoOp.Codeunit.al"), "utf8")).toBe(NO_MUTANTS_AL);
+      expect((await readdir(dir)).includes("Added.Codeunit.al")).toBe(false);
+      expect(JSON.parse(readFileSync(join(dir, "app.json"), "utf8")).name).toBe(
+        "Sandbox Orchestrator Fixture",
+      );
+    }
+    expect(report.buildSymbols).toContain("PINNED");
+    expect(report.buildSymbols).not.toContain("EDITED");
+    const warned = sourceWarnings(cli.events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(
+      "(added: Added.Codeunit.al; removed: SandboxNoOp.Codeunit.al; changed: SandboxLogic.Codeunit.al, app.json;",
+    );
+    expect(cli.sourceSha()).toBeNull();
+  });
+
+  test("R205: an untouched tree through runFromCli does not warn and records the source hash", async () => {
+    const dirs = await makeProject();
+    const cli = await runCliOn(dirs);
+    await cli.run(() => {});
+    expect(sourceWarnings(cli.events)).toEqual([]);
+    expect(cli.sourceSha()).toBe(await hashTargetSource(dirs.projectDir, []));
+  });
+
+  /**
+   * R205: the `failOnCall`-th source snapshot read (1-based) fails to read `file` with EACCES,
+   * through `readTargetSource`'s read seam, ONCE; every other read is real. Deterministic on every
+   * platform and user (chmod denies nothing on Windows or to root).
+   */
+  function failSourceRead(file: string, failOnCall: number) {
+    const real = baselineSnapshotModule.readTargetSource;
+    let calls = 0;
+    return spyOn(baselineSnapshotModule, "readTargetSource").mockImplementation(async (dir) => {
+      calls += 1;
+      if (calls !== failOnCall) return real(dir);
+      return real(dir, async (p) => {
+        if (p === file) {
+          throw Object.assign(new Error(`EACCES: permission denied, open '${p}'`), {
+            code: "EACCES",
+          });
+        }
+        return readFileSync(p);
+      });
+    });
+  }
+
+  test("R205: an unreadable source file refuses the session by name before anything is built", async () => {
+    const dirs = await makeProject();
+    const file = join(dirs.projectDir, "SandboxLogic.Codeunit.al");
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    const spy = failSourceRead(file, 1);
+    try {
+      const err = await runSession({ backend, store, ...dirs, selectorIds }).catch((e) => e);
+      expect(err).toBeInstanceOf(SourceSnapshotUnreadableError);
+      expect(String(err)).toContain(file);
+      expect(String(err)).toContain("EACCES");
+      expect(backend.calls).toEqual([]);
+      // The readable control: the one-shot failure is spent, so the same project now runs.
+      const again = new PhaseBackend();
+      await runSession({ backend: again, store, ...dirs, selectorIds });
+      expect(again.returned).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+      store.close();
+    }
+  });
+
+  test("R205: a last-batch re-read that fails warns and withholds the hash, never aborts", async () => {
+    const dirs = await makeProject();
+    const file = join(dirs.projectDir, "SandboxLogic.Codeunit.al");
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    // Read 1 is the session's snapshot, read 2 the last batch's re-read.
+    const spy = failSourceRead(file, 2);
+    try {
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [(e) => events.push(e)],
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(backend.returned).toHaveLength(1);
+    const warned = sourceWarnings(events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("could not be read after the last batch was prepared");
+    const run = store.db.query("SELECT source_sha256 FROM runs LIMIT 1").get() as {
+      source_sha256: string | null;
+    };
+    expect(run.source_sha256).toBeNull();
+    store.close();
+  });
+
   test("an edit between generation and the last batch's preparation records NULL and warns", async () => {
     const dirs = await makeProject();
     // A second carrier file so maxGuardsPerBatch: 1 gives two batches; the edit lands while the
@@ -5074,6 +5265,25 @@ describe("runSession — deploy:none (al-runner) app_version", () => {
     // C02-02 Task 3: a deploy:"none" backend never publishes an artifact, so `artifacts` is `[]`,
     // not `undefined`: the field is always written.
     expect(report.artifacts).toEqual([]);
+    store.close();
+  });
+
+  test("R205: records the snapshot's app.json version, not a version-only edit made after it", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    const appJson = join(dirs.projectDir, "app.json");
+    await Bun.write(appJson, JSON.stringify({ ...manifest, version: "1.2.3.4" }));
+    const source = await baselineSnapshotModule.readTargetSource(dirs.projectDir);
+    await Bun.write(appJson, JSON.stringify({ ...manifest, version: "5.6.7.8" }));
+    const backend = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, source, selectorIds });
+    const row = store.db.query("SELECT app_version FROM runs LIMIT 1").get() as {
+      app_version: string;
+    };
+    expect(row.app_version).toBe("1.2.3.4");
     store.close();
   });
 

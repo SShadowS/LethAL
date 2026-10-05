@@ -107,17 +107,50 @@ export async function hashTargetSource(
   return hashSourceSnapshot(await readTargetSource(projectDir), preprocessorSymbols);
 }
 
+/** R205: the target's source could not be read into a snapshot. Names the path and the cause. */
+export class SourceSnapshotUnreadableError extends Error {
+  constructor(path: string, cause: unknown) {
+    super(
+      `the target's source could not be read at ${path} (${cause instanceof Error ? cause.message : String(cause)}), so LethAL cannot pin the source it measures`,
+    );
+    this.name = "SourceSnapshotUnreadableError";
+  }
+}
+
 /**
  * The target build's inputs read ONCE: every `targetAlFiles` path plus `app.json`, keyed by the
  * path as `targetAlFiles` spells it. `runSession` hashes this snapshot AND hands it to
  * `generateMutationSet` to parse, so the recorded hash is of the bytes generation consumed, not of
  * a separate read that an edit could land between.
+ *
+ * R205: a read failure throws `SourceSnapshotUnreadableError`, except a missing `app.json`, which
+ * leaves the key out (readers then treat it as absent, never as "read the disk"). `readFileFn` is
+ * the file read, a parameter so a test can fail one read deterministically on every platform.
  */
-export async function readTargetSource(projectDir: string): Promise<ReadonlyMap<string, Buffer>> {
+export async function readTargetSource(
+  projectDir: string,
+  readFileFn: (path: string) => Promise<Buffer> = (p) => readFile(p),
+): Promise<ReadonlyMap<string, Buffer>> {
+  const read = async <T>(path: string, f: () => Promise<T>) => {
+    try {
+      return await f();
+    } catch (err) {
+      throw new SourceSnapshotUnreadableError(path, err);
+    }
+  };
   const snapshot = new Map<string, Buffer>();
-  for (const rel of [...(await targetAlFiles(projectDir)), "app.json"]) {
-    snapshot.set(rel, await readFile(join(projectDir, rel)));
+  for (const rel of await read(projectDir, () => targetAlFiles(projectDir))) {
+    const path = join(projectDir, rel);
+    snapshot.set(rel, await read(path, () => readFileFn(path)));
   }
+  const appJson = join(projectDir, "app.json");
+  const manifest = await read(appJson, () =>
+    readFileFn(appJson).catch((err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") return undefined;
+      throw err;
+    }),
+  );
+  if (manifest !== undefined) snapshot.set("app.json", manifest);
   return snapshot;
 }
 

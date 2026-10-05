@@ -739,7 +739,8 @@ Stated so a consumer does not read an absence as a finding.
 
 ### Which mutants can fail to terminate (guidance)
 
-Six shapes have been found and three were fixed by giving the same question a form that cannot hang.
+Six shapes were listed. Three were fixed by giving the same question a form that cannot hang, and
+one turned out never to be produced (below).
 What remains is small and named, so a stranded run is diagnosable rather than mysterious.
 
 **Fixed, and listed so an older report reads correctly:**
@@ -750,6 +751,9 @@ What remains is small and named, so a stranded run is diagnosable rather than my
 - `empty-block` on a `while` loop's body. A `while` loop's body is what advances its condition, so
   emptying it freezes the loop forever. Ceded to `loop-skip` (`while false`), which runs the body
   zero times (R179).
+- `empty-block` on a `repeat` body was listed here as a remaining hazard. It never occurred:
+  `empty-block` has never claimed a `repeat` body on this grammar, so no such mutant exists (R244).
+  Whether to add one for cursor loops only is R467.
 - `flip-boolean-literal` at a loop's whole-condition literal. `until true` and `while false` flipped
   to loops whose condition never ends; both are refused (issue #7 and its follow-up). `until false`
   and `while true` are ceded to `loop-truncate` and `loop-skip`, which emit the same text.
@@ -761,9 +765,6 @@ What remains is small and named, so a stranded run is diagnosable rather than my
   idiom. **Seven such sites on one real 554-file app.** It is NOT refused, because the identical
   syntax on a decrementing counter terminates and is a good mutant, and telling them apart requires
   reasoning about values rather than syntax (R173).
-- `empty-block` on a `repeat` body whose condition its body advances. `repeat` always runs its body
-  once, so there is no "run it zero times" rewrite to cede to. A handful of sites on the same app,
-  and the count is an estimate rather than a measurement (R179).
 - `flip-boolean-literal` at a literal NESTED in a loop condition, under a unary `not`, or in the loop
   body guarding its only exit. None of these three shapes is refused; zero sites measured for the
   condition shapes, and the body-guard shape is not yet counted (R239).

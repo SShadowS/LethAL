@@ -30,9 +30,12 @@ import { readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-// Reached through the engine package, which owns this dependency; scripts/ has no direct one.
-import { Language, Parser } from "../packages/engine/node_modules/web-tree-sitter/tree-sitter.js";
+// `Language` and `Parser` come through the engine module, which owns the web-tree-sitter
+// dependency; scripts/ has no direct one. A deep import of its `tree-sitter.js` has no types and
+// kept this file out of `bun run typecheck` (R280).
 import {
+  Language,
+  Parser,
   initWasmParser as initParser,
   parseALWasm as parseAL,
   wrapWasmRoot as wrapRoot,

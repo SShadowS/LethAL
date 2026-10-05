@@ -46,6 +46,7 @@ import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { BackendStatus, ExecutionBackend } from "./backend";
+import { readTargetSource } from "./baseline-snapshot";
 import { bcFetch } from "./bc-fetch";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
@@ -233,11 +234,18 @@ export function validateSelectorIdsConfig(
  */
 async function readTargetAppManifestForIdCheck(
   projectDir: string,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<Record<string, unknown>> {
   const appJsonPath = join(projectDir, "app.json");
   let raw: string;
   try {
-    raw = await readFile(appJsonPath, "utf8");
+    // R205: from the session's snapshot when given, where a missing app.json is missing.
+    if (snapshot === undefined) raw = await readFile(appJsonPath, "utf8");
+    else {
+      const bytes = snapshot.get("app.json");
+      if (bytes === undefined) throw new Error("the source snapshot holds no app.json");
+      raw = bytes.toString("utf8");
+    }
   } catch (err) {
     throw new Error(
       `cannot read ${appJsonPath} to validate selector ids against the target app's idRanges: ${err instanceof Error ? err.message : String(err)}`,
@@ -272,13 +280,19 @@ const EMITTED_FILENAMES: ReadonlySet<string> = new Set([
  * `emitRegisterUpgrade`), and a BC object id is unique only within its own type, so a same-id
  * table/page is not a real collision.
  */
-async function scanProjectCodeunitIds(projectDir: string): Promise<Map<number, DeclaredObject>> {
-  const entries = (await readdir(projectDir, { recursive: true }))
+async function scanProjectCodeunitIds(
+  projectDir: string,
+  snapshot?: ReadonlyMap<string, Buffer>,
+): Promise<Map<number, DeclaredObject>> {
+  const entries = (
+    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true })
+  )
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .filter((e) => !EMITTED_FILENAMES.has(basename(e)));
   const byId = new Map<number, DeclaredObject>();
   for (const rel of entries) {
-    const source = await readFile(join(projectDir, rel), "utf8");
+    const source =
+      snapshot?.get(rel)?.toString("utf8") ?? (await readFile(join(projectDir, rel), "utf8"));
     for (const obj of scanDeclaredObjects(source)) {
       if (obj.type === "codeunit" && !byId.has(obj.id)) byId.set(obj.id, obj);
     }
@@ -298,14 +312,16 @@ async function scanProjectCodeunitIds(projectDir: string): Promise<Map<number, D
  * `buildBackend` (both branches), positioned after every pre-existing early-exit check that
  * doesn't need a real project directory — kept as defense in depth for any caller that reaches
  * `buildBackend` some other way, and because it costs nothing beyond a second fs read.
+ * R205: `snapshot` is the session's source snapshot; when given, both reads come from it.
  */
 export async function validateSelectorIdsForProject(
   projectDir: string,
   selectorIds: SelectorConfig,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<void> {
-  const manifest = await readTargetAppManifestForIdCheck(projectDir);
+  const manifest = await readTargetAppManifestForIdCheck(projectDir, snapshot);
   const idRanges: AppIdRange[] = parseIdRanges(manifest);
-  const existingCodeunitIds = await scanProjectCodeunitIds(projectDir);
+  const existingCodeunitIds = await scanProjectCodeunitIds(projectDir, snapshot);
   validateSelectorIds(selectorIds, idRanges, existingCodeunitIds);
 }
 
@@ -2245,10 +2261,11 @@ async function applyAlRunnerCoverageGuard(
   configFile: LethalConfigFile,
   projectDir: string,
   warn: (line: string) => void,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<{ readonly config: LethalConfigFile; readonly named: readonly string[] }> {
   const section = configFile.alRunner;
   if (section?.coverage !== "al-runner") return { config: configFile, named: [] };
-  const support = await alRunnerCoverageSupport(projectDir);
+  const support = await alRunnerCoverageSupport(projectDir, snapshot);
   if (support.multiObjectFiles.length === 0 && support.wrappedObjectFiles.length === 0) {
     return { config: configFile, named: [] };
   }
@@ -2277,11 +2294,13 @@ async function applyAlRunnerCoverageGuard(
  * the section (the same call `buildBackend` makes), apply the coverage guard, and print the ONE
  * advisory line. Returns the config every backend of the session is built from. A config with no
  * `alRunner` section is returned untouched, so `buildBackend` still throws its own targeted error.
+ * R205: `snapshot` is the session's source snapshot, so the guard judges the files the build uses.
  */
 export async function prepareAlRunnerSession(
   configFile: LethalConfigFile,
   projectDir: string,
   warn: (line: string) => void = console.warn,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<LethalConfigFile> {
   if (configFile.alRunner === undefined) return configFile;
   validateAlRunnerConfig(configFile.alRunner);
@@ -2289,6 +2308,7 @@ export async function prepareAlRunnerSession(
     configFile,
     projectDir,
     warn,
+    snapshot,
   );
   const advisory = alRunnerAdvisory(sessionConfig.alRunner ?? {}, named);
   if (advisory !== undefined) warn(advisory);
@@ -2501,7 +2521,8 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
  * Issue #19 (R227): the line filter's ranges, `--lines` unioned with `--changed-since`'s diff, or
  * `undefined` when neither flag was given. `changedLinesSince` already keeps only `.al` files.
  * GH-25: `changedSince` names where the diff came from, and is present exactly when
- * `--changed-since` was given.
+ * `--changed-since` was given. R205: `snapshot` is the source the session builds; the diff runs
+ * against it.
  */
 export async function resolveLineRanges(
   cfg: {
@@ -2510,12 +2531,13 @@ export async function resolveLineRanges(
     readonly changedSince?: string;
   },
   spawn: SpawnFn = defaultSpawn,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<
   { readonly ranges: readonly LineRange[]; readonly changedSince?: ChangedSinceSource } | undefined
 > {
   if (cfg.lines === undefined && cfg.changedSince === undefined) return undefined;
   if (cfg.changedSince === undefined) return { ranges: [...(cfg.lines ?? [])] };
-  const git = await changedLinesSince(cfg.projectDir, cfg.changedSince, spawn);
+  const git = await changedLinesSince(cfg.projectDir, cfg.changedSince, spawn, snapshot);
   return { ranges: [...(cfg.lines ?? []), ...git.ranges], changedSince: git.source };
 }
 
@@ -2914,6 +2936,8 @@ export async function buildBackend(
   // before without having to name it. `runFromCli` is the one real caller that threads a
   // non-default value through.
   selectorIds: SelectorConfig = DEFAULT_SELECTOR_IDS,
+  /** R205: the session's source snapshot, so the id check reads the source the build uses. */
+  source?: ReadonlyMap<string, Buffer>,
 ): Promise<ExecutionBackend> {
   // R101(c): validated FIRST, for both backends, before anything is constructed — a typo'd symbol
   // list must fail immediately rather than after a compile that silently used the other branch.
@@ -2922,7 +2946,7 @@ export async function buildBackend(
     // R3/R4: validated here, first, before constructing anything — al-runner's own `alc` run is
     // lazy (`AlRunnerBackend.activate()`, see `selector.ts`'s doc comment), so this is the
     // earliest point that can catch a bad id for this backend too.
-    await validateSelectorIdsForProject(parsed.projectDir, selectorIds);
+    await validateSelectorIdsForProject(parsed.projectDir, selectorIds, source);
     const c = validateAlRunnerConfig(configFile.alRunner);
     // R387: the defaults are applied HERE and nowhere else. A default in the backend's constructor
     // would silently turn the gate's one-shot legs, which build the backend directly, into server
@@ -3009,7 +3033,7 @@ export async function buildBackend(
   // error-priority for an incomplete install) but before any compiler/deployer object touches the
   // target project, and well before an actual `alc` invocation would burn a live BC round trip on
   // an AL0297.
-  await validateSelectorIdsForProject(parsed.projectDir, selectorIds);
+  await validateSelectorIdsForProject(parsed.projectDir, selectorIds, source);
   const outputDir = join(scratchDir, "publish");
   await mkdir(outputDir, { recursive: true });
   const compiler = new ArtifactCompiler(
@@ -3302,6 +3326,8 @@ export async function printDryRun(
     readonly exclude?: readonly string[];
     /** R266: write the listing as JSON here. */
     readonly outPath?: string;
+    /** R205: the source snapshot the line ranges were computed against; parsed instead of the disk. */
+    readonly source?: ReadonlyMap<string, Buffer>;
     /** R214: the config's symbols, so a dry run answers for the build the real run compiles. */
     readonly preprocessorSymbols?: readonly string[];
     /** R377: the backend whose build is listed; absent is alc's (`bcdev`). */
@@ -3338,6 +3364,7 @@ export async function printDryRun(
       ...(exclude !== undefined ? { exclude } : {}),
       ...(operators !== undefined ? { operators } : {}),
       ...(paths.lines !== undefined ? { lines: paths.lines } : {}),
+      ...(paths.source !== undefined ? { source: paths.source } : {}),
       ...(paths.preprocessorSymbols !== undefined
         ? { preprocessorSymbols: paths.preprocessorSymbols }
         : {}),
@@ -3725,8 +3752,12 @@ export async function runFromCli(
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
+  // R205: the target's source, read ONCE before anything else reads it. The `--changed-since`
+  // lines, the al-runner coverage guard and the session's build all use this snapshot, so an edit
+  // landing later is never built; the session's last-batch re-read warns about it.
+  const source = await readTargetSource(parsed.projectDir);
   // Issue #19: before anything is provisioned, so a bad ref fails in seconds.
-  const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn);
+  const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn, source);
   // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
   // resolved once here so the session and every message downstream see one list. Union, never
   // override: see `LethalConfigFile.exclude` for why a CLI flag must not be able to switch off an
@@ -3748,7 +3779,7 @@ export async function runFromCli(
   // resolved `selectorIds` — are available now, with no I/O of `resolveSession`'s own in between,
   // so there is no reason to defer it past this point.
   const validateIds = deps.validateSelectorIdsForProject ?? validateSelectorIdsForProject;
-  await validateIds(parsed.projectDir, selectorIds);
+  await validateIds(parsed.projectDir, selectorIds, source);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
   // R360 I2: this invocation owns `scratchRoot` from here on. On any throw it is kept and named,
   // since compile diagnostics name files in it; a killed process leaves it by design. After a
@@ -3815,7 +3846,12 @@ export async function runFromCli(
         );
       }
       // R387: once per session, here rather than in `buildBackend`, which runs once per worker.
-      sessionConfig = await prepareAlRunnerSession(configFile, parsed.projectDir);
+      sessionConfig = await prepareAlRunnerSession(
+        configFile,
+        parsed.projectDir,
+        console.warn,
+        source,
+      );
     }
 
     // Task 7: resolves the bcdev section EXACTLY ONCE (see `resolveEnvToolSession`'s doc comment)
@@ -3874,7 +3910,15 @@ export async function runFromCli(
         // code 3, and the report would never be printed/written.
         let report: SessionReport | undefined;
         try {
-          backend = await build(parsed, effectiveConfig, scratchRoot, deploy, {}, selectorIds);
+          backend = await build(
+            parsed,
+            effectiveConfig,
+            scratchRoot,
+            deploy,
+            {},
+            selectorIds,
+            source,
+          );
           // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
           // without awaiting — see orchestrator.ts), but building a worker's backend
           // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
@@ -3902,6 +3946,7 @@ export async function runFromCli(
                   deploy,
                   {},
                   selectorIds,
+                  source,
                 ),
               );
             }
@@ -3951,6 +3996,7 @@ export async function runFromCli(
             backend,
             store,
             projectDir: parsed.projectDir,
+            source,
             testDir: parsed.testDir,
             instrumentedDir: join(scratchRoot, "instrumented"),
             excludeOutputs: runOutputPaths(parsed),
@@ -5607,10 +5653,13 @@ async function main(): Promise<number> {
       );
     }
     const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
-    const dryRunLines = await resolveLineRanges(parsed);
+    // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
+    const dryRunSource = await readTargetSource(parsed.projectDir);
+    const dryRunLines = await resolveLineRanges(parsed, defaultSpawn, dryRunSource);
     await printDryRun(parsed.projectDir, parsed.only, {
       dbPath: parsed.dbPath,
       configPath: parsed.configPath,
+      source: dryRunSource,
       ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
       ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
       ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
