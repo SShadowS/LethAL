@@ -604,6 +604,29 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
     );
     expect(r.why("A")).toContain("cycle");
   });
+  test("N1f. a parameter passed down a chain of callers deeper than the limit keeps the fallback", () => {
+    let chain = "";
+    for (let i = 0; i < 40; i += 1)
+      chain += `\n    procedure H${i}(R: Variant)\n    begin\n        ${i === 0 ? "Check" : `H${i - 1}`}(R);\n    end;\n`;
+    const r = run(
+      s(
+        (e) => LIB(e, "", "", chain),
+        proc("B()", LIBV, "        Lib.H39(5);\n"),
+      )({}),
+    );
+    expect(r.why("A")).toContain("deeper than");
+  });
+  test("N1g. a bare call of ANOTHER object's own same-named procedure is not a caller", () => {
+    const other = `codeunit 50181 "Other"\n{\n    var\n        GlobalW: Variant;\n\n    procedure Check(R: Variant)\n    begin\n    end;\n\n    procedure Use()\n    begin\n        Check(GlobalW);\n    end;\n}\n`;
+    const r = run({ ...s((e) => LIB(e))({}), "Other.al": other });
+    expect(r.why("A")).toBeUndefined();
+  });
+  test("N1h. a caller passing a test-app codeunit's id or reference keeps the fallback", () => {
+    for (const arg of ["50101", 'Codeunit::"Mock"']) {
+      const r = run(s((e) => LIB(e), proc("B()", LIBV, `        Lib.Check(${arg});\n`))({}));
+      expect(r.why("A")).toContain("passes");
+    }
+  });
 });
 
 describe("R-389 option (a), narrowing 2: namespace-qualified names", () => {
