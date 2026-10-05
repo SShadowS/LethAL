@@ -456,7 +456,20 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   app.json). Otherwise (al-runner, an older control app, an error, a dependent app) the test takes
   the whole-source digest: on DC that is every test. The answer is part of every digest, so a run
   and a verify that got different answers share no digest. `MIN_CONTROL_VERSION` stays 1.0.0.20.
-
+  After the upgrade, the first run whose guard answers closed-world gives every test a new digest
+  (the answer is a line in each one), so the next verify re-runs every test once.
+- **A carried verdict no longer lands on a statement whose procedure changed around it** (R474).
+  When the source changed since the recorded run, `--resume` and `--skip-known-survivors` matched a
+  mutant on its file and statement alone, so inserting `exit;` before an unchanged statement carried
+  its old `killed` onto a mutant that could no longer be reached, and removing such an `exit;`
+  skipped a now-killable mutant as a known survivor. A verdict now carries across an edit only
+  when the enclosing procedure or trigger is byte-identical, its attributes included (a retargeted
+  `[EventSubscriber]` counts as an edit). Unchanged source carries exactly as before. Rows and
+  manifests from before this change carry nothing across an edit, so the first run after it
+  re-runs those mutants once. Still carried across: edits outside the procedure (a caller, a
+  global or its initialisation, a table definition, another trigger or subscriber, the `#if`
+  around it). Measured cost: 0.03-0.74% of such carries refused across one PR, up to 6.6% across
+  a month, on BC apps and one partner app (a structural proxy, R474).
 - **A mutant's covering tests run in the same order on every host** (R481). The last tie between
   two covering tests was broken by name with the host's default collation, which decides
   `killingTest`, the kill position and, through a warm prefix, possibly the verdict. It now compares

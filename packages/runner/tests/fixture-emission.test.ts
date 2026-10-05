@@ -37,6 +37,10 @@ import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/o
  * R470: `DataBandExt.ReportExt.al` re-pinned because its selector var is now
  * `MutationSelector79341` (its own object id), declared and called; its only change (it was
  * 758b11c9...74cb). The manifest is unchanged by R470.
+ * R474: all five manifests re-pinned because every entry gains `memberHash`, the only change:
+ * each manifest with that key removed hashes to its old pin (sandbox-app 24960578...5641,
+ * sandbox-data 257d5dde...752e, sandbox-hang cdfb8da1...dd3b, sandbox-harden 71fe65be...94b4,
+ * sandbox-coverage-probe da594088...3cc). No `.al` file moved.
  */
 const PINNED: Record<
   string,
@@ -58,7 +62,7 @@ const PINNED: Record<
         "07afac62dc7a9cdd4958bd31b2688e4e021d6c98cb72cab958620cbc877a2e00",
       "SandboxPricing.Codeunit.al":
         "1e5744a518bf3df186ba3ce9495745bfe0d68efde8f6eac615c235c1567083cc",
-      "mutant-manifest.json": "24960578e7b86f7ee0d6009295ec27c714ad429e6c82c717d2f1a36bf1be5641",
+      "mutant-manifest.json": "f763eb7da2f9de5ff3443ddd111680774703b8e431d7e39e85a0800aeac48ee3",
     },
   },
   "sandbox-data": {
@@ -114,7 +118,7 @@ const PINNED: Record<
         "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
-      "mutant-manifest.json": "257d5dde5b30d401b8fee4fd5c361bb156dbc4b90b8605eeb7e1166ff0d2752e",
+      "mutant-manifest.json": "e01e5bc8260426433127bc50f96a3829f757046b23a38020aa75292471dcc9c0",
     },
   },
   "sandbox-hang": {
@@ -127,7 +131,7 @@ const PINNED: Record<
         "03da5adb8c426958a6549fc03d174e5bbadba7aa150538881de3adecc8f6105f",
       "MutationUpgrade.Codeunit.al":
         "ecc6b99d40ce7e6bf92be1e73c0c8609cffa268684613158cb32e8513e317f59",
-      "mutant-manifest.json": "cdfb8da1c27398281faa615f9665812eca960ab4d5eaae74047b0f54669cdd3b",
+      "mutant-manifest.json": "26cc971ee19c52c4b6a6b60a5e9c95b0e7296a48f5c77fd336e85aff8224c469",
     },
   },
   "sandbox-harden": {
@@ -141,7 +145,7 @@ const PINNED: Record<
         "761229a7c2c2edaa674509cd00a51e53118742a676a957645d3d33cb3f30966d",
       "MutationUpgrade.Codeunit.al":
         "4a52c84af5a27079132374f5737fb95f13d9721f616e70c2b62f83e6d90d7378",
-      "mutant-manifest.json": "71fe65be7ce4ae7a5e342f67b084fa48c92d7d241fcddb74ab18fa18b40094b4",
+      "mutant-manifest.json": "523f3eec2147e39de5f6ea2ed9077f5f74d67b22667989f2c92cff557b279e3e",
     },
   },
   "sandbox-coverage-probe": {
@@ -158,7 +162,7 @@ const PINNED: Record<
       "MutationUpgrade.Codeunit.al":
         "42b5f8d119d822359366db5b0c776be4c7c03690f9ab04ae8d5ebfa219370dd1",
       "TwoObjects.Codeunit.al": "7f36f6c33258728c6dfdec37e742730e48627e4f0e92cd325184a1c444b2f740",
-      "mutant-manifest.json": "da594088aba11817ac3a5d78f17c931d82f1f30b506b17588cc7365e40cc63cc",
+      "mutant-manifest.json": "7056d12b1d3c5d6b96be1f9072c8660827dbdd0c77586101dc38cedfb7af172b",
     },
   },
 };

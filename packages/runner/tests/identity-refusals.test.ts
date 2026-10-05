@@ -169,6 +169,7 @@ function verdictRow(m: MutantManifestEntry, verdict: MutantVerdict): MutantVerdi
     identityOrdinal: k.ordinal,
     verdict,
     durationMs: 1,
+    memberHash: m.memberHash ?? null,
   };
 }
 

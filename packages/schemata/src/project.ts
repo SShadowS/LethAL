@@ -8,6 +8,7 @@ import {
   astSubtreeHash,
   gapBlockOf,
   isProcedureLike,
+  memberSpanText,
   procedureLikeNameNode,
   renamedMemberCoverageNames,
 } from "@lethal/engine";
@@ -438,6 +439,14 @@ export interface MutantManifestEntry {
    */
   readonly identityOrdinal?: number;
   /**
+   * R474: SHA-256 of the enclosing member's RAW source (`memberSpanText`: from its first
+   * attribute, attribute-only `#if` wrappers included, to its end); `""` at object level. NOT part
+   * of the identity key: rule 2 of `carryRecord` also requires it equal, so a verdict carries across
+   * an edit only into an unchanged member. Absent on a manifest written before R474, which carries
+   * nothing under rule 2 and is never given an invented hash.
+   */
+  readonly memberHash?: string;
+  /**
    * The source text this mutant REPLACED, and what it replaced it with — the mutation itself,
    * stated rather than implied.
    *
@@ -691,6 +700,17 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       { gapId: string; blockStartLine: number; blockEndLine: number }
     >();
     const armNamesCache = new Map<number, string[]>();
+    // R474: one hash per member (keyed by its start), not per mutant.
+    const memberHashes = new Map<number, string>();
+    const memberHashOf = (member: ALSyntaxNode | null): string => {
+      if (member === null) return "";
+      let hash = memberHashes.get(member.startIndex);
+      if (hash === undefined) {
+        hash = createHash("sha256").update(memberSpanText(f.source, member)).digest("hex");
+        memberHashes.set(member.startIndex, hash);
+      }
+      return hash;
+    };
     let at = 0;
     for (const { mutantId, spec } of ided) {
       const planned = mutants[at];
@@ -778,6 +798,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
           ? { platformKillMechanism: spec.platformKillMechanism }
           : {}),
         ...(spec.hangCapable !== undefined ? { hangCapable: spec.hangCapable } : {}),
+        memberHash: memberHashOf(member),
         // Last, where `assignIdentityOrdinals`' spread puts it, so the manifest's key order holds.
         identityOrdinal,
       });

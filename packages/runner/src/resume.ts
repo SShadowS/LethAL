@@ -9,6 +9,7 @@ import {
   carryRecord,
   identityKeyOf,
   isCarryDisabled,
+  memberSiteOf,
   serializeKey,
   twinSiteOf,
 } from "./selection";
@@ -245,8 +246,9 @@ export function buildResumeIndex(
   const carryableBySite = new Map<string, CarriedVerdict>();
   for (const [site, bucket] of bySite) {
     const [row] = bucket;
-    if (bucket.length === 1 && row !== undefined && carryableRow(row)) {
-      carryableBySite.set(site, carriedOf(row));
+    // R474: keyed with the row's member hash; a NULL one (a row from before R474) is no rule-2 site.
+    if (bucket.length === 1 && row !== undefined && carryableRow(row) && row.memberHash !== null) {
+      carryableBySite.set(memberSiteOf(site, row.memberHash), carriedOf(row));
     }
   }
   return { carryable, carryableBySite, ambiguousKeys, nonCarryableRows, strandedKeys };
@@ -313,10 +315,10 @@ export function wasStranded(index: ResumeIndex, m: MutantManifestEntry): boolean
  * The prior verdict for one of THIS run's mutants, or `undefined` if it must be executed.
  *
  * A mutant whose source changed since the prior run has a different `astHash` and therefore a
- * different key, so it simply misses — a stale verdict can never attach to edited code. That is
- * the property that makes resume safe against a working tree that moved underneath it.
+ * different key, so it simply misses — a stale verdict never attaches to an edited statement.
  * R391: an edit elsewhere can still renumber a twin onto another mutant's key, so the record is
- * found through `carryRecord` (rule 1 by key, rule 2 by (file, tuple), else none).
+ * found through `carryRecord` (rule 1 by key, rule 2 by (file, tuple) and, since R474, an
+ * unchanged enclosing member, else none). Edits outside the member can still carry under rule 2.
  * One exception (R318): a `no-coverage` never carries onto a mutant with `coverageArmNames`.
  */
 export function carriedVerdictFor(

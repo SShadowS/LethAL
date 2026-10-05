@@ -5980,6 +5980,8 @@ async function seedPriorSurvivor(
     verdict: "survived",
     durationMs: 0,
     batchIndex: 0,
+    // R474: rule 2 also matches the enclosing member's hash, from the target like the rest.
+    ...(target.memberHash !== undefined ? { memberHash: target.memberHash } : {}),
   });
   store.finishRun(runId, { batchCount: 1, baselineGreen: true });
 }
@@ -14970,6 +14972,51 @@ describe("C02-06 Task 5.4: runVerify", () => {
     const verifyRunId = out.verifyRunId;
     if (verifyRunId === undefined) throw new Error("verify recorded no run");
     expect(fx.store.getRun(verifyRunId)?.testAppHash).toBe(`package:${COMPILED.sha256}`);
+  });
+
+  // R474: verify records through the shared `record` path from the installed manifest's entries, so
+  // its rows carry the manifest's member hash (a later history or resume reads them under rule 2).
+  const memberHashRow = (s: ResultsStore, runId: number) =>
+    (
+      s.db
+        .query("SELECT member_hash FROM mutants WHERE run_id = ? AND mutant_code = 'M0001'")
+        .get(runId) as { member_hash: string | null } | null
+    )?.member_hash;
+  test("R474: verify writes the installed manifest's memberHash through to its own row", async () => {
+    const fx = await verifyFixture();
+    const manifest = JSON.parse(
+      await readFile(join(fx.installed.instrumentedDir, "mutant-manifest.json"), "utf8"),
+    ) as { mutants: MutantManifestEntry[] };
+    const hash = manifest.mutants.find((m) => m.mutantId === "M0001")?.memberHash;
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(memberHashRow(fx.store, fx.installed.fromRunId)).toBe(hash);
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(0);
+    const verifyRunId = out.verifyRunId;
+    if (verifyRunId === undefined) throw new Error("verify recorded no run");
+    expect(memberHashRow(fx.store, verifyRunId)).toBe(hash);
+  });
+
+  test("R474: an installed manifest without memberHash makes verify record NULL, never a hash", async () => {
+    const fx = await verifyFixture();
+    let rewritten = "";
+    await rewriteManifestKeepingId(fx.installed.instrumentedDir, (m) => {
+      const next = {
+        ...m,
+        mutants: (m.mutants as MutantManifestEntry[]).map(({ memberHash: _, ...rest }) => rest),
+      };
+      rewritten = JSON.stringify(next);
+      return next;
+    });
+    fx.store.db
+      .query("UPDATE batch_artifacts SET manifest_sha256 = ? WHERE run_id = ? AND batch_index = 0")
+      .run(Bun.SHA256.hash(rewritten, "hex"), fx.installed.fromRunId);
+    await restoreBundleFromDisk(fx.store, fx.installed);
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.refused).toBeUndefined();
+    const verifyRunId = out.verifyRunId;
+    if (verifyRunId === undefined) throw new Error("verify recorded no run");
+    expect(memberHashRow(fx.store, verifyRunId)).toBeNull();
   });
 
   test("verify reports the server's read-back identity, not the local compile's", async () => {

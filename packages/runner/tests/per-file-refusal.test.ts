@@ -250,7 +250,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     const manifest = await readFile(join(dir, "mutant-manifest.json"));
     expect(createHash("sha256").update(manifest).digest("hex")).toBe(
       // R459: flip-boolean-literal's operatorVersion 1.1.0 is the only change (was b1d589cd...5e21).
-      "105d129b220be6bded8f8ccdc97bf0b65d4ba8ae8442ff189a6961fa4d67b83f",
+      // R474: every entry gains `memberHash`, the only change (was 105d129b...b83f).
+      "db5aef548546072c265799037b2c9800e3636cf3812277394831a26d77c8b4e7",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -260,8 +261,10 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // R470: re-pinned (was dec43213...a617) for DataBandExt's selector var `MutationSelector79341`;
     // the manifest pin above is unchanged by R470. R459 (merged over R470): the manifest's 13 flip
     // entries carry operatorVersion 1.1.0, so this moved again (R470 alone gave 4dfb9b56...a329).
+    // R474: the manifest's `memberHash` alone moved it (was 4fb14bca...b9e6; the same files with
+    // that key removed from the manifest give 4fb14bca...b9e6 again).
     expect(all.digest("hex")).toBe(
-      "4fb14bca6f1f6b1ba3241d98e707627e4504d31fd32657939f6d87a33194b9e6",
+      "e166345f7bc2286dfff7bac0091cc90da3029d14239a418cf80d8cdf5cad1358",
     );
   }, 60_000);
 });
