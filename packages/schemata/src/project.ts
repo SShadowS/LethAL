@@ -167,11 +167,14 @@ export function coarseIdentityTupleOf(
  * R468, every direct object-level var section is the object's globals (only the first was), so a
  * later section's record receivers move call deletions from `void-method-call` to Tier 2, `true`
  * RunTrigger flips cede to `swap-modify-flag`, new hang refusals remove writes, and swaps choose a
- * different typed pair under an unchanged key. 20 is held by R-464. 21: R459, a two-argument
+ * different typed pair under an unchanged key. 20 is unused. 21: R459, a two-argument
  * `Insert`'s Booleans are flipped (no longer ceded to `swap-modify-flag`, which never claimed
  * them), so a later same-tuple `true` twin in the procedure moves ordinal (BC.History: 9 keys).
+ * 22 is held by R-464. 23: R446, in a loop whose condition reads no name and calls nothing
+ * (`while true`), a write a body-exit guard reads is hang-refused, so a later same-tuple twin of a
+ * refused mutant takes its ordinal (BC.History: 16 keys).
  */
-export const IDENTITY_SCHEME = 21;
+export const IDENTITY_SCHEME = 23;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

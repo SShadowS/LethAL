@@ -104,6 +104,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A write a body-exit guard reads, in a `while true` loop, is hang-refused; identity scheme 23**
+  (R446; 22 is held by R-464). When a loop's condition reads no name and calls nothing
+  (`while true`, `until false`), the four value operators now also refuse a write that the guard
+  of any of its body exits reads: `exit`, `Error(...)` outside `asserterror`,
+  `CurrReport.Quit`/`Break`, or a `break` of that loop. Such a write could leave the loop with no
+  way out. The refusals are counted as `hang-refused` sites (R447). This is a scoped rule, not a
+  proof that no mutant hangs; the shapes it still misses are R480. Measured: BC.History 74 sites
+  move from mutated to hang-refused (remove-assignment 55, flip-boolean-literal 11, shift-integer 6,
+  swap-additive 2) and 16 keys move ordinal in `ItemJnlPostLine`; CDO, the fixtures and the examples
+  unchanged. Re-check equivalence marks.
 - **One source snapshot per run, and `--changed-since` diffs against it** (R205). `lethal run`
   reads the target's `.al` files and `app.json` once, before anything else, and every reader of
   them uses that copy: the `--changed-since` lines, the al-runner coverage guard, the selector-id

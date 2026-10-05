@@ -1,44 +1,46 @@
-# R-446 plan: refuse writes that a body-exit guard reads, when the loop condition cannot end the loop
+# R-446 plan: refuse writes that a body-exit guard reads, when the loop condition reads no name and calls nothing
 
 Evidence: `/coord/handoff/R-446/survey.md`. Base: master `477b23bc`, worktree `/work/lethal-wt/r446`.
+The main text below was rewritten by the builder to match the "Changes since" sections (r3).
 
-## The rule
+## The rule (a scoped heuristic, not "never emit a hang-capable mutant")
 A "hang refusal" stops the four value operators (`remove-assignment`, `shift-integer`,
 `swap-additive`, `flip-boolean-literal`) from emitting a mutant that can make a loop run forever.
 Today it reads only the loop's CONDITION. Extend it:
-1. A loop's condition "cannot end the loop" when it reads no name and calls nothing (`while true`,
-   `until false`), `#if` tails included, inactive arms skipped.
-2. For such a loop only, the guards of its body exits count as part of its exit test.
-   - Exits: `exit`; `Error(...)` (it raises, so the loop ends); `break` only if its nearest
-     enclosing `while`/`repeat`/`for`/`foreach` is this loop.
-   - A call that MAY exit (a procedure that errors) does not count. That is the known miss
-     "progress through a call", unchanged.
+1. When a loop's condition reads no name and calls nothing (`while true`, `until false`; `#if` tails
+   included, inactive arms skipped; `conditionIsNameAndCallFree`), the guards of its body exits
+   count as part of its exit test.
+   - Exits: `exit`; `Error(...)` outside `asserterror`; `CurrReport.Quit`/`Break` (and the
+     `CurrXMLport` twins), with or without `()`; `break` only if its nearest enclosing
+     `while`/`repeat`/`for`/`foreach` is this loop.
    - Guards: every condition between the exit and the loop: `if` (then OR else branch), `case`
      selector and branch pattern, inner loop condition, `for` bounds, `foreach` iterable, plus tails.
-3. Refuse a write to a variable ANY guard reads. A hang needs EVERY exit blocked, so refusing only
-   when all guards can be defeated would need value reasoning we do not do; a single mutated write
-   may also defeat the one guard that actually fires. "Any" is the safe direction (an extra
-   refusal costs a site; a missed one can hang a session). Same choice as the condition rule.
-4. Loops whose own condition can end them are untouched (R446's 433-site over-count is excluded).
+2. Refuse a write to a variable ANY guard reads (sol r1 s1: an "all guards" or "only update" rule
+   would need value reasoning and is unsound).
+3. Loops whose own condition reads a name are untouched (R446's 433-site over-count is excluded).
+4. Exclusions, filed as one measure-first item (R480), each pinned as NOT refused by a witness test:
+   a body-exit flag under a condition that reads a name; an indirect guard; a call-based condition;
+   an outer `for`/`foreach`; `asserterror` as the only exit; `CurrReport.Skip` (its docs say only
+   that report processing continues with the next record, not that the AL loop is interrupted). Not
+   counted either: an `exit` in a callee, `Commit()`, `Codeunit.Run` returning false.
 
 ## Code (one file, plus the scheme)
-- `packages/builtin-tier1/src/loop-hazard.ts`: add `loopExitParts`, `conditionCannotEnd`,
-  `exitsLoop`, `bodyExitGuards` (prototype in the scratch `proto/`, about 90 lines). Use
-  `loopExitParts` in `conditionIdentifiers`, `conditionReadsMember`, `loopConditionReadsByName`.
-  `shift-integer` keeps `loopConditionParts` for its own literal refusal. Update the header's
-  "does not see" list.
+- `packages/builtin-tier1/src/loop-hazard.ts`: `loopExitParts`, `conditionIsNameAndCallFree`,
+  `exitsLoop`, `bodyExitGuards`. `loopExitParts` is used in `conditionIdentifiers`,
+  `conditionReadsMember`, `loopConditionReadsByName`. `shift-integer` keeps `loopConditionParts`
+  for its own literal refusal. The header names the exclusions.
 - Refusals flow through the existing `refusesHangCapable`, so they are counted as hang-refused (R447).
-- `IDENTITY_SCHEME` 21 -> 23 (R-464 holds 22) in `packages/schemata/src/project.ts`, with a
-  comment: 16 BaseApp keys move. Update the runner tests that pin the scheme.
-- The prototype's `R446_MODE` switch goes; "const" is the rule. The wider mode added 0 sites anywhere.
+- `IDENTITY_SCHEME` 21 -> 23 (R-464 holds 22) in `packages/schemata/src/project.ts`.
 
-## Measured diff (all operators, identity-keyed, complete dumps)
-- fixtures 17, examples 4, CDO 6 projects: identical.
+## Measured diff (all operators, identity-keyed, complete dumps; re-measured on the build)
+- fixtures 17 (incl. `sandbox-hang`), examples 4, CDO 6 projects: identical.
 - BC.History: 74 specs move from emitted to hang-refused (remove-assignment 55, flip 11, shift 6,
-  swap-additive 2), all in BaseApp Source and Tests-Misc. No spec changes, none appears.
+  swap-additive 2), all in BaseApp Source (70) and Tests-Misc (4). No spec changes, none appears.
+  The report exits and the `asserterror` rule leave the count where the prototype had it.
+- 16 identity keys move (flip 11, shift 3, remove-assignment 1, swap-additive 1), all in
+  `ItemJnlPostLine.Codeunit.al`.
 - Real hangs among them: 4 established (`OptionValue += 1` x2, `OptionNo += 1`,
   `Expected := Expected.NextSibling`); 70 are over-refusals or data-dependent, accepted as R454 did.
-- Re-run the same dumps on the branch and require the identical 74-site set and 16 key moves.
 
 ## Gates
 `itest:hang`: `sandbox-hang` has no constant-condition loop and its dump is identical, so no pinned
@@ -52,7 +54,7 @@ Each must go red under its named revert:
    until false` (swap-additive `I := I + 1`), an `Error` guard, a `case` guard, an `else exit`.
    Revert: `loopExitParts` returns `loopConditionParts(loop)` only.
 2. Not over-refused: `while I < 10 do begin I += 1; J += 1; if J > 3 then exit; end` claims
-   `J += 1`. Revert: drop the `conditionCannotEnd` check (always add guards).
+   `J += 1`. Revert: drop the `conditionIsNameAndCallFree` check (always add guards).
 3. Inner break: outer `while true` (exit guard on `I`) holding `repeat ... if K > 2 then break;
    until false`, with `K := 0` written in the OUTER body: that write is claimed, `I += 1` refused.
    Revert: `exitsLoop` accepts any `break`.
