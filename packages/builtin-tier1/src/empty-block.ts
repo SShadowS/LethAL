@@ -14,7 +14,14 @@ const BODY_PARENT_KINDS: ReadonlySet<string> = new Set([
   ALNodeKind.if_statement,
   ALNodeKind.while_statement,
   ALNodeKind.for_statement,
-  ALNodeKind.repeat_statement,
+  // R244: NO `repeat_statement`. It was listed and matched nothing: a repeat's body is a
+  // `statement_block`, and a `begin ... end` written inside it is a `code_block` whose parent is that
+  // `statement_block`, never the `repeat_statement`. MEASURED 2026-10-05: of 12,363 `repeat` loops
+  // (BaseApp history, CDO, fixtures) none is written `repeat begin ... end until`, so the entry
+  // could not have claimed anything even on a grammar where it worked. Repeat bodies are left
+  // unclaimed on purpose: emptying one freezes an `until` that the body advances (537 BaseApp loops
+  // whose `until` calls no `Next`) and hangs the session, the hazard R179 cedes `while` bodies for.
+  // Mutating only the cursor-advanced ones is a separate product question, filed as its own item.
   // R180: a case ARM's body. `case_statement` used to be listed here and matched NOTHING — an arm's
   // body is a `code_block` whose parent is `case_branch`, never the `case_statement` itself, so
   // every `begin ... end` case arm in every AL project went unmutated while the list looked like it
@@ -59,9 +66,8 @@ export const emptyBlock: MutationOperator = {
     // where this mutant currently terminates, it is replaced by `loop-skip`'s, which asks nearly the
     // same question.
     //
-    // `repeat` is NOT ceded: its body always runs once, so `until true` does not remove the body's
-    // effect and `loop-truncate` is no substitute. The 6 frozen `repeat` bodies on the corpus stay,
-    // and stay recorded on R179.
+    // A `repeat` body never reaches this point: no block has a `repeat_statement` parent (R244,
+    // see BODY_PARENT_KINDS), so the "6 frozen repeat bodies" R179 recorded were never claimed.
     if (node.parent.kind === ALNodeKind.while_statement) return false;
     // Skip already-empty blocks. Cheapest signal: whether the block has any
     // namedChildren that aren't `begin` / `end` keywords. The grammar exposes
