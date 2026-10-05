@@ -29,7 +29,7 @@ import {
   sessionFingerprint,
   wasStranded,
 } from "../src/resume";
-import type { SessionFingerprintInput } from "../src/resume";
+import type { ResumeIndex, SessionFingerprintInput } from "../src/resume";
 import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
@@ -270,10 +270,23 @@ function row(over: Partial<MutantVerdictRow> = {}): MutantVerdictRow {
     procedureName: "Post",
     operatorName: "lethal.negate-conditional",
     operatorMajor: 1,
+    file: "src/SandboxLogic.Codeunit.al",
     identityOrdinal: 0,
     verdict: "survived",
     durationMs: 42,
     ...over,
+  };
+}
+
+/** R391: `index` under rule 1 (the recorded run had this session's source), so the tests below
+ *  exercise the key lookup they were written for. */
+function sameSource(index: ResumeIndex): ResumeIndex {
+  return {
+    ...index,
+    carryRule: {
+      recorded: { hash: "same", twins: null },
+      current: { hash: "same", twins: new Set(), refused: new Set() },
+    },
   };
 }
 
@@ -381,8 +394,8 @@ describe("buildResumeIndex (R47)", () => {
     expect(index.carryable.size).toBe(1);
     const first = manifestEntry("hash-a");
     const second = { ...manifestEntry("hash-a"), mutantId: "M-second", identityOrdinal: 1 };
-    expect(carriedVerdictFor(index, first)?.verdict).toBe("killed");
-    expect(carriedVerdictFor(index, second)).toBeUndefined();
+    expect(carriedVerdictFor(sameSource(index), first)?.verdict).toBe("killed");
+    expect(carriedVerdictFor(sameSource(index), second)).toBeUndefined();
     expect(wasStranded(index, first)).toBe(false);
     expect(wasStranded(index, second)).toBe(true);
   });
@@ -794,6 +807,7 @@ describe("ResultsStore resume queries (R47)", () => {
         procedureName: "Post",
         operatorName: "op",
         operatorMajor: 2,
+        file: "f.al",
         identityOrdinal: 0,
         verdict: "killed",
         killingTest: "T",
@@ -1372,11 +1386,13 @@ describe("runSession --resume (R47)", () => {
   test("R192: a batch whose carried rows predate the coverage columns is deployed as before", () => {
     // A pre-R192 database holds verdicts without covering tests. Skipping on those would record
     // a carried survivor with an invented empty list, so the batch takes the ordinary path.
-    const withFacts = buildResumeIndex(
-      [row({ astHash: "a", coveringTests: ["T.one"], coverageAttribution: "exact" })],
-      false,
+    const withFacts = sameSource(
+      buildResumeIndex(
+        [row({ astHash: "a", coveringTests: ["T.one"], coverageAttribution: "exact" })],
+        false,
+      ),
     );
-    const withoutFacts = buildResumeIndex([row({ astHash: "a" })], false);
+    const withoutFacts = sameSource(buildResumeIndex([row({ astHash: "a" })], false));
     const mutant = manifestEntry("a");
     expect(batchCarriesEntirely(withFacts, [mutant], false)).toBe(true);
     expect(batchCarriesEntirely(withoutFacts, [mutant], false)).toBe(false);
@@ -2551,9 +2567,8 @@ class R318Backend implements ExecutionBackend {
 
 describe("R318: a resume across R318 re-scores a renamed member instead of keeping no-coverage", () => {
   test("carriedVerdictFor: a no-coverage row does not carry onto a mutant with coverageArmNames", () => {
-    const index = buildResumeIndex(
-      [row({ astHash: "h-r", procedureName: "", verdict: "no-coverage" })],
-      false,
+    const index = sameSource(
+      buildResumeIndex([row({ astHash: "h-r", procedureName: "", verdict: "no-coverage" })], false),
     );
     const base = { ...manifestEntry("h-r"), procedureName: "" };
     expect(
@@ -2562,9 +2577,8 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     // Controls: the same row onto an entry without the field still carries, and a kill on a
     // renamed member still carries (a kill is a measurement whatever attributed it).
     expect(carriedVerdictFor(index, base)?.verdict).toBe("no-coverage");
-    const killed = buildResumeIndex(
-      [row({ astHash: "h-k", procedureName: "", verdict: "killed" })],
-      false,
+    const killed = sameSource(
+      buildResumeIndex([row({ astHash: "h-k", procedureName: "", verdict: "killed" })], false),
     );
     expect(
       carriedVerdictFor(killed, {

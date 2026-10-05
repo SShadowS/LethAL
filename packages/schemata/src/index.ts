@@ -40,6 +40,7 @@ export {
   identityEntriesOf,
   numberIdentityOrdinals,
   runIdentityOrdinals,
+  runIdentityEntries,
   withRunIdentityOrdinals,
   IDENTITY_SCHEME,
   gapIdOf,

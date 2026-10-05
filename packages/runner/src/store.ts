@@ -7,8 +7,8 @@ import type { PublishOutcome } from "./deployment-verifier";
 import type { InstalledBundleRows, InstalledBundleWrite } from "./installed-bundle";
 import { normalizeRelPath } from "./line-filter";
 import { sameBuildSymbols } from "./preprocessor-symbols";
-import type { CoverageAttribution } from "./selection";
-import { type IdentityKey, serializeKey } from "./selection";
+import type { CoverageAttribution, PriorSurvivors } from "./selection";
+import { type IdentityKey, NO_PRIOR_SURVIVORS, serializeKey, twinSiteOf } from "./selection";
 
 /** C02-06: `artifactRecordById` found one artifact id on more than one batch row, a corrupt store.
  *  Typed so `lethal verify` can refuse it without matching message text. */
@@ -169,6 +169,8 @@ export interface MutantVerdictRow {
   readonly procedureName: string | null;
   readonly operatorName: string;
   readonly operatorMajor: number;
+  /** R391: the row's file, which rule 2 matches on together with the tuple. */
+  readonly file: string;
   /** R193 — see `MutantRow.identityOrdinal`. A pre-R193 row reads back 0: its twins, if it had
    *  any, then still collide on resume and are re-run, which is the cheap direction. */
   readonly identityOrdinal: number;
@@ -236,6 +238,28 @@ export interface RunRow {
   /** R442: what the run numbered no ordinal for. `null` on a row recorded before the column, or a
    *  run that died before generation: untrusted, so no history or resume carries from it. */
   readonly carryHidden: CarryHidden | null;
+  /** R391: the source hash taken at generation (`sourceHashAtGeneration`), written by
+   *  `createRun`. `null` when not recorded (before R391): no rule-1 carry from that run. */
+  readonly generationSourceSha256: string | null;
+  /** R391: sorted `twinSiteOf` pairs with a twin in their file. `null` is "not measured" (before
+   *  R391, or the run died before generation): no rule-2 carry. `[]` is "measured, no twins". */
+  readonly twinTuples: readonly string[] | null;
+}
+
+/** R391: a stored `twin_tuples`, checked. NULL stays `null`; anything but a JSON string array
+ *  is a corrupt row and throws. */
+function parseTwinTuples(value: string | null, runId: number): readonly string[] | null {
+  if (value === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    parsed = undefined;
+  }
+  if (Array.isArray(parsed) && parsed.every((t) => typeof t === "string")) return parsed;
+  throw new Error(
+    `store.ts: run ${runId} has a corrupt "twin_tuples" column value ${JSON.stringify(value.slice(0, 200))} — expected a JSON array of strings or NULL`,
+  );
 }
 
 /**
@@ -607,6 +631,10 @@ export class ResultsStore {
       ["runs", "resource_key TEXT", runCols],
       // R442: NULL on an older row, read as untrusted: no history or resume carries from it.
       ["runs", "carry_hidden TEXT", runCols],
+      // R391: NULL on an older row, read as "not recorded": no rule-1 carry from it.
+      ["runs", "generation_source_sha256 TEXT", runCols],
+      // R391: NULL on an older row, read as "not measured": no rule-2 carry from it.
+      ["runs", "twin_tuples TEXT", runCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
       if (!known.some((c) => c.name === name)) {
@@ -651,13 +679,18 @@ export class ResultsStore {
     /** R442: what the run's keys numbered no ordinal for. Absent or `null` writes NULL (untrusted).
      *  `runSession` writes it after generation (`setCarryHidden`); verify copies its source's here. */
     carryHidden?: CarryHidden | null;
+    /** R391: the source hash taken at generation. Absent or `null` writes NULL (no rule-1 carry). */
+    generationSourceSha256?: string | null;
+    /** R391: the run's `twin_tuples`. Absent or `null` writes NULL ("not measured"). `runSession`
+     *  writes it after generation (`setTwinTuples`); verify copies its source's here. */
+    twinTuples?: readonly string[] | null;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts, carry_hidden) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -672,10 +705,21 @@ export class ResultsStore {
         info.testDigests !== undefined ? JSON.stringify(info.testDigests) : null,
         info.testDigestParts !== undefined ? JSON.stringify(info.testDigestParts) : null,
         info.carryHidden != null ? JSON.stringify(info.carryHidden) : null,
+        info.generationSourceSha256 ?? null,
+        info.twinTuples != null ? JSON.stringify(info.twinTuples) : null,
       ) as {
       id: number;
     };
     return r.id;
+  }
+
+  /** R391: records the run's `twin_tuples` once generation has numbered its sites. Called before
+   *  any mutant row is written, so a run that dies before it holds no verdict and stays NULL. */
+  setTwinTuples(runId: number, twinTuples: readonly string[]): void {
+    const changed = this.db
+      .query("UPDATE runs SET twin_tuples = ? WHERE id = ?")
+      .run(JSON.stringify(twinTuples), runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setTwinTuples: no run ${runId}`);
   }
 
   /** R442: records what the run numbered no ordinal for, once generation knows it. Called before
@@ -841,10 +885,12 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, carry_hidden FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, carry_hidden, generation_source_sha256, twin_tuples FROM runs WHERE id = ?",
       )
       .get(runId) as {
       carry_hidden: string | null;
+      generation_source_sha256: string | null;
+      twin_tuples: string | null;
       id: number;
       project_path: string;
       backend: string;
@@ -867,6 +913,8 @@ export class ResultsStore {
       coverageMode: parseCoverageMode(row.coverage_mode, row.id),
       testAppHash: row.test_app_hash,
       carryHidden: parseCarryHidden(row.carry_hidden, row.id),
+      generationSourceSha256: row.generation_source_sha256,
+      twinTuples: parseTwinTuples(row.twin_tuples, row.id),
     };
   }
 
@@ -930,10 +978,11 @@ export class ResultsStore {
       .query(
         "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, verdict, " +
           "killing_test, failure_note, killing_test_failure, kill_position, duration_ms, runner, " +
-          "covering_tests, coverage_attribution, unplaceable, identity_ordinal " +
+          "covering_tests, coverage_attribution, unplaceable, identity_ordinal, file " +
           "FROM mutants WHERE run_id = ?",
       )
       .all(runId) as Array<{
+      file: string;
       ast_hash: string;
       codeunit_name: string;
       procedure_name: string | null;
@@ -953,6 +1002,7 @@ export class ResultsStore {
     }>;
     return rows.map((r) => ({
       identityOrdinal: r.identity_ordinal ?? 0,
+      file: r.file,
       ...(r.covering_tests !== null
         ? { coveringTests: this.parseCoveringTests(r.covering_tests, r) }
         : {}),
@@ -1638,7 +1688,9 @@ export class ResultsStore {
 
   /** A prior "known-survivor" verdict counts exactly like "survived" here (I4) — it means the
    *  identity key was skipped rather than re-tested, so it must remain skippable/filterable in
-   *  the run after that, not silently fall out of history after one `--skip-known-survivors` pass. */
+   *  the run after that, not silently fall out of history after one `--skip-known-survivors` pass.
+   *  R391: returns the survivors' keys AND their (file, tuple) sites, plus the run's generation
+   *  hash and `twin_tuples`; `filterHistory` decides which of them carries (`carryRecord`). */
   priorSurvivorKeys(
     projectPath: string,
     /** R354: the coverage mode THIS session measures under. A survivor recorded under another
@@ -1685,37 +1737,40 @@ export class ResultsStore {
       /** R247: the test app differs, or is unknown. Checked after the coverage mode. */
       readonly testAppChanged?: (info: { runId: number; testAppHash: string | null }) => void;
     } = {},
-  ): Set<string> {
+  ): PriorSurvivors {
+    const none = NO_PRIOR_SURVIVORS;
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, carry_hidden FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, carry_hidden, generation_source_sha256, twin_tuples FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
       carry_hidden: string | null;
+      generation_source_sha256: string | null;
+      twin_tuples: string | null;
       id: number;
       scheme: number;
       build_symbols: string | null;
       coverage_mode: string | null;
       test_app_hash: string | null;
     } | null;
-    if (!run) return new Set();
+    if (!run) return none;
     if (run.scheme !== IDENTITY_SCHEME) {
       on.schemeChanged?.({ runId: run.id, identityScheme: run.scheme });
-      return new Set();
+      return none;
     }
     const recorded = parseCoverageMode(run.coverage_mode, run.id);
     if (recorded !== coverageMode) {
       on.coverageModeChanged?.({ runId: run.id, coverageMode: recorded });
-      return new Set();
+      return none;
     }
     if (run.test_app_hash === null || run.test_app_hash !== testAppHash) {
       on.testAppChanged?.({ runId: run.id, testAppHash: run.test_app_hash });
-      return new Set();
+      return none;
     }
     const recordedSymbols = parseBuildSymbols(run.build_symbols);
     if (recordedSymbols === null || !sameBuildSymbols(recordedSymbols, buildSymbols)) {
       on.symbolsChanged?.({ runId: run.id, buildSymbols: recordedSymbols });
-      return new Set();
+      return none;
     }
     // R442: a key of that run may name another mutant here when it hid a site this run numbers
     // (or the other way round). NULL is untrusted; other hidden FILES refuse every key; a hidden
@@ -1723,19 +1778,20 @@ export class ResultsStore {
     const hidden = parseCarryHidden(run.carry_hidden, run.id);
     if (hidden === null) {
       on.carryUntrusted?.({ runId: run.id });
-      return new Set();
+      return none;
     }
     if (!sameHiddenFiles(hidden.files, hiddenFiles)) {
       on.hiddenFilesChanged?.({ runId: run.id, before: hidden.files, now: hiddenFiles });
-      return new Set();
+      return none;
     }
     const hiddenTuples = new Set(hidden.tuples);
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal FROM mutants " +
+        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal, file FROM mutants " +
           "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor')",
       )
       .all(run.id) as Array<{
+      file: string;
       ast_hash: string;
       codeunit_name: string;
       procedure_name: string | null;
@@ -1747,30 +1803,44 @@ export class ResultsStore {
     // than keyed with an empty procedure: an empty name is a real value (object-level mutants use
     // it), so treating null as empty would let a pre-R166 row match a genuine object-level mutant
     // and skip it as a known survivor. Dropping costs one re-run; matching wrongly costs a verdict.
-    return new Set(
-      rows
-        .filter((r) => r.procedure_name !== null)
-        .filter(
-          (r) =>
-            !hiddenTuples.has(
-              coarseIdentityTupleOf({
-                astHash: r.ast_hash,
-                operatorName: r.operator_name,
-                operatorVersion: `${r.operator_major}`,
-              }),
-            ),
-        )
-        .map((r) =>
-          serializeKey({
-            astHash: r.ast_hash,
-            codeunitName: r.codeunit_name,
-            procedureName: r.procedure_name ?? "",
-            operatorName: r.operator_name,
-            operatorMajor: r.operator_major,
-            ordinal: r.identity_ordinal ?? 0,
-          } satisfies IdentityKey),
-        ),
-    );
+    const kept = rows
+      .filter((r) => r.procedure_name !== null)
+      .filter(
+        (r) =>
+          !hiddenTuples.has(
+            coarseIdentityTupleOf({
+              astHash: r.ast_hash,
+              operatorName: r.operator_name,
+              operatorVersion: `${r.operator_major}`,
+            }),
+          ),
+      )
+      .map((r) => {
+        const key: IdentityKey = {
+          astHash: r.ast_hash,
+          codeunitName: r.codeunit_name,
+          procedureName: r.procedure_name ?? "",
+          operatorName: r.operator_name,
+          operatorMajor: r.operator_major,
+          ordinal: r.identity_ordinal ?? 0,
+        };
+        // The tuple is the key without its ordinal (`serializeKey` adds it only above 0).
+        return {
+          key: serializeKey(key),
+          tuple: serializeKey({ ...key, ordinal: 0 }),
+          file: r.file,
+        };
+      });
+    // R391: rule 2 (`carryRecord`) needs the survivors' (file, tuple) and the run's own twin facts.
+    const twins = parseTwinTuples(run.twin_tuples, run.id);
+    return {
+      keys: new Set(kept.map((k) => k.key)),
+      sites: new Set(kept.map((k) => twinSiteOf(k.file, k.tuple))),
+      recorded: {
+        hash: run.generation_source_sha256,
+        twins: twins === null ? null : new Set(twins),
+      },
+    };
   }
 
   /**

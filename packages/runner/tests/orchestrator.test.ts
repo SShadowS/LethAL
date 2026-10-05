@@ -664,6 +664,8 @@ describe("runSession", () => {
           buildSymbols: [],
           coverageMode: "procedure",
           carryHidden: null,
+          generationSourceSha256: null,
+          twinTuples: null,
           targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
           rows: [],
         },
@@ -820,6 +822,8 @@ describe("runSession", () => {
             buildSymbols: [],
             coverageMode: "procedure",
             carryHidden: null,
+            generationSourceSha256: null,
+            twinTuples: null,
             targets: [
               {
                 batchIndex: 0,
@@ -5898,6 +5902,9 @@ async function seedPriorSurvivor(
     appVersion: "0.0.0.1",
     // R442: a run that hid nothing from numbering; a NULL list is untrusted and skips nothing.
     carryHidden: { tuples: [], files: [] },
+    // R391: a run that measured its twins and found none, so the seed (a singleton) carries under
+    // rule 2. A NULL record is "not measured" and carries nothing.
+    twinTuples: [],
   });
   store.recordMutant(runId, {
     mutantCode: "SEED",
@@ -7443,7 +7450,7 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
       [],
       [],
     );
-    expect(keys.size).toBe(0);
+    expect(keys.keys.size).toBe(0);
     store.close();
   });
 });

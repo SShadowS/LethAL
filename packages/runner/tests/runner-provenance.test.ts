@@ -354,6 +354,7 @@ describe("buildResumeIndex carries runner (R69 Phase 2 — the resume hole)", ()
       operatorName: "lethal.negate-conditional",
       identityOrdinal: 0,
       operatorMajor: 1,
+      file: "src/SandboxLogic.Codeunit.al",
       verdict: "killed",
       durationMs: 42,
       ...over,

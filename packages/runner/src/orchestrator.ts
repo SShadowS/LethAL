@@ -41,8 +41,10 @@ import {
   identityFieldsOf,
   identitySiteKey,
   isMutableSite,
+  numberIdentityOrdinals,
   planOneFile,
   reachLatchRefusedOwner,
+  runIdentityEntries,
   runIdentityOrdinals,
   varSectionUnparsed,
   writeInstrumentedProject,
@@ -192,8 +194,9 @@ import {
   filterHistory,
   identityKeyOf,
   testKeyOf,
+  twinSitesOf,
 } from "./selection";
-import type { CoverageAttribution } from "./selection";
+import type { CoverageAttribution, CurrentCarrySide, RecordedCarrySide } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
   describeStaleTestApp,
@@ -3647,10 +3650,14 @@ function resolveResume(
   buildSymbols: readonly string[],
   /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
   refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
-): { runId: number; index: ResumeIndex; carryHidden: CarryHidden } | undefined {
+):
+  | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
+  | undefined {
   if (cfg.resume === undefined) return undefined;
 
   let priorRunId: number;
+  // R391: the resumed run's generation hash and `twin_tuples`, never its `source_sha256`.
+  let recorded: RecordedCarrySide;
   let priorHidden: CarryHidden | null;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
@@ -3714,6 +3721,7 @@ function resolveResume(
         `--resume found run ${found}, but it ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume to run from scratch.`,
       );
     }
+    recorded = recordedCarrySideOf(foundRow);
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -3760,6 +3768,7 @@ function resolveResume(
         `--resume-run ${cfg.resume} ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume-run to run from scratch.`,
       );
     }
+    recorded = recordedCarrySideOf(row);
     priorRunId = cfg.resume;
   }
 
@@ -3812,7 +3821,16 @@ function resolveResume(
     strandedKeyCount: index.strandedKeys.size,
     retryStranded: cfg.retryStranded ?? false,
   });
-  return { runId: priorRunId, index, carryHidden: priorHidden };
+  return { runId: priorRunId, index, carryHidden: priorHidden, recorded };
+}
+
+/** R391: a run row's side of `carryRecord`. A missing row, like a NULL column, carries nothing. */
+function recordedCarrySideOf(row: RunRow | null): RecordedCarrySide {
+  const twins = row?.twinTuples ?? null;
+  return {
+    hash: row?.generationSourceSha256 ?? null,
+    twins: twins === null ? null : new Set(twins),
+  };
 }
 
 /**
@@ -5042,6 +5060,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     identityScheme: IDENTITY_SCHEME,
     buildSymbols,
     coverageMode: caps.coverage,
+    // R391: rule 1's "same source" fact, recorded with the row so no mutant row exists without it.
+    generationSourceSha256: sourceHashAtGeneration,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
     ...(testAppHash !== undefined ? { testAppHash } : {}),
@@ -5112,7 +5132,19 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   cfg.store.setCarryHidden(runId, carryHidden);
   // R374: numbered once over the whole run, here and not inside `generateMutationSet`'s file loop,
   // which then held one entry per mutant until its end (R400). Still inside the generate phase.
-  const identityOrdinals = identityOrdinalsOf({ files: allFiles, reservedIdentityEntries });
+  // `identityOrdinalsOf`'s numbering, from entries kept long enough to read the twins below.
+  const identityEntries = runIdentityEntries(allFiles, operatorTiers, reservedIdentityEntries);
+  const identityOrdinals = numberIdentityOrdinals(identityEntries);
+  // R391: which tuples have a twin in their FILE, from exactly the set the ordinals number. A fact
+  // of the run, written before any mutant row (known-survivor and stranded rows included): an
+  // interrupted run's rows undercount it. `carryCurrent` is this session's side of every carry.
+  const twinTuples = twinSitesOf(identityEntries);
+  cfg.store.setTwinTuples(runId, twinTuples);
+  const carryCurrent: CurrentCarrySide = {
+    hash: sourceHashAtGeneration,
+    twins: new Set(twinTuples),
+    refused: new Set(),
+  };
   // R214: fail loudly if the set recorded on the run (above) and the set generation enumerated
   // under ever diverge; today both read the same snapshot.
   if (!sameBuildSymbols(generatedSymbols, buildSymbols)) {
@@ -5140,6 +5172,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       index: {
         ...resolvedResume.index,
         ...(union.size > 0 ? { carryDisabled: union } : {}),
+        // R391: the resumed run's generation facts against this session's.
+        carryRule: { recorded: resolvedResume.recorded, current: carryCurrent },
       },
     };
   }
@@ -5694,6 +5728,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
         ...(carryDisabled !== undefined ? { carryDisabled } : {}),
+        current: carryCurrent,
       });
       for (const m of knownSurvivors)
         record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
@@ -6445,6 +6480,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Deliberately NOT delegated to design §G's attestation gate — that gate skips a batch that
   // already earned a clean attestation, which a batch can do moments before the lease is lost.
   emitLeaseLostInvalidation(leaseSession, safety, emit);
+
+  // R391: one warning for every recorded verdict a key matched but `carryRecord` refused.
+  if (carryCurrent.refused.size > 0) {
+    emit({
+      type: "warning",
+      code: "carry-refused-renumbered",
+      message: `[lethal] ${carryCurrent.refused.size} mutant(s) matched a recorded verdict by identity key, but that verdict was not carried and the mutant is scored in this run: the source changed since the recorded run (or that run predates the record of it), and the mutant is a twin in its file in either run, or no record of it in its own file was found. A key holds no file, so after an edit it can name another twin (R391).`,
+    });
+  }
 
   // Layer 5C-A Task 8, Task 10 (design §G): a quarantined run must NEVER be marked finished.
   // `priorSurvivorKeys` (store.ts) selects the most recent run with `finished_at IS NOT NULL` and

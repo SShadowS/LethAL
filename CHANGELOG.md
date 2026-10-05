@@ -394,6 +394,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A recorded verdict no longer carries onto a different mutant after an edit** (R391).
+  `--skip-known-survivors` and `--resume` matched a mutant to its earlier record by identity key
+  alone. When two mutants share every identity field, for instance the same statement in two
+  same-named objects, or twice in one procedure, an edit that removed one of them renumbered the
+  other onto its key, and the old verdict, `killed` included, carried to code that never ran.
+  - Now a verdict carries by key only when the project's source is unchanged since the recorded
+    run, interrupted runs included.
+  - After an edit, a verdict carries only to a mutant that is the only one of its kind in its file in
+    both runs, and every such "twin" runs again.
+  - Refused carries are counted in one `carry-refused-renumbered` warning.
+  - No key or baseline changes.
+  - **One-time cost:** history and resume data recorded before this release lack the new run facts,
+    so nothing carries from it; the next run measures everything once.
 - **A `Modify(true)`, `Delete(true)` or `Insert(true)` flip on a receiver LethAL cannot resolve
   keeps its skip tag** (R473). `swap-modify-flag` does not claim such a call, so
   `flip-boolean-literal` flips its `true`, and that flip carried no `run-trigger-skipped-*` tag. It
