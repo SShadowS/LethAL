@@ -105,15 +105,32 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 ### Changed
 
 - **A write a body-exit guard reads, in a `while true` loop, is hang-refused; identity scheme 23**
-  (R446; 22 is held by R-464). When a loop's condition reads no name and calls nothing
+  (R446; 22 was R464). When a loop's condition reads no name and calls nothing
   (`while true`, `until false`), the four value operators now also refuse a write that the guard
   of any of its body exits reads: `exit`, `Error(...)` outside `asserterror`,
   `CurrReport.Quit`/`Break`, or a `break` of that loop. Such a write could leave the loop with no
   way out. The refusals are counted as `hang-refused` sites (R447). This is a scoped rule, not a
-  proof that no mutant hangs; the shapes it still misses are R480. Measured: BC.History 74 sites
-  move from mutated to hang-refused (remove-assignment 55, flip-boolean-literal 11, shift-integer 6,
-  swap-additive 2) and 16 keys move ordinal in `ItemJnlPostLine`; CDO, the fixtures and the examples
-  unchanged. Re-check equivalence marks.
+  proof that no mutant hangs; the shapes it still misses are R480. Measured: MEASURED.
+  Re-check equivalence marks.
+- **One implicit-record resolver; identity scheme 22** (R464; 20 was held for R-464 and is unused,
+  21 is R459). Which record a bare name or a `Rec.`-qualified call binds to is decided in one place
+  in the engine (`recordScopesAt`): a page's `SourceTable`, a TableNo codeunit's `OnRun` (`Rec`
+  only), every enclosing report dataitem, and every enclosing `with` subject; a pageextension stays
+  refused. So a qualified `Rec.Modify(true)` in a page or a TableNo `OnRun` is now claimed exactly
+  as the bare `Modify(true)` was, and bare calls in report dataitems and `with` bodies are claimed
+  on the record they bind to. `lookupVar` gains a precise guard: a record field wins over a
+  variable only where AL binds it (a `with` subject's field over any variable, an implicit record's
+  field over an object global, never in a table or tableextension) and only for a field the
+  project declares. Measured on BaseApp, CDO, the other BC.History apps and every fixture: +3,928
+  Tier-2 mutants; 250 `true` RunTrigger flips cede to `swap-modify-flag` at the same call, none
+  orphaned; no hang refusal moves. Run-trigger tags: 12 dropped where the receiver now resolves
+  and the real predicate proves the trigger absent (CDO Page 6175303 x2, EDocOrderLineMatching,
+  ShpfyVariantImageExport x2, SubBillingActivities, CreateSubContractRenewal,
+  ItemServCommitmentPackages, sandbox-probes LangRefusalRunner, SustExciseJnlPost,
+  AITLogEntries, CommandLineTestTool), 1 added (DeleteExpiredSalesQuotes). Of R473's new skip
+  tags, 231 move onto the replacing `swap-modify-flag` mutant: 198 keep a tag and 33 are untagged
+  by its proof (four of those are a known under-tag, R476). No gate fixture moves. Re-check
+  equivalence marks.
 - **One source snapshot per run, and `--changed-since` diffs against it** (R205). `lethal run`
   reads the target's `.al` files and `app.json` once, before anything else, and every reader of
   them uses that copy: the `--changed-since` lines, the al-runner coverage guard, the selector-id
@@ -404,6 +421,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`validate-to-assign` writes the record the call binds to** (R464). Its bare form synthesized a
+  literal `Rec.`: inside `with R do begin Validate(Amount, 1); end;` in a table trigger or a page,
+  that was `Rec.Amount := 1`, a mutant of a different record (no real site in the measured
+  corpora). It now writes the binding (`R.`, a dataitem name, `Rec.`), and only where that spelling
+  is PROVEN to bind that record: every reachable table is declared in the project and has no field
+  or procedure of that name (in any `#if` arm), and the name is provably undeclared at the call
+  (or, for a `with` subject, the same declaration). Otherwise the site is refused, in `targets()`
+  too. Cost: 29 of the bare sites mutated before are refused (Intrastat 23 and SAF-T 3 in
+  tableextensions of tables outside the project, BaseApp 3), and 6 new claims are not taken
+  (R477). The name scans read the engine's lexer (`maskAlNonCode`), so a `//` inside a string no
+  longer hides the rest of a line, as do `projectDeclaresProcedureOnTable`'s unparsed-object scans.
 - **A recorded verdict no longer carries onto a different mutant after an edit** (R391).
   `--skip-known-survivors` and `--resume` matched a mutant to its earlier record by identity key
   alone. When two mutants share every identity field, for instance the same statement in two

@@ -229,7 +229,7 @@ describe("R459: an Insert(true, true) moves a later twin's key", () => {
     expect(last.key).toBe(`${first.key}|3`);
   });
 
-  it("the identity scheme is 23 (21 for R459, 22 held by R-464, 23 R446)", () => {
+  it("the identity scheme is 23 (21 for R459; 20 unused; 22 R-464; 23 R446)", () => {
     expect(IDENTITY_SCHEME).toBe(23);
   });
 });
