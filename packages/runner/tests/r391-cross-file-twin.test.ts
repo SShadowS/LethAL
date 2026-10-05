@@ -546,30 +546,41 @@ describe("R391: a recorded verdict carries only under rule 1 or rule 2", () => {
     const twinRows = (r: SessionReport) =>
       rows(r).filter((x) => x.startsWith(`${AA} @13`) || x.startsWith(Z));
 
-    const first = await runSession({
-      backend: new SiteBackend({ [`${AA}:13`]: "fail", [`${AA}:14`]: "abort" }),
-      store,
-      ...dirs,
-      selectorIds,
-      maxGuardsPerBatch,
+    // Pin the host collation per run: every `localeCompare` without a locale collates as `host`.
+    // Run 1 is an "en" host and run 2 a Danish one, whatever this machine's default is.
+    const original = String.prototype.localeCompare;
+    const onHost = async <T>(host: string, run: () => Promise<T>): Promise<T> => {
+      String.prototype.localeCompare = function (
+        this: string,
+        that: string,
+        locales?: string | string[],
+        options?: Intl.CollatorOptions,
+      ): number {
+        return original.call(this, that, locales ?? host, options);
+      };
+      try {
+        return await run();
+      } finally {
+        String.prototype.localeCompare = original;
+      }
+    };
+
+    const first = await onHost("en", async () => {
+      expect(["Aa", "Z"].sort((a, b) => a.localeCompare(b))).toEqual(["Aa", "Z"]);
+      return runSession({
+        backend: new SiteBackend({ [`${AA}:13`]: "fail", [`${AA}:14`]: "abort" }),
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch,
+      });
     });
     expect(twinRows(first)).toEqual([`${AA} @13 killed`]);
 
-    // A Danish host: every `localeCompare` without a locale collates as "da".
-    const original = String.prototype.localeCompare;
-    String.prototype.localeCompare = function (
-      this: string,
-      that: string,
-      locales?: string | string[],
-      options?: Intl.CollatorOptions,
-    ): number {
-      return original.call(this, that, locales ?? "da", options);
-    };
     const backend = new SiteBackend({});
-    let second: SessionReport;
-    try {
+    const second = await onHost("da", async () => {
       expect(["Aa", "Z"].sort((a, b) => a.localeCompare(b))).toEqual(["Z", "Aa"]);
-      second = await runSession({
+      return runSession({
         backend,
         store,
         ...dirs,
@@ -577,9 +588,7 @@ describe("R391: a recorded verdict carries only under rule 1 or rule 2", () => {
         maxGuardsPerBatch,
         resume: "last",
       });
-    } finally {
-      String.prototype.localeCompare = original;
-    }
+    });
     const hashes = store.db
       .query("SELECT generation_source_sha256 AS h FROM runs ORDER BY id")
       .all() as { h: string }[];
