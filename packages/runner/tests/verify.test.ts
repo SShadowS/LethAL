@@ -3386,7 +3386,11 @@ describe("C02-09: gap ids", () => {
       expect(pairAnswerOf(o, [{ ...N1, codeunitId: 50199 }], K1)).toBeUndefined();
     });
 
-    /** `scripted`, plus the store writes the real run makes: one row per target and per probe. */
+    /**
+     * `scripted`, plus the store writes the real run makes: one row per target and per probe.
+     * Post-merge weak test (c), R-452: the probe rows come from the requests production's
+     * `cfg.probe` built (captured as the fake asks it), never from the fake's own `res.probes`.
+     */
     const recordingWorld = (
       seeds: readonly Seed[],
       o: Parameters<typeof scripted>[1],
@@ -3397,8 +3401,21 @@ describe("C02-09: gap ids", () => {
         baseline: [T_M],
         published: PUBLISHED,
         runNamed: async (cfg) => {
-          const res = await inner(cfg);
-          for (const r of [...cfg.requests, ...(res.probes ?? []).map((p) => p.request)]) {
+          const sent: NamedMutantRequest[] = [];
+          const { probe } = cfg;
+          const res = await inner({
+            ...cfg,
+            ...(probe !== undefined
+              ? {
+                  probe: (outcomes: readonly SessionOutcome[]) => {
+                    const r = probe(outcomes);
+                    sent.push(...r);
+                    return r;
+                  },
+                }
+              : {}),
+          });
+          for (const r of [...cfg.requests, ...sent]) {
             cfg.store.recordMutant(
               cfg.runId,
               mutantRow(r.mutantId, "survived", { astHash: `h-${r.mutantId}` }),

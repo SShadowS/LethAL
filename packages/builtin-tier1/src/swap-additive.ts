@@ -168,6 +168,12 @@ interface AdditiveFlip {
  *
  * One decision function for both entry points, so `targets()` and `generate()` cannot drift apart
  * about which sites are claimed.
+ *
+ * A BOUND in a loop's own condition (`while I < N - 1`) is KEPT, by ruling (R454 point 4): the 7
+ * such sites on BaseApp were each read and none can loop forever. That is corpus evidence, not a
+ * rule: a bound change can add passes on which a conditional step does not advance
+ * (`while I < N - 1 do if I < 2 then I += 1;` hangs at `N + 1`). The run's timeout, strand and
+ * quarantine handling catches such a site; revisit if a hang from this operator is ever measured.
  */
 function flipFor(node: ALSyntaxNode, ctx: SemanticContext): AdditiveFlip | null {
   const flip = flipBeforeHang(node, ctx);

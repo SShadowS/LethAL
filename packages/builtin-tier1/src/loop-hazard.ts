@@ -24,7 +24,8 @@ import {
  *
  * WHAT IT DELIBERATELY DOES NOT SEE, all UNCLASSIFIED rather than proven safe (spec 3.2): a target
  * read in the loop BODY rather than its condition; preheader assignments; progress that happens
- * through a CALL (which is both hangs in `fixtures/sandbox-hang`); record and field targets; and
+ * through a CALL (which is both hangs in `fixtures/sandbox-hang`); a field target whose receiver
+ * does not resolve (implicit `Rec`, `with`; a resolved `R.Field` IS seen since R454); and
  * condition-side mutations, which are not assignments at all.
  *
  * POSITIONAL AND IDENTITY-BASED, never value-based. `empty-block.ts` records the principle this
@@ -142,12 +143,74 @@ function conditionIdentifiers(loop: ALSyntaxNode, ctx: SemanticContext): ALSynta
     if (isIdentifierLike(n)) out.push(n);
     for (const c of n.namedChildren) walk(c);
   };
-  const cond = conditionOf(loop);
-  if (cond !== null) walk(cond);
-  for (const c of loop.namedChildren) {
-    if (c.rawKind === "preproc_conditional_expression_tail") walk(c);
-  }
+  for (const part of loopConditionParts(loop)) walk(part);
   return out;
+}
+
+/**
+ * A loop's exit test: its `condition` field plus the `#if` tails the grammar puts BESIDE it (R402).
+ * Exported so `shift-integer`'s loop-condition refusal reads the same parts (R454 shape 1).
+ */
+export function loopConditionParts(loop: ALSyntaxNode): ALSyntaxNode[] {
+  const cond = conditionOf(loop);
+  return [
+    ...(cond !== null ? [cond] : []),
+    ...loop.namedChildren.filter((c) => c.rawKind === "preproc_conditional_expression_tail"),
+  ];
+}
+
+/**
+ * R454 shape 3: a `Rec.Field` read or write, kept as TWO parts, the receiver's resolved declaration
+ * and the normalised member name. Never joined into one string: `"A.B".C` and `A."B.C"` can share a
+ * declaration list and would join to the same text. An unresolved receiver (`with`, implicit `Rec`)
+ * gives null, so the site stays declined (spec 3.1).
+ */
+interface MemberRef {
+  readonly receiver: NonNullable<ReturnType<typeof resolveVarRef>>;
+  readonly member: string;
+}
+
+function memberRefOf(n: ALSyntaxNode, ctx: SemanticContext): MemberRef | null {
+  if (n.kind !== ALNodeKind.field_access) return null;
+  const obj = n.childForFieldName("object");
+  const mem = n.childForFieldName("member");
+  if (obj === null || mem === null || !isIdentifierLike(obj)) return null;
+  const receiver = resolveVarRef(obj, ctx);
+  return receiver === null ? null : { receiver, member: normalizeAlName(mem.text) };
+}
+
+/** Does the loop's condition read `target`? Same arm and marker rules as `conditionIdentifiers`. */
+function conditionReadsMember(
+  loop: ALSyntaxNode,
+  target: MemberRef,
+  ctx: SemanticContext,
+): boolean {
+  const walk = (n: ALSyntaxNode): boolean => {
+    if (DIRECTIVE_MARKERS.has(n.rawKind)) return false;
+    if (armOfNode(ctx, n) === "inactive") return false;
+    const ref = memberRefOf(n, ctx);
+    if (
+      ref !== null &&
+      ref.member === target.member &&
+      sameDeclaration(ref.receiver, target.receiver)
+    ) {
+      return true;
+    }
+    return n.namedChildren.some(walk);
+  };
+  return loopConditionParts(loop).some(walk);
+}
+
+/** The member target of the assignment at, or enclosing, `node`, or null. `assignmentTargetOf`
+ *  stays identifier-only, which the census scripts assert. */
+function memberTargetOf(node: ALSyntaxNode, ctx: SemanticContext): MemberRef | null {
+  for (let cur: ALSyntaxNode | null = node; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (cur.kind === ALNodeKind.assignment_statement) {
+      const left = cur.childForFieldName("left") ?? cur.namedChildren[0] ?? null;
+      return left === null ? null : memberRefOf(left, ctx);
+    }
+  }
+  return null;
 }
 
 /**
@@ -210,7 +273,17 @@ export function classifyHangCapable(
   ctx: SemanticContext,
 ): HangCapableReason | null {
   const target = assignmentTargetOf(node);
-  if (target === null) return null;
+  if (target === null) {
+    // R454 shape 3: a member target, matched by receiver declaration and member name separately.
+    const ref = memberTargetOf(node, ctx);
+    if (ref === null) return null;
+    for (let cur = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+      if (LOOP_KINDS.has(cur.kind) && conditionReadsMember(cur, ref, ctx)) {
+        return "loop-condition-target";
+      }
+    }
+    return null;
+  }
   const targetSym = resolveVarRef(target, ctx);
   if (targetSym === null) return null;
 

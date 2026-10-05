@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**101 of 450 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**101 of 456 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -175,7 +175,13 @@ that ordering is the priority.
 - **R446** · A loop whose only exit is a guard in its BODY still gets a non-terminating `remove-assignment` mutant on the counter that guard reads · [R446.md](docs/roadmap/R446.md) · open
 - **R448** · GitHub CI's Windows job has been red on master since the R-307 merge: 13 R307 refusal tests and the 1 GB measure-peak probe fail on Windows only · [R448.md](docs/roadmap/R448.md) · done (18dd5957)
 - **R450** · A `SourceTable` or `TableNo` property inside a member-level `#if` is not seen, so R-294's implicit-with refusal does not engage and a field-shadowed global is still typed · [R450.md](docs/roadmap/R450.md) · closed 2026-10-05 — 0 objects have SourceTable/TableNo under a member-level #if…
-- **R452** · A skipped `OnModify` (`Modify(true)` to `Modify(false)`, `ModifyAll(..., true)`) is untagged, the same class R281 fixes for `Delete` · [R452.md](docs/roadmap/R452.md) · blocked (R281)
+- **R452** · A skipped `OnModify` (`Modify(true)` to `Modify(false)`, `ModifyAll(..., true)`) is untagged, the same class R281 fixes for `Delete` · [R452.md](docs/roadmap/R452.md) · done (362ead0e)
+- **R454** · Hang-capable mutants that R-196's refusal still lets through untagged: a literal in an active `#if` loop-condition tail, a literal inside a comparison in a loop condition, and member-target loop writes · [R454.md](docs/roadmap/R454.md) · done (f023b8a2)
+- **R455** · Typed operators can still mistype a name after R-294: a field-designator argument of a record builtin (`R.SetRange(Amount, Value)`), and an unqualified call inside `with` · [R455.md](docs/roadmap/R455.md) · done (b2c3c740)
+- **R456** · A report whose request page declares `SourceTable` is an implicit-record scope in its OWN triggers and procedures too; R294's predicate types them by the report's globals · [R456.md](docs/roadmap/R456.md) · closed 2026-10-05 — stated limit: real in alc, but 0 typed mutants in the 3 BaseApp reports with a…
+- **R458** · Loop writes through a receiver the hang walk cannot resolve (implicit `Rec` fields, `with`, report globals, xmlport locals) are still mutated untagged: BaseApp 38 sites / 50 mutants, CDO 2, including 13 table number-series loops · [R458.md](docs/roadmap/R458.md) · open
+- **R457** · `flip-boolean-literal`'s `false` -> `true` RunTrigger flip on `ModifyAll`/`DeleteAll` FORCES the trigger, R165's `run-trigger-forced` class, and is untagged · [R457.md](docs/roadmap/R457.md) · done (d8833acb)
+- **R459** · Two-argument `Insert(RunTrigger, InsertWithSystemId)`: the forcing `false` flip is untagged, and the cession orphans the second argument's `true` and the first argument's `true` · [R459.md](docs/roadmap/R459.md) · open
 
 ## Product gaps a real project hits
 
@@ -493,7 +499,7 @@ that ordering is the priority.
 - **R435** · On al-runner the dependency fingerprint still reads Microsoft apps by declared version; resolve them from the provisioned platform-apps directory before verify supports al-runner · [R435.md](docs/roadmap/R435.md) · open, filed 2026-10-04
 - **R439** · Two more unit tests time out at Bun's 5 s default under machine load and pass alone: manifest-stream's short-writes test and runSession's I7 transport-error abort · [R439.md](docs/roadmap/R439.md) · done (8ef7ce7e)
 - **R440** · scripts/r402-shape-sweep.ts crashes since R-307: it calls writeInstrumentedProject without identityOrdinals, and no typecheck covers the script · [R440.md](docs/roadmap/R440.md) · done (3e3555ab)
-- **R449** · Three SQLite-heavy unit tests time out at bun's 5 s default on GitHub CI's Windows job only (7 to 8.3 s), each passing on other runs · [R449.md](docs/roadmap/R449.md) · open, filed 2026-10-05
+- **R449** · Three SQLite-heavy unit tests time out at bun's 5 s default on GitHub CI's Windows job only (7 to 8.3 s), each passing on other runs · [R449.md](docs/roadmap/R449.md) · done (f224fa0d)
 - **R453** · al-runner loses a reportextension after a test calls Code Coverage Mgt. (found by the R-254 probe) · [R453.md](docs/roadmap/R453.md) · open, filed 2026-10-05
 
 ---

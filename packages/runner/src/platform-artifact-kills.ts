@@ -87,23 +87,39 @@ export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism,
     "the primary key is not visible at the call site, and for a base-app record it is not visible " +
     "at all. Treat it as a prompt to read the kill, not as a verdict on it.",
   "run-trigger-skipped-delete":
-    "rewriting `Delete(true)` to `Delete(false)` skips `OnDelete` and the table's delete " +
-    "subscribers. When that code deletes or writes OTHER rows (child lines, a log row), those rows " +
-    "are left behind, and a later insert of one can raise a duplicate key before any assertion " +
-    "runs. Kept wherever LethAL cannot prove the skipped code harmless, which includes every table " +
+    "rewriting `Delete(true)` to `Delete(false)`, or `DeleteAll(true)` to `DeleteAll(false)`, " +
+    "skips `OnDelete`. The table's delete events still fire, with `RunTrigger` false, so a " +
+    "subscriber that branches on that flag, or on state the skipped trigger would have changed, " +
+    "behaves differently too. When the skipped code deletes or writes OTHER rows (child lines, a " +
+    "log row), those rows are left behind, and a later insert of one can raise a duplicate key " +
+    "before any assertion runs. Kept wherever LethAL cannot prove the skipped code harmless, which includes every table " +
     "it cannot read, such as a base-app record. It cannot see a delete subscriber or a " +
     "`tableextension` delete trigger in another app (the test app, say). WEAK, like the `Insert` " +
     "tag: the duplicate-key route is not measured live for `Delete`, and whether `RunTrigger` " +
     "changes how BC deletes record links, notes or media is not measured either. Treat it as a " +
     "prompt to read the kill, not as a verdict on it.",
+  "run-trigger-skipped-modify":
+    "rewriting `Modify(true)` to `Modify(false)`, or `ModifyAll(Field, Value, true)` to " +
+    "`ModifyAll(Field, Value, false)`, skips `OnModify`. The table's modify events still fire, " +
+    "with `RunTrigger` false, so a subscriber that branches on that flag, or on state the skipped " +
+    "trigger would have changed, behaves differently too. When the skipped code deletes or writes " +
+    "OTHER rows, those writes do not happen, and a later statement can " +
+    "raise on the rows they would have changed (a duplicate key, a missing record) before any " +
+    "assertion runs. Kept wherever LethAL cannot prove the skipped code harmless, which includes " +
+    "every table it cannot read, such as a base-app record. SCOPE: it reads only this project. A " +
+    "modify subscriber or `tableextension` modify trigger in another app (the test app, say) is " +
+    "not read, so finding none here is not proof that none exists. WEAK, like the `Delete` tag: " +
+    "the route is not measured live. Treat it as a prompt to read the kill, not as a verdict on it.",
   "run-trigger-forced":
-    "rewriting `Modify()` to `Modify(true)` makes the table's `OnModify` RUN where it did not — " +
-    "`Rec.Modify()` means `RunTrigger = false`. Forcing a trigger writes more than the unmutated " +
-    "program, so unlike skipping one it can add an error the suite never had to catch: an " +
-    "`Error`, a `TestField`, a `FieldError`, or a write to another table hitting a duplicate key " +
-    "or a locked row. STRONGER THAN `run-trigger-skipped-insert`: this operator is scoped to " +
-    "tables this project declares AND that declare the trigger, so the tag is emitted only where " +
-    "the trigger body PROVABLY contains a raise-capable statement, never as a blanket. It " +
-    "under-tags for a raise reached through a project procedure, which is the honest direction " +
-    "for a screen whose value is that a tag means something.",
+    "rewriting `Modify()` or `Modify(false)` to `Modify(true)` (and the same for `Insert`, " +
+    "`Delete`, `ModifyAll(Field, Value, false)` and `DeleteAll(false)`) makes the table's trigger " +
+    "RUN where it did not, and raises its events with `RunTrigger` true. Forcing a trigger writes " +
+    "more than the unmutated program, so unlike skipping one it can add an error the suite never " +
+    "had to catch: an `Error`, a `TestField`, a `FieldError`, or a write to another table hitting " +
+    "a duplicate key or a locked row. Kept unless LethAL proves the table has no such trigger and " +
+    "no subscriber or `tableextension` trigger for it in this project. No trigger body is read, so " +
+    "every table with that trigger keeps it, and so does every table it cannot read, such as a " +
+    "base-app record. SCOPE: it reads only this project. A subscriber or `tableextension` trigger " +
+    "in another app (the test app, say) is not read, so finding none here is not proof that none " +
+    "exists. Treat it as a prompt to read the kill, not as a verdict on it.",
 };

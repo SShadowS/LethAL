@@ -3797,6 +3797,10 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     const { files } = await generateMutationSet(dirs.projectDir);
     const texts = files.flatMap((f) => f.specs.map((s) => s.before.text.replace(/\s+/g, " ")));
     expect(texts).not.toContain("Remaining := Remaining - 1");
+    // swap-additive's `before` is the EXPRESSION, so the statement check alone misses it (R454).
+    expect(texts).not.toContain("Remaining - 1");
+    // Control: the preheader `Remaining + 1` is still emitted by the same operator.
+    expect(texts).toContain("Remaining + 1");
   });
 
   test("reports zero rather than nothing on a project with no hang-capable site", async () => {
@@ -15114,6 +15118,12 @@ describe("C02-06 Task 5.4: runVerify", () => {
       unknown: ["0/M0002"],
       overCap: 0,
     };
+    // Post-merge weak test (b), R-452: the group's attestation must be clean, or `runProbes`' own
+    // unattested-probe gate answers `unknown` and the attempted-set guard is never what decides.
+    // It is: M0003's run in the same group attests (NamedFake's default), and the skip verdict
+    // below now carries a clean attestation of its own. Revert: delete the R198 attempted-set guard
+    // in `runMutantsOnBackend`; all three cases go red (measured).
+    const clean = { observedAny: true, identityMismatch: false } as const;
     const endings: ReadonlyArray<readonly [string, (ref: TestMethodRef) => RunManyResult]> = [
       [
         "a skip",
@@ -15121,7 +15131,7 @@ describe("C02-06 Task 5.4: runVerify", () => {
           kind: "verdicts",
           endedBy: "failure",
           ranCount: 1,
-          verdicts: [{ ref, outcome: "skip", durationMs: 1 }],
+          verdicts: [{ ref, outcome: "skip", durationMs: 1, attestation: clean }],
           durationMs: 1,
           fencedOp: fencedOp(),
         }),
