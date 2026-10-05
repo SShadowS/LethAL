@@ -37,6 +37,9 @@ const NON_WRITING_RECORD_METHODS: ReadonlySet<string> = new Set([
 /** The table triggers a skip can be judged for. */
 export type HarmlessTriggerKind = "delete" | "modify";
 
+/** R-457: the table triggers a RunTrigger argument can force or skip. */
+export type RunTriggerKind = HarmlessTriggerKind | "insert";
+
 /** System calls that write nothing. Harmless only UNQUALIFIED and not shadowed (`claimsSystemCall`). */
 const NON_WRITING_SYSTEM_CALLS: ReadonlySet<string> = new Set(["error", "message", "confirm"]);
 
@@ -46,7 +49,7 @@ const OWN_RECORD_NAMES: ReadonlySet<string> = new Set(["rec", "xrec"]);
  *  it, and the text an unindexed object is matched by. */
 const SKIP_KINDS: Readonly<
   Record<
-    HarmlessTriggerKind,
+    RunTriggerKind,
     {
       readonly trigger: string;
       readonly events: ReadonlySet<string>;
@@ -66,6 +69,12 @@ const SKIP_KINDS: Readonly<
     events: new Set(["onbeforemodifyevent", "onaftermodifyevent"]),
     extensionTriggers: ["OnBeforeModify", "OnAfterModify"],
     unindexedText: /on(before|after)modify/i,
+  },
+  insert: {
+    trigger: "OnInsert",
+    events: new Set(["onbeforeinsertevent", "onafterinsertevent"]),
+    extensionTriggers: ["OnBeforeInsert", "OnAfterInsert"],
+    unindexedText: /on(before|after)insert/i,
   },
 };
 const EVENT_NAME_KINDS: ReadonlySet<string> = new Set([
@@ -184,12 +193,14 @@ function procedureNamesOn(table: ObjectSymbol, symbols: SymbolTable): ReadonlySe
   return names;
 }
 
-/** Does the project subscribe to this table's `kind` events, or extend its `kind` triggers? */
+/** Does the project subscribe to this table's `kind` events, or extend its `kind` triggers?
+ *  `armOf` decides which member-level `#if` arms of an extension's triggers count. */
 function projectObserves(
   table: ObjectSymbol,
   symbols: SymbolTable,
   ctx: SemanticContext,
-  kind: HarmlessTriggerKind,
+  kind: RunTriggerKind,
+  armOf: ((node: ALSyntaxNode) => NodeArm) | undefined = rawArmOf(ctx),
 ): boolean {
   const { events, extensionTriggers, unindexedText } = SKIP_KINDS[kind];
   const tableName = table.name.toLowerCase();
@@ -197,7 +208,7 @@ function projectObserves(
     if (ext.baseObject.toLowerCase() !== tableName) continue;
     if (armOfNode(ctx, ext.node) === "undecided") return true;
     for (const t of extensionTriggers) {
-      if (findTableTrigger(ext.node, t, rawArmOf(ctx)) !== null) return true;
+      if (findTableTrigger(ext.node, t, armOf) !== null) return true;
     }
   }
   // Objects the symbol table does not index (wrapped whole in `#if`, or unparsable) are read by
