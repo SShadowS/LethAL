@@ -387,8 +387,9 @@ export function buildSymbolTable(
     // Globals: the first var_section that's a direct member of the object, as before, plus (R405 a)
     // every var_section inside a member-level `#if` whose arm the build compiles, in source order.
     const varSections = placed.filter((m) => m.node.kind === ALNodeKind.var_section);
-    const firstDirect = varSections.find((m) => m.place === "direct");
-    const globalSections = varSections.filter((m) => m === firstDirect || m.place === "inside-if");
+    const globalSections = varSections.filter(
+      (m) => m.place === "direct" || m.place === "inside-if",
+    );
     if (globalSections.length > 0) {
       globals.set(
         ownerName,
