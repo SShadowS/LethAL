@@ -161,9 +161,11 @@ export function coarseIdentityTupleOf(
  * (not indexed) the same refusal matches an unresolved target by name, so hang-capable writes
  * there are removed and a later same-tuple twin takes the removed one's ordinal. 17: R254, a
  * reportextension is instrumented; its mutants take ordinals, so a same-named twin elsewhere can
- * move.
+ * move. 18: R-458, the same refusal also matches by name through every `with` subject and implicit
+ * record (`Rec`, report dataitems, reportextension `modify`) a target's name can bind to, so those
+ * hang-capable writes are removed and a later same-tuple twin takes the removed one's ordinal.
  */
-export const IDENTITY_SCHEME = 17;
+export const IDENTITY_SCHEME = 18;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

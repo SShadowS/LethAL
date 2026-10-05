@@ -115,6 +115,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   mutants, consistent with alc compiling every `.al` under the folder, and a renamed or new path is
   selected whole. The refusal of an `.al` marked assume-unchanged or skip-worktree is removed: the
   index is no longer read for content, so such a file's edits are seen.
+- **Identity scheme 18** (R-458; 17 was R254). The hang refusal through implicit
+  records and `with` subjects (below) removes mutants, and a later same-tuple twin of a removed
+  mutant can take its key: re-check equivalence marks.
 - **Identity scheme 16** (R-364; 15 is reserved for R-254). The hang refusal below removes
   mutants inside wrapped objects, and a later same-tuple twin of a removed mutant can take its key:
   re-check equivalence marks.
@@ -378,6 +381,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The loop-hang refusal now sees writes through an implicit record or a `with` subject** (R-458).
+  A loop that writes a field through `Rec` (table, tableextension, pageextension, page with
+  `SourceTable`, TableNo codeunit `OnRun`, request page), a report dataitem, a reportextension
+  `modify(X)` or a `with` subject, and reads it back in its condition, was mutated with no refusal
+  (for example a table's number-series loop). Such a site is now refused by name and counted in
+  `hang-refused`, following R294's measured precedence (a local wins over the field outside a
+  `with`; a global wins in a table). Measured: 43 more refused sites (BaseApp 37, CDO 2, other
+  BC.History apps 4), nothing else changed; some are over-refusals (e.g. a loop that also ends on
+  `Next() = 0`).
 - **A target whose unmutated build alc rejects is refused as that, not blamed on a mutant or the
   environment** (R461). At a session's first compile failure (bcdev, sequential path), LethAL now
   compiles its staged copy of the unmutated target once. If alc rejects that too, the run stops
