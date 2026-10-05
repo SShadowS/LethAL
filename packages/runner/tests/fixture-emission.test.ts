@@ -27,6 +27,8 @@ import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/o
  * hang-capable (they were 977eb7bb...ef67 and f7b49d85...86e6). R281: sandbox-data's manifest was
  * re-pinned because `Data Flag Ops.DeleteWithTrigger`'s `Delete(true)` mutant now carries
  * `platformKillMechanism: run-trigger-skipped-delete`, its only change (it was 90fa82e4...17ba).
+ * R-457: sandbox-data's manifest re-pinned because seven mutants (M0034, M0045, M0056, M0065,
+ * M0186, M0223, M0362) gained `run-trigger-forced`, its only change (it was 65d75386...e4ea).
  */
 const PINNED: Record<
   string,
@@ -102,7 +104,7 @@ const PINNED: Record<
         "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
-      "mutant-manifest.json": "65d753862d2165e9f8e60202124b9df621a08e0b8de84a9d0da41d8a7f3fe4ea",
+      "mutant-manifest.json": "245847db4008b2c9eb4c9063380fa0e4eb6dad7dd8bafc07fc18bdfd8be1a603",
     },
   },
   "sandbox-hang": {

@@ -156,6 +156,34 @@ export function deleteSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): bo
   return skipCanRaise(node, ctx, "delete");
 }
 
+/**
+ * R-457: for a call that FORCES the receiver table's `kind` trigger (`Modify()` or `Modify(false)`
+ * to `Modify(true)`, `ModifyAll(F, V, false)` to `..., true)`, `DeleteAll(false)` to
+ * `DeleteAll(true)`), does the mutant keep `run-trigger-forced`? TRUE unless the table resolves, its
+ * file is decided, the project neither subscribes to its `kind` events nor extends its `kind`
+ * triggers, and it declares no `On<Kind>`. No trigger body is read: R165's reading of one missed
+ * calls without parentheses, `with`, indirect calls and raising assignments. An UNDECIDED member
+ * arm counts as present, and with no arm map so does every `#if` arm (only "inactive" is skipped).
+ * A subscriber or tableextension in ANOTHER app is not visible here (stated in the explanation).
+ */
+export function forceCanRaise(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  kind: RunTriggerKind,
+): boolean {
+  const tableRef = resolveReceiverTable(node, ctx);
+  if (tableRef === null) return true;
+  const symbols = (ctx as { symbols?: SymbolTable } | undefined)?.symbols;
+  if (symbols === undefined) return true;
+  const table = symbols.resolveObject({ kind: "table", idOrName: tableRef });
+  if (table === null) return true;
+  if (armOfNode(ctx, table.node) === "undecided") return true;
+  const raw = rawArmOf(ctx);
+  const anyArm = (n: ALSyntaxNode): NodeArm => (raw?.(n) === "inactive" ? "inactive" : "active");
+  if (projectObserves(table, symbols, ctx, kind, anyArm)) return true;
+  return findTableTrigger(table.node, SKIP_KINDS[kind].trigger, anyArm) !== null;
+}
+
 /** R-452: `skipCanRaise` for `Modify(true)` and `ModifyAll(F, V, true)`. */
 export function modifySkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   return skipCanRaise(node, ctx, "modify");
@@ -343,8 +371,7 @@ export function findTableTrigger(
   return null;
 }
 
-/** The bare method name of a call, qualified or not. Same as the copy in Tier 2's
- *  `forced-trigger-raise.ts`, which its forcing half still uses. */
+/** The bare method name of a call, qualified or not. */
 function calleeName(call: ALSyntaxNode): string | null {
   const callee = call.childForFieldName("function");
   if (callee === null) return null;

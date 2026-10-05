@@ -89,6 +89,7 @@ export type { HarmlessTriggerKind, RunTriggerKind } from "./semantic/trigger-ski
 export {
   deleteSkipCanRaise,
   findTableTrigger,
+  forceCanRaise,
   isHarmlessTriggerCall,
   modifySkipCanRaise,
   skipCanRaise,

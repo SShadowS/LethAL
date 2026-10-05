@@ -1,7 +1,9 @@
 import {
+  type RunTriggerKind,
   claimsRecordMethod,
   deleteSkipCanRaise,
   exactArguments,
+  forceCanRaise,
   inMemberBody,
   modifySkipCanRaise,
 } from "@lethal/engine";
@@ -84,14 +86,17 @@ const CASE_LABEL_PARENTS: ReadonlySet<string> = new Set(["case_branch", "case_st
  * compile probe failed 2 of 10 shapes on it. `CASE_LABEL_PARENTS` is the refusal; everywhere else the
  * type argument does hold, verified against real `alc` on every shape the corpus contains.
  *
- * **`PlatformKillMechanism` only on a RunTrigger it skips (R-452).** Flipping a value is ordinary
- * changed behaviour. `Rec.Insert(true)` to `Insert(false)` skips a trigger and can die on a
- * duplicate key with no assertion, which is why R138 tagged it, and those sites are ceded to
- * `swap-modify-flag`, which carries the tag. `ModifyAll` and `DeleteAll` are NOT ceded, so their
+ * **`PlatformKillMechanism` only on a RunTrigger it skips (R-452) or forces (R-457).** Flipping a
+ * value is ordinary changed behaviour. `Rec.Insert(true)` to `Insert(false)` skips a trigger and
+ * can die on a duplicate key with no assertion, which is why R138 tagged it, and those sites are
+ * ceded to `swap-modify-flag`, which carries the tag. `ModifyAll` and `DeleteAll` are NOT ceded, so their
  * RunTrigger flips are this operator's: `ModifyAll(F, V, true)` and `DeleteAll(true)` flipped to
  * `false` skip `OnModify`/`OnDelete` for every affected row, and carry the same tag as
- * `Modify`/`Delete`, from the same engine detector (`runTriggerSkipTag`). The `false` -> `true`
- * direction forces the trigger and is not tagged here.
+ * `Modify`/`Delete`, from the same engine detector (`runTriggerTag`). The `false` -> `true`
+ * direction FORCES the trigger, at `Modify`/`Insert`/`Delete` (a `false` there is not ceded) as well
+ * as `ModifyAll`/`DeleteAll`, and carries `run-trigger-forced` unless `forceCanRaise` proves the
+ * table has no such trigger and no observer of it in this project. A two-argument `Insert(false, X)`
+ * is not read (exact count 1) and stays untagged.
  *
  * **Documented limits:**
  *   - Equivalence is not detected. A flipped boolean that no path reads is an equivalent mutant this
@@ -118,7 +123,7 @@ export const flipBooleanLiteral: MutationOperator = {
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const after = flipped(node, ctx);
     if (after === null) return [];
-    const platformKillMechanism = runTriggerSkipTag(node, ctx);
+    const platformKillMechanism = runTriggerTag(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -230,52 +235,63 @@ export const flipBooleanLiteral: MutationOperator = {
 };
 
 /**
- * R-452: the Record methods whose RunTrigger argument this operator flips (not ceded), its position
- * under an EXACT argument count, and the skip detector that judges a `true` -> `false` flip. AL has
- * no named arguments (alc 18: AL0104 on `RunTrigger := true`), so the position is the whole answer.
+ * R-452: the Record methods whose RunTrigger argument this operator flips, its position under an
+ * EXACT argument count, the trigger kind it runs, and the skip detector that judges a `true` ->
+ * `false` flip. AL has no named arguments (alc 18: AL0104 on `RunTrigger := true`), so the position
+ * is the whole answer. R-457 adds `Modify`/`Delete`/`Insert`: their `true` is ceded to
+ * `swap-modify-flag`, so only the forcing `false` reaches this operator, and they have no `skip`.
  */
 const RUN_TRIGGER_ARGUMENTS = [
   {
     method: "ModifyAll",
     count: 3,
     index: 2,
-    canRaise: modifySkipCanRaise,
-    tag: "run-trigger-skipped-modify",
+    kind: "modify",
+    skip: { canRaise: modifySkipCanRaise, tag: "run-trigger-skipped-modify" },
   },
   {
     method: "DeleteAll",
     count: 1,
     index: 0,
-    canRaise: deleteSkipCanRaise,
-    tag: "run-trigger-skipped-delete",
+    kind: "delete",
+    skip: { canRaise: deleteSkipCanRaise, tag: "run-trigger-skipped-delete" },
   },
+  { method: "Modify", count: 1, index: 0, kind: "modify", skip: null },
+  { method: "Delete", count: 1, index: 0, kind: "delete", skip: null },
+  { method: "Insert", count: 1, index: 0, kind: "insert", skip: null },
 ] as const satisfies readonly {
   method: string;
   count: number;
   index: number;
-  canRaise: (node: ALSyntaxNode, ctx: SemanticContext) => boolean;
-  tag: PlatformKillMechanism;
+  kind: RunTriggerKind;
+  skip: {
+    canRaise: (node: ALSyntaxNode, ctx: SemanticContext) => boolean;
+    tag: PlatformKillMechanism;
+  } | null;
 }[];
 
 /**
- * The tag for a `true` that IS the RunTrigger argument of a Record `ModifyAll`/`DeleteAll` (the
- * argument itself, span-equal, read comment-aware through `exactArguments`; a `(true)` or any other
- * expression around it is not), when skipping that trigger is not proven harmless. Else `undefined`.
+ * The tag for a literal that IS the RunTrigger argument of a Record method in
+ * `RUN_TRIGGER_ARGUMENTS` (the argument itself, span-equal, read comment-aware through
+ * `exactArguments`; a `(true)` or any other expression around it is not). A `true` (skip) gets the
+ * skip tag when skipping that trigger is not proven harmless; a `false` (force) gets
+ * `run-trigger-forced` unless `forceCanRaise` proves nothing runs. Else `undefined`.
  */
-function runTriggerSkipTag(
+function runTriggerTag(
   node: ALSyntaxNode,
   ctx: SemanticContext,
 ): PlatformKillMechanism | undefined {
-  if (node.text.toLowerCase() !== "true") return undefined;
+  const value = node.text.toLowerCase();
   const call = node.parent?.parent;
   if (call?.kind !== ALNodeKind.procedure_call) return undefined;
-  for (const { method, count, index, canRaise, tag } of RUN_TRIGGER_ARGUMENTS) {
+  for (const { method, count, index, kind, skip } of RUN_TRIGGER_ARGUMENTS) {
     const arg = exactArguments(call, count)?.[index];
     if (arg === undefined || arg.startIndex !== node.startIndex || arg.endIndex !== node.endIndex) {
       continue;
     }
     if (!claimsRecordMethod(call, ctx, method)) continue;
-    return canRaise(call, ctx) ? tag : undefined;
+    if (value === "false") return forceCanRaise(call, ctx, kind) ? "run-trigger-forced" : undefined;
+    return skip?.canRaise(call, ctx) ? skip.tag : undefined;
   }
   return undefined;
 }

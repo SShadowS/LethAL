@@ -898,3 +898,26 @@ describe("swap-modify-flag Modify mechanism (R-452)", () => {
     expect(skipTag({ "P.al": t, "K.al": KID, "O.al": both }, "Par.Delete")).toBeUndefined();
   });
 });
+
+// R-457. The forward direction (`Modify()` -> `Modify(true)`) keeps `run-trigger-forced` wherever
+// the trigger exists: no trigger body is read, so a "harmless-looking" one keeps it too.
+describe("swap-modify-flag forward mechanism (R-457)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  // Revert: decide by R165's recogniser (a parenthesised raise-capable call in the body).
+  it("tags Modify() on a table whose OnModify only increments a field", () => {
+    const t = `table 50300 "Par"\n{\n    fields { field(1; "No."; Code[20]) { } field(2; Amount; Decimal) { } }\n    keys { key(PK; "No.") { } }\n    trigger OnModify()\n    begin\n        Amount := Amount + 1;\n    end;\n}\n`;
+    const caller = `codeunit 50301 "Ops" { procedure P() var Par: Record "Par"; begin Par.Modify(); end; }`;
+    const roots = [parseClean(t), parseClean(caller)];
+    const ctx = projectContextFor(roots);
+    const specs = roots
+      .flatMap((r) => findAll(r, ALNodeKind.procedure_call))
+      .filter((n) => n.text === "Par.Modify()" && swapModifyFlag.targets(n, ctx))
+      .flatMap((n) => swapModifyFlag.generate(n, ctx));
+    expect(specs.map((s) => `${s.after.text} ${s.platformKillMechanism ?? "-"}`)).toEqual([
+      "Par.Modify(true) run-trigger-forced",
+    ]);
+  });
+});
