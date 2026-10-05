@@ -351,6 +351,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **Three more loop-hang shapes are refused; identity scheme 14** (R454). `shift-integer` now
+  refuses a literal in a loop condition's `#if` tail; `flip-boolean-literal` refuses a literal
+  inside a comparison in a loop's exit test (`until X.Next() = false`) or an in-loop `if` guard;
+  and all four value operators refuse a write to `R.Field` that an enclosing loop's condition
+  reads (receiver and field compared separately; an unresolved receiver is still not seen). The
+  first two are silent refusals; the third counts into `hang-refused`. Measured: BaseApp loses 47
+  mutants (15 more hang-refused), CDO 1, no fixture or gate figure moves. A later same-tuple twin
+  of a refused mutant can take its key, hence the scheme bump: marks files need
+  `"identityScheme": 14` after re-checking each mark (R325).
 - **`swap-call-arguments` no longer swaps an argument that names a field** (R455). In
   `R.SetRange(Amount, Value)` the first argument is the record's field even when a local has the
   same name, so the swap did not compile (AL0166). Record builtins are matched by method name, with
@@ -366,7 +375,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **Identity scheme 13** (R455; 12 is reserved for R254): swaps and additive flips are removed, so
   same-tuple ordinals can move. Every older store stops resuming once, the next
   `--skip-known-survivors` run skips nothing once, and marks files need `"identityScheme": 13`
-  after re-checking each mark (R325).
+  after re-checking each mark (R325). History only: R454 moved the effective scheme to 14, so
+  marks files now need `"identityScheme": 14`.
 - **No more wrong swaps and claims from the later names of `A, B: T`** (R295). Only the first name
   of a multi-name declaration was seen, so a use of B was typed by a same-named global of another
   type: `swap-call-arguments` emitted swaps `alc` rejects (AL0133) and `remove-setrange` claimed a

@@ -6,7 +6,7 @@ import {
   type MutationSpec,
   type SemanticContext,
 } from "@lethal/operator-sdk";
-import { hangCapableForMutatedNode } from "./loop-hazard";
+import { hangCapableForMutatedNode, loopConditionParts } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.shift-integer";
@@ -189,13 +189,13 @@ function inExecutableBody(node: ALSyntaxNode): boolean {
   return inMemberBody(node);
 }
 
-/** In the CONDITION of a `repeat` or `while`, see the doc comment for why those are refused. */
+/** In the CONDITION of a `repeat` or `while`, `#if` tails included (R454), see the doc comment for
+ *  why those are refused. */
 function inLoopCondition(node: ALSyntaxNode): boolean {
   for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
     if (p.rawKind === "repeat_statement" || p.rawKind === "while_statement") {
-      const cond = p.childForFieldName("condition");
-      if (cond !== null && node.startIndex >= cond.startIndex && node.endIndex <= cond.endIndex) {
-        return true;
+      for (const cond of loopConditionParts(p)) {
+        if (node.startIndex >= cond.startIndex && node.endIndex <= cond.endIndex) return true;
       }
     }
     // R302: the member boundary. Nothing encloses a member, so this stop is for consistency.
