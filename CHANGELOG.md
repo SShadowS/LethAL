@@ -115,6 +115,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   mutants, consistent with alc compiling every `.al` under the folder, and a renamed or new path is
   selected whole. The refusal of an `.al` marked assume-unchanged or skip-worktree is removed: the
   index is no longer read for content, so such a file's edits are seen.
+- **Identity scheme 19** (R468; 18 is reserved for R-458). Every object-level `var` section is now
+  read (below), so call deletions move between operators, flips cede, hang-capable writes are
+  removed, and 26 BaseApp swaps choose a different pair under an unchanged key: re-check
+  equivalence marks.
 - **Identity scheme 16** (R-364; 15 is reserved for R-254). The hang refusal below removes
   mutants inside wrapped objects, and a later same-tuple twin of a removed mutant can take its key:
   re-check equivalence marks.
@@ -378,6 +382,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A global declared in an object's second `var` section is now known** (R468). An object may
+  declare its globals in several sections, usually `protected var` then `var`; LethAL read only
+  the first, so every name in a later one resolved to nothing. Record operators lost those
+  receivers, and the loop-hang check could not refuse a write to such a variable. Measured on
+  BaseApp (BC.History w1-28, 203 projects): 7 hang-capable mutants are now refused (6 report
+  files, among them `SuggestVendorPayments`); 680 call deletions move from `void-method-call` to
+  `remove-setrange`, `remove-testfield` or `remove-calcfields` with the same deleted text; 25
+  `true` RunTrigger flips cede to `swap-modify-flag`; 637 new sites appear, mostly typed record
+  operators and argument swaps; one
+  `run-trigger-forced` tag drops where the table is now known to have no `OnModify`. CDO: one
+  site changes. No fixture changes. No name in a later section was found to bind where AL binds a
+  record field instead; that check, and the 39 places where an existing FIRST-section global
+  already does, are recorded on R464.
 - **A target whose unmutated build alc rejects is refused as that, not blamed on a mutant or the
   environment** (R461). At a session's first compile failure (bcdev, sequential path), LethAL now
   compiles its staged copy of the unmutated target once. If alc rejects that too, the run stops

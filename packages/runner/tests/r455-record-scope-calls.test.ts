@@ -222,6 +222,6 @@ describe("R455 item 2: an unqualified call in a record scope is untyped", () => 
   });
 
   test("the identity scheme is 17 (13 for R455, 12 and 15 unused, 14 for R454, 16 for R-364, 17 for R254)", () => {
-    expect(IDENTITY_SCHEME).toBe(17);
+    expect(IDENTITY_SCHEME).toBe(19);
   });
 });

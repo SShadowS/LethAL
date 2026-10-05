@@ -66,6 +66,6 @@ describe("R254: admitting a reportextension moves a same-named twin's key", () =
     expect(ordinal).toBe(1);
   });
   test("so the identity scheme is 17", () => {
-    expect(IDENTITY_SCHEME).toBe(17);
+    expect(IDENTITY_SCHEME).toBe(19);
   });
 });
