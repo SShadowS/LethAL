@@ -292,10 +292,12 @@ function runTriggerTag(
     }
     // R-364: an UNRESOLVED receiver keeps the SKIP tag (R143's rule; screen tagging is
     // conservative). `claimsRecordMethod` refuses it, which is right for claiming and is left
-    // unchanged. The forcing `false` (R-457) is untouched here: it is tagged only when claimed.
+    // unchanged. R460: the forcing `false` (R-457) is tagged there too, at every method, since
+    // nothing proves the forced trigger harmless (`forceCanRaise` itself keeps an unresolved table).
     if (!claimsRecordMethod(call, ctx, method)) {
-      if (value === "true" && skip !== null && receiverUnresolved(call, ctx, method)) {
-        return skip.tag;
+      if (receiverUnresolved(call, ctx, method)) {
+        if (value === "false") return "run-trigger-forced";
+        if (skip !== null) return skip.tag;
       }
       continue;
     }
