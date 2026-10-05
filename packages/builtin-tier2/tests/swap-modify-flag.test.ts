@@ -467,10 +467,101 @@ describe("swap-modify-flag Delete mechanism (R281)", () => {
     );
   });
 
-  // Revert: always true.
-  it("does NOT tag an OnDelete of only TestField, Error and Rec.Modify", () => {
-    const t = par(onDelete("", `TestField("No."); if "No." = 'X' then Error('no'); Rec.Modify();`));
+  // Revert: always true. The drop control: only Error and TestField, nothing that writes.
+  it("does NOT tag an OnDelete of only TestField and Error", () => {
+    const t = par(onDelete("", `TestField("No."); if "No." = 'X' then Error('no');`));
     expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBeUndefined();
+  });
+
+  // R-452 rule D (sol plan r1 finding 1, post-merge finding 1). Own record is not own row, and a
+  // RunTrigger=true write runs a trigger nobody read, so no Modify/Delete is ever harmless.
+  // Revert for each: restore R281's own-row allow-list (`OWN_ROW_WRITES` + `onOwnRecord`).
+  it("rule D: tags an OnDelete that loads another row into xRec and deletes it", () => {
+    const t = par(onDelete("", "xRec.Get('X'); xRec.Delete();"));
+    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
+  });
+
+  it("rule D: tags an OnDelete that calls Rec.Modify(true), which runs OnModify", () => {
+    const t = par(onDelete("", "Rec.Modify(true);"));
+    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
+  });
+
+  it("rule D: tags an OnDelete that calls Rec.Modify() (the R281 drop this flips)", () => {
+    const t = par(onDelete("", "Rec.Modify();"));
+    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
+  });
+
+  // sol plan r2 finding 6: one rejection per write, transaction or Run method, each on its own so
+  // no call keeps the tag for another. Revert: add the method to `NON_WRITING_RECORD_METHODS` (or,
+  // for the unqualified system calls, to `NON_WRITING_SYSTEM_CALLS`).
+  const KID_PAR = `var Kid: Record "Kid"; Num: Integer;`;
+  for (const body of [
+    "Kid.Insert();",
+    "Kid.Rename('X');",
+    `Kid.ModifyAll("Parent No.", 'X');`,
+    "Kid.DeleteAll();",
+    `Kid.Validate("Parent No.", 'X');`,
+    "Kid.LockTable();",
+    "Commit();",
+    "Codeunit.Run(50303);",
+    "Report.Run(50303);",
+    "Page.Run(50303);",
+  ]) {
+    it(`rejects \`${body}\` in OnDelete`, () => {
+      const t = par(onDelete(KID_PAR, body));
+      expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER })).toBe(
+        "run-trigger-skipped-delete",
+      );
+    });
+  }
+
+  // Post-merge finding 2, split headers. Revert: collect raw `procedure` names only.
+  it("tags an OnDelete that calls a SPLIT-HEADER table procedure without parentheses", () => {
+    const split =
+      "#if X\n    local procedure CleanUpChildren(): Boolean\n#else\n    local procedure CleanUpChildren(A: Integer): Boolean\n#endif\n    begin\n    end;\n";
+    const t = par(`${onDelete("", "if CleanUpChildren then Error('x');")}${split}`);
+    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
+  });
+
+  // Post-merge finding 2, the receiver. `Mgt.Flag` is a codeunit procedure called without
+  // parentheses, whose name is also a field of Par itself. Revert: accept any receiver whose member
+  // names a field, not only the own `Rec`/`xRec` (R281's rule).
+  it("tags a parenthesis-less Mgt.Flag even when Flag is also the table's own field", () => {
+    const mgt = `codeunit 50303 "Mgt" { procedure Flag(): Boolean var K: Record "Kid"; begin K.DeleteAll(); exit(true); end; }`;
+    const p = `table 50300 "Par"\n{\n    fields { field(1; "No."; Code[20]) { } field(2; Flag; Boolean) { } }\n    keys { key(PK; "No.") { } }\n${onDelete(`var Mgt: Codeunit "Mgt";`, "if Mgt.Flag then Error('x');")}}\n`;
+    expect(deleteTag({ "P.al": p, "K.al": KID, "M.al": mgt, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // The same finding through the own record: `Rec.Archive` names no field of Par (it can only be a
+  // procedure from another app's tableextension of Par), only a field of Kid. Revert: accept a field
+  // of any project table.
+  it("tags a parenthesis-less Rec.Archive whose name is only another table's field", () => {
+    const kid = `table 50302 "Kid" { fields { field(1; "Parent No."; Code[20]) { } field(2; Archive; Boolean) { } } }`;
+    const t = par(onDelete("", "if Rec.Archive then Error('x');"));
+    expect(deleteTag({ "P.al": t, "K.al": kid, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // The drop control for the strict field read: `Rec.<own field>` and `xRec.<own field>`.
+  // Revert: refuse every bare member read.
+  it("does NOT tag an OnDelete that reads its own fields through Rec and xRec", () => {
+    const t = par(onDelete("", `if Rec."No." <> xRec."No." then Error('x');`));
+    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBeUndefined();
+  });
+
+  // sol plan r2 finding 1. alc 18.0.43 (Linux) compiles a trigger-local `Rec: Record "Kid"` in a
+  // table trigger, and `Rec.CleanUp` then binds to the LOCAL (a type probe: Kid.CleanUp returning
+  // Integer against Par's Boolean field gives AL0122). So the spelling `Rec` proves nothing.
+  // Revert: accept a `Rec`/`xRec` receiver by spelling, without the binding check.
+  it("tags a bare Rec.CleanUp when a trigger-local Rec of another table shadows the own record", () => {
+    const kid = `table 50302 "Kid" { fields { field(1; "Parent No."; Code[20]) { } } procedure CleanUp(): Boolean var K: Record "Kid"; begin K.DeleteAll(); exit(true); end; }`;
+    const p = `table 50300 "Par"\n{\n    fields { field(1; "No."; Code[20]) { } field(2; CleanUp; Boolean) { } }\n    keys { key(PK; "No.") { } }\n${onDelete(`var Rec: Record "Kid";`, "if Rec.CleanUp then Error('x');")}}\n`;
+    expect(deleteTag({ "P.al": p, "K.al": kid, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
   });
 
   it("does NOT tag a resolved table with no OnDelete", () => {
@@ -499,10 +590,16 @@ describe("swap-modify-flag Delete mechanism (R281)", () => {
     expect(deleteTag({ "P.al": cleanUp, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
   });
 
-  // Revert: match the bare name instead of using claimsRecordMethod.
-  it("tags an allow-listed name the table declares itself (its own Reset)", () => {
-    const t = par(`${onDelete("", "Reset();")}    procedure Reset() begin end;\n`);
-    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
+  // Post-merge weak test (a): the old version called the table's OWN `Reset`, which the
+  // table-procedure identifier check also refuses, so it passed with this guard gone. `Other` is a
+  // second project table that declares a writing `Reset`, so only `claimsRecordMethod` refuses it.
+  // Revert: accept a NON_WRITING_RECORD_METHODS name without asking `claimsRecordMethod`.
+  it("tags an allow-listed name another project table declares itself (Other.Reset())", () => {
+    const other = `table 50306 "Other" { fields { field(1; "No."; Code[20]) { } } procedure Reset() var K: Record "Kid"; begin K.DeleteAll(); end; }`;
+    const t = par(onDelete(`var Other: Record "Other";`, "Other.Reset();"));
+    expect(deleteTag({ "P.al": t, "X.al": other, "K.al": KID, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
   });
 
   it("tags an allow-listed name called on a codeunit (Mgt.Get())", () => {
@@ -555,11 +652,14 @@ describe("swap-modify-flag Delete mechanism (R281)", () => {
     );
   });
 
-  // Final review fix 1. Revert: drop the `with_statement` check in `isHarmlessTriggerCall`. The
-  // bare `Delete()` reads as an implicit-`Rec` call, but `with` makes it delete a Kid row.
-  it("tags a Delete() inside `with Kid do` (another record's row)", () => {
-    const t = par(onDelete(KID_VAR, "with Kid do Delete();"));
-    expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER })).toBe(
+  // Final review fix 1, re-aimed by sol plan r2 finding 2. Revert: drop the `with_statement` check
+  // in `isHarmlessTriggerCall`. Rule D refuses every `Delete()`, so the old `with Kid do Delete()`
+  // stayed tagged without the guard. `Reset` is otherwise allow-listed (Par declares none), and
+  // `with` binds it to Kid, whose own `Reset` deletes rows.
+  it("tags an allow-listed Reset() inside `with Kid do` (Kid's own writing Reset)", () => {
+    const kid = `table 50302 "Kid" { fields { field(1; "Parent No."; Code[20]) { } } procedure Reset() var K: Record "Kid"; begin K.DeleteAll(); end; }`;
+    const t = par(onDelete(KID_VAR, "with Kid do Reset();"));
+    expect(deleteTag({ "P.al": t, "K.al": kid, "O.al": CALLER })).toBe(
       "run-trigger-skipped-delete",
     );
   });
@@ -583,13 +683,12 @@ describe("swap-modify-flag Delete mechanism (R281)", () => {
     expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
   });
 
-  // Final review fix 3 (for R-213). Revert: one own-row allow-list for every trigger kind.
-  it("isHarmlessTriggerCall: Rec.Delete() is harmless for OnDelete, not for OnModify", () => {
-    const root = parseClean(par(onDelete("", "Rec.Delete();")));
+  // R-452 rule D replaces R281's per-trigger own-row allow-list. Revert: restore it.
+  it("isHarmlessTriggerCall: no own-record Modify or Delete is harmless", () => {
+    const root = parseClean(par(onDelete("", "Rec.Delete(); xRec.Modify(); Modify(false);")));
     const ctx = contextFor(root);
-    const call = findAll(root, ALNodeKind.procedure_call).find((c) => c.text === "Rec.Delete()");
-    if (call === undefined) throw new Error("no Rec.Delete() call");
-    expect(isHarmlessTriggerCall(call, ctx, "delete")).toBe(true);
-    expect(isHarmlessTriggerCall(call, ctx, "modify")).toBe(false);
+    const calls = findAll(root, ALNodeKind.procedure_call);
+    expect(calls.map((c) => c.text)).toEqual(["Rec.Delete()", "xRec.Modify()", "Modify(false)"]);
+    expect(calls.map((c) => isHarmlessTriggerCall(c, ctx))).toEqual([false, false, false]);
   });
 });

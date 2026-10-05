@@ -3,7 +3,8 @@ import { type ALSyntaxNode, visit } from "../ast/syntax-node";
 import { liveMembers } from "../ast/tree-walks";
 import { type NodeArm, type SemanticContext, armOfNode, rawArmOf } from "./context";
 import { claimsRecordMethod, claimsSystemCall, resolveReceiverTable } from "./receiver";
-import type { ObjectSymbol, SymbolTable } from "./symbol-table";
+import { resolveVarRef } from "./resolve-var-ref";
+import { type ObjectSymbol, type SymbolTable, triggerLocalNames } from "./symbol-table";
 
 /**
  * R281's SKIP-direction detector, MOVED here from `builtin-tier2/src/forced-trigger-raise.ts`
@@ -33,18 +34,8 @@ const NON_WRITING_RECORD_METHODS: ReadonlySet<string> = new Set([
   "init",
 ]);
 
-/** The table triggers `isHarmlessTriggerCall` can judge a call for. */
+/** The table triggers a skip can be judged for. */
 export type HarmlessTriggerKind = "delete" | "modify";
-
-/**
- * Single-row writes that are harmless only on the trigger's OWN record (`Rec`, `xRec`, implicit),
- * per trigger. Inside `OnDelete` the row is going anyway, so `Rec.Delete()` adds nothing. Inside
- * `OnModify` it does: skip the trigger and the row survives, so a later insert can collide.
- */
-const OWN_ROW_WRITES: Readonly<Record<HarmlessTriggerKind, ReadonlySet<string>>> = {
-  delete: new Set(["modify", "delete"]),
-  modify: new Set(["modify"]),
-};
 
 /** System calls that write nothing. Harmless only UNQUALIFIED and not shadowed (`claimsSystemCall`). */
 const NON_WRITING_SYSTEM_CALLS: ReadonlySet<string> = new Set(["error", "message", "confirm"]);
@@ -59,25 +50,23 @@ const EVENT_NAME_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * R281, shared with R-213: is SKIPPING this call, inside the table's `trigger` (`OnDelete` or
- * `OnModify`), proven unable to leave a row behind that a later statement could collide with?
- * `false` means "not proven", never "proven harmful".
+ * R281, shared with R-213: is SKIPPING this call, inside a table's `OnDelete` or `OnModify`, proven
+ * unable to leave a row behind that a later statement could collide with? `false` means "not
+ * proven", never "proven harmful". The answer is the same for both triggers.
  *
  * Harmless only when:
  *   (a) it is a non-writing Record method (`NON_WRITING_RECORD_METHODS`) and `claimsRecordMethod`
  *       claims it, so the receiver is a record and the project declares no method of that name;
- *   (b) it is a write `OWN_ROW_WRITES[trigger]` allows on the trigger's own record (`Rec`, `xRec` or
- *       implicit), claimed the same way: `Modify`/`Delete` in `OnDelete`, `Modify` only in `OnModify`;
- *   (c) it is an unqualified `Error`, `Message` or `Confirm` that `claimsSystemCall` claims.
- * Every other call is not proven: a write to another record, `DeleteAll`/`ModifyAll`/`DeleteLinks`,
+ *   (b) it is an unqualified `Error`, `Message` or `Confirm` that `claimsSystemCall` claims.
+ * Every other call is not proven: ANY `Modify`/`Delete`, `DeleteAll`/`ModifyAll`/`DeleteLinks`,
  * `Validate`, any project or codeunit call, and ANY call inside a `with` statement, whose bare names
  * bind to the `with` record rather than to `Rec`.
+ *
+ * R-452 rule D: R281 accepted `Modify`/`Delete` on the trigger's own record. Own record is not own
+ * row (`xRec.Get(X); xRec.Delete()` deletes another row), and `Rec.Modify(true)` runs `OnModify`,
+ * which nothing read. So no `Modify`/`Delete` is harmless.
  */
-export function isHarmlessTriggerCall(
-  call: ALSyntaxNode,
-  ctx: SemanticContext,
-  trigger: HarmlessTriggerKind,
-): boolean {
+export function isHarmlessTriggerCall(call: ALSyntaxNode, ctx: SemanticContext): boolean {
   if (call.kind !== ALNodeKind.procedure_call) return false;
   for (let p = call.parent; p !== null; p = p.parent) {
     if (p.rawKind === "with_statement") return false;
@@ -90,18 +79,7 @@ export function isHarmlessTriggerCall(
     return callee.kind === ALNodeKind.identifier && claimsSystemCall(call, ctx, name);
   }
   if (NON_WRITING_RECORD_METHODS.has(lower)) return claimsRecordMethod(call, ctx, name);
-  if (OWN_ROW_WRITES[trigger].has(lower)) {
-    return onOwnRecord(callee) && claimsRecordMethod(call, ctx, name);
-  }
   return false;
-}
-
-/** The callee is implicit (`Modify()`) or qualified by `Rec`/`xRec`. */
-function onOwnRecord(callee: ALSyntaxNode): boolean {
-  if (callee.kind === ALNodeKind.identifier) return true;
-  if (callee.kind !== ALNodeKind.field_access) return false;
-  const object = callee.childForFieldName("object");
-  return object?.kind === ALNodeKind.identifier && OWN_RECORD_NAMES.has(object.text.toLowerCase());
 }
 
 /**
@@ -130,11 +108,12 @@ export function deleteSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): bo
   if (projectObservesDelete(table, symbols, ctx)) return true;
   const trigger = findTableTrigger(table.node, "OnDelete", rawArmOf(ctx));
   if (trigger === null) return false;
-  return !onlyHarmlessCalls(trigger, ctx, symbols, procedureNamesOn(table, symbols));
+  return !onlyHarmlessCalls(trigger, ctx, table, symbols, procedureNamesOn(table, symbols));
 }
 
 /** Every procedure name declared on the table or a project tableextension of it, in every `#if`
- *  arm (over-inclusive, which can only over-tag). Lowercase, quotes stripped. */
+ *  arm (over-inclusive, which can only over-tag). Lowercase, quotes stripped. R-452: a split-header
+ *  procedure (`preproc_split_procedure` and its `_preamble`) adds every arm's `name`. */
 function procedureNamesOn(table: ObjectSymbol, symbols: SymbolTable): ReadonlySet<string> {
   const names = new Set<string>();
   const owners = [
@@ -145,6 +124,15 @@ function procedureNamesOn(table: ObjectSymbol, symbols: SymbolTable): ReadonlySe
   ];
   for (const owner of owners) {
     visit(owner, (n) => {
+      if (
+        n.rawKind === "preproc_split_procedure" ||
+        n.rawKind === "preproc_split_procedure_preamble"
+      ) {
+        for (const c of n.children) {
+          if (c.fieldName === "name") names.add(c.text.replace(/"/g, "").toLowerCase());
+        }
+        return;
+      }
       if (n.rawKind !== "procedure") return;
       const id = n.namedChildren.find(
         (c) => c.rawKind === "identifier" || c.rawKind === "quoted_identifier",
@@ -205,15 +193,16 @@ function subscribesToDelete(args: ALSyntaxNode, tableNames: ReadonlySet<string>)
 /**
  * Every live call in the trigger is proven harmless. A call written WITHOUT parentheses is not a
  * `call_expression`: `CleanUp;` parses as a `call_statement` and `Kid.DeleteAll;` as a bare
- * `member_expression`. The first is never proven; the second only when its member names a field of
- * a project table (a field read). An unqualified call without parentheses used as a VALUE
- * (`if CheckIt then`) looks like a variable, so ANY identifier naming a procedure of the table or
- * its project tableextensions keeps the tag. Still unseen: such a call to a procedure declared in
- * another app's tableextension.
+ * `member_expression`. The first is never proven. The second only when it is a read of the
+ * trigger's OWN table's field through its OWN `Rec`/`xRec` (`ownFieldRead`). An unqualified call
+ * without parentheses used as a VALUE (`if CheckIt then`) looks like a variable, so ANY identifier
+ * naming a procedure of the table or its project tableextensions keeps the tag. Still unseen: such
+ * a call to a procedure declared in another app's tableextension.
  */
 function onlyHarmlessCalls(
   trigger: ALSyntaxNode,
   ctx: SemanticContext,
+  table: ObjectSymbol,
   symbols: SymbolTable,
   tableProcedures: ReadonlySet<string>,
 ): boolean {
@@ -222,7 +211,7 @@ function onlyHarmlessCalls(
   const walk = (n: ALSyntaxNode): void => {
     if (!harmless || armOfNode(ctx, n) === "inactive") return;
     if (n.kind === ALNodeKind.procedure_call) {
-      if (!isHarmlessTriggerCall(n, ctx, "delete")) harmless = false;
+      if (!isHarmlessTriggerCall(n, ctx)) harmless = false;
     } else if (
       (n.rawKind === "identifier" || n.rawKind === "quoted_identifier") &&
       tableProcedures.has(n.text.replace(/"/g, "").toLowerCase())
@@ -231,11 +220,8 @@ function onlyHarmlessCalls(
     } else if (n.rawKind === "call_statement") {
       harmless = false;
     } else if (n.kind === ALNodeKind.field_access && n.parent?.kind !== ALNodeKind.procedure_call) {
-      fields ??= projectFieldNames(symbols);
-      const member = n.childForFieldName("member");
-      if (member === null || !fields.has(member.text.replace(/"/g, "").toLowerCase())) {
-        harmless = false;
-      }
+      fields ??= new Set(symbols.fieldsOf(table.name).map((f) => f.name.toLowerCase()));
+      if (!ownFieldRead(n, trigger, ctx, fields)) harmless = false;
     }
     for (const c of n.namedChildren) walk(c);
   };
@@ -243,13 +229,27 @@ function onlyHarmlessCalls(
   return harmless;
 }
 
-function projectFieldNames(symbols: SymbolTable): ReadonlySet<string> {
-  return new Set(
-    symbols.objects
-      .filter((o) => o.kind === "table")
-      .flatMap((t) => symbols.fieldsOf(t.name))
-      .map((f) => f.name.toLowerCase()),
-  );
+/**
+ * R-452 (post-merge finding 2, sol plan r2 finding 1): a bare `X.Y` is a field read only when `X`
+ * is the trigger's own implicit `Rec`/`xRec` and `Y` is a field of the trigger's OWN table. The
+ * binding is checked, not the spelling: alc 18.0.43 (Linux) compiles a trigger-local
+ * `Rec: Record "Kid"` in a table trigger, and `Rec.Y` then binds to that local. So any declaration
+ * of the name in the trigger's header (any `#if` arm, `triggerLocalNames`) or one the engine's
+ * var-ref resolution finds (a global) keeps the tag.
+ */
+function ownFieldRead(
+  access: ALSyntaxNode,
+  trigger: ALSyntaxNode,
+  ctx: SemanticContext,
+  ownFields: ReadonlySet<string>,
+): boolean {
+  const object = access.childForFieldName("object");
+  const member = access.childForFieldName("member");
+  if (object?.kind !== ALNodeKind.identifier || member === null) return false;
+  const name = object.text.toLowerCase();
+  if (!OWN_RECORD_NAMES.has(name)) return false;
+  if (triggerLocalNames(trigger).has(name) || resolveVarRef(object, ctx) !== null) return false;
+  return ownFields.has(member.text.replace(/"/g, "").toLowerCase());
 }
 
 /**
