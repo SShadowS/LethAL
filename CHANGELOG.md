@@ -92,6 +92,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **One source snapshot per run, and `--changed-since` diffs against it** (R205). `lethal run`
+  reads the target's `.al` files and `app.json` once, before anything else, and every reader uses
+  that copy: the `--changed-since` lines, the al-runner coverage guard, `--dry-run` and the build.
+  An edit made during the run is not built; the run warns `source-changed-during-run`, naming each
+  added, removed and changed file, and records no source hash. A source file that cannot be read
+  stops the run, naming the file. Under `--changed-since`, a git-ignored `.al` file now gets
+  mutants, consistent with alc compiling every `.al` under the folder, and a renamed or new path is
+  selected whole. The refusal of an `.al` marked assume-unchanged or skip-worktree is removed: the
+  index is no longer read for content, so such a file's edits are seen.
+
 - **A skipped `OnModify` is now screened, and so are `ModifyAll`/`DeleteAll` RunTrigger flips**
   (R452). `swap-modify-flag`'s `Modify(true)` -> `Modify(false)` mutants carry the new
   `platformKillMechanism` value `run-trigger-skipped-modify` unless LethAL can prove that skipping
