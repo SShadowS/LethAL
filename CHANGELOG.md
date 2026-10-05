@@ -474,6 +474,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   global or its initialisation, a table definition, another trigger or subscriber, the `#if`
   around it). Measured cost: 0.03-0.74% of such carries refused across one PR, up to 6.6% across
   a month, on BC apps and one partner app (a structural proxy, R474).
+- **An `Insert(true)` -> `Insert(false)` mutant keeps its platform tag when `OnInsert` fills the
+  key through a procedure** (R476). The tag `run-trigger-skipped-insert` was dropped whenever the
+  table's `OnInsert` did not assign the primary key itself, so a trigger that reaches the key
+  through a helper (BaseApp `Sales Header` -> `InitInsert`) left a possible duplicate-key kill
+  untagged. Now the tag also stays when `OnInsert` makes any call not proven harmless, or when the
+  project subscribes to the table's insert events or extends its insert triggers (R452's rule for
+  `Modify` and `Delete`). Tags only, no mutant moved: 1,030 more `Insert` mutants are tagged
+  (BaseApp 759, other BC.History 175, CDO 8, DC 61, DO 26, the gift-card example 1); no gate
+  fixture changes.
 - **A mutant's covering tests run in the same order on every host** (R481). The last tie between
   two covering tests was broken by name with the host's default collation, which decides
   `killingTest`, the kill position and, through a warm prefix, possibly the verdict. It now compares

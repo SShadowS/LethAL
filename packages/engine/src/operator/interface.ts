@@ -35,8 +35,9 @@ export type AstNodeId = string;
  * THE TWO ARE NOT EQUALLY PROVEN, and the report must not present them as if they were. The
  * write-transaction tag is emitted only where a detector found the exact measured shape.
  * `run-trigger-skipped-insert` is a REFUSAL detector (R143, `insertSkipCanRaise`): it is dropped
- * only where the target table resolves and its `OnInsert` provably does not assign the primary key,
- * and KEPT wherever that cannot be shown, which includes every base-app record — the semantic layer
+ * only where the target table resolves and its `OnInsert` provably does not assign the primary key
+ * (R-476: nor makes a call, nor is observed by a project subscriber or tableextension, that is not
+ * proven harmless), and KEPT wherever that cannot be shown, which includes every base-app record — the semantic layer
  * is source-derived and cannot see base-app triggers. So it means "a kill here CAN be the platform;
  * read it", never "this kill is false". See `PLATFORM_KILL_MECHANISM_EXPLANATIONS` (runner), where
  * each mechanism states its own evidence.
