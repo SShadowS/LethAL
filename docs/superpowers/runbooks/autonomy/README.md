@@ -40,8 +40,10 @@ next free id right before writing).
   last command's. Use `set -o pipefail;` if the output must be trimmed.
 - **At most two BaseApp-corpus jobs at once.** The container has 24 GB; a third census or diff
   process gets OOM-killed (R-458 planner, 2026-10-05).
-- **Push work early.** Unplanned restarts happen; commits only on disk are safe, but an unpushed
-  branch is invisible to everyone else.
+- **Push work early, but WIP pushes carry `[skip ci]`** in the head commit's message. Unplanned
+  restarts happen, so push; but CI runs on every branch and every red run emails the owner. Push
+  WITHOUT `[skip ci]` only when you want a real CI result (before submitting, or to reproduce a
+  Windows-only failure); the submitted head must have a CI run.
 
 ## coord
 
