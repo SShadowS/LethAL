@@ -301,6 +301,9 @@ type VariantSource =
 
 const VARIANT_TYPE = /^\s*variant\s*$/i;
 const INTERFACE_TYPE = /^\s*interface\s+(.+?)\s*$/i;
+/** R-389 (option a): how many traced Variants (parameters and locals, across callers) deep a
+ *  trace goes before it falls back. */
+const MAX_CALLER_DEPTH = 32;
 
 /** The element types of a `List of [...]` / `Dictionary of [...]` text, split at top-level commas. */
 const elementTypes = (text: string): string[] => text.match(/(?:"[^"]*"|[^,"])+/g) ?? [];
@@ -436,6 +439,8 @@ export interface Proc {
   /** R-371: every `Codeunit::X` name and every integer literal of 1000 or more in the body, as
    *  written: where a codeunit id an Integer can carry may come from (`Scanner.foldIdTargets`). */
   readonly idRefs: readonly string[];
+  /** R-389: an attribute says the platform or another app calls it (`PLATFORM_CALLED`). */
+  readonly platformCalled: boolean;
   /** R-389: the parameters' names as written, in order. */
   readonly paramNames: readonly string[];
   /** R-389: the positions of its `var` parameters. */
@@ -663,6 +668,10 @@ const spanText = (source: string, run: AttributeRun): string =>
   run.pieces.map(([from, to]) => source.slice(from, to)).join("\n");
 const HANDLER_ATTRIBUTE = /^\[\s*HandlerFunctions\s*\(\s*'([^']*)'/i;
 const SUBSCRIBER_ATTRIBUTE = /^\[\s*EventSubscriber\s*\(/i;
+/** R-389: attributes under which the platform or another app calls the procedure: a subscriber,
+ *  a test, a UI handler (`[MessageHandler]`, ...), a web service or external business event. */
+const PLATFORM_CALLED =
+  /^\[\s*(?:EventSubscriber|Test|ServiceEnabled|ExternalBusinessEvent|\w*Handler)\b/i;
 const MANUAL_BINDING = /EventSubscriberInstance\s*=\s*Manual/i;
 
 /**
@@ -907,6 +916,7 @@ function procFrom(
     spanHash: sha256(normalizeSource(spanText(source, run))),
     key: "",
     subscriber: attributes.some((t) => SUBSCRIBER_ATTRIBUTE.test(t)),
+    platformCalled: attributes.some((t) => PLATFORM_CALLED.test(t)),
     paramNames,
     varParams: varParams ?? NO_POSITIONS,
     variantSources: facts === undefined || facts.sources.size === 0 ? NO_SOURCES : facts.sources,
@@ -1272,10 +1282,14 @@ function lastSegment(raw: string): string {
 /**
  * R-371 (the orchestrator's EXTERNAL condition): whether a reference is ONE plain name that the
  * test app's objects can be checked against: a bare identifier, or one quoted name (dots inside
- * the quotes are part of the name). An id, a namespace-qualified name and any other shape are
+ * the quotes are part of the name). R-389 (option a): also a namespace-qualified name, plain
+ * names joined by dots (`System.RestClient."Http Response Message"`): every resolver here matches
+ * a test-app object by the LAST segment (`unitsNamed`, `objectsNamed`, `implementationsOf`), so
+ * when none has that name the reference is a dependency's object. An id and any other shape are
  * not, and a reference the test app does not declare is then UNFOLLOWED, never EXTERNAL.
  */
-const PLAIN_NAME = /^\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)\s*$/;
+const PLAIN_NAME =
+  /^\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*))*\s*$/;
 
 const OBJ_TYPE =
   /^\s*(codeunit|record|page|report|query|xmlport|testpage|testrequestpage)\s+(.+?)(?:\s+temporary)?\s*$/i;
@@ -1365,6 +1379,11 @@ export class Scanner {
   /** R-389: the normalised name of every interface the test app declares. */
   private readonly testAppInterfaces = new Set<string>();
   private unknownAncestryCache: Set<Unit> | undefined;
+  /** R-389 (option a): every name a `[HandlerFunctions]` lists (the platform calls those). */
+  private readonly handlerNames = new Set<string>();
+  /** R-389 (option a): `name|arity` -> every call site of that name and arity in the test app. */
+  private callSiteIndex: Map<string, Array<{ q: Proc; site: Site }>> | undefined;
+  private readonly allProcs: readonly Proc[];
   /** R-389: `name|arity` -> the `var` positions of every test-app procedure of that name and arity. */
   private readonly varPositions = new Map<string, Set<number>>();
 
@@ -1398,9 +1417,11 @@ export class Scanner {
     );
     this.anyDamage = model.damaged.length > 0;
     this.lowIds = model.units.some((u) => u.id < 1000);
+    this.allProcs = [...model.units, ...model.objects].flatMap((u) => [...u.procs, ...u.triggers]);
     for (const u of [...model.units, ...model.objects]) {
       for (const i of u.implements) add(this.implementers, lastSegment(i), u);
       if (u.kind === "interface") this.testAppInterfaces.add(u.name);
+      for (const p of u.procs) for (const h of p.handlers) this.handlerNames.add(h);
       for (const p of u.procs) {
         if (p.varParams.size === 0) continue;
         const k = `${p.name}|${p.params}`;
@@ -2120,7 +2141,8 @@ export class Scanner {
     path: readonly string[],
   ): void {
     const key = this.norm(raw);
-    if (path.includes(key)) {
+    const at = `${p.key}|${key}`;
+    if (path.includes(at)) {
       fallBack(st, `${why}: ${raw} is assigned in a cycle`);
       return;
     }
@@ -2128,11 +2150,9 @@ export class Scanner {
       fallBack(st, `${why}: it can hold what the global ${raw} holds`);
       return;
     }
-    if (!root && p.paramNames.some((n) => this.norm(n) === key)) {
-      fallBack(st, `${why}: it can hold what the parameter ${raw} is given`);
-      return;
-    }
-    const here = [...path, key];
+    const here = [...path, at];
+    const param = p.paramNames.findIndex((n) => this.norm(n) === key);
+    if (!root && param >= 0) this.traceParam(p, raw, param, why, st, here);
     for (const s of p.variantSources.get(key) ?? []) {
       if (s.k === "foreach") fallBack(st, `${why}: ${raw} is a foreach variable`);
       else if (s.k === "assign") this.traceValue(p, s.recv, why, st, here);
@@ -2202,6 +2222,77 @@ export class Scanner {
     if (p.unit.kind !== "codeunit" && kin.some(has))
       return { k: "opaque", kind: `parenthesis-less call ${raw}` };
     return undefined;
+  }
+
+  /**
+   * R-389 (option a): what the Variant parameter `raw` (position `at`) of `p` can be given: the
+   * union of what every test-app call site of that name and arity passes, each traced as usual.
+   * Over-approximated on purpose: a member call matches whatever its receiver (a dependency's
+   * procedure of the same name adds callers, never removes one), and a bare call in another
+   * object counts only inside a `with`. A caller the walk cannot list keeps the fallback: the
+   * platform or another app calling `p` (a subscriber, a test, a handler, a trigger, a web
+   * service), interface dispatch (any procedure of a codeunit that implements an interface), or
+   * a chain of callers deeper than `MAX_CALLER_DEPTH` (a cycle falls back in `traceVariant`).
+   * Access level does not count: `local`, `internal` and public procedures are all read the
+   * same. Only the test app and an app that DEPENDS on it can call a test-app procedure by name;
+   * a dependency cannot name it, and a dependent app's code is outside every digest already
+   * (R-371 walks the test app only).
+   */
+  private traceParam(
+    p: Proc,
+    raw: string,
+    at: number,
+    why: string,
+    st: ReachState,
+    path: readonly string[],
+  ): void {
+    const external =
+      p.platformCalled ||
+      p.subscriber ||
+      p.unit.triggers.includes(p) ||
+      this.handlerNames.has(p.name) ||
+      (p.unit.kind === "codeunit" && p.unit.implements.length > 0);
+    if (external) {
+      fallBack(
+        st,
+        `${why}: ${raw} is a parameter of ${p.display}, which can be called from outside the test app`,
+      );
+      return;
+    }
+    if (path.length > MAX_CALLER_DEPTH) {
+      fallBack(st, `${why}: ${raw} is passed down a chain of callers deeper than ${MAX_CALLER_DEPTH}`);
+      return;
+    }
+    const kin = p.unit.baseKey === undefined ? [] : (this.otherByBase.get(p.unit.baseKey) ?? []);
+    for (const { q, site } of this.callers(p.name, p.params)) {
+      if (site.kind === "bare" && !site.inWith && q.unit !== p.unit && !kin.includes(q.unit))
+        continue;
+      const f = site.argFacts.find((x) => x.at === at);
+      if (f === undefined) continue; // a literal or an operator's result: a value
+      if (f.k === "int") {
+        if (this.byNameAll(f.value).length > 0)
+          fallBack(st, `${why}: ${q.display} passes ${f.value}, a test-app codeunit's id`);
+      } else if (f.k === "ref") {
+        if (this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name))
+          fallBack(st, `${why}: ${q.display} passes ${f.kind}::${f.name}`);
+      } else this.traceValue(q, f.recv, why, st, path);
+    }
+  }
+
+  /** R-389 (option a): every call site of `name` with `args` arguments, indexed once. */
+  private callers(name: string, args: number): ReadonlyArray<{ q: Proc; site: Site }> {
+    if (this.callSiteIndex === undefined) {
+      const index = new Map<string, Array<{ q: Proc; site: Site }>>();
+      for (const q of this.allProcs)
+        for (const site of q.sites ?? []) {
+          const k = `${this.norm(site.kind === "bare" ? site.name : site.member)}|${site.args}`;
+          const list = index.get(k);
+          if (list === undefined) index.set(k, [{ q, site }]);
+          else list.push({ q, site });
+        }
+      this.callSiteIndex = index;
+    }
+    return this.callSiteIndex.get(`${name}|${args}`) ?? [];
   }
 
   /** R-389: what a value assigned to a traced Variant can be, folded (part 1's table). */

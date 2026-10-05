@@ -185,8 +185,9 @@ describe("R-389 part 1: a Variant handed out as an argument", () => {
     cached ??= run(unseenFiles());
     return cached;
   };
-  test("4. a helper handing out its own Variant parameter falls back, naming the parameter", () => {
-    expect(unseen().why("ViaParam")).toContain("the parameter P");
+  // R-389 option (a): a parameter is traced through every test-app caller (the "N1" tests below).
+  test("4. a helper handing out its own Variant parameter: traced through its caller, no fallback", () => {
+    expect(unseen().why("ViaParam")).toBeUndefined();
   });
   test("5. a global, a var argument, a call's return, an element: each falls back", () => {
     const u = unseen();
@@ -539,6 +540,100 @@ describe("R-389 final review (sol): three holes, each closed fail-closed", () =>
     expect(moves(s, "impl", "A")).toBe(false);
     expect(moves(s, "inner2", "Trivial")).toBe(false);
     expect(moves(s, "mock", "Trivial")).toBe(true);
+  });
+});
+
+describe("R-389 option (a), narrowing 1: a Variant parameter traced through its callers", () => {
+  // DC's shape: a test-app assert helper formats its Variant parameter.
+  const LIB = (e: Edits, attrs = "", impl = "", extra = ""): string =>
+    `codeunit 50180 "Lib"${impl}\n{\n${attrs}    procedure Check(Result: Variant)\n    var\n${EXT}    begin\n        Ext.RunFormatted(Format(Result));\n    end;\n${impl === "" ? "" : "\n    procedure Go()\n    begin\n    end;\n"}${extra}}\n`;
+  const LIBV = `        Lib: Codeunit "Lib";\n        Cust: Record Customer;\n`;
+  const callers = (more = ""): string =>
+    proc("A()", LIBV, "        Lib.Check(5);\n        Lib.Check(Cust);\n") + more;
+  const s =
+    (lib: (e: Edits) => string, more = "", globals = ""): Scenario =>
+    (e) => ({
+      ...base(e),
+      "Lib.al": lib(e),
+      "T.al": testUnit(callers(more), globals),
+    });
+  test("N1a. every caller passes a value or a record: no fallback (it fell back before)", () => {
+    const r = run(s((e) => LIB(e))({}));
+    expect(r.why("A")).toBeUndefined();
+    expect(r.closure).toBeUndefined();
+  });
+  test("N1b. hole 1 through a parameter: a caller passing a Mock-holding Variant folds Mock", () => {
+    const sc = s(
+      (e) => LIB(e),
+      proc("B()", LIBV + V + MOCK, "        V := Mock;\n        Lib.Check(V);\n"),
+    );
+    expect(moves(sc, "mock", "B")).toBe(true);
+    expect(moves(sc, "mock", "A")).toBe(true); // the union over every caller
+    expect(moves(sc, "unrelated", "A")).toBe(false);
+    expect(run(sc({})).why("A")).toBeUndefined();
+  });
+  test("N1c. a caller the walk cannot trace (a global) keeps the fallback", () => {
+    const r = run(
+      s((e) => LIB(e), proc("B()", LIBV, "        Lib.Check(GlobalV);\n"), "        GlobalV: Variant;\n")({}),
+    );
+    expect(r.why("A")).toContain("the global GlobalV");
+  });
+  test("N1d. unseen callers keep the fallback: interface dispatch, a subscriber", () => {
+    const viaIface = run(s((e) => LIB(e, "", ` implements "IFace"`))({}));
+    expect(viaIface.why("A")).toContain("can be called from outside the test app");
+    const sub = run(
+      s((e) =>
+        LIB(
+          e,
+          `    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Ext Pub", 'OnX', '', false, false)]\n`,
+        ),
+      )({}),
+    );
+    expect(sub.closure ?? sub.why("A")).toContain("can be called from outside the test app");
+  });
+  test("N1e. a parameter passed on through a cycle of callers keeps the fallback", () => {
+    const r = run(
+      s((e) =>
+        LIB(
+          e,
+          "",
+          "",
+          `\n    procedure Again(R: Variant)\n    begin\n        Check(R);\n        Again(R);\n    end;\n`,
+        ).replace("        Ext.RunFormatted(Format(Result));\n", "        Ext.RunFormatted(Format(Result));\n        Again(Result);\n"),
+      )({}),
+    );
+    expect(r.why("A")).toContain("cycle");
+  });
+});
+
+describe("R-389 option (a), narrowing 2: namespace-qualified names", () => {
+  const qualified =
+    (type: string, call = "SetCode(200)"): Scenario =>
+    (e) => ({
+      ...base(e),
+      "T.al": testUnit(proc("A()", `        Resp: Codeunit ${type};\n`, `        Resp.${call};\n`)),
+    });
+  test("N2a. a qualified name the test app does not declare is a dependency's: no fallback", () => {
+    expect(run(qualified(`System.RestClient."Http Response Message"`)({})).why("A")).toBeUndefined();
+  });
+  test("N2b. a qualified name whose object IS in the test app is walked into", () => {
+    const sc = qualified(`My.Ns."Mock"`, "Go()");
+    expect(moves(sc, "mock", "A")).toBe(true);
+    expect(moves(sc, "unrelated", "A")).toBe(false);
+    expect(run(sc({})).why("A")).toBeUndefined();
+  });
+  test("N2c. a reference the walk still cannot read (an id) keeps the fallback", () => {
+    expect(run(qualified("50999")({})).why("A")).toContain("not one plain name");
+  });
+  test("N2d. hole 3 kept: a dependency-ancestry implementer naming a qualified codeunit still folds, closure clean", () => {
+    const sc: Scenario = (e) => ({
+      ...base(e),
+      "Dep.al": `codeunit 50170 "DepMock" implements "IDerived"\n{\n    procedure Go()\n    var\n        Resp: Codeunit System.RestClient."Http Response Message";\n    begin\n${at(e, "impl")}        Resp.SetCode(200);\n    end;\n}\n`,
+      "Subs.al": subscribers(sub("OnGet", `var J: Interface "IBase"`, "", "")),
+      "T.al": testUnit(TRIVIAL),
+    });
+    expect(moves(sc, "impl", "Trivial")).toBe(true);
+    expect(run(sc({})).closure).toBeUndefined();
   });
 });
 
