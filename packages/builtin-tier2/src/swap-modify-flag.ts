@@ -9,7 +9,11 @@ import {
   type SemanticContext,
   isStatementPosition,
 } from "@lethal/operator-sdk";
-import { forcedTriggerCanRaise, resolveForcedTrigger } from "./forced-trigger-raise";
+import {
+  deleteSkipCanRaise,
+  forcedTriggerCanRaise,
+  resolveForcedTrigger,
+} from "./forced-trigger-raise";
 import { insertSkipCanRaise } from "./insert-key-assignment";
 import { exactArguments, soleArgument, synthesizeAfter } from "./mutate-helpers";
 
@@ -25,11 +29,10 @@ const FALSE_REPLACEMENT = "false";
 const RUN_TRIGGER_METHODS = ["Modify", "Insert", "Delete"] as const;
 
 /**
- * R138. The one method of the three whose skipped trigger can ADD an error rather than remove one —
- * see `PlatformKillMechanism` (engine) for the mechanism and for the ruling that `Delete`/`Modify`
- * get none. Matched case-insensitively, like every other method comparison here.
+ * R281. The tag `Delete` mutants carry, wherever `deleteSkipCanRaise` cannot prove skipping the
+ * table's delete code harmless. Typed the same way as the `Insert` tag below.
  */
-const PLATFORM_KILL_METHOD = "Insert";
+const RUN_TRIGGER_SKIPPED_DELETE: PlatformKillMechanism = "run-trigger-skipped-delete";
 
 /**
  * The tag `Insert` mutants carry. Declared as a typed constant rather than an inline string so a
@@ -150,9 +153,11 @@ const OPERATOR_VERSION = "1.2.0";
  * the mutant is scored `killed` without the suite having earned it.
  *
  * Since R138 the `Insert` mutants declare `run-trigger-skipped-insert`, so the report's
- * platform-artifact screen groups them. `Delete` and `Modify` declare nothing, and that is a RULING,
- * not an omission: skipping `OnDelete`/`OnModify` writes LESS than the unmutated program, never
- * more, and the row is still located by the same key, so there is no error the mutation can add.
+ * platform-artifact screen groups them. `Modify` declares nothing, and that is a RULING: skipping
+ * `OnModify` writes LESS than the unmutated program and the row is still located by the same key.
+ * R138 ruled the same for `Delete`; R281 overturned it, because an `OnDelete` that deletes or writes
+ * other rows leaves them behind, and a later insert of one can hit a duplicate key. `Delete` mutants
+ * declare `run-trigger-skipped-delete` unless `deleteSkipCanRaise` proves the skip harmless.
  *
  * R143 NARROWED the `Insert` tag from "every one" to "every one whose mechanism is not provably
  * unavailable": the receiver's table is resolved, and a table whose `OnInsert` does not assign the
@@ -203,13 +208,14 @@ export const swapModifyFlag: MutationOperator = {
     const method = claimedRunTriggerMethod(node, ctx);
     // R143: and, for `Insert`, only where the mechanism is not PROVABLY unavailable — see
     // `insertSkipCanRaise` (`insert-key-assignment.ts`) for the four cases and for why an
-    // unresolvable receiver keeps the tag rather than losing it.
+    // unresolvable receiver keeps the tag rather than losing it. R281: `Delete` the same way, through
+    // `deleteSkipCanRaise`. `Modify` is never tagged.
     const platformKillMechanism =
-      method !== null &&
-      method.toLowerCase() === PLATFORM_KILL_METHOD.toLowerCase() &&
-      insertSkipCanRaise(node, ctx)
+      method === "Insert" && insertSkipCanRaise(node, ctx)
         ? RUN_TRIGGER_SKIPPED_INSERT
-        : undefined;
+        : method === "Delete" && deleteSkipCanRaise(node, ctx)
+          ? RUN_TRIGGER_SKIPPED_DELETE
+          : undefined;
 
     return [
       {
@@ -349,8 +355,8 @@ function generateForced(node: ALSyntaxNode, ctx: SemanticContext): readonly Muta
  * non-matching node costs at most three cheap callee-name comparisons and nothing more, since
  * `claimsRecordMethod` itself rejects on the callee name before doing any symbol-table work.
  *
- * Returns the matched NAME rather than a boolean, which is what R138 needed: only the `Insert`
- * mutants declare a `PlatformKillMechanism`, so `generate()` has to know which of the three names
+ * Returns the matched NAME rather than a boolean, which is what R138 needed: the tag depends on the
+ * method (`Insert` and, since R281, `Delete`), so `generate()` has to know which of the three names
  * claimed. The name returned is this file's own spelling from `RUN_TRIGGER_METHODS`, not the
  * source's — `claimsRecordMethod` matches case-insensitively, so `INSERT(True)` claims under
  * `"Insert"` and is tagged exactly as `Insert(true)` is.

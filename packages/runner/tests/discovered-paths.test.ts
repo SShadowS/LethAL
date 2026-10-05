@@ -207,7 +207,8 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
     const bytes = await readFile(join(targetDir, "mutant-manifest.json"));
     return createHash("sha256").update(bytes).digest("hex");
   };
-  const pinned = "b754095f8aebddf35074c5d032bdac8692076e3e9c1b015d6810bc0ec0ff588e";
+  // R281 re-pinned (was b754095f...588e): one mutant gained `run-trigger-skipped-delete`.
+  const pinned = "5e997a85dfdfe30095ab7745efa22224772068c5374237cf83de45744ade5e4e";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(
