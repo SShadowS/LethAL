@@ -215,10 +215,12 @@ const OBJECT_KIND_BY_NODE: Record<string, ObjectSymbol["kind"]> = {
  */
 const TABLEEXTENSION_DECLARATION = "tableextension_declaration";
 const PAGEEXTENSION_DECLARATION = "pageextension_declaration";
+const REPORTEXTENSION_DECLARATION = "reportextension_declaration";
 const BASE_OBJECT_FIELD = "base_object";
 
-/** The extension object kinds whose members are indexed for variable scope. */
-export type ExtensionKind = "tableextension" | "pageextension";
+/** The extension object kinds whose members are indexed for variable scope (`reportextension`
+ *  since R254, when it became instrumentable). */
+export type ExtensionKind = "tableextension" | "pageextension" | "reportextension";
 
 /**
  * The `procedures`/`globals` key under which an extension object's own members are indexed for
@@ -487,7 +489,9 @@ export function buildSymbolTable(
         // so every call on a declared record variable there was refused as unresolvable. Measured
         // on Continia Document Output: that is the shape its extension code overwhelmingly uses —
         // 17 sites in its `tableextension`s and 18 more in a `pageextension`
-        // (`scripts/probe-r30-pageext.ts`), which is why BOTH kinds are indexed here.
+        // (`scripts/probe-r30-pageext.ts`), which is why BOTH kinds are indexed here. R254 adds
+        // `reportextension` (instrumentable since then); it is never pushed to `tableExtensions`
+        // and gets no `indexFields`, since it adds report columns, not table fields.
         indexMembers(objectNode, extensionScopeKey(extension.kind, extension.name));
         // R160: a `tableextension`'s fields belong to the table it EXTENDS, which is the name any
         // expression uses to reach them. Keyed on `baseObject` for that reason, never on the
@@ -561,16 +565,16 @@ export function buildSymbolTable(
 }
 
 /**
- * `tableextension|pageextension <id> "<name>" extends "<base>"` -> its kind, name and extends
- * target.
+ * `tableextension|pageextension|reportextension <id> "<name>" extends "<base>"` -> its kind, name
+ * and extends target.
  *
  * `null` for any other node kind, and for an extension missing either name — both are what the
  * matching in `@lethal/builtin-tier2`'s `claimsRecordMethod` keys on, and half an entry could
  * only ever produce a wrong match.
  *
- * Both kinds are parsed because both own a variable SCOPE (R30). What the caller does with them
- * differs: only a `tableextension` declares procedures callable on a record, so only it enters
- * `tableExtensions`.
+ * All three kinds are parsed because each owns a variable SCOPE (R30; R254 for reportextension).
+ * What the caller does with them differs: only a `tableextension` declares procedures callable on
+ * a record, so only it enters `tableExtensions`.
  */
 function parseExtensionHeader(
   node: ALSyntaxNode,
@@ -580,7 +584,9 @@ function parseExtensionHeader(
       ? "tableextension"
       : node.rawKind === PAGEEXTENSION_DECLARATION
         ? "pageextension"
-        : null;
+        : node.rawKind === REPORTEXTENSION_DECLARATION
+          ? "reportextension"
+          : null;
   if (kind === null) return null;
   const nameNode = node.childForFieldName("object_name");
   const baseNode = node.childForFieldName(BASE_OBJECT_FIELD);

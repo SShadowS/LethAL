@@ -63,9 +63,9 @@ export function planOneFile(
 
 /** Global, so `matchAll` can find EVERY object header in the file, not just the first. */
 // Extension kinds first: alternation is tried left to right, so a bare `page`/`table` would
-// engage on `pageextension`/`tableextension` before failing its `\s+\d+`.
+// engage on `pageextension`/`tableextension`/`reportextension` before failing its `\s+\d+`.
 const OBJECT_HEADER =
-  /^\s*(codeunit|tableextension|pageextension|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/gim;
+  /^\s*(codeunit|tableextension|pageextension|reportextension|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/gim;
 
 /**
  * Blanks out AL comments, preserving length (so any index computed against the result still
@@ -111,7 +111,10 @@ export interface ObjectHeader {
  *  granularity: that predicate answers "does this FILE have at least one", this answers
  *  "is THIS object one". Kept in sync by hand (both are short, stable lists tied to the same
  *  AL grammar fact — only a codeunit or a table can hold a `var` before/around its members in a
- *  position `injectSelectorVarIntoObject` can anchor against). */
+ *  position `injectSelectorVarIntoObject` can anchor against).
+ *  R254 kept this list on purpose: a reportextension is a carrier ALONE in its file, but beside
+ *  another object it is refused `object-mix`, since al-runner's multi-object guard was measured
+ *  for codeunits and tables only (pinned by `r254-reportext.test.ts`). */
 const INJECTABLE_OBJECT_TYPES: ReadonlySet<string> = new Set(["codeunit", "table"]);
 
 /**

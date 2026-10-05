@@ -1,8 +1,19 @@
 import { describe, expect, it, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
-import { AlcCompileError, ArtifactCompiler, ArtifactPrepareError } from "../src/artifact";
+import {
+  AlcCompileError,
+  ArtifactCompiler,
+  ArtifactPrepareError,
+  defaultArtifactIo,
+} from "../src/artifact";
 import type { ArtifactIo, CompiledArtifact } from "../src/artifact";
 import { ContainerDeployer } from "../src/publisher";
+import type { SpawnFn } from "../src/publisher";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 const CFG = {
   alcPath: "alc",
@@ -57,6 +68,22 @@ describe("ArtifactCompiler", () => {
       writeArtifact: async () => {},
     });
     await expect(compiler.compile(BASE_INPUT)).rejects.toBeInstanceOf(AlcCompileError);
+  });
+
+  it("R461: keeps BOTH streams, labelled, so a stderr warning cannot hide a stdout error", async () => {
+    const compiler = new ArtifactCompiler(CFG, {
+      spawn: async () => ({
+        exitCode: 1,
+        stdout: "X.al(5,9): error AL0118: The name 'Amont' does not exist",
+        stderr: "warning AL0432: Method 'Y' is marked for removal",
+      }),
+      readArtifact: async () => new Uint8Array(),
+      writeArtifact: async () => {},
+    });
+    const err = await compiler.compile(BASE_INPUT).catch((e: unknown) => e);
+    expect((err as Error).message).toBe(
+      "alc compile failed (exit 1):\nstdout:\nX.al(5,9): error AL0118: The name 'Amont' does not exist\nstderr:\nwarning AL0432: Method 'Y' is marked for removal",
+    );
   });
 
   it("throws ArtifactPrepareError — NOT AlcCompileError — when the compiler cannot be spawned", async () => {
@@ -356,8 +383,14 @@ describe("C02-05: compile's argv parity", () => {
       { alcPath: "C:/alc.exe", packageCachePath: "C:\\cache", outputDir: "C:\\out" },
       recordingIo(argvs),
     ).compile(input("C:\\proj"));
+    // R461: the scratch output carries a per-call unique segment, so the last argument is a pattern.
     expect(argvs).toEqual([
-      ["C:/alc.exe", "/project:C:/proj", "/packagecachepath:C:/cache", `/out:C:/out/${ID}.app`],
+      [
+        "C:/alc.exe",
+        "/project:C:/proj",
+        "/packagecachepath:C:/cache",
+        expect.stringMatching(new RegExp(`^/out:C:/out/${ID}\\.[0-9a-f-]{36}\\.partial\\.app$`)),
+      ],
     ]);
   });
   test("compile's argv with preprocessor symbols is exactly the pre-refactor argv", async () => {
@@ -377,9 +410,63 @@ describe("C02-05: compile's argv parity", () => {
         "/project:C:/proj",
         "/packagecachepath:C:/cache",
         "/define:A,B",
-        `/out:C:/out/${ID}.app`,
+        expect.stringMatching(new RegExp(`^/out:C:/out/${ID}\\.[0-9a-f-]{36}\\.partial\\.app$`)),
       ],
     ]);
+  });
+});
+
+describe("R461: a failed compile cleans up only its own scratch output", () => {
+  const outOf = (argv: readonly string[]) =>
+    argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length) ?? "";
+
+  test("two overlapping same-name calls, one fails: the other's output survives", async () => {
+    const outputDir = scratch("lethal-artifact-overlap-");
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let calls = 0;
+    const spawn: SpawnFn = async (argv) => {
+      calls++;
+      if (calls === 1) {
+        await Bun.write(outOf(argv), "one");
+        await gate; // still "compiling" while the second call fails and cleans up
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      await Bun.write(outOf(argv), "two");
+      return { exitCode: 1, stdout: "error AL0001", stderr: "" };
+    };
+    const c = new ArtifactCompiler(
+      { alcPath: "alc", packageCachePath: "p", outputDir },
+      { ...defaultArtifactIo, spawn },
+    );
+    const first = c.compileProject({ projectDir: "a", packageCachePath: "p", name: "x" });
+    const second = await c
+      .compileProject({ projectDir: "b", packageCachePath: "p", name: "x" })
+      .catch((e: unknown) => e);
+    release();
+    const ok = await first;
+    expect(second).toBeInstanceOf(AlcCompileError);
+    expect(await readFile(ok.appPath, "utf8")).toBe("one");
+  });
+
+  test("a failing call whose name equals an existing artifact's file name leaves that artifact", async () => {
+    const outputDir = scratch("lethal-artifact-collide-");
+    const existing = join(outputDir, "0123456789abcdef-x.app");
+    await Bun.write(existing, "published earlier");
+    const c = new ArtifactCompiler(
+      { alcPath: "alc", packageCachePath: "p", outputDir },
+      {
+        ...defaultArtifactIo,
+        spawn: async () => ({ exitCode: 1, stdout: "error AL0001", stderr: "" }),
+      },
+    );
+    const err = await c
+      .compileProject({ projectDir: "a", packageCachePath: "p", name: "0123456789abcdef-x" })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlcCompileError);
+    expect(await readFile(existing, "utf8")).toBe("published earlier");
   });
 });
 

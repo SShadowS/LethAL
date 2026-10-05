@@ -215,6 +215,22 @@ describe("swap-modify-flag extension to Insert/Delete (R136)", () => {
     expect(specs.map((s) => s.after.text)).toEqual(["Rec.Insert(false)", "Rec.Delete(false)"]);
   });
 
+  // R463 (kept by R-254 review R-254-001): a site inside a `reportextension` is never claimed, even
+  // where Tier-1's RunTrigger tag now treats its receiver as unresolved. Control: the codeunit above.
+  it("does NOT claim Insert/Modify/Delete inside a reportextension", () => {
+    const src = `reportextension 50158 "RX" extends "Base"
+    {
+      procedure P()
+      var Rec: Record Customer;
+      begin
+        Rec.Insert(true);
+        Rec.Modify(true);
+        Rec.Delete(true);
+      end;
+    }`;
+    expect(specsFor(src)).toEqual([]);
+  });
+
   /**
    * The implicit-receiver form (`Rec` implicit inside a table's own code) was only ever exercised
    * for `Modify` (the pre-existing test above, "claims the implicit-receiver form inside a table

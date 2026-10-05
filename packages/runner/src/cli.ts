@@ -5730,9 +5730,14 @@ if (import.meta.main) {
         console.error(formatFailure(err));
         process.exit(1);
       }
-      const named = err.name !== "Error" ? `${err.name}: ` : "";
-      console.error(`${named}${err.message}`);
+      console.error(refusalLine(err));
       console.error("(set LETHAL_DEBUG=1 for the stack trace)");
       process.exit(1);
     });
+}
+
+/** The stderr line for a refusal: `<name>: <message>`, the name dropped only when it is "Error". */
+export function refusalLine(err: Error): string {
+  const named = err.name !== "Error" ? `${err.name}: ` : "";
+  return `${named}${err.message}`;
 }

@@ -875,6 +875,23 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   /**
+   * R461: compile the caller's staged copy of the UNMUTATED target as it stands: no
+   * `stageForCompile` (it has no selector, so no Control dependency), no publish. Same compiler,
+   * package cache and /define as `compile`. The output .app is deleted, best-effort, so a cleanup
+   * failure never masks the compile's own answer.
+   */
+  async compilePlainCheck(dir: string): Promise<void> {
+    const deployment = this.deployment;
+    if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
+    const { appPath } = await deployment.compiler.compileProject({
+      projectDir: dir,
+      packageCachePath: this.cfg.packageCachePath,
+      name: "plain-check",
+    });
+    await rm(appPath, { force: true }).catch(() => {});
+  }
+
+  /**
    * C02-05: compile a test project against an installed guarded build. Local only: alc, no
    * server call. A thin hand-off: the module does the staging/compile work, this only supplies
    * the backend's own compiler and control symbol.

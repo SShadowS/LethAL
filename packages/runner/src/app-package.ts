@@ -136,6 +136,9 @@ const OBJECT_TYPE_NAME: Record<number, string> = {
   // and every extension mutant would have been reported `no-coverage`.
   14: "PageExtension",
   15: "TableExtension",
+  // R254, MEASURED on Cronus28 (2026-10-05, scripts/r254-probe/README.md): a reportextension's
+  // Code Coverage rows and hub methods come back as `22:<extension id>`; the base report keeps 3.
+  22: "ReportExtension",
 };
 
 // SymbolReference.json top-level arrays that carry {Id, Name, Methods: [{Id, Name}]}
@@ -153,6 +156,9 @@ const SYMBOL_ARRAYS: ReadonlyArray<{ key: string; objectType: number }> = [
   { key: "Queries", objectType: 9 },
   { key: "PageExtensions", objectType: 14 },
   { key: "TableExtensions", objectType: 15 },
+  // R254: `ReportExtensions` read from alc's own SymbolReference.json for the probe (same
+  // {Id, Name, Methods, Target} shape); 22 measured live.
+  { key: "ReportExtensions", objectType: 22 },
 ];
 
 // R403 phase B: the shapes below were MEASURED with alc 18.0.2732683 (linux) on a probe test app,

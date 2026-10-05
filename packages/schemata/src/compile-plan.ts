@@ -375,6 +375,10 @@ export function canCarryMutationSelectorVar(root: ALSyntaxNode): boolean {
  * reason: they hold no code, so they can hold no var. `xmlport` and `query` are the kinds that
  * still hold code and still cannot carry it.
  *
+ * `reportextension` was added by R254 once its coverage was measured: BC reports it as object
+ * type 22 under the extension's own id, al-runner as its own Cobertura class
+ * (scripts/r254-probe/README.md); the tables gate's `DataBandExt` arm executes it.
+ *
  * Exported (R127) so the ONE user-facing message that names these kinds — `generateMutationSet`'s
  * skipped-file warning in @lethal/runner — derives the list instead of restating it. It restated
  * it as "only a codeunit or a table" for two releases after that stopped being true.
@@ -386,6 +390,7 @@ export const CARRIER_KINDS: readonly ALNodeKind[] = [
   ALNodeKind.report,
   ALNodeKind.pageextension,
   ALNodeKind.tableextension,
+  ALNodeKind.reportextension,
 ];
 
 /**
@@ -514,7 +519,8 @@ function injectSelectorVarIntoObject(
     object.kind === ALNodeKind.page ||
     object.kind === ALNodeKind.report ||
     object.kind === ALNodeKind.pageextension ||
-    object.kind === ALNodeKind.tableextension;
+    object.kind === ALNodeKind.tableextension ||
+    object.kind === ALNodeKind.reportextension;
   const headerKinds = isTable ? TABLE_HEADER_KINDS : CODEUNIT_HEADER_KINDS;
   // Under the current v3 grammar `declarationMembers` already strips the
   // `declaration_body` container, so header tokens never actually reach

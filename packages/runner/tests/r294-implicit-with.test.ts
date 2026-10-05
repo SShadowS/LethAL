@@ -208,6 +208,15 @@ reportextension 92700 "IW RX" extends "IW R3"
     procedure XRTake(A: Integer; B: Text)
     begin
     end;
+
+    procedure XRTakeInts(A: Integer; B: Integer)
+    begin
+    end;
+
+    procedure XRCall()
+    begin
+        XRTakeInts(Q2, Z); // SWAPPED reportextension procedure
+    end;
 }
 `;
 
@@ -272,11 +281,11 @@ describe("R294 review: implicit `with` over a record, the deployed manifest", ()
     });
   }
 
-  // Not load-bearing for this refusal (red-checked): the symbol table gives a reportextension no
-  // scope, so nothing in one is typed and this passes with or without the refusal. No case that can
-  // fail exists until a reportextension gets a scope (R254, R455 point 4). Pinned so that giving it
-  // a scope must keep this site refused.
-  test("reportextension modify: no swap (NOT load-bearing: a reportextension has no scope)", () => {
+  // Load-bearing since R254 (R455 point 4): a reportextension now has a scope and is instrumented,
+  // so its globals are typed, and the `dataset_section` case of `implicitRecordShadowsGlobals` is
+  // what keeps this site refused (red-checked by removing that case). The control
+  // "reportextension procedure" below proves the scope exists, so this cannot pass vacuously.
+  test("reportextension modify: no swap", () => {
     expect(swapsAt("REFUSED reportextension modify")).toBe(0);
   });
 
@@ -286,6 +295,7 @@ describe("R294 review: implicit `with` over a record, the deployed manifest", ()
     "codeunit procedure",
     "report trigger",
     "table",
+    "reportextension procedure",
   ]) {
     test(`control, ${ctx}: the name is typed and the swap is emitted`, () => {
       expect(swapsAt(`SWAPPED ${ctx}`)).toBe(1);
