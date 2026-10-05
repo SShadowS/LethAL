@@ -65,7 +65,7 @@ jobs:
         shell: bash
         run: rm -rf packages/*/dist
 
-      # R449: temp files on D:, the runner's local disk, not C:\Users\runneradmin\AppData\Local\Temp.
+      # R449: temp files on D:, the runner's local disk, not the default temp folder on C:.
       # C: is the runner's OS disk and stalls for seconds at a time: in run 37245027545 three tests
       # that normally take 15 to 30 ms, writing a few small files to temp with an in-memory store,
       # each hit the 5 s timeout back to back, and store tests stalled 6.7 to 8.3 s in other runs.
