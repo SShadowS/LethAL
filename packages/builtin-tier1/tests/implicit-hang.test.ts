@@ -115,6 +115,13 @@ const POSITIVES: Case[] = [
     write: "Done := true",
   },
   {
+    id: "b2' report: Line over L (no Done), bare Done inherits OUTER Header.Done",
+    src: `report 50474 Rq { dataset { dataitem(Header; T) {
+      dataitem(Line; L) { trigger OnAfterGetRecord() begin repeat Done := true; until Header.Done; end; } }
+      } }`,
+    write: "Done := true",
+  },
+  {
     id: 't1 table OnInsert number series: until not Get("No.")',
     src: `table 50470 Tt { fields { field(1; "No."; Code[20]) { } }
       trigger OnInsert() begin repeat "No." := IncStr("No."); until not Get("No."); end;
