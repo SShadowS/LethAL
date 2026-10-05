@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
+import { AppMethodIndex } from "../src/app-package";
 import {
   AlcCompileError,
   ArtifactCompiler,
@@ -708,6 +709,62 @@ describe("BcDevMcpBackend.run", () => {
       expect(v.durationMs).toBeGreaterThanOrEqual(0);
       expect(v.coverage?.entries[0]?.procedure).toBe("Post");
       expect(v.coverage?.entries[0]?.objectType).toBe("Codeunit");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // R254, hub direction. MEASURED on Cronus28 (scripts/r254-probe/README.md): a test calling only
+  // the extension's `Classify` reported exactly `22:91601` methodId 1710736425. The base REPORT
+  // shares the id 91601 here on purpose, with a method of the SAME id, so a lookup or a conversion
+  // that drops the kind and keys by id alone resolves the wrong object.
+  test("R254: a 22:<id> row names the REPORTEXTENSION's method, never the same-id report's", async () => {
+    const symbols = {
+      ReportExtensions: [
+        { Id: 91601, Name: "R254 Probe RepExt", Methods: [{ Id: 1710736425, Name: "Classify" }] },
+      ],
+      Reports: [
+        { Id: 91601, Name: "R254 Same Id Report", Methods: [{ Id: 1710736425, Name: "OnReport" }] },
+      ],
+    };
+    for (const sr of [symbols, { Namespaces: [{ Name: "Probe", ...symbols }] }]) {
+      const index = AppMethodIndex.fromSymbolReference(sr);
+      expect(index.lookup(22, 91601, 1710736425)).toBe("Classify");
+      expect(index.declaredObjects().has("reportextension:91601")).toBe(true);
+      expect(index.lookup(3, 91601, 1710736425)).toBe("OnReport");
+      expect(index.lookup(14, 91601, 1710736425)).toBeUndefined();
+      expect(index.lookup(15, 91601, 1710736425)).toBeUndefined();
+    }
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({
+        results: [
+          {
+            codeunitId: 79100,
+            method: "PostingUpdatesTotal",
+            status: "passed",
+            durationMs: 1,
+            output: "",
+          },
+        ],
+        coverage: [
+          {
+            testObjectId: 79100,
+            testMethodId: 111,
+            coveredProcedures: [
+              { objectType: 22, objectId: 91601, methodId: 1710736425 },
+              { objectType: 3, objectId: 91601, methodId: 1710736425 },
+            ],
+          },
+        ],
+      }),
+      symbols,
+    );
+    try {
+      const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "ReportExtension", objectId: 91601, procedure: "Classify" },
+        { objectType: "Report", objectId: 91601, procedure: "OnReport" },
+      ]);
     } finally {
       await cleanup();
     }

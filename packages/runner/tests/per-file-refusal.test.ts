@@ -218,10 +218,13 @@ describe("R307: the per-file trial", () => {
  * value valid on Windows and Linux alike. It was the Windows capture before (manifest b03f52f2...,
  * all files e889a463...), which no Linux run ever matched; the values below are the ones Linux
  * gave all along, re-recorded deliberately. The identity scheme is not written into these files,
- * so the scheme 14 bump does not move them. R281 re-pinned both (manifest was b754095f...588e, all
+ * so the scheme 14, 16 and 17 bumps do not move them. R281 re-pinned both (manifest was b754095f...588e, all
  * files 9abd8f06...73c6): `DeleteWithTrigger`'s mutant gained `run-trigger-skipped-delete`.
  * R-457 re-pinned both (manifest was 5e997a85...5e4e, all files da7243c9...bd74): seven mutants
  * gained `run-trigger-forced`, the manifest's only change.
+ * R254 re-pinned both (manifest was db3667dd...a82f, all files daa98b9f...7a07): the
+ * reportextension arm (`DataBandExt.ReportExt.al`, 15 mutants) is instrumented, and every later
+ * mutant id moves by 15.
  */
 describe("R307: sandbox-data is byte-identical with the trial in place", () => {
   let dir = "";
@@ -246,7 +249,7 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     });
     const manifest = await readFile(join(dir, "mutant-manifest.json"));
     expect(createHash("sha256").update(manifest).digest("hex")).toBe(
-      "db3667dd6ee4d08dff9c754b9a003c002b7901b684b13c9536f5f9d6c073a82f",
+      "b1d589cdd9df4161cb5d2b92bf4155e6cb84de50fcb8e1885d59183e066a5e21",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -254,7 +257,7 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       all.update(await readFile(join(dir, f)));
     }
     expect(all.digest("hex")).toBe(
-      "daa98b9fa4215266053a0d879c142b92e0e142c460ebaecb8bc24e0876c07a07",
+      "dec4321304eab25663f4aee1db5c8c815d83a90576f1457c5140055350d6a617",
     );
   }, 60_000);
 });

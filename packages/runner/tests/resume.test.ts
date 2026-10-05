@@ -463,8 +463,10 @@ describe("sessionFingerprint (R47)", () => {
   // eab8b0ef...5539 under scheme 9. It moved again for R295/R294 (scheme 11); it was
   // 64769073...984e under scheme 10. It moved again for R455 (scheme 13); it was 667cd9c9...02aa
   // under scheme 11. It moved again for R454 (scheme 14, more refused loop-exit sites); it was
-  // b5155ac2...1864 under scheme 13.
-  const PINNED = "a721384a0ca37cff9c643212ca2e3be01b16eb45876e309091b882b74240f23c";
+  // b5155ac2...1864 under scheme 13. It moved again for R-364 (scheme 16, hang refusal by name in
+  // an unindexed object); it was a721384a...f23c under scheme 14. It moved again for R254 (scheme
+  // 17, reportextensions instrumented); it was 961d7a41...3b65 under scheme 16.
+  const PINNED = "f6e4a1c683bb28ef5b7f7ab2ff56da5bd65cd0b0adf74fb7879d54973f95c971";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1950,11 +1952,13 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 14 since R454 (more refused loop-exit sites); 13
-    // was R455 (field-designator swaps, calls in a record scope, case-only pairs removed; 12 is
-    // reserved for R254); 11 was R295/R294 (every name of `A, B: T`, member receivers); 10 was
-    // R196 (refused loop-exit sites move twins).
-    expect(IDENTITY_SCHEME).toBe(14);
+    // Pinned by value so a bump is deliberate: 17 since R254 (reportextensions instrumented); 16
+    // was R-364 (hang refusal by name inside an unindexed object; 15 was reserved for R-254 and is
+    // unused); 14 was R454 (more refused loop-exit sites); 13 was R455 (field-designator swaps,
+    // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
+    // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
+    // sites move twins).
+    expect(IDENTITY_SCHEME).toBe(17);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

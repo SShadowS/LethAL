@@ -13,6 +13,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A `reportextension` is mutated; identity scheme 17** (R254). Until now such a file was skipped
+  as a non-carrier kind. BC reports a report extension's coverage as object type 22 under the
+  extension's own id (measured on BC 28), and al-runner as its own Cobertura class, so both are
+  attributed now; its members also get a variable scope, so the typed operators reach it. A
+  reportextension beside another object in one file is still refused (`object-mix`). Tier 2 does not
+  yet claim record calls inside one (R463). Measured: BaseApp (w1-28.6) gains 543 mutants in 13
+  report-extension files, none of its other mutants moved, CDO none (it has no report extension). An admitted extension can share an
+  object name with another object, and its mutants then take identity ordinals ahead of that one's,
+  so keys can move for unchanged source: marks files need `"identityScheme": 17` after re-checking
+  each mark (R325), and the first run on a project with report extensions does not carry the
+  previous run's history once (R442).
+
 - **The report names the loop steps R196 refused** (R447). A site an operator would have mutated
   but R196's hang check refused (the mutation writes a variable an enclosing loop's condition
   reads, so it could make the loop never end) is now counted per file as an `excludedSites` row
