@@ -51,6 +51,7 @@ export {
 } from "./ast/tree-walks";
 export type { MemberPlace, PlacedMember } from "./ast/tree-walks";
 export { evaluateArms, hasDirectiveLine, startsInInactiveArm } from "./ast/preproc-arms";
+export { countArguments, exactArguments, soleArgument } from "./ast/arguments";
 export type { ArmEvaluation } from "./ast/preproc-arms";
 
 // Semantic
@@ -84,6 +85,12 @@ export { buildCallerIndex } from "./semantic/callers";
 export type { NodeArm, SemanticContext } from "./semantic/context";
 export { armOfNode, buildSemanticContext, rawArmOf } from "./semantic/context";
 export { normalizeAlName, resolveVarRef } from "./semantic/resolve-var-ref";
+export type { HarmlessTriggerKind } from "./semantic/trigger-skip";
+export {
+  deleteSkipCanRaise,
+  findTableTrigger,
+  isHarmlessTriggerCall,
+} from "./semantic/trigger-skip";
 
 // Operator contract
 export type {
