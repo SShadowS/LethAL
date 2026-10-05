@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**88 of 474 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**88 of 475 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -172,7 +172,7 @@ that ordering is the priority.
 - **R441** · R433's extensions guard checks the request text before fetch normalises it: a tab, CR or LF inside `extensions` passes the check and is stripped by the URL parser · [R441.md](docs/roadmap/R441.md) · done (1a266901)
 - **R442** · A header-refused file reserves no identity ordinals, so a same-tuple twin's recorded key can later name the refused file's mutant and --skip-known-survivors carries the wrong verdict; and EMIT's import allow-list ignores external imports · [R442.md](docs/roadmap/R442.md) · done (5afbbe70)
 - **R443** · An equivalence mark written from a run that had a header refusal can name the wrong mutant once that file's header is readable again · [R443.md](docs/roadmap/R443.md) · open, filed 2026-10-05
-- **R446** · A loop whose only exit is a guard in its BODY still gets a non-terminating `remove-assignment` mutant on the counter that guard reads · [R446.md](docs/roadmap/R446.md) · open
+- **R446** · A loop whose only exit is a guard in its BODY still gets a non-terminating `remove-assignment` mutant on the counter that guard reads · [R446.md](docs/roadmap/R446.md) · done (d70cad43)
 - **R448** · GitHub CI's Windows job has been red on master since the R-307 merge: 13 R307 refusal tests and the 1 GB measure-peak probe fail on Windows only · [R448.md](docs/roadmap/R448.md) · done (18dd5957)
 - **R450** · A `SourceTable` or `TableNo` property inside a member-level `#if` is not seen, so R-294's implicit-with refusal does not engage and a field-shadowed global is still typed · [R450.md](docs/roadmap/R450.md) · closed 2026-10-05 — 0 objects have SourceTable/TableNo under a member-level #if…
 - **R452** · A skipped `OnModify` (`Modify(true)` to `Modify(false)`, `ModifyAll(..., true)`) is untagged, the same class R281 fixes for `Delete` · [R452.md](docs/roadmap/R452.md) · done (362ead0e)
@@ -194,6 +194,7 @@ that ordering is the priority.
 - **R474** · A carried `killed` lands on an unchanged statement whose surrounding code changed, because the identity key hashes only the statement's subtree · [R474.md](docs/roadmap/R474.md) · open
 - **R475** · Identity ordinals are numbered in `localeCompare` file order, so two hosts with different collations can number the same source's twins differently · [R475.md](docs/roadmap/R475.md) · open
 - **R476** · `insertSkipCanRaise` misses an `OnInsert` that assigns the primary key through a procedure, so `Insert(true)` -> `Insert(false)` loses its duplicate-key tag (4 rows R464 newly untags, plus master's resolved receivers) · [R476.md](docs/roadmap/R476.md) · open
+- **R480** · Loop shapes R446's body-exit-guard hang refusal does not see: measure each, then refuse or rule · [R480.md](docs/roadmap/R480.md) · open
 
 ## Product gaps a real project hits
 
