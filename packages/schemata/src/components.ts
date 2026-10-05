@@ -1,6 +1,6 @@
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { resolveStatement } from "./enclosing";
-import type { IdedSpec } from "./ids";
+import { type IdedSpec, compareCodeUnits } from "./ids";
 
 export interface ComponentMember {
   readonly mutantId: string;
@@ -67,5 +67,5 @@ function orderOutermostFirst(a: ComponentMember, b: ComponentMember): number {
   if (span !== 0) return span;
   const start = a.spec.before.startIndex - b.spec.before.startIndex;
   if (start !== 0) return start;
-  return a.spec.operatorName.localeCompare(b.spec.operatorName);
+  return compareCodeUnits(a.spec.operatorName, b.spec.operatorName);
 }
