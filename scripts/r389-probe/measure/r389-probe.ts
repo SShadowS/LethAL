@@ -338,8 +338,10 @@ function handOutsOf(p: Proc): HandOut[] {
     const im = IFACE.exec(elem ?? inner);
     if (im?.[1] !== undefined) {
       // An Interface I hand-out can hold only an implementation of I: fold them all, no tracing.
-      for (const u of implUnits(im[1])) collect.add(u);
-      out.push({ proc: p, what, argType: "interface", classes: ["bi"] });
+      // With no test-app implementation of I there is nothing to fold: the digest is unchanged.
+      const impls = implUnits(im[1]);
+      for (const u of impls) collect.add(u);
+      out.push({ proc: p, what, argType: "interface", classes: [impls.length > 0 ? "bi" : "bi:none"] });
     } else if (RECREF.test(elem ?? inner))
       out.push({ proc: p, what, argType: "recref", classes: ["a"] });
     else if (VARIANT.test(inner)) {
