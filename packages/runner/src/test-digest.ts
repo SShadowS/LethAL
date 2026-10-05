@@ -145,7 +145,11 @@ export function subscriberFold(
   for (const u of model.units) {
     if (!u.subscriber) continue;
     lines.push(`C ${key(u)} ${u.textHash}`);
-    for (const p of [...u.procs, ...u.triggers]) scanner.reach(p, st);
+    // R-389: an [EventSubscriber] procedure is called by external code, so what it hands back
+    // through a `var` parameter is read too (`foldEntryProc`).
+    for (const p of [...u.procs, ...u.triggers])
+      if (p.subscriber) scanner.foldEntryProc(p, st);
+      else scanner.reach(p, st);
   }
   for (const u of model.objects) {
     if (!u.kind.endsWith("extension")) continue;
