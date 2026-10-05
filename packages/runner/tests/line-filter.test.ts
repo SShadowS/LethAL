@@ -159,24 +159,25 @@ describe("parsing", () => {
     expect(() => parseCliConfig([...base, "--changed-since", ""])).toThrow("requires a git ref");
   });
 
-  test("resolveLineRanges unions --lines with the diff, keeping only .al files", async () => {
+  test("resolveLineRanges unions --lines with the diff, keeping only enumerated .al files", async () => {
     const seen: string[][] = [];
     const sha = "a".repeat(40);
-    // GH-25: answer each git call by its verb (`git -c core.quotePath=false diff ...` puts it third).
+    // GH-25: answer each git call by its verb. R205: the diff is `--no-index` over the snapshot.
     const spawn = async (argv: readonly string[]) => {
       seen.push([...argv]);
-      const verb = argv[1] === "-c" ? argv[3] : argv[1];
       const stdout =
-        verb === "merge-base"
+        argv[1] === "merge-base"
           ? `${sha}\n`
-          : verb === "diff"
-            ? "+++ b/app.json\n@@ -1 +1 @@\n+++ b/src/X.al\n@@ -4,0 +5,2 @@\n"
+          : argv.includes("diff")
+            ? "+++ b/snap/src/MutationX.al\n@@ -1 +1 @@\n+++ b/snap/src/X.al\n@@ -4,0 +5,2 @@\n"
             : "";
-      return { exitCode: 0, stderr: "", stdout };
+      return { exitCode: argv.includes("diff") ? 1 : 0, stderr: "", stdout };
     };
+    const snapshot = new Map([["src/X.al", Buffer.from("a\nb\nc\nd\ne\nf\n")]]);
     const r = await resolveLineRanges(
       { projectDir: "p", lines: [{ file: "A.al", start: 1, end: 1 }], changedSince: "main" },
       spawn,
+      snapshot,
     );
     expect(r?.ranges).toEqual([
       { file: "A.al", start: 1, end: 1 },
@@ -184,10 +185,10 @@ describe("parsing", () => {
     ]);
     expect(r?.changedSince).toEqual({ ref: "main", mergeBase: sha, untrackedFiles: [] });
     expect(seen[0]).toEqual(["git", "merge-base", "main", "HEAD"]);
-    const diffArgv = seen.find((a) => a[3] === "diff");
-    expect(diffArgv).toContain(sha);
-    expect(diffArgv).toContain("--relative");
-    expect(diffArgv).not.toContain("main...HEAD");
+    expect(seen.find((a) => a[1] === "ls-tree")).toContain(sha);
+    const diffArgv = seen.find((a) => a.includes("diff"));
+    expect(diffArgv).toContain("--no-index");
+    expect(diffArgv?.slice(-2)).toEqual(["base", "snap"]);
     expect(await resolveLineRanges({ projectDir: "p" }, spawn)).toBeUndefined();
     const linesOnly = await resolveLineRanges(
       { projectDir: "p", lines: [{ file: "A.al", start: 1, end: 1 }] },

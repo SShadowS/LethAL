@@ -1321,6 +1321,12 @@ export interface SessionConfig {
   readonly alRunnerContractProbe?: typeof runAlRunnerContractProbe;
   readonly store: ResultsStore;
   readonly projectDir: string; // target AL project (source of truth)
+  /**
+   * R205: the `readTargetSource` snapshot `runFromCli` took before any other reader, so the
+   * `--changed-since` lines, the coverage guard and the build all see one source. Absent, the
+   * session reads its own before its first reader.
+   */
+  readonly source?: ReadonlyMap<string, Buffer>;
   readonly testDir: string;
   readonly instrumentedDir: string; // scratch output dir for schemata writes
   /**
@@ -1782,10 +1788,10 @@ export function targetAppIdOf(projectManifest: Readonly<Record<string, unknown>>
   return id;
 }
 
-/** C02-06: `hashTargetSource` plus the snapshot it hashed (generation parses that snapshot), or
- *  the reason the tree could not be read (no `app.json`, say). An
- *  unread tree never matches, so it records no hash rather than a wrong one, and the warning can
- *  say which of "edited" and "unreadable" happened. */
+/** C02-06: `hashTargetSource` plus the snapshot it hashed, or the reason the tree could not be
+ *  read. R205: only the last-batch re-read uses it, which is diagnostic: an unread tree never
+ *  matches, so it records no hash rather than a wrong one, and the warning can say which of
+ *  "edited" and "unreadable" happened. */
 async function readTargetSourceHash(
   projectDir: string,
   symbols: readonly string[],
@@ -1799,6 +1805,31 @@ async function readTargetSourceHash(
   } catch (err) {
     return { unreadable: messageOf(err) };
   }
+}
+
+/** R205: the paths two source snapshots differ in, named for `source-changed-during-run`. */
+function sourceChanges(
+  before: ReadonlyMap<string, Buffer>,
+  after: ReadonlyMap<string, Buffer>,
+): string {
+  const names = (keys: readonly string[]) =>
+    keys
+      .map((k) => k.replaceAll("\\", "/"))
+      .sort()
+      .join(", ");
+  const added = [...after.keys()].filter((k) => !before.has(k));
+  const removed = [...before.keys()].filter((k) => !after.has(k));
+  const changed = [...before].filter(([k, b]) => after.get(k)?.equals(b) === false).map(([k]) => k);
+  return (
+    [
+      ["added", added],
+      ["removed", removed],
+      ["changed", changed],
+    ] as const
+  )
+    .filter(([, keys]) => keys.length > 0)
+    .map(([what, keys]) => `${what}: ${names(keys)}`)
+    .join("; ");
 }
 
 async function prepareArtifactDir(args: {
@@ -4844,6 +4875,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // the refusal, on the server's own words. See `published-test-app.ts`.
   // R247: it also returns this session's test-app identity, recorded on the run and compared by
   // `--resume` and `--skip-known-survivors`.
+  // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
+  // snapshot rather than the disk, so the first hash is of the bytes generation consumed by
+  // construction (review r1: a separate earlier read let an edit undone before the last read slip
+  // through). Hashed again after the last batch is prepared (below), which brackets the per-batch
+  // copies of the uninstrumented files; recorded only when the two agree.
+  // R205: `runFromCli` hands over the snapshot it took before anything else read the source (the
+  // `--changed-since` lines, the coverage guard); a caller that did not is read here, before the
+  // first reader below (`testAppIdentity`). An unreadable source refuses the run
+  // (`SourceSnapshotUnreadableError`): every batch copies its files and `app.json` from this one
+  // snapshot, so each compiles exactly the hashed bytes.
+  const sourceSnapshot = cfg.source ?? (await readTargetSource(cfg.projectDir));
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
   const { testAppHash, testDigests, testDigestParts } = await testAppIdentity(
     cfg,
@@ -4853,20 +4895,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     emit,
     // R403 phase B: R139's source-to-source comparison filters both sides alike.
     armPolicyApplied ? testBuildSymbols : undefined,
+    sourceSnapshot,
   );
-
-  // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
-  // snapshot rather than the disk, so the first hash is of the bytes generation consumed by
-  // construction (review r1: a separate earlier read let an edit undone before the last read slip
-  // through). Hashed again after the last batch is prepared (below), which brackets the per-batch
-  // copies of the uninstrumented files; recorded only when the two agree.
   const sourceSymbols = cfg.preprocessorSymbols ?? [];
-  const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
-  // Every batch copies its uninstrumented files and `app.json` from this same snapshot, so each
-  // compiles exactly the hashed bytes. Undefined only when the read failed, and then no hash is
-  // recorded anyway, so the disk is read as before.
-  const sourceSnapshot =
-    "snapshot" in sourceHashAtGeneration ? sourceHashAtGeneration.snapshot : undefined;
+  const sourceHashAtGeneration = hashSourceSnapshot(sourceSnapshot, sourceSymbols);
   // R214: the EFFECTIVE symbols (config plus app.json), read from the same snapshot generation
   // parses. Recorded on the run and compared by history, resume and marks: a key names a site
   // within one build.
@@ -5422,19 +5454,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       }
       if (batchIdx === artifacts.length - 1) {
         const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
-        if (
-          "hash" in atLastBatch &&
-          "hash" in sourceHashAtGeneration &&
-          atLastBatch.hash === sourceHashAtGeneration.hash
-        ) {
+        if ("hash" in atLastBatch && atLastBatch.hash === sourceHashAtGeneration) {
           cfg.store.recordSourceHash(runId, atLastBatch.hash);
         } else {
+          // R205: diagnostic only. The build is pinned to the snapshot, so an unreadable or edited
+          // tree withholds the hash and warns; it never aborts the run.
           const why =
-            "unreadable" in sourceHashAtGeneration
-              ? `could not be read before generation (${sourceHashAtGeneration.unreadable})`
-              : "unreadable" in atLastBatch
-                ? `could not be read after the last batch was prepared (${atLastBatch.unreadable})`
-                : "changed between generation and the last batch's preparation";
+            "unreadable" in atLastBatch
+              ? `could not be read after the last batch was prepared (${atLastBatch.unreadable})`
+              : `changed between generation and the last batch's preparation (${sourceChanges(sourceSnapshot, atLastBatch.snapshot)}; this run measured the source as first read)`;
           emit({
             type: "warning",
             code: "source-changed-during-run",
@@ -7610,6 +7638,8 @@ async function testAppIdentity(
   diskModel: TestAppModel,
   emit: RunEmitter,
   armSymbols: readonly string[] | undefined,
+  /** R205: the target's source snapshot, so `targetOf` reads the pinned `app.json`. */
+  source: ReadonlyMap<string, Buffer>,
 ): Promise<{
   testAppHash: string | undefined;
   testDigests?: Record<string, string>;
@@ -7663,7 +7693,7 @@ async function testAppIdentity(
       inputs,
       read,
       microsoft,
-      await targetOf(cfg.projectDir),
+      await targetOf(cfg.projectDir, source),
     );
     const { digests, parts } = testDigestsOfModel(
       published ? buildTestAppModel(sources.files) : diskModel,

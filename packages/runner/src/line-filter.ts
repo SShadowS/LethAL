@@ -1,5 +1,7 @@
-import { readFile, readdir } from "node:fs/promises";
-import { join, posix, win32 } from "node:path";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, posix, win32 } from "node:path";
+import { readTargetSource } from "./baseline-snapshot";
 import type { SpawnFn } from "./publisher";
 
 /**
@@ -161,10 +163,10 @@ export function lineCount(text: string): number {
 export interface ChangedSinceSource {
   /** The ref as given. */
   readonly ref: string;
-  /** Full sha of `git merge-base <ref> HEAD`; the diff runs from here to the working tree. */
+  /** Full sha of `git merge-base <ref> HEAD`; the diff runs from here to the source snapshot. */
   readonly mergeBase: string;
   /** Untracked, not-ignored `.al` files under the project (minus `Mutation*`, as enumeration skips them), project-relative, sorted. Every line
-   *  of each counts as changed; an empty one is listed and contributes no range. */
+   *  of each absent at the base counts as changed; an empty one is listed and contributes no range. */
   readonly untrackedFiles: readonly string[];
 }
 
@@ -177,31 +179,77 @@ const isAl = (p: string) => p.toLowerCase().endsWith(".al");
 export const isEnumeratedAl = (p: string, platform: NodeJS.Platform = process.platform) =>
   isAl(p) && !(platform === "win32" ? win32 : posix).basename(p).startsWith("Mutation");
 
-/** "Holds a file LethAL would parse", walked the way `generateMutationSet` walks the project. */
-async function holdsAlFile(dir: string): Promise<boolean> {
-  try {
-    return (await readdir(dir, { recursive: true })).some((e) => isEnumeratedAl(e));
-  } catch (e) {
-    // A submodule registered in the index but absent on disk: LethAL parses nothing there.
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw e;
+/** R205: a byte scan of the whole file, not git's prefix heuristic: any NUL, or a UTF-16 BOM. */
+const looksBinary = (b: Buffer) =>
+  b.includes(0) ||
+  (b.length >= 2 && ((b[0] === 0xff && b[1] === 0xfe) || (b[0] === 0xfe && b[1] === 0xff)));
+
+/**
+ * R205: the blobs `oids` name, read as BYTES through ONE `git cat-file --batch` (`SpawnFn` decodes
+ * to text, which would rewrite a BOM or an invalid UTF-8 byte). `oids` maps each id to the path
+ * it is read for, which a refusal names. A `missing` reply, a non-blob, a short read or a failed
+ * exit throws: an unreadable base is never taken as "no base".
+ */
+async function readBlobs(
+  cwd: string,
+  oids: ReadonlyMap<string, string>,
+  ref: string,
+): Promise<Map<string, Buffer>> {
+  const out = new Map<string, Buffer>();
+  if (oids.size === 0) return out;
+  const proc = Bun.spawn(["git", "cat-file", "--batch"], {
+    cwd,
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  // Both pipes drain while stdin is written, so a large batch cannot stall on a full pipe.
+  const stdout = new Response(proc.stdout).arrayBuffer();
+  const stderr = new Response(proc.stderr).text();
+  proc.stdin.write(`${[...oids.keys()].join("\n")}\n`);
+  await proc.stdin.end();
+  const [bytes, err, code] = await Promise.all([stdout, stderr, proc.exited]);
+  const buf = Buffer.from(bytes);
+  let at = 0;
+  for (const [oid, path] of oids) {
+    const nl = buf.indexOf(10, at);
+    const header = nl < 0 ? "" : buf.toString("utf8", at, nl);
+    const m = /^([0-9a-f]+) blob (\d+)$/.exec(header);
+    const end = nl + 1 + Number(m?.[2] ?? 0);
+    if (m === null || m[1] !== oid || end >= buf.length || buf[end] !== 10) {
+      throw new Error(
+        `--changed-since ${ref}: git cat-file could not read ${path} (object ${oid}) at the merge base: ${header !== "" ? header : `exit ${code}: ${err.trim()}`}`,
+      );
+    }
+    out.set(oid, buf.subarray(nl + 1, end));
+    at = end + 1;
   }
+  if (code !== 0) {
+    throw new Error(
+      `--changed-since ${ref}: git cat-file --batch failed (exit ${code}): ${err.trim()}`,
+    );
+  }
+  return out;
 }
 
 /**
- * GH-25: the lines changed between `git merge-base <ref> HEAD` and the WORKING TREE, plus every
- * line of each untracked, not-ignored `.al` file. The working tree is what LethAL parses and
- * deploys, so these line numbers match the files the mutants are generated from; #19's
- * `<ref>...HEAD` used HEAD's numbering and misaligned on a dirty tree. On a clean tree the two
- * are identical. Runs inside the project with `--relative` and `-- .`, so paths come out
- * project-relative even when the project is a subdirectory of the repository. Only `.al` ranges
- * are returned.
+ * GH-25: the lines changed between `git merge-base <ref> HEAD` and the SOURCE SNAPSHOT the session
+ * builds (R205; `readTargetSource`, read here when the caller passes none). The snapshot is what
+ * LethAL parses and deploys, so these line numbers match the files the mutants are generated
+ * from, whatever the disk does afterwards; #19's `<ref>...HEAD` used HEAD's numbering and
+ * misaligned on a dirty tree.
+ *
+ * One rule (R205): each snapshot `.al` is diffed against the SAME path's blob at the merge base,
+ * under the project's own folder of the repository. A path absent at the base (a new, untracked,
+ * ignored or renamed file) is selected whole; a deleted one adds nothing. The diff is
+ * `git diff --no-index` of two scratch folders, outside any repository, so no attribute, filter,
+ * index flag or user config can change it. Only `.al` ranges are returned.
  */
-// ponytail: reads the live tree at session start; an edit before generateMutationSet parses misaligns the lines. R205's snapshot closes this.
 export async function changedLinesSince(
   projectDir: string,
   ref: string,
   spawn: SpawnFn,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<{ ranges: LineRange[]; source: ChangedSinceSource }> {
   const run = async (args: readonly string[]) => {
     const out = await spawn(["git", ...args], { cwd: projectDir });
@@ -231,76 +279,130 @@ export async function changedLinesSince(
     );
   }
 
-  // An index flag makes git diff treat a file as unchanged whatever is on disk, so its edits would
-  // get no mutants. `ls-files -v` tags assume-unchanged with a lowercase letter, skip-worktree with S.
-  for (const entry of (await run(["ls-files", "-v", "-z", "--", "."])).split("\0")) {
-    const tag = entry.slice(0, 1);
-    const path = entry.slice(2);
-    if (!isEnumeratedAl(path)) continue;
-    const flag =
-      tag === "S" ? "skip-worktree" : /^[a-z]$/.test(tag) ? "assume-unchanged" : undefined;
-    if (flag === undefined) continue;
-    throw new Error(
-      `--changed-since ${ref}: ${path} is marked ${flag}, so git diff reports it unchanged whatever its working-tree content, and its edits would get no mutants. Clear the flag in ${projectDir} with: git update-index --no-${flag} ${path}`,
-    );
+  // The base: every `.al` blob under the project's folder at the merge base, keyed by its path
+  // inside the project and fetched by object id (`<sha>:<path>` would name a root-relative path).
+  // `prefix` ends in "/" (or is ""), so matching on it respects path separators.
+  const prefix = (await run(["rev-parse", "--show-prefix"])).replace(/\n$/, "");
+  const baseIds = new Map<string, string>();
+  const gitlinks: string[] = [];
+  for (const entry of (await run(["ls-tree", "-r", "-z", "--full-tree", mergeBase])).split("\0")) {
+    const tab = entry.indexOf("\t");
+    const path = entry.slice(tab + 1);
+    if (tab < 0 || !path.startsWith(prefix)) continue;
+    const [mode, type, oid] = entry.slice(0, tab).split(" ");
+    const key = path.slice(prefix.length);
+    if (mode === "160000") gitlinks.push(key);
+    else if (type === "blob" && oid !== undefined && isAl(key)) baseIds.set(key, oid);
   }
-
-  // No second tree: the diff runs to the working tree. Each flag pins a behaviour a user's config
-  // could otherwise change (quotePath, prefixes, renames, textconv, inter-hunk context, diff
-  // algorithm) or that CRLF would break.
-  const diff = await run([
-    "-c",
-    "core.quotePath=false",
-    "diff",
-    "-U0",
-    "--no-color",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--inter-hunk-context=0",
-    "--diff-algorithm=myers",
-    "--find-renames",
-    "--ignore-cr-at-eol",
-    "--src-prefix=a/",
-    "--dst-prefix=b/",
-    "--relative",
-    mergeBase,
-    "--",
-    ".",
-  ]);
-  const ranges = parseUnifiedDiffAdded(diff).filter((r) => isEnumeratedAl(r.file));
-
-  // A submodule or nested repository is walked and parsed by LethAL, but this repository's diff
-  // never sees edits inside it. No `--exclude` remedy: line resolution runs before exclusions.
-  const blind = (path: string, what: string) =>
-    new Error(
-      `--changed-since ${ref}: ${path} is ${what} inside the project. LethAL parses its .al files, but this repository's diff cannot see edits inside it, so they would get no mutants. Move the project out of the ${what === "a git submodule" ? "submodule's" : "nested repository's"} parent.`,
-    );
   for (const entry of (await run(["ls-files", "-s", "-z", "--", "."])).split("\0")) {
     const tab = entry.indexOf("\t");
-    if (tab < 0 || entry.split(" ")[0] !== "160000") continue;
-    const path = entry.slice(tab + 1);
-    if (await holdsAlFile(join(projectDir, path))) throw blind(path, "a git submodule");
+    if (tab >= 0 && entry.split(" ")[0] === "160000") gitlinks.push(entry.slice(tab + 1));
   }
-
-  const untrackedFiles: string[] = [];
   const others = (await run(["ls-files", "-z", "--others", "--exclude-standard", "--", "."]))
     .split("\0")
     .filter((e) => e !== "");
+
+  const snap = new Map<string, Buffer>();
+  for (const [raw, bytes] of snapshot ?? (await readTargetSource(projectDir))) {
+    if (isAl(raw)) snap.set(normalizeRelPath(raw), bytes);
+  }
+
+  // A submodule or nested repository holding a snapshot `.al`: this repository records no base
+  // for the files inside it. No `--exclude` remedy: line resolution runs before exclusions.
+  const blind = (path: string, what: string) =>
+    new Error(
+      `--changed-since ${ref}: ${path} is ${what} inside the project. LethAL parses its .al files, but their baseline lives in the inner repository, which this repository's diff cannot read, so their changes cannot be found. Move the project out of the ${what === "a git submodule" ? "submodule's" : "nested repository's"} parent.`,
+    );
+  const holdsSnapshotAl = (dir: string) => {
+    const under = `${dir.replace(/\/$/, "")}/`;
+    return [...snap.keys()].some((k) => k.startsWith(under) && isEnumeratedAl(k));
+  };
+  for (const path of gitlinks) if (holdsSnapshotAl(path)) throw blind(path, "a git submodule");
   for (const entry of others) {
-    if (entry.endsWith("/")) {
-      if (await holdsAlFile(join(projectDir, entry))) throw blind(entry, "a nested git repository");
-      continue;
+    if (entry.endsWith("/") && holdsSnapshotAl(entry))
+      throw blind(entry, "a nested git repository");
+  }
+  const untrackedFiles = others
+    .filter((e) => !e.endsWith("/") && isEnumeratedAl(e) && snap.has(normalizeRelPath(e)))
+    .map(normalizeRelPath)
+    .sort();
+
+  const baseIdPaths = new Map<string, string>();
+  for (const [key, oid] of baseIds) if (!baseIdPaths.has(oid)) baseIdPaths.set(oid, key);
+  const blobs = await readBlobs(projectDir, baseIdPaths, ref);
+  const baseOf = (key: string) => {
+    const oid = baseIds.get(key);
+    return oid === undefined ? undefined : blobs.get(oid);
+  };
+  for (const [key, bytes] of snap) {
+    const base = baseOf(key);
+    if (base?.equals(bytes) === true) continue;
+    if (looksBinary(bytes) || (base !== undefined && looksBinary(base))) {
+      throw new Error(binaryAlMessage(key));
     }
-    if (isEnumeratedAl(entry)) untrackedFiles.push(normalizeRelPath(entry));
   }
-  untrackedFiles.sort();
-  for (const file of untrackedFiles) {
-    const bytes = await readFile(join(projectDir, file));
-    if (bytes.includes(0)) throw new Error(binaryAlMessage(file));
-    const n = lineCount(new TextDecoder().decode(bytes));
-    if (n > 0) ranges.push({ file, start: 1, end: n });
+
+  const scratch = await mkdtemp(join(tmpdir(), "lethal-changed-since-"));
+  try {
+    const put = async (dir: string, key: string, bytes: Buffer) => {
+      const path = join(scratch, dir, key);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, bytes);
+    };
+    await mkdir(join(scratch, "base"));
+    await mkdir(join(scratch, "snap"));
+    for (const key of baseIds.keys()) {
+      const bytes = baseOf(key);
+      if (bytes !== undefined) await put("base", key, bytes);
+    }
+    for (const [key, bytes] of snap) await put("snap", key, bytes);
+    // No repository, so no attributes, filters, index or worktree; no user config either. Each
+    // flag pins a behaviour config could otherwise change (quotePath, prefixes, renames, textconv,
+    // inter-hunk context, diff algorithm, CRLF). Exit 1 means "differences", not failure.
+    const nowhere = join(scratch, "no-gitconfig");
+    const diff = await spawn(
+      [
+        "git",
+        "-c",
+        "core.quotePath=false",
+        "-c",
+        "core.autocrlf=false",
+        "diff",
+        "--no-index",
+        "--no-renames",
+        "-U0",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--inter-hunk-context=0",
+        "--diff-algorithm=myers",
+        "--ignore-cr-at-eol",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "base",
+        "snap",
+      ],
+      { cwd: scratch, env: { GIT_CONFIG_GLOBAL: nowhere, GIT_CONFIG_SYSTEM: nowhere } },
+    );
+    if (diff.exitCode !== 0 && diff.exitCode !== 1) {
+      throw new Error(
+        `--changed-since ${ref}: git diff --no-index failed (exit ${diff.exitCode}): ${diff.stderr.trim()}`,
+      );
+    }
+    const ranges = parseUnifiedDiffAdded(diff.stdout)
+      .map((r) => {
+        if (!r.file.startsWith("snap/")) {
+          throw new Error(
+            `--changed-since ${ref}: git diff --no-index reported ${r.file}, which is not in the source snapshot`,
+          );
+        }
+        return { ...r, file: r.file.slice("snap/".length) };
+      })
+      .filter((r) => isEnumeratedAl(r.file));
+    return { ranges, source: { ref, mergeBase, untrackedFiles } };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
   }
-  return { ranges, source: { ref, mergeBase, untrackedFiles } };
 }
 
 /** Case-insensitive on the file, because the AL projects this runs on live on Windows. */

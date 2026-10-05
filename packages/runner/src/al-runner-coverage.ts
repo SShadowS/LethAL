@@ -159,20 +159,28 @@ export interface AlRunnerCoverageIndex {
  * to no coverage when EITHER list is non-empty (`withAlRunnerCoverageGuard`, cli.ts). A file can be
  * in both lists.
  */
-export async function alRunnerCoverageSupport(projectDir: string): Promise<{
+export async function alRunnerCoverageSupport(
+  projectDir: string,
+  /** R205: the session's source snapshot; when given, its `.al` keys are parsed, not the disk. */
+  snapshot?: ReadonlyMap<string, Buffer>,
+): Promise<{
   supported: boolean;
   multiObjectFiles: readonly string[];
   wrappedObjectFiles: readonly string[];
 }> {
   await initParser();
-  const rels = (await readdir(projectDir, { recursive: true }))
+  const rels = (
+    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true })
+  )
     .map((e) => e.toString())
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .sort();
   const multi: string[] = [];
   const wrapped: string[] = [];
   for (const rel of rels) {
-    const root = wrapRoot(parseAL(await readFile(join(projectDir, rel), "utf8")));
+    const text =
+      snapshot?.get(rel)?.toString("utf8") ?? (await readFile(join(projectDir, rel), "utf8"));
+    const root = wrapRoot(parseAL(text));
     if (fileHoldsWrappedObject(root)) wrapped.push(normalizeSlashes(rel));
     // R383 r2: the same predicate as the index skip below. An enum then a codeunit puts the
     // codeunit second, and al-runner reports a later object in the wrong frame whatever the first.

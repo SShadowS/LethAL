@@ -37,6 +37,7 @@ import {
 } from "./al-runner-canary";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { alRunnerCoverageSupport } from "./al-runner-coverage";
+import { readTargetSource } from "./baseline-snapshot";
 import {
   predefinedSymbolsChangedWarning,
   probeAlRunnerPredefinedSymbols,
@@ -2245,10 +2246,11 @@ async function applyAlRunnerCoverageGuard(
   configFile: LethalConfigFile,
   projectDir: string,
   warn: (line: string) => void,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<{ readonly config: LethalConfigFile; readonly named: readonly string[] }> {
   const section = configFile.alRunner;
   if (section?.coverage !== "al-runner") return { config: configFile, named: [] };
-  const support = await alRunnerCoverageSupport(projectDir);
+  const support = await alRunnerCoverageSupport(projectDir, snapshot);
   if (support.multiObjectFiles.length === 0 && support.wrappedObjectFiles.length === 0) {
     return { config: configFile, named: [] };
   }
@@ -2277,11 +2279,13 @@ async function applyAlRunnerCoverageGuard(
  * the section (the same call `buildBackend` makes), apply the coverage guard, and print the ONE
  * advisory line. Returns the config every backend of the session is built from. A config with no
  * `alRunner` section is returned untouched, so `buildBackend` still throws its own targeted error.
+ * R205: `snapshot` is the session's source snapshot, so the guard judges the files the build uses.
  */
 export async function prepareAlRunnerSession(
   configFile: LethalConfigFile,
   projectDir: string,
   warn: (line: string) => void = console.warn,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<LethalConfigFile> {
   if (configFile.alRunner === undefined) return configFile;
   validateAlRunnerConfig(configFile.alRunner);
@@ -2289,6 +2293,7 @@ export async function prepareAlRunnerSession(
     configFile,
     projectDir,
     warn,
+    snapshot,
   );
   const advisory = alRunnerAdvisory(sessionConfig.alRunner ?? {}, named);
   if (advisory !== undefined) warn(advisory);
@@ -2501,7 +2506,8 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
  * Issue #19 (R227): the line filter's ranges, `--lines` unioned with `--changed-since`'s diff, or
  * `undefined` when neither flag was given. `changedLinesSince` already keeps only `.al` files.
  * GH-25: `changedSince` names where the diff came from, and is present exactly when
- * `--changed-since` was given.
+ * `--changed-since` was given. R205: `snapshot` is the source the session builds; the diff runs
+ * against it.
  */
 export async function resolveLineRanges(
   cfg: {
@@ -2510,12 +2516,13 @@ export async function resolveLineRanges(
     readonly changedSince?: string;
   },
   spawn: SpawnFn = defaultSpawn,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<
   { readonly ranges: readonly LineRange[]; readonly changedSince?: ChangedSinceSource } | undefined
 > {
   if (cfg.lines === undefined && cfg.changedSince === undefined) return undefined;
   if (cfg.changedSince === undefined) return { ranges: [...(cfg.lines ?? [])] };
-  const git = await changedLinesSince(cfg.projectDir, cfg.changedSince, spawn);
+  const git = await changedLinesSince(cfg.projectDir, cfg.changedSince, spawn, snapshot);
   return { ranges: [...(cfg.lines ?? []), ...git.ranges], changedSince: git.source };
 }
 
@@ -3302,6 +3309,8 @@ export async function printDryRun(
     readonly exclude?: readonly string[];
     /** R266: write the listing as JSON here. */
     readonly outPath?: string;
+    /** R205: the source snapshot the line ranges were computed against; parsed instead of the disk. */
+    readonly source?: ReadonlyMap<string, Buffer>;
     /** R214: the config's symbols, so a dry run answers for the build the real run compiles. */
     readonly preprocessorSymbols?: readonly string[];
     /** R377: the backend whose build is listed; absent is alc's (`bcdev`). */
@@ -3338,6 +3347,7 @@ export async function printDryRun(
       ...(exclude !== undefined ? { exclude } : {}),
       ...(operators !== undefined ? { operators } : {}),
       ...(paths.lines !== undefined ? { lines: paths.lines } : {}),
+      ...(paths.source !== undefined ? { source: paths.source } : {}),
       ...(paths.preprocessorSymbols !== undefined
         ? { preprocessorSymbols: paths.preprocessorSymbols }
         : {}),
@@ -3725,8 +3735,12 @@ export async function runFromCli(
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
+  // R205: the target's source, read ONCE before anything else reads it. The `--changed-since`
+  // lines, the al-runner coverage guard and the session's build all use this snapshot, so an edit
+  // landing later is never built; the session's last-batch re-read warns about it.
+  const source = await readTargetSource(parsed.projectDir);
   // Issue #19: before anything is provisioned, so a bad ref fails in seconds.
-  const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn);
+  const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn, source);
   // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
   // resolved once here so the session and every message downstream see one list. Union, never
   // override: see `LethalConfigFile.exclude` for why a CLI flag must not be able to switch off an
@@ -3815,7 +3829,12 @@ export async function runFromCli(
         );
       }
       // R387: once per session, here rather than in `buildBackend`, which runs once per worker.
-      sessionConfig = await prepareAlRunnerSession(configFile, parsed.projectDir);
+      sessionConfig = await prepareAlRunnerSession(
+        configFile,
+        parsed.projectDir,
+        console.warn,
+        source,
+      );
     }
 
     // Task 7: resolves the bcdev section EXACTLY ONCE (see `resolveEnvToolSession`'s doc comment)
@@ -3951,6 +3970,7 @@ export async function runFromCli(
             backend,
             store,
             projectDir: parsed.projectDir,
+            source,
             testDir: parsed.testDir,
             instrumentedDir: join(scratchRoot, "instrumented"),
             excludeOutputs: runOutputPaths(parsed),
@@ -5607,10 +5627,13 @@ async function main(): Promise<number> {
       );
     }
     const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
-    const dryRunLines = await resolveLineRanges(parsed);
+    // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
+    const dryRunSource = await readTargetSource(parsed.projectDir);
+    const dryRunLines = await resolveLineRanges(parsed, defaultSpawn, dryRunSource);
     await printDryRun(parsed.projectDir, parsed.only, {
       dbPath: parsed.dbPath,
       configPath: parsed.configPath,
+      source: dryRunSource,
       ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
       ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
       ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),

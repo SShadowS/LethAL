@@ -14,6 +14,7 @@ import {
 import { AL_RUNNER_PROVISION_SENTINEL, type AlRunnerBackend } from "../src/al-runner-backend";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import { isPredefinedProbeArgv, predefinedProbeArgv } from "../src/al-runner-predefined-probe";
+import { readTargetSource } from "../src/baseline-snapshot";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
   alRunnerAdvisory,
@@ -572,6 +573,27 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     expect(advisory).toContain("turned off for this run");
     expect(advisory).toContain("B.Codeunit.al (an #if-wrapped object)");
     expect(advisory).not.toContain('"alRunner.coverage": "al-runner" runs only');
+  });
+
+  // R205: the guard judges the session's snapshot, not a disk that changed after it was taken.
+  test("R205: prepareAlRunnerSession judges the snapshot: multi-object there, single on disk, falls back", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS });
+    const snapshot = await readTargetSource(dir);
+    await writeFile(join(dir, "Two.Codeunit.al"), "codeunit 50104 P\n{\n}\n", "utf8");
+    const warned: string[] = [];
+    const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l), snapshot);
+    expect(out.alRunner?.coverage).toBe("none");
+    expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
+  });
+
+  test("R205: prepareAlRunnerSession judges the snapshot: single there, multi-object on disk, keeps coverage", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": "codeunit 50104 P\n{\n}\n" });
+    const snapshot = await readTargetSource(dir);
+    await writeFile(join(dir, "Two.Codeunit.al"), TWO_OBJECTS, "utf8");
+    const warned: string[] = [];
+    const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l), snapshot);
+    expect(out.alRunner?.coverage).toBe("al-runner");
+    expect(warned.filter((l) => l.includes("al-runner-coverage-unsupported"))).toEqual([]);
   });
 
   test("prepareAlRunnerSession refuses a bad section before anything else", async () => {
