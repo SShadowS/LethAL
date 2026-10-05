@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**95 of 464 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**94 of 464 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -179,7 +179,7 @@ that ordering is the priority.
 - **R454** · Hang-capable mutants that R-196's refusal still lets through untagged: a literal in an active `#if` loop-condition tail, a literal inside a comparison in a loop condition, and member-target loop writes · [R454.md](docs/roadmap/R454.md) · done (f023b8a2)
 - **R455** · Typed operators can still mistype a name after R-294: a field-designator argument of a record builtin (`R.SetRange(Amount, Value)`), and an unqualified call inside `with` · [R455.md](docs/roadmap/R455.md) · done (b2c3c740)
 - **R456** · A report whose request page declares `SourceTable` is an implicit-record scope in its OWN triggers and procedures too; R294's predicate types them by the report's globals · [R456.md](docs/roadmap/R456.md) · closed 2026-10-05 — stated limit: real in alc, but 0 typed mutants in the 3 BaseApp reports with a…
-- **R458** · Loop writes through a receiver the hang walk cannot resolve (implicit `Rec` fields, `with`, report globals, xmlport locals) are still mutated untagged: BaseApp 38 sites / 50 mutants, CDO 2, including 13 table number-series loops · [R458.md](docs/roadmap/R458.md) · open
+- **R458** · Loop writes through a receiver the hang walk cannot resolve (implicit `Rec` fields, `with`, report globals, xmlport locals) are still mutated untagged: BaseApp 38 sites / 50 mutants, CDO 2, including 13 table number-series loops · [R458.md](docs/roadmap/R458.md) · done (81096714)
 - **R457** · `flip-boolean-literal`'s `false` -> `true` RunTrigger flip on `ModifyAll`/`DeleteAll` FORCES the trigger, R165's `run-trigger-forced` class, and is untagged · [R457.md](docs/roadmap/R457.md) · done (d8833acb)
 - **R459** · Two-argument `Insert(RunTrigger, InsertWithSystemId)`: the forcing `false` flip is untagged, and the cession orphans the second argument's `true` and the first argument's `true` · [R459.md](docs/roadmap/R459.md) · open
 - **R460** · Forcing RunTrigger flip on an UNRESOLVED receiver carries no `run-trigger-forced` · [R460.md](docs/roadmap/R460.md) · done (c7d06747)
