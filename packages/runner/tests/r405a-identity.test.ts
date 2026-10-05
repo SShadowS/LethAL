@@ -127,7 +127,7 @@ beforeAll(async () => {
 });
 
 describe("R-405 (a): a newly admitted same-tuple twin moves a key", () => {
-  test("the identity scheme is 22 (8 for this key move, 9 R307, 10 R196, 11 R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20 unused, 21 R459, 22 R-464, 23 R446)", () => {
+  test("the identity scheme is 23 (8 for this key move, 9 R307, 10 R196, 11 R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20 unused, 21 R459, 22 R-464, 23 R446)", () => {
     expect(IDENTITY_SCHEME).toBe(23);
   });
 
