@@ -10,11 +10,15 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  type ArmEvaluation,
   type SemanticContext,
+  buildSemanticContext,
+  evaluateArms,
   findAll,
   initParser,
   isStatementPosition,
 } from "@lethal/engine";
+import { isHarmlessTriggerCall } from "../src/forced-trigger-raise";
 import { swapModifyFlag } from "../src/swap-modify-flag";
 import { contextFor, parseClean, projectContextFor } from "./parse-clean";
 
@@ -313,8 +317,8 @@ describe("swap-modify-flag extension to Insert/Delete (R136)", () => {
 // R138. `Insert(false)` can kill through a PLATFORM error rather than an assertion: with `OnInsert`
 // skipped, a table whose `OnInsert` assigns the primary key leaves that key blank, the first
 // blank-key insert succeeds and a second raises a duplicate primary key. The mutant is scored
-// `killed` and the suite did not earn it. `Delete` and `Modify` have no such shape — skipping their
-// triggers writes LESS, never more — so only the `Insert` mutants declare a mechanism.
+// `killed` and the suite did not earn it. `Modify` has no such shape. `Delete` does since R281 (an
+// `OnDelete` that deletes or writes other rows), so its mutants declare their own mechanism.
 //
 // The ruling and its cost are pre-committed in
 // docs/superpowers/specs/2026-08-14-r138-insert-mechanism-precommitment.md.
@@ -330,14 +334,15 @@ describe("swap-modify-flag platform-kill mechanism (R138)", () => {
     expect(specs[0]?.platformKillMechanism).toBe("run-trigger-skipped-insert");
   });
 
-  // The tag must follow the METHOD, not the operator. Tagging every mutant this operator emits
-  // would claim a platform mechanism for `Delete`/`Modify` that does not exist, and the screen's
-  // whole value is that an untagged kill is not screened.
-  it("declares NOTHING on a Delete mutant — skipping OnDelete removes errors, it does not add them", () => {
+  // R281 FLIPPED THIS TEST. It used to pin "declares NOTHING on a Delete mutant", on R138's ruling
+  // that skipping `OnDelete` only writes less. An `OnDelete` that deletes child rows breaks that: the
+  // children stay and a later insert of one collides. A base-app `Record Customer` cannot be read,
+  // so harmlessness is not proven and the tag stays.
+  it("declares run-trigger-skipped-delete on a Delete mutant whose table it cannot resolve (R281)", () => {
     const src = `codeunit 50171 "T" { procedure P() var Rec: Record Customer; begin Rec.Delete(true); end; }`;
     const specs = specsFor(src);
     expect(specs.map((s) => s.before.text)).toEqual(["Rec.Delete(true)"]);
-    expect(specs[0]?.platformKillMechanism).toBeUndefined();
+    expect(specs[0]?.platformKillMechanism).toBe("run-trigger-skipped-delete");
   });
 
   it("declares NOTHING on a Modify mutant", () => {
@@ -349,7 +354,7 @@ describe("swap-modify-flag platform-kill mechanism (R138)", () => {
 
   // All three in one walk, so a change that tags by position, by order, or by "the first match
   // wins" rather than by the matched method name fails here.
-  it("tags exactly the Insert mutant when all three methods appear in one procedure", () => {
+  it("tags Insert and Delete by their own mechanism, and never Modify, in one procedure", () => {
     const src = `codeunit 50173 "T" {
       procedure P()
       var Rec: Record Customer;
@@ -368,7 +373,7 @@ describe("swap-modify-flag platform-kill mechanism (R138)", () => {
     expect(specs.map((s) => s.platformKillMechanism)).toEqual([
       undefined,
       "run-trigger-skipped-insert",
-      undefined,
+      "run-trigger-skipped-delete",
     ]);
   });
 
@@ -397,5 +402,194 @@ describe("swap-modify-flag platform-kill mechanism (R138)", () => {
     expect(specs.map((s) => s.before.text)).toEqual(["Insert(true)"]);
     expect(specs.map((s) => s.after.text)).toEqual(["Insert(false)"]);
     expect(specs[0]?.platformKillMechanism).toBeUndefined();
+  });
+});
+
+// R281. `Delete(true)` -> `Delete(false)` skips `OnDelete`. When that trigger deletes or writes other
+// rows (child lines, a log row), they are left behind, and a later insert of one can hit a
+// duplicate key that no test asserted. The tag is kept unless the table is resolved and skipping
+// its delete code is PROVEN harmless; each test below names the revert that turns it red.
+describe("swap-modify-flag Delete mechanism (R281)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const KID = `table 50302 "Kid" { fields { field(1; "Parent No."; Code[20]) { } } }`;
+  const CALLER = `codeunit 50301 "Ops" { procedure P() var Par: Record "Par"; begin Par.Delete(true); end; }`;
+  const par = (members: string): string =>
+    `table 50300 "Par"\n{\n    fields { field(1; "No."; Code[20]) { } }\n    keys { key(PK; "No.") { } }\n${members}}\n`;
+
+  /** The tag on the one `Par.Delete(true)` mutant. `symbols` null: no arm map (no `#if` read). */
+  function deleteTag(
+    files: Readonly<Record<string, string>>,
+    symbols: readonly string[] | null = null,
+  ): string | undefined {
+    const parsed = Object.entries(files).map(([path, text]) => ({
+      path,
+      text,
+      root: parseClean(text),
+    }));
+    const arms =
+      symbols === null
+        ? undefined
+        : new Map<ALSyntaxNode, ArmEvaluation>(
+            parsed.map((p) => [p.root, evaluateArms(p.root, p.text, symbols)]),
+          );
+    const ctx = buildSemanticContext(
+      parsed.map(({ path, root }) => ({ path, root })),
+      arms,
+    );
+    const specs = parsed
+      .flatMap((p) => findAll(p.root, ALNodeKind.procedure_call))
+      .filter((n) => n.text === "Par.Delete(true)" && swapModifyFlag.targets(n, ctx))
+      .flatMap((n) => swapModifyFlag.generate(n, ctx));
+    expect(specs.map((s) => s.after.text)).toEqual(["Par.Delete(false)"]);
+    return specs[0]?.platformKillMechanism;
+  }
+
+  const onDelete = (vars: string, body: string): string =>
+    `    trigger OnDelete()\n    ${vars}\n    begin\n${body}\n    end;\n`;
+  const KID_VAR = `var Kid: Record "Kid";`;
+
+  // Revert: return false whenever an OnDelete exists.
+  it("tags an OnDelete that DeleteAll()s child rows", () => {
+    const t = par(onDelete(KID_VAR, `Kid.SetRange("Parent No.", "No."); Kid.DeleteAll();`));
+    expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Revert: drop the Rec-only receiver check (allow Modify/Delete on any record).
+  it("tags an OnDelete that Delete()s ANOTHER record", () => {
+    const t = par(onDelete(KID_VAR, "if Kid.FindFirst() then Kid.Delete();"));
+    expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Revert: always true.
+  it("does NOT tag an OnDelete of only TestField, Error and Rec.Modify", () => {
+    const t = par(onDelete("", `TestField("No."); if "No." = 'X' then Error('no'); Rec.Modify();`));
+    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBeUndefined();
+  });
+
+  it("does NOT tag a resolved table with no OnDelete", () => {
+    expect(deleteTag({ "P.al": par(""), "O.al": CALLER })).toBeUndefined();
+  });
+
+  // Revert: unresolved returns false.
+  it("tags a receiver whose table is not in the project", () => {
+    const caller = `codeunit 50301 "Ops" { procedure P() var Par: Record Customer; begin Par.Delete(true); end; }`;
+    expect(deleteTag({ "O.al": caller })).toBe("run-trigger-skipped-delete");
+  });
+
+  // Revert: allow every call that is not a write method.
+  it("tags an OnDelete that calls an unknown procedure", () => {
+    const t = par(`${onDelete("", "CleanUp();")}    local procedure CleanUp() begin end;\n`);
+    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
+  });
+
+  // Revert: treat a statement-level call without parentheses as harmless (skip it in the walk).
+  it("tags an OnDelete whose writes are written without parentheses", () => {
+    const deleteAll = par(onDelete(KID_VAR, "Kid.DeleteAll;"));
+    expect(deleteTag({ "P.al": deleteAll, "K.al": KID, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+    const cleanUp = par(`${onDelete("", "CleanUp;")}    local procedure CleanUp() begin end;\n`);
+    expect(deleteTag({ "P.al": cleanUp, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
+  });
+
+  // Revert: match the bare name instead of using claimsRecordMethod.
+  it("tags an allow-listed name the table declares itself (its own Reset)", () => {
+    const t = par(`${onDelete("", "Reset();")}    procedure Reset() begin end;\n`);
+    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
+  });
+
+  it("tags an allow-listed name called on a codeunit (Mgt.Get())", () => {
+    const mgt = `codeunit 50303 "Mgt" { procedure Get() begin end; }`;
+    const t = par(onDelete(`var Mgt: Codeunit "Mgt";`, "Mgt.Get();"));
+    expect(deleteTag({ "P.al": t, "M.al": mgt, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Revert: drop the subscriber check.
+  it("tags a table with no OnDelete when the project subscribes to its delete event", () => {
+    const sub = `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::"Par", 'OnAfterDeleteEvent', '', false, false)]\n  local procedure X(var Rec: Record "Par"; RunTrigger: Boolean) begin end;\n}`;
+    expect(deleteTag({ "P.al": par(""), "S.al": sub, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Revert: drop the tableextension check.
+  it("tags a table with no OnDelete when a project tableextension has OnBeforeDelete", () => {
+    const ext = `tableextension 50305 "Par Ext" extends "Par" { trigger OnBeforeDelete() begin end; }`;
+    expect(deleteTag({ "P.al": par(""), "X.al": ext, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Revert: stop skipping inactive calls.
+  it("#if: a write only in an INACTIVE arm does not tag", () => {
+    const t = par(
+      onDelete(KID_VAR, `#if X\n        Kid.DeleteAll();\n#endif\n        TestField("No.");`),
+    );
+    expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER }, [])).toBeUndefined();
+  });
+
+  it("#if: the same write in an ACTIVE arm tags", () => {
+    const t = par(
+      onDelete(KID_VAR, `#if X\n        Kid.DeleteAll();\n#endif\n        TestField("No.");`),
+    );
+    expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER }, ["X"])).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Revert: drop the R378 undecided-file check. In an undecided file `liveMembers` does not find a
+  // trigger inside `#if`, so without the check the table reads as "no OnDelete" and loses the tag.
+  it("#if: an UNDECIDED table file tags", () => {
+    const t = par(`#if and\n${onDelete(KID_VAR, "Kid.DeleteAll();")}#endif\n`);
+    expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER }, ["X"])).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Final review fix 1. Revert: drop the `with_statement` check in `isHarmlessTriggerCall`. The
+  // bare `Delete()` reads as an implicit-`Rec` call, but `with` makes it delete a Kid row.
+  it("tags a Delete() inside `with Kid do` (another record's row)", () => {
+    const t = par(onDelete(KID_VAR, "with Kid do Delete();"));
+    expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Final review fix 2. Revert: accept only a `string_literal` event name. alc 18.0.43 (Linux)
+  // compiles the unquoted `OnAfterDeleteEvent` and refuses an unknown unquoted name with AL0280,
+  // measured 2026-10-05, so this form is real AL.
+  it("tags a table whose delete subscriber names the event unquoted", () => {
+    const sub = `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::Par, OnAfterDeleteEvent, '', false, false)]\n  local procedure X(var Rec: Record "Par"; RunTrigger: Boolean) begin end;\n}`;
+    expect(deleteTag({ "P.al": par(""), "S.al": sub, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Final review fix 4. Revert: drop the project-procedure identifier check. A parenthesis-less
+  // call used as a value looks like a variable to the grammar.
+  it("tags an OnDelete that calls a table procedure without parentheses, as a value", () => {
+    const t = par(
+      `${onDelete("", "if CleanUpChildren then Error('x');")}    local procedure CleanUpChildren(): Boolean begin end;\n`,
+    );
+    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
+  });
+
+  // Final review fix 3 (for R-213). Revert: one own-row allow-list for every trigger kind.
+  it("isHarmlessTriggerCall: Rec.Delete() is harmless for OnDelete, not for OnModify", () => {
+    const root = parseClean(par(onDelete("", "Rec.Delete();")));
+    const ctx = contextFor(root);
+    const call = findAll(root, ALNodeKind.procedure_call).find((c) => c.text === "Rec.Delete()");
+    if (call === undefined) throw new Error("no Rec.Delete() call");
+    expect(isHarmlessTriggerCall(call, ctx, "delete")).toBe(true);
+    expect(isHarmlessTriggerCall(call, ctx, "modify")).toBe(false);
   });
 });

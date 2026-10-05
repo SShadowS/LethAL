@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**100 of 447 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**100 of 449 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -107,7 +107,7 @@ that ordering is the priority.
 - **R246** · GH-24's reach marker runs on every loop iteration and slows the mutant: a kill that raced the time budget (Int32 overflow) now scores timeout-killed on itest:hang · [R246.md](docs/roadmap/R246.md) · done (0a9cc84)
 - **R268** · `lethal verify` refuses a test app whose symbol cache holds a Ready-to-Run Microsoft package (no root NavxManifest.xml) · [R268.md](docs/roadmap/R268.md) · done (63d381e)
 - **R279** · GH-24's reach latch may emit a second `var` section when a procedure's var section holds only comments (unmeasured) · [R279.md](docs/roadmap/R279.md) · open
-- **R281** · Skipping `OnDelete` can leave child rows that a later statement collides with, so R138's "writes less, cannot add an error" reasoning does not hold for shipped `Delete(true)` mutants (unmeasured) · [R281.md](docs/roadmap/R281.md) · open
+- **R281** · Skipping `OnDelete` can leave child rows that a later statement collides with, so R138's "writes less, cannot add an error" reasoning does not hold for shipped `Delete(true)` mutants (unmeasured) · [R281.md](docs/roadmap/R281.md) · closed 2026-10-05 — `Delete(true) -> Delete(false)` mutants are tagged `run-trigger-skipped-delete`, narrowed…
 - **R284** · `asserterror Arr[1].Method(...)`: tree-sitter makes `[1].Method(...)` its own statement, and `void-method-call` plants a mutant on that fragment that leaves `asserterror Arr;` (compile unmeasured) · [R284.md](docs/roadmap/R284.md) · done (50e98d1), closed 2026-09-27 by tree-sitter-al 4.4.1 (#26, upstream 209d038)
 - **R285** · A `case` label split by `#if`/`#else` builds a `preproc_split_case_extended` node, which escapes R214's `preproc_conditional*` framing, and mutants are planted in the arm the compiler never builds · [R285.md](docs/roadmap/R285.md) · done (84f72d33) for its four inactive-arm mutants; the block-body empty-block loss stays open, see R304 and…
 - **R288** · tree-sitter-al 4.3.0 parses a page property value `Type = Type::X` (or `Type <> Type::X`) into an ERROR node; `Kind = Kind::X` or a qualified `Rec.Type = Rec.Type::X` parse clean · [R288.md](docs/roadmap/R288.md) · done (50e98d1), closed 2026-09-27 by tree-sitter-al 4.4.1 (#27, upstream 551829e)
@@ -175,6 +175,7 @@ that ordering is the priority.
 - **R446** · A loop whose only exit is a guard in its BODY still gets a non-terminating `remove-assignment` mutant on the counter that guard reads · [R446.md](docs/roadmap/R446.md) · open
 - **R448** · GitHub CI's Windows job has been red on master since the R-307 merge: 13 R307 refusal tests and the 1 GB measure-peak probe fail on Windows only · [R448.md](docs/roadmap/R448.md) · done (18dd5957)
 - **R450** · A `SourceTable` or `TableNo` property inside a member-level `#if` is not seen, so R-294's implicit-with refusal does not engage and a field-shadowed global is still typed · [R450.md](docs/roadmap/R450.md) · closed 2026-10-05 — 0 objects have SourceTable/TableNo under a member-level #if…
+- **R452** · A skipped `OnModify` (`Modify(true)` to `Modify(false)`, `ModifyAll(..., true)`) is untagged, the same class R281 fixes for `Delete` · [R452.md](docs/roadmap/R452.md) · blocked (R281)
 
 ## Product gaps a real project hits
 
@@ -229,7 +230,7 @@ that ordering is the priority.
 - **R199** · The mutation-elements export renders a narrowed run as a full project's page, and the first real consumer hand-wrote a scope banner within minutes of the run finishing · [R199.md](docs/roadmap/R199.md) · done in part (`config.lethal`, `framework`) — 2026-09-02. The run's `validity`, `counts` and `mutationScore`…
 - **R201** · A stranded mutant's skip lasted exactly one resume: the skip note did not match `isStrandedNote`, so the resume after a resume re-ran the hang, and the first field run patched its database between iterations to stay skipped · [R201.md](docs/roadmap/R201.md) · done (`STRANDED_SKIP_NOTE` moved beside the detector in `resume.ts`, `isStrandedNote` recognises it)…
 - **R205** · A source file that changes on disk between session start and batch staging is instrumented from a stale parse: a mid-edit file with a missing `end;` produced a dispatch chain that repeated the file's tail 21 times, alc refused batch 0, and bisection blamed the environment; a test app republished under a running baseline was refused as stale · [R205.md](docs/roadmap/R205.md) · open — filed 2026-09-03 from the Document Output PR 54483 run…
-- **R213** · `ModifyAll(Field, Value, true)` clears R13's bar and `DeleteAll(true)` does not, measured — extend `swap-modify-flag` to the first only · [R213.md](docs/roadmap/R213.md) · open, filed 2026-09-08, measured
+- **R213** · `ModifyAll(Field, Value, true)` clears R13's bar and `DeleteAll(true)` does not, measured — extend `swap-modify-flag` to the first only · [R213.md](docs/roadmap/R213.md) · closed 2026-10-05 — RULING: not built. R213's probe read the LAST argument, so `ModifyAll(F, true)`…
 - **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call or an assignment there is not a statement site: real, measured, and inert on every app corpus (assignments added 2026-09-27) · [R216.md](docs/roadmap/R216.md) · closed 2026-09-27: not admitted: measured 0 deployable product sites on seven fixture targets…
 - **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over, and the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · done (557404f7) — the container list is pinned against the grammar; options 1 and 2 are not built
 - **R219** · A real project with two control add-ins cannot be instrumented at all: the flat write refuses on colliding resource basenames, and un-flattening is blocked by an al-runner source-root convention · [R219.md](docs/roadmap/R219.md) · open, filed 2026-09-09, measured on Continia Document Output and against al-runner 2.11.0
@@ -307,6 +308,7 @@ that ordering is the priority.
 - **R432** · Typed operators lose sites at #if positions the type table never types (global var body, locals/parameters, fields, disagreeing split headers); refused safely, and no item records the loss · [R432.md](docs/roadmap/R432.md) · closed 2026-10-04 — stated limit: never-typed #if positions lose 1 of 55 typed mutants on fixtures and 0 of…
 - **R445** · lethal run on a test project nested inside the target compiles and mutates the test code as target code, without a warning · [R445.md](docs/roadmap/R445.md) · open
 - **R447** · R-196 refuses hang-capable loop-step sites silently, so a report reader cannot tell that a loop's own step writes were never measured · [R447.md](docs/roadmap/R447.md) · done (bb4a0c46)
+- **R451** · Forward direction `ModifyAll(Field, Value)` to `ModifyAll(Field, Value, true)` is a genuinely new edit; sites exist in BaseApp, none in CDO (low priority, measure before building) · [R451.md](docs/roadmap/R451.md) · open, filed 2026-10-05
 
 ## Backends and tooling
 
