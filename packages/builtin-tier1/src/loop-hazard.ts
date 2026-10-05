@@ -201,16 +201,113 @@ function conditionReadsMember(
   return loopConditionParts(loop).some(walk);
 }
 
-/** The member target of the assignment at, or enclosing, `node`, or null. `assignmentTargetOf`
- *  stays identifier-only, which the census scripts assert. */
-function memberTargetOf(node: ALSyntaxNode, ctx: SemanticContext): MemberRef | null {
+/** The member target of the assignment at, or enclosing, `node`, as its receiver and member
+ *  IDENTIFIERS read from the tree before any resolution (R-364: an unresolved receiver must still
+ *  reach the name fallback), or null. `assignmentTargetOf` stays identifier-only, which the census
+ *  scripts assert. */
+function memberTargetOf(node: ALSyntaxNode): {
+  readonly field: ALSyntaxNode;
+  readonly receiver: ALSyntaxNode;
+  readonly member: ALSyntaxNode;
+} | null {
   for (let cur: ALSyntaxNode | null = node; cur !== null && !isScope(cur); cur = cur.parent) {
     if (cur.kind === ALNodeKind.assignment_statement) {
       const left = cur.childForFieldName("left") ?? cur.namedChildren[0] ?? null;
-      return left === null ? null : memberRefOf(left, ctx);
+      if (left === null || left.kind !== ALNodeKind.field_access) return null;
+      const receiver = left.childForFieldName("object");
+      const member = left.childForFieldName("member");
+      if (receiver === null || member === null || !isIdentifierLike(receiver)) return null;
+      return { field: left, receiver, member };
     }
   }
   return null;
+}
+
+/**
+ * R-364: a loop-condition target by NAME, for where no declaration can be resolved. Names are
+ * compared as AL compares them (any case, quotes stripped); the matcher normalises them itself.
+ * `receiver: null` is a plain variable; otherwise the target is `<receiver>.<member>`.
+ * `implicitReceiver` (R-458): a plain target also matches `<implicitReceiver>.<member>`, and a
+ * target on that receiver also matches a plain `<member>`.
+ */
+export type NameTarget = {
+  readonly receiver: string | null;
+  readonly member: string;
+  readonly implicitReceiver?: string;
+};
+
+/**
+ * R-364: does any enclosing loop's condition (to the procedure or trigger boundary) read `target`
+ * by NAME? A plain target matches a plain identifier read, including a member read's receiver
+ * (R294's `Txt.Contains`), never the member half of `R.Amount`. A member target matches the
+ * (receiver, member) PAIR structurally, never joined text (`"A.B".C` is not `A."B.C"`). Same arm
+ * and directive-marker rules as `conditionIdentifiers` and `conditionReadsMember`.
+ *
+ * A name match is a guess (spec 3.1), so this is no classifier by itself: a caller gates it.
+ * R-364's gate is `classifyHangCapable` (unresolved target inside an unindexed object); R-458
+ * reuses this matcher under its own gate.
+ */
+export function loopConditionReadsByName(
+  assignment: ALSyntaxNode,
+  target: NameTarget,
+  ctx: SemanticContext,
+): boolean {
+  const receiver = target.receiver === null ? null : normalizeAlName(target.receiver);
+  const member = normalizeAlName(target.member);
+  const implicit =
+    target.implicitReceiver === undefined ? null : normalizeAlName(target.implicitReceiver);
+  const plainMatches = receiver === null || (implicit !== null && receiver === implicit);
+  const wanted = receiver ?? implicit;
+  const walk = (n: ALSyntaxNode): boolean => {
+    if (DIRECTIVE_MARKERS.has(n.rawKind)) return false;
+    if (armOfNode(ctx, n) === "inactive") return false;
+    if (n.kind === ALNodeKind.field_access) {
+      const obj = n.childForFieldName("object");
+      const mem = n.childForFieldName("member");
+      if (obj !== null && mem !== null && isIdentifierLike(obj) && wanted !== null) {
+        if (normalizeAlName(obj.text) === wanted && normalizeAlName(mem.text) === member) {
+          return true;
+        }
+      }
+      // The member half is never a plain read; everything else (the receiver, arguments) is.
+      return n.namedChildren.filter((c) => c.fieldName !== "member").some(walk);
+    }
+    if (plainMatches && isIdentifierLike(n) && normalizeAlName(n.text) === member) return true;
+    return n.namedChildren.some(walk);
+  };
+  for (let cur = assignment.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (LOOP_KINDS.has(cur.kind) && loopConditionParts(cur).some(walk)) return true;
+  }
+  return false;
+}
+
+/**
+ * R-364's gate: is `node` inside an object the symbol table does not index (`unindexedObjects`,
+ * R343), where no declaration outside a trigger's own `var` section can resolve? Its OWN enclosing
+ * object, matched by file and span, never by wrapper identity or by offset alone (offsets repeat
+ * across files). Objects in `unparsedObjects`, failed headers and other unindexed members are out
+ * of scope and keep the declaration-only rule.
+ */
+function inUnindexedObject(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const unindexed = ctx.symbols.unindexedObjects;
+  if (unindexed.length === 0) return false;
+  const root = rootOf(node);
+  return unindexed.some(
+    (o) =>
+      o.startIndex <= node.startIndex && node.endIndex <= o.endIndex && sameFile(rootOf(o), root),
+  );
+}
+
+function rootOf(node: ALSyntaxNode): ALSyntaxNode {
+  let cur = node;
+  while (cur.parent !== null) cur = cur.parent;
+  return cur;
+}
+
+/** Two file roots hold the same source. Identical sources give identical answers here, so this is
+ *  exact for the question asked. */
+function sameFile(a: ALSyntaxNode, b: ALSyntaxNode): boolean {
+  return a.endIndex === b.endIndex && a.text === b.text;
 }
 
 /**
@@ -264,9 +361,12 @@ function sameDeclaration(
 /**
  * Does any enclosing loop's condition read this assignment's target?
  *
- * Returns `null` for every case it cannot establish, INCLUDING an unresolvable target. That refusal
- * is deliberate: a claim here can force LethAL to end a BC session on the user's own server, and a
- * name match is a guess (spec 3.1).
+ * Resolution is by DECLARATION first. In an indexed object an unresolvable target returns `null`:
+ * a claim here can force LethAL to end a BC session on the user's own server, and a name match is
+ * a guess (spec 3.1). R-364: inside an object the symbol table does not index (`unindexedObjects`,
+ * R343) nothing outside a trigger's own `var` section can resolve, so there an unresolved target
+ * is matched by NAME (`loopConditionReadsByName`). That is the safe direction: an extra refusal
+ * costs a site, a missed one can hang a session.
  */
 export function classifyHangCapable(
   node: ALSyntaxNode,
@@ -275,8 +375,15 @@ export function classifyHangCapable(
   const target = assignmentTargetOf(node);
   if (target === null) {
     // R454 shape 3: a member target, matched by receiver declaration and member name separately.
-    const ref = memberTargetOf(node, ctx);
-    if (ref === null) return null;
+    const parts = memberTargetOf(node);
+    if (parts === null) return null;
+    const ref = memberRefOf(parts.field, ctx);
+    if (ref === null) {
+      const byName = { receiver: parts.receiver.text, member: parts.member.text };
+      return inUnindexedObject(node, ctx) && loopConditionReadsByName(node, byName, ctx)
+        ? "loop-condition-target"
+        : null;
+    }
     for (let cur = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
       if (LOOP_KINDS.has(cur.kind) && conditionReadsMember(cur, ref, ctx)) {
         return "loop-condition-target";
@@ -285,7 +392,12 @@ export function classifyHangCapable(
     return null;
   }
   const targetSym = resolveVarRef(target, ctx);
-  if (targetSym === null) return null;
+  if (targetSym === null) {
+    return inUnindexedObject(node, ctx) &&
+      loopConditionReadsByName(node, { receiver: null, member: target.text }, ctx)
+      ? "loop-condition-target"
+      : null;
+  }
 
   let cur: ALSyntaxNode | null = node.parent;
   while (cur !== null && !isScope(cur)) {

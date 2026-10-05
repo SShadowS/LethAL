@@ -224,6 +224,34 @@ export function claimsRecordMethod(
 }
 
 /**
+ * R-364: is `node` a QUALIFIED call to `methodName` whose receiver this project's source cannot
+ * resolve (`claimsRecordMethod`'s rule 4)? For conservative screen TAGGING only, never for
+ * claiming: a platform-kill tag must stay where nothing proves the skip harmless, and an
+ * unresolved receiver proves nothing (R143). Inside an object the symbol table does not index
+ * (R343) every receiver outside a trigger's own `var` section is unresolved.
+ */
+export function receiverUnresolved(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  methodName: string,
+): boolean {
+  if (node.kind !== ALNodeKind.procedure_call) return false;
+  const callee = node.childForFieldName("function");
+  if (callee === null) return false;
+  const target = describeCallee(callee);
+  if (target === null || target.receiver === null) return false;
+  if (!equalsIgnoreCase(target.name, methodName)) return false;
+  const objectNode = enclosingObject(node);
+  if (objectNode === null) return false;
+  const objectName = objectNameOf(objectNode);
+  if (objectName === null) return false;
+  return (
+    resolveReceiver(target.receiver, node, objectNode, objectName, ctx.symbols).kind ===
+    "unresolved"
+  );
+}
+
+/**
  * R143: the TABLE a claimed record call's receiver resolves to, by name, or `null` when this
  * project's source cannot prove one.
  *

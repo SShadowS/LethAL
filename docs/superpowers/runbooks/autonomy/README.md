@@ -33,6 +33,17 @@ next free id right before writing).
   its lane branch, or kraken refuses to start.
 - **Reviews:** gpt-6.1-sol through `pi_ask` (provider `openai-codex`). For any two-way check, require a
   red-going test for EACH direction; "it works both ways" is not evidence.
+- **Submit only on green CI, both jobs.** Push the task branch; `check` (Windows) and `unit-linux`
+  must both pass, and the submit note names the run id. The container is Linux, so CI is the only
+  Windows check.
+- **Never pipe a gating command into `grep` or `tail` before `&&`.** The pipeline's status is the
+  last command's. Use `set -o pipefail;` if the output must be trimmed.
+- **At most two BaseApp-corpus jobs at once.** The container has 24 GB; a third census or diff
+  process gets OOM-killed (R-458 planner, 2026-10-05).
+- **Push work early, but WIP pushes carry `[skip ci]`** in the head commit's message. Unplanned
+  restarts happen, so push; but CI runs on every branch and every red run emails the owner. Push
+  WITHOUT `[skip ci]` only when you want a real CI result (before submitting, or to reproduce a
+  Windows-only failure); the submitted head must have a CI run.
 
 ## coord
 
