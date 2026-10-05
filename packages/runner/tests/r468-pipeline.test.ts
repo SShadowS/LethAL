@@ -3,10 +3,11 @@ import { afterAll, describe, expect, it } from "bun:test";
  * R468, through the whole pipeline (`generateMutationSet`, then `dedupeSpecs`, the deployed set): a
  * `Record` global declared in an object's SECOND var section is a resolved receiver.
  *
- * Revert (first section only) turns every assertion here: the deletion at `R.SetRange` stays
+ * Revert (first section only) turns every test here red: the deletion at `R.SetRange` stays
  * `void-method-call`, `R.Modify(true)` stays a `flip-boolean-literal`, and `S.Modify(false)` is
  * tagged `run-trigger-forced` because its receiver is unresolved (R460) although table U has no
- * `OnModify`.
+ * `OnModify`. `R.Modify(false)` staying `run-trigger-forced` is the unchanged positive control
+ * (T has an `OnModify`, so it is tagged either way); the U assertion is what turns that test.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
