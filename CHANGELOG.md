@@ -364,7 +364,25 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   matched by name. Measured: the 7 BaseApp mutants of the census are now refused.
 - **A `ModifyAll`/`DeleteAll` RunTrigger flip keeps its platform-kill tag when the receiver does
   not resolve** (R-364). `flip-boolean-literal` dropped the tag there, the unsafe direction for the
-  screen (R143); it is now kept. Tier-2 claiming is unchanged.
+  screen (R143); it is now kept, in every object. Tier-2 claiming is unchanged.
+  - Measured on BaseApp (BC.History w1-28, 203 projects, under `[]`): 11 `flip-boolean-literal`
+    mutants gain a tag, and none loses one.
+  - **1 restored**, in a wrapped object: `CalculateSubcontracts.Report.al`'s
+    `RequisitionLine.DeleteAll(true)` (`run-trigger-skipped-delete`).
+  - **10 newly added**, in indexed objects. The line numbers are in the R-364 site diff.
+    - 8 are a qualified `Rec.` call in a page or a `TableNo` codeunit, where an implicit `Rec` does
+      not resolve (R458's territory):
+      - Base Application: `Rec.ModifyAll` in `DimensionCorrectionChanges.Page.al`,
+        `ReminderAutErrorOverview.Page.al` and `MonitoredFieldsWorksheet.page.al`, and
+        `Rec.DeleteAll` in `ArchivedWFStepInstances.Page.al`;
+      - Sustainability: `Rec.DeleteAll` in `SustExciseJnlPost.Codeunit.al` and
+        `SustainabilityJnlPost.Codeunit.al`;
+      - AI Test Toolkit: `Rec.DeleteAll` in `AITLogEntries.Page.al`;
+      - Test Runner: `Rec.ModifyAll` in `CommandLineTestTool.Page.al`.
+    - 2 are a global the symbol table does not read because a `#if` sits in the global var section
+      (R369's class): `PurchReqLine.DeleteAll` in `CalculatePlanReqWksh.Report.al` and
+      `SalesLine.DeleteAll` in `SalesHeader.Table.al`'s `RecreateSalesLines`.
+  - CDO and every fixture are unchanged.
 
 - **Three more loop-hang shapes are refused; identity scheme 14** (R454). `shift-integer` now
   refuses a literal in a loop condition's `#if` tail; `flip-boolean-literal` refuses a literal
