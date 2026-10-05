@@ -221,7 +221,7 @@ describe("R455 item 2: an unqualified call in a record scope is untyped", () => 
     expect(serializeKey(identityKeyOf(outside))).toBe(serializeKey(identityKeyOf(alone)));
   });
 
-  test("the identity scheme is 17 (13 for R455, 12 and 15 unused, 14 for R454, 16 for R-364, 17 for R254)", () => {
+  test("the identity scheme is 19 (13 for R455, 12 and 15 unused, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468)", () => {
     expect(IDENTITY_SCHEME).toBe(19);
   });
 });
