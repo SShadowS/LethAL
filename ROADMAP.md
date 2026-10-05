@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**93 of 467 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**94 of 468 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -512,6 +512,7 @@ that ordering is the priority.
 - **R440** · scripts/r402-shape-sweep.ts crashes since R-307: it calls writeInstrumentedProject without identityOrdinals, and no typecheck covers the script · [R440.md](docs/roadmap/R440.md) · done (3e3555ab)
 - **R449** · Three SQLite-heavy unit tests time out at bun's 5 s default on GitHub CI's Windows job only (7 to 8.3 s), each passing on other runs · [R449.md](docs/roadmap/R449.md) · done (f224fa0d)
 - **R453** · al-runner loses a reportextension after a test calls Code Coverage Mgt. (found by the R-254 probe) · [R453.md](docs/roadmap/R453.md) · open, filed 2026-10-05
+- **R471** · al-runner compiles a project that BC's alc rejects with AL0155 (a report and its reportextension declaring the same global), so LethAL's al-runner path can look green where bcdev errors · [R471.md](docs/roadmap/R471.md) · open
 
 ---
 
