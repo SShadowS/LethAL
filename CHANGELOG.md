@@ -394,6 +394,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A `Modify(true)`, `Delete(true)` or `Insert(true)` flip on a receiver LethAL cannot resolve
+  keeps its skip tag** (R473). `swap-modify-flag` does not claim such a call, so
+  `flip-boolean-literal` flips its `true`, and that flip carried no `run-trigger-skipped-*` tag. It
+  now carries the tag of its kind, as the `false` flip on the same receiver already did (R460).
+  Tags only: no mutant added or removed and no identity key moved. Measured: BC.History 1116 flips
+  newly tagged (879 modify, 130 delete, 107 insert), CDO 1, fixtures none.
 - **The test-app scan reads a TableNo codeunit's `Rec` in its `OnRun` only** (R466), as AL does,
   instead of in every procedure of the codeunit. Measured: no test digest or TestPage result
   changes on CDO or on 178 BC.History test apps, because none of them uses `Rec` outside `OnRun`.
