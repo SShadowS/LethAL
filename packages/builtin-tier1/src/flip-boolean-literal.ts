@@ -309,6 +309,8 @@ function runTriggerTag(
     // conservative). `claimsRecordMethod` refuses it, which is right for claiming and is left
     // unchanged. R460: the forcing `false` (R-457) is tagged there too, at every method, since
     // nothing proves the forced trigger harmless (`forceCanRaise` itself keeps an unresolved table).
+    // R479: a BARE call whose implicit record is refused (a pageextension's `Rec`) counts as
+    // unresolved too, both directions.
     if (!claimsRecordMethod(call, ctx, method)) {
       if (receiverUnresolved(call, ctx, method)) {
         if (value === "false") return "run-trigger-forced";

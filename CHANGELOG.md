@@ -504,6 +504,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   now carries the tag of its kind, as the `false` flip on the same receiver already did (R460).
   Tags only: no mutant added or removed and no identity key moved. Measured: BC.History 1116 flips
   newly tagged (879 modify, 130 delete, 107 insert), CDO 1, fixtures none.
+- **A bare `Insert(true)`, `Modify(true)` or `Delete(true)` in a pageextension keeps its tag**
+  (R479). A call with no receiver binds the implicit `Rec`, and in a pageextension that is the
+  extended page's source table, which LethAL cannot see, so the call is not claimed by
+  `swap-modify-flag` and `flip-boolean-literal` flips it. That flip carried no
+  `run-trigger-skipped-*` tag, while `Rec.Insert(true)` in the same place did. Now the bare form is
+  treated like the qualified one, in both directions (`true` keeps its skip tag, `false` gets
+  `run-trigger-forced`), also in a reportextension and under a `with` whose subject LethAL cannot
+  resolve. A procedure the object declares itself, or a `with` on a codeunit, stays untagged.
+  Tags only: no mutant added or removed and no identity key moved. Measured: no change on
+  BC.History, CDO, DC, DO or the fixtures, none of which has this shape.
 - **The test-app scan reads a TableNo codeunit's `Rec` in its `OnRun` only** (R466), as AL does,
   instead of in every procedure of the codeunit. Measured: no test digest or TestPage result
   changes on CDO or on 178 BC.History test apps, because none of them uses `Rec` outside `OnRun`.

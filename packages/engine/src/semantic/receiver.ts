@@ -251,8 +251,9 @@ export function claimedRunTriggerSkip(
 }
 
 /**
- * R-364: is `node` a QUALIFIED call to `methodName` whose receiver this project's source cannot
- * resolve (`claimsRecordMethod`'s rule 4)? For conservative screen TAGGING only, never for
+ * R-364: is `node` a call to `methodName` whose receiver this project's source cannot resolve
+ * (`claimsRecordMethod`'s rule 4)? R479: a BARE call too, through `implicitRecordUnresolved`.
+ * For conservative screen TAGGING only, never for
  * claiming: a platform-kill tag must stay where nothing proves the skip harmless, and an
  * unresolved receiver proves nothing (R143). Inside an object the symbol table does not index
  * (R343) every receiver outside a trigger's own `var` section is unresolved.
@@ -269,8 +270,9 @@ export function receiverUnresolved(
   const callee = node.childForFieldName("function");
   if (callee === null) return false;
   const target = describeCallee(callee);
-  if (target === null || target.receiver === null) return false;
+  if (target === null) return false;
   if (!equalsIgnoreCase(target.name, methodName)) return false;
+  if (target.receiver === null) return implicitRecordUnresolved(node, ctx, target.name);
   const objectNode = enclosingObject(node);
   if (objectNode === null) {
     for (let p = node.parent; p !== null; p = p.parent) {
@@ -281,6 +283,36 @@ export function receiverUnresolved(
   const objectName = objectNameOf(objectNode);
   if (objectName === null) return false;
   return resolveReceiver(target.receiver, node, ctx.symbols).kind === "unresolved";
+}
+
+/**
+ * R479: the BARE form of `receiverUnresolved`. A bare call binds the innermost record scope
+ * (`recordScopesAt`). It is unresolved when that record exists but its table is not provable (a
+ * pageextension's `Rec`, a reportextension request page or `modify`, a `with` subject that is not
+ * a provable table), or when it sits outside `OBJECT_KINDS` (a reportextension's added dataitem),
+ * where `claimsRecordMethod` refuses every call. No record scope at all (a codeunit outside a
+ * TableNo `OnRun`, a page without `SourceTable`) means the call is not a record method, and a
+ * `with` subject that resolves to a non-record is not unresolved either (R460's control). Neither
+ * is a name the enclosing object declares as its own procedure (rule 3's own-object guard).
+ */
+function implicitRecordUnresolved(node: ALSyntaxNode, ctx: SemanticContext, name: string): boolean {
+  const symbols = ctx.symbols;
+  const [scope] = recordScopesAt(node, symbols);
+  if (scope === undefined) return false;
+  const objectNode = enclosingObject(node);
+  let owner = objectNode;
+  for (let p = node.parent; owner === null && p !== null; p = p.parent)
+    if (p.kind === ALNodeKind.reportextension) owner = p;
+  if (owner !== null && declaresProcedure(owner, name, rawArmOf(ctx))) return false;
+  if (objectNode === null) return true;
+  if (scope.table !== null) return false;
+  if (scope.kind !== "with" || scope.at === undefined) return true;
+  const subject = scope.at.childForFieldName("record");
+  const subjectName = subject === null ? null : identifierText(subject);
+  return (
+    subjectName === null ||
+    resolveReceiverName(subjectName, scope.at, symbols).kind !== "non-record"
+  );
 }
 
 /**

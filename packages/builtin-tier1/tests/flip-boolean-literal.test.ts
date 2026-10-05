@@ -4,6 +4,7 @@ import {
   type ALSyntaxNode,
   type ArmEvaluation,
   buildSemanticContext,
+  claimedRunTriggerSkip,
   evaluateArms,
   findAll,
   initParser,
@@ -382,6 +383,59 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
       ),
     };
     expect(tagged(resolvedNonRecord)).toEqual(["true->false -", "true->false -", "true->false -"]);
+  });
+
+  // F13 (R479). The BARE form of F10/F12: in a pageextension the implicit `Rec` is the extended
+  // page's `SourceTable`, which the project cannot see, so `claimsRecordMethod` refuses the call
+  // (and `swap-modify-flag` does not claim it: `claimedRunTriggerSkip` stays null) and this operator
+  // flips it. Nothing proves the trigger harmless, so both directions keep their tag, as
+  // `Rec.Insert(true)` in the same place already does; a reportextension `modify(X)` trigger the
+  // same. Revert: give `receiverUnresolved` back `target.receiver === null -> false` (every bare
+  // row goes untagged).
+  it("tags a bare RunTrigger call on a pageextension's implicit Rec, both directions", () => {
+    const body =
+      "Insert(true); Modify(true); Delete(true); Insert(false); Modify(false); Delete(false); Rec.Insert(true);";
+    const ext = `pageextension 50310 "Ext" extends "Customer Card" { trigger OnOpenPage() begin ${body} end; }`;
+    expect(tagged({ "O.al": ext })).toEqual([
+      "true->false run-trigger-skipped-insert",
+      "true->false run-trigger-skipped-modify",
+      "true->false run-trigger-skipped-delete",
+      "false->true run-trigger-forced",
+      "false->true run-trigger-forced",
+      "false->true run-trigger-forced",
+      "true->false run-trigger-skipped-insert",
+    ]);
+    const root = wrapRoot(parseAL(ext));
+    const ctx = buildSemanticContext([{ path: "O.al", root }]);
+    const calls = findAll(root, ALNodeKind.procedure_call);
+    expect(calls.length).toBe(7);
+    for (const c of calls) expect(claimedRunTriggerSkip(c, ctx)).toBeNull();
+    const repExt = `reportextension 50314 "RX" extends "Customer - List" { dataset { modify(Customer) { trigger OnAfterAfterGetRecord() begin Modify(true); Insert(false); end; } } }`;
+    expect(tagged({ "O.al": repExt })).toEqual([
+      "true->false run-trigger-skipped-modify",
+      "false->true run-trigger-forced",
+    ]);
+  });
+
+  // F14 (R479). Controls: a bare call whose binding IS known keeps today's behaviour.
+  // - a page whose `SourceTable` (Par, no triggers) resolves: `Modify(true)` is ceded to
+  //   `swap-modify-flag` (no flip) and `Modify(false)` is proven harmless (untagged).
+  //   Revert: stop ceding in `isCededRunTriggerFlag` (a `true->false` row appears).
+  // - the same page on a Par that DECLARES `Modify`: rule 3 refuses the claim, the call is Par's own
+  //   procedure, untagged. Revert: drop `scope.table !== null` in `implicitRecordUnresolved`.
+  // - a pageextension that declares its own `Delete`: untagged. Revert: drop the
+  //   `declaresProcedure` guard.
+  // - `with Mgt do Modify(true)`, Mgt a codeunit: untagged. Revert: drop the non-record check.
+  it("keeps a bare call untagged where its binding is known (resolved Rec, namesake, codeunit with)", () => {
+    const page = `page 50311 "Pg" { SourceTable = "Par"; trigger OnOpenPage() begin Modify(true); Modify(false); end; }`;
+    expect(tagged({ "P.al": par(""), "O.al": page })).toEqual(["false->true -"]);
+    const own = par("    procedure Modify(Run: Boolean) begin end;\n");
+    expect(tagged({ "P.al": own, "O.al": page })).toEqual(["true->false -", "false->true -"]);
+    const extOwn = `pageextension 50312 "Ext2" extends "Customer Card" { trigger OnOpenPage() begin Delete(true); end; local procedure Delete(Run: Boolean) begin end; }`;
+    expect(tagged({ "O.al": extOwn })).toEqual(["true->false -"]);
+    const mgt = `codeunit 50303 "Mgt" { procedure Modify(Run: Boolean) begin end; }`;
+    const withCu = `pageextension 50313 "Ext3" extends "Customer Card" { trigger OnOpenPage() var Mgt: Codeunit "Mgt"; begin with Mgt do Modify(true); end; }`;
+    expect(tagged({ "M.al": mgt, "O.al": withCu })).toEqual(["true->false -"]);
   });
 
   // F8. Revert: drop `claimsRecordMethod` (tag by method name alone).
