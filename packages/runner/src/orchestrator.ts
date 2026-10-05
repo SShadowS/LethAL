@@ -4311,12 +4311,14 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     const { batchDir, testDir, allowReuse } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
     const packageReader = backend.fetchPublishedAppPackage;
+    // R462: the request identity is read ONCE, so the re-read at a refusal asks for the same app
+    // even if the local app.json changed meanwhile.
+    const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
     hashTestApp = () =>
       testAppHashFor(
         packageReader === undefined
           ? undefined
           : async () => {
-              const manifest = await readTestAppManifest(testDir);
               return manifest === undefined
                 ? undefined
                 : packageReader.call(backend, {
@@ -5722,7 +5724,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // installed version verbatim. Re-stamp strictly above it, recompile, and retry
         // EXACTLY once — a second conflict means the server's installed version is moving
         // underneath us, and that must fail the session loudly, not loop.
-        // R461: never from alc's own output, which now carries stdout too. A conflict is a publish answer.
+        // R461: an AlcCompileError is never read as a conflict, here or in the retry below: its text is
+        // alc's output, which now carries stdout too. A conflict is a publish answer.
         const installed =
           deployErr instanceof AlcCompileError ? null : parseVersionConflict(messageOf(deployErr));
         if (installed !== null) {
@@ -5743,7 +5746,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             );
             deployed = true;
           } catch (retryErr) {
-            const stillInstalled = parseVersionConflict(messageOf(retryErr));
+            const stillInstalled =
+              retryErr instanceof AlcCompileError
+                ? null
+                : parseVersionConflict(messageOf(retryErr));
             if (stillInstalled !== null) {
               throw new Error(
                 `version conflict persisted after retry: re-stamped to ${bumped} above BC's ` +

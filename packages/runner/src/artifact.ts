@@ -1,4 +1,4 @@
-import { readFile, rename } from "node:fs/promises";
+import { readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import type { DeploymentVerification, PublishOutcome } from "./deployment-verifier";
@@ -231,6 +231,21 @@ export class ArtifactCompiler {
         `could not run alc (${this.cfg.alcPath}): ${describeThrown(err)}`,
       );
     }
+    try {
+      return await this.placeOutput(res, scratch, name);
+    } catch (err) {
+      // R461: a failed compile or placement can leave alc's partial output; removed best-effort,
+      // never masking the original error.
+      await rm(scratch, { force: true }).catch(() => {});
+      throw err;
+    }
+  }
+
+  private async placeOutput(
+    res: { exitCode: number; stdout: string; stderr: string },
+    scratch: string,
+    name: string,
+  ): Promise<{ readonly appPath: string; readonly sha256: string }> {
     if (res.exitCode !== 0) {
       // R461: BOTH streams, labelled. `stderr || stdout` let a stderr warning hide a stdout error.
       throw new AlcCompileError(

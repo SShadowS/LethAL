@@ -1460,6 +1460,38 @@ describe("BcDevMcpBackend.compilePlainCheck (R461)", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("a failed compile leaves no partial plain-check.app, and the error is alc's own", async () => {
+    const dir = scratch("lethal-bcdev-plaincheck-fail-");
+    try {
+      const plain = join(dir, "plain");
+      await mkdir(plain);
+      await Bun.write(join(plain, "app.json"), "{}");
+      // alc writes its output, then exits non-zero: the shape of a crash mid-emit.
+      const spawn: SpawnFn = async (argv) => {
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (out !== undefined) await Bun.write(out, "partial");
+        return { exitCode: 1, stdout: "error AL0001: boom", stderr: "" };
+      };
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { spawn }),
+      );
+      const err = await backend.compilePlainCheck(plain).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlcCompileError);
+      expect((err as Error).message).toContain("error AL0001: boom");
+      expect((await readdir(dir)).filter((f) => f.endsWith(".app"))).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("BcDevMcpBackend.compileCheck", () => {

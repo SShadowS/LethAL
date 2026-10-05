@@ -186,7 +186,7 @@ export class StaleTestAppError extends Error {
    * R462: what the test app's identity, read before the baseline and again at this refusal, says.
    * `unchanged-endpoints`: the same package both times. `identity-unverified`: a read failed, only
    * the test source was hashed, or there was no first read, so the app may be older than the
-   * source OR may have been replaced while the baseline ran.
+   * source OR may have been replaced between the two reads.
    */
   constructor(
     missing: readonly StaleTestAppFinding[],
@@ -195,17 +195,19 @@ export class StaleTestAppError extends Error {
     const { head, names } = missingTestsHead(missing);
     const identity =
       cause === "unchanged-endpoints"
-        ? "The published test app's package was the same before this batch's baseline and at this refusal, so it is most likely older than the source; a replace-and-restore between the two reads cannot be ruled out. If no other session publishes to this server: "
-        : "LethAL could not compare the published test app before and after this batch's baseline, so it may be older than the source OR may have been replaced while the baseline ran. ";
-    super(`${head} ${identity}${STALE_TEST_APP_REMEDY}`);
+        ? "The published test app's package was the same at the start of this batch's baseline and at this refusal; a replace-and-restore between the two reads cannot be ruled out."
+        : "LethAL could not compare the published test app's package at the start of this batch's baseline with the one at this refusal, so the app may be older than the source OR may have been replaced between the two.";
+    super(
+      `${head} ${identity} If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}`,
+    );
     this.name = "StaleTestAppError";
     this.missingTests = names;
   }
 }
 
 /**
- * R462: the published test app's package CHANGED between the read before this batch's baseline and
- * the read at the refusal, so another publish landed while the baseline ran. Extends `Error`
+ * R462: the published test app's package CHANGED between the read at the start of this batch's
+ * baseline and the read at the refusal, so another publish landed in that interval. Extends `Error`
  * directly, for the same reason `StaleTestAppError` does.
  */
 export class TestAppChangedError extends Error {
@@ -218,7 +220,7 @@ export class TestAppChangedError extends Error {
   ) {
     const { head, names } = missingTestsHead(missing);
     super(
-      `${head} The published test app CHANGED while this batch's baseline ran (package ${before} before it, ${after} at this refusal): something else published to this server mid-run. Re-run when no other session publishes to it.`,
+      `${head} The published test app's package CHANGED between the start of this batch's baseline and this refusal (${before} at the start, ${after} at the refusal): something published to this server in that interval. Re-run when no other session publishes to it.`,
     );
     this.name = "TestAppChangedError";
     this.missingTests = names;

@@ -117,6 +117,8 @@ class R461Backend implements ExecutionBackend {
     private readonly hooks: {
       readonly onInstrumentedFailure?: () => Promise<void>;
       readonly check?: (dir: string) => Promise<void>;
+      /** Runs after a deploy's compile succeeded, with the 1-based deploy number; throw = publish failed. */
+      readonly publish?: (deploy: number) => void;
     } = {},
   ) {
     this.compiler = new ArtifactCompiler(
@@ -154,6 +156,7 @@ class R461Backend implements ExecutionBackend {
       await this.hooks.onInstrumentedFailure?.();
       throw err;
     }
+    this.hooks.publish?.(this.deploys);
     return null;
   }
   async compileCheck(dir: string): Promise<void> {
@@ -313,6 +316,48 @@ describe("R461: the unmutated build is compiled once, at the first compile failu
     const store = new ResultsStore(":memory:");
     await settle(runSession({ backend, store, ...dirs, selectorIds }));
     expect(backend.deploys).toBe(1);
+    store.close();
+  });
+
+  const CONFLICT = "Publishing failed: a newer version 9.9.9.9 was already installed.";
+
+  test("a real publish conflict still retries once and then fails loudly", async () => {
+    const dirs = await makeProject();
+    const backend = new R461Backend(
+      dirs.root,
+      () => OK,
+      () => OK,
+      {
+        publish: () => {
+          throw new Error(CONFLICT);
+        },
+      },
+    );
+    const store = new ResultsStore(":memory:");
+    const err = await settle(runSession({ backend, store, ...dirs, selectorIds }));
+    expect(backend.deploys).toBe(2);
+    expect((err as Error).message).toContain("version conflict persisted after retry");
+    store.close();
+  });
+
+  test("a real conflict, then an alc rejection quoting the conflict phrase, reaches the plain check", async () => {
+    const dirs = await makeProject();
+    // Deploy 1 compiles and its publish conflicts; deploy 2 (the retry) is rejected by alc.
+    const backend: R461Backend = new R461Backend(
+      dirs.root,
+      () => (backend.deploys < 2 ? OK : { exitCode: 1, stdout: CONFLICT, stderr: "" }),
+      () => OK,
+      {
+        publish: (n) => {
+          if (n === 1) throw new Error(CONFLICT);
+        },
+      },
+    );
+    const store = new ResultsStore(":memory:");
+    const err = await settle(runSession({ backend, store, ...dirs, selectorIds }));
+    expect((err as Error | undefined)?.message ?? "").not.toContain("version conflict persisted");
+    expect(backend.deploys).toBe(2);
+    expect(backend.plainCompiles).toBe(1);
     store.close();
   });
 

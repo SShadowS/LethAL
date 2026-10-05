@@ -112,6 +112,7 @@ import { isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import {
+  STALE_TEST_APP_REMEDY,
   StaleTestAppError,
   TestAppChangedError,
   runMutantLineCountMessage,
@@ -2265,6 +2266,56 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
         );
         expect((testAppRefusal(missing, pkg, undefined) as StaleTestAppError).cause).toBe(
           "identity-unverified",
+        );
+      });
+
+      test("the re-read asks for the SAME app even if the local app.json changed during the baseline", async () => {
+        // The server holds two different apps and neither changes. Only the local manifest's name
+        // moves, after the first read; an unpinned re-read would compare app "Tests" with "Other".
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(missingFor);
+        const run = backend.run.bind(backend);
+        let renamed = false;
+        const err = await runSession({
+          backend: Object.assign(backend, {
+            fetchPublishedAppPackage: async (app: { readonly name: string }) =>
+              app.name === "Tests" ? A : B,
+            run: async (ref: TestMethodRef, opts: RunOpts) => {
+              if (!renamed) {
+                renamed = true;
+                await Bun.write(
+                  join(dirs.testDir, "app.json"),
+                  '{"name":"Other","publisher":"P","version":"1.0.0.0"}',
+                );
+              }
+              return run(ref, opts);
+            },
+          }),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(StaleTestAppError);
+        expect((err as StaleTestAppError).cause).toBe("unchanged-endpoints");
+      });
+
+      test("each refusal's full message: the observed interval, no inferred age, a conditional remedy", () => {
+        const missing = [{ name: "T.A", description: "d" }];
+        const head =
+          "the published test app is missing 1 test(s) this project's source declares:\n  T.A: d\n" +
+          "Refusing to measure: every mutant covered only by these would be recorded no-coverage and " +
+          "the run would report a plausible score for a suite that never ran.";
+        expect(testAppRefusal(missing, "package:a", "package:a").message).toBe(
+          `${head} The published test app's package was the same at the start of this batch's baseline and at this refusal; a replace-and-restore between the two reads cannot be ruled out. If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}`,
+        );
+        expect(testAppRefusal(missing, "package:a", undefined).message).toBe(
+          `${head} LethAL could not compare the published test app's package at the start of this batch's baseline with the one at this refusal, so the app may be older than the source OR may have been replaced between the two. If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}`,
+        );
+        expect(testAppRefusal(missing, "package:a", "package:b").message).toBe(
+          `${head} The published test app's package CHANGED between the start of this batch's baseline and this refusal (package:a at the start, package:b at the refusal): something published to this server in that interval. Re-run when no other session publishes to it.`,
         );
       });
     });
