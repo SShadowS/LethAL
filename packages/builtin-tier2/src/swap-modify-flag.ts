@@ -1,4 +1,4 @@
-import { claimsRecordMethod } from "@lethal/engine";
+import { claimsRecordMethod, modifySkipCanRaise } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -33,6 +33,10 @@ const RUN_TRIGGER_METHODS = ["Modify", "Insert", "Delete"] as const;
  * table's delete code harmless. Typed the same way as the `Insert` tag below.
  */
 const RUN_TRIGGER_SKIPPED_DELETE: PlatformKillMechanism = "run-trigger-skipped-delete";
+
+/** R-452. The tag `Modify` mutants carry, wherever `modifySkipCanRaise` cannot prove skipping the
+ *  table's modify code harmless. */
+const RUN_TRIGGER_SKIPPED_MODIFY: PlatformKillMechanism = "run-trigger-skipped-modify";
 
 /**
  * The tag `Insert` mutants carry. Declared as a typed constant rather than an inline string so a
@@ -153,11 +157,12 @@ const OPERATOR_VERSION = "1.2.0";
  * the mutant is scored `killed` without the suite having earned it.
  *
  * Since R138 the `Insert` mutants declare `run-trigger-skipped-insert`, so the report's
- * platform-artifact screen groups them. `Modify` declares nothing, and that is a RULING: skipping
- * `OnModify` writes LESS than the unmutated program and the row is still located by the same key.
- * R138 ruled the same for `Delete`; R281 overturned it, because an `OnDelete` that deletes or writes
- * other rows leaves them behind, and a later insert of one can hit a duplicate key. `Delete` mutants
- * declare `run-trigger-skipped-delete` unless `deleteSkipCanRaise` proves the skip harmless.
+ * platform-artifact screen groups them. R138 ruled that `Modify` and `Delete` need nothing, because
+ * skipping their trigger writes LESS. R281 overturned it for `Delete`, because an `OnDelete` that
+ * deletes or writes other rows leaves them behind, and a later insert of one can hit a duplicate
+ * key; R-452 did the same for `Modify`, whose `OnModify` can write other rows too. `Delete` mutants
+ * declare `run-trigger-skipped-delete` unless `deleteSkipCanRaise` proves the skip harmless, and
+ * `Modify` mutants `run-trigger-skipped-modify` unless `modifySkipCanRaise` does.
  *
  * R143 NARROWED the `Insert` tag from "every one" to "every one whose mechanism is not provably
  * unavailable": the receiver's table is resolved, and a table whose `OnInsert` does not assign the
@@ -209,13 +214,15 @@ export const swapModifyFlag: MutationOperator = {
     // R143: and, for `Insert`, only where the mechanism is not PROVABLY unavailable — see
     // `insertSkipCanRaise` (`insert-key-assignment.ts`) for the four cases and for why an
     // unresolvable receiver keeps the tag rather than losing it. R281: `Delete` the same way, through
-    // `deleteSkipCanRaise`. `Modify` is never tagged.
+    // `deleteSkipCanRaise`. R-452: `Modify` through `modifySkipCanRaise`.
     const platformKillMechanism =
       method === "Insert" && insertSkipCanRaise(node, ctx)
         ? RUN_TRIGGER_SKIPPED_INSERT
         : method === "Delete" && deleteSkipCanRaise(node, ctx)
           ? RUN_TRIGGER_SKIPPED_DELETE
-          : undefined;
+          : method === "Modify" && modifySkipCanRaise(node, ctx)
+            ? RUN_TRIGGER_SKIPPED_MODIFY
+            : undefined;
 
     return [
       {

@@ -180,6 +180,8 @@ const COMPOSITION_MODULES: Readonly<Record<string, readonly string[]>> = {
 
 /** Neither PLAN nor EMIT: parsing, tree walks, ids, selectors, barrels and shared constants. */
 const NEITHER_MODULES = [
+  /** Argument-list readers shared by the operators (R-452). */
+  "packages/engine/src/ast/arguments.ts",
   "packages/engine/src/ast/canonicalization.ts",
   "packages/engine/src/ast/hash.ts",
   "packages/engine/src/ast/mask.ts",
