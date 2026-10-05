@@ -185,3 +185,130 @@ describe("flipBooleanLiteral", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * R-452: a `true` -> `false` flip of a Record `ModifyAll`'s RunTrigger (argument 3) or a
+ * `DeleteAll`'s (argument 1) skips `OnModify`/`OnDelete` for every affected row, the same mechanism
+ * `swap-modify-flag` tags on `Modify(true)`/`Delete(true)`, through the same engine detector.
+ * Each test names the revert that turns it red.
+ */
+describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const KID = `table 50302 "Kid" { fields { field(1; "Parent No."; Code[20]) { } } }`;
+  const harmful = (trigger: string): string =>
+    `    trigger ${trigger}()\n    var Kid: Record "Kid";\n    begin\n        Kid.SetRange("Parent No.", "No.");\n        Kid.DeleteAll();\n    end;\n`;
+  const par = (members: string): string =>
+    `table 50300 "Par"\n{\n    fields { field(1; "No."; Code[20]) { } field(2; Amount; Decimal) { } field(3; Flag; Boolean) { } }\n    keys { key(PK; "No.") { } }\n${members}}\n`;
+  const caller = (body: string, vars = `Par: Record "Par";`): string =>
+    `codeunit 50301 "Ops" { procedure P() var ${vars} begin ${body} end; }`;
+
+  /** `<before>-><after> <tag or ->` for every flip in the codeunit, across one project context. */
+  function tagged(files: Readonly<Record<string, string>>): string[] {
+    const parsed = Object.entries(files).map(([path, text]) => ({
+      path,
+      root: wrapRoot(parseAL(text)),
+    }));
+    const ctx = buildSemanticContext(parsed);
+    const ops = parsed.find((p) => p.path === "O.al");
+    if (ops === undefined) throw new Error("no O.al");
+    return findAll(ops.root, ALNodeKind.boolean_literal)
+      .filter((n) => flipBooleanLiteral.targets(n, ctx))
+      .flatMap((n) => flipBooleanLiteral.generate(n, ctx))
+      .map((s) => `${s.before.text}->${s.after.text} ${s.platformKillMechanism ?? "-"}`);
+  }
+
+  // F1. Reverts: judge ModifyAll by the delete kind (this Par has no OnDelete); never tag.
+  it("tags a ModifyAll RunTrigger flip when OnModify writes other rows", () => {
+    const files = {
+      "P.al": par(harmful("OnModify")),
+      "K.al": KID,
+      "O.al": caller("Par.ModifyAll(Amount, 1, true);"),
+    };
+    expect(tagged(files)).toEqual(["true->false run-trigger-skipped-modify"]);
+  });
+
+  // F2. Revert: always tag.
+  it("does NOT tag it when the table has no OnModify", () => {
+    const files = { "P.al": par(""), "O.al": caller("Par.ModifyAll(Amount, 1, true);") };
+    expect(tagged(files)).toEqual(["true->false -"]);
+  });
+
+  // F3. Revert: tag any `true` argument of a claimed ModifyAll.
+  it("tags only the RunTrigger literal, never the value literal, in one ModifyAll", () => {
+    const files = {
+      "P.al": par(harmful("OnModify")),
+      "K.al": KID,
+      "O.al": caller("Par.ModifyAll(Flag, true, true);"),
+    };
+    expect(tagged(files)).toEqual(["true->false -", "true->false run-trigger-skipped-modify"]);
+  });
+
+  // F4. Revert: index the raw `namedChildren` of the argument list (comments included).
+  it("sees through comments: the RunTrigger after a comment tags, the value before one does not", () => {
+    const files = {
+      "P.al": par(harmful("OnModify")),
+      "K.al": KID,
+      "O.al": caller(
+        "Par.ModifyAll(Amount, 1, /* c */ true); Par.ModifyAll(Flag, /* c */ true, false);",
+      ),
+    };
+    expect(tagged(files)).toEqual([
+      "true->false run-trigger-skipped-modify",
+      "true->false -",
+      "false->true -",
+    ]);
+  });
+
+  // F5. Revert: accept a literal nested inside the argument (a descendant), not only the argument.
+  it("does NOT tag a parenthesised (true) RunTrigger", () => {
+    const files = {
+      "P.al": par(harmful("OnModify")),
+      "K.al": KID,
+      "O.al": caller("Par.ModifyAll(Amount, 1, (true));"),
+    };
+    expect(tagged(files)).toEqual(["true->false -"]);
+  });
+
+  // F6 (sol plan r2 finding 6). The false -> true flip FORCES the trigger (R165's class, filed
+  // separately) and is not tagged here. Revert: tag regardless of the literal's value.
+  it("does NOT tag a false RunTrigger on ModifyAll or DeleteAll", () => {
+    const files = {
+      "P.al": par(`${harmful("OnModify")}${harmful("OnDelete")}`),
+      "K.al": KID,
+      "O.al": caller("Par.ModifyAll(Amount, 1, false); Par.DeleteAll(false);"),
+    };
+    expect(tagged(files)).toEqual(["false->true -", "false->true -"]);
+  });
+
+  // F7. Reverts: judge DeleteAll by the modify kind (this Par has no OnModify); always tag; raw
+  // `namedChildren` index (the commented one).
+  it("tags a DeleteAll(true) flip by OnDelete: harmful, harmless, commented", () => {
+    const body = "Par.DeleteAll(true); Par.DeleteAll(/* c */ true);";
+    const harm = { "P.al": par(harmful("OnDelete")), "K.al": KID, "O.al": caller(body) };
+    expect(tagged(harm)).toEqual([
+      "true->false run-trigger-skipped-delete",
+      "true->false run-trigger-skipped-delete",
+    ]);
+    const none = { "P.al": par(""), "O.al": caller(body) };
+    expect(tagged(none)).toEqual(["true->false -", "true->false -"]);
+  });
+
+  // F8. Revert: drop `claimsRecordMethod` (tag by method name alone).
+  it("does NOT tag a codeunit's or a table procedure's ModifyAll/DeleteAll", () => {
+    const mgt = `codeunit 50303 "Mgt" { procedure ModifyAll(A: Integer; B: Integer; Run: Boolean) begin end; procedure DeleteAll(Run: Boolean) begin end; }`;
+    const own = `table 50300 "Par"\n{\n    fields { field(1; "No."; Code[20]) { } }\n    keys { key(PK; "No.") { } }\n${harmful("OnDelete")}    procedure DeleteAll(Run: Boolean) begin end;\n}\n`;
+    const files = {
+      "P.al": own,
+      "K.al": KID,
+      "M.al": mgt,
+      "O.al": caller(
+        "Mgt.ModifyAll(1, 2, true); Mgt.DeleteAll(true); Par.DeleteAll(true);",
+        `Par: Record "Par"; Mgt: Codeunit "Mgt";`,
+      ),
+    };
+    expect(tagged(files)).toEqual(["true->false -", "true->false -", "true->false -"]);
+  });
+});
