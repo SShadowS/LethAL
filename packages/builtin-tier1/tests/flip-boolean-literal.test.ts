@@ -316,6 +316,17 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     expect(tagged(none)).toEqual(["true->false -", "true->false -"]);
   });
 
+  // F9 (R-364). A caller wrapped whole in `#if` is not indexed, so its receiver does not resolve and
+  // nothing proves the skip harmless: the tag is KEPT. The same `Par` without `OnDelete`, called
+  // from an indexed caller, still drops it (F7's control). Revert: drop the unresolved-receiver
+  // branch in `runTriggerSkipTag`.
+  it("KEEPS the DeleteAll(true) tag when the receiver does not resolve (wrapped caller)", () => {
+    const body = "Par.DeleteAll(true);";
+    const wrappedCaller = { "P.al": par(""), "O.al": `#if not CLEANX\n${caller(body)}\n#endif\n` };
+    expect(tagged(wrappedCaller)).toEqual(["true->false run-trigger-skipped-delete"]);
+    expect(tagged({ "P.al": par(""), "O.al": caller(body) })).toEqual(["true->false -"]);
+  });
+
   // F8. Revert: drop `claimsRecordMethod` (tag by method name alone).
   it("does NOT tag a codeunit's or a table procedure's ModifyAll/DeleteAll", () => {
     const mgt = `codeunit 50303 "Mgt" { procedure ModifyAll(A: Integer; B: Integer; Run: Boolean) begin end; procedure DeleteAll(Run: Boolean) begin end; }`;
