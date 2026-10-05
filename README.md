@@ -563,7 +563,7 @@ That selects which mutants run and cannot change a verdict.
 | Operator | Version | Example | What weak test it catches |
 |---|---|---|---|
 | `lethal.conditional-boundary` | 1.0.0 | `A > 0` → `A >= 0` | an off-by-one at a boundary no test pins |
-| `lethal.flip-boolean-literal` | 1.0.0 | `true` → `false` | a flag nobody checks the other setting of |
+| `lethal.flip-boolean-literal` | 1.1.0 | `true` → `false` | a flag nobody checks the other setting of |
 | `lethal.negate-conditional` | 1.0.0 | `Cust.Next() = 0` → `Cust.Next() <> 0` | a branch that is taken but never checked |
 | `lethal.negate-guard` | 1.0.0 | `Cust.Get('X')` → `not (Cust.Get('X'))` | a plain `if Rec.Get(...) then` guard nobody tests the other side of |
 | `lethal.toggle-blank-string` | 1.0.0 | `'FOO'` → `''` | a blank check nobody drives with a blank value |

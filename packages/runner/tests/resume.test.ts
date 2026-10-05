@@ -468,8 +468,9 @@ describe("sessionFingerprint (R47)", () => {
   // 17, reportextensions instrumented); it was 961d7a41...3b65 under scheme 16. It moved again for
   // R-458 (scheme 18, hang refusal by name through `with` subjects and implicit records); it was
   // f6e4a1c6...c971 under scheme 17. It moved again for R468 (scheme 19, every object-level var
-  // section is globals); it was 44f5ea54...3e7a under scheme 18.
-  const PINNED = "869bd1aea5f68ab3781d9b9444b8b8621eab7ee994e15ae3914808e546268cd9";
+  // section is globals); it was 44f5ea54...3e7a under scheme 18. It moved again for R459 (scheme
+  // 21, a two-argument Insert's Booleans flipped); it was 869bd1ae...68cd9 under scheme 19.
+  const PINNED = "6aab8fc7f6a384d2538f66d57141140221a6351014c8f6b0f1a20055f43fbe41";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1955,7 +1956,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 19 since R468 (every object-level var section is
+    // Pinned by value so a bump is deliberate: 21 since R459 (a two-argument Insert's Booleans are
+    // flipped; 20 is held by R-464); 19 was R468 (every object-level var section is
     // globals); 18 was R-458 (hang refusal by name through `with` subjects and implicit records);
     // 17 was R254 (reportextensions instrumented); 16
     // was R-364 (hang refusal by name inside an unindexed object; 15 was reserved for R-254 and is
@@ -1963,7 +1965,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
     // sites move twins).
-    expect(IDENTITY_SCHEME).toBe(19);
+    expect(IDENTITY_SCHEME).toBe(21);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
