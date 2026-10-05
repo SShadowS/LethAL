@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**94 of 464 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**94 of 466 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -187,6 +187,7 @@ that ordering is the priority.
 - **R465** · A query object's procedure does not resolve its own named return value, so `KeepReading := Read()` inside `while KeepReading do` is not hang-refused (14 sites in System Application) · [R465.md](docs/roadmap/R465.md) · open
 - **R466** · The runner's TestPage scan (R-371) gives a TableNo codeunit's `Rec` to every procedure; `alc` binds it in `OnRun` only · [R466.md](docs/roadmap/R466.md) · open
 - **R468** · Only an object's FIRST direct `var` section is indexed as globals, so every global in a second section (`protected var` then `var`) resolves to nothing; `SuggestVendorPayments` is not hang-refused · [R468.md](docs/roadmap/R468.md) · open
+- **R469** · Schemata inserts the `MutationSelector` variable into an object's FIRST var section, which may be `protected var`, so the instrumented object exposes it to extensions · [R469.md](docs/roadmap/R469.md) · open
 
 ## Product gaps a real project hits
 
@@ -320,9 +321,9 @@ that ordering is the priority.
 - **R445** · lethal run on a test project nested inside the target compiles and mutates the test code as target code, without a warning · [R445.md](docs/roadmap/R445.md) · open
 - **R447** · R-196 refuses hang-capable loop-step sites silently, so a report reader cannot tell that a loop's own step writes were never measured · [R447.md](docs/roadmap/R447.md) · done (bb4a0c46)
 - **R451** · Forward direction `ModifyAll(Field, Value)` to `ModifyAll(Field, Value, true)` is a genuinely new edit; sites exist in BaseApp, none in CDO (low priority, measure before building) · [R451.md](docs/roadmap/R451.md) · open, filed 2026-10-05
-- **R461** · A target that does not compile UNMUTATED is reported as a deploy failure "not attributable to any single mutant", not as "your project does not compile" · [R461.md](docs/roadmap/R461.md) · open
+- **R461** · A target that does not compile UNMUTATED is reported as a deploy failure "not attributable to any single mutant", not as "your project does not compile" · [R461.md](docs/roadmap/R461.md) · done (65e20ee8)
 - **R467** · `empty-block` never empties a `repeat` body; the safe half (an `until` that advances a cursor) is ~11,500 BaseApp sites with no coarse mutant · [R467.md](docs/roadmap/R467.md) · open
-- **R462** · `StaleTestAppError` says the published test app is OLDER when it may be being REPLACED under the running baseline; its remedy (republish) is then wrong in cause · [R462.md](docs/roadmap/R462.md) · open
+- **R462** · `StaleTestAppError` says the published test app is OLDER when it may be being REPLACED under the running baseline; its remedy (republish) is then wrong in cause · [R462.md](docs/roadmap/R462.md) · done (65e20ee8)
 - **R463** · Tier 2 never claims a record call inside a `reportextension`: `receiver.ts` knows table and page extensions only · [R463.md](docs/roadmap/R463.md) · open
 
 ## Backends and tooling
@@ -509,6 +510,7 @@ that ordering is the priority.
 - **R439** · Two more unit tests time out at Bun's 5 s default under machine load and pass alone: manifest-stream's short-writes test and runSession's I7 transport-error abort · [R439.md](docs/roadmap/R439.md) · done (8ef7ce7e)
 - **R440** · scripts/r402-shape-sweep.ts crashes since R-307: it calls writeInstrumentedProject without identityOrdinals, and no typecheck covers the script · [R440.md](docs/roadmap/R440.md) · done (3e3555ab)
 - **R449** · Three SQLite-heavy unit tests time out at bun's 5 s default on GitHub CI's Windows job only (7 to 8.3 s), each passing on other runs · [R449.md](docs/roadmap/R449.md) · done (f224fa0d)
+- **R453** · al-runner loses a reportextension after a test calls Code Coverage Mgt. (found by the R-254 probe) · [R453.md](docs/roadmap/R453.md) · open, filed 2026-10-05
 
 ---
 

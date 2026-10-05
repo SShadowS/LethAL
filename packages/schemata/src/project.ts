@@ -150,18 +150,19 @@ export function coarseIdentityTupleOf(
  * a later same-tuple twin of a refused mutant takes its ordinal and its old key. 11: R295 and
  * R294, every name of `A, B: T` is declared and a member-expression receiver resolves again (and
  * a name inside a `with` body types as nothing), so sites are added and removed and same-tuple
- * ordinals move. 12 is reserved for R254. 13: R455, a field-designator argument of a record
+ * ordinals move. 12 was reserved for R254 and is unused. 13: R455, a field-designator argument of a record
  * builtin is never swapped, an unqualified call in a record scope types as nothing, and a
  * case-only pair is not swapped, so swaps and additive flips are removed and a later same-tuple
  * twin takes the removed one's ordinal. 14: R454, the built-in value operators also refuse a
  * literal in a loop condition's `#if` tail (`shift-integer`), a literal inside a comparison in a
  * loop's exit test (`flip-boolean-literal`) and a write to `R.Field` that an enclosing loop's
  * condition reads, so a later same-tuple twin of a refused mutant takes its ordinal and its old
- * key. 15 is reserved for R-254. 16: R-364, inside an object wrapped whole in `#if` (not indexed)
- * the same refusal matches an unresolved target by name, so hang-capable writes there are removed
- * and a later same-tuple twin takes the removed one's ordinal. 17 is reserved for R-254. 18:
- * R-458, the same refusal also matches by name through every `with` subject and implicit record
- * (`Rec`, report dataitems, reportextension `modify`) a target's name can bind to, so those
+ * key. 15 was reserved for R-254 and is unused. 16: R-364, inside an object wrapped whole in `#if`
+ * (not indexed) the same refusal matches an unresolved target by name, so hang-capable writes
+ * there are removed and a later same-tuple twin takes the removed one's ordinal. 17: R254, a
+ * reportextension is instrumented; its mutants take ordinals, so a same-named twin elsewhere can
+ * move. 18: R-458, the same refusal also matches by name through every `with` subject and implicit
+ * record (`Rec`, report dataitems, reportextension `modify`) a target's name can bind to, so those
  * hang-capable writes are removed and a later same-tuple twin takes the removed one's ordinal.
  */
 export const IDENTITY_SCHEME = 18;

@@ -15,8 +15,9 @@ The arm adds `report 79340 "Data Band Report"` (no code), `reportextension 79341
 `BandClassifiesDirectly` (calls `Band(3)` and `Band(2)` through the report variable, no report run)
 and `BandReportSumsBands` (seeds four 'BAND' rows in `Data Related`, entry numbers 1 to 4, runs the
 report, expects total 1+1+2+2 = 6). Engine: plan r4's build, including the symbol-table fix (the
-reportextension's members are indexed for scope). IDENTITY_SCHEME **15** (master is at 14; 12 was
-reserved for R254 and stays unused).
+reportextension's members are indexed for scope). IDENTITY_SCHEME **17** (amended at build: master
+took 16 for R-364 while R254 was open, so 12 and 15, both once reserved for R254, stay unused; a
+scheme number is not a gate figure).
 
 Derived with `scripts/r214-capture.ts` (deployed rows, keys, `hang=`, `plat=`), mutant codes in
 `assignMutantIds` order (file, then start offset, then operator name), and the specs' own
@@ -37,6 +38,11 @@ original and mutated text.
   rollback between tests (it passes alone, twice); the cause is `Data Related` rows written by five
   pre-existing tests. LethAL's own harness rolls back per test, so this is not a gate prediction and
   no gate figure rests on it. The 70 tests match offline discovery (70).
+  Note (added at build, no figure changes): the per-test rollback is LethAL's, cited.
+  `extensions/lethal-control/src/RunMany.Codeunit.al` runs each method of a `RunMutantMany` call as
+  its own `CODEUNIT.Run` under the stock test runner, so `RequiredTestIsolation` applies per method;
+  R198 measured no write leak between methods (`scripts/r198-group-runner-probe/`, E1 vs E7).
+  `bcdev_test_run` lacks this, hence M2's multi-test failure.
 
 ## The oracle (15 mutants, file `src/DataBandExt.ReportExt.al`)
 

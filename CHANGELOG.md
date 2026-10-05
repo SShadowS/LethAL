@@ -13,6 +13,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A `reportextension` is mutated; identity scheme 17** (R254). Until now such a file was skipped
+  as a non-carrier kind. BC reports a report extension's coverage as object type 22 under the
+  extension's own id (measured on BC 28), and al-runner as its own Cobertura class, so both are
+  attributed now; its members also get a variable scope, so the typed operators reach it. A
+  reportextension beside another object in one file is still refused (`object-mix`). Tier 2 does not
+  yet claim record calls inside one (R463). Measured: BaseApp (w1-28.6) gains 543 mutants in 13
+  report-extension files, none of its other mutants moved, CDO none (it has no report extension). An admitted extension can share an
+  object name with another object, and its mutants then take identity ordinals ahead of that one's,
+  so keys can move for unchanged source: marks files need `"identityScheme": 17` after re-checking
+  each mark (R325), and the first run on a project with report extensions does not carry the
+  previous run's history once (R442).
+
 - **The report names the loop steps R196 refused** (R447). A site an operator would have mutated
   but R196's hang check refused (the mutation writes a variable an enclosing loop's condition
   reads, so it could make the loop never end) is now counted per file as an `excludedSites` row
@@ -103,7 +115,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   mutants, consistent with alc compiling every `.al` under the folder, and a renamed or new path is
   selected whole. The refusal of an `.al` marked assume-unchanged or skip-worktree is removed: the
   index is no longer read for content, so such a file's edits are seen.
-- **Identity scheme 18** (R-458; 17 is reserved for R-254). The hang refusal through implicit
+- **Identity scheme 18** (R-458; 17 was R254). The hang refusal through implicit
   records and `with` subjects (below) removes mutants, and a later same-tuple twin of a removed
   mutant can take its key: re-check equivalence marks.
 - **Identity scheme 16** (R-364; 15 is reserved for R-254). The hang refusal below removes
@@ -378,6 +390,22 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `with`; a global wins in a table). Measured: 43 more refused sites (BaseApp 37, CDO 2, other
   BC.History apps 4), nothing else changed; some are over-refusals (e.g. a loop that also ends on
   `Next() = 0`).
+- **A target whose unmutated build alc rejects is refused as that, not blamed on a mutant or the
+  environment** (R461). At a session's first compile failure (bcdev, sequential path), LethAL now
+  compiles its staged copy of the unmutated target once. If alc rejects that too, the run stops
+  with `UnmutatedBuildFailedError` and alc's output, records no `error` rows for the batch, and
+  stays resumable. If it compiles, bisection runs as before. Compile-failure text now carries
+  BOTH alc streams, labelled `stdout:` and `stderr:`, so a stderr warning no longer hides a stdout
+  error; bisection notes and `TestAppError.detail` get longer accordingly.
+- **A stale-test-app refusal says what the test app's identity shows, not that the app is older**
+  (R462). At the refusal the published test app (the same publisher and name as the first read) is
+  hashed again and compared with the hash taken at the start of the baseline. A changed package
+  throws the new `TestAppChangedError`. An unchanged one throws `StaleTestAppError`
+  (`cause: "unchanged-endpoints"`), which notes that a replace-and-restore between the two reads
+  cannot be ruled out. A read that cannot be compared throws `StaleTestAppError`
+  (`cause: "identity-unverified"`): the app may be older or may have been replaced. Both give the
+  republish remedy only "if no other session publishes to this server". A replacement restored
+  before the second read is still reported as unchanged.
 - **The loop-hang refusal now works inside an object wrapped whole in `#if`** (R-364, R343).
   The symbol table does not index such an object, so no variable there resolved and the four value
   operators deployed hang-capable mutants. Now, when a write's target does not resolve and its own

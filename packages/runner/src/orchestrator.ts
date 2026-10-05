@@ -63,6 +63,7 @@ import {
   ArtifactPrepareError,
   DeploymentError,
   InstalledArtifactError,
+  UnmutatedBuildFailedError,
 } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type {
@@ -195,9 +196,9 @@ import {
 import type { CoverageAttribution } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
-  StaleTestAppError,
   describeStaleTestApp,
   isRunMutantLineCountMessage,
+  testAppRefusal,
 } from "./stale-test-app";
 import { sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
@@ -1868,6 +1869,56 @@ async function prepareArtifactDir(args: {
     args.source,
     args.excludeOutputs,
   );
+}
+
+/**
+ * R461: compile LethAL's staged copy of the UNMUTATED target: the batch layout (`prepareBatchProject`)
+ * with no `writeInstrumentedProject`, so no selector, install/upgrade codeunits or guards. The
+ * scratch dir is cleared first, since `prepareBatchProject` keeps a file already there. Only an
+ * `AlcCompileError` becomes `UnmutatedBuildFailedError`; a preparation or spawn failure propagates
+ * as itself. Cleanup is best-effort, so it never masks the compile's answer.
+ */
+async function checkPlainBuild(args: {
+  readonly scratchDir: string;
+  readonly projectDir: string;
+  readonly projectManifest: Readonly<Record<string, unknown>>;
+  readonly appVersion: string;
+  readonly source: ReadonlyMap<string, Buffer> | undefined;
+  readonly excludeOutputs: readonly string[];
+  readonly compilePlainCheck: (dir: string) => Promise<void>;
+}): Promise<void> {
+  await rm(args.scratchDir, { recursive: true, force: true });
+  await mkdir(args.scratchDir, { recursive: true });
+  try {
+    await prepareBatchProject(
+      args.projectDir,
+      args.scratchDir,
+      args.projectManifest,
+      args.appVersion,
+      args.source,
+      args.excludeOutputs,
+    );
+    try {
+      await args.compilePlainCheck(args.scratchDir);
+    } catch (err) {
+      if (err instanceof AlcCompileError) throw new UnmutatedBuildFailedError(err);
+      throw err;
+    }
+  } finally {
+    await rm(args.scratchDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * R461: `start` runs at the FIRST call only. Every later call, concurrent or after it settled, gets
+ * that same promise, so a success is not re-checked and a failure is not retried.
+ */
+export function firstCallOnly<A>(start: (arg: A) => Promise<void>): (arg: A) => Promise<void> {
+  let started: Promise<void> | undefined;
+  return (arg) => {
+    started ??= start(arg);
+    return started;
+  };
 }
 
 /**
@@ -4254,24 +4305,30 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     | { readonly batchHash: string; readonly testAppHash: string | undefined }
     | undefined;
   let reused: BaselineSnapshot | undefined;
+  // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
+  let hashTestApp: (() => Promise<string | undefined>) | undefined;
   if (input.snapshot !== undefined) {
     const { batchDir, testDir, allowReuse } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
     const packageReader = backend.fetchPublishedAppPackage;
-    const testAppHash = await testAppHashFor(
-      packageReader === undefined
-        ? undefined
-        : async () => {
-            const manifest = await readTestAppManifest(testDir);
-            return manifest === undefined
-              ? undefined
-              : packageReader.call(backend, {
-                  publisher: manifest.publisher,
-                  name: manifest.name,
-                });
-          },
-      testDir,
-    );
+    // R462: the request identity is read ONCE, so the re-read at a refusal asks for the same app
+    // even if the local app.json changed meanwhile.
+    const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
+    hashTestApp = () =>
+      testAppHashFor(
+        packageReader === undefined
+          ? undefined
+          : async () => {
+              return manifest === undefined
+                ? undefined
+                : packageReader.call(backend, {
+                    publisher: manifest.publisher,
+                    name: manifest.name,
+                  });
+            },
+        testDir,
+      );
+    const testAppHash = await hashTestApp();
     const reusable =
       allowReuse && testAppHash !== undefined
         ? store.findBaselineSnapshot(batchHash, testAppHash, caps.coverage)
@@ -4440,7 +4497,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       ? []
       : [{ name: qualifiedTestName(b.ref), description: described }];
   });
-  if (missingFromServer.length > 0) throw new StaleTestAppError(missingFromServer);
+  if (missingFromServer.length > 0) {
+    // R462: a failed re-read proves nothing, so it is `undefined`, never a guess.
+    const after = await hashTestApp?.().catch(() => undefined);
+    throw testAppRefusal(missingFromServer, snapshotKey?.testAppHash, after);
+  }
 
   const plan = input.select(baseline);
   if (plan === undefined) return "nothing-to-run";
@@ -5224,6 +5285,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // stay strictly increasing within one session even when the clock doesn't advance (or a
   // conflict retry re-stamped above something newer than the clock would produce).
   let lastIssuedVersion: string | undefined;
+  // R461: the unmutated build is compiled at most once per session, at the first compile failure.
+  const plainBuild = firstCallOnly(checkPlainBuild);
   // R325: the history filter runs per batch; its scheme warning is said once per session.
   let historySchemeWarned = false;
   let historySymbolsWarned = false;
@@ -5661,7 +5724,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // installed version verbatim. Re-stamp strictly above it, recompile, and retry
         // EXACTLY once — a second conflict means the server's installed version is moving
         // underneath us, and that must fail the session loudly, not loop.
-        const installed = parseVersionConflict(messageOf(deployErr));
+        // R461: an AlcCompileError is never read as a conflict, here or in the retry below: its text is
+        // alc's output, which now carries stdout too. A conflict is a publish answer.
+        const installed =
+          deployErr instanceof AlcCompileError ? null : parseVersionConflict(messageOf(deployErr));
         if (installed !== null) {
           const bumped = nextAbove(installed);
           lastIssuedVersion = bumped;
@@ -5680,7 +5746,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             );
             deployed = true;
           } catch (retryErr) {
-            const stillInstalled = parseVersionConflict(messageOf(retryErr));
+            const stillInstalled =
+              retryErr instanceof AlcCompileError
+                ? null
+                : parseVersionConflict(messageOf(retryErr));
             if (stillInstalled !== null) {
               throw new Error(
                 `version conflict persisted after retry: re-stamped to ${bumped} above BC's ` +
@@ -5726,6 +5795,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // `AlcCompileError` — `instanceof` cannot cross-match them, so this guard alone is
         // sufficient to exclude both.
         if (!(deployErr instanceof AlcCompileError)) throw deployErr;
+        // 3b'. R461: before blaming a mutant, does the UNMUTATED target compile? Sequential path
+        // only: bcdev, the one backend with the check, refuses `workers > 1`.
+        const compilePlainCheck = cfg.backend.compilePlainCheck?.bind(cfg.backend);
+        if (compilePlainCheck !== undefined) {
+          await plainBuild({
+            scratchDir: join(cfg.instrumentedDir, `run-${runId}-plain`),
+            projectDir: cfg.projectDir,
+            projectManifest,
+            appVersion,
+            source: sourceSnapshot,
+            excludeOutputs: cfg.excludeOutputs ?? [],
+            compilePlainCheck,
+          });
+        }
         // 3c. Layer 4.3 put every mutant in one artifact (design spec §6): one
         // malformed spec now fails this ONE compile and would otherwise turn
         // every mutant `execute` holds into an equally uninformative "error"

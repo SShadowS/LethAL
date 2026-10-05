@@ -464,9 +464,10 @@ describe("sessionFingerprint (R47)", () => {
   // 64769073...984e under scheme 10. It moved again for R455 (scheme 13); it was 667cd9c9...02aa
   // under scheme 11. It moved again for R454 (scheme 14, more refused loop-exit sites); it was
   // b5155ac2...1864 under scheme 13. It moved again for R-364 (scheme 16, hang refusal by name in
-  // an unindexed object); it was a721384a...f23c under scheme 14. It moved again for R-458 (scheme
-  // 18, hang refusal by name through `with` subjects and implicit records); it was 961d7a41...3b65
-  // under scheme 16.
+  // an unindexed object); it was a721384a...f23c under scheme 14. It moved again for R254 (scheme
+  // 17, reportextensions instrumented); it was 961d7a41...3b65 under scheme 16. It moved again for
+  // R-458 (scheme 18, hang refusal by name through `with` subjects and implicit records); it was
+  // f6e4a1c6...c971 under scheme 17.
   const PINNED = "44f5ea541fcac6a3aa2de577069407a31757bd6b674f407f53ef836ec47a3e7a";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
@@ -1954,11 +1955,12 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       selectorIds,
     });
     // Pinned by value so a bump is deliberate: 18 since R-458 (hang refusal by name through `with`
-    // subjects and implicit records; 17 is reserved for R-254); 16 was R-364 (hang refusal by name
-    // inside an unindexed object; 15 is reserved for R-254); 14 was R454 (more refused loop-exit sites); 13
-    // was R455 (field-designator swaps, calls in a record scope, case-only pairs removed; 12 is
-    // reserved for R254); 11 was R295/R294 (every name of `A, B: T`, member receivers); 10 was
-    // R196 (refused loop-exit sites move twins).
+    // subjects and implicit records); 17 was R254 (reportextensions instrumented); 16
+    // was R-364 (hang refusal by name inside an unindexed object; 15 was reserved for R-254 and is
+    // unused); 14 was R454 (more refused loop-exit sites); 13 was R455 (field-designator swaps,
+    // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
+    // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
+    // sites move twins).
     expect(IDENTITY_SCHEME).toBe(18);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });

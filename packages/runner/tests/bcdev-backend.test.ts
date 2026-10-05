@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
+import { AppMethodIndex } from "../src/app-package";
 import {
   AlcCompileError,
   ArtifactCompiler,
@@ -713,6 +714,62 @@ describe("BcDevMcpBackend.run", () => {
     }
   });
 
+  // R254, hub direction. MEASURED on Cronus28 (scripts/r254-probe/README.md): a test calling only
+  // the extension's `Classify` reported exactly `22:91601` methodId 1710736425. The base REPORT
+  // shares the id 91601 here on purpose, with a method of the SAME id, so a lookup or a conversion
+  // that drops the kind and keys by id alone resolves the wrong object.
+  test("R254: a 22:<id> row names the REPORTEXTENSION's method, never the same-id report's", async () => {
+    const symbols = {
+      ReportExtensions: [
+        { Id: 91601, Name: "R254 Probe RepExt", Methods: [{ Id: 1710736425, Name: "Classify" }] },
+      ],
+      Reports: [
+        { Id: 91601, Name: "R254 Same Id Report", Methods: [{ Id: 1710736425, Name: "OnReport" }] },
+      ],
+    };
+    for (const sr of [symbols, { Namespaces: [{ Name: "Probe", ...symbols }] }]) {
+      const index = AppMethodIndex.fromSymbolReference(sr);
+      expect(index.lookup(22, 91601, 1710736425)).toBe("Classify");
+      expect(index.declaredObjects().has("reportextension:91601")).toBe(true);
+      expect(index.lookup(3, 91601, 1710736425)).toBe("OnReport");
+      expect(index.lookup(14, 91601, 1710736425)).toBeUndefined();
+      expect(index.lookup(15, 91601, 1710736425)).toBeUndefined();
+    }
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({
+        results: [
+          {
+            codeunitId: 79100,
+            method: "PostingUpdatesTotal",
+            status: "passed",
+            durationMs: 1,
+            output: "",
+          },
+        ],
+        coverage: [
+          {
+            testObjectId: 79100,
+            testMethodId: 111,
+            coveredProcedures: [
+              { objectType: 22, objectId: 91601, methodId: 1710736425 },
+              { objectType: 3, objectId: 91601, methodId: 1710736425 },
+            ],
+          },
+        ],
+      }),
+      symbols,
+    );
+    try {
+      const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "ReportExtension", objectId: 91601, procedure: "Classify" },
+        { objectType: "Report", objectId: 91601, procedure: "OnReport" },
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   // R63: the pre-fix behaviour expanded an unresolvable methodId to EVERY local procedure in the
   // object. Measured on Continia Document Output: one genuinely-executed local credited five
   // tests with all ten locals of the codeunit, and 77 mutants in procedures those tests cannot
@@ -1408,6 +1465,86 @@ describe("BcDevMcpBackend.deploy", () => {
       await expect(backend.deploy(dir)).rejects.toBeInstanceOf(HarnessVerificationError);
       expect(verify).toHaveBeenCalledTimes(1);
       expect(compile).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("BcDevMcpBackend.compilePlainCheck (R461)", () => {
+  test("compiles the dir as given: no Control dependency staged, no altool, no .app left", async () => {
+    const dir = scratch("lethal-bcdev-plaincheck-");
+    try {
+      const plain = join(dir, "plain");
+      await mkdir(plain);
+      const appJson = JSON.stringify({ id: TEST_APP_ID, name: "Fixture", version: "1.0.0.0" });
+      await Bun.write(join(plain, "app.json"), appJson);
+      const calls: string[][] = [];
+      let appJsonSeen = "";
+      const spawn: SpawnFn = async (argv) => {
+        calls.push([...argv]);
+        const project = argv.find((a) => a.startsWith("/project:"))?.slice("/project:".length);
+        if (project !== undefined) appJsonSeen = await readFile(join(project, "app.json"), "utf8");
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (out !== undefined) await Bun.write(out, "plain-app-bytes");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const staging = await controlStaging(dir);
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...staging,
+        },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { spawn }),
+      );
+      await backend.compilePlainCheck(plain);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toBe("C:/fake/alc.exe");
+      expect(calls[0]).toContain(`/project:${plain.replaceAll("\\", "/")}`);
+      expect(calls[0]).toContain(
+        `/packagecachepath:${staging.packageCachePath.replaceAll("\\", "/")}`,
+      );
+      expect(appJsonSeen).toBe(appJson);
+      expect(await readdir(staging.packageCachePath).catch(() => [])).not.toContain(
+        "lethal-control.app",
+      );
+      expect((await readdir(dir)).filter((f) => f.endsWith(".app"))).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed compile leaves no partial plain-check.app, and the error is alc's own", async () => {
+    const dir = scratch("lethal-bcdev-plaincheck-fail-");
+    try {
+      const plain = join(dir, "plain");
+      await mkdir(plain);
+      await Bun.write(join(plain, "app.json"), "{}");
+      // alc writes its output, then exits non-zero: the shape of a crash mid-emit.
+      const spawn: SpawnFn = async (argv) => {
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (out !== undefined) await Bun.write(out, "partial");
+        return { exitCode: 1, stdout: "error AL0001: boom", stderr: "" };
+      };
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { spawn }),
+      );
+      const err = await backend.compilePlainCheck(plain).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlcCompileError);
+      expect((err as Error).message).toContain("error AL0001: boom");
+      expect((await readdir(dir)).filter((f) => f.endsWith(".app"))).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

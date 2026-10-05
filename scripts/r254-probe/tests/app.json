@@ -1,0 +1,43 @@
+{
+  "id": "8d2f4a10-2540-4c54-9a54-254000000002",
+  "name": "LethAL R254 RepExt Probe Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.1",
+  "brief": "R254: reaches a reportextension's code and reports the Code Coverage rows BC recorded for it.",
+  "description": "Throwaway probe, not for production use. See scripts/r254-probe/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "8d2f4a10-2540-4c54-9a54-254000000001",
+      "name": "LethAL R254 RepExt Probe",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    },
+    {
+      "id": "23de40a6-dfe8-4f80-80db-d70f83ce8caf",
+      "name": "Test Runner",
+      "publisher": "Microsoft",
+      "version": "28.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "platform": "28.0.0.0",
+  "application": "28.0.0.0",
+  "idRanges": [
+    {
+      "from": 91610,
+      "to": 91619
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "16.0",
+  "features": ["NoImplicitWith"]
+}

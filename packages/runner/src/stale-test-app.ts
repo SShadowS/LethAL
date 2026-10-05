@@ -182,21 +182,84 @@ export interface StaleTestAppFinding {
 export class StaleTestAppError extends Error {
   readonly missingTests: readonly string[];
 
-  constructor(missing: readonly StaleTestAppFinding[]) {
-    const sorted = [...missing].sort((a, b) => a.name.localeCompare(b.name));
-    const names = sorted.map((m) => m.name);
-    const refusal =
-      "Refusing to measure: every mutant covered only by these would be recorded no-coverage and " +
-      "the run would report a plausible score for a suite that never ran.";
-    // Each test's own line carries the SERVER's claim, not just this detector's conclusion. The
-    // repo already keeps BC's verbatim words next to the R35 diagnosis for the same reason: a
-    // reader can only overrule a matcher if the evidence travels with it. It also distinguishes
-    // which producer answered, since the two arms word their answers differently.
-    const evidence = sorted.map((m) => `  ${m.name}: ${m.description}`).join("\n");
+  /**
+   * R462: what the test app's identity, read before the baseline and again at this refusal, says.
+   * `unchanged-endpoints`: the same package both times. `identity-unverified`: a read failed, only
+   * the test source was hashed, or there was no first read, so the app may be older than the
+   * source OR may have been replaced between the two reads.
+   */
+  constructor(
+    missing: readonly StaleTestAppFinding[],
+    override readonly cause: "unchanged-endpoints" | "identity-unverified",
+  ) {
+    const { head, names } = missingTestsHead(missing);
+    const identity =
+      cause === "unchanged-endpoints"
+        ? "The published test app's package was the same at the start of this batch's baseline and at this refusal; a replace-and-restore between the two reads cannot be ruled out."
+        : "LethAL could not compare the published test app's package at the start of this batch's baseline with the one at this refusal, so the app may be older than the source OR may have been replaced between the two.";
     super(
-      `the published test app is missing ${names.length} test(s) this project's source declares:\n${evidence}\n${refusal} ${STALE_TEST_APP_REMEDY}`,
+      `${head} ${identity} If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}`,
     );
     this.name = "StaleTestAppError";
     this.missingTests = names;
   }
+}
+
+/**
+ * R462: the published test app's package CHANGED between the read at the start of this batch's
+ * baseline and the read at the refusal, so another publish landed in that interval. Extends `Error`
+ * directly, for the same reason `StaleTestAppError` does.
+ */
+export class TestAppChangedError extends Error {
+  readonly missingTests: readonly string[];
+
+  constructor(
+    missing: readonly StaleTestAppFinding[],
+    readonly before: string,
+    readonly after: string,
+  ) {
+    const { head, names } = missingTestsHead(missing);
+    super(
+      `${head} The published test app's package CHANGED between the start of this batch's baseline and this refusal (${before} at the start, ${after} at the refusal): something published to this server in that interval. Re-run when no other session publishes to it.`,
+    );
+    this.name = "TestAppChangedError";
+    this.missingTests = names;
+  }
+}
+
+/**
+ * R462: which refusal the two identity reads support. Only two `package:` hashes are comparable;
+ * anything else (a failed read, a `source:` fallback, no first read) proves nothing either way.
+ */
+export function testAppRefusal(
+  missing: readonly StaleTestAppFinding[],
+  before: string | undefined,
+  after: string | undefined,
+): StaleTestAppError | TestAppChangedError {
+  if (before?.startsWith("package:") && after?.startsWith("package:")) {
+    return before === after
+      ? new StaleTestAppError(missing, "unchanged-endpoints")
+      : new TestAppChangedError(missing, before, after);
+  }
+  return new StaleTestAppError(missing, "identity-unverified");
+}
+
+function missingTestsHead(missing: readonly StaleTestAppFinding[]): {
+  readonly head: string;
+  readonly names: readonly string[];
+} {
+  const sorted = [...missing].sort((a, b) => a.name.localeCompare(b.name));
+  const names = sorted.map((m) => m.name);
+  const refusal =
+    "Refusing to measure: every mutant covered only by these would be recorded no-coverage and " +
+    "the run would report a plausible score for a suite that never ran.";
+  // Each test's own line carries the SERVER's claim, not just this detector's conclusion. The
+  // repo already keeps BC's verbatim words next to the R35 diagnosis for the same reason: a
+  // reader can only overrule a matcher if the evidence travels with it. It also distinguishes
+  // which producer answered, since the two arms word their answers differently.
+  const evidence = sorted.map((m) => `  ${m.name}: ${m.description}`).join("\n");
+  return {
+    head: `the published test app is missing ${names.length} test(s) this project's source declares:\n${evidence}\n${refusal}`,
+    names,
+  };
 }

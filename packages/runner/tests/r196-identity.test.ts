@@ -68,7 +68,7 @@ beforeAll(async () => {
 });
 
 describe("R196: refusing an earlier identity twin moves a later twin's key", () => {
-  test("the identity scheme is 18 (10 for this key move, 11 R295/R294, 13 R455, 14 R454, 16 R-364, 18 R-458)", () => {
+  test("the identity scheme is 18 (10 for this key move, 11 R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458)", () => {
     expect(IDENTITY_SCHEME).toBe(18);
   });
 

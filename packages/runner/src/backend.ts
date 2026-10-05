@@ -293,6 +293,12 @@ export interface ExecutionBackend {
    * Backends with no publish step may implement this as their existing deploy.
    */
   compileCheck(instrumentedDir: string): Promise<void>;
+  /**
+   * R461, OPTIONAL: compile a staged copy of the UNMUTATED target (no selector, no guards, no
+   * Control dependency) with the same compiler, package cache and /define, and throw on a
+   * rejection. No publish. Absent on al-runner, whose compile happens per test.
+   */
+  compilePlainCheck?(dir: string): Promise<void>;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**
