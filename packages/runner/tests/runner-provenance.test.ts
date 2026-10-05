@@ -357,6 +357,7 @@ describe("buildResumeIndex carries runner (R69 Phase 2 — the resume hole)", ()
       file: "src/SandboxLogic.Codeunit.al",
       verdict: "killed",
       durationMs: 42,
+      memberHash: null,
       ...over,
     };
   }

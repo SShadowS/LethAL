@@ -185,6 +185,8 @@ const COMPOSITION_MODULES: Readonly<Record<string, readonly string[]>> = {
 const NEITHER_MODULES = [
   /** Argument-list readers shared by the operators (R-452). */
   "packages/engine/src/ast/arguments.ts",
+  /** A member's attribute run (R474: the member hash; runner's testpage-scan and test digest). */
+  "packages/engine/src/ast/attribute-run.ts",
   "packages/engine/src/ast/canonicalization.ts",
   "packages/engine/src/ast/hash.ts",
   "packages/engine/src/ast/mask.ts",

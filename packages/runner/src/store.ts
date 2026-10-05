@@ -8,7 +8,13 @@ import type { InstalledBundleRows, InstalledBundleWrite } from "./installed-bund
 import { normalizeRelPath } from "./line-filter";
 import { sameBuildSymbols } from "./preprocessor-symbols";
 import type { CoverageAttribution, PriorSurvivors } from "./selection";
-import { type IdentityKey, NO_PRIOR_SURVIVORS, serializeKey, twinSiteOf } from "./selection";
+import {
+  type IdentityKey,
+  NO_PRIOR_SURVIVORS,
+  memberSiteOf,
+  serializeKey,
+  twinSiteOf,
+} from "./selection";
 
 /** C02-06: `artifactRecordById` found one artifact id on more than one batch row, a corrupt store.
  *  Typed so `lethal verify` can refuse it without matching message text. */
@@ -146,6 +152,8 @@ export interface MutantRow {
    * refuses, never as "not carried".
    */
   readonly carried?: boolean;
+  /** R474: `MutantManifestEntry.memberHash`. Absent writes NULL: no rule-2 carry from the row. */
+  readonly memberHash?: string;
 }
 
 /**
@@ -194,6 +202,8 @@ export interface MutantVerdictRow {
   readonly coveringTests?: readonly string[];
   readonly coverageAttribution?: CoverageAttribution;
   readonly unplaceable?: boolean;
+  /** R474: `MutantRow.memberHash`; `null` on a row from before R474, which is no rule-2 site. */
+  readonly memberHash: string | null;
 }
 
 /**
@@ -611,6 +621,8 @@ export class ResultsStore {
       ["batch_artifacts", "app_path TEXT", baCols],
       ["batch_artifacts", "instrumented_dir TEXT", baCols],
       ["mutants", "carried INTEGER", cols],
+      // R474: the enclosing member's hash. NULL on an older row: rule 2 carries nothing from it.
+      ["mutants", "member_hash TEXT", cols],
       ["runs", "source_sha256 TEXT", runCols],
       // R325: NULL on an older row, and read as scheme 1, the only scheme there was.
       ["runs", "identity_scheme INTEGER", runCols],
@@ -997,11 +1009,12 @@ export class ResultsStore {
       .query(
         "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, verdict, " +
           "killing_test, failure_note, killing_test_failure, kill_position, duration_ms, runner, " +
-          "covering_tests, coverage_attribution, unplaceable, identity_ordinal, file " +
+          "covering_tests, coverage_attribution, unplaceable, identity_ordinal, file, member_hash " +
           "FROM mutants WHERE run_id = ?",
       )
       .all(runId) as Array<{
       file: string;
+      member_hash: string | null;
       ast_hash: string;
       codeunit_name: string;
       procedure_name: string | null;
@@ -1022,6 +1035,7 @@ export class ResultsStore {
     return rows.map((r) => ({
       identityOrdinal: r.identity_ordinal ?? 0,
       file: r.file,
+      memberHash: r.member_hash,
       ...(r.covering_tests !== null
         ? { coveringTests: this.parseCoveringTests(r.covering_tests, r) }
         : {}),
@@ -1558,8 +1572,8 @@ export class ResultsStore {
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name,
          operator_name, operator_major, file, line, verdict, killing_test, failure_note,
          killing_test_failure, kill_position, duration_ms, batch_index, runner,
-         covering_tests, coverage_attribution, unplaceable, identity_ordinal, carried)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         covering_tests, coverage_attribution, unplaceable, identity_ordinal, carried, member_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -1584,6 +1598,7 @@ export class ResultsStore {
         row.unplaceable === undefined ? null : row.unplaceable ? 1 : 0,
         row.identityOrdinal ?? 0,
         row.carried === undefined ? null : row.carried ? 1 : 0,
+        row.memberHash ?? null,
       ) as { id: number };
     return r.id;
   }
@@ -1806,11 +1821,12 @@ export class ResultsStore {
     const hiddenTuples = new Set(hidden.tuples);
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal, file FROM mutants " +
+        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal, file, member_hash FROM mutants " +
           "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor')",
       )
       .all(run.id) as Array<{
       file: string;
+      member_hash: string | null;
       ast_hash: string;
       codeunit_name: string;
       procedure_name: string | null;
@@ -1848,13 +1864,19 @@ export class ResultsStore {
           key: serializeKey(key),
           tuple: serializeKey({ ...key, ordinal: 0 }),
           file: r.file,
+          memberHash: r.member_hash,
         };
       });
     // R391: rule 2 (`carryRecord`) needs the survivors' (file, tuple) and the run's own twin facts.
     const twins = parseTwinTuples(run.twin_tuples, run.id);
     return {
       keys: new Set(kept.map((k) => k.key)),
-      sites: new Set(kept.map((k) => twinSiteOf(k.file, k.tuple))),
+      // R474: a rule-2 site also names the member's hash; a NULL one (an older row) names none.
+      sites: new Set(
+        kept.flatMap((k) =>
+          k.memberHash === null ? [] : [memberSiteOf(twinSiteOf(k.file, k.tuple), k.memberHash)],
+        ),
+      ),
       recorded: {
         hash: run.generation_source_sha256,
         twins: twins === null ? null : new Set(twins),

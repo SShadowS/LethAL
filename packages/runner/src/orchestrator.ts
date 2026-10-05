@@ -9658,6 +9658,8 @@ export function record(
     ...(unplaceable !== undefined ? { unplaceable } : {}),
     // C02-06: always written, so a NULL can only mean a row from before the column existed.
     carried: carried === true,
+    // R474: from the manifest entry; an entry without one (before R474) writes NULL, never a guess.
+    ...(m.memberHash !== undefined ? { memberHash: m.memberHash } : {}),
   });
   outcomes.push({
     mutant: m,

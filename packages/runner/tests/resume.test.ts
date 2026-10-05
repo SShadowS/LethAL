@@ -274,6 +274,7 @@ function row(over: Partial<MutantVerdictRow> = {}): MutantVerdictRow {
     identityOrdinal: 0,
     verdict: "survived",
     durationMs: 42,
+    memberHash: null,
     ...over,
   };
 }
@@ -816,6 +817,8 @@ describe("ResultsStore resume queries (R47)", () => {
         verdict: "killed",
         killingTest: "T",
         durationMs: 77,
+        // R474: a row recorded without a member hash reads back NULL, never an invented one.
+        memberHash: null,
       },
     ]);
   });

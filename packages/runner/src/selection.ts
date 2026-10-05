@@ -110,6 +110,13 @@ export function twinSiteOf(file: string, tuple: string): string {
   return `${file.replaceAll("\\", "/")}\0${tuple}`;
 }
 
+/** R474: a rule-2 lookup site: `twinSiteOf` plus the enclosing member's hash
+ *  (`MutantManifestEntry.memberHash`), so a verdict carries only into an unchanged member. Twin
+ *  counting still uses the bare `twinSiteOf`. */
+export function memberSiteOf(site: string, memberHash: string): string {
+  return `${site}\0${memberHash}`;
+}
+
 /** R391: the sorted `twinSiteOf` pairs that occur more than once, i.e. the tuples that have a
  *  twin in the same FILE. Built from the full numbered set (deployed sites plus reserved ones). */
 export function twinSitesOf(
@@ -184,9 +191,12 @@ export interface CurrentCarrySide {
  *   source gives identical tuples, files and ordinals (every other input has its own gate), so the
  *   key names the same mutant: look it up by key.
  * - Rule 2: otherwise, when the recorded run measured its twins and `m`'s (file, tuple) is a
- *   singleton in its file on BOTH sides: look it up by (file, tuple). No renumbering can move a
- *   verdict onto it: a twin in another file has another file, a twin in this file is not a
- *   singleton.
+ *   singleton in its file on BOTH sides: look it up by (file, tuple) AND its enclosing member's
+ *   hash (R474). No renumbering can move a verdict onto it: a twin in another file has another
+ *   file, a twin in this file is not a singleton. An edit inside the member (an `exit;` before the
+ *   statement, a retargeted `[EventSubscriber]`) changes the hash, so nothing carries; an entry or
+ *   a row without a hash (before R474) carries nothing here. Edits OUTSIDE the member (callers,
+ *   globals, table definitions, other subscribers, the `#if` context) still do not stop it.
  * - Otherwise nothing carries and `m` runs.
  *
  * A key match that is not carried is added to `current.refused`.
@@ -205,7 +215,8 @@ export function carryRecord<T>(
     carried = keyed;
   } else if (recorded.twins !== null) {
     const site = twinSiteOf(m.file, identityTupleOf(m));
-    if (!recorded.twins.has(site) && !current.twins.has(site)) carried = bySite(site);
+    if (!recorded.twins.has(site) && !current.twins.has(site) && m.memberHash !== undefined)
+      carried = bySite(memberSiteOf(site, m.memberHash));
   }
   if (keyed !== undefined && carried === undefined) current.refused.add(key);
   return carried;
