@@ -153,8 +153,18 @@ const NON_WRITING_RECORD_METHODS: ReadonlySet<string> = new Set([
   "init",
 ]);
 
-/** Single-row writes that are harmless only on the trigger's OWN record (`Rec`, `xRec`, implicit). */
-const OWN_ROW_WRITES: ReadonlySet<string> = new Set(["modify", "delete"]);
+/** The table triggers `isHarmlessTriggerCall` can judge a call for. */
+export type HarmlessTriggerKind = "delete" | "modify";
+
+/**
+ * Single-row writes that are harmless only on the trigger's OWN record (`Rec`, `xRec`, implicit),
+ * per trigger. Inside `OnDelete` the row is going anyway, so `Rec.Delete()` adds nothing. Inside
+ * `OnModify` it does: skip the trigger and the row survives, so a later insert can collide.
+ */
+const OWN_ROW_WRITES: Readonly<Record<HarmlessTriggerKind, ReadonlySet<string>>> = {
+  delete: new Set(["modify", "delete"]),
+  modify: new Set(["modify"]),
+};
 
 /** System calls that write nothing. Harmless only UNQUALIFIED and not shadowed (`claimsSystemCall`). */
 const NON_WRITING_SYSTEM_CALLS: ReadonlySet<string> = new Set(["error", "message", "confirm"]);
@@ -162,22 +172,36 @@ const NON_WRITING_SYSTEM_CALLS: ReadonlySet<string> = new Set(["error", "message
 const OWN_RECORD_NAMES: ReadonlySet<string> = new Set(["rec", "xrec"]);
 const DELETE_EVENTS: ReadonlySet<string> = new Set(["onbeforedeleteevent", "onafterdeleteevent"]);
 const EXTENSION_DELETE_TRIGGERS = ["OnBeforeDelete", "OnAfterDelete"] as const;
+const EVENT_NAME_KINDS: ReadonlySet<string> = new Set([
+  "string_literal",
+  "identifier",
+  "quoted_identifier",
+]);
 
 /**
- * R281, shared with R-213: is this call, inside a table trigger, PROVEN to write no row other than
- * the trigger's own? `false` means "not proven", never "proven harmful".
+ * R281, shared with R-213: is SKIPPING this call, inside the table's `trigger` (`OnDelete` or
+ * `OnModify`), proven unable to leave a row behind that a later statement could collide with?
+ * `false` means "not proven", never "proven harmful".
  *
  * Harmless only when:
  *   (a) it is a non-writing Record method (`NON_WRITING_RECORD_METHODS`) and `claimsRecordMethod`
  *       claims it, so the receiver is a record and the project declares no method of that name;
- *   (b) it is `Modify`/`Delete` on the trigger's own record (`Rec`, `xRec` or implicit), claimed the
- *       same way; or
+ *   (b) it is a write `OWN_ROW_WRITES[trigger]` allows on the trigger's own record (`Rec`, `xRec` or
+ *       implicit), claimed the same way: `Modify`/`Delete` in `OnDelete`, `Modify` only in `OnModify`;
  *   (c) it is an unqualified `Error`, `Message` or `Confirm` that `claimsSystemCall` claims.
  * Every other call is not proven: a write to another record, `DeleteAll`/`ModifyAll`/`DeleteLinks`,
- * `Validate`, and any project or codeunit call.
+ * `Validate`, any project or codeunit call, and ANY call inside a `with` statement, whose bare names
+ * bind to the `with` record rather than to `Rec`.
  */
-export function isHarmlessTriggerCall(call: ALSyntaxNode, ctx: SemanticContext): boolean {
+export function isHarmlessTriggerCall(
+  call: ALSyntaxNode,
+  ctx: SemanticContext,
+  trigger: HarmlessTriggerKind,
+): boolean {
   if (call.kind !== ALNodeKind.procedure_call) return false;
+  for (let p = call.parent; p !== null; p = p.parent) {
+    if (p.rawKind === "with_statement") return false;
+  }
   const callee = call.childForFieldName("function");
   const name = calleeName(call);
   if (callee === null || name === null) return false;
@@ -186,7 +210,9 @@ export function isHarmlessTriggerCall(call: ALSyntaxNode, ctx: SemanticContext):
     return callee.kind === ALNodeKind.identifier && claimsSystemCall(call, ctx, name);
   }
   if (NON_WRITING_RECORD_METHODS.has(lower)) return claimsRecordMethod(call, ctx, name);
-  if (OWN_ROW_WRITES.has(lower)) return onOwnRecord(callee) && claimsRecordMethod(call, ctx, name);
+  if (OWN_ROW_WRITES[trigger].has(lower)) {
+    return onOwnRecord(callee) && claimsRecordMethod(call, ctx, name);
+  }
   return false;
 }
 
@@ -224,7 +250,29 @@ export function deleteSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): bo
   if (projectObservesDelete(table, symbols, ctx)) return true;
   const trigger = findTableTrigger(table.node, "OnDelete", rawArmOf(ctx));
   if (trigger === null) return false;
-  return !onlyHarmlessCalls(trigger, ctx, symbols);
+  return !onlyHarmlessCalls(trigger, ctx, symbols, procedureNamesOn(table, symbols));
+}
+
+/** Every procedure name declared on the table or a project tableextension of it, in every `#if`
+ *  arm (over-inclusive, which can only over-tag). Lowercase, quotes stripped. */
+function procedureNamesOn(table: ObjectSymbol, symbols: SymbolTable): ReadonlySet<string> {
+  const names = new Set<string>();
+  const owners = [
+    table.node,
+    ...symbols.tableExtensions
+      .filter((e) => e.baseObject.toLowerCase() === table.name.toLowerCase())
+      .map((e) => e.node),
+  ];
+  for (const owner of owners) {
+    visit(owner, (n) => {
+      if (n.rawKind !== "procedure") return;
+      const id = n.namedChildren.find(
+        (c) => c.rawKind === "identifier" || c.rawKind === "quoted_identifier",
+      );
+      if (id !== undefined) names.add(id.text.replace(/"/g, "").toLowerCase());
+    });
+  }
+  return names;
 }
 
 /** Does the project subscribe to this table's delete events, or extend its delete triggers? */
@@ -259,11 +307,13 @@ function projectObservesDelete(
 }
 
 /** An `[EventSubscriber(...)]` argument list naming a delete event of one of `tableNames`. An
- *  unreadable `Database::` target counts as a match. */
+ *  unreadable `Database::` target counts as a match. The event name may be quoted (`'On...'`) or
+ *  not (`OnAfterDeleteEvent`, which alc 18.0.43 compiles; an unknown unquoted name is AL0280). */
 function subscribesToDelete(args: ALSyntaxNode, tableNames: ReadonlySet<string>): boolean {
   const isDeleteEvent = args.namedChildren.some(
     (c) =>
-      c.rawKind === "string_literal" && DELETE_EVENTS.has(c.text.replace(/'/g, "").toLowerCase()),
+      EVENT_NAME_KINDS.has(c.rawKind) &&
+      DELETE_EVENTS.has(c.text.replace(/['"]/g, "").toLowerCase()),
   );
   if (!isDeleteEvent) return false;
   const ref = args.namedChildren.find((c) => c.rawKind === "database_reference");
@@ -276,20 +326,28 @@ function subscribesToDelete(args: ALSyntaxNode, tableNames: ReadonlySet<string>)
  * Every live call in the trigger is proven harmless. A call written WITHOUT parentheses is not a
  * `call_expression`: `CleanUp;` parses as a `call_statement` and `Kid.DeleteAll;` as a bare
  * `member_expression`. The first is never proven; the second only when its member names a field of
- * a project table (a field read). ponytail: an unqualified call without parentheses used as a VALUE
- * (`if CheckIt then`) looks like a variable and is not seen; resolve identifiers if that matters.
+ * a project table (a field read). An unqualified call without parentheses used as a VALUE
+ * (`if CheckIt then`) looks like a variable, so ANY identifier naming a procedure of the table or
+ * its project tableextensions keeps the tag. Still unseen: such a call to a procedure declared in
+ * another app's tableextension.
  */
 function onlyHarmlessCalls(
   trigger: ALSyntaxNode,
   ctx: SemanticContext,
   symbols: SymbolTable,
+  tableProcedures: ReadonlySet<string>,
 ): boolean {
   let harmless = true;
   let fields: ReadonlySet<string> | undefined;
   const walk = (n: ALSyntaxNode): void => {
     if (!harmless || armOfNode(ctx, n) === "inactive") return;
     if (n.kind === ALNodeKind.procedure_call) {
-      if (!isHarmlessTriggerCall(n, ctx)) harmless = false;
+      if (!isHarmlessTriggerCall(n, ctx, "delete")) harmless = false;
+    } else if (
+      (n.rawKind === "identifier" || n.rawKind === "quoted_identifier") &&
+      tableProcedures.has(n.text.replace(/"/g, "").toLowerCase())
+    ) {
+      harmless = false;
     } else if (n.rawKind === "call_statement") {
       harmless = false;
     } else if (n.kind === ALNodeKind.field_access && n.parent?.kind !== ALNodeKind.procedure_call) {

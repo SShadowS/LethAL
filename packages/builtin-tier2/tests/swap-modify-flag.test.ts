@@ -18,6 +18,7 @@ import {
   initParser,
   isStatementPosition,
 } from "@lethal/engine";
+import { isHarmlessTriggerCall } from "../src/forced-trigger-raise";
 import { swapModifyFlag } from "../src/swap-modify-flag";
 import { contextFor, parseClean, projectContextFor } from "./parse-clean";
 
@@ -552,5 +553,43 @@ describe("swap-modify-flag Delete mechanism (R281)", () => {
     expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER }, ["X"])).toBe(
       "run-trigger-skipped-delete",
     );
+  });
+
+  // Final review fix 1. Revert: drop the `with_statement` check in `isHarmlessTriggerCall`. The
+  // bare `Delete()` reads as an implicit-`Rec` call, but `with` makes it delete a Kid row.
+  it("tags a Delete() inside `with Kid do` (another record's row)", () => {
+    const t = par(onDelete(KID_VAR, "with Kid do Delete();"));
+    expect(deleteTag({ "P.al": t, "K.al": KID, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Final review fix 2. Revert: accept only a `string_literal` event name. alc 18.0.43 (Linux)
+  // compiles the unquoted `OnAfterDeleteEvent` and refuses an unknown unquoted name with AL0280,
+  // measured 2026-10-05, so this form is real AL.
+  it("tags a table whose delete subscriber names the event unquoted", () => {
+    const sub = `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::Par, OnAfterDeleteEvent, '', false, false)]\n  local procedure X(var Rec: Record "Par"; RunTrigger: Boolean) begin end;\n}`;
+    expect(deleteTag({ "P.al": par(""), "S.al": sub, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // Final review fix 4. Revert: drop the project-procedure identifier check. A parenthesis-less
+  // call used as a value looks like a variable to the grammar.
+  it("tags an OnDelete that calls a table procedure without parentheses, as a value", () => {
+    const t = par(
+      `${onDelete("", "if CleanUpChildren then Error('x');")}    local procedure CleanUpChildren(): Boolean begin end;\n`,
+    );
+    expect(deleteTag({ "P.al": t, "O.al": CALLER })).toBe("run-trigger-skipped-delete");
+  });
+
+  // Final review fix 3 (for R-213). Revert: one own-row allow-list for every trigger kind.
+  it("isHarmlessTriggerCall: Rec.Delete() is harmless for OnDelete, not for OnModify", () => {
+    const root = parseClean(par(onDelete("", "Rec.Delete();")));
+    const ctx = contextFor(root);
+    const call = findAll(root, ALNodeKind.procedure_call).find((c) => c.text === "Rec.Delete()");
+    if (call === undefined) throw new Error("no Rec.Delete() call");
+    expect(isHarmlessTriggerCall(call, ctx, "delete")).toBe(true);
+    expect(isHarmlessTriggerCall(call, ctx, "modify")).toBe(false);
   });
 });
