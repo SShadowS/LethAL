@@ -110,7 +110,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   of any of its body exits reads: `exit`, `Error(...)` outside `asserterror`,
   `CurrReport.Quit`/`Break`, or a `break` of that loop. Such a write could leave the loop with no
   way out. The refusals are counted as `hang-refused` sites (R447). This is a scoped rule, not a
-  proof that no mutant hangs; the shapes it still misses are R480. Measured: MEASURED.
+  proof that no mutant hangs; the shapes it still misses are R480. Measured against master `fc9ff10a`:
+  BC.History 74 sites move from mutated to hang-refused (remove-assignment 55,
+  flip-boolean-literal 11, shift-integer 6, swap-additive 2) and 16 keys move ordinal in
+  `ItemJnlPostLine`; CDO, the fixtures and the examples unchanged.
   Re-check equivalence marks.
 - **One implicit-record resolver; identity scheme 22** (R464; 20 was held for R-464 and is unused,
   21 is R459). Which record a bare name or a `Rec.`-qualified call binds to is decided in one place

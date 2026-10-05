@@ -176,7 +176,7 @@ export function coarseIdentityTupleOf(
  * the record the call binds to or is refused, and a later same-tuple twin of a removed mutant takes
  * its ordinal. 23: R446, in a loop whose condition reads no name and calls nothing (`while true`),
  * a write a body-exit guard reads is hang-refused, so a later same-tuple twin of a refused mutant
- * takes its ordinal (BC.History: KEYS keys).
+ * takes its ordinal (BC.History: 16 keys).
  */
 export const IDENTITY_SCHEME = 23;
 
