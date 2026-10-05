@@ -1087,7 +1087,7 @@ function assertVerdictTable(report: SessionReport): void {
   // fixture has three `Insert(true)` sites and the interesting fact is exactly WHICH of them the
   // screen holds — arms A and K (both killed), never arm B (which survives, and a survivor at such
   // a site is just a survivor), and never the `Delete` site (R281 gives it its own mechanism, below)
-  // or a `Modify` site, which gets no mechanism at all.
+  // or a `Modify` site (R452's skipped-modify mechanism finds no unproven site on this fixture).
   const insertGroup = groupOf("run-trigger-skipped-insert");
   const insertScreened = insertGroup.mutants.map(mutantOf);
   assert.equal(insertScreened.length, 1, "the Insert mechanism screens exactly one kill");
@@ -1143,8 +1143,24 @@ function assertVerdictTable(report: SessionReport): void {
   const forcedGroup = groupOf("run-trigger-forced");
   const forcedScreened = forcedGroup.mutants.map(mutantOf);
   assert.deepEqual(
-    forcedScreened.map((m) => [m.operatorName, m.procedureName, m.verdict]),
-    [["lethal.flip-boolean-literal", "InsertWithoutTrigger", "killed"]],
+    forcedScreened.map((m) => [
+      m.operatorName,
+      m.procedureName,
+      m.verdict,
+      m.killingTest,
+      m.file,
+      m.line,
+    ]),
+    [
+      [
+        "lethal.flip-boolean-literal",
+        "InsertWithoutTrigger",
+        "killed",
+        "InsertWithoutTriggerKeepsAmount",
+        "src/DataOps.Codeunit.al",
+        96,
+      ],
+    ],
     "the ONE screened forced kill is M0223 (Insert(false)->true, an over-tag: its test raises its own " +
       "Error). It disappearing means the conservative rule dropped the tag on a table that has an " +
       "OnInsert, the under-tagging direction; a verdict change means a diagnosis moved a verdict",
@@ -1157,6 +1173,11 @@ function assertVerdictTable(report: SessionReport): void {
   assert.ok(
     forcedGroup.explanation.includes("RUN where it did not"),
     "the forced mechanism must explain ITS own mechanism",
+  );
+  assert.notEqual(
+    forcedGroup.explanation,
+    groupOf("run-trigger-skipped-insert").explanation,
+    "the forced and skipped-Insert mechanisms must not share one explanation",
   );
   // The mechanisms must not share one explanation: the reader would be told a duplicate-key
   // artifact was measured on Cronus281 as a write-transaction abort.
