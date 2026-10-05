@@ -48,18 +48,6 @@ const ALLOWED: ReadonlyMap<string, Allowed> = new Map([
     },
   ],
   [
-    "scripts/r389-probe/dependents/run.ts",
-    {
-      count: 1,
-      reason:
-        "R389's one-shot presence check (run 2026-10-05): one app id per request, the filter passed as a query parameter on the next line",
-      check: (text) =>
-        text.includes("$filter: `id eq ${id}`")
-          ? undefined
-          : "the probe no longer sends `$filter: id eq <one id>` with its extensions query",
-    },
-  ],
-  [
     "packages/runner/tests/doctor-issue-23.test.ts",
     {
       count: 1,
