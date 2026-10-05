@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**90 of 456 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**90 of 457 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -101,7 +101,7 @@ that ordering is the priority.
 - **R249** · A refused `BeginPublish` is always read as a lost lease, so an owned-but-idle lease is left held until its ttl · [R249.md](docs/roadmap/R249.md) · done (01c3d1c4)
 - **R248** · A test-app publish whose pre-fence read fails still goes ahead, and then can only end indeterminate: one wrong read credential leaves a container needing a recycle · [R248.md](docs/roadmap/R248.md) · done (56d33cd)
 - **R250** · `parseVersionConflict` matches BC's downgrade phrase anywhere in an error's text, and two publish paths trust it as proof the server refused · [R250.md](docs/roadmap/R250.md) · done (9842500f)
-- **R244** · empty-block's repeat_statement entry matches no block on the vendored grammar: a repeat body is a statement_block · [R244.md](docs/roadmap/R244.md) · open
+- **R244** · empty-block's repeat_statement entry matches no block on the vendored grammar: a repeat body is a statement_block · [R244.md](docs/roadmap/R244.md) · done (012f91c8)
 - **R251** · `injectMutationSelectorVar` matches objects by node IDENTITY, so specs found by separate tree walks over one object can produce two overlapping edits · [R251.md](docs/roadmap/R251.md) · done (0185b3a)
 - **R256** · A run recorded WITH preprocessor symbols before C02-06 can still be resumed by a run with NO symbols, so an old verdict or baseline can carry across a `#if` change · [R256.md](docs/roadmap/R256.md) · open
 - **R246** · GH-24's reach marker runs on every loop iteration and slows the mutant: a kill that raced the time budget (Int32 overflow) now scores timeout-killed on itest:hang · [R246.md](docs/roadmap/R246.md) · done (0a9cc84)
@@ -316,6 +316,7 @@ that ordering is the priority.
 - **R445** · lethal run on a test project nested inside the target compiles and mutates the test code as target code, without a warning · [R445.md](docs/roadmap/R445.md) · open
 - **R447** · R-196 refuses hang-capable loop-step sites silently, so a report reader cannot tell that a loop's own step writes were never measured · [R447.md](docs/roadmap/R447.md) · done (bb4a0c46)
 - **R451** · Forward direction `ModifyAll(Field, Value)` to `ModifyAll(Field, Value, true)` is a genuinely new edit; sites exist in BaseApp, none in CDO (low priority, measure before building) · [R451.md](docs/roadmap/R451.md) · open, filed 2026-10-05
+- **R467** · `empty-block` never empties a `repeat` body; the safe half (an `until` that advances a cursor) is ~11,500 BaseApp sites with no coarse mutant · [R467.md](docs/roadmap/R467.md) · open
 
 ## Backends and tooling
 
