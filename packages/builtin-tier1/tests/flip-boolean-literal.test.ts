@@ -327,6 +327,34 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     expect(tagged({ "P.al": par(""), "O.al": caller(body) })).toEqual(["true->false -"]);
   });
 
+  // F10 (R460). The forcing direction of F9: a `false` RunTrigger on a receiver that does not
+  // resolve is tagged `run-trigger-forced` at all five methods, because nothing proves the forced
+  // trigger harmless. Controls: the same calls from an indexed caller on a `Par` with no triggers
+  // stay untagged (`forceCanRaise` proves it), and a codeunit receiver that RESOLVES to a non-record
+  // stays untagged. Reverts: drop the forcing half of the unresolved branch (the wrapped half goes
+  // untagged); tag every unclaimed `false` (the codeunit control goes red).
+  it("tags a false RunTrigger as forced when the receiver does not resolve (wrapped caller)", () => {
+    const body =
+      "Par.ModifyAll(Amount, 1, false); Par.DeleteAll(false); Par.Modify(false); Par.Delete(false); Par.Insert(false);";
+    const FORCED = "false->true run-trigger-forced";
+    const UNTAGGED = "false->true -";
+    const wrappedCaller = { "P.al": par(""), "O.al": `#if not CLEANX\n${caller(body)}\n#endif\n` };
+    expect(tagged(wrappedCaller)).toEqual([FORCED, FORCED, FORCED, FORCED, FORCED]);
+    expect(tagged({ "P.al": par(""), "O.al": caller(body) })).toEqual([
+      UNTAGGED,
+      UNTAGGED,
+      UNTAGGED,
+      UNTAGGED,
+      UNTAGGED,
+    ]);
+    const mgt = `codeunit 50303 "Mgt" { procedure DeleteAll(Run: Boolean) begin end; procedure Modify(Run: Boolean) begin end; }`;
+    const resolvedNonRecord = {
+      "M.al": mgt,
+      "O.al": caller("Mgt.DeleteAll(false); Mgt.Modify(false);", `Mgt: Codeunit "Mgt";`),
+    };
+    expect(tagged(resolvedNonRecord)).toEqual([UNTAGGED, UNTAGGED]);
+  });
+
   // F8. Revert: drop `claimsRecordMethod` (tag by method name alone).
   it("does NOT tag a codeunit's or a table procedure's ModifyAll/DeleteAll", () => {
     const mgt = `codeunit 50303 "Mgt" { procedure ModifyAll(A: Integer; B: Integer; Run: Boolean) begin end; procedure DeleteAll(Run: Boolean) begin end; }`;
