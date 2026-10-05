@@ -36,8 +36,11 @@
  *
  * WHAT IT CANNOT SEE, stated because a screen that hides its own reach is worse than none:
  *
- *   - Only `lethal.remove-commit` and `lethal.swap-modify-flag`'s `Insert` mutants tag sites today
- *     (R138 added the second). Other operators produce platform-refused kills too — R82's arm E is a
+ *   - Only `lethal.remove-commit` and `lethal.swap-modify-flag` tag sites today (R138 added its
+ *     `Insert` skip, R165 its forced trigger, R281 its `Delete` skip). R281's tag cannot see a delete
+ *     subscriber or `tableextension` delete trigger in ANOTHER app (the test app, say), so a table
+ *     it proves harmless here can still leave rows behind through one of those. Other operators
+ *     produce platform-refused kills too — R82's arm E is a
  *     swap killed by a BC field-length overflow, and the table fixture's arm K reaches its
  *     duplicate-key error by two further routes, an `empty-block` on the `OnInsert` body and a
  *     `negate-conditional` on its blank-key guard, neither of which is tagged. An absent tag is not
@@ -83,6 +86,16 @@ export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism,
     "every `Insert` mutant carries this tag, because whether the target table's `OnInsert` touches " +
     "the primary key is not visible at the call site, and for a base-app record it is not visible " +
     "at all. Treat it as a prompt to read the kill, not as a verdict on it.",
+  "run-trigger-skipped-delete":
+    "rewriting `Delete(true)` to `Delete(false)` skips `OnDelete` and the table's delete " +
+    "subscribers. When that code deletes or writes OTHER rows (child lines, a log row), those rows " +
+    "are left behind, and a later insert of one can raise a duplicate key before any assertion " +
+    "runs. Kept wherever LethAL cannot prove the skipped code harmless, which includes every table " +
+    "it cannot read, such as a base-app record. It cannot see a delete subscriber or a " +
+    "`tableextension` delete trigger in another app (the test app, say). WEAK, like the `Insert` " +
+    "tag: the duplicate-key route is not measured live for `Delete`, and whether `RunTrigger` " +
+    "changes how BC deletes record links, notes or media is not measured either. Treat it as a " +
+    "prompt to read the kill, not as a verdict on it.",
   "run-trigger-forced":
     "rewriting `Modify()` to `Modify(true)` makes the table's `OnModify` RUN where it did not — " +
     "`Rec.Modify()` means `RunTrigger = false`. Forcing a trigger writes more than the unmutated " +

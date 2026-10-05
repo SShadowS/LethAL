@@ -24,7 +24,9 @@ import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/o
  * A deliberate emission change (a new operator finding a site here, say) re-pins these values in
  * the same commit, and says so. R196: sandbox-hang's `HangLogic.Codeunit.al` and manifest were
  * re-pinned because its line-104 `remove-assignment` and `shift-integer` sites are now refused as
- * hang-capable (they were 977eb7bb...ef67 and f7b49d85...86e6).
+ * hang-capable (they were 977eb7bb...ef67 and f7b49d85...86e6). R281: sandbox-data's manifest was
+ * re-pinned because `Data Flag Ops.DeleteWithTrigger`'s `Delete(true)` mutant now carries
+ * `platformKillMechanism: run-trigger-skipped-delete`, its only change (it was 90fa82e4...17ba).
  */
 const PINNED: Record<
   string,
@@ -100,7 +102,7 @@ const PINNED: Record<
         "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
-      "mutant-manifest.json": "90fa82e468b6c90a88a73bb74bf9e55c0c19cd56a07bcccdc8cbce976ca317ba",
+      "mutant-manifest.json": "65d753862d2165e9f8e60202124b9df621a08e0b8de84a9d0da41d8a7f3fe4ea",
     },
   },
   "sandbox-hang": {
