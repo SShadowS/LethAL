@@ -172,15 +172,22 @@ describe("swapCallArguments: field-designator arguments (R455)", () => {
     await initParser();
   });
 
-  const TABLE = `table 92800 "R455 T" { fields { field(1; Code; Code[20]) { } field(2; Amount; Decimal) { } field(3; Name; Text[50]) { } } keys { key(PK; Code) { Clustered = true; } } }`;
+  const TABLE = `table 92800 "R455 T" { fields { field(1; Code; Code[20]) { } field(2; Amount; Decimal) { } field(3; Name; Text[50]) { } field(4; Qty; Integer) { } } keys { key(PK; Code) { Clustered = true; } } }`;
   const withTable = (decls: string, body: string): string =>
     `${TABLE}\ncodeunit 92800 "R455 C" { procedure P() var R: Record "R455 T"; ${decls} begin ${body} end; }`;
   const swaps = (decls: string, body: string): string[] =>
     specsFor(withTable(decls, body)).map((s) => s.after.text);
 
   // Same-typed locals, so only the field-designator rule refuses it: `Name` binds to the Text field.
+  // alc rejects this ORIGINAL too (AL0193, an Integer value for a Text field), so it pins the
+  // generator only; the next test is the same shape as AL that compiles.
   it("pin: R.Validate(Name, Other) with Integer locals is not swapped", () => {
     expect(swaps("Name: Integer; Other: Integer;", "R.Validate(Name, Other);")).toEqual([]);
+  });
+
+  // alc 18.0.43: compiles; the swap `R.Validate(Other, Qty)` is AL0166.
+  it("pin: R.Validate(Qty, Other) with Integer locals and an Integer field is not swapped", () => {
+    expect(swaps("Qty: Integer; Other: Integer;", "R.Validate(Qty, Other);")).toEqual([]);
   });
 
   it("pin: R.SetRange(Amount, Value) with Integer locals is not swapped", () => {

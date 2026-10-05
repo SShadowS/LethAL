@@ -337,6 +337,22 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`swap-call-arguments` no longer swaps an argument that names a field** (R455). In
+  `R.SetRange(Amount, Value)` the first argument is the record's field even when a local has the
+  same name, so the swap did not compile (AL0166). Record builtins are matched by method name, with
+  the field positions of each (SetRange, SetFilter, Validate, TestField and others at position 1;
+  CalcFields, CalcSums, SetLoadFields, SetCurrentKey and others at every position; CopyFilter at 1
+  and 3). Swaps between value arguments stay. BaseApp: 43 swaps removed, among them 28 that alc
+  rejects; CDO: 1.
+- **An unqualified call in a record scope has no type** (R455). Inside `with R do`, on a page with a
+  `SourceTable`, in a `TableNo` codeunit's OnRun and in a report dataitem, a call `F()` binds to the
+  table's method first, so typing it by the object's own procedure could emit `F() - F()` on Text
+  (AL0175). BaseApp: 13 `swap-additive` mutants removed; CDO: 0.
+- **A case-only pair is not swapped** (R455): `SetRange(ID, Id)` names one variable twice.
+- **Identity scheme 13** (R455; 12 is reserved for R254): swaps and additive flips are removed, so
+  same-tuple ordinals can move. Every older store stops resuming once, the next
+  `--skip-known-survivors` run skips nothing once, and marks files need `"identityScheme": 13`
+  after re-checking each mark (R325).
 - **No more wrong swaps and claims from the later names of `A, B: T`** (R295). Only the first name
   of a multi-name declaration was seen, so a use of B was typed by a same-named global of another
   type: `swap-call-arguments` emitted swaps `alc` rejects (AL0133) and `remove-setrange` claimed a

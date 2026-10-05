@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**101 of 451 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**101 of 452 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -177,7 +177,8 @@ that ordering is the priority.
 - **R450** · A `SourceTable` or `TableNo` property inside a member-level `#if` is not seen, so R-294's implicit-with refusal does not engage and a field-shadowed global is still typed · [R450.md](docs/roadmap/R450.md) · closed 2026-10-05 — 0 objects have SourceTable/TableNo under a member-level #if…
 - **R452** · A skipped `OnModify` (`Modify(true)` to `Modify(false)`, `ModifyAll(..., true)`) is untagged, the same class R281 fixes for `Delete` · [R452.md](docs/roadmap/R452.md) · blocked (R281)
 - **R454** · Hang-capable mutants that R-196's refusal still lets through untagged: a literal in an active `#if` loop-condition tail, a literal inside a comparison in a loop condition, and member-target loop writes · [R454.md](docs/roadmap/R454.md) · open
-- **R455** · Typed operators can still mistype a name after R-294: a field-designator argument of a record builtin (`R.SetRange(Amount, Value)`), and an unqualified call inside `with` · [R455.md](docs/roadmap/R455.md) · open
+- **R455** · Typed operators can still mistype a name after R-294: a field-designator argument of a record builtin (`R.SetRange(Amount, Value)`), and an unqualified call inside `with` · [R455.md](docs/roadmap/R455.md) · done (b2c3c740)
+- **R456** · A report whose request page declares `SourceTable` is an implicit-record scope in its OWN triggers and procedures too; R294's predicate types them by the report's globals · [R456.md](docs/roadmap/R456.md) · open
 
 ## Product gaps a real project hits
 
