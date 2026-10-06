@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**75 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**72 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -84,7 +84,7 @@ that ordering is the priority.
 - **R210** · `resolveVarRef` keys a procedure's locals/parameters by NAME alone, so an overloaded procedure name resolves against the wrong overload's declarations · [R210.md](docs/roadmap/R210.md) · done (f9af337)
 - **R211** · `docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson` predates `hangCapableCount` and is pinned as a known schema-validation failure, not backfilled · [R211.md](docs/roadmap/R211.md) · done (bef6693d..eab34a51): the R231 re-freeze re-ran the gift-card rehearsal live on Cronus28, seq 5 now…
 - **R212** · No fixture is a NAMESPACED AL app, which is why every gate stayed green while namespaced projects got zero coverage attribution · [R212.md](docs/roadmap/R212.md) · done (7f37015)
-- **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · open, narrowed 2026-10-01 (8a8a8ebe..959d7f20): no mutant in a compiled-out arm, undecidable files refused…
+- **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · closed 2026-10-06 — the false-survivor risk is gone: 0 of 2,143,029 mutants on BaseApp, CDO, DC and DO sit in…
 - **R215** · `tree-sitter-al` shapes an enum's `Implementation` mapping as a comparison; LethAL's declarative guard already drops it, and this row records that rather than a defect · [R215.md](docs/roadmap/R215.md) · open, filed 2026-09-08, severity CORRECTED the same day: not a LethAL defect
 - **R218** · `census-operator-sites.ts` did not sort its file list, so the grammar-bump proof instrument produced spurious per-site diffs · [R218.md](docs/roadmap/R218.md) · done (see the 4.3.0 bump), filed and fixed 2026-09-09
 - **R223** · Every env-gated itest exits 0 when it skips, so a caller reading exit codes cannot tell a passed gate from one that never contacted BC · [R223.md](docs/roadmap/R223.md) · open, NARROWED twice: 2026-09-18 all seven live gates emit receipts and exit non-zero on a challenged skip…
@@ -103,7 +103,7 @@ that ordering is the priority.
 - **R250** · `parseVersionConflict` matches BC's downgrade phrase anywhere in an error's text, and two publish paths trust it as proof the server refused · [R250.md](docs/roadmap/R250.md) · done (9842500f)
 - **R244** · empty-block's repeat_statement entry matches no block on the vendored grammar: a repeat body is a statement_block · [R244.md](docs/roadmap/R244.md) · done (012f91c8)
 - **R251** · `injectMutationSelectorVar` matches objects by node IDENTITY, so specs found by separate tree walks over one object can produce two overlapping edits · [R251.md](docs/roadmap/R251.md) · done (0185b3a)
-- **R256** · A run recorded WITH preprocessor symbols before C02-06 can still be resumed by a run with NO symbols, so an old verdict or baseline can carry across a `#if` change · [R256.md](docs/roadmap/R256.md) · open
+- **R256** · A run recorded WITH preprocessor symbols before C02-06 can still be resumed by a run with NO symbols, so an old verdict or baseline can carry across a `#if` change · [R256.md](docs/roadmap/R256.md) · closed 2026-10-06 — already closed on master by R214's run-row build symbols (NULL never matches); pinned end…
 - **R246** · GH-24's reach marker runs on every loop iteration and slows the mutant: a kill that raced the time budget (Int32 overflow) now scores timeout-killed on itest:hang · [R246.md](docs/roadmap/R246.md) · done (0a9cc84)
 - **R268** · `lethal verify` refuses a test app whose symbol cache holds a Ready-to-Run Microsoft package (no root NavxManifest.xml) · [R268.md](docs/roadmap/R268.md) · done (63d381e)
 - **R279** · GH-24's reach latch may emit a second `var` section when a procedure's var section holds only comments (unmeasured) · [R279.md](docs/roadmap/R279.md) · open
@@ -123,7 +123,7 @@ that ordering is the priority.
 - **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · done (db641338..234cb4b1)
 - **R400** · R-307's per-file refusal raises Base Application's dry-run peak by 31% and its wall time by 18% against master · [R400.md](docs/roadmap/R400.md) · done (4bd4b66b)
 - **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · done (9a308e1)
-- **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · open, filed 2026-09-28
+- **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · closed 2026-10-06 — case 1 closed by R214 (0 compiled-out mutants measured on BaseApp, CDO, DC, DO), case 3…
 - **R312** · A member whose `var` section ENDS in an `#if` block of declarations gets its reach latch written on the `#endif` line, and alc rejects the artifact (AL0631) · [R312.md](docs/roadmap/R312.md) · done (4001282)
 - **R313** · A member whose `var` section tree-sitter-al cannot parse gets no reach latch: it is refused by name, and its reach is not measured · [R313.md](docs/roadmap/R313.md) · open, filed 2026-09-28
 - **R316** · A split-header procedure whose arms each have their own `var` section (`preproc_split_procedure_preamble`) has no procedure name, scope or line-map span, so coverage cannot attribute its mutants and some operators find no site in it · [R316.md](docs/roadmap/R316.md) · done (56b7e3b3..ae0793a9)
