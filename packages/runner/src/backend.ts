@@ -17,6 +17,9 @@ export interface TestMethodRef {
    * this every survivor costs a project-wide grep.
    */
   readonly file?: string;
+  /** R272: 1-based line of the method's NAME in `file`, set by `discoverTests` alongside `file`.
+   *  Like `file`, no execution path reads it. */
+  readonly line?: number;
 }
 
 /**
@@ -86,6 +89,13 @@ export interface TestVerdict {
   readonly ref: TestMethodRef;
   readonly outcome: TestOutcome;
   readonly durationMs: number;
+  /**
+   * R272: this test's own duration, for the report only (never the timeout budget, which reads
+   * `durationMs`), on a `pass`. al-runner sets the runner's own per-test figure, since its
+   * `durationMs` includes a compile per call (one-shot) or is the whole suite's (`--server`).
+   * bcdev sets its per-test call's wall clock (`BcDevBackend.run`). Absent: not measured per test.
+   */
+  readonly measuredDurationMs?: number;
   readonly failureMessage?: string;
   readonly coverage?: CoverageMap;
   /**

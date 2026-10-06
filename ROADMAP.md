@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**55 of 486 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**58 of 490 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -203,6 +203,9 @@ that ordering is the priority.
 - **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · open, filed 2026-10-06
 - **R488** · al-runner one-shot runs every test whose name CONTAINS the requested one, and LethAL credits the merged coverage to the requested test · [R488.md](docs/roadmap/R488.md) · done (0cbc8cf6)
 - **R490** · al-runner one-shot: a look-alike test that discovery did not see and that hangs scores the requested test's mutant timeout-killed · [R490.md](docs/roadmap/R490.md) · open, filed 2026-10-06
+- **R491** · R488 follow-ups: a duplicate row for the requested test is credited, and three R488 tests would pass with the guarantee broken · [R491.md](docs/roadmap/R491.md) · open, filed 2026-10-06
+- **R492** · Env-tool runs record the served package hash before the installed version is proven, so a later --resume can carry another test app's verdicts · [R492.md](docs/roadmap/R492.md) · open, filed 2026-10-06
+- **R493** · R484 follow-ups: three report data-item shapes still emit hang-capable mutants, and an OnPostDataItem write is over-refused · [R493.md](docs/roadmap/R493.md) · open, filed 2026-10-06
 
 ## Product gaps a real project hits
 
@@ -278,7 +281,7 @@ that ordering is the priority.
 - **R265** · No command prints a mutant's identity key, so a reader writes `lethal.equivalent.json` keys by hand · [R265.md](docs/roadmap/R265.md) · done (75be4c23)
 - **R266** · `lethal run --dry-run` accepts and ignores its 19 execution flags (`--out`, `--progress-out`, `--tests`, `--backend` and more) · [R266.md](docs/roadmap/R266.md) · done (7443861b)
 - **R270** · The epic's 20% verify wall-time criterion (c02) is recorded but not gated: C02-08 measured it on sandbox-harden and left it open · [R270.md](docs/roadmap/R270.md) · closed 2026-09-28, owner ruling: the 20% criterion is measured against a hardening round's survivors…
-- **R272** · `lethal explain` gaps do not list the covering tests' file:line or rank them by reach then duration · [R272.md](docs/roadmap/R272.md) · open
+- **R272** · `lethal explain` gaps do not list the covering tests' file:line or rank them by reach then duration · [R272.md](docs/roadmap/R272.md) · done (9b2025d6)
 - **R273** · `lethal explain` gives no suggested fix kind per gap · [R273.md](docs/roadmap/R273.md) · done (bc7d4fdc)
 - **R274** · an explain gap does not carry its source span with the surviving mutants marked inline · [R274.md](docs/roadmap/R274.md) · done (07bea539)
 - **R275** · an explain gap does not print its verify command; the gap id and artifact id are the inputs, the command still has to be assembled · [R275.md](docs/roadmap/R275.md) · done (496cd804)
@@ -343,6 +346,7 @@ that ordering is the priority.
 - **R477** · Guarded bare fallback for the validate-to-assign sites R464 refuses (35: 29 previously mutated, 6 new) · [R477.md](docs/roadmap/R477.md) · done (467e2faf)
 - **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · closed 2026-10-05 — neither shape reaches the prefix proof today: no Tier-2 claim is made inside a…
 - **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files; correction: the extension's members ARE mutated…
+- **R489** · explain's covering tests are not ordered by duration: no measurement shows a per-test baseline duration is stable enough to rank by · [R489.md](docs/roadmap/R489.md) · open
 
 ## Backends and tooling
 

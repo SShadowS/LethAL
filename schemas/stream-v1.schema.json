@@ -596,6 +596,9 @@
               },
               "file": {
                 "type": "string"
+              },
+              "line": {
+                "type": "number"
               }
             }
           }
@@ -783,6 +786,9 @@
               },
               "failureMessage": {
                 "type": "string"
+              },
+              "durationMs": {
+                "type": "number"
               }
             }
           }

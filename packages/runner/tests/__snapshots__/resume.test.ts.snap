@@ -283,6 +283,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
             "codeunitId": 79100,
             "codeunitName": "Sandbox Tests",
             "file": "SandboxTests.Codeunit.al",
+            "line": 6,
             "method": "OverBudgetDetected",
           },
         ],

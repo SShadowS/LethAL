@@ -456,6 +456,55 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "Sales Permission Tests": "Al/Codeunit/Codeunit 50113 Sales Permission Tests.al",
     "Sales Post Tests": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
   },
+  "testMethods": [
+    {
+      "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
+      "name": "Sales Approval Tests.T1",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
+      "name": "Sales Approval Tests.T2",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50112 Sales Approval Tests.al",
+      "name": "Sales Approval Tests.T3",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
+      "name": "Sales Helper Tests.T1",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
+      "name": "Sales Helper Tests.T2",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50110 Sales Helper Tests.al",
+      "name": "Sales Helper Tests.T3",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50113 Sales Permission Tests.al",
+      "name": "Sales Permission Tests.WritesToAppTable",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+      "name": "Sales Post Tests.T1",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+      "name": "Sales Post Tests.T2",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+      "name": "Sales Post Tests.T3",
+    },
+    {
+      "file": "Al/Codeunit/Codeunit 50111 Sales Post Tests.al",
+      "name": "Sales Post Tests.T4",
+    },
+    {
+      "name": "Sales UI Tests.OpensApprovalCard",
+    },
+  ],
   "testPageUnsupported": {
     "diagnosis": "this test opens a TestPage, which the fenced session cannot run: LethAL executes tests in a GuiAllowed=No, ClientType=ODataV4 session (R57/R58) and BC refuses to create a test service there, immediately (measured at 87 ms — a refusal, not a hang). This is a property of the EXECUTION PATH, not of your test: no change to the test or its declarations makes it run here. The affected tests are dropped from the green set, so mutants covered only by them are excluded from the score rather than scored against tests that never ran.",
     "tests": [

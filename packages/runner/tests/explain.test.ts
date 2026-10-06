@@ -517,6 +517,16 @@ function fullCoverageReport(): SessionReport {
       barBlock(plainMutant("M0015", "known-survivor")),
       barBlock(plainMutant("M0016", "known-survivor")),
     ],
+    // R272: reaches `gaps[].coveringTests[]` (all but `lineAmbiguous`, reached in
+    // r272-covering-tests.test.ts) and `gaps[].reachMeasuredMembers`.
+    testMethods: [
+      {
+        name: "Foo Tests.ComputesTotal",
+        file: "test/Foo.Test.al",
+        line: 12,
+        baselineDurationMs: 340,
+      },
+    ],
     testsOnly: ["test/Posting/**"],
     // R265: a report from the previous identity scheme, which an older build writes, so
     // `markKeysStale` is reached.
@@ -693,6 +703,13 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.gaps[].artifactId", // [verbatim] artifacts[].artifactId whose batchIndex equals the gap's
   "$.gaps[].artifactIdAbsent", // [enum] ArtifactIdAbsence
   "$.gaps[].verifyCommand", // [derived] R275: gapVerifyCommand(artifactId, gapId)
+  "$.gaps[].coveringTests[].name", // [verbatim] R272: report.testMethods[].name
+  "$.gaps[].coveringTests[].file", // [verbatim] report.testMethods[].file
+  "$.gaps[].coveringTests[].line", // [verbatim] report.testMethods[].line
+  "$.gaps[].coveringTests[].lineAmbiguous", // [verbatim] report.testMethods[].lineAmbiguous
+  "$.gaps[].coveringTests[].baselineDurationMs", // [verbatim] report.testMethods[]
+  "$.gaps[].coveringTests[].reachedMembers", // [derived] count of the gap's survivors' reachedBy
+  "$.gaps[].reachMeasuredMembers", // [derived] count of the gap's survivors with reachedBy
   // R274, only under `--project`: read from the project after it hashed to report.sourceSha256.
   "$.gaps[].source.startLine", // [verbatim] the gap's blockStartLine
   "$.gaps[].source.lines[]", // [source] the block's lines from the verified project
@@ -881,8 +898,10 @@ describe("explain — the admissibility rule, made executable", () => {
     // R274: `gaps[].source` exists only under `--project`, which needs a real project on disk;
     // r274-explain-project.test.ts reaches exactly these paths from a real run.
     const produced = new Set(leafPathsIn(explain(fullCoverageReport())));
+    // R272: `lineAmbiguous` needs two `#if` arms of one test; r272-covering-tests.test.ts.
     expect(EXPLAIN_LEAF_PATHS.filter((p) => !produced.has(p))).toEqual([
       "$.gaps[].unobservedBlock",
+      "$.gaps[].coveringTests[].lineAmbiguous",
       "$.gaps[].source.startLine",
       "$.gaps[].source.lines[]",
       "$.gaps[].source.marks[].mutantCode",
