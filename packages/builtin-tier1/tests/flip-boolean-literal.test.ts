@@ -708,6 +708,15 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
         };
         expect(tagged(files)).toEqual([PLAIN]);
       });
+      // Only an `[EventSubscriber]` observes: a clean wrapped codeunit whose attributes are all
+      // something else drops it. Revert: count any attribute as a subscriber of this table.
+      it("an unindexed codeunit with only non-subscriber attributes drops it", () => {
+        const s = wrap(
+          `codeunit 50304 "Helper"\n{\n    [Scope('OnPrem')]\n    procedure Touch(var Rec: Record "Par")\n    begin\n    end;\n}`,
+        );
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
       // Revert: drop `subscribesToTable`'s integer-target match.
       it("an unindexed subscriber naming the table by a bare id keeps it", () => {
         const s = wrap(subOn("50300", "OnAfterModifyEvent"));
