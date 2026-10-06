@@ -684,6 +684,17 @@ export class AlRunnerBackend implements ExecutionBackend {
   }
 
   /**
+   * Sol run 001 (I): the objects the deployed bundle's index refuses by name, read by `runSession`
+   * after each deploy and merged into selection's refusal map, so an index-only refusal (an
+   * instrumented text whose arms are undecided) is never scored or read as plain no-coverage.
+   */
+  async coverageRefusals(): Promise<ReadonlyMap<string, string>> {
+    if ((this.cfg.coverage ?? "none") === "none") return new Map();
+    this.coverageIndex ??= await this.coverageIndexOf(this.activeDir());
+    return this.coverageIndex.refusals;
+  }
+
+  /**
    * `isolation: "full-reset"` is honest only because the transport actually sends
    * `--isolation test` (see OneShotTransport.send) — v2's mode that gives every [Test] fresh
    * state. Do not claim it back if that flag ever changes.

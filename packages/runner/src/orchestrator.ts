@@ -3936,6 +3936,19 @@ function pinPlatformAppsDir(backend: ExecutionBackend, dir: string, who: string)
   return consumed;
 }
 
+/**
+ * Sol run 001 (I): `base` plus the objects the backend's deployed coverage index refused by name
+ * (al-runner only; a backend without the method adds nothing). The base sentence wins a tie.
+ */
+async function withBackendRefusals(
+  backend: ExecutionBackend,
+  base: ReadonlyMap<string, string>,
+): Promise<ReadonlyMap<string, string>> {
+  const r = backend as { coverageRefusals?: () => Promise<ReadonlyMap<string, string>> };
+  if (typeof r.coverageRefusals !== "function") return base;
+  return new Map([...(await r.coverageRefusals()), ...base]);
+}
+
 /** R-300b: hands the session's effective build symbols to a backend that takes them. */
 function handBuildSymbols(backend: ExecutionBackend, symbols: readonly string[]): void {
   const taker = backend as { useBuildSymbols?: (s: readonly string[]) => void };
@@ -6127,6 +6140,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       }> = [];
       let refusedThisBatch = new Map<string, string>();
       let testPageThisBatch = new Map<string, string>();
+      // Sol run 001 (I): plus what THIS batch's deployed index refused by name, read after deploy
+      // and before any mutant is scored. Selection read the original source, which can decide
+      // where the instrumented text does not.
+      const batchRefused = await withBackendRefusals(cfg.backend, coverageRefused);
       const select = (baseline: readonly BaselineRow[]): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -6248,7 +6265,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // get the same answer. Spelling it as a comparison against one mode's NAME meant every
             // new source-parsing mode silently opted into the widening it must not have.
             isHubCoverageMode(caps.coverage),
-            coverageRefused,
+            batchRefused,
           );
           perMutantTests = split.covered;
           refusedIds = split.refused;
@@ -6289,13 +6306,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             ? new Map<string, readonly TestMethodRef[]>()
             : coverageFilter(
                 // R298: a refused mutant was decided by the green split; it is left out here so
-                // its refusal is not warned a second time. `coverageRefused` stays as the guard.
+                // its refusal is not warned a second time. `batchRefused` stays as the guard.
                 uncovered.filter((m) => !refusedIds.has(m.mutantId)),
                 unsupportedIndex,
                 unsupportedBaseline.map((b) => b.ref),
                 undefined,
                 true,
-                coverageRefused,
+                batchRefused,
               ).covered;
         // R69 (closed): a mutant covered ONLY by a test this session cannot run is NAMED rather
         // than silently scored `no-coverage`. Recording is deferred until after the fenced mutant

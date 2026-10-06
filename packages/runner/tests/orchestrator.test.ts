@@ -9,6 +9,7 @@ import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
 import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
+import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import {
   AlcCompileError,
   ArtifactPrepareError,
@@ -1159,6 +1160,12 @@ interface "I Probe"
 
       test("the session's build symbols reach the session backend AND every worker backend", async () => {
         const dirs = await makeProject();
+        // Sol run 001 (minor): DISTINCT app and config symbols, so an empty or partial handoff
+        // cannot match the expected set the way three equal empty sets matched each other.
+        await Bun.write(
+          join(dirs.projectDir, "app.json"),
+          JSON.stringify({ ...JSON.parse(APP_JSON), preprocessorSymbols: ["APPSYM"] }),
+        );
         const got: (readonly string[])[] = [];
         class Taking extends StubBackend {
           useBuildSymbols(s: readonly string[]): void {
@@ -1175,13 +1182,122 @@ interface "I Probe"
             store,
             ...dirs,
             selectorIds,
+            preprocessorSymbols: ["CFGSYM"],
           });
         } finally {
           store.close();
         }
-        // One session backend plus two workers, each given the same effective set.
-        expect(got).toHaveLength(3);
-        for (const s of got) expect(s).toEqual(got[0] ?? []);
+        // app.json's, the config's and al-runner's predefined set (R392), sorted and unique.
+        const { symbols: predefined } = await measuredV2_12();
+        const expected = [...new Set(["APPSYM", "CFGSYM", ...predefined])].sort();
+        // One session backend plus two workers, each given exactly that set.
+        expect(got).toEqual([expected, expected, expected]);
+      });
+
+      // Sol run 001 (I): an admitted wrapped file whose INSTRUMENTED text re-parses with undecided
+      // arms is dropped by the al-runner index, which refuses its objects. Selection read the
+      // ORIGINAL source, which decides, so it held no refusal: a reached procedure read plain
+      // no-coverage and a table trigger took the all-green fallback and was SCORED. The fake
+      // builds the real index over the deployed batch, as AlRunnerBackend does.
+      test("an index-only refusal (instrumented text undecided) reaches scoring by name", async () => {
+        const dirs = await makeProject();
+        // R318's seed: `Other`'s nested `#if` in a conditional var section parses in the original
+        // but not once instrumented. Wrapped, so the file is an admitted wrapped file.
+        const otherProc = `    procedure Other(X: Integer);
+#if not CLEAN27
+    var
+        K: Integer;
+#if A
+        N: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+`;
+        await Bun.write(
+          join(dirs.projectDir, "Repro.Codeunit.al"),
+          `#if not NEVERDEFINED
+codeunit 50100 "Repro R"
+{
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K);
+    end;
+
+${otherProc}}
+#endif
+`,
+        );
+        await Bun.write(
+          join(dirs.projectDir, "SandboxTable.Table.al"),
+          `#if not NEVERDEFINED
+table 79001 "Sandbox Table"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+            trigger OnValidate()
+            begin
+                if "No." = '' then
+                    Error('blank');
+            end;
+        }
+    }
+
+${otherProc}}
+#endif
+`,
+        );
+        class Indexing extends StubBackend {
+          symbols: readonly string[] = [];
+          useBuildSymbols(s: readonly string[]): void {
+            this.symbols = s;
+          }
+          async coverageRefusals(): Promise<ReadonlyMap<string, string>> {
+            const dir = this.deploys.at(-1);
+            if (dir === undefined) throw new Error("coverageRefusals before deploy");
+            return (await buildAlRunnerCoverageIndex(dir, { symbols: this.symbols })).refusals;
+          }
+        }
+        // Coverage names the reached procedures of BOTH wrapped objects, as al-runner would have
+        // reported them had the index not dropped the files.
+        const backend = new Indexing(CAPS_NST_WORKERS, () => "pass", ["IsOverBudget"]);
+        backend.coverageEntriesFor = () => [
+          { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
+          { objectType: "Codeunit", objectId: 50100, procedure: "Pick" },
+          { objectType: "Codeunit", objectId: 50100, procedure: "Other" },
+        ];
+        const store = new ResultsStore(":memory:");
+        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const report = await runSession({ backend, store, ...dirs, selectorIds });
+          for (const [file, key] of [
+            ["Repro", "Codeunit:50100"],
+            ["SandboxTable", "Table:79001"],
+          ] as const) {
+            const ms = report.mutants.filter((m) => m.file.includes(file));
+            expect([file, ms.length > 0]).toEqual([file, true]);
+            for (const m of ms) {
+              expect([m.mutantCode, m.verdict]).toEqual([m.mutantCode, "no-coverage"]);
+              expect(m.failureNote).toContain(`coverage refused for ${key} (${file}.`);
+              expect(m.failureNote).toContain("its #if arms could not be evaluated as alc does");
+            }
+          }
+          // No trigger took the all-green fallback; the plain codeunit still runs.
+          expect(report.untargetedTriggerCount).toBe(0);
+          expect(report.counts.survived).toBeGreaterThan(0);
+        } finally {
+          warnSpy.mockRestore();
+          store.close();
+        }
       });
 
       test("al-runner (C1): a key two active files declare is refused in selection by name", async () => {

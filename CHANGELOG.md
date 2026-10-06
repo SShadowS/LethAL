@@ -132,7 +132,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   namespace, using and comment lines before it or inside it, and statement-level `#if`s inside the
   object. Declarations in a compiled-out arm are no longer indexed, and an object declared in two
   active files is refused by name. On `--server`, a statement in such a file whose own procedure
-  name disagrees with its position is dropped, with a warning. Two-arm, nested and multi-object
+  name disagrees with its position is dropped, with a warning. If such a file's instrumented text
+  re-parses with `#if` arms that cannot be evaluated, its mutants read `no-coverage` with that
+  refusal named; they are never scored by the all-tests fallback. Two-arm, nested and multi-object
   wrapped files, and every BC coverage path (fenced, hub, `lethal verify`), still refuse by name.
   No key moves and the emitted AL is unchanged, but a key whose verdict was a refusal's
   `no-coverage` can now be scored, so history, `--resume` and marks recorded under 28 (bcdev

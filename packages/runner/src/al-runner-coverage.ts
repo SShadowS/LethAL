@@ -138,6 +138,14 @@ export interface AlRunnerCoverageIndex {
    */
   readonly exempt: ReadonlySet<string>;
   /**
+   * Every object this index refuses BY NAME (a wrapped file not admitted, an admitted one whose
+   * instrumented text is undecided, a duplicate key), `type:id` lower-cased -> the sentence.
+   * Sol run 001 (I): selection reads the ORIGINAL source, so the orchestrator merges this map into
+   * its refusal map before scoring; otherwise an undecided re-parse is invisible to selection.
+   * Multi-object files are not here: their exemption is not a per-object refusal.
+   */
+  readonly refusals: ReadonlyMap<string, string>;
+  /**
    * Every `.al` path scanned but NOT in `byFile` (lower-cased keys): refused, multi-object and not
    * admitted, or holding no indexed object (R-300b: compiled out, undecided, or every object a
    * duplicate key). A coverage row stops at its own path here instead of
@@ -254,6 +262,7 @@ export async function buildAlRunnerCoverageIndex(
   const entries: LineMapEntry[] = [];
   const declared = new Set<string>();
   const exempt = new Set<string>();
+  const refusals = new Map<string, string>();
   const admittedWrappedFiles = new Set<string>();
   /** Files that pass every per-file rule, before the duplicate-key pass. */
   const candidates: { file: string; key: string; entries: LineMapEntry[] }[] = [];
@@ -268,6 +277,7 @@ export async function buildAlRunnerCoverageIndex(
       skippedFiles.push(normalizeFileKey(rel));
       for (const [key, reason] of refusedObjectsOfFile(root, file, "al-runner")) {
         exempt.add(key);
+        refusals.set(key, reason);
         console.warn(`[lethal] ${reason}`);
       }
       continue;
@@ -283,10 +293,11 @@ export async function buildAlRunnerCoverageIndex(
         refusedFiles.push(file);
         skippedFiles.push(normalizeFileKey(rel));
         for (const e of fileEntries) {
-          exempt.add(`${e.objectType.toLowerCase()}:${e.objectId}`);
-          console.warn(
-            `[lethal] ${undecidedArmsReason(e.objectType, e.objectId, file, arms.reason)}`,
-          );
+          const key = `${e.objectType.toLowerCase()}:${e.objectId}`;
+          const reason = undecidedArmsReason(e.objectType, e.objectId, file, arms.reason);
+          exempt.add(key);
+          refusals.set(key, reason);
+          console.warn(`[lethal] ${reason}`);
         }
         continue;
       }
@@ -325,6 +336,7 @@ export async function buildAlRunnerCoverageIndex(
   );
   for (const [key, reason] of duplicates) {
     exempt.add(key);
+    refusals.set(key, reason);
     console.warn(`[lethal] ${reason}`);
   }
   for (const c of candidates) {
@@ -348,6 +360,7 @@ export async function buildAlRunnerCoverageIndex(
     admittedWrappedFiles,
     declared,
     exempt,
+    refusals,
     skippedFiles,
   };
 }

@@ -492,6 +492,30 @@ describe("R-300b: the backend evaluates arms under the session's symbols", () =>
     ]);
   });
 
+  // Sol run 001 (I): what runSession merges into selection's refusal map after each deploy.
+  test("coverageRefusals names the deployed bundle's undecided wrapped object, with the index's sentence", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const backend = await backendOf();
+      backend.useBuildSymbols([]);
+      await backend.deploy(
+        await bundle({
+          "src/U.Codeunit.al": `#if PROBESYM PROBESYM\n${W1_BODY.replace("91900", "91902")}#endif\n`,
+          "MutationSelector.Codeunit.al": "placeholder",
+          "mutant-manifest.json": JSON.stringify({ artifactId: "a".repeat(32), mutants: [] }),
+        }),
+      );
+      const refusals = await backend.coverageRefusals();
+      await backend.close();
+      expect([...refusals.keys()]).toEqual(["codeunit:91902"]);
+      expect(refusals.get("codeunit:91902")).toStartWith(
+        "coverage refused for Codeunit:91902 (src/U.Codeunit.al): its #if arms could not be evaluated as alc does (",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("without the session's symbols, a coverage deploy refuses rather than guessing the arms", async () => {
     const backend = await backendOf();
     const err = await backend.deploy(await batch()).then(
