@@ -1,0 +1,39 @@
+{
+  "id": "610d8d9f-b5bb-45fd-ab1e-fa80fcf06e11",
+  "name": "LethAL R300b Probe Tests",
+  "publisher": "LethAL R300b Probe",
+  "version": "1.0.0.0",
+  "brief": "LethAL R300b probe: tests that reach known statements of the probe target.",
+  "description": "Throwaway probe, not for production. Reach tests pass; Fence tests read BC's Code Coverage table themselves and carry it out through Error text (they fail by design). No tables.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "2f6483db-5b5f-4b17-b2aa-852530a8a00b",
+      "name": "LethAL R300b Probe Target",
+      "publisher": "LethAL R300b Probe",
+      "version": "1.0.0.0"
+    },
+    {
+      "id": "23de40a6-dfe8-4f80-80db-d70f83ce8caf",
+      "name": "Test Runner",
+      "publisher": "Microsoft",
+      "version": "28.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "platform": "28.0.0.0",
+  "application": "28.0.0.0",
+  "idRanges": [{ "from": 91930, "to": 91949 }],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "16.0",
+  "target": "OnPrem",
+  "features": ["NoImplicitWith"]
+}
