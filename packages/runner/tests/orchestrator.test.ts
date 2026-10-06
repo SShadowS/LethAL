@@ -8532,6 +8532,36 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       });
     });
 
+    // R492 item 1: the server serves P2 while P1 is still installed, so run 1 MEASURES P1. Later P2
+    // is installed. A run whose recorded identity was never proven installed must not lend its
+    // verdicts to a P2 run: not through --resume, not through --skip-known-survivors.
+    describe("R492: an unproven served hash is never a test-app identity", () => {
+      const measuredP1ServedP2 = (extra: Partial<SessionConfig>) =>
+        envRun({ post: P2, installed: { [APP_ID]: ["1.0.0.1"] }, extra });
+      const provenP2 = { pre: P2, post: P2, installed: { [APP_ID]: ["1.0.0.2"] } } as const;
+      test("--resume-run of it into a proven P2 run is refused", async () => {
+        const first = await measuredP1ServedP2({});
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const r = await envRun({
+          ...provenP2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).toBeInstanceOf(Error);
+        r.store.close();
+      });
+      test("--skip-known-survivors takes nothing from it in a proven P2 run", async () => {
+        const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+        const first = await measuredP1ServedP2(skip);
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const r = await envRun({ ...provenP2, dirs: first.dirs, store: first.store, extra: skip });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        r.store.close();
+      });
+    });
+
     // R486 (review M2): the history filter runs per batch, after the hook, so it compares the
     // READ-BACK. A finished run measured under P1 is no evidence once the hook published P2.
     describe("R486: --skip-known-survivors compares the read-back, not the pre-lease test app", () => {
