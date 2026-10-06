@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**54 of 485 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**55 of 486 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -202,6 +202,7 @@ that ordering is the priority.
 - **R486** · An env-tool --resume can carry kills measured under the OUTGOING test app: R247's test-app hash is read before the session publishes the new one (a false-kill path) · [R486.md](docs/roadmap/R486.md) · done (5c4d96cf)
 - **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · open, filed 2026-10-06
 - **R488** · al-runner one-shot runs every test whose name CONTAINS the requested one, and LethAL credits the merged coverage to the requested test · [R488.md](docs/roadmap/R488.md) · done (0cbc8cf6)
+- **R490** · al-runner one-shot: a look-alike test that discovery did not see and that hangs scores the requested test's mutant timeout-killed · [R490.md](docs/roadmap/R490.md) · open, filed 2026-10-06
 
 ## Product gaps a real project hits
 
