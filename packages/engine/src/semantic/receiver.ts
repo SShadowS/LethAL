@@ -251,8 +251,9 @@ export function claimedRunTriggerSkip(
 }
 
 /**
- * R-364: is `node` a QUALIFIED call to `methodName` whose receiver this project's source cannot
- * resolve (`claimsRecordMethod`'s rule 4)? For conservative screen TAGGING only, never for
+ * R-364: is `node` a call to `methodName` whose receiver this project's source cannot resolve
+ * (`claimsRecordMethod`'s rule 4)? R479: a BARE call too, through `implicitRecordUnresolved`.
+ * For conservative screen TAGGING only, never for
  * claiming: a platform-kill tag must stay where nothing proves the skip harmless, and an
  * unresolved receiver proves nothing (R143). Inside an object the symbol table does not index
  * (R343) every receiver outside a trigger's own `var` section is unresolved.
@@ -269,8 +270,9 @@ export function receiverUnresolved(
   const callee = node.childForFieldName("function");
   if (callee === null) return false;
   const target = describeCallee(callee);
-  if (target === null || target.receiver === null) return false;
+  if (target === null) return false;
   if (!equalsIgnoreCase(target.name, methodName)) return false;
+  if (target.receiver === null) return implicitRecordUnresolved(node, ctx, target.name);
   const objectNode = enclosingObject(node);
   if (objectNode === null) {
     for (let p = node.parent; p !== null; p = p.parent) {
@@ -281,6 +283,59 @@ export function receiverUnresolved(
   const objectName = objectNameOf(objectNode);
   if (objectName === null) return false;
   return resolveReceiver(target.receiver, node, ctx.symbols).kind === "unresolved";
+}
+
+/**
+ * R479: the BARE form of `receiverUnresolved`. A bare call binds the innermost record scope
+ * (`recordScopesAt`). It is unresolved when that record exists but its table is not provable (a
+ * pageextension's `Rec`, a reportextension request page or `modify`, a `with` subject that is not
+ * a provable table), or when it sits outside `OBJECT_KINDS` (a reportextension's added dataitem),
+ * where `claimsRecordMethod` refuses every call. NOT unresolved, checked before the reportextension
+ * case: no record scope at all (a codeunit outside a TableNo `OnRun`, a page without
+ * `SourceTable`: the call is not a record method); a procedure of that name declared by the
+ * enclosing object, or by the project on the scope's known table or a tableextension of it (rule
+ * 3); a `with` subject DECLARED as a non-record (R460's control). A `with` subject that is not
+ * declared where the index can see it counts as unresolved and is tagged.
+ */
+function implicitRecordUnresolved(node: ALSyntaxNode, ctx: SemanticContext, name: string): boolean {
+  const symbols = ctx.symbols;
+  const armOf = rawArmOf(ctx);
+  const [scope] = recordScopesAt(node, symbols);
+  if (scope === undefined) return false;
+  const objectNode = enclosingObject(node);
+  let owner = objectNode;
+  for (let p = node.parent; owner === null && p !== null; p = p.parent)
+    if (p.kind === ALNodeKind.reportextension) owner = p;
+  if (owner !== null && declaresProcedure(owner, name, armOf)) return false;
+  if (scope.table !== null && projectDeclaresProcedureOnTable(symbols, scope.table, name, armOf))
+    return false;
+  if (
+    scope.kind === "with" &&
+    scope.at !== undefined &&
+    withSubjectIsNonRecord(scope.at, owner, symbols)
+  )
+    return false;
+  if (objectNode === null) return true;
+  return scope.table === null;
+}
+
+/** R479: is a `with` statement's subject declared as a non-record (a codeunit, a Text...)? Inside a
+ *  reportextension, outside `OBJECT_KINDS`, the extension's own variable scope is read directly. */
+function withSubjectIsNonRecord(
+  at: ALSyntaxNode,
+  owner: ALSyntaxNode | null,
+  symbols: SymbolTable,
+): boolean {
+  const subject = at.childForFieldName("record");
+  const subjectName = subject === null ? null : identifierText(subject);
+  if (subjectName === null) return false;
+  if (owner?.kind !== ALNodeKind.reportextension)
+    return resolveReceiverName(subjectName, at, symbols).kind === "non-record";
+  const extensionName = objectNameOf(owner);
+  if (extensionName === null) return false;
+  const scopeKey = extensionScopeKey("reportextension", extensionName);
+  const declared = lookupVar(subjectName, at, scopeKey, symbols);
+  return declared !== null && classifyDeclaredType(declared).kind === "non-record";
 }
 
 /**
