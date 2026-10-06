@@ -10211,7 +10211,10 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
           ref: m.ref,
           outcome: "error",
           durationMs: 1,
-          failureMessage: extra.lost === false ? "RunMutantMany answer malformed: x" : "RunMutantMany failed: HTTP 400",
+          failureMessage:
+            extra.lost === false
+              ? "RunMutantMany answer malformed: x"
+              : "RunMutantMany failed: HTTP 400",
           ...(extra.lost === false ? {} : { operation: "in-flight-unknown" as const, fencedOp }),
           ...(stopState !== undefined ? { stopState } : {}),
         },

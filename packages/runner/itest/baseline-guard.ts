@@ -264,6 +264,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "itest:envtool",
   ),
   "harden.baseline.json": gateHow("LETHAL_ITEST_HARDEN=1", "harden.baseline.json", "itest:harden"),
+  "hang.single.baseline.json": gateHow(
+    "LETHAL_ITEST_HANG=1",
+    "hang.single.baseline.json",
+    "itest:hang",
+  ),
   "tables.baseline.json": gateHow("LETHAL_ITEST_TABLES=1", "tables.baseline.json", "itest:tables"),
 };
 
@@ -274,9 +279,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * wiring test fails while a listed file exists. R387's CLI-default leg was recorded 2026-10-01
  * (al-runner.cli-default.baseline.json), and R383's multi-object leg 2026-10-02
  * (al-runner.multiobject.baseline.json, per mutant as pre-committed in
- * docs/superpowers/specs/2026-10-02-r383-multiobject-refusal-precommitment.md). Empty.
+ * docs/superpowers/specs/2026-10-02-r383-multiobject-refusal-precommitment.md). R-204b's
+ * single-path hang leg (`hang.single.baseline.json`) waits for its first record run, which needs
+ * its pre-commitment committed under docs/superpowers/specs/ first.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = [];
+export const PENDING_FIRST_RECORD: readonly string[] = ["hang.single.baseline.json"];
 
 /** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
 export const SYMBOL_BASELINES: readonly string[] = [

@@ -138,7 +138,8 @@ async function settleStop(
   if (stop.state === "issued" && stop.done !== undefined && left > 0) {
     await bounded(stop.done, left, "the stop").catch(() => {});
   }
-  const stopState: StopState = stop.state === "issued" || stop.state === undefined ? "unknown" : stop.state;
+  const stopState: StopState =
+    stop.state === "issued" || stop.state === undefined ? "unknown" : stop.state;
   const why =
     stopState === "refused"
       ? ` (${stop.refusal ?? "no reason given"})`
@@ -1667,7 +1668,9 @@ export class RunMutantTransport {
             );
           }, timeoutMs);
     const hardTimer =
-      stopHook === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs + graceMs);
+      stopHook === undefined
+        ? undefined
+        : setTimeout(() => controller.abort(), timeoutMs + graceMs);
     // R191: the timers stay armed until the BODY is in hand, not until the headers are. `fetch`
     // resolves on headers; BC can stall after them, and a stall there used to fall outside every
     // LethAL timer, so the R53 stop hook never fired and the run ended only when the runtime gave

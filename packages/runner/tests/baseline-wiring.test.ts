@@ -322,6 +322,7 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
   "bcdev.itest.ts": { BASELINE_PATH: "bcdev.baseline.json" },
   "envtool.itest.ts": { BASELINE_PATH: "envtool.baseline.json" },
   "harden.itest.ts": { BASELINE_PATH: "harden.baseline.json" },
+  "hang.itest.ts": { SINGLE_BASELINE_PATH: "hang.single.baseline.json" },
   "tables.itest.ts": { BASELINE_PATH: "tables.baseline.json" },
 };
 const READERS: Record<string, string> = {

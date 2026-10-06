@@ -278,7 +278,8 @@ describe("R-204b Part R: the stop's outcome is settled before the call returns (
     });
     const c = start({
       hook: async () => ({ stopped: true }),
-      kept: () => odata({ found: true, attemptId: "a1", opSeq: 7, epoch: 3, generation: "gen-1", answer }),
+      kept: () =>
+        odata({ found: true, attemptId: "a1", opSeq: 7, epoch: 3, generation: "gen-1", answer }),
     });
     await flush();
     jest.advanceTimersByTime(BUDGET);
