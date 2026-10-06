@@ -63,6 +63,8 @@
     "compile-fixtures.ts",
     "control-version-drift.test.ts",
     "lib/grammar-crosscheck.ts",
+    "lib/member-key.ts",
+    "lib/member-key.test.ts",
     "lib/source-hash.ts",
     "lib/source-hash.test.ts",
     "lib/symbol-sets.ts",
