@@ -705,6 +705,16 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
         expect(tagged(files)).toEqual([FORCED]);
       });
       // Revert: make `textObserves` return false for an unparsed (ERROR) object.
+      // The codeunit half of the `hasError` guard alone. Its subscription names ANOTHER table, so
+      // only the whole-text fallback keeps the tag. Revert: drop `!n.hasError &&` on the codeunit
+      // branch.
+      it("a half-parsed unindexed codeunit keeps it by its whole text", () => {
+        const s = wrap(
+          `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::"Oth", 'OnAfterModifyEvent', '', false, false)]\n  local procedure X(var Rec: Record "Par"; RunTrigger: Boolean)\n  var N: Integer;\n  begin\n    N := ;\n  end;\n}`,
+        );
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
       it("an unparsed ERROR object still keeps the any-table text rule", () => {
         const broken = `@@ OnBeforeModify @@ )))\n`;
         const files = { "P.al": par(""), "B.al": broken, "O.al": caller("Par.Modify(false);") };
