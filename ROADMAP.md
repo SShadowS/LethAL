@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**63 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**60 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -487,7 +487,7 @@ that ordering is the priority.
 - **R338** · al-runner 2.12.0 prints its `[bc] selected BC <build> (<dir>)` line only under AL_RUNNER_VERBOSE=1, so LethAL records no `bcBuild` and itest:alrunner fails · [R338.md](docs/roadmap/R338.md) · done (01230c5c)
 - **R344** · On a `--server` session, `runSession` still re-probes the al-runner contract under the platform-app pin, an argv no mutant uses · [R344.md](docs/roadmap/R344.md) · open, filed 2026-09-29
 - **R345** · The R149 contract re-probe failed once with al-runner exit 82 (no readable --output-json) while another session was running al-runner probes; cause not measured · [R345.md](docs/roadmap/R345.md) · closed 2026-10-02: the lanes and gates run a pinned source build of upstream main (c39ad5de) that carries the…
-- **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · open
+- **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · done (32b814da)
 - **R348** · Docs state the CURRENT control-app version as a literal, so every bump leaves them stale (CLAUDE.md says 1.0.0.19 while the code requires 1.0.0.20) · [R348.md](docs/roadmap/R348.md) · done (3d756626)
 - **R375** · The full unit suite fails intermittently on Windows: `cli.test.ts`'s scratch cleanup cannot remove a `lethal-run-verify-*` folder (EBUSY), and the R358 guard then fails too · [R375.md](docs/roadmap/R375.md) · open, filed 2026-10-01
 - **R393** · A unit test that times out can still finish later and write its snapshot under the NEXT test's name, so a plain `bun test` rewrites a tracked .snap file with a bogus entry · [R393.md](docs/roadmap/R393.md) · done (427a8e85): verify.ts runs bun test with CI=true and a .snap belt; CLAUDE.md names it as the unit-suite…
@@ -495,11 +495,11 @@ that ordering is the priority.
 - **R377** · al-runner predefines `CLEANSCHEMA1` to `CLEANSCHEMA25` and alc does not, so a `#if not CLEANSCHEMA<n>` arm is still generated and compiled out on al-runner · [R377.md](docs/roadmap/R377.md) · done (0a9ba1d7)
 - **R352** · al-runner 2.12.0 compiles a test against a dependency built under other --define symbols · [R352.md](docs/roadmap/R352.md) · open, filed 2026-09-30
 - **R392** · al-runner's predefined preprocessor symbols are a hard-coded list measured on v2.12.0; nothing checks a newer al-runner's list per session · [R392.md](docs/roadmap/R392.md) · done (27c773b5)
-- **R379** · `scripts/campaign/compile-only.ts` enumerates with no config symbols, so its sites differ from a real run's · [R379.md](docs/roadmap/R379.md) · open, filed 2026-10-01
+- **R379** · `scripts/campaign/compile-only.ts` enumerates with no config symbols, so its sites differ from a real run's · [R379.md](docs/roadmap/R379.md) · done (8e6e7cde)
 - **R356** · The al-runner backend leaves its lethal-alrunner-cov-* Cobertura scratch directory behind when it closes · [R356.md](docs/roadmap/R356.md) · done (0924cd93)
 - **R358** · Something in the unit suite leaks one lethal-alrunner-canary-* temp directory per run, although the canary removes its directory in a finally · [R358.md](docs/roadmap/R358.md) · done (64488c59)
 - **R382** · `scripts/r214-capture.ts` must be updated when R-307 lands: `writeInstrumentedProject` gains a required `identityOrdinals` · [R382.md](docs/roadmap/R382.md) · done (99edf1ef)
-- **R359** · The unit-test preload's fake home (R264) and private temp folder (R358) do not reach child processes · [R359.md](docs/roadmap/R359.md) · open, filed 2026-09-30
+- **R359** · The unit-test preload's fake home (R264) and private temp folder (R358) do not reach child processes · [R359.md](docs/roadmap/R359.md) · done (d2dac025)
 - **R360** · lethal run never removes its temp scratch folder (a full instrumented copy of the project per run), because lethal verify reads the installed batch from it · [R360.md](docs/roadmap/R360.md) · done (6b7b6b56)
 - **R363** · Every batch dir copies the results database, the run's report and its progress file into the build, because prepareBatchProject copies every non-AL file in the project · [R363.md](docs/roadmap/R363.md) · done (fd418949)
 - **R383** · Upstream closed al-runner #3713 (coverage lost after a file's first object) on 2026-09-10, but LethAL still disables coverage for every multi-object file; re-measure on 2.12.0 · [R383.md](docs/roadmap/R383.md) · closed 2026-10-02: ruling (option A), the whole-run multi-object refusal stays. Upstream #3713's object loss…
