@@ -709,7 +709,9 @@ The filter sees only code a new test runs itself, in its own session. A test tha
 because an EARLIER test in the same call left state behind (SingleInstance globals, committed
 data), or because of code run in another session (StartSession, a scheduled task, the job queue),
 is not sent to that survivor. A fresh `lethal run` has the same blind spot. Pass
-`--no-reach-filter` to send every new test to every survivor, as before R-384.
+`--no-reach-filter` to send every new test to every survivor, as before R-384. On apps that use
+background sessions, the job queue or SingleInstance state (most real apps), prefer
+`--no-reach-filter` when a missed kill would matter (R426).
 
 The cap counts extra test runs: two unmutated runs per new test, plus one per survivor a new test
 joins, against `--max-new-tests` (default 50) x (survivors + 2). With the reach filter on, a new

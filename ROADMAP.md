@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**70 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**69 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -164,7 +164,7 @@ that ordering is the priority.
 - **R418** · maskAlNonCode indexes a code-point array by UTF-16 offsets, so a non-BMP character (emoji) before a comment or string shifts the blanking and can erase an object header · [R418.md](docs/roadmap/R418.md) · done (cd6e14e2)
 - **R419** · R-307's per-file trial checks the latch refusals (C1-C4) only on the FULL mutant set, but the writer re-instruments BATCH SUBSETS, where a member's reach grain can change and a latch refusal can first appear at write time · [R419.md](docs/roadmap/R419.md) · closed 2026-10-05 — measured: no batch subset can be refused where the full set is not; 0 refusals over…
 - **R421** · Discovered file paths keep the OS separator, so the manifest's `file` (and every report) says `src\X.al` on Windows and `src/X.al` on Linux, and mutant numbering can differ between the two in a project with subfolders · [R421.md](docs/roadmap/R421.md) · done (dda76e88)
-- **R426** · verify's reach filter cannot see a kill that depends on state left by an earlier test in the same call, or on code run in another session; filtered verify keeps fresh `lethal run`'s blind spot · [R426.md](docs/roadmap/R426.md) · open, filed 2026-10-04
+- **R426** · verify's reach filter cannot see a kill that depends on state left by an earlier test in the same call, or on code run in another session; filtered verify keeps fresh `lethal run`'s blind spot · [R426.md](docs/roadmap/R426.md) · closed 2026-10-06 — stated limit: a per-project detector would fire on every real product target…
 - **R431** · lethal verify cannot see a test-app codeunit that another app runs by its integer id (Codeunit.Run(<id>)), when the test hands that id over as a plain Integer · [R431.md](docs/roadmap/R431.md) · open, filed 2026-10-04
 - **R433** · The unfiltered automation extensions query hangs BC 28.4 (and took Cronus28 down) and must never be issued · [R433.md](docs/roadmap/R433.md) · done (4aeb224a)
 - **R434** · lethal verify cannot see an installed app outside the test app's dependency closure, nor a non-Microsoft dependency that is published but not the installed one · [R434.md](docs/roadmap/R434.md) · open, filed 2026-10-04
