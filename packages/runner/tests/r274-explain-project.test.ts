@@ -320,7 +320,10 @@ describe("R274: explain --project renders each gap's source", () => {
 
 describe("R274: refusals, by name", () => {
   test("a one-byte edit in any hashed file refuses as source-mismatch", () => {
-    for (const key of [FILE, "app.json"]) {
+    // The snapshot keys use the OS separator (`\` on Windows).
+    const keys = [...fixture.source.keys()];
+    expect(keys.map((k) => k.replaceAll("\\", "/")).sort()).toEqual(["app.json", FILE]);
+    for (const key of keys) {
       const edited = new Map(fixture.source);
       const bytes = edited.get(key);
       if (bytes === undefined) throw new Error(`no ${key}`);
