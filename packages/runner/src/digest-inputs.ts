@@ -385,8 +385,9 @@ export async function dependencyFingerprint(
  * R-385 D2: a Microsoft package the server serves must be the one INSTALLED: exactly one installed
  * row, at the hashed manifest's version. `dev/packages` returns "a version you have", which during
  * a staged upgrade may be published but not installed; hashing that would call it resident.
+ * R373: the env-tool deferred digest step applies it to every app its hook published.
  */
-async function checkInstalled(
+export async function checkInstalled(
   mode: Extract<MicrosoftMode, { kind: "bytes" }>,
   dep: AppDependency,
   served: string,

@@ -76,6 +76,7 @@ import {
   type MicrosoftMode,
   appInputsOfPackage,
   dependencyFingerprint,
+  publishedPackageReader,
   readAppJsonInputs,
   targetOf,
 } from "../src/digest-inputs";
@@ -128,7 +129,11 @@ import {
   publishTestApp,
 } from "../src/test-app-publish";
 import { testDigestsOfModel, testDigestsOfSources } from "../src/test-digest";
-import { PublishAppUnreadableError, TestAppDiffersError } from "../src/test-membership";
+import {
+  PublishAppUnreadableError,
+  TestAppDiffersError,
+  TestAppRepublishedError,
+} from "../src/test-membership";
 import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
 import {
@@ -8100,6 +8105,598 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(log).not.toContain("hook");
       });
     }
+  });
+
+  // R373/R486: an env-tool session's test digests and test-app identity come from the published
+  // test app read back AFTER the lease-held hook, never from the pre-lease read, which can hold the
+  // OUTGOING package. The fake server serves P1 for the test app until the hook runs, then what the
+  // test says; the installed versions are a map by app id.
+  describe("R373/R486: env-tool digests and test-app identity from the read-back after the hook", () => {
+    const K = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" };
+    const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+    const DEP = {
+      id: "55555555-5555-5555-5555-555555555555",
+      name: "Dep Lib",
+      publisher: "Partner",
+      version: "1.0.0.0",
+    };
+    const BODY_A = TEST_AL;
+    const BODY_B = TEST_AL.replace("begin\n", "begin\n        Error('B asserts');\n");
+    const testPkg = (o: { version: string; body: string; dep?: boolean }) =>
+      new Uint8Array(
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="${o.version}" />${
+            o.dep === true
+              ? `<Dependencies><Dependency Id="${DEP.id}" Name="${DEP.name}" Publisher="${DEP.publisher}" MinVersion="1.0.0.0" /></Dependencies>`
+              : ""
+          }</Package>`,
+          "SymbolReference.json": JSON.stringify({
+            Codeunits: [
+              {
+                Id: 79100,
+                Name: "Sandbox Tests",
+                Properties: [{ Name: "Subtype", Value: "Test" }],
+                Methods: [{ Id: 1, Name: K.method, Attributes: [{ Name: "Test" }] }],
+              },
+            ],
+          }),
+          "src/SandboxTests.Codeunit.al": o.body,
+        }),
+      );
+    const depPkg = (build: string) =>
+      new Uint8Array(
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP.id}" Name="${DEP.name}" Publisher="${DEP.publisher}" Version="1.0.0.0" /></Package>`,
+          "src/Dep.al": `// build ${build}`,
+        }),
+      );
+    /** The outgoing test app (the server's before the hook) and the one the hook publishes. */
+    const P1 = testPkg({ version: "1.0.0.1", body: BODY_A });
+    const P2 = testPkg({ version: "1.0.0.2", body: BODY_B });
+
+    const mode = (installed: Record<string, readonly string[]>, calls: string[]): MicrosoftMode => {
+      const base = fakeMicrosoftMode();
+      if (base.kind !== "bytes") throw new Error("fakeMicrosoftMode is not bytes mode");
+      return {
+        ...base,
+        installed: async (id: string) => {
+          calls.push(id);
+          return installed[id] ?? ["1.0.0.0"];
+        },
+      };
+    };
+
+    interface EnvRun {
+      /** The test app the server serves after the hook (`null`: the read fails). */
+      readonly post: Uint8Array | null;
+      /** The publishApps test-app file the hook publishes; default `post`, else P2. */
+      readonly file?: Uint8Array;
+      /** Installed versions by app id; default the test app at 1.0.0.2, others 1.0.0.0. */
+      readonly installed?: Record<string, readonly string[]>;
+      /** The dependency's package before and after the hook; publishes it too when set. */
+      readonly dep?: { readonly pre: Uint8Array; readonly post: Uint8Array };
+      readonly hookThrows?: boolean;
+      /** false: publishApps holds only the dependency, so no file cross-check applies. */
+      readonly testAppInPublishApps?: boolean;
+      readonly extra?: Partial<SessionConfig>;
+      readonly dirs?: { projectDir: string; testDir: string; instrumentedDir: string };
+      readonly store?: ResultsStore;
+      /** The test app the server serves before the hook; default P1 (`null`: the read fails). */
+      readonly pre?: Uint8Array | null;
+      /** The backend's `microsoftMode` throws, as bcdev's does with no harness verifier. */
+      readonly microsoftModeThrows?: boolean;
+    }
+
+    async function envRun(o: EnvRun) {
+      const dirs = o.dirs ?? (await makeProject(BODY_B));
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      const testAppFile = join(dirs.testDir, "..", "Tests.app");
+      const depFile = join(dirs.testDir, "..", "Dep.app");
+      writeFileSync(testAppFile, P1);
+      if (o.dep !== undefined) writeFileSync(depFile, o.dep.pre);
+      let hooked = false;
+      let fetchesAfterHook = 0;
+      const installedCalls: string[] = [];
+      const fetch = async (app: { readonly name: string }) => {
+        if (hooked) fetchesAfterHook++;
+        if (app.name === DEP.name) {
+          if (o.dep === undefined) return null;
+          return hooked ? o.dep.post : o.dep.pre;
+        }
+        return hooked ? o.post : o.pre === undefined ? P1 : o.pre;
+      };
+      const client = new FakeLeaseClient();
+      const { lease } = leaseCfg(client);
+      const backend = leaseBackend({
+        fetchPublishedAppPackage: fetch,
+        microsoftMode: () => {
+          if (o.microsoftModeThrows === true) {
+            throw new DependencyUnreadableError("this bcdev backend has no harness verifier");
+          }
+          return mode(o.installed ?? { [APP_ID]: ["1.0.0.2"] }, installedCalls);
+        },
+      });
+      const store = o.store ?? new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      const outcome = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        resourceServer: "http://cronus281",
+        resourceServerInstance: "BC",
+        quarantineDir: freshTmpDir(),
+        lease,
+        emit: [createEmitter([(e) => events.push(e)])],
+        afterLeaseAcquired: async () => {
+          if (o.hookThrows === true) throw new Error("the env tool died mid-publish");
+          writeFileSync(testAppFile, o.file ?? o.post ?? P2);
+          if (o.dep !== undefined) writeFileSync(depFile, o.dep.post);
+          hooked = true;
+        },
+        afterLeaseAcquiredPublishes: [
+          ...(o.dep !== undefined ? [depFile] : []),
+          ...(o.testAppInPublishApps === false ? [] : [testAppFile]),
+        ],
+        ...o.extra,
+      }).catch((e: unknown) => e);
+      const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      const warningsOf = (code: string) =>
+        events.flatMap((e) => (e.type === "warning" && e.code === code ? [e.message] : []));
+      return {
+        outcome,
+        dirs,
+        store,
+        runId,
+        digestWarning: warningsOf("test-digests-unavailable"),
+        mismatchWarning: warningsOf("published-test-app-mismatch"),
+        unreadableWarning: warningsOf("published-test-app-unreadable"),
+        historyWarning: warningsOf("history-test-app-changed"),
+        knownSurvivors: (
+          store.db
+            .query(
+              "SELECT COUNT(*) AS n FROM mutants WHERE run_id = ? AND verdict = 'known-survivor'",
+            )
+            .get(runId) as { n: number }
+        ).n,
+        fetchesAfterHook: () => fetchesAfterHook,
+        installedCalls,
+      };
+    }
+
+    /** R-372's digests of `pkg`'s body, its dependencies read from `server`. */
+    const digestsOfPkg = async (
+      dirs: { projectDir: string },
+      pkg: Uint8Array,
+      body: string,
+      server: (app: { readonly name: string }) => Promise<Uint8Array | null>,
+    ) => {
+      const app = appInputsOfPackage(pkg);
+      return testDigestsOfSources([{ path: "x.al", text: body }], [K], {
+        dependencies: await dependencyFingerprint(
+          app,
+          publishedPackageReader(server),
+          fakeMicrosoftMode(),
+          await targetOf(dirs.projectDir),
+        ),
+        buildInputs: app.buildInputs,
+      });
+    };
+    const onlyP = (pkg: Uint8Array) => async () => pkg;
+
+    test("the recorded digests are the post-hook package's, never the pre-lease one's", async () => {
+      const r = await envRun({ post: P2 });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.digestWarning).toEqual([]);
+      const recorded = r.store.testDigests(r.runId);
+      expect(recorded).toEqual(await digestsOfPkg(r.dirs, P2, BODY_B, onlyP(P2)));
+      expect(recorded).not.toEqual(await digestsOfPkg(r.dirs, P1, BODY_A, onlyP(P1)));
+      expect(r.store.testDigestParts(r.runId)).not.toBeNull();
+      r.store.close();
+    });
+
+    for (const [installed, recorded, inPublishApps] of [
+      [["1.0.0.1"], false, true],
+      [["1.0.0.2"], true, true],
+      [["1.0.0.1", "1.0.0.2"], false, true],
+      // No publishApps file is the test app: the read-back's own installed check is all there is.
+      [["1.0.0.1"], false, false],
+      [["1.0.0.2"], true, false],
+      [["1.0.0.1", "1.0.0.2"], false, false],
+    ] as const) {
+      test(`installed [${installed.join(", ")}] for the read-back at 1.0.0.2${inPublishApps ? "" : ", no publishApps test-app file,"} ${recorded ? "records" : "records NULL with one named warning"}`, async () => {
+        const r = await envRun({
+          post: P2,
+          installed: { [APP_ID]: installed },
+          testAppInPublishApps: inPublishApps,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        if (recorded) {
+          expect(r.store.testDigests(r.runId)).not.toBeNull();
+          expect(r.digestWarning).toEqual([]);
+        } else {
+          expect(r.store.testDigests(r.runId)).toBeNull();
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("not proven installed");
+          expect(r.digestWarning[0]).toContain(APP_ID);
+        }
+        r.store.close();
+      });
+    }
+
+    test("a dependency the hook republishes is fingerprinted from its post-hook package", async () => {
+      const pre = depPkg("one");
+      const post = depPkg("two");
+      const P2D = testPkg({ version: "1.0.0.2", body: BODY_B, dep: true });
+      const r = await envRun({
+        post: P2D,
+        dep: { pre, post },
+        installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["1.0.0.0"] },
+      });
+      expect(r.digestWarning).toEqual([]);
+      const server = (dep: Uint8Array) => async (app: { readonly name: string }) =>
+        app.name === DEP.name ? dep : P2D;
+      const recorded = r.store.testDigests(r.runId);
+      expect(recorded).toEqual(await digestsOfPkg(r.dirs, P2D, BODY_B, server(post)));
+      expect(recorded).not.toEqual(await digestsOfPkg(r.dirs, P2D, BODY_B, server(pre)));
+      r.store.close();
+    });
+
+    test("an app the hook published that is not installed at its served version records NULL", async () => {
+      // The test app does not depend on it, so only the publishApps installed check reads it.
+      const r = await envRun({
+        post: P2,
+        dep: { pre: depPkg("one"), post: depPkg("two") },
+        installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["0.9.0.0"] },
+      });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain(DEP.id);
+      expect(r.installedCalls).toContain(DEP.id);
+      r.store.close();
+    });
+
+    test("a read-back at another version than the publishApps file records NULL and names both", async () => {
+      const r = await envRun({ post: P2, file: testPkg({ version: "1.0.0.3", body: BODY_B }) });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("version 1.0.0.2");
+      expect(r.digestWarning[0]).toContain("version 1.0.0.3");
+      r.store.close();
+    });
+
+    test("a read-back whose .al sources differ from the publishApps file records NULL", async () => {
+      const r = await envRun({ post: P2, file: testPkg({ version: "1.0.0.2", body: BODY_A }) });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("other .al sources");
+      r.store.close();
+    });
+
+    test("an unreadable read-back records NULL digests, one warning, and a NULL test_app_hash", async () => {
+      const r = await envRun({ post: null, file: P2 });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("after the hook published envTool.publishApps");
+      expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+      r.store.close();
+    });
+
+    test("test_app_hash is the post-hook package's, also when the digests are NULL", async () => {
+      const recorded = await envRun({ post: P2 });
+      expect(recorded.store.getRun(recorded.runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+      recorded.store.close();
+      const refused = await envRun({ post: P2, installed: { [APP_ID]: ["1.0.0.1"] } });
+      expect(refused.store.testDigests(refused.runId)).toBeNull();
+      expect(refused.store.getRun(refused.runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+      refused.store.close();
+    });
+
+    test("a hook that throws leaves the row NULL and never reads the test app back", async () => {
+      const r = await envRun({ post: P2, hookThrows: true });
+      expect((r.outcome as Error).message).toContain("died mid-publish");
+      expect(r.fetchesAfterHook()).toBe(0);
+      expect(r.installedCalls).toEqual([]);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toEqual([]);
+      r.store.close();
+    });
+
+    test("published-test-app-mismatch is judged on the read-back, not the outgoing package", async () => {
+      // P1 (1.0.0.1) disagrees with the test app.json (1.0.0.2); the read-back P2 agrees.
+      const fine = await envRun({ post: P2 });
+      expect(fine.mismatchWarning).toEqual([]);
+      fine.store.close();
+      // And the other way: a read-back at another version than app.json is named.
+      const off = testPkg({ version: "1.0.0.3", body: BODY_B });
+      const named = await envRun({ post: off, file: off });
+      expect(named.mismatchWarning).toHaveLength(1);
+      expect(named.mismatchWarning[0]).toContain("1.0.0.3");
+      named.store.close();
+    });
+
+    /** A first, finished run that measured P1 both before and after its hook. */
+    async function priorRun(extra: Partial<SessionConfig>) {
+      const first = await envRun({
+        post: P1,
+        file: P1,
+        installed: { [APP_ID]: ["1.0.0.1"] },
+        extra,
+      });
+      expect(first.outcome).not.toBeInstanceOf(Error);
+      expect(first.store.getRun(first.runId)?.testAppHash).toBe(`package:${hashPackage(P1)}`);
+      return first;
+    }
+
+    describe("R486: a --resume-run resolved before the lease is refused unless the read-back equals it", () => {
+      test("a changed read-back refuses before the first baseline", async () => {
+        const first = await priorRun({});
+        const r = await envRun({
+          post: P2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((r.outcome as TestAppRepublishedError).flag).toBe(`--resume-run ${first.runId}`);
+        expect(r.store.baselineTests(r.runId)).toEqual([]);
+        r.store.close();
+      });
+      test("an unreadable read-back refuses (fail closed)", async () => {
+        const first = await priorRun({});
+        const r = await envRun({
+          post: null,
+          file: P1,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((r.outcome as Error).message).toContain("could not be read back");
+        r.store.close();
+      });
+      test("an unchanged read-back proceeds", async () => {
+        const first = await priorRun({});
+        const r = await envRun({
+          post: P1,
+          file: P1,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        r.store.close();
+      });
+      test("with no flag, a changed read-back is not refused", async () => {
+        const first = await priorRun({});
+        const r = await envRun({ post: P2, dirs: first.dirs, store: first.store });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        r.store.close();
+      });
+    });
+
+    // R486 (review M2): the history filter runs per batch, after the hook, so it compares the
+    // READ-BACK. A finished run measured under P1 is no evidence once the hook published P2.
+    describe("R486: --skip-known-survivors compares the read-back, not the pre-lease test app", () => {
+      const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+      test("the hook publishes a new test app: the session proceeds, skips nothing, and says why", async () => {
+        const first = await priorRun(skip);
+        const r = await envRun({ post: P2, dirs: first.dirs, store: first.store, extra: skip });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        expect(r.historyWarning).toHaveLength(1);
+        expect(r.historyWarning[0]).toContain(hashPackage(P2));
+        r.store.close();
+      });
+      test("an unchanged read-back skips the known survivors (control)", async () => {
+        const first = await priorRun(skip);
+        const r = await envRun({
+          post: P1,
+          file: P1,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: skip,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBeGreaterThan(0);
+        expect(r.historyWarning).toEqual([]);
+        r.store.close();
+      });
+      test("an unreadable read-back skips nothing (fail closed)", async () => {
+        const first = await priorRun(skip);
+        const r = await envRun({
+          post: null,
+          file: P1,
+          dirs: first.dirs,
+          store: first.store,
+          extra: skip,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        expect(r.historyWarning).toHaveLength(1);
+        r.store.close();
+      });
+    });
+
+    test("a microsoftMode that throws records NULL with one warning, never aborting the session", async () => {
+      const r = await envRun({ post: P2, microsoftModeThrows: true });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("no harness verifier");
+      r.store.close();
+    });
+
+    test("an unreadable pre-lease read says nothing when the read-back is fine", async () => {
+      const r = await envRun({ pre: null, post: P2 });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.unreadableWarning).toEqual([]);
+      expect(r.store.testDigests(r.runId)).not.toBeNull();
+      r.store.close();
+      // Control: the read-back's own failure is still named.
+      const failed = await envRun({ post: null, file: P2 });
+      expect(failed.unreadableWarning).toHaveLength(1);
+      failed.store.close();
+    });
+
+    test("a read-back with the publishApps file's version but another app id records NULL", async () => {
+      const otherId = new Uint8Array(
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="22222222-2222-2222-2222-222222222222" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /></Package>`,
+          "SymbolReference.json": JSON.stringify({
+            Codeunits: [
+              {
+                Id: 79100,
+                Name: "Sandbox Tests",
+                Properties: [{ Name: "Subtype", Value: "Test" }],
+                Methods: [{ Id: 1, Name: K.method, Attributes: [{ Name: "Test" }] }],
+              },
+            ],
+          }),
+          "src/SandboxTests.Codeunit.al": BODY_B,
+        }),
+      );
+      const r = await envRun({ post: P2, file: otherId });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("22222222-2222-2222-2222-222222222222");
+      r.store.close();
+    });
+
+    test("a plain bcdev run (no hook) never reads back, rewrites test_app_hash or defers digests", async () => {
+      const dirs = await makeProject(BODY_B);
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      const store = new ResultsStore(":memory:");
+      const setHash = spyOn(store, "setRunTestAppHash");
+      const setDigests = spyOn(store, "setRunTestDigests");
+      const outcome = await runSession({
+        backend: leaseBackend({
+          fetchPublishedAppPackage: async () => P2,
+          microsoftMode: () => mode({ [APP_ID]: ["1.0.0.2"] }, []),
+        }),
+        store,
+        ...dirs,
+        selectorIds,
+        resourceServer: "http://cronus281",
+        resourceServerInstance: "BC",
+        quarantineDir: freshTmpDir(),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e);
+      expect(outcome).not.toBeInstanceOf(Error);
+      expect(setHash).not.toHaveBeenCalled();
+      expect(setDigests).not.toHaveBeenCalled();
+      const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      // Recorded at createRun from the one pre-lease read, as before R373.
+      expect(store.testDigests(runId)).not.toBeNull();
+      expect(store.getRun(runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+      store.close();
+    });
+
+    test("verify accepts the env-tool run, and reads a test edited on disk afterwards as new", async () => {
+      const r = await envRun({ post: P2 });
+      const recorded = r.store.testDigests(r.runId);
+      expect(recorded).not.toBeNull();
+      const plan = () =>
+        verifyDependencyFingerprint(
+          { fetchPublishedAppPackage: onlyP(P2), microsoftMode: () => fakeMicrosoftMode() },
+          r.dirs.testDir,
+          r.dirs.projectDir,
+        ).then((dependencies) =>
+          planVerify({
+            sourceTestDigestParts: r.store.testDigestParts(r.runId),
+            coverage: "procedure",
+            source: {
+              runId: r.runId,
+              projectPath: r.dirs.projectDir,
+              artifactSha256: "0".repeat(64),
+              sourceSha256: "5".repeat(64),
+              installed: {
+                fromRunId: r.runId,
+                batchIndex: 0,
+                appPath: "x.app",
+                instrumentedDir: "d",
+              },
+              identityScheme: IDENTITY_SCHEME,
+              buildSymbols: [],
+              coverageMode: "procedure",
+              carryHidden: null,
+              generationSourceSha256: null,
+              twinTuples: null,
+              numberingDigest: null,
+              targets: [
+                {
+                  batchIndex: 0,
+                  mutantCode: "M0001",
+                  coveringTests: [`${K.codeunitName}.${K.method}`],
+                },
+              ],
+              rows: [],
+            },
+            manifest: {
+              selectorIds,
+              artifactId: "a".repeat(32),
+              mutants: [
+                {
+                  mutantId: "M0001",
+                  file: "SandboxLogic.Codeunit.al",
+                  startIndex: 10,
+                  endIndex: 20,
+                  startLine: 3,
+                  operatorName: "lethal.negate-conditional",
+                  operatorVersion: "1.0.0",
+                  astHash: "hash-M0001",
+                  objectType: "codeunit",
+                  codeunitId: 79000,
+                  codeunitName: "Sandbox Logic",
+                  procedureName: "IsOverBudget",
+                  originalText: "a",
+                  mutatedText: "b",
+                },
+              ],
+            },
+            sourceBaseline: r.store.baselineTests(r.runId),
+            sourceTestDigests: recorded,
+            testDir: r.dirs.testDir,
+            dependencies,
+          }),
+        );
+      expect((await plan()).newTests.map((t) => t.method)).toEqual([]);
+      await Bun.write(
+        join(r.dirs.testDir, "SandboxTests.Codeunit.al"),
+        BODY_B.replace("B asserts", "B asserts more"),
+      );
+      expect((await plan()).newTests.map((t) => t.method)).toEqual([K.method]);
+      r.store.close();
+    });
+  });
+
+  test("R373: setRunTestDigests never overwrites a recorded row and throws on a missing run", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      coverageMode: "procedure",
+    });
+    store.setRunTestDigests(runId, { a: "1" }, { p: 1 });
+    expect(store.testDigests(runId)).toEqual({ a: "1" });
+    expect(() => store.setRunTestDigests(runId, { a: "2" }, { p: 2 })).toThrow(
+      "already records test digests",
+    );
+    expect(store.testDigests(runId)).toEqual({ a: "1" });
+    expect(store.testDigestParts(runId)).toEqual({ p: 1 });
+    expect(() => store.setRunTestDigests(runId + 1, { a: "1" }, {})).toThrow("does not exist");
+    expect(() => store.setRunTestAppHash(runId + 1, null)).toThrow("no run");
+    store.close();
   });
 
   // R232: `afterLeaseAcquired` used to run BEFORE the try/finally that releases the lease, so a
