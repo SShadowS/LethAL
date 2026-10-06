@@ -137,6 +137,7 @@ import {
   type AlSource,
   ManifestDeclarationError,
   activeObjectKeys,
+  alRunnerAdmitsWrappedFile,
   coverageRefusedObjects,
   duplicateObjectRefusals,
 } from "./line-map";
@@ -5296,6 +5297,19 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...coverageRefusedObjects(allFiles, backendName),
     ...(backendName === "al-runner" ? duplicateObjects : []),
   ]);
+  // Sol run 002: on al-runner the index can refuse an ADMITTED wrapped file's objects after deploy
+  // (its instrumented text re-parses undecided), which the source read here cannot see. So no
+  // verdict is carried for such a file's mutants before that (known-survivor, full-batch resume);
+  // the ordinary resume carry runs after the post-deploy split and is safe.
+  const carryBarredFiles = new Set(
+    backendName === "al-runner"
+      ? allFiles
+          .filter((f) => alRunnerAdmitsWrappedFile(f.root))
+          .map((f) => f.path.replaceAll("\\", "/"))
+      : [],
+  );
+  const carryBarred = (m: MutantManifestEntry): boolean =>
+    carryBarredFiles.has(m.file.replaceAll("\\", "/"));
   // R92: raw site count (every spec that made it into an instrumentable file) vs the DEPLOYED
   // count once per-file dedup (`dedupeSpecs`) collapses same-site operator collisions into one
   // winner — the same collapse `writeInstrumentedProject` runs at compile time, per file (identity
@@ -5760,8 +5774,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // needed for a verdict that already exists. A batch with one mutant to execute, one
       // colliding key, or one carried row from before the coverage columns existed takes the
       // ordinary path unchanged.
+      // Sol run 002: a batch holding a `carryBarred` mutant deploys, so the index can refuse it.
       if (
         resumeState !== undefined &&
+        !manifest.mutants.some(carryBarred) &&
         batchCarriesEntirely(resumeState.index, manifest.mutants, cfg.retryStranded ?? false)
       ) {
         replayCarriedBatch(cfg, runId, manifest.mutants, batchIdx, resumeState, outcomes, emit);
@@ -5901,11 +5917,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           },
         },
       );
-      const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
+      // Sol run 002: never a mutant whose refusal is known only after deploy (`carryBarred`).
+      const knownSurvivors = filterHistory([...manifest.mutants], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
         ...(carryDisabled !== undefined ? { carryDisabled } : {}),
         current: carryCurrent,
-      });
+      }).knownSurvivors.filter((m) => !carryBarred(m));
+      const skipped = new Set(knownSurvivors);
+      const execute = manifest.mutants.filter((m) => !skipped.has(m));
       for (const m of knownSurvivors)
         record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
 

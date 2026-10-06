@@ -1199,11 +1199,12 @@ interface "I Probe"
       // ORIGINAL source, which decides, so it held no refusal: a reached procedure read plain
       // no-coverage and a table trigger took the all-green fallback and was SCORED. The fake
       // builds the real index over the deployed batch, as AlRunnerBackend does.
-      test("an index-only refusal (instrumented text undecided) reaches scoring by name", async () => {
-        const dirs = await makeProject();
-        // R318's seed: `Other`'s nested `#if` in a conditional var section parses in the original
-        // but not once instrumented. Wrapped, so the file is an admitted wrapped file.
-        const otherProc = `    procedure Other(X: Integer);
+      describe("an index-only refusal (instrumented text undecided)", () => {
+        async function undecidedProject() {
+          const dirs = await makeProject();
+          // R318's seed: `Other`'s nested `#if` in a conditional var section parses in the original
+          // but not once instrumented. Wrapped, so the file is an admitted wrapped file.
+          const otherProc = `    procedure Other(X: Integer);
 #if not CLEAN27
     var
         K: Integer;
@@ -1218,9 +1219,9 @@ interface "I Probe"
     var
         Glob: Integer;
 `;
-        await Bun.write(
-          join(dirs.projectDir, "Repro.Codeunit.al"),
-          `#if not NEVERDEFINED
+          await Bun.write(
+            join(dirs.projectDir, "Repro.Codeunit.al"),
+            `#if not NEVERDEFINED
 codeunit 50100 "Repro R"
 {
     procedure Pick(X: Integer): Integer
@@ -1234,10 +1235,10 @@ codeunit 50100 "Repro R"
 ${otherProc}}
 #endif
 `,
-        );
-        await Bun.write(
-          join(dirs.projectDir, "SandboxTable.Table.al"),
-          `#if not NEVERDEFINED
+          );
+          await Bun.write(
+            join(dirs.projectDir, "SandboxTable.Table.al"),
+            `#if not NEVERDEFINED
 table 79001 "Sandbox Table"
 {
     fields
@@ -1255,7 +1256,9 @@ table 79001 "Sandbox Table"
 ${otherProc}}
 #endif
 `,
-        );
+          );
+          return dirs;
+        }
         class Indexing extends StubBackend {
           symbols: readonly string[] = [];
           useBuildSymbols(s: readonly string[]): void {
@@ -1268,17 +1271,19 @@ ${otherProc}}
           }
         }
         // Coverage names the reached procedures of BOTH wrapped objects, as al-runner would have
-        // reported them had the index not dropped the files.
-        const backend = new Indexing(CAPS_NST_WORKERS, () => "pass", ["IsOverBudget"]);
-        backend.coverageEntriesFor = () => [
-          { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
-          { objectType: "Codeunit", objectId: 50100, procedure: "Pick" },
-          { objectType: "Codeunit", objectId: 50100, procedure: "Other" },
-        ];
-        const store = new ResultsStore(":memory:");
-        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-        try {
-          const report = await runSession({ backend, store, ...dirs, selectorIds });
+        // reported them had the index not dropped the files. `Plain` has no `coverageRefusals`, so
+        // it records what a run before sol run 001's fix recorded: the wrapped mutants `survived`.
+        function covering<T extends StubBackend>(backend: T): T {
+          backend.coverageEntriesFor = () => [
+            { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
+            { objectType: "Codeunit", objectId: 50100, procedure: "Pick" },
+            { objectType: "Codeunit", objectId: 50100, procedure: "Other" },
+          ];
+          return backend;
+        }
+        const indexing = () => covering(new Indexing(CAPS_NST_WORKERS, () => "pass"));
+        const plain = () => covering(new StubBackend(CAPS_NST_WORKERS, () => "pass"));
+        function expectRefused(report: SessionReport): void {
           for (const [file, key] of [
             ["Repro", "Codeunit:50100"],
             ["SandboxTable", "Table:79001"],
@@ -1293,11 +1298,80 @@ ${otherProc}}
           }
           // No trigger took the all-green fallback; the plain codeunit still runs.
           expect(report.untargetedTriggerCount).toBe(0);
-          expect(report.counts.survived).toBeGreaterThan(0);
-        } finally {
-          warnSpy.mockRestore();
-          store.close();
         }
+        async function quietly<T>(f: () => Promise<T>): Promise<T> {
+          const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+          try {
+            return await f();
+          } finally {
+            warnSpy.mockRestore();
+          }
+        }
+
+        test("reaches fresh scoring by name", async () => {
+          const dirs = await undecidedProject();
+          const store = new ResultsStore(":memory:");
+          try {
+            const report = await quietly(() =>
+              runSession({ backend: indexing(), store, ...dirs, selectorIds }),
+            );
+            expectRefused(report);
+            expect(report.counts.survived).toBeGreaterThan(0);
+          } finally {
+            store.close();
+          }
+        });
+
+        // Sol run 002: a stored `survived` from a run before the fix (same identity scheme) must
+        // not be carried past the current index's refusal, by either carry path.
+        test("a stored survived is not skipped as a known survivor", async () => {
+          const dirs = await undecidedProject();
+          const store = new ResultsStore(":memory:");
+          try {
+            const first = await quietly(() =>
+              runSession({ backend: plain(), store, ...dirs, selectorIds }),
+            );
+            expect(first.mutants.filter((m) => m.file.includes("Repro"))[0]?.verdict).toBe(
+              "survived",
+            );
+            const report = await quietly(() =>
+              runSession({
+                backend: indexing(),
+                store,
+                ...dirs,
+                selectorIds,
+                skipKnownSurvivors: true,
+              }),
+            );
+            expectRefused(report);
+            // The plain codeunit's survivors ARE skipped: the gate is not blanket.
+            expect(report.mutants.some((m) => m.verdict === "known-survivor")).toBe(true);
+          } finally {
+            store.close();
+          }
+        });
+
+        test("a stored survived is not carried by a full-batch --resume", async () => {
+          const dirs = await undecidedProject();
+          const store = new ResultsStore(":memory:");
+          try {
+            const first = await quietly(() =>
+              runSession({ backend: plain(), store, ...dirs, selectorIds }),
+            );
+            expect(first.mutants.filter((m) => m.file.includes("Repro"))[0]?.verdict).toBe(
+              "survived",
+            );
+            store.db.run("UPDATE runs SET finished_at = NULL");
+            const report = await quietly(() =>
+              runSession({ backend: indexing(), store, ...dirs, selectorIds, resume: 1 }),
+            );
+            expectRefused(report);
+            // The plain codeunit's verdicts still carry.
+            expect(report.mutants.some((m) => m.carried === true)).toBe(true);
+          } finally {
+            store.close();
+          }
+        });
       });
 
       test("al-runner (C1): a key two active files declare is refused in selection by name", async () => {
