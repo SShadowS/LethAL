@@ -104,6 +104,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **More loop shapes refuse a hang-capable mutant; identity scheme 27** (R480). R446 refused a
+  write a body-exit guard reads only in a `while true` loop. Now: any `while`/`repeat` gets its
+  body-exit guards unless its condition names a cursor method (`Next`, `Read`, `EOS`, `MoveNext`),
+  which advances on its own; in a `while true` loop a write that FEEDS a guard's variable is refused
+  too; and a write to an enclosing `for` loop's control variable is refused. Measured against master:
+  257 mutants move from emitted to hang-refused (BC.History 154, DC 66, DO 25, CDO 12), nothing else
+  changes, no gate fixture moves; 52 identity keys move (DC 12, BC.History 40), so marks files need
+  `"identityScheme": 27` after re-checking each mark (R325). Still not refused, each a known
+  exclusion: a cursor-named condition, a `for` end bound, `foreach`, `asserterror` as the only exit,
+  `CurrReport.Skip`.
 - **EXISTING EQUIVALENCE MARKS STOP APPLYING UNTIL YOU RE-MARK THEM** (R443). A mark in
   `lethal.equivalent.json` that holds only a `key` (every mark written before this release) is now
   refused (`no-proof`), because a key alone cannot show which mutant it was written for. Each such

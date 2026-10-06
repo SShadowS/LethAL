@@ -23,13 +23,19 @@ import {
  * error or an overflow cannot end the loop anyway. R179's `DrainQueue` is this repository's
  * counterexample: its frozen loop terminated by Int32 overflow in ~4.4 s rather than hanging.
  *
- * R446: when a loop's condition reads no name and calls nothing (`while true`, `until false`), the
- * guards of its body exits (`exit`, `Error`, `CurrReport.Quit`/`Break`, a `break` of that loop)
- * count as its condition (`loopExitParts`). A scoped heuristic: a write ANY such guard reads is
- * refused. Still NOT seen (R480, each pinned as not refused in `loop-exit-refusal.test.ts`): a
- * body-exit flag under a condition that reads a name; an indirect guard (`Done := I >= 3` between
- * the write to `I` and the exit); a condition that calls something; an outer `for`/`foreach`;
- * `asserterror` as the only exit; `CurrReport.Skip`.
+ * R446 and R480: the guards of a `while`/`repeat` loop's body exits (`exit`, `Error`,
+ * `CurrReport.Quit`/`Break`, a `break` of that loop) count as its condition (`loopExitParts`), so a
+ * write ANY such guard reads is refused. R446 did this for a condition that reads no name and calls
+ * nothing (`while true`, `until false`); R480 extends it to every other condition that does not
+ * name a cursor method (`namesCursorMethod`). For a name- and call-free condition only, a write that
+ * FEEDS a guard's name is refused too, by name and to a fixpoint (`indirectFeeds`: `I += 1; Done :=
+ * I >= 3; if Done then exit`). And a write to an enclosing `for`'s control variable is refused
+ * (R480 shape 4n, in `classifyHangCapable`); a `for` gets no body guards. A scoped heuristic, not a
+ * proof. Not extended; each a known exclusion, pinned as not refused in `loop-exit-refusal.test.ts`,
+ * none shown safe: a condition naming a cursor method (`Next`, `Read`, `EOS`, `MoveNext`), which by
+ * name also covers a user procedure or field named `Next` and a mixed condition (`(C.Next() <> 0)
+ * or KeepGoing`); a write to a `for` loop's end bound; a `foreach` (its list); `asserterror` as the
+ * only exit; `CurrReport.Skip`.
  *
  * WHAT IT DELIBERATELY DOES NOT SEE, all UNCLASSIFIED rather than proven safe (spec 3.2): a target
  * read in the loop BODY rather than its condition (beyond R446's body-exit guards); preheader
@@ -55,7 +61,10 @@ const LOOP_KINDS: ReadonlySet<string> = new Set([
 /**
  * `for_statement` is absent on purpose. Whether an AL `for` can be made non-terminating by mutating
  * its control variable depends on whether the platform re-evaluates the bound and re-reads the
- * variable each iteration, and this repository has NOT measured that. Unmeasured, so unclassified.
+ * variable each iteration, and this repository has NOT measured that. R480 refuses a write to the
+ * control variable on relevance (Microsoft: the behaviour "isn't predictable") through a SEPARATE
+ * check in `classifyHangCapable`, so `hasEnclosingLoop` and `loopConditionParts`, which other
+ * operators' literal refusals read, do not change.
  */
 const SCOPE_KINDS: ReadonlySet<string> = new Set([ALNodeKind.procedure, ALNodeKind.trigger]);
 /** R302: a walk stops at a `SCOPE_KINDS` node or a split-header member (`isProcedureLike`). Nothing
@@ -158,14 +167,101 @@ function conditionIdentifiers(loop: ALSyntaxNode, ctx: SemanticContext): ALSynta
 }
 
 /**
- * R446: the parts that decide whether `loop` ends. Its own condition parts, plus, ONLY when that
- * condition reads no name and calls nothing in this build (`while true`, `until false`), the guard
- * of every exit in its body (`bodyExitGuards`). A scoped heuristic, not a proof that no mutant
- * hangs: see the R446 exclusions in the header.
+ * R446/R480: the parts that decide whether `loop` ends. Its own condition parts, plus the guard of
+ * every exit in its body (`bodyExitGuards`) UNLESS the condition names a cursor method
+ * (`namesCursorMethod`). When the condition reads no name and calls nothing in this build
+ * (`while true`, `until false`), also every value that feeds those parts (`indirectFeeds`). A scoped
+ * heuristic, not a proof that no mutant hangs: see the known exclusions in the header.
  */
 function loopExitParts(loop: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
   const own = loopConditionParts(loop);
-  return conditionIsNameAndCallFree(own, ctx) ? [...own, ...bodyExitGuards(loop)] : own;
+  if (conditionIsNameAndCallFree(own, ctx)) {
+    const parts = [...own, ...bodyExitGuards(loop)];
+    return [...parts, ...indirectFeeds(loop, parts, ctx)];
+  }
+  return namesCursorMethod(own, ctx) ? own : [...own, ...bodyExitGuards(loop)];
+}
+
+/** R480: a method whose name says it steps a cursor or a stream. By NAME, any receiver. */
+const CURSOR_METHODS: ReadonlySet<string> = new Set(["next", "read", "eos", "movenext"]);
+
+/**
+ * R480: does the condition (active arms, tails included; undecided read) name a cursor method? A
+ * `call_expression` whose callee is a bare name or a member, or a bare `member_expression` (`X.Next`
+ * with no parentheses), whose name is in `CURSOR_METHODS`. A heuristic, NOT a proof that the loop
+ * advances: a user procedure or field named `Next` matches, and so does a mixed condition
+ * (`(C.Next() <> 0) or KeepGoing`). Both are known exclusions.
+ */
+function namesCursorMethod(parts: ALSyntaxNode[], ctx: SemanticContext): boolean {
+  const named = (n: ALSyntaxNode | null): boolean =>
+    n !== null && CURSOR_METHODS.has(normalizeAlName(n.text));
+  const walk = (n: ALSyntaxNode): boolean => {
+    if (DIRECTIVE_MARKERS.has(n.rawKind)) return false;
+    if (armOfNode(ctx, n) === "inactive") return false;
+    if (n.rawKind === "call_expression") {
+      const f = n.childForFieldName("function");
+      if (f !== null && isIdentifierLike(f) && named(f)) return true;
+    }
+    if (n.rawKind === "member_expression" && named(n.childForFieldName("member"))) return true;
+    return n.namedChildren.some(walk);
+  };
+  return parts.some(walk);
+}
+
+/**
+ * R480 shape 2: the right-hand side (and its `#if` tails) of every body assignment, nested bodies
+ * included, whose target is a name `parts` read, to a fixpoint (`I += 1; Done := I >= 3; if Done
+ * then exit` makes `I >= 3` a part, then `1`). By NAME, the safe direction for a refusal: every
+ * identifier counts, member halves included, and a bare target `X` or a member target `R.X` matches
+ * a read of `X`. An assignment in an inactive arm adds nothing, because no name or reader reads an
+ * inactive node; an undecided one is followed.
+ */
+function indirectFeeds(
+  loop: ALSyntaxNode,
+  parts: ALSyntaxNode[],
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  const body = loop.childForFieldName("body");
+  if (body === null) return [];
+  const names = new Set<string>();
+  const collect = (n: ALSyntaxNode): void => {
+    if (DIRECTIVE_MARKERS.has(n.rawKind) || armOfNode(ctx, n) === "inactive") return;
+    if (isIdentifierLike(n)) names.add(normalizeAlName(n.text));
+    for (const c of n.namedChildren) collect(c);
+  };
+  for (const p of parts) collect(p);
+  const assignments: ALSyntaxNode[] = [];
+  const find = (n: ALSyntaxNode): void => {
+    if (n.kind === ALNodeKind.assignment_statement) assignments.push(n);
+    for (const c of n.namedChildren) find(c);
+  };
+  find(body);
+  const out: ALSyntaxNode[] = [];
+  const used = new Set<ALSyntaxNode>();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const a of assignments) {
+      if (used.has(a)) continue;
+      const left = a.childForFieldName("left");
+      const right = a.childForFieldName("right");
+      if (left === null || right === null) continue;
+      const name = left.kind === ALNodeKind.field_access ? left.childForFieldName("member") : left;
+      if (name === null || !isIdentifierLike(name) || !names.has(normalizeAlName(name.text))) {
+        continue;
+      }
+      used.add(a);
+      const fed = [
+        right,
+        ...a.namedChildren.filter((c) => c.rawKind === "preproc_conditional_expression_tail"),
+      ];
+      for (const f of fed) {
+        out.push(f);
+        collect(f);
+      }
+      changed = true;
+    }
+  }
+  return out;
 }
 
 const BREAK_SCOPES: ReadonlySet<string> = new Set([
@@ -525,6 +621,13 @@ export function classifyHangCapable(
 
   let cur: ALSyntaxNode | null = node.parent;
   while (cur !== null && !isScope(cur)) {
+    // R480 shape 4n: a write to an enclosing `for`'s control variable, by declaration. A separate
+    // check: `for` is not in `LOOP_KINDS`, which the literal refusals of other operators read.
+    if (cur.rawKind === "for_statement") {
+      const variable = cur.childForFieldName("variable");
+      const varSym = variable === null ? null : resolveVarRef(variable, ctx);
+      if (varSym !== null && sameDeclaration(varSym, targetSym)) return "loop-condition-target";
+    }
     if (LOOP_KINDS.has(cur.kind)) {
       for (const ident of conditionIdentifiers(cur, ctx)) {
         const identSym = resolveVarRef(ident, ctx);

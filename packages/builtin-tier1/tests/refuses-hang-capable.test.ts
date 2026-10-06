@@ -239,6 +239,106 @@ describe("R446: a body-exit guard's write is refused AND counted, its sibling em
   }
 });
 
+/** R480: shapes 1, 2, 3n and 4n are refused AND counted, their siblings emitted. 4n through all four
+ *  operators (M1). */
+describe("R480: the new shapes are refused AND counted, their siblings emitted", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const cu = (id: number, vars: string, body: string) =>
+    `codeunit ${id} "R" { procedure P() var ${vars} begin ${body} end; }`;
+  const FOR_HEAD = "for Step := 5 downto 1 do begin";
+  const R480: (Case & { shape: string })[] = [
+    {
+      shape: "1",
+      op: removeAssignment,
+      src: cu(
+        50490,
+        "Go: Boolean; Pending: Integer; Total: Integer;",
+        "while Go do begin Pending += 1; Total += 1; if Pending > 3 then exit; end;",
+      ),
+      kind: "assignment_statement",
+      refused: "Pending += 1",
+      claimed: "Total += 1",
+    },
+    {
+      shape: "2",
+      op: shiftInteger,
+      src: cu(
+        50491,
+        "Done: Boolean; Pending: Integer; Total: Integer;",
+        "while true do begin Pending += 1; Total += 1; Done := Pending >= 3; if Done then exit; end;",
+      ),
+      kind: "integer",
+      refused: "1",
+      refusedWithin: "Pending += 1",
+      claimed: "1",
+      claimedWithin: "Total += 1",
+    },
+    {
+      shape: "3n",
+      op: swapAdditive,
+      src: cu(
+        50492,
+        "Pending: Integer; Total: Integer;",
+        "while Ready() do begin Pending := Pending + 1; Total := Total + 1; if Pending > 3 then exit; end;",
+      ),
+      kind: "additive_expression",
+      refused: "Pending + 1",
+      claimed: "Total + 1",
+    },
+    {
+      shape: "4n",
+      op: removeAssignment,
+      src: cu(50493, "Step: Integer; Total: Integer;", `${FOR_HEAD} Step += 1; Total += 1; end;`),
+      kind: "assignment_statement",
+      refused: "Step += 1",
+      claimed: "Total += 1",
+    },
+    {
+      shape: "4n",
+      op: shiftInteger,
+      src: cu(50494, "Step: Integer; Total: Integer;", `${FOR_HEAD} Step := 1; Total := 7; end;`),
+      kind: "integer",
+      refused: "1",
+      refusedWithin: "Step := 1",
+      claimed: "7",
+    },
+    {
+      shape: "4n",
+      op: swapAdditive,
+      src: cu(
+        50495,
+        "Step: Integer; Total: Integer;",
+        `${FOR_HEAD} Step := Step + 1; Total := Total + 1; end;`,
+      ),
+      kind: "additive_expression",
+      refused: "Step + 1",
+      claimed: "Total + 1",
+    },
+    {
+      shape: "4n",
+      op: flipBooleanLiteral,
+      src: cu(
+        50496,
+        "Step: Integer; Total: Integer;",
+        `${FOR_HEAD} Step := Step + Delta(true); Total := Total + Delta(true); end;`,
+      ),
+      kind: "boolean",
+      refused: "true",
+      refusedWithin: "Step := Step + Delta(true)",
+      claimed: "true",
+      claimedWithin: "Total := Total + Delta(true)",
+    },
+  ];
+
+  for (const c of R480) {
+    it(`shape ${c.shape}, ${c.op.name}: refused AND counted, the sibling emitted`, () =>
+      assertCounted(c));
+  }
+});
+
 describe("R447: an earlier check refuses, the hang check would not (5.1b)", () => {
   beforeAll(async () => {
     await initParser();

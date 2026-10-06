@@ -23,12 +23,20 @@ import { swapAdditive } from "../src/swap-additive";
  * `claimedSites` calls `targets()` AND `generate()` on every node and fails if they disagree, so a
  * refusal made in `generate()` alone (the prototype's shape) is caught, not only an emitted mutant.
  */
-function claimedSites(op: MutationOperator, src: string, symbols?: string[]): string[] {
+function claimedSites(
+  op: MutationOperator,
+  src: string,
+  symbols?: string[] | "undecided",
+): string[] {
   const root = wrapRoot(parseAL(src));
-  const ctx = buildSemanticContext(
+  const built = buildSemanticContext(
     [{ path: "fixture.al", root }],
-    symbols === undefined ? undefined : new Map([[root, evaluateArms(root, src, symbols)]]),
+    symbols === undefined || symbols === "undecided"
+      ? undefined
+      : new Map([[root, evaluateArms(root, src, symbols)]]),
   );
+  // "undecided": every node answers as in a file whose directives could not be evaluated.
+  const ctx = symbols === "undecided" ? { ...built, armOf: () => "undecided" as const } : built;
   const out: string[] = [];
   visit(root, (n: ALSyntaxNode) => {
     const claimed = op.targets(n, ctx);
@@ -296,8 +304,12 @@ describe("R454: literals in a loop's exit test the older walks missed", () => {
  */
 describe("R446: a write a body-exit guard reads, in a loop whose condition is name- and call-free", () => {
   const V = "Done: Boolean; Go: Boolean; I: Integer; J: Integer; K: Integer; Total: Integer;";
-  const claims = (op: MutationOperator, lines: string[], vars = V, symbols?: string[]) =>
-    claimedSites(op, unit(lines.join("\n"), vars), symbols);
+  const claims = (
+    op: MutationOperator,
+    lines: string[],
+    vars = V,
+    symbols?: string[] | "undecided",
+  ) => claimedSites(op, unit(lines.join("\n"), vars), symbols);
   const COUNTER = [
     "        while true do begin", // 7
     "            I += 1;", // 8 refused
@@ -377,15 +389,28 @@ describe("R446: a write a body-exit guard reads, in a loop whose condition is na
     expect(claims(removeAssignment, src)).toEqual(["10|Total += 1"]);
   });
 
-  it("NOT over-refused: a loop whose condition reads a name keeps body guards out (revert: always add guards)", () => {
+  it("R480: a loop whose condition reads a name now gets body guards too; a same-loop sibling is still claimed", () => {
+    // Was "NOT over-refused" (J claimed): R480 shape 1 refuses a body-exit guard's write under a
+    // name-reading condition, so the old exclusion is intentionally gone. `Total` is the control.
     const src = [
       "        while I < 10 do begin",
       "            I += 1;", // 8 refused by the condition itself
-      "            J += 1;", // 9 claimed: only a body guard reads J
+      "            J += 1;", // 9 refused: a body guard reads J
+      "            Total += 1;", // 10 claimed
       "            if J > 3 then exit;",
       "        end;",
     ];
-    expect(claims(removeAssignment, src)).toEqual(["9|J += 1"]);
+    expect(claims(removeAssignment, src)).toEqual(["10|Total += 1"]);
+  });
+
+  it("NOT over-refused: a cursor condition keeps body guards out (revert: always add guards)", () => {
+    const src = [
+      "        while Cust.Next() <> 0 do begin",
+      "            I += 1;", // 8 claimed: only a body guard reads I
+      "            if I > 3 then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src, `${V} Cust: Record Customer;`)).toEqual(["8|I += 1"]);
   });
 
   it("an inner loop's `break` ends only the inner loop (revert: `exitsLoop` accepts any `break`)", () => {
@@ -437,11 +462,13 @@ describe("R446: a write a body-exit guard reads, in a loop whose condition is na
     expect(claims(removeAssignment, src, vars)).toEqual(["9|L3 := L2"]);
   });
 
-  it("a loop condition's `#if` tail: active and reading a name, guards stay out; inactive, they count (reverts: read inactive arms; skip tails)", () => {
+  it("a loop condition's `#if` tail: active and naming a cursor, guards stay out; inactive, they count (reverts: read inactive arms; skip tails)", () => {
+    // R480: the tail was `and Go`, which now gets guards in either build (shape 1), so the tail
+    // names a cursor instead and keeps both reverts meaningful.
     const src = [
       "        while true",
       "#if LETHALX",
-      "            and Go",
+      "            and (Cust.Next() <> 0)",
       "#endif",
       "        do begin",
       "            I += 1;", // 12
@@ -449,8 +476,12 @@ describe("R446: a write a body-exit guard reads, in a loop whose condition is na
       "            if I > 3 then exit;",
       "        end;",
     ];
-    expect(claims(removeAssignment, src, V, ["LETHALX"])).toEqual(["12|I += 1", "13|Total += 1"]);
-    expect(claims(removeAssignment, src, V, [])).toEqual(["13|Total += 1"]);
+    const vars = `${V} Cust: Record Customer;`;
+    expect(claims(removeAssignment, src, vars, ["LETHALX"])).toEqual([
+      "12|I += 1",
+      "13|Total += 1",
+    ]);
+    expect(claims(removeAssignment, src, vars, [])).toEqual(["13|Total += 1"]);
   });
 
   it("a guard's `#if` tail: active, its read counts; inactive, it does not (revert: drop the guard-tail loop)", () => {
@@ -508,53 +539,392 @@ end; }`;
 });
 
 /**
- * R446's EXCLUSIONS (R480, measure-first): shapes that can hang but that this rule does not refuse
- * today. Each pins the write as CLAIMED; a change that starts refusing one must change it here.
+ * R480: four of R446's six excluded shapes are now refused. Each refused write sits beside a
+ * same-loop control that must stay claimed. Each `it` names the revert that turns it red.
  */
-describe("R446 exclusions: hang-capable writes still claimed (R480)", () => {
-  const V = "Done: Boolean; Go: Boolean; I: Integer; J: Integer; N: Integer; Total: Integer;";
+describe("R480: hang-capable writes R446 did not see, now refused", () => {
+  const V =
+    "Done: Boolean; Flag: Boolean; Go: Boolean; A, B: Integer; I: Integer; J: Integer; K: Integer; N: Integer; Total: Integer; Cust: Record Customer;";
+  const claims = (
+    op: MutationOperator,
+    lines: string[],
+    vars = V,
+    symbols?: string[] | "undecided",
+  ) => claimedSites(op, unit(lines.join("\n"), vars), symbols);
+  /** A counter loop and a flag loop under `head` ... `tail`: line 8 is the refused write, line 9
+   *  the same-loop control. */
+  const counter = (head: string, tail: string, step = "+= 1") => [
+    `        ${head}`, // 7
+    `            I ${step};`, // 8
+    `            Total ${step};`, // 9
+    "            if I > 3 then exit;",
+    `        ${tail}`,
+  ];
+  const flag = (head: string, tail: string) => [
+    `        ${head}`, // 7
+    "            Done := true;", // 8
+    "            Flag := true;", // 9
+    "            if Done then exit;",
+    `        ${tail}`,
+  ];
+  const LOOPS = [
+    ["while Go do begin", "end;"],
+    ["repeat", "until Go;"],
+  ] as const;
+
+  // Shape 1. Revert: `loopExitParts` adds body guards only to a name- and call-free condition.
+  for (const [head, tail] of LOOPS) {
+    it(`shape 1, \`${head}\`: a body-exit guard's write is refused through all four operators`, () => {
+      expect(claims(removeAssignment, counter(head, tail))).toEqual(["9|Total += 1"]);
+      expect(claims(shiftInteger, counter(head, tail))).toEqual(["9|1"]);
+      expect(claims(swapAdditive, counter(head, tail, ":= I + 1"))).toEqual(["9|I + 1"]);
+      expect(claims(flipBooleanLiteral, flag(head, tail))).toEqual(["9|true"]);
+    });
+  }
+
+  it("shape 1 CONTROL: under a cursor condition the same writes are still claimed (revert: drop the cursor exemption)", () => {
+    const [head, tail] = ["while Cust.Next() <> 0 do begin", "end;"];
+    expect(claims(removeAssignment, counter(head, tail))).toEqual(["8|I += 1", "9|Total += 1"]);
+    expect(claims(flipBooleanLiteral, flag(head, tail))).toEqual(["8|true", "9|true"]);
+  });
+
+  // Shape 3n: a call in the condition that names no cursor method gets body guards too.
+  const called = (cond: string) => flag(`while ${cond} do begin`, "end;");
+  it("shape 3n: a call that names no cursor method gets body guards (revert: guards only for a call-free condition)", () => {
+    for (const cond of ["not Cust.IsEmpty()", "Ready()", "Cust.NextOne() <> 0"]) {
+      expect(claims(removeAssignment, called(cond)), cond).toEqual(["9|Flag := true"]);
+    }
+  });
+
+  it("shape 3n: each cursor name, any case, quoted, bare member or call, keeps guards out (revert: drop the cursor exemption)", () => {
+    for (const cond of [
+      "Cust.Next() <> 0",
+      "Cust.NEXT(1) <> 0",
+      'Cust."Next"() <> 0',
+      "X.Next <> 0", // a bare member, no parentheses
+      "not InS.EOS()",
+      "not InS.eos",
+      "Rd.Read()",
+      "Enum.MoveNext()",
+      "Next()", // a bare callee: a user procedure named Next is a known exclusion, by name
+    ]) {
+      expect(claims(removeAssignment, called(cond)), cond).toEqual([
+        "8|Done := true",
+        "9|Flag := true",
+      ]);
+    }
+  });
+
+  it("shape 3n: a condition `#if` tail naming a cursor exempts when active or undecided, not when inactive", () => {
+    const src = [
+      "        while not Cust.IsEmpty()", // 7
+      "#if LETHALX",
+      "            or (Cust.Next() <> 0)",
+      "#endif",
+      "        do begin",
+      "            Done := true;", // 12
+      "            Flag := true;", // 13
+      "            if Done then exit;",
+      "        end;",
+    ];
+    const both = ["12|Done := true", "13|Flag := true"];
+    expect(claims(removeAssignment, src, V, ["LETHALX"])).toEqual(both);
+    expect(claims(removeAssignment, src, V, "undecided")).toEqual(both);
+    expect(claims(removeAssignment, src, V, [])).toEqual(["13|Flag := true"]);
+  });
+
+  // Shape 2: in a `while true` loop, a write that FEEDS a guard's variable is refused.
+  it("shape 2: a chain whose hops run forward in source order needs a fixpoint (revert: one pass)", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;", // 8 refused: feeds J
+      "            J := I;", // 9 refused: feeds Done
+      "            Done := J >= 3;", // 10 refused: the guard reads Done
+      "            Total += 1;", // 11 claimed
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["11|Total += 1"]);
+    expect(claims(shiftInteger, src)).toEqual(["11|1"]);
+  });
+
+  it("shape 2: the same chain in reverse source order (revert: follow one hop only)", () => {
+    const src = [
+      "        while true do begin",
+      "            Done := J >= 3;", // 8
+      "            J := I;", // 9
+      "            I += 1;", // 10
+      "            Total += 1;", // 11 claimed
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["11|Total += 1"]);
+  });
+
+  it("shape 2: a cycle ends, and both of its writes are refused", () => {
+    const src = [
+      "        while true do begin",
+      "            I := J + 1;", // 8 refused: the guard reads I
+      "            J := I;", // 9 refused: feeds I
+      "            Total += 1;", // 10 claimed
+      "            if I > 5 then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["10|Total += 1"]);
+  });
+
+  it("shape 2: `A, B: Integer` share a declaration, but only A feeds the guard", () => {
+    const src = [
+      "        while true do begin",
+      "            A += 1;", // 8 refused
+      "            B += 1;", // 9 claimed
+      "            Done := A > 3;", // 10 refused
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["9|B += 1"]);
+  });
+
+  const TABLE = "table 50496 T { fields { field(1; Done; Boolean) { } } }";
+  const member = (feed: string, guard: string) => `${TABLE}
+codeunit 50497 C { procedure P() var R: Record T; Done: Boolean; I: Integer; Total: Integer; begin
+  while true do begin
+    I += 1;
+    ${feed};
+    Total += 1;
+    if ${guard} then exit;
+  end;
+end; }`;
+
+  it("shape 2: a member target `R.Done := I >= 3` feeds `if R.Done` (revert: follow bare targets only)", () => {
+    expect(claimedSites(removeAssignment, member("R.Done := I >= 3", "R.Done"))).toEqual([
+      "6|Total += 1",
+    ]);
+  });
+
+  it("shape 2 BY NAME: a local `Done` feeds a guard reading `R.Done` (accepted over-refusal of `I`)", () => {
+    expect(claimedSites(removeAssignment, member("Done := I >= 3", "R.Done"))).toEqual([
+      "5|Done := I >= 3",
+      "6|Total += 1",
+    ]);
+  });
+
+  it("shape 2 boundary (B1): a name-reading condition gets guards but no feeds (revert: close feeds for every loop)", () => {
+    for (const head of ["while Go do begin", "while Ready() do begin"]) {
+      const src = [
+        `        ${head}`,
+        "            I += 1;", // 8 claimed: it only feeds Done
+        "            Done := I >= 3;", // 9 refused through shape 1 / 3n
+        "            Total += 1;", // 10 claimed
+        "            if Done then exit;",
+        "        end;",
+      ];
+      expect(claims(removeAssignment, src), head).toEqual(["8|I += 1", "10|Total += 1"]);
+    }
+  });
+
+  it("shape 2: a feed's own `#if` tail counts when active or undecided, not when inactive", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;", // 8
+      "            Done := false", // 9
+      "#if LETHALX",
+      "                or (I >= 3)",
+      "#endif",
+      "            ;",
+      "            Total += 1;", // 14
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src, V, ["LETHALX"])).not.toContain("8|I += 1");
+    expect(claims(removeAssignment, src, V, "undecided")).not.toContain("8|I += 1");
+    expect(claims(removeAssignment, src, V, [])).toContain("8|I += 1");
+    expect(claims(removeAssignment, src, V, ["LETHALX"])).toContain("14|Total += 1");
+  });
+
+  it("shape 2: a feed in an inactive arm is skipped, with the names it reads; active or undecided, it is followed (revert: collect names from inactive arms)", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;", // 8
+      "            J := I;", // 9
+      "#if LETHALX",
+      "            Done := J >= 3;",
+      "#endif",
+      "            Total += 1;", // 13
+      "            if Done then exit;",
+      "        end;",
+    ];
+    const builds: (string[] | "undecided")[] = [["LETHALX"], "undecided"];
+    for (const b of builds) {
+      const got = claims(removeAssignment, src, V, b);
+      expect(got, `[${b}]`).not.toContain("8|I += 1");
+      expect(got, `[${b}]`).not.toContain("9|J := I");
+    }
+    expect(claims(removeAssignment, src, V, [])).toEqual(["8|I += 1", "9|J := I", "13|Total += 1"]);
+  });
+
+  // Shape 4n: a write to an enclosing `for`'s control variable. Revert: drop the 4n check.
+  for (const dir of ["to", "downto"]) {
+    it(`shape 4n, \`${dir}\`: a control-variable write is refused through all four operators`, () => {
+      const head = dir === "to" ? "for I := 1 to N do begin" : "for I := N downto 1 do begin";
+      expect(
+        claims(removeAssignment, [
+          `        ${head}`,
+          "            I += 1;",
+          "            Total += 1;",
+          "        end;",
+        ]),
+      ).toEqual(["9|Total += 1"]);
+      expect(
+        claims(shiftInteger, [
+          `        ${head}`,
+          "            I := 1;",
+          "            Total := 7;",
+          "        end;",
+        ]),
+      ).toEqual(["9|7"]);
+      expect(
+        claims(swapAdditive, [
+          `        ${head}`,
+          "            I := I - 1;",
+          "            Total := Total + 1;",
+          "        end;",
+        ]),
+      ).toEqual(["9|Total + 1"]);
+      expect(
+        claims(flipBooleanLiteral, [
+          `        ${head}`,
+          "            I := I + Delta(true);",
+          "            Total := Total + Delta(true);",
+          "        end;",
+        ]),
+      ).toEqual(["9|true"]);
+    });
+  }
+
+  it("shape 4n CONTROLS: a preheader write, an end-bound write and a guard-only write are still claimed", () => {
+    const src = [
+      "        I := 5;", // 7 preheader
+      "        for I := 1 to N do begin",
+      "            N += 1;", // 9 end bound: a known exclusion
+      "            I += 1;", // 10 refused
+      "            Done := true;", // 11 guard-only: a `for` gets no body guards
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["7|I := 5", "9|N += 1", "11|Done := true"]);
+  });
+
+  it("shape 4n: `A, B: Integer` share a declaration, but a write to B is not A's (revert: compare declarations by position only)", () => {
+    const src = [
+      "        for A := 1 to N do begin",
+      "            B += 1;", // 8 claimed
+      "            A += 1;", // 9 refused
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["8|B += 1"]);
+  });
+
+  it("shape 4n M2: a `for` is still no loop for flip-boolean-literal's in-loop `if` rule", () => {
+    expect(
+      claims(flipBooleanLiteral, [
+        "        for I := 1 to 3 do",
+        "            if true then Total += 1;",
+      ]),
+    ).toEqual(["8|true"]);
+  });
+
+  it("shape 4n: a trigger-local control variable is refused too (sol final r1 minor 3)", () => {
+    const src = [
+      "codeunit 50000 P",
+      "{",
+      "    trigger OnRun()",
+      "    var",
+      "        I: Integer;",
+      "        Total: Integer;",
+      "    begin",
+      "        for I := 1 to 3 do begin",
+      "            I := 1;", // 9 refused
+      "            Total := 7;", // 10 claimed
+      "        end;",
+      "    end;",
+      "}",
+    ].join("\n");
+    expect(claimedSites(removeAssignment, src)).toEqual(["10|Total := 7"]);
+  });
+
+  it("shape 2: a feed found only inside a nested body (sol final r1 minor 2; revert: scan the loop's own statements only)", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;", // 8 refused: feeds Done inside the `for`
+      "            for J := 1 to 1 do",
+      "                Done := I >= 3;", // 10 refused: the guard reads Done
+      "            Total += 1;", // 11 claimed
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["11|Total += 1"]);
+  });
+
+  // Nesting (B4): each enclosing loop checks the write against ITS OWN exit parts.
+  it("nesting: an inner `break` does not exit the outer loop; an inner `exit` does", () => {
+    const nested = (leave: string) => [
+      "        while Go do begin",
+      "            K := 3;", // 8
+      "            repeat",
+      `                if K > 2 then ${leave};`,
+      "            until false;",
+      "            exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, nested("break"))).toEqual(["8|K := 3"]);
+    expect(claims(removeAssignment, nested("exit"))).toEqual([]);
+  });
+
+  it("nesting: a control-variable write inside an inner `while` is refused by the outer `for`", () => {
+    const src = [
+      "        for I := 1 to N do begin",
+      "            J := 0;", // 8 claimed
+      "            while J < 3 do begin",
+      "                I += 1;", // 10 refused by the for
+      "                J += 1;", // 11 refused by the while
+      "                Total += 1;", // 12 claimed
+      "            end;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["8|J := 0", "12|Total += 1"]);
+  });
+});
+
+/**
+ * R480's KNOWN EXCLUSIONS: shapes that can hang but that this rule does not extend to. Each pins the
+ * write as CLAIMED; a change that starts refusing one must change it here. None is proven safe.
+ */
+describe("R480 known exclusions: hang-capable writes still claimed", () => {
+  const V =
+    "Done: Boolean; Go: Boolean; KeepGoing: Boolean; I: Integer; J: Integer; N: Integer; Total: Integer; Cust: Record Customer;";
   const claims = (lines: string[], vars = V) =>
     claimedSites(removeAssignment, unit(lines.join("\n"), vars));
 
-  it("a body-exit flag under a condition that reads a name", () => {
-    expect(
-      claims([
-        "        while Go do begin",
-        "            Done := true;",
-        "            if Done then exit;",
-        "        end;",
-      ]),
-    ).toEqual(["8|Done := true"]);
-  });
-
-  it("an indirect guard: the write feeds the guard's variable", () => {
-    expect(
-      claims([
-        "        while true do begin",
-        "            I += 1;",
-        "            Done := I >= 3;",
-        "            if Done then exit;",
-        "        end;",
-      ]),
-    ).toEqual(["8|I += 1"]);
-  });
-
-  it("a condition that calls something", () => {
-    expect(
-      claims(
-        [
-          "        while not Cust.IsEmpty() do begin",
+  it("a cursor condition, including a mixed one (`(Cust.Next() <> 0) or KeepGoing`)", () => {
+    for (const cond of ["Cust.Next() <> 0", "(Cust.Next() <> 0) or KeepGoing"]) {
+      expect(
+        claims([
+          `        while ${cond} do begin`,
           "            Done := true;",
           "            if Done then exit;",
           "        end;",
-        ],
-        `${V} Cust: Record Customer;`,
-      ),
-    ).toEqual(["8|Done := true"]);
+        ]),
+        cond,
+      ).toEqual(["8|Done := true"]);
+    }
   });
 
-  it("an outer `for` whose bound the body moves, and an outer `foreach`", () => {
+  it("an outer `for` whose end bound the body moves", () => {
     expect(claims(["        for I := 1 to N do", "            N += 1;"])).toEqual(["8|N += 1"]);
+  });
+
+  it("an outer `foreach` whose list the body replaces", () => {
     expect(
       claims(
         ["        foreach J in L do", "            L := L2;"],
