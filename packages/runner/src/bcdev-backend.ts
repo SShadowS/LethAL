@@ -380,11 +380,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
     app: { readonly publisher: string; readonly name: string },
     fetchFn: FetchLike = bcFetch,
   ): Promise<Uint8Array | null | undefined> {
-    // `undefined`, not `null`: this configuration cannot form the request at all, so there is
-    // nothing for the caller to report. The env-tool path is the real instance — it reaches BC
-    // through a tool-supplied base URL and names no dev server of its own, and it publishes the
-    // test app itself, so a warning on every one of its runs would be noise about a check that was
-    // never applicable.
+    // `undefined`, not `null`: this configuration cannot form the request at all (no dev server or
+    // no dev-endpoint credentials configured), so there is nothing for the caller to report. An
+    // env-tool session is NOT this case: `startEnvToolSession` (env-tool-session.ts) sets `server`,
+    // `serverInstance`, `BC_DEV_USER` and `BC_DEV_PASSWORD`, and R373 reads its test app back
+    // through here after the lease-held publish.
     const url = devPackagesUrl(this.cfg, app);
     if (url === null) return undefined;
     const username = this.cfg.env?.BC_DEV_USER;

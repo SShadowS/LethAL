@@ -121,11 +121,12 @@ export class TestAppDiffersError extends Error {
 }
 
 /**
- * R486: an env-tool session resolved a `--resume` or `--skip-known-survivors` baseline against the
- * test app the server held BEFORE the lease, and the test app read back after its hook published
- * `publishApps` differs from it, or could not be read. Carrying a verdict across that would report
- * kills measured under the outgoing test app as this run's (a false kill), so it refuses before the
- * first baseline.
+ * R486: an env-tool session resolved a `--resume` baseline against the test app the server held
+ * BEFORE the lease, and the test app read back after its hook published `publishApps` differs from
+ * it, or could not be read. Carrying a verdict across that would report kills measured under the
+ * outgoing test app as this run's (a false kill), so it refuses before the first baseline.
+ * (`--skip-known-survivors` needs no refusal: its history filter runs after the hook and compares
+ * the read-back.)
  */
 export class TestAppRepublishedError extends Error {
   readonly code = "test-app-republished" as const;

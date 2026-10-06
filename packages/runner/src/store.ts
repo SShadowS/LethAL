@@ -782,17 +782,6 @@ export class ResultsStore {
     if (changed !== 1) throw new Error(`store.ts: setRunTestAppHash: no run ${runId}`);
   }
 
-  /** R486: the latest finished run's recorded test-app hash for this project, the one
-   *  `--skip-known-survivors` would skip from; `null` when there is none or it recorded none. */
-  latestFinishedTestAppHash(projectPath: string): string | null {
-    const row = this.db
-      .query(
-        "SELECT test_app_hash FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
-      )
-      .get(projectPath) as { test_app_hash: string | null } | null;
-    return row?.test_app_hash ?? null;
-  }
-
   /** R442: records what the run numbered no ordinal for, once generation knows it. Called before
    *  any mutant row is written, so a run that dies before it holds no verdict and stays NULL. */
   setCarryHidden(runId: number, hidden: CarryHidden): void {

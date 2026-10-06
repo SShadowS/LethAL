@@ -5347,6 +5347,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let historyCoverageModeWarned = false;
   // R247: likewise for its test-app warning.
   let historyTestAppWarned = false;
+  // R486: the test app the history filter compares. On an env-tool session it becomes the one
+  // read back after the hook published the test apps (below), never the pre-lease read.
+  let historyTestAppHash = testAppHash;
   // R442: likewise for its untrusted-run and hidden-files warnings.
   let historyCarryWarned = false;
 
@@ -5435,24 +5438,21 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       readBack = after.sources;
       // R486: the row records the test app that ran, or NULL ("unknown"), never the outgoing one.
       cfg.store.setRunTestAppHash(runId, after.packageHash ?? null);
-      // R486, fail closed: a carried verdict was measured against `testAppHash`, the pre-lease
-      // read. It stands only if the read-back is defined and equal. First after the hook, before
-      // and independent of every digest check.
-      const flag =
-        resolvedResume !== undefined
-          ? cfg.resume === "last"
-            ? "--resume"
-            : `--resume-run ${String(cfg.resume)}`
-          : (cfg.skipKnownSurvivors ?? false) &&
-              testAppHash !== undefined &&
-              cfg.store.latestFinishedTestAppHash(cfg.projectDir) === testAppHash
-            ? "--skip-known-survivors"
-            : undefined;
+      // R486: the history filter runs per batch, after this, so it compares the read-back.
+      // `undefined` matches no finished run, so nothing is skipped (fail closed).
+      historyTestAppHash = after.packageHash;
+      // R486, fail closed: a resume was resolved before the lease against `testAppHash`, the
+      // pre-lease read. Its verdicts stand only if the read-back is defined and equal. First after
+      // the hook, before and independent of every digest check.
       if (
-        flag !== undefined &&
+        resolvedResume !== undefined &&
         (after.packageHash === undefined || after.packageHash !== testAppHash)
       ) {
-        throw new TestAppRepublishedError(flag, testAppHash, after.packageHash);
+        throw new TestAppRepublishedError(
+          cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
+          testAppHash,
+          after.packageHash,
+        );
       }
     }
     // R403 phase B (plan §3(b)): on an env-tool session the test app that RUNS is the
@@ -5733,7 +5733,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const prior = cfg.store.priorSurvivorKeys(
         cfg.projectDir,
         caps.coverage,
-        testAppHash,
+        historyTestAppHash,
         buildSymbols,
         carryHidden.files,
         {
@@ -5770,7 +5770,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             emit({
               type: "warning",
               code: "history-test-app-changed",
-              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(historyTestAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
             });
           },
           carryUntrusted: (old) => {
@@ -7750,9 +7750,10 @@ async function reportPublishedTestApp(
   /** R403 phase B: the derived test set when the session runs the arm-FILTERED suite, so the
    *  published source is filtered alike; absent when it runs the unfiltered one. */
   armSymbols: readonly string[] | undefined,
-  /** R373: false on an env-tool session's pre-lease read, which may be the OUTGOING package; the
-   *  `published-test-app-mismatch` warning is then judged on the read after its hook. */
-  judgeMismatch = true,
+  /** R373: false on an env-tool session's pre-lease read, which may be the OUTGOING package; its
+   *  `published-test-app-mismatch` and `published-test-app-unreadable` warnings are then said
+   *  only by the read after its hook. */
+  judge = true,
 ): Promise<{
   testAppHash: string | undefined;
   sources: PublishedTestSources;
@@ -7763,6 +7764,7 @@ async function reportPublishedTestApp(
   // the package's hash when it was read, `undefined` when the read failed, else the test source
   // tree's hash).
   const sourceHash = () => testAppHashFor(undefined, cfg.testDir);
+  const warn: RunEmitter = judge ? emit : () => {};
   if (read.kind === "no-fetch") {
     return { testAppHash: await sourceHash(), sources: { kind: "not-published" } };
   }
@@ -7774,7 +7776,7 @@ async function reportPublishedTestApp(
   }
   const { name } = read;
   if (read.kind === "failed") {
-    emit({
+    warn({
       type: "warning",
       code: "published-test-app-unreadable",
       message: `[lethal] could not read the published test app "${name}" from the server, so this run did not verify that the container holds the suite this project's source declares. A stale test app is still caught at baseline, one round trip later.`,
@@ -7791,7 +7793,7 @@ async function reportPublishedTestApp(
       armSymbols !== undefined ? { buildSymbols: armSymbols } : {},
     );
   } catch (err) {
-    emit({
+    warn({
       type: "warning",
       code: "published-test-app-unreadable",
       message: `[lethal] the server returned a package for the test app "${name}" that could not be read (${err instanceof Error ? err.message : String(err)}), so this run did not verify the published suite.`,
@@ -7799,13 +7801,11 @@ async function reportPublishedTestApp(
     return { testAppHash, sources: { kind: "unavailable", why: UNREADABLE } };
   }
 
-  const message = judgeMismatch
-    ? publishedTestAppWarning(
-        comparePublishedTestApp({ version, tests: tests.map(qualifiedTestName) }, published),
-      )
-    : undefined;
+  const message = publishedTestAppWarning(
+    comparePublishedTestApp({ version, tests: tests.map(qualifiedTestName) }, published),
+  );
   if (message !== undefined) {
-    emit({ type: "warning", code: "published-test-app-mismatch", message });
+    warn({ type: "warning", code: "published-test-app-mismatch", message });
   }
   const files = publishedAlSources(Buffer.from(bytes));
   return {
@@ -7836,7 +7836,7 @@ type PublishedTestSources =
 const NO_PUBLISHED_READ =
   "the published test app could not be requested from the server (no dev server, no dev-endpoint credentials, or no readable test app.json), and the source on disk is not known to be the body it runs";
 const UNREADABLE =
-  "the published test app could not be read, see the published-test-app-unreadable warning";
+  "the published test app could not be read (on an env-tool session this is the read before its own publish; the published-test-app-unreadable warning appears only if the read after the publish fails too)";
 
 /**
  * R139 check 2 plus R-278's digests, from ONE package read. R-372: on a backend that publishes, the
@@ -8003,7 +8003,15 @@ async function deferredTestDigests(
     return { why: `this backend cannot read the published test app back ${AFTER}` };
   }
   if (sources.kind === "unavailable") return { why: `${AFTER}: ${sources.why}` };
-  const mode = cfg.backend.microsoftMode?.();
+  // bcdev's `microsoftMode` throws `DependencyUnreadableError` with no harness verifier: that is a
+  // run without digests, never a session abort.
+  let mode: MicrosoftMode | undefined;
+  try {
+    mode = cfg.backend.microsoftMode?.();
+  } catch (err) {
+    if (!(err instanceof DependencyUnreadableError)) throw err;
+    return { why: `the installed app versions cannot be read ${AFTER}: ${err.message}` };
+  }
   const fetchPackage = cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend);
   if (mode?.kind !== "bytes" || fetchPackage === undefined) {
     return {

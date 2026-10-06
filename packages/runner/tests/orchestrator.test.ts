@@ -8179,6 +8179,10 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       readonly extra?: Partial<SessionConfig>;
       readonly dirs?: { projectDir: string; testDir: string; instrumentedDir: string };
       readonly store?: ResultsStore;
+      /** The test app the server serves before the hook; default P1 (`null`: the read fails). */
+      readonly pre?: Uint8Array | null;
+      /** The backend's `microsoftMode` throws, as bcdev's does with no harness verifier. */
+      readonly microsoftModeThrows?: boolean;
     }
 
     async function envRun(o: EnvRun) {
@@ -8197,13 +8201,18 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           if (o.dep === undefined) return null;
           return hooked ? o.dep.post : o.dep.pre;
         }
-        return hooked ? o.post : P1;
+        return hooked ? o.post : o.pre === undefined ? P1 : o.pre;
       };
       const client = new FakeLeaseClient();
       const { lease } = leaseCfg(client);
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
-        microsoftMode: () => mode(o.installed ?? { [APP_ID]: ["1.0.0.2"] }, installedCalls),
+        microsoftMode: () => {
+          if (o.microsoftModeThrows === true) {
+            throw new DependencyUnreadableError("this bcdev backend has no harness verifier");
+          }
+          return mode(o.installed ?? { [APP_ID]: ["1.0.0.2"] }, installedCalls);
+        },
       });
       const store = o.store ?? new ResultsStore(":memory:");
       const events: RunEvent[] = [];
@@ -8239,6 +8248,15 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         runId,
         digestWarning: warningsOf("test-digests-unavailable"),
         mismatchWarning: warningsOf("published-test-app-mismatch"),
+        unreadableWarning: warningsOf("published-test-app-unreadable"),
+        historyWarning: warningsOf("history-test-app-changed"),
+        knownSurvivors: (
+          store.db
+            .query(
+              "SELECT COUNT(*) AS n FROM mutants WHERE run_id = ? AND verdict = 'known-survivor'",
+            )
+            .get(runId) as { n: number }
+        ).n,
         fetchesAfterHook: () => fetchesAfterHook,
         installedCalls,
       };
@@ -8399,73 +8417,184 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       named.store.close();
     });
 
-    describe("R486: a resume or history baseline resolved before the lease is refused unless the read-back equals it", () => {
-      /** A first, finished run that measured P1 both before and after its hook. */
-      async function priorRun(extra: Partial<SessionConfig>) {
-        const first = await envRun({
+    /** A first, finished run that measured P1 both before and after its hook. */
+    async function priorRun(extra: Partial<SessionConfig>) {
+      const first = await envRun({
+        post: P1,
+        file: P1,
+        installed: { [APP_ID]: ["1.0.0.1"] },
+        extra,
+      });
+      expect(first.outcome).not.toBeInstanceOf(Error);
+      expect(first.store.getRun(first.runId)?.testAppHash).toBe(`package:${hashPackage(P1)}`);
+      return first;
+    }
+
+    describe("R486: a --resume-run resolved before the lease is refused unless the read-back equals it", () => {
+      test("a changed read-back refuses before the first baseline", async () => {
+        const first = await priorRun({});
+        const r = await envRun({
+          post: P2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((r.outcome as TestAppRepublishedError).flag).toBe(`--resume-run ${first.runId}`);
+        expect(r.store.baselineTests(r.runId)).toEqual([]);
+        r.store.close();
+      });
+      test("an unreadable read-back refuses (fail closed)", async () => {
+        const first = await priorRun({});
+        const r = await envRun({
+          post: null,
+          file: P1,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((r.outcome as Error).message).toContain("could not be read back");
+        r.store.close();
+      });
+      test("an unchanged read-back proceeds", async () => {
+        const first = await priorRun({});
+        const r = await envRun({
           post: P1,
           file: P1,
           installed: { [APP_ID]: ["1.0.0.1"] },
-          extra,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
         });
-        expect(first.outcome).not.toBeInstanceOf(Error);
-        expect(first.store.getRun(first.runId)?.testAppHash).toBe(`package:${hashPackage(P1)}`);
-        return first;
-      }
-      const cases: Array<[string, (runId: number) => Partial<SessionConfig>, string]> = [
-        ["--resume-run", (runId) => ({ resume: runId }), "--resume-run"],
-        ["--skip-known-survivors", () => ({ skipKnownSurvivors: true }), "--skip-known-survivors"],
-      ];
-      for (const [label, extraOf, flag] of cases) {
-        const firstExtra: Partial<SessionConfig> =
-          label === "--skip-known-survivors" ? { skipKnownSurvivors: true } : {};
-        test(`${label}: a changed read-back refuses before the first baseline`, async () => {
-          const first = await priorRun(firstExtra);
-          const r = await envRun({
-            post: P2,
-            dirs: first.dirs,
-            store: first.store,
-            extra: extraOf(first.runId),
-          });
-          expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
-          expect((r.outcome as TestAppRepublishedError).flag).toStartWith(flag);
-          expect(r.store.baselineTests(r.runId)).toEqual([]);
-          r.store.close();
-        });
-        test(`${label}: an unreadable read-back refuses (fail closed)`, async () => {
-          const first = await priorRun(firstExtra);
-          const r = await envRun({
-            post: null,
-            file: P1,
-            dirs: first.dirs,
-            store: first.store,
-            extra: extraOf(first.runId),
-          });
-          expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
-          expect((r.outcome as Error).message).toContain("could not be read back");
-          r.store.close();
-        });
-        test(`${label}: an unchanged read-back proceeds`, async () => {
-          const first = await priorRun(firstExtra);
-          const r = await envRun({
-            post: P1,
-            file: P1,
-            installed: { [APP_ID]: ["1.0.0.1"] },
-            dirs: first.dirs,
-            store: first.store,
-            extra: extraOf(first.runId),
-          });
-          expect(r.outcome).not.toBeInstanceOf(Error);
-          r.store.close();
-        });
-      }
-
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        r.store.close();
+      });
       test("with no flag, a changed read-back is not refused", async () => {
         const first = await priorRun({});
         const r = await envRun({ post: P2, dirs: first.dirs, store: first.store });
         expect(r.outcome).not.toBeInstanceOf(Error);
         r.store.close();
       });
+    });
+
+    // R486 (review M2): the history filter runs per batch, after the hook, so it compares the
+    // READ-BACK. A finished run measured under P1 is no evidence once the hook published P2.
+    describe("R486: --skip-known-survivors compares the read-back, not the pre-lease test app", () => {
+      const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+      test("the hook publishes a new test app: the session proceeds, skips nothing, and says why", async () => {
+        const first = await priorRun(skip);
+        const r = await envRun({ post: P2, dirs: first.dirs, store: first.store, extra: skip });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        expect(r.historyWarning).toHaveLength(1);
+        expect(r.historyWarning[0]).toContain(hashPackage(P2));
+        r.store.close();
+      });
+      test("an unchanged read-back skips the known survivors (control)", async () => {
+        const first = await priorRun(skip);
+        const r = await envRun({
+          post: P1,
+          file: P1,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: skip,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBeGreaterThan(0);
+        expect(r.historyWarning).toEqual([]);
+        r.store.close();
+      });
+      test("an unreadable read-back skips nothing (fail closed)", async () => {
+        const first = await priorRun(skip);
+        const r = await envRun({
+          post: null,
+          file: P1,
+          dirs: first.dirs,
+          store: first.store,
+          extra: skip,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        expect(r.historyWarning).toHaveLength(1);
+        r.store.close();
+      });
+    });
+
+    test("a microsoftMode that throws records NULL with one warning, never aborting the session", async () => {
+      const r = await envRun({ post: P2, microsoftModeThrows: true });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("no harness verifier");
+      r.store.close();
+    });
+
+    test("an unreadable pre-lease read says nothing when the read-back is fine", async () => {
+      const r = await envRun({ pre: null, post: P2 });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.unreadableWarning).toEqual([]);
+      expect(r.store.testDigests(r.runId)).not.toBeNull();
+      r.store.close();
+      // Control: the read-back's own failure is still named.
+      const failed = await envRun({ post: null, file: P2 });
+      expect(failed.unreadableWarning).toHaveLength(1);
+      failed.store.close();
+    });
+
+    test("a read-back with the publishApps file's version but another app id records NULL", async () => {
+      const otherId = new Uint8Array(
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="22222222-2222-2222-2222-222222222222" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /></Package>`,
+          "SymbolReference.json": JSON.stringify({
+            Codeunits: [
+              {
+                Id: 79100,
+                Name: "Sandbox Tests",
+                Properties: [{ Name: "Subtype", Value: "Test" }],
+                Methods: [{ Id: 1, Name: K.method, Attributes: [{ Name: "Test" }] }],
+              },
+            ],
+          }),
+          "src/SandboxTests.Codeunit.al": BODY_B,
+        }),
+      );
+      const r = await envRun({ post: P2, file: otherId });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(r.store.testDigests(r.runId)).toBeNull();
+      expect(r.digestWarning).toHaveLength(1);
+      expect(r.digestWarning[0]).toContain("22222222-2222-2222-2222-222222222222");
+      r.store.close();
+    });
+
+    test("a plain bcdev run (no hook) never reads back, rewrites test_app_hash or defers digests", async () => {
+      const dirs = await makeProject(BODY_B);
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      const store = new ResultsStore(":memory:");
+      const setHash = spyOn(store, "setRunTestAppHash");
+      const setDigests = spyOn(store, "setRunTestDigests");
+      const outcome = await runSession({
+        backend: leaseBackend({
+          fetchPublishedAppPackage: async () => P2,
+          microsoftMode: () => mode({ [APP_ID]: ["1.0.0.2"] }, []),
+        }),
+        store,
+        ...dirs,
+        selectorIds,
+        resourceServer: "http://cronus281",
+        resourceServerInstance: "BC",
+        quarantineDir: freshTmpDir(),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e);
+      expect(outcome).not.toBeInstanceOf(Error);
+      expect(setHash).not.toHaveBeenCalled();
+      expect(setDigests).not.toHaveBeenCalled();
+      const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      // Recorded at createRun from the one pre-lease read, as before R373.
+      expect(store.testDigests(runId)).not.toBeNull();
+      expect(store.getRun(runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+      store.close();
     });
 
     test("verify accepts the env-tool run, and reads a test edited on disk afterwards as new", async () => {

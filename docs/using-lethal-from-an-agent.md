@@ -732,11 +732,12 @@ read-back, a package without source) it records none and warns `test-digests-una
 naming why, and verify refuses that run as `source-predates-verify`. On al-runner the source on
 disk is what runs, and that is what the run records.
 
-An env-tool session's `--resume` or `--skip-known-survivors` compares the run's test app before the
-lease. When such a baseline was found, the session refuses with `TestAppRepublishedError` (code
-`test-app-republished`) before the first baseline if the test app read back after the publish
-differs from it or cannot be read (R486). The run records the read-back's identity, or none when it
-could not be read.
+An env-tool session's `--resume` finds the run to resume before the lease, against the test app the
+server held then. If the test app read back after the publish differs from it or cannot be read,
+the session refuses with `TestAppRepublishedError` (code `test-app-republished`) before the first
+baseline (R486). `--skip-known-survivors` compares the read-back instead: after a new test app, or
+an unreadable read-back, it skips nothing and warns `history-test-app-changed`. The run records the
+read-back's identity, or none when it could not be read.
 
 ### After verify (guidance)
 
