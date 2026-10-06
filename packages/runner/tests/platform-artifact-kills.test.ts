@@ -176,7 +176,11 @@ describe("SessionReport.platformArtifactKills with two mechanisms (R138)", () =>
       (r.platformArtifactKills?.byMechanism ?? []).map((g) => [g.mechanism, g.explanation]),
     );
     expect(byName.get("run-trigger-skipped-insert")).toContain("duplicate primary key");
-    expect(byName.get("run-trigger-skipped-insert")).toContain("every `Insert` mutant carries");
+    // R-476: it no longer claims every Insert is tagged (untrue since R143); it states the refusal.
+    expect(byName.get("run-trigger-skipped-insert")).toContain(
+      "cannot prove skipping `OnInsert` harmless",
+    );
+    expect(byName.get("run-trigger-skipped-insert")).not.toContain("every `Insert` mutant carries");
     expect(byName.get("write-txn-codeunit-run")).toContain("return value is consumed");
     expect(byName.get("write-txn-codeunit-run")).not.toContain("duplicate primary key");
   });
