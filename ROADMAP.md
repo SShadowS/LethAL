@@ -278,7 +278,7 @@ that ordering is the priority.
 - **R266** · `lethal run --dry-run` accepts and ignores its 19 execution flags (`--out`, `--progress-out`, `--tests`, `--backend` and more) · [R266.md](docs/roadmap/R266.md) · done (7443861b)
 - **R270** · The epic's 20% verify wall-time criterion (c02) is recorded but not gated: C02-08 measured it on sandbox-harden and left it open · [R270.md](docs/roadmap/R270.md) · closed 2026-09-28, owner ruling: the 20% criterion is measured against a hardening round's survivors…
 - **R272** · `lethal explain` gaps do not list the covering tests' file:line or rank them by reach then duration · [R272.md](docs/roadmap/R272.md) · open
-- **R273** · `lethal explain` gives no suggested fix kind per gap · [R273.md](docs/roadmap/R273.md) · open
+- **R273** · `lethal explain` gives no suggested fix kind per gap · [R273.md](docs/roadmap/R273.md) · done (bc7d4fdc)
 - **R274** · an explain gap does not carry its source span with the surviving mutants marked inline · [R274.md](docs/roadmap/R274.md) · done (07bea539)
 - **R275** · an explain gap does not print its verify command; the gap id and artifact id are the inputs, the command still has to be assembled · [R275.md](docs/roadmap/R275.md) · done (496cd804)
 - **R276** · gap ids change when a block is moved, and differ between a CRLF and an LF checkout of the same commit · [R276.md](docs/roadmap/R276.md) · done (db3fc886) — CRLF and LF checkouts now give one gap id; a moved block keeps getting a new id by the…

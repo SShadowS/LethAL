@@ -526,9 +526,96 @@
         "buildScheme": { "type": "integer" },
         "interpretation": { "$ref": "#/$defs/interpretation" }
       }
+    },
+    "suggestions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "kinds", "gaps"],
+      "description": "R273: present only under lethal explain --suggest. SUGGESTIONS, not measurements: a suggested fix kind per gap, derived only from each survivor's measured reach and coverage attribution, outside the measured projection and its rules. An optional additive field: no version bump; a new kind value would bump (R233).",
+      "properties": {
+        "label": { "type": "string", "description": "Fixed text stating what this section is." },
+        "kinds": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The text of each kind that appears in gaps, once.",
+          "properties": {
+            "check-the-result": { "$ref": "#/$defs/suggestionText" },
+            "cover-the-branch": { "$ref": "#/$defs/suggestionText" },
+            "cover-the-statement": { "$ref": "#/$defs/suggestionText" }
+          }
+        },
+        "gaps": {
+          "type": "array",
+          "description": "One per gaps[] entry, same order, same members.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["gapId", "kind", "members"],
+            "properties": {
+              "gapId": { "type": "string" },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "check-the-result",
+                  "cover-the-branch",
+                  "cover-the-statement",
+                  "undecided",
+                  "reader-marked",
+                  "mixed"
+                ],
+                "description": "The members' kind when they agree, else mixed."
+              },
+              "members": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["mutantCode", "kind", "reach", "attribution"],
+                  "properties": {
+                    "mutantCode": { "type": "string" },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "check-the-result",
+                        "cover-the-branch",
+                        "cover-the-statement",
+                        "undecided",
+                        "reader-marked"
+                      ]
+                    },
+                    "reach": {
+                      "type": "string",
+                      "enum": [
+                        "reached-unnoticed",
+                        "covered-but-unreached",
+                        "unreached-and-uncovered",
+                        "not-decided"
+                      ]
+                    },
+                    "attribution": {
+                      "type": "string",
+                      "enum": ["exact", "object", "all-green", "not-measured"]
+                    },
+                    "equivalenceRisk": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
+    "suggestionText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suggestion", "derivedFrom"],
+      "properties": {
+        "suggestion": { "type": "string" },
+        "derivedFrom": { "type": "string" }
+      }
+    },
     "interpretation": {
       "type": "object",
       "description": "What a machine value MEANS, plus a pointer at the evidence. Emitted by reference to a shared constant co-located with the value it is keyed to; never composed per call.",

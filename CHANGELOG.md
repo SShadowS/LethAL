@@ -13,6 +13,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`lethal explain --suggest` adds a suggested fix kind per gap** (R273). A separate `suggestions`
+  section, off by default and labelled as suggestions, not measurements: each gap gets
+  `check-the-result`, `cover-the-branch`, `cover-the-statement`, `undecided`, `reader-marked` or
+  `mixed`, derived only from each survivor's measured reach and coverage attribution. Everything
+  else in explain's output is unchanged with or without the flag. Explain schema stays 13.
+
 - **`lethal explain --project <dir>` shows each gap's source with its survivors marked** (R274).
   Every gap gains `source`: the block's lines and one mark per survivor (start and end line and
   column), as structured data. The report gains `sourceSha256`, the hash of the source generation
