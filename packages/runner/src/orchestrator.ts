@@ -3706,7 +3706,8 @@ function resolveResume(
   if (cfg.resume === undefined) return undefined;
   const sameTestApp = (row: RunRow | null, flag: string): void => {
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash);
-    else if (row === null) throw new Error(`${flag}: the run it found is no longer in this database`);
+    else if (row === null)
+      throw new Error(`${flag}: the run it found is no longer in this database`);
   };
 
   let priorRunId: number;
@@ -3972,6 +3973,8 @@ interface ScoreBatchInput {
     readonly batchDir: string;
     readonly testDir: string;
     readonly allowReuse: boolean;
+    /** R492: an env-tool session reuses only a snapshot whose run recorded digests (its proof). */
+    readonly requireDigests: boolean;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
   readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
@@ -4380,7 +4383,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
   let hashTestApp: (() => Promise<string | undefined>) | undefined;
   if (input.snapshot !== undefined) {
-    const { batchDir, testDir, allowReuse } = input.snapshot;
+    const { batchDir, testDir, allowReuse, requireDigests } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
     const packageReader = backend.fetchPublishedAppPackage;
     // R462: the request identity is read ONCE, so the re-read at a refusal asks for the same app
@@ -4403,7 +4406,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     const testAppHash = await hashTestApp();
     const reusable =
       allowReuse && testAppHash !== undefined
-        ? store.findBaselineSnapshot(batchHash, testAppHash, caps.coverage)
+        ? store.findBaselineSnapshot(batchHash, testAppHash, caps.coverage, requireDigests)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
     // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
@@ -5825,6 +5828,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         buildSymbols,
         carryHidden.files,
         {
+          // R492: an env-tool session borrows only from a run that proved its test app.
+          requireDigests: envPublishes !== undefined,
           schemeChanged: (old) => {
             if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
             historySchemeWarned = true;
@@ -6569,6 +6574,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           allowReuse:
             resumeState !== undefined &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
+          requireDigests: envPublishes !== undefined,
         },
         select,
         ...(workers > 1 ? { executeCovering } : {}),
