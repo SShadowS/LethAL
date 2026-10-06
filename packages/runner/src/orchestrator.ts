@@ -78,6 +78,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
+import { stopIsRetrySafe } from "./backend";
 import {
   hashAlTree,
   hashPackage,
@@ -2424,6 +2425,8 @@ interface FencedRunOutcome {
    */
   readonly retryAfter?: LostAckOutcome;
   readonly original?: { readonly attemptId: string; readonly opSeq: number };
+  /** R-204b: set when a retry was withheld because our stop may have ended the run. */
+  readonly cause?: "stop-outcome-unconfirmed";
 }
 
 /**
@@ -2473,6 +2476,16 @@ async function runFenced(
   const firstOutcome = await reconcileFencedLostAck(leaseSession, first);
   if (firstOutcome === "unresolved") {
     return { verdict: first, lostAck: "unresolved", retried: false };
+  }
+  // R-204b (R202): a tombstone our own stop may have written proves nothing about the run, and a
+  // hang need not recur, so a passing retry here could turn a real timeout into a survivor.
+  if (!stopIsRetrySafe(first.stopState)) {
+    return {
+      verdict: first,
+      lostAck: firstOutcome,
+      retried: false,
+      cause: "stop-outcome-unconfirmed",
+    };
   }
   // R194 (second half): the two retry-safe outcomes say DIFFERENT things and the warning must
   // not borrow one's words for the other. `completed`: the fence ran to phase 3 and only the
@@ -2566,8 +2579,16 @@ async function runFencedMany(
     return r;
   };
   const first = await once();
+  // R-204b: renames a call-level ending whose answer we could not use after a stop that may have
+  // been accepted. The malformed and run-error endings never retry, so for them only the name moves.
+  const unconfirmed = (r: RunManyResult): RunManyResult =>
+    r.kind === "call" ? { ...r, cause: "stop-outcome-unconfirmed" } : r;
   if (first.kind !== "call" || !isLostAck(first.verdict)) {
-    return { result: first, lostAck: "none", retried: false };
+    const malformed =
+      first.kind === "call" &&
+      (first.cause === "group-answer-malformed" || first.cause === "group-run-error") &&
+      !stopIsRetrySafe(first.verdict.stopState);
+    return { result: malformed ? unconfirmed(first) : first, lostAck: "none", retried: false };
   }
   emit({
     type: "warning",
@@ -2577,6 +2598,10 @@ async function runFencedMany(
   const firstOutcome = await reconcileFencedLostAck(leaseSession, first.verdict, groupBudgetMs);
   if (firstOutcome === "unresolved")
     return { result: first, lostAck: "unresolved", retried: false };
+  // R-204b (R202): as in `runFenced`, no retry unless every stop in the call was refused.
+  if (!stopIsRetrySafe(first.verdict.stopState)) {
+    return { result: unconfirmed(first), lostAck: firstOutcome, retried: false };
+  }
   emit({
     type: "warning",
     code: firstOutcome === "completed" ? "lost-ack-retry" : "lost-ack-not-started",
@@ -2695,6 +2720,12 @@ async function* coveringRuns(args: {
       retried: out.retried,
       ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
       ...(out.original !== undefined ? { original: out.original } : {}),
+      // R-204b: the single path's two causes, carried exactly as the grouped call's are.
+      ...(out.cause !== undefined
+        ? { cause: out.cause }
+        : out.verdict.stopRefusal !== undefined
+          ? { cause: out.verdict.stopRefusal }
+          : {}),
       testBudgetMs: budget,
       groupBudgetMs: budget,
       opKind: "single",
@@ -8256,6 +8287,14 @@ async function classifyNonVerdictStep(
     // Layer 5C-B2 (design §5): reaching here means `runFenced` could not turn this run into a
     // readable answer — it already reconciled, and (when the op was proven complete) already
     // spent its one fresh attempt on it. All that is left is which diagnosis to record.
+    if (step.cause === "stop-outcome-unconfirmed") {
+      // R-204b (R202): the op reconciled clean, but LethAL had sent a stop for this run and it was
+      // not refused, so the retry was withheld: whether the stop or the test ended the run is not
+      // established. No verdict, no quarantine; `--resume` re-runs it.
+      note = `stop outcome unconfirmed ${what}: LethAL sent a stop for this run (${v.stopState ?? "unknown"}) and its answer could not be read${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}; the operation reconciled ${lostAck}, but a run our stop may have ended is never retried, because a hang need not recur — no verdict (R202). Re-run with --resume`;
+      cause = step.cause;
+      return { failureNote: note, cause, transportError };
+    }
     if (lostAck === "completed") {
       // Phase 3 ran: the op is tombstoned and the container is clean. This mutant's RESULT is
       // genuinely lost (so `error`, never a verdict), but there is nothing to recycle, nothing

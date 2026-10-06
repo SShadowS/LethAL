@@ -1,10 +1,10 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import { RunMutantTransport } from "../src/run-mutant-transport";
-import type { RunMutantManyRequest } from "../src/run-mutant-transport";
+import type { RunMutantManyRequest, RunMutantManyResult } from "../src/run-mutant-transport";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -129,7 +129,8 @@ const odata = (inner: Record<string, unknown>, status = 200) =>
 function fakes(opts: {
   many: Response | "hold";
   status?: () => Record<string, unknown> | Error;
-  stopAt?: (body: Record<string, unknown>) => Record<string, unknown>;
+  /** R-204b: an `Error` rejects the stop (its reply lost); `"hang"` never answers it. */
+  stopAt?: (body: Record<string, unknown>) => Record<string, unknown> | Error | "hang";
   /** R236b: answers `GetOpAnswer`; absent, that action is rejected like any unexpected one. */
   kept?: () => Response | Error;
 }) {
@@ -167,7 +168,8 @@ function fakes(opts: {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       stops.push(body);
       const a = opts.stopAt === undefined ? { stopped: true, sessionId: 9 } : opts.stopAt(body);
-      return Promise.resolve(odata(a));
+      if (a === "hang") return new Promise<Response>(() => {});
+      return a instanceof Error ? Promise.reject(a) : Promise.resolve(odata(a));
     }
     return Promise.reject(new Error(`unexpected action ${u}`));
   }) as typeof fetch;
@@ -697,6 +699,171 @@ describe("runMany — the watchdog (R198 §3.2)", () => {
     expect(r.verdict.outcome).toBe("deadline-exceeded");
     expect(r.verdict.failureMessage).toContain("hard cap");
     expect(r.verdict.failureMessage).toContain("Alpha");
+  });
+});
+
+/**
+ * R-204b Part R, grouped: every stop the watchdog sends ends in a state, inside its own bound, and
+ * the call's state is `refused` only if EVERY attempt was refused. Fake timers, advanced 1 ms at a
+ * time, so `at` is the virtual time the call returned.
+ */
+describe("runMany — R-204b: the call's stop state", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 300; i++) await Promise.resolve();
+  }
+  async function drive(
+    fetchFn: typeof fetch,
+    over: Partial<RunMutantManyRequest> = {},
+  ): Promise<{ r: RunMutantManyResult; at: number }> {
+    let out: RunMutantManyResult | undefined;
+    let t = 0;
+    let at = -1;
+    void transport(fetchFn)
+      .runMany(req({ stopHungSessions: true, ...over }))
+      .then((v) => {
+        out = v;
+        at = t;
+      });
+    for (let i = 0; i < 2000 && out === undefined; i++) {
+      jest.advanceTimersByTime(1);
+      t += 1;
+      await flush();
+    }
+    if (out === undefined) throw new Error("runMany never returned within 2000 virtual ms");
+    return { r: out, at };
+  }
+  const BAD = () => new Response("Cannot establish a connection", { status: 400 });
+
+  test("17a. the stop throws (reply lost): the call's state is unknown", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        queueMicrotask(() => f.release(BAD()));
+        return new Error("ECONNRESET");
+      },
+    });
+    const { r } = await drive(f.fetchFn);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+    expect(r.verdict.stopState).toBe("unknown");
+  });
+
+  test("17b. the stop answers stopped:false: refused", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        queueMicrotask(() => f.release(BAD()));
+        return { stopped: false, reason: "no-session-id" };
+      },
+    });
+    const { r } = await drive(f.fetchFn);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.stopState).toBe("refused");
+  });
+
+  test("17c. the stop answers stopped:true: confirmed", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        queueMicrotask(() => f.release(BAD()));
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const { r } = await drive(f.fetchFn);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.stopState).toBe("confirmed");
+  });
+
+  /** Two stop attempts: method 1 refused `method-completed`, then `second` for method 2. */
+  function twoAttempts(second: Record<string, unknown> | Error) {
+    let index = 1;
+    const f = fakes({
+      many: "hold",
+      status: () =>
+        statusOf({
+          opProgress: {
+            ...(statusOf().opProgress as object),
+            methodIndex: index,
+            method: M[index - 1]?.method,
+            token: `tok-m${index}`,
+          },
+        }),
+      stopAt: (body) => {
+        if (body.methodIndex === 1) {
+          index = 2;
+          return { stopped: false, reason: "method-completed", rowIndex: 2, rowState: "running" };
+        }
+        queueMicrotask(() => f.release(BAD()));
+        return second;
+      },
+    });
+    return f;
+  }
+
+  test("10. refused then unknown: the call is NOT retry-safe (unknown)", async () => {
+    const f = twoAttempts(new Error("ECONNRESET"));
+    const { r } = await drive(f.fetchFn);
+    expect(f.stops.map((s) => s.methodIndex)).toEqual([1, 2]);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.stopState).toBe("unknown");
+  });
+
+  test("10b. refused then refused: the call is refused", async () => {
+    const f = twoAttempts({ stopped: false, reason: "no-session-id" });
+    const { r } = await drive(f.fetchFn);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.stopState).toBe("refused");
+  });
+
+  test("12t. a malformed 2xx after a confirmed stop carries the state as data", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        queueMicrotask(() => f.release(odata(answer({ endedBy: "bogus" }))));
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const { r } = await drive(f.fetchFn);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.cause).toBe("group-answer-malformed");
+    expect(r.verdict.stopState).toBe("confirmed");
+  });
+
+  test("bound: a stop that never answers ends at send time + grace, as unknown", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        queueMicrotask(() => f.release(BAD()));
+        return "hang";
+      },
+    });
+    // Poll at 5, stop sent at 5, grace 100: the call returns at 105, not never.
+    const { r, at } = await drive(f.fetchFn, { stopGraceMs: 100 });
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.stopState).toBe("unknown");
+    expect(at).toBeGreaterThanOrEqual(104);
+    expect(at).toBeLessThanOrEqual(106);
+  });
+
+  test("bound: the hard cap ends a stop sent late in the call, not a fresh grace after it", async () => {
+    const f = fakes({ many: "hold", stopAt: () => "hang" });
+    // Poll at 60, ceiling 50 + grace 100 = hard cap 150: the stop gets 90 ms, not 100.
+    const { r, at } = await drive(f.fetchFn, {
+      requestCeilingMs: 50,
+      stopGraceMs: 100,
+      watchdogPollMs: 60,
+    });
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("deadline-exceeded");
+    expect(r.verdict.stopState).toBe("unknown");
+    expect(at).toBeGreaterThanOrEqual(149);
+    expect(at).toBeLessThanOrEqual(151);
   });
 });
 

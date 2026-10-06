@@ -5,7 +5,8 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 
 | File | Describes | Version constant |
 |---|---|---|
-| [`explain-v12.schema.json`](explain-v12.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 12 |
+| [`explain-v13.schema.json`](explain-v13.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 13 |
+| [`explain-v12.schema.json`](explain-v12.schema.json) | the same, from builds before R-204b; kept so a stored v12 document stays checkable (v13 added the cause `stop-outcome-unconfirmed`) | `EXPLAIN_SCHEMA_VERSION` = 12 |
 | [`explain-v11.schema.json`](explain-v11.schema.json) | the same, from builds before R443; kept so a stored v11 document stays checkable (v12 added `survivors[].mark`, and a mark with `markKey` alone is now refused) | `EXPLAIN_SCHEMA_VERSION` = 11 |
 | [`explain-v10.schema.json`](explain-v10.schema.json) | the same, from builds before R307; kept so a stored v10 document stays checkable (v11 added the caveat `files-refused`) | `EXPLAIN_SCHEMA_VERSION` = 10 |
 | [`explain-v9.schema.json`](explain-v9.schema.json) | the same, from builds before R403; kept so a stored v9 document stays checkable (v10 added the caveats `tests-compiled-out` and `test-symbols-unverified`) | `EXPLAIN_SCHEMA_VERSION` = 9 |
