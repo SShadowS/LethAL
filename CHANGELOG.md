@@ -116,7 +116,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   No key moves and the emitted AL is unchanged, but a key whose verdict was a refusal's
   `no-coverage` can now be scored, so history, `--resume` and marks recorded under 28 (bcdev
   included) are not carried: marks files need `"identityScheme": 29` after you re-check each mark
-  (R325).
+  (R325). Measured offline on BC.History under an al-runner build: 137 admitted files with 6,984
+  mutation sites move from refused to scored; CDO and the gate fixtures have none. A new
+  `itest:alrunner` leg (`fixtures/sandbox-wrapped`) pins it once its baseline is first recorded.
 
 - **A report data item over `Integer` counts as a loop for the hang refusal; identity scheme 28**
   (R484). BC calls a data item's `OnAfterGetRecord` once per record. Over the virtual `Integer` table
