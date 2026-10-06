@@ -834,6 +834,38 @@ end; }`;
     ).toEqual(["8|true"]);
   });
 
+  it("shape 4n: a trigger-local control variable is refused too (sol final r1 minor 3)", () => {
+    const src = [
+      "codeunit 50000 P",
+      "{",
+      "    trigger OnRun()",
+      "    var",
+      "        I: Integer;",
+      "        Total: Integer;",
+      "    begin",
+      "        for I := 1 to 3 do begin",
+      "            I := 1;", // 9 refused
+      "            Total := 7;", // 10 claimed
+      "        end;",
+      "    end;",
+      "}",
+    ].join("\n");
+    expect(claimedSites(removeAssignment, src)).toEqual(["10|Total := 7"]);
+  });
+
+  it("shape 2: a feed found only inside a nested body (sol final r1 minor 2; revert: scan the loop's own statements only)", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;", // 8 refused: feeds Done inside the `for`
+      "            for J := 1 to 1 do",
+      "                Done := I >= 3;", // 10 refused: the guard reads Done
+      "            Total += 1;", // 11 claimed
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["11|Total += 1"]);
+  });
+
   // Nesting (B4): each enclosing loop checks the write against ITS OWN exit parts.
   it("nesting: an inner `break` does not exit the outer loop; an inner `exit` does", () => {
     const nested = (leave: string) => [
