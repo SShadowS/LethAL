@@ -26,6 +26,7 @@ import {
   TOOL_CONDITIONS,
 } from "../src/explain";
 import { assertExplainableReport, explain } from "../src/explain";
+import { SUGGESTION_KINDS, SUGGESTION_TEXTS } from "../src/explain-suggest";
 import {
   CAVEAT_INTERPRETATIONS,
   ERROR_CAUSE_INTERPRETATIONS,
@@ -239,6 +240,9 @@ describe("published JSON Schemas (R152)", () => {
   const doctorSchema = loadSchema("doctor-v1.schema.json");
 
   test("the explain schema describes exactly the leaves ExplainOutput declares", () => {
+    // R273: the optional root `suggestions` (`--suggest`) is NOT part of `ExplainOutput`; the CLI
+    // composes it. Its leaves are checked against their own type in the next test, and every
+    // OTHER schema leaf must still equal `ExplainOutput`'s, exactly as before.
     const fromType = typeLeafPaths({
       files: [join(SRC, "explain.ts"), join(SRC, "interpretation.ts")],
       root: "ExplainOutput",
@@ -255,7 +259,25 @@ describe("published JSON Schemas (R152)", () => {
         'ReportValidity["reliability"]',
       ],
     });
-    expect([...schemaLeafPaths(explainSchema)].sort()).toEqual([...fromType].sort());
+    const outsideSuggestions = schemaLeafPaths(explainSchema).filter(
+      (p) => !p.startsWith("$.suggestions."),
+    );
+    expect(outsideSuggestions.sort()).toEqual([...fromType].sort());
+  });
+
+  test("the explain schema's `suggestions` describes exactly the leaves ExplainSuggestions declares", () => {
+    const fromType = typeLeafPaths({
+      files: [join(SRC, "explain-suggest.ts")],
+      root: "ExplainSuggestions",
+      expectedLeafTypeNames: [
+        "SuggestionKind",
+        "GapSuggestionKind",
+        "SurvivorReach",
+        "ExplainAttribution",
+      ],
+    }).map((p) => p.replace(/^\$/, "$.suggestions"));
+    const inSchema = schemaLeafPaths(explainSchema).filter((p) => p.startsWith("$.suggestions."));
+    expect(inSchema.sort()).toEqual([...fromType].sort());
   });
 
   test("the doctor schema describes exactly the leaves DoctorJsonOutput declares", () => {
@@ -292,6 +314,27 @@ describe("published JSON Schemas (R152)", () => {
     expect(enumAt(explainSchema, "$.survivors[].artifactIdAbsent")).toEqual([
       ...ARTIFACT_ID_ABSENCES,
     ]);
+    // R273: the suggestions section's kind domain and the facts it copies.
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].kind")).toEqual([...SUGGESTION_KINDS]);
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].members[].kind")).toEqual(
+      SUGGESTION_KINDS.filter((k) => k !== "mixed"),
+    );
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].members[].reach")).toEqual(
+      Object.keys(REACH_INTERPRETATIONS),
+    );
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].members[].attribution")).toEqual(
+      Object.keys(EXPLAIN_ATTRIBUTION_INTERPRETATIONS),
+    );
+    expect(Object.keys(SUGGESTION_TEXTS)).toEqual(
+      Object.keys(
+        ((
+          (explainSchema.properties as Record<string, Schema>).suggestions?.properties as Record<
+            string,
+            Schema
+          >
+        ).kinds?.properties as Record<string, Schema>) ?? {},
+      ),
+    );
     expect(enumAt(doctorSchema, "$.notChecked")).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
     expect(enumAt(doctorSchema, "$.caveat.kind")).toEqual([...DOCTOR_CAVEAT_KINDS]);
   });
@@ -1463,6 +1506,31 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "warm-confirmation-incomplete",
       ],
       "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
+      // R273: new domains on the new optional `suggestions` (an optional additive field, so no
+      // bump, orchestrator ruling 2026-10-06). From here on a value added to them bumps (R233).
+      "#/properties/suggestions/properties/gaps/items/properties/kind": [
+        "check-the-result",
+        "cover-the-branch",
+        "cover-the-statement",
+        "undecided",
+        "reader-marked",
+        "mixed",
+      ],
+      "#/properties/suggestions/properties/gaps/items/properties/members/items/properties/kind": [
+        "check-the-result",
+        "cover-the-branch",
+        "cover-the-statement",
+        "undecided",
+        "reader-marked",
+      ],
+      "#/properties/suggestions/properties/gaps/items/properties/members/items/properties/reach": [
+        "reached-unnoticed",
+        "covered-but-unreached",
+        "unreached-and-uncovered",
+        "not-decided",
+      ],
+      "#/properties/suggestions/properties/gaps/items/properties/members/items/properties/attribution":
+        ["exact", "object", "all-green", "not-measured"],
     });
     // C02-09: the one new enum path reuses the survivor's domain exactly, which is why it did not
     // bump the version.
