@@ -75,7 +75,8 @@ import { loadEquivalenceMarks } from "./equivalence-marks";
 // Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
 export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
 import type { EventSubscriber } from "./events";
-import { assertExplainableReport, explain } from "./explain";
+import { type ExplainOutput, assertExplainableReport, explain } from "./explain";
+import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
 import { HarnessVerifier } from "./harness";
 import type { LeaseSnapshot } from "./harness";
@@ -713,6 +714,10 @@ export interface ExplainCliConfig {
    * what it dropped.
    */
   readonly topSurvivors?: number;
+  /** R274: `--project <dir>`, the target whose source `gaps[].source` renders. */
+  readonly projectDir?: string;
+  /** R273: `--suggest`, the opt-in suggestions section (explain-suggest.ts). */
+  readonly suggest?: boolean;
 }
 
 /**
@@ -894,7 +899,7 @@ USAGE
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>] [--tests <dir>] [--json]
-  lethal explain           <report.json> [--top <n>]
+  lethal explain           <report.json> [--top <n>] [--project <dir>] [--suggest]
   lethal export            <report.json> --format mutation-elements --project <dir> --out <path>
                                          [--thresholds <high,low>]
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
@@ -1085,6 +1090,18 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
                              docs/campaign/2026-08-03-do/rung2.report.json (473 mutants, 125
                              survivors) projects to 243 KB, 206 KB of it survivors; --top 15 makes
                              it 30 KB. The uncapped output does not fit an agent's context window
+  --project <dir>            also read the target project at <dir> and give each gap its block's
+                             source lines with every survivor's site marked ('gaps[].source').
+                             <dir> must hash to the report's 'sourceSha256' (every .al file the
+                             target build compiles plus app.json, raw bytes, with the config's
+                             preprocessor symbols); any difference, or a report from before
+                             R274, is REFUSED with nothing on stdout. The output then holds
+                             TARGET SOURCE: do not publish it for a third party's code
+  --suggest                  add a separate 'suggestions' section: a suggested fix kind per gap,
+                             LABELLED as a suggestion, not a measurement, derived only from each
+                             survivor's measured reach and coverage attribution ('undecided' where
+                             the report cannot tell). Everything else in the output is unchanged.
+                             Refused on a report without gap ids
 
 CAMPAIGN — the measurement gates, with 'committed before the run' machine-checked
   A measurement campaign states what it expects in a file, COMMITS it, and only then runs. These
@@ -1247,6 +1264,8 @@ export const RUN_FLAGS = {
   // R150: `lethal explain --top <n>`. In the shared table for the same reason as every flag above —
   // `parseArgs` runs in strict mode over ONE option set for every subcommand.
   top: { type: "string" },
+  // R273: `lethal explain --suggest`, the opt-in suggestions section. Owned by `explain` alone.
+  suggest: { type: "boolean", default: false },
   // R178: `lethal export`. In the shared table for the same strict-mode reason as every flag above,
   // and owned by `export` alone in FLAG_OWNERS so another subcommand cannot swallow one silently.
   format: { type: "string" },
@@ -1329,7 +1348,16 @@ export const FLAG_OWNERS: ReadonlyArray<{
 }> = [
   {
     flag: "project",
-    owners: ["run", "init", "clear-ceiling", "force-reset-lease", "doctor", "export", "campaign"],
+    owners: [
+      "run",
+      "init",
+      "clear-ceiling",
+      "force-reset-lease",
+      "doctor",
+      "explain",
+      "export",
+      "campaign",
+    ],
   },
   { flag: "tests", owners: ["run", "doctor", "verify"] },
   { flag: "config", owners: ["run", "clear-ceiling", "force-reset-lease", "doctor", "verify"] },
@@ -1362,6 +1390,11 @@ export const FLAG_OWNERS: ReadonlyArray<{
     instead: "It pre-commits a mutant count for `lethal campaign freeze`.",
   },
   { flag: "top", owners: ["explain"], instead: "It bounds `lethal explain`'s survivor list." },
+  {
+    flag: "suggest",
+    owners: ["explain"],
+    instead: "It adds `lethal explain`'s opt-in suggestions section.",
+  },
   {
     flag: "format",
     owners: ["export"],
@@ -1794,6 +1827,14 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     // was wrong. `explain()` refuses the same values again on its own account — this is a second
     // check of the same contract at a different layer, not the only one.
     const top = values.top;
+    const project = values.project;
+    if (project === "") {
+      throw new Error("--project needs the target project directory the report's run measured.");
+    }
+    const projectOpt = {
+      ...(project !== undefined ? { projectDir: project } : {}),
+      ...(values.suggest === true ? { suggest: true } : {}),
+    };
     if (top !== undefined) {
       const n = Number(top);
       if (!Number.isInteger(n) || n < 1) {
@@ -1801,9 +1842,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
           `--top must be a positive integer (the maximum number of survivors to keep), got ${JSON.stringify(top)}. Omit it to get every survivor.`,
         );
       }
-      return { mode: "explain", reportPath, topSurvivors: n };
+      return { mode: "explain", reportPath, topSurvivors: n, ...projectOpt };
     }
-    return { mode: "explain", reportPath };
+    return { mode: "explain", reportPath, ...projectOpt };
   }
 
   if (subcommand === "campaign") {
@@ -5256,9 +5297,21 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
       `explain: ${parsed.reportPath} is not valid JSON — ${err instanceof Error ? err.message : String(err)}.`,
     );
   }
-  const options = parsed.topSurvivors !== undefined ? { topSurvivors: parsed.topSurvivors } : {};
-  const out = explain(assertExplainableReport(parsedJson), options);
-  console.log(JSON.stringify(out, null, 2));
+  // R274: read once; `explain` hashes and renders this same map. An unreadable project throws
+  // `SourceSnapshotUnreadableError` before anything is printed.
+  const options = {
+    ...(parsed.topSurvivors !== undefined ? { topSurvivors: parsed.topSurvivors } : {}),
+    ...(parsed.projectDir !== undefined
+      ? { projectSource: await readTargetSource(parsed.projectDir) }
+      : {}),
+  };
+  const report = assertExplainableReport(parsedJson);
+  const out = explain(report, options);
+  // R273: composed HERE, never inside `explain()`, so the default output is unchanged by
+  // construction. Built before anything prints, so a refusal leaves stdout empty.
+  const printed: ExplainOutput | ExplainSuggestedOutput =
+    parsed.suggest === true ? { ...out, suggestions: suggest(report, out) } : out;
+  console.log(JSON.stringify(printed, null, 2));
   // R265: the mark keys for a human, on STDERR so stdout stays one JSON document. Each key sits
   // under its survivor; the stale statement, when there is one, comes first.
   if (out.markKeysStale !== undefined) {

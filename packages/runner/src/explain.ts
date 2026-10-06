@@ -1,9 +1,16 @@
-import { IDENTITY_SCHEME, type ReachGrain, coarseIdentityTupleOf } from "@lethal/schemata";
+import {
+  IDENTITY_SCHEME,
+  type ReachGrain,
+  clipMutationText,
+  coarseIdentityTupleOf,
+} from "@lethal/schemata";
 import type { CoverageMode } from "./backend";
+import { decodeSource, hashSourceSnapshot } from "./baseline-snapshot";
 import { MARK_REASON_PLACEHOLDER } from "./equivalence-marks";
 import { GapGroupingError, type GapRow, type GapTally, tallyGaps } from "./gaps";
 import type { Interpretation } from "./interpretation";
 import { spanCovered } from "./line-filter";
+import { positionOf } from "./mutation-elements";
 import {
   CAVEAT_INTERPRETATIONS,
   COVERAGE_NOT_MEASURED_INTERPRETATION,
@@ -217,6 +224,10 @@ import type { MutantVerdict } from "./store";
  * span and LF text, not offsets and raw text): the field is an opaque id, read verbatim, so no bump.
  * R277 keeps `gaps[].unobservedBlock` on a line-narrowed run whose ranges cover the block: same
  * meaning, present in more cases only where it stays provably true, so no bump.
+ * R274 added the optional `gaps[].source`, present only under `--project`: an optional additive
+ * field, so no bump. R273 added the optional root `suggestions`, present only under `--suggest` and
+ * composed by the CLI outside `ExplainOutput` (explain-suggest.ts): an optional additive field, so
+ * no bump; a value added later to its kind domain bumps (R233).
  */
 export const EXPLAIN_SCHEMA_VERSION = 13;
 
@@ -232,6 +243,26 @@ export class MalformedReportError extends Error {
     this.name = "MalformedReportError";
   }
 }
+
+/**
+ * R274: `lethal explain --project <dir>` will not render source from `<dir>`. `reason` names which
+ * refusal: the report records no `sourceSha256` (written before R274), or `<dir>` hashes to
+ * something else. Extends `Error` directly (CLAUDE.md's typed-error convention).
+ */
+export class ProjectSourceRefusedError extends Error {
+  constructor(
+    readonly reason: "no-source-hash" | "source-mismatch",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ProjectSourceRefusedError";
+  }
+}
+
+/** The marker `scripts/redact-campaign-report.ts` writes over a redacted source field. A fixed
+ *  string, so `--check` is an equality test; `--project` skips its per-site text check on exactly
+ *  this value (R274). */
+export const REDACTION_MARKER = "[redacted: third-party source, see this directory's README]";
 
 /**
  * Every `Interpretation` this projection is allowed to emit — the closed set rule (1) of the
@@ -471,6 +502,30 @@ export interface ExplainGap {
   /** R275: the `lethal verify` line for this gap (`gapVerifyCommand`), with `<project>` and
    *  `<tests-dir>` left to fill in. Present exactly when `artifactId` is. */
   readonly verifyCommand?: string;
+  /** R274: the block's source, read from `lethal explain --project <dir>` after `<dir>` hashed to
+   *  the report's `sourceSha256`. Present exactly when `--project` was given. TARGET SOURCE: do
+   *  not publish it for a third party's code. */
+  readonly source?: ExplainGapSource;
+}
+
+/** R274: a gap block's lines, with each survivor's site marked. Structured, never spliced text. */
+export interface ExplainGapSource {
+  /** The file line `lines[0]` is: the gap's `blockStartLine`. */
+  readonly startLine: number;
+  /** `blockStartLine..blockEndLine`, split on `\n` with one trailing `\r` dropped per line. */
+  readonly lines: readonly string[];
+  /** One per member, in `members` order. */
+  readonly marks: readonly ExplainSourceMark[];
+}
+
+/** R274: a survivor's site in file coordinates: 1-based lines, 1-based UTF-16 columns (a tab is
+ *  one), end exclusive. A site can span lines. */
+export interface ExplainSourceMark {
+  readonly mutantCode: string;
+  readonly startLine: number;
+  readonly startColumn: number;
+  readonly endLine: number;
+  readonly endColumn: number;
 }
 
 /** C02-09: a block with at least one `no-coverage` row. A location list, not a verify input, so it
@@ -855,6 +910,13 @@ export function assertExplainableReport(value: unknown): SessionReport {
     !(Number.isInteger(identityScheme) && (identityScheme as number) >= 1)
   ) {
     refuse("`identityScheme` is present but is not a positive integer", identityScheme);
+  }
+  // R274: `--project` compares it, so a present value must be a digest.
+  if (
+    record.sourceSha256 !== undefined &&
+    (typeof record.sourceSha256 !== "string" || !/^[0-9a-f]{64}$/.test(record.sourceSha256))
+  ) {
+    refuse("`sourceSha256` is not a sha256 hex digest", record.sourceSha256);
   }
   // R443: decide every survivor's `mark` (its `numberingDigest` and `fileSingleton`). Written
   // together by the producer, so some without the others is a corrupt report.
@@ -1256,11 +1318,18 @@ function artifactOf(
     : { artifactIdAbsent: "not-published" };
 }
 
-function survivorOf(
+/**
+ * A survivor's `attribution`, `guardEvidence` and `reach`, the one derivation `survivorOf` and
+ * `lethal explain --suggest` (explain-suggest.ts, R273) both read, so the two cannot disagree.
+ */
+export function survivorEvidenceOf(
   m: MutantOutcome,
-  artifacts: SessionReport["artifacts"],
   coverageMode: CoverageMode | undefined,
-): ExplainSurvivor {
+): {
+  readonly attribution: ExplainAttribution;
+  readonly guardEvidence: GuardEvidence;
+  readonly reach: SurvivorReach;
+} {
   const measured = m.coverageAttribution;
   if (measured === undefined && coverageMode !== "none") {
     // Unreachable via `explain` (validated above); kept because this function is where the claim
@@ -1278,6 +1347,15 @@ function survivorOf(
         ? "reached-unnoticed"
         : "not-decided"
       : survivorReachOf(measured, guardEvidence, m.guardReached, m.reachGrain, m.carried === true);
+  return { attribution, guardEvidence, reach };
+}
+
+function survivorOf(
+  m: MutantOutcome,
+  artifacts: SessionReport["artifacts"],
+  coverageMode: CoverageMode | undefined,
+): ExplainSurvivor {
+  const { attribution, guardEvidence, reach } = survivorEvidenceOf(m, coverageMode);
   return {
     mutantCode: m.mutantCode,
     file: m.file,
@@ -1606,6 +1684,94 @@ export interface ExplainOptions {
    * be guessing about completeness. Omit the option to get every survivor.
    */
   readonly topSurvivors?: number;
+  /**
+   * R274: the target project's files as `readTargetSource` reads them. `explain` hashes THIS map
+   * and renders from it, so what it shows is what matched `sourceSha256`; any difference refuses
+   * (`ProjectSourceRefusedError`). Absent: no `gaps[].source`, the output unchanged.
+   */
+  readonly projectSource?: ReadonlyMap<string, Buffer>;
+}
+
+/**
+ * R274: the project's text per `/` path, once `projectSource` hashed to `report.sourceSha256`.
+ * Keyed by `/` (snapshot keys use the OS separator, report files use `/`), and the NORMALISED map
+ * is what is hashed: two keys colliding on normalisation drop one and so refuse, never render.
+ */
+function verifiedProjectText(
+  report: SessionReport,
+  projectSource: ReadonlyMap<string, Buffer>,
+): ReadonlyMap<string, string> {
+  if (report.sourceSha256 === undefined) {
+    throw new ProjectSourceRefusedError(
+      "no-source-hash",
+      "lethal explain --project: this report records no sourceSha256 (it was written before R274), so nothing proves which source its positions refer to. Re-run under this build, then explain with --project.",
+    );
+  }
+  const symbols: unknown = report.preprocessorSymbols;
+  if (!Array.isArray(symbols) || !symbols.every((s) => typeof s === "string")) {
+    refuse("`preprocessorSymbols` is not an array of strings", symbols);
+  }
+  const files = new Map<string, Buffer>();
+  for (const [rel, bytes] of projectSource) files.set(rel.replaceAll("\\", "/"), bytes);
+  const actual = hashSourceSnapshot(files, symbols);
+  if (actual !== report.sourceSha256) {
+    throw new ProjectSourceRefusedError(
+      "source-mismatch",
+      `lethal explain --project: the project is not the source this report's positions refer to (sourceSha256 ${report.sourceSha256}, the project hashes to ${actual}). Every .al file the target build compiles and app.json are hashed as raw bytes, with the config's preprocessor symbols: a CRLF/LF checkout difference, an app.json version bump, a changed symbol, or an edit to a test project nested inside the target all count. Check out the commit the run measured.`,
+    );
+  }
+  return new Map([...files].map(([rel, bytes]) => [rel, decodeSource(bytes)]));
+}
+
+/**
+ * R274: one gap's block lines and its survivors' marks. Every check here can fail only on a
+ * report inconsistent with source it hashed to, so each throws rather than mark the wrong text.
+ */
+function gapSourceOf(
+  gap: ExplainGap,
+  rows: readonly MutantOutcome[],
+  text: string | undefined,
+): ExplainGapSource {
+  if (text === undefined) refuse(`gap ${gap.gapId}'s file is not in the project`, gap.file);
+  const lines = text.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
+  const { blockStartLine: first, blockEndLine: last } = gap;
+  if (last > lines.length || first > last) {
+    refuse(`gap ${gap.gapId}'s block lines are not in ${gap.file}`, [first, last]);
+  }
+  // A gap block is a branch body or a member, never a whole file.
+  if (first === 1 && last >= lines.length - (lines[lines.length - 1] === "" ? 1 : 0)) {
+    refuse(`gap ${gap.gapId}'s block is the whole of ${gap.file}`, [first, last]);
+  }
+  const marks = gap.members.map((code): ExplainSourceMark => {
+    const matching = rows.filter((m) => m.mutantCode === code);
+    const [row] = matching;
+    if (row === undefined || matching.length > 1) {
+      refuse(`gap ${gap.gapId}'s member is not exactly one survived row`, code);
+    }
+    const { startIndex: s, endIndex: e } = row;
+    if (!(Number.isInteger(s) && Number.isInteger(e) && 0 <= s && s <= e && e <= text.length)) {
+      refuse(`${code}'s offsets are not in ${gap.file}`, [s, e]);
+    }
+    if (
+      row.originalText !== REDACTION_MARKER &&
+      clipMutationText(text.slice(s, e)) !== row.originalText
+    ) {
+      refuse(`${code}'s originalText is not the text at its offsets in ${gap.file}`, [s, e]);
+    }
+    const start = positionOf(text, s);
+    const end = positionOf(text, e);
+    if (start.line < first || end.line > last) {
+      refuse(`${code}'s site is outside its gap block`, [start.line, end.line]);
+    }
+    return {
+      mutantCode: code,
+      startLine: start.line,
+      startColumn: start.column,
+      endLine: end.line,
+      endColumn: end.column,
+    };
+  });
+  return { startLine: first, lines: lines.slice(first - 1, last), marks };
 }
 
 /**
@@ -1625,6 +1791,11 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
       `explain: topSurvivors must be a positive integer, got ${JSON.stringify(topSurvivors)}`,
     );
   }
+  // R274: verified before anything is projected, so a refusal leaves nothing half-built.
+  const projectText =
+    options.projectSource !== undefined
+      ? verifiedProjectText(validated, options.projectSource)
+      : undefined;
   const markOf = markBuilderOf(validated);
   const allSurvivors = validated.mutants
     .filter((m) => m.verdict === "survived")
@@ -1670,7 +1841,22 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
     notMeasured: validated.mutants.filter((m) => m.verdict === "error").map(notMeasuredOf),
     toolConditions: toolConditionsOf(validated),
     ...(blocks !== undefined
-      ? { gaps: blocks.gaps, noCoverageBlocks: blocks.noCoverageBlocks }
+      ? {
+          gaps:
+            projectText === undefined
+              ? blocks.gaps
+              : blocks.gaps.map((g) => ({
+                  ...g,
+                  source: gapSourceOf(
+                    g,
+                    validated.mutants.filter(
+                      (m) => m.gapId === g.gapId && m.verdict === "survived",
+                    ),
+                    projectText.get(g.file),
+                  ),
+                })),
+          noCoverageBlocks: blocks.noCoverageBlocks,
+        }
       : {}),
     markIdentityScheme,
     // R325's rule (`applyEquivalenceMarks`): a mark whose scheme is not the run's is stale.

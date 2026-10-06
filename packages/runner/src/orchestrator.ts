@@ -80,6 +80,7 @@ import type {
 } from "./backend";
 import { stopIsRetrySafe } from "./backend";
 import {
+  decodeSource,
   hashAlTree,
   hashPackage,
   hashSourceSnapshot,
@@ -891,11 +892,10 @@ export async function generateMutationSet(
       if (snapshot !== undefined && bytes === undefined) {
         throw new Error(`generateMutationSet: ${raw} is not in the source snapshot`);
       }
-      // Buffer's decode, as `readFile(..., "utf8")` does: a BOM is kept, not stripped.
+      // Buffer's decode, as `readFile(..., "utf8")` does: a BOM is kept, not stripped. The same
+      // `decodeSource` `lethal explain --project` renders with (R274).
       const source =
-        bytes !== undefined
-          ? bytes.toString("utf8")
-          : await readFile(join(projectDir, raw), "utf8");
+        bytes !== undefined ? decodeSource(bytes) : await readFile(join(projectDir, raw), "utf8");
       return { path: rel, source, root: wrapRoot(parseAL(source)) };
     }),
   );
@@ -4984,6 +4984,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     envPublishes?.testApp,
   );
   const { tests, armPolicyApplied } = chooseTestSuite(discovery, testArmEvidence);
+  // R488: the UNFILTERED list, every arm read: a look-alike al-runner would also select must be
+  // excluded whether or not this session runs it. Given again to every worker below.
+  cfg.backend.useDiscoveredTests?.(discovery.unfiltered);
   // Discovery returns the whole list in one parse — 1,000+ per-item events at one instant would
   // be false granularity, not liveness (see events.ts's doc comment on `tests-discovered`).
   // R403 phase C. With no compiled evidence the unfiltered suite runs, so a `compiled-out` record
@@ -5324,6 +5327,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       : {}),
     // R447: present only when non-empty, like `refusedFiles`.
     ...(hangRefused.length > 0 ? { hangRefusedFiles: hangRefused } : {}),
+    // R274: the source the report's positions refer to, for `lethal explain --project`. The
+    // GENERATION hash, not `runs.generation_source_sha256`, which is withheld when the source
+    // changed mid-run: the positions still refer to the bytes generation parsed.
+    sourceSha256: sourceHashAtGeneration,
     // R443: the run's numbering facts, for equivalence marks and `lethal explain`.
     numberingDigest,
     twinSites: twinTuples,
@@ -5597,6 +5604,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           );
         }
         handBuildSymbols(worker, buildSymbols);
+        // R488: each worker starts with an empty sibling cache, so it needs the list too.
+        worker.useDiscoveredTests?.(discovery.unfiltered);
         workerBackends.push(worker);
       }
     }

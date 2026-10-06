@@ -140,7 +140,7 @@ has the complete set.
 
 | flag | read by |
 |---|---|
-| `--project` | `run`, `init`, `clear-ceiling`, `force-reset-lease`, `doctor`, `export`, `campaign` |
+| `--project` | `run`, `init`, `clear-ceiling`, `force-reset-lease`, `doctor`, `explain`, `export`, `campaign` |
 | `--tests` | `run`, `doctor`, `verify` |
 | `--config` | `run`, `clear-ceiling`, `force-reset-lease`, `doctor`, `verify` |
 | `--db` | `run`, `clear-ceiling`, `verify` |
@@ -148,6 +148,7 @@ has the complete set.
 | `--progress-out` | `run` |
 | `--json` | `doctor`, `campaign` |
 | `--top` | `explain` |
+| `--suggest` | `explain` |
 | `--report` | `campaign` |
 | `--only` | `run` |
 | `--exclude` | `run` |
@@ -347,6 +348,48 @@ Each gap has
 exactly one of `artifactId` (the artifact to verify it against) and `artifactIdAbsent` (why there
 is none, with the same values as on a survivor row; a gap is `carried` when any of its members is).
 `--top` never shortens `gaps`: every gap is listed, even one none of whose survivors is shown.
+
+`--project <dir>` adds each gap's source (R274):
+
+```
+lethal explain report.json --project <dir>
+```
+
+Each `gaps` row can also carry `source`. Given `--project`, it holds `startLine` (the gap's `blockStartLine`),
+`lines` (the block's lines, split on LF, with one trailing CR dropped per line) and `marks`, one per
+member in `members` order, each `{ mutantCode, startLine, startColumn, endLine, endColumn }`. Lines and
+columns start at 1; a column counts UTF-16 code units (a tab is one), and the end is exclusive, so a
+site can span lines. Explain first hashes `<dir>` the way the run hashed its source (every .al
+file the target build compiles plus app.json, raw bytes, with the config's preprocessor symbols)
+and compares that with the report's sourceSha256. Any difference refuses by name (a
+ProjectSourceRefusedError, reason source-mismatch) with nothing on stdout: a CRLF/LF checkout
+difference, an app.json version bump, a changed preprocessor symbol or an edit to a test project
+nested inside the target all count. A report from before R274 has no sourceSha256 and refuses with
+reason no-source-hash. The output then holds TARGET SOURCE: do not publish it for a third party's
+code.
+
+`--suggest` adds a suggested fix kind per gap (R273), in its own section:
+
+```
+lethal explain report.json --suggest
+```
+
+The top level can also carry `suggestions`. It is a SUGGESTION, not a measurement, and it sits
+outside the measured projection: everything else in the output is the same with or without the
+flag. Each kind is derived only from a survivor's measured `reach` and coverage `attribution`.
+The kinds:
+
+| reach | attribution | kind |
+|---|---|---|
+| reached-unnoticed | any | check-the-result: the statement ran under a covering test and every covering test still passed |
+| covered-but-unreached | exact | cover-the-branch: a test enters the procedure, but the statement did not run in this mutant's runs (or it is unreachable) |
+| unreached-and-uncovered | object, all-green | cover-the-statement: it did not run in this mutant's runs, and entry to its procedure was not measured |
+| not-decided | any | undecided: the report cannot tell |
+
+A survivor a reader already marked is `reader-marked`. A gap takes its members' kind when they
+agree, else `mixed`; it lists every member of the matching `gaps` entry, in the same order. The
+section covers the recorded survivors only (on a narrowed run, not the whole block), and no-coverage
+blocks are outside it. On a report without gap ids, `--suggest` refuses with nothing on stdout.
 
 `noCoverageBlocks` lists the no-coverage mutants by block. It is a location list, not a verify
 input: an entry has no gap id and no counts.

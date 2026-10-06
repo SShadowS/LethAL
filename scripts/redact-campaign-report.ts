@@ -30,10 +30,11 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { REDACTION_MARKER } from "../packages/runner/src/explain";
 
-/** The marker a redacted field carries. A fixed string, so `--check` is an equality test rather than
- *  a guess, and so a reader meeting one in a report can grep for where it came from. */
-export const REDACTION_MARKER = "[redacted: third-party source, see this directory's README]";
+/** The marker a redacted field carries, defined beside `lethal explain --project`, which skips its
+ *  per-site text check on exactly this value (R274). Re-exported so this script's callers keep it. */
+export { REDACTION_MARKER };
 
 /** The only two fields that carry verbatim target source. Named here rather than inline so the
  *  ruling's scope is one greppable list. */

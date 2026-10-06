@@ -13,6 +13,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`lethal explain --suggest` adds a suggested fix kind per gap** (R273). A separate `suggestions`
+  section, off by default and labelled as suggestions, not measurements: each gap gets
+  `check-the-result`, `cover-the-branch`, `cover-the-statement`, `undecided`, `reader-marked` or
+  `mixed`, derived only from each survivor's measured reach and coverage attribution. Everything
+  else in explain's output is unchanged with or without the flag. Explain schema stays 13.
+
+- **`lethal explain --project <dir>` shows each gap's source with its survivors marked** (R274).
+  Every gap gains `source`: the block's lines and one mark per survivor (start and end line and
+  column), as structured data. The report gains `sourceSha256`, the hash of the source generation
+  parsed; explain recomputes it over `<dir>` and refuses by name, with nothing on stdout, on any
+  difference or on a report from before this release. No source goes into the report. The output
+  with `--project` holds target source. Explain schema stays 13 (an optional additive field).
+
 - **A `reportextension` is mutated; identity scheme 17** (R254). Until now such a file was skipped
   as a non-carrier kind. BC reports a report extension's coverage as object type 22 under the
   extension's own id (measured on BC 28), and al-runner as its own Cobertura class, so both are
@@ -492,6 +505,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   On al-runner nothing changes: the scan runs on bcdev only.
 
 ### Fixed
+
+- **al-runner one-shot: a result naming any other test is never credited to the requested one**
+  (R488). al-runner's `--test` is a case-insensitive substring match, so asking for `GrowPre` also
+  ran `GrowPreTwin`, and LethAL credited both tests' coverage, and their shared deadline, to
+  `GrowPre`. al-runner has no exact `--test`, but `--exclude-test` matches a whole name. Every
+  discovered test whose name contains the requested one is now excluded from the first call on, on
+  the session backend and on every worker. As a defence, a result that still names another test is
+  discarded, the test re-runs with that name excluded too, and a result that names one even then is
+  refused by name. A test whose name is no part of another's runs exactly as before. `--server` was not
+  affected.
 
 - **A lost answer after a stop is never retried into a survivor; the single path refuses a stop
   that landed after the test finished** (R202, R204; R-204b landing 1, client only). With
