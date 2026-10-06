@@ -293,6 +293,9 @@ export type RunEventInput =
          */
         readonly classification: readonly BaselineClassification[];
         readonly failureMessage?: string;
+        /** R272: this test's own measured duration (`TestVerdict.measuredDurationMs`), on a `pass`
+         *  run in THIS session only (never a resume-reused baseline). Optional on the wire. */
+        readonly durationMs?: number;
       }[];
     }
   | {

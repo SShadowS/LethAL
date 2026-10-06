@@ -413,7 +413,7 @@ describe("R420: discovery against the compiler, per shape and build", () => {
     const dir = await testDirWith({ "S4.Codeunit.al": SHAPES.S4 ?? "" });
     const refs = await discoverTests(dir);
     expect(refs).toEqual([
-      { codeunitId: 92454, codeunitName: "S4", method: "T4", file: "S4.Codeunit.al" },
+      { codeunitId: 92454, codeunitName: "S4", method: "T4", file: "S4.Codeunit.al", line: 7 },
     ]);
   });
 });

@@ -943,6 +943,25 @@ export interface ExecutionContext {
   readonly platformAppsDir?: string;
 }
 
+/** R272: one discovered test method — see `SessionReport.testMethods`. */
+export interface TestMethodRecord {
+  /** Qualified `Codeunit.method`, the name `coveringTests` and `reachedBy` use. */
+  readonly name: string;
+  /** Project-relative file, present when every discovered ref of this name agrees on it. */
+  readonly file?: string;
+  /** 1-based line of the method's name, present when every ref of this name agrees on the file
+   *  and the line. */
+  readonly line?: number;
+  /** The name was discovered more than once (two `#if` arms, R403) at different places, so no
+   *  single location is given: one of them is not in the build. */
+  readonly lineAmbiguous?: true;
+  /** The smallest per-test baseline duration from THIS session's COMPLETED baseline batches
+   *  (`TestVerdict.measuredDurationMs`); a batch whose baseline aborted (quarantine) contributes
+   *  nothing. Absent: not measured per test in a completed batch (a resume-reused baseline, a
+   *  failing test, a backend that reports none). Displayed, never a ranking key (R272). */
+  readonly baselineDurationMs?: number;
+}
+
 /** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */
 export interface SurvivorGroup {
   readonly file: string;
@@ -988,6 +1007,12 @@ export interface SessionReport {
    * Indexed once at session level rather than repeated on every mutant.
    */
   readonly testFiles: Readonly<Record<string, string>>;
+  /**
+   * R272: every discovered test method, one per qualified `Codeunit.method` name, sorted by
+   * `compareCodeUnits(name)`: where it is, and how long its baseline took. Absent on a report from
+   * before R272. `lethal explain` lists a gap's covering tests from it (`gaps[].coveringTests`).
+   */
+  readonly testMethods?: readonly TestMethodRecord[];
   readonly backend: string;
   readonly authoritative: boolean;
   /**
@@ -2925,6 +2950,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       : {}),
     survivorsByProcedure,
     testFiles,
+    ...(input.testMethods !== undefined ? { testMethods: input.testMethods } : {}),
     backend: input.caps.authoritative ? "bcdev" : "al-runner",
     authoritative: input.caps.authoritative,
     coverageMode: input.caps.coverage,
