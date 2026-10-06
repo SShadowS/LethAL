@@ -3367,31 +3367,19 @@ describe("runSession — parallel workers", () => {
     };
     // R491: one shared event log across every backend, so ORDER is read from call counters, never
     // from a clock: each backend's seed must come before its own first run().
-    const log: { backend: number; what: "seed" | "run"; method?: string | undefined }[] = [];
+    // Each entry is pushed synchronously at the call's entry, so workers' runs never interleave
+    // into one another's entries.
+    const log: { backend: number; what: "seed" | "run"; method?: string }[] = [];
     const given: string[][] = [];
     let made = 0;
     const make = () => {
       const id = made++;
-      let current: string | undefined;
-      const b = new StubBackend(
-        caps,
-        (mutant, ref) => {
-          current = ref.method;
-          return mutant === null ? "pass" : "fail";
-        },
-        [],
-        undefined,
-        async () => {
-          log.push({ backend: id, what: "run" });
-        },
-      );
+      const b = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
       const run = b.run.bind(b);
       return Object.assign(b, {
-        run: async (ref: TestMethodRef, opts: RunOpts) => {
-          const v = await run(ref, opts);
-          const last = log.at(-1);
-          if (last !== undefined) last.method = current;
-          return v;
+        run: (ref: TestMethodRef, opts: RunOpts) => {
+          log.push({ backend: id, what: "run", method: ref.method });
+          return run(ref, opts);
         },
         useDiscoveredTests: (tests: readonly TestMethodRef[]) => {
           log.push({ backend: id, what: "seed" });

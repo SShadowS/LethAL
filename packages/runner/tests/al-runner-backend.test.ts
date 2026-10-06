@@ -6,7 +6,9 @@ import { AL_RUNNER_UNCLASSIFIED_ERROR, AlRunnerBackend } from "../src/al-runner-
 import type { ServerSpawnFn } from "../src/al-runner-server";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
+import { runOnce } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
+import { SessionSafety } from "../src/session-safety";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -1355,8 +1357,11 @@ describe("AlRunnerBackend one-shot: a result naming any other test is never cred
       ],
     });
     const { backend } = await makeBackend(spawn);
-    const v = await backend.run(ref, opts);
+    // Through `runOnce`, which re-sends a retry-safe failure once: the test WAS dispatched, so the
+    // refusal must be `completed-accepted` and must not be re-sent.
+    const v = await runOnce(backend, new SessionSafety(), ref, opts);
     expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("completed-accepted");
     expect(v.failureMessage).toContain(`"${QUALIFIED}"`);
     expect(v.failureMessage).toContain("2 rows");
     expect(calls.length).toBe(1);
