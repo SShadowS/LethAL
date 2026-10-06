@@ -239,31 +239,57 @@ function projectObserves(
       if (findTableTrigger(ext.node, t, armOf) !== null) return true;
     }
   }
-  // Objects the symbol table does not index (wrapped whole in `#if`, or unparsable) are read by
-  // their text, for any table: over-tagging is the safe direction. One that looks like a
-  // tableextension naming this table keeps the tag whatever its triggers, since its procedures
-  // are not among `procedureNamesOn`'s and a trigger may call one without parentheses (sol final
-  // r1 finding 2).
-  for (const n of [...symbols.unindexedObjects, ...symbols.unparsedObjects]) {
-    if (unindexedText.test(n.text)) return true;
-    const text = n.text.toLowerCase();
-    if (
-      /\btableextension\b/.test(text) &&
-      (text.includes(tableName) || text.includes(String(table.id)))
-    ) {
+  const names = new Set([tableName, String(table.id)]);
+  const subscribes = (node: ALSyntaxNode): boolean => {
+    let found = false;
+    visit(node, (n) => {
+      if (!found && n.rawKind === "attribute_argument_list") found = subscribesTo(n, names, events);
+    });
+    return found;
+  };
+  // Objects the symbol table does not index. R485: a CLEAN `#if`-wrapped tableextension or
+  // codeunit is read like an indexed one, for THIS table: a tableextension of it keeps the tag
+  // whatever its triggers (its procedures are not among `procedureNamesOn`'s, and a trigger may
+  // call one without parentheses: sol final r1 finding 2); a codeunit keeps it when it subscribes
+  // to this table's events, in any member arm (the tree holds every arm). Anything else (an ERROR
+  // node, an object with an ERROR or MISSING descendant, a split header, any other kind) is read by
+  // its whole TEXT, for any table, as before: a broken parse's structure cannot be trusted, and
+  // over-tagging is the safe direction.
+  for (const n of symbols.unindexedObjects) {
+    if (!n.hasError && n.rawKind === TABLEEXTENSION_DECLARATION) {
+      const base = n.childForFieldName("base_object")?.text.replace(/"/g, "").toLowerCase();
+      if (base === undefined || names.has(base)) return true;
+    } else if (!n.hasError && n.rawKind === CODEUNIT_DECLARATION) {
+      if (subscribes(n)) return true;
+    } else if (textObserves(n, unindexedText, tableName, table.id)) {
       return true;
     }
   }
-  const names = new Set([tableName, String(table.id)]);
-  let found = false;
+  for (const n of symbols.unparsedObjects) {
+    if (textObserves(n, unindexedText, tableName, table.id)) return true;
+  }
   for (const cu of symbols.objects) {
-    if (cu.kind !== "codeunit") continue;
-    visit(cu.node, (n) => {
-      if (!found && n.rawKind === "attribute_argument_list") found = subscribesTo(n, names, events);
-    });
-    if (found) return true;
+    if (cu.kind === "codeunit" && subscribes(cu.node)) return true;
   }
   return false;
+}
+
+const TABLEEXTENSION_DECLARATION = "tableextension_declaration";
+const CODEUNIT_DECLARATION = "codeunit_declaration";
+
+/** The text rule for an object without trustworthy structure, for ANY table: it names an
+ *  `On(Before|After)<Kind>`, or it looks like a tableextension and mentions this table. */
+function textObserves(
+  n: ALSyntaxNode,
+  unindexedText: RegExp,
+  tableName: string,
+  tableId: number,
+): boolean {
+  if (unindexedText.test(n.text)) return true;
+  const text = n.text.toLowerCase();
+  return (
+    /\btableextension\b/.test(text) && (text.includes(tableName) || text.includes(String(tableId)))
+  );
 }
 
 /** An `[EventSubscriber(...)]` argument list naming one of `events` of one of `tableNames`. An
