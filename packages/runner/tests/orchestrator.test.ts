@@ -1119,6 +1119,93 @@ interface "I Probe"
       }
     });
 
+    // R-300b (c): the SAME wrapped codeunit, one session per backend kind. The kind comes from
+    // `authoritative` (bcdev true, al-runner false). Only the al-runner session scores it.
+    describe("R-300b: a #if-wrapped codeunit alone in its file, per backend", () => {
+      async function wrappedRun(caps: BackendCapabilities) {
+        const dirs = await makeProject();
+        await Bun.write(
+          join(dirs.projectDir, "SandboxLogic.Codeunit.al"),
+          `#if not NEVERDEFINED\n${TARGET_AL}#endif\n`,
+        );
+        const backend = new StubBackend(caps, () => "pass", ["IsOverBudget"]);
+        const store = new ResultsStore(":memory:");
+        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          return await runSession({ backend, store, ...dirs, selectorIds });
+        } finally {
+          warnSpy.mockRestore();
+          store.close();
+        }
+      }
+
+      test("bcdev: every mutant reads no-coverage, refused by name", async () => {
+        const report = await wrappedRun(CAPS_NST);
+        expect(report.mutants.length).toBeGreaterThan(0);
+        for (const m of report.mutants) {
+          expect(m.verdict).toBe("no-coverage");
+          expect(m.failureNote).toContain("coverage refused for Codeunit:79000");
+        }
+      });
+
+      test("al-runner: the mutants are covered and run (survived), with no refusal", async () => {
+        const report = await wrappedRun(CAPS_NST_WORKERS);
+        expect(report.mutants.length).toBeGreaterThan(0);
+        for (const m of report.mutants) {
+          expect(m.verdict).toBe("survived");
+          expect(m.failureNote ?? "").not.toContain("coverage refused");
+        }
+      });
+
+      test("the session's build symbols reach the session backend AND every worker backend", async () => {
+        const dirs = await makeProject();
+        const got: (readonly string[])[] = [];
+        class Taking extends StubBackend {
+          useBuildSymbols(s: readonly string[]): void {
+            got.push(s);
+          }
+        }
+        const make = () => new Taking(CAPS_NST_WORKERS, () => "pass", ["IsOverBudget"]);
+        const store = new ResultsStore(":memory:");
+        try {
+          await runSession({
+            backend: make(),
+            backendFactory: make,
+            workers: 2,
+            store,
+            ...dirs,
+            selectorIds,
+          });
+        } finally {
+          store.close();
+        }
+        // One session backend plus two workers, each given the same effective set.
+        expect(got).toHaveLength(3);
+        for (const s of got) expect(s).toEqual(got[0] ?? []);
+      });
+
+      test("al-runner (C1): a key two active files declare is refused in selection by name", async () => {
+        const dirs = await makeProject();
+        await Bun.write(join(dirs.projectDir, "Twin.Codeunit.al"), TARGET_AL);
+        const backend = new StubBackend(CAPS_NST_WORKERS, () => "pass", ["IsOverBudget"]);
+        const store = new ResultsStore(":memory:");
+        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const report = await runSession({ backend, store, ...dirs, selectorIds });
+          expect(report.mutants.length).toBeGreaterThan(0);
+          for (const m of report.mutants) {
+            expect(m.verdict).toBe("no-coverage");
+            expect(m.failureNote).toContain(
+              "coverage refused for codeunit:79000: it is declared in SandboxLogic.Codeunit.al and Twin.Codeunit.al",
+            );
+          }
+        } finally {
+          warnSpy.mockRestore();
+          store.close();
+        }
+      });
+    });
+
     test("a #if-wrapped table's trigger mutants read no-coverage, named, not all-green (R298)", async () => {
       const dirs = await makeProject();
       await Bun.write(

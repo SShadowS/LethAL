@@ -3245,6 +3245,7 @@ table 50110 "Wrapped T"
         Object.entries({ ...files, "B2.Codeunit.al": TWO_ARM, "Other.Codeunit.al": PLAIN }).map(
           ([path, text]) => ({ path, root: wrapRoot(parseAL(text)) }),
         ),
+        "bcdev",
       );
       const other = { codeunitId: 50140, codeunitName: "Tests", method: "U" };
       const index = buildCoverageIndex([

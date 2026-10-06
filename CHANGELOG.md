@@ -104,6 +104,20 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **al-runner scores a `#if`-wrapped object that is alone in its file; identity scheme 29**
+  (R-300b, R300). al-runner (one-shot, `--server` and resource modes) now scores such an object,
+  joining its coverage by the original file's line numbers (measured on both al-runner legs, two
+  rounds). Admitted: exactly one one-arm `#if ... #endif` wrapper holding one object, with
+  namespace, using and comment lines before it or inside it, and statement-level `#if`s inside the
+  object. Declarations in a compiled-out arm are no longer indexed, and an object declared in two
+  active files is refused by name. On `--server`, a statement in such a file whose own procedure
+  name disagrees with its position is dropped, with a warning. Two-arm, nested and multi-object
+  wrapped files, and every BC coverage path (fenced, hub, `lethal verify`), still refuse by name.
+  No key moves and the emitted AL is unchanged, but a key whose verdict was a refusal's
+  `no-coverage` can now be scored, so history, `--resume` and marks recorded under 28 (bcdev
+  included) are not carried: marks files need `"identityScheme": 29` after you re-check each mark
+  (R325).
+
 - **A report data item over `Integer` counts as a loop for the hang refusal; identity scheme 28**
   (R484). BC calls a data item's `OnAfterGetRecord` once per record. Over the virtual `Integer` table
   the item ends only when a trigger calls `CurrReport.Break` or `Quit`, raises an `Error`, or a bound

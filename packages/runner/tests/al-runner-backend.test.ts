@@ -279,6 +279,7 @@ ${"    // pad\n".repeat(pad)}    procedure Reached()
       },
       coveringSpawn(() => line),
     );
+    backend.useBuildSymbols([]); // R-300b: what runSession hands over before the first deploy
     const procs = (v: { coverage?: { entries: readonly { procedure?: string }[] } }) =>
       (v.coverage?.entries ?? []).map((e) => e.procedure ?? "<none>");
     // Batch 1, no shift: line 5 is `exit;` inside Reached.
@@ -349,6 +350,7 @@ describe("AlRunnerBackend.deploy: manifest objects against parsed declarations (
       },
       spawn,
     );
+    backend.useBuildSymbols([]); // R-300b: what runSession hands over before the first deploy
     let err: unknown;
     try {
       // The orchestrator's order: deploy, then the baseline run.

@@ -346,6 +346,8 @@ export class AlRunnerBackend implements ExecutionBackend {
   /** R147 — see `usePlatformAppsDir`. Undefined until this session's provisioning run has reported a
    *  directory that passed every check, and then for the rest of the session. */
   private platformAppsDir: string | undefined;
+  /** R-300b — see `useBuildSymbols`. A session fact, so `resetLayoutState` keeps it. */
+  private buildSymbols: readonly string[] | undefined;
   private readonly transport: AlRunnerTransport;
   /** R220 — present only under `serverMode`, and the sole owner of the daemon's lifetime. */
   private server: AlRunnerServer | undefined;
@@ -632,6 +634,26 @@ export class AlRunnerBackend implements ExecutionBackend {
   }
 
   /**
+   * R-300b: the session's EFFECTIVE build symbols (app.json, config and al-runner's predefined
+   * ones), handed over by `runSession` before the first deploy. The coverage index evaluates each
+   * file's `#if` arms under them, as generation did. Not a layout field: one set per session.
+   */
+  useBuildSymbols(symbols: readonly string[]): void {
+    this.buildSymbols = [...symbols];
+  }
+
+  /** The index, under the session's symbols; with coverage on, a deploy without them refuses. */
+  private coverageIndexOf(dir: string): Promise<AlRunnerCoverageIndex> {
+    const symbols = this.buildSymbols;
+    if (symbols === undefined) {
+      throw new Error(
+        "AlRunnerBackend: coverage is on but the session's build symbols were never handed over (useBuildSymbols), so the #if arms of the bundle are unknown; refusing rather than guessing them (R-300b).",
+      );
+    }
+    return buildAlRunnerCoverageIndex(dir, { symbols });
+  }
+
+  /**
    * `isolation: "full-reset"` is honest only because the transport actually sends
    * `--isolation test` (see OneShotTransport.send) — v2's mode that gives every [Test] fresh
    * state. Do not claim it back if that flag ever changes.
@@ -806,7 +828,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     // declarations first. A holds by construction (map and `declared` come from one parse) and is
     // checked anyway; B is exempt only for the index's own refused and multi-object files.
     if ((this.cfg.coverage ?? "none") !== "none") {
-      const index = await buildAlRunnerCoverageIndex(activeDir);
+      const index = await this.coverageIndexOf(activeDir);
       this.coverageIndex = index;
       assertManifestObjectsDeclared(
         await readManifestObjectKeys(activeDir),
@@ -932,7 +954,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     }
     const lines = parseCobertura(xml);
     if (lines.length === 0) return undefined;
-    this.coverageIndex ??= await buildAlRunnerCoverageIndex(this.activeDir());
+    this.coverageIndex ??= await this.coverageIndexOf(this.activeDir());
     return alRunnerCoverageFrom(lines, this.coverageIndex);
   }
 
@@ -1169,7 +1191,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     for (const t of res.tests) byName.set(t.name, t);
     const coverageByName = new Map<string, CoverageMap>();
     if (wantCoverage && res.perTestCoverage.length > 0) {
-      this.coverageIndex ??= await buildAlRunnerCoverageIndex(this.activeDir());
+      this.coverageIndex ??= await this.coverageIndexOf(this.activeDir());
       for (const entry of res.perTestCoverage) {
         coverageByName.set(entry.test, alRunnerCoverageFromServer(entry, this.coverageIndex));
       }

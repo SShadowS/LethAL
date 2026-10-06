@@ -132,7 +132,13 @@ import {
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { discoveredRelPaths, isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
-import { type AlSource, ManifestDeclarationError, coverageRefusedObjects } from "./line-map";
+import {
+  type AlSource,
+  ManifestDeclarationError,
+  activeObjectKeys,
+  coverageRefusedObjects,
+  duplicateObjectRefusals,
+} from "./line-map";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -417,6 +423,13 @@ export interface RefusedFile extends Omit<FileRefusalFields, "site"> {
 
 export interface MutationSetResult {
   readonly files: readonly InstrumentedFile[];
+  /**
+   * R-300b (C1): object keys declared, in an arm this build compiles, by more than one of the
+   * project's files (every parsed file, `--only` or not) -> the refusal sentence
+   * (`duplicateObjectRefusals`, the function the al-runner index uses). `runSession` refuses them
+   * in selection on the al-runner path. Usually empty: alc rejects such a project.
+   */
+  readonly duplicateObjects: ReadonlyMap<string, string>;
   /** Files with >=1 spec that no selector var could be injected into — see doc comment above. */
   readonly skipped: readonly NotInstrumentedFile[];
   /** Every `.al` source file scanned (excluding emitted `Mutation*` artifacts) — the denominator
@@ -1301,6 +1314,12 @@ export async function generateMutationSet(
   }
   return {
     files,
+    duplicateObjects: duplicateObjectRefusals(
+      parsed.map(({ path, root }) => {
+        const arms = armsByRoot.get(root);
+        return { path, keys: arms === undefined ? [] : activeObjectKeys(root, arms) };
+      }),
+    ),
     skipped,
     totalFiles: entries.length,
     excludedByOnly,
@@ -3917,6 +3936,12 @@ function pinPlatformAppsDir(backend: ExecutionBackend, dir: string, who: string)
   return consumed;
 }
 
+/** R-300b: hands the session's effective build symbols to a backend that takes them. */
+function handBuildSymbols(backend: ExecutionBackend, symbols: readonly string[]): void {
+  const taker = backend as { useBuildSymbols?: (s: readonly string[]) => void };
+  if (typeof taker.useBuildSymbols === "function") taker.useBuildSymbols(symbols);
+}
+
 /**
  * C02-04: the session-level values `scoreBatch` needs. Built once per session by `runSession`,
  * after the lease is open, and shared by every batch.
@@ -5047,6 +5072,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     sourceSnapshot,
     buildBackend,
   );
+  // R-300b: the al-runner coverage index evaluates `#if` arms under this same set. Structural,
+  // like `usePlatformAppsDir`: a backend without it builds no such index.
+  handBuildSymbols(cfg.backend, buildSymbols);
   const symbolsWarning = marksSymbolsWarning(
     marksUnderOtherSymbols(cfg.equivalenceMarks ?? [], buildSymbols),
     buildSymbols,
@@ -5160,6 +5188,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const generateStartedMs = Date.now();
   const {
     files: allFiles,
+    duplicateObjects,
     skipped: notInstrumentedFiles,
     totalFiles: totalAlFiles,
     excludedByOnly,
@@ -5238,7 +5267,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   }
   // R298: objects declared inside, or after, a #if object wrapper, by the line map's own rule.
   // Passed to BOTH `coverageFilter` calls so no coverage mode and no fallback scores their mutants.
-  const coverageRefused = coverageRefusedObjects(allFiles);
+  // R-300b: per coverage path. On al-runner an admitted wrapped file is scored, and a key two
+  // files declare is refused by the sentence the index prints (C1).
+  const coverageRefused: ReadonlyMap<string, string> = new Map([
+    ...coverageRefusedObjects(allFiles, backendName),
+    ...(backendName === "al-runner" ? duplicateObjects : []),
+  ]);
   // R92: raw site count (every spec that made it into an instrumentable file) vs the DEPLOYED
   // count once per-file dedup (`dedupeSpecs`) collapses same-site operator collisions into one
   // winner — the same collapse `writeInstrumentedProject` runs at compile time, per file (identity
@@ -5562,6 +5596,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             `runSession: the session backend sends al-runner's pinned platform-app directory (${platformAppsDir}) but worker backend ${i} declined it, so the baseline and the mutants would run under different argv (R147, R242).`,
           );
         }
+        handBuildSymbols(worker, buildSymbols);
         workerBackends.push(worker);
       }
     }
