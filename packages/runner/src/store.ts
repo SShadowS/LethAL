@@ -751,6 +751,48 @@ export class ResultsStore {
     if (changed !== 1) throw new Error(`store.ts: setNumberingDigest: no run ${runId}`);
   }
 
+  /**
+   * R373: records an env-tool run's test digests, taken after its lease-held hook published the
+   * test app. Writes only a row that holds none yet: zero rows changed (no such run, or digests
+   * already recorded) is a caller-contract violation and throws, never an overwrite.
+   */
+  setRunTestDigests(
+    runId: number,
+    digests: Readonly<Record<string, string>>,
+    parts: unknown,
+  ): void {
+    const changed = this.db
+      .query(
+        "UPDATE runs SET test_digests = ?, test_digest_parts = ? WHERE id = ? AND test_digests IS NULL",
+      )
+      .run(JSON.stringify(digests), JSON.stringify(parts), runId).changes;
+    if (changed !== 1) {
+      throw new Error(
+        `store.ts: setRunTestDigests: run ${runId} does not exist or already records test digests`,
+      );
+    }
+  }
+
+  /** R486: an env-tool run's test-app identity, read again after its hook published the test app.
+   *  `null` records "unknown" (the read-back was unavailable), which no resume or history matches. */
+  setRunTestAppHash(runId: number, testAppHash: string | null): void {
+    const changed = this.db
+      .query("UPDATE runs SET test_app_hash = ? WHERE id = ?")
+      .run(testAppHash, runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setRunTestAppHash: no run ${runId}`);
+  }
+
+  /** R486: the latest finished run's recorded test-app hash for this project, the one
+   *  `--skip-known-survivors` would skip from; `null` when there is none or it recorded none. */
+  latestFinishedTestAppHash(projectPath: string): string | null {
+    const row = this.db
+      .query(
+        "SELECT test_app_hash FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+      )
+      .get(projectPath) as { test_app_hash: string | null } | null;
+    return row?.test_app_hash ?? null;
+  }
+
   /** R442: records what the run numbered no ordinal for, once generation knows it. Called before
    *  any mutant row is written, so a run that dies before it holds no verdict and stays NULL. */
   setCarryHidden(runId: number, hidden: CarryHidden): void {

@@ -95,6 +95,7 @@ import {
   DependencyUnreadableError,
   type MicrosoftMode,
   appInputsOfPackage,
+  checkInstalled,
   dependencyFingerprint,
   packageFolderReader,
   publishedPackageReader,
@@ -211,6 +212,7 @@ import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
   PublishAppUnreadableError,
+  TestAppRepublishedError,
   type TestArmEvidence,
   assertTestMembership,
   chooseTestSuite,
@@ -4903,8 +4905,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // (a compiled-out test there still meets R31's refusal at baseline), and the evidence record says
   // so. Phase C reports it: `tests-discovered` below carries `testBuildSymbols`, `excludedTests`
   // and the `tests-compiled-out` / `test-symbols-unverified` caveats.
-  const { evidence: testArmEvidence, deferredCheck: deferredTestAppCheck } =
-    await resolveTestArmEvidence(cfg, buildBackend.kind, publishedRead, discovery);
+  // R373/R486: what the env-tool hook will publish, read once here, before the lease. `undefined`
+  // when no hook runs under a lease (and on al-runner, which publishes nothing).
+  const envPublishes = buildBackend.kind === "al-runner" ? undefined : await envToolPublishes(cfg);
+  const { evidence: testArmEvidence, deferredCheck: deferredTestAppCheck } = resolveTestArmEvidence(
+    buildBackend.kind,
+    publishedRead,
+    discovery,
+    envPublishes?.testApp,
+  );
   const { tests, armPolicyApplied } = chooseTestSuite(discovery, testArmEvidence);
   // Discovery returns the whole list in one parse — 1,000+ per-item events at one instant would
   // be false granularity, not liveness (see events.ts's doc comment on `tests-discovered`).
@@ -4978,6 +4987,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // R403 phase B: R139's source-to-source comparison filters both sides alike.
     armPolicyApplied ? testBuildSymbols : undefined,
     sourceSnapshot,
+    envPublishes !== undefined,
   );
   const sourceSymbols = cfg.preprocessorSymbols ?? [];
   const sourceHashAtGeneration = hashSourceSnapshot(sourceSnapshot, sourceSymbols);
@@ -5410,12 +5420,61 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         });
       }
     }
+    // R373/R486: the hook above published the test app this session runs, so the pre-lease read
+    // may describe the OUTGOING one. Read it back under the lease, with R139's own read; nothing
+    // can republish before the tests run. `envPublishes` is defined only when the hook ran.
+    let readBack: PublishedTestSources | undefined;
+    if (envPublishes !== undefined) {
+      const after = await reportPublishedTestApp(
+        cfg,
+        await fetchPublishedTestApp(cfg),
+        tests,
+        emit,
+        armPolicyApplied ? testBuildSymbols : undefined,
+      );
+      readBack = after.sources;
+      // R486: the row records the test app that ran, or NULL ("unknown"), never the outgoing one.
+      cfg.store.setRunTestAppHash(runId, after.packageHash ?? null);
+      // R486, fail closed: a carried verdict was measured against `testAppHash`, the pre-lease
+      // read. It stands only if the read-back is defined and equal. First after the hook, before
+      // and independent of every digest check.
+      const flag =
+        resolvedResume !== undefined
+          ? cfg.resume === "last"
+            ? "--resume"
+            : `--resume-run ${String(cfg.resume)}`
+          : (cfg.skipKnownSurvivors ?? false) &&
+              testAppHash !== undefined &&
+              cfg.store.latestFinishedTestAppHash(cfg.projectDir) === testAppHash
+            ? "--skip-known-survivors"
+            : undefined;
+      if (
+        flag !== undefined &&
+        (after.packageHash === undefined || after.packageHash !== testAppHash)
+      ) {
+        throw new TestAppRepublishedError(flag, testAppHash, after.packageHash);
+      }
+    }
     // R403 phase B (plan §3(b)): on an env-tool session the test app that RUNS is the
     // `publishApps` file the hook above just published, not the pre-lease R139 download, which can
     // hold the outgoing package. Its compiled membership is checked here, under the lease and
     // before the first baseline, so a valid replacement passes whatever the server held before.
     if (deferredTestAppCheck !== undefined) {
       await checkPublishedTestAppFile(deferredTestAppCheck, discovery);
+    }
+    // R373: the env-tool run's digests, from the read-back, recorded only with proof it is what
+    // runs; otherwise exactly one `test-digests-unavailable` warning, and the row stays NULL.
+    if (envPublishes !== undefined && readBack !== undefined) {
+      const got = await deferredTestDigests(
+        cfg,
+        envPublishes,
+        readBack,
+        tests,
+        testModel,
+        sourceSnapshot,
+      );
+      if ("why" in got) warnNoTestDigests(emit, got.why);
+      else cfg.store.setRunTestDigests(runId, got.digests, got.parts);
     }
 
     // R26: run it EXACTLY ONCE, here — after the lease is acquired above (the canary drives the
@@ -7580,32 +7639,38 @@ async function fetchPublishedTestApp(cfg: SessionConfig): Promise<PublishedTestA
  * lease). A file that cannot be read or is not an app package throws `PublishAppUnreadableError`
  * here, before the lease: skipping it would fall back to the pre-lease package, possibly the
  * outgoing build (plan §3(b)), and the publish would fail on it anyway (R232). Several matching
- * files: the LAST is published last, so it is the one that runs.
+ * files: the LAST is published last, so it is the one that runs. R373/R486: `undefined` when the
+ * hook will not run; otherwise also every file's app identity, for the installed check after it.
  */
-async function envToolTestAppFile(
-  cfg: SessionConfig,
-): Promise<{ readonly path: string; readonly bytes: Uint8Array } | undefined> {
+async function envToolPublishes(cfg: SessionConfig): Promise<EnvToolPublishes | undefined> {
+  if (cfg.afterLeaseAcquired === undefined || cfg.lease === undefined) return undefined;
   const paths = cfg.afterLeaseAcquiredPublishes ?? [];
-  if (cfg.afterLeaseAcquired === undefined || cfg.lease === undefined || paths.length === 0) {
-    return undefined;
-  }
-  const want = await readTestAppManifest(cfg.testDir);
-  if (want === undefined) return undefined;
-  let match: { readonly path: string; readonly bytes: Uint8Array } | undefined;
+  const want = paths.length === 0 ? undefined : await readTestAppManifest(cfg.testDir);
+  let testApp: { readonly path: string; readonly bytes: Uint8Array } | undefined;
+  const apps: Array<{ id: string; name: string; publisher: string }> = [];
   for (const path of paths) {
     let bytes: Buffer;
-    let identity: { readonly name: string; readonly publisher: string };
+    let identity: ReturnType<typeof readAppIdentity>;
     try {
       bytes = await readFile(path);
       identity = readAppIdentity(bytes);
     } catch (err) {
       throw new PublishAppUnreadableError(path, messageOf(err));
     }
-    if (identity.name === want.name && identity.publisher === want.publisher) {
-      match = { path, bytes };
+    apps.push({
+      id: identity.id.toLowerCase(),
+      name: identity.name,
+      publisher: identity.publisher,
+    });
+    if (
+      want !== undefined &&
+      identity.name === want.name &&
+      identity.publisher === want.publisher
+    ) {
+      testApp = { path, bytes };
     }
   }
-  return match;
+  return { apps, ...(testApp !== undefined ? { testApp } : {}) };
 }
 
 /**
@@ -7614,14 +7679,14 @@ async function envToolTestAppFile(
  * the baseline, and throws `TestAppDiffersError` on any difference. With an env-tool test app
  * file, the check is DEFERRED (`deferredCheck`, its path) to after the hook publishes it.
  */
-async function resolveTestArmEvidence(
-  cfg: SessionConfig,
+function resolveTestArmEvidence(
   backendKind: BuildBackend["kind"],
   read: PublishedTestAppRead,
   discovery: ArmAwareDiscovery,
-): Promise<{ evidence: TestArmEvidence; deferredCheck?: string }> {
+  /** The env-tool `publishApps` file that is the test app, when one is (`envToolPublishes`). */
+  file: { readonly path: string; readonly bytes: Uint8Array } | undefined,
+): { evidence: TestArmEvidence; deferredCheck?: string } {
   if (backendKind === "al-runner") return { evidence: { kind: "derived" } };
-  const file = await envToolTestAppFile(cfg);
   if (file !== undefined) {
     const m = compiledMembershipOf(file.bytes);
     if (m.kind === "none") {
@@ -7685,7 +7750,15 @@ async function reportPublishedTestApp(
   /** R403 phase B: the derived test set when the session runs the arm-FILTERED suite, so the
    *  published source is filtered alike; absent when it runs the unfiltered one. */
   armSymbols: readonly string[] | undefined,
-): Promise<{ testAppHash: string | undefined; sources: PublishedTestSources }> {
+  /** R373: false on an env-tool session's pre-lease read, which may be the OUTGOING package; the
+   *  `published-test-app-mismatch` warning is then judged on the read after its hook. */
+  judgeMismatch = true,
+): Promise<{
+  testAppHash: string | undefined;
+  sources: PublishedTestSources;
+  /** R486: the package's hash only when one was read AND parsed, never the source fallback. */
+  packageHash?: string;
+}> {
   // R247: this session's test-app identity, from the ONE package read (`testAppHashFor`'s rule:
   // the package's hash when it was read, `undefined` when the read failed, else the test source
   // tree's hash).
@@ -7726,15 +7799,18 @@ async function reportPublishedTestApp(
     return { testAppHash, sources: { kind: "unavailable", why: UNREADABLE } };
   }
 
-  const message = publishedTestAppWarning(
-    comparePublishedTestApp({ version, tests: tests.map(qualifiedTestName) }, published),
-  );
+  const message = judgeMismatch
+    ? publishedTestAppWarning(
+        comparePublishedTestApp({ version, tests: tests.map(qualifiedTestName) }, published),
+      )
+    : undefined;
   if (message !== undefined) {
     emit({ type: "warning", code: "published-test-app-mismatch", message });
   }
   const files = publishedAlSources(Buffer.from(bytes));
   return {
     testAppHash,
+    packageHash: testAppHash,
     sources:
       files.length > 0
         ? { kind: "published", files, pkg: bytes }
@@ -7778,30 +7854,65 @@ async function testAppIdentity(
   armSymbols: readonly string[] | undefined,
   /** R205: the target's source snapshot, so `targetOf` reads the pinned `app.json`. */
   source: ReadonlyMap<string, Buffer>,
+  /** R373: the env-tool hook will run under the lease; the digests are taken after it. */
+  deferred: boolean,
 ): Promise<{
   testAppHash: string | undefined;
   testDigests?: Record<string, string>;
   testDigestParts?: TestDigestParts;
 }> {
-  const { testAppHash, sources } = await reportPublishedTestApp(cfg, read, tests, emit, armSymbols);
+  const { testAppHash, sources } = await reportPublishedTestApp(
+    cfg,
+    read,
+    tests,
+    emit,
+    armSymbols,
+    !deferred,
+  );
   const none = (why: string) => {
-    emit({
-      type: "warning",
-      code: "test-digests-unavailable",
-      message: `[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: ${why}`,
-    });
+    warnNoTestDigests(emit, why);
     return { testAppHash };
   };
   // An env-tool session publishes `envTool.publishApps`, PREBUILT .app files, only after the lease
   // is taken, which is after the read above (`afterLeaseAcquiredFor` in cli.ts calls
   // `publishTestApps` in env-tool-session.ts, which publishes each file as it is). Neither that
-  // read nor the disk is known to be the body the server runs.
+  // read nor the disk is known to be the body the server runs. R373: when the hook will run, the
+  // digests are taken after it (`deferredTestDigests`), which warns if it records none.
   if (cfg.afterLeaseAcquired !== undefined) {
+    if (deferred) return { testAppHash };
     return none(
       "this run publishes its test apps itself (envTool.publishApps, prebuilt .app files) after the published test app is read, so neither that read nor the source on disk is known to be the body the server runs",
     );
   }
   if (sources.kind === "unavailable") return none(sources.why);
+  const got = await digestsOf(cfg, sources, tests, diskModel, source);
+  if ("why" in got) return none(got.why);
+  return { testAppHash, testDigests: got.digests, testDigestParts: got.parts };
+}
+
+/** R-278: the one `test-digests-unavailable` warning, said the same way on every path. */
+function warnNoTestDigests(emit: RunEmitter, why: string): void {
+  emit({
+    type: "warning",
+    code: "test-digests-unavailable",
+    message: `[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: ${why}`,
+  });
+}
+
+/**
+ * R-372's digest body, split out by R373 so the env-tool step after the hook runs the same code on
+ * its read-back. The digests, or why there are none.
+ */
+async function digestsOf(
+  cfg: SessionConfig,
+  sources: Exclude<PublishedTestSources, { readonly kind: "unavailable" }>,
+  tests: readonly TestMethodRef[],
+  diskModel: TestAppModel,
+  source: ReadonlyMap<string, Buffer>,
+): Promise<
+  | { readonly digests: Record<string, string>; readonly parts: TestDigestParts }
+  | { readonly why: string }
+> {
   try {
     // R-371: the dependency fingerprint and build inputs of the app that RUNS. On a backend that
     // publishes, the published package's manifest and the server's resident dependency packages;
@@ -7838,20 +7949,133 @@ async function testAppIdentity(
       tests,
       { dependencies, buildInputs: inputs.buildInputs },
     );
-    return { testAppHash, testDigests: digests, testDigestParts: parts };
+    return { digests, parts };
   } catch (err) {
     if (err instanceof DependencyUnreadableError) {
-      return none(
-        `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${err.message}`,
-      );
+      return {
+        why: `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${err.message}`,
+      };
     }
     if (!(err instanceof TestDigestError)) throw err;
-    return none(
-      sources.kind === "published"
-        ? `the published test app does not declare or parse every discovered test (republish it): ${err.message}`
-        : err.message,
-    );
+    return {
+      why:
+        sources.kind === "published"
+          ? `the published test app does not declare or parse every discovered test (republish it): ${err.message}`
+          : err.message,
+    };
   }
+}
+
+/** R373/R486: what an env-tool session publishes in its hook, read once before the lease. */
+interface EnvToolPublishes {
+  /** The `publishApps` file that is the test app, when one is (R403). */
+  readonly testApp?: { readonly path: string; readonly bytes: Uint8Array };
+  /** Every `publishApps` file's app identity, in publish order. */
+  readonly apps: ReadonlyArray<{
+    readonly id: string;
+    readonly name: string;
+    readonly publisher: string;
+  }>;
+}
+
+/**
+ * R373: an env-tool session's digests, taken after its hook published `publishApps`, from the
+ * test app read back then (`sources`), with R-372's own body (`digestsOf`). Recorded only with
+ * proof that the read-back is what runs: exactly one INSTALLED row at the served version for the
+ * test app and for every app the hook published (R-385 D2: `dev/packages` serves a version that
+ * may be published but not installed), and, when a `publishApps` file is the test app, the
+ * read-back's identity, version and `.al` source set equal that file's. Anything else is why there
+ * are none.
+ */
+async function deferredTestDigests(
+  cfg: SessionConfig,
+  publishes: EnvToolPublishes,
+  sources: PublishedTestSources,
+  tests: readonly TestMethodRef[],
+  diskModel: TestAppModel,
+  source: ReadonlyMap<string, Buffer>,
+): Promise<
+  | { readonly digests: Record<string, string>; readonly parts: TestDigestParts }
+  | { readonly why: string }
+> {
+  const AFTER = "after the hook published envTool.publishApps";
+  if (sources.kind === "not-published") {
+    return { why: `this backend cannot read the published test app back ${AFTER}` };
+  }
+  if (sources.kind === "unavailable") return { why: `${AFTER}: ${sources.why}` };
+  const mode = cfg.backend.microsoftMode?.();
+  const fetchPackage = cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend);
+  if (mode?.kind !== "bytes" || fetchPackage === undefined) {
+    return {
+      why: `this backend cannot read installed app versions, so the test app read back ${AFTER} is not proven to be the installed one`,
+    };
+  }
+  let got: ReturnType<typeof readAppIdentity>;
+  try {
+    got = readAppIdentity(Buffer.from(sources.pkg));
+  } catch (err) {
+    return { why: `the test app read back ${AFTER} has no readable identity: ${messageOf(err)}` };
+  }
+  try {
+    await checkInstalled(
+      mode,
+      { id: got.id.toLowerCase(), name: got.name, publisher: got.publisher, version: got.version },
+      got.version,
+    );
+    for (const app of publishes.apps) {
+      const bytes = await fetchPackage({ publisher: app.publisher, name: app.name });
+      if (bytes === null || bytes === undefined) {
+        throw new DependencyUnreadableError(
+          `the package of "${app.name}" (${app.id}) could not be read back`,
+        );
+      }
+      let served: ReturnType<typeof readAppIdentity>;
+      try {
+        served = readAppIdentity(Buffer.from(bytes));
+      } catch (err) {
+        throw new DependencyUnreadableError(
+          `the package read back for "${app.name}" (${app.id}) is not an app package: ${messageOf(err)}`,
+        );
+      }
+      if (served.id.toLowerCase() !== app.id) {
+        throw new DependencyUnreadableError(
+          `the package read back for "${app.name}" (${app.id}) is app ${served.id}, not the one published`,
+        );
+      }
+      await checkInstalled(mode, { ...app, version: served.version }, served.version);
+    }
+  } catch (err) {
+    if (!(err instanceof DependencyUnreadableError)) throw err;
+    return { why: `an app read back ${AFTER} is not proven installed: ${err.message}` };
+  }
+  const file = publishes.testApp;
+  if (file !== undefined) {
+    let local: Buffer;
+    let want: ReturnType<typeof readAppIdentity>;
+    try {
+      local = await readFile(file.path);
+      want = readAppIdentity(local);
+    } catch (err) {
+      return {
+        why: `the publishApps test app ${file.path} could not be read ${AFTER}: ${messageOf(err)}`,
+      };
+    }
+    const describe = (a: typeof got) =>
+      `"${a.name}" by "${a.publisher}" (${a.id.toLowerCase()}) version ${a.version}`;
+    if (describe(got) !== describe(want)) {
+      return {
+        why: `the test app read back ${AFTER} is ${describe(got)}, but the publishApps file ${file.path} is ${describe(want)}, so that file is not known to be what runs`,
+      };
+    }
+    const sourceSet = (files: ReadonlyArray<{ path: string; text: string }>) =>
+      JSON.stringify(files.map((f) => [f.path, f.text]).sort());
+    if (sourceSet(sources.files) !== sourceSet(publishedAlSources(local))) {
+      return {
+        why: `the test app read back ${AFTER} carries other .al sources than the publishApps file ${file.path}, so that file is not known to be what runs (a publish that skipped an already-installed version, say)`,
+      };
+    }
+  }
+  return digestsOf(cfg, sources, tests, diskModel, source);
 }
 
 /**

@@ -455,6 +455,24 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **An env-tool run records test digests, so `lethal verify` accepts it** (R373). An env-tool
+  session publishes its test apps (`envTool.publishApps`) after it takes the lease, after the
+  published test app is read, so it recorded no digests and verify refused it as
+  `source-predates-verify`. It now reads the test app back after that publish, under the lease, and
+  takes the digests from that read with R372's own code (no digest-scheme change). It records them
+  only with proof the read-back is what runs: exactly one installed version, the one served, for
+  the test app and for every app the hook published, and, when a `publishApps` file is the test app,
+  the same name, publisher, version and `.al` sources as that file. Otherwise the digests stay NULL
+  with one `test-digests-unavailable` warning naming why. `published-test-app-mismatch` is now
+  judged on that read-back, not on the package the server held before the publish.
+
+- **An env-tool `--resume` no longer carries kills measured under the outgoing test app** (R486).
+  `--resume` and `--skip-known-survivors` compare the test app read BEFORE the lease, and an
+  env-tool session then publishes its own. When such a baseline was found, the session now refuses
+  with `TestAppRepublishedError` (`test-app-republished`) before the first baseline unless the test
+  app read back after the publish equals it; an unreadable read-back refuses too. The run row
+  records the read-back's test-app hash, or NULL when it could not be read, never the outgoing one.
+
 - **`lethal run` refuses a test project nested inside the target** (R445). The target build copies
   every `.al` under the target folder, so a `--tests` folder inside it was mutated and published as
   target code, without a word. `lethal run` now refuses that layout by name

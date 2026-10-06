@@ -722,10 +722,21 @@ scheme v1 or v2) is refused once as `source-predates-verify`, and the detail nam
 (`scheme v2, this build v3`). An edited test
 gets the same unmutated runs as an added one. On bcdev the run records each test's source from the
 PUBLISHED test app, the body the server ran (R372), so a test you edited without republishing reads
-as new to verify. Where the run could not read that source (no dev endpoint, an env-tool session
-that publishes its own test apps, a package without source) it records none and warns
-`test-digests-unavailable`, and verify refuses that run as `source-predates-verify`. On al-runner the
-source on disk is what runs, and that is what the run records.
+as new to verify. An env-tool session publishes its own test apps after it takes the lease, so it
+reads the test app back after that publish and records the digests from that read (R373). It
+records them only when the read-back is installed (exactly one installed version, the one served),
+every app it published is installed at the version the server serves, and, when a `publishApps`
+file is the test app, the read-back has that file's name, publisher, version and `.al` sources.
+Where the run could not read that source or prove it (no dev endpoint, a failed or unproven
+read-back, a package without source) it records none and warns `test-digests-unavailable` once,
+naming why, and verify refuses that run as `source-predates-verify`. On al-runner the source on
+disk is what runs, and that is what the run records.
+
+An env-tool session's `--resume` or `--skip-known-survivors` compares the run's test app before the
+lease. When such a baseline was found, the session refuses with `TestAppRepublishedError` (code
+`test-app-republished`) before the first baseline if the test app read back after the publish
+differs from it or cannot be read (R486). The run records the read-back's identity, or none when it
+could not be read.
 
 ### After verify (guidance)
 
