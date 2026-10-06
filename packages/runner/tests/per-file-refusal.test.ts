@@ -251,7 +251,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     expect(createHash("sha256").update(manifest).digest("hex")).toBe(
       // R459: flip-boolean-literal's operatorVersion 1.1.0 is the only change (was b1d589cd...5e21).
       // R474: every entry gains `memberHash`, the only change (was 105d129b...b83f).
-      "db5aef548546072c265799037b2c9800e3636cf3812277394831a26d77c8b4e7",
+      // R477: validate-to-assign's operatorVersion 1.2.0 is the only change (was db5aef54...b4e7).
+      "59942c7a8a1595d023fda9ab2366bef4410e17c5503d2e7fb23d1d1194b14e81",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -263,8 +264,10 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // entries carry operatorVersion 1.1.0, so this moved again (R470 alone gave 4dfb9b56...a329).
     // R474: the manifest's `memberHash` alone moved it (was 4fb14bca...b9e6; the same files with
     // that key removed from the manifest give 4fb14bca...b9e6 again).
+    // R477: only the manifest moved it, by validate-to-assign's operatorVersion 1.2.0 (was
+    // e166345f...1358, which the same tree at 1.1.0 still gives).
     expect(all.digest("hex")).toBe(
-      "e166345f7bc2286dfff7bac0091cc90da3029d14239a418cf80d8cdf5cad1358",
+      "3e3a8ec9826dfaba93be6648c13fa1f2275e7ea517537c3a49146d2b47dcf6ae",
     );
   }, 60_000);
 });
