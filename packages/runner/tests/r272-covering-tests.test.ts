@@ -46,6 +46,29 @@ describe("R272: discovery gives each test the line of its name", () => {
     }
   });
 
+  test("tree path, a split header (R424): each arm at its own name's line", () => {
+    const src = [
+      'codeunit 50102 "Split Tests"',
+      "{",
+      "    Subtype = Test;",
+      "",
+      "    [Test]",
+      "#if CLEAN25",
+      "    procedure Split()",
+      "#else",
+      "    procedure Split()",
+      "#endif",
+      "    begin",
+      "    end;",
+      "}",
+      "",
+    ].join("\n");
+    expect(testsInAlSource("t/Split.Codeunit.al", src).map((r) => [r.method, r.line])).toEqual([
+      ["Split", 7],
+      ["Split", 9],
+    ]);
+  });
+
   test("tree path: both #if arms of one test are discovered, each at its own line", () => {
     // R403's whole-member shape: the regex and tree counts differ, so the tree path decides.
     const src = [

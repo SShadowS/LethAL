@@ -1442,16 +1442,6 @@ function survivorOf(
 }
 
 /**
- * C02-09: the report's rows grouped by gap id through `tallyGaps`, the one grouping rule `explain`
- * and `verify` share. `undefined` when no row carries a gap id (a report written before C02-09),
- * so the caller omits both lists rather than emitting `[]`.
- *
- * Rows sharing a gap id must agree on `file`, `blockStartLine`, `blockEndLine` (checked here) and
- * `batchIndex` (checked by `tallyGaps`). The limit, stated: two different blocks on the SAME lines
- * of one file that share an id cannot be told apart here, because the report carries block lines,
- * not offsets. Only the manifest writer, which produced the report, catches that case.
- */
-/**
  * R272: a gap's covering tests (the union over its survived rows' `coveringTests`), each joined to
  * `testMethods` by name, ordered by how many of the survivors it reached, then by
  * `compareCodeUnits(name)` (R481's key). A name missing from `testMethods` is a report
@@ -1467,7 +1457,14 @@ function coveringTestsOf(
   const measured = survivors.filter((m) => m.reachedBy !== undefined);
   const covering = names.map((name): ExplainCoveringTest => {
     const t = byName.get(name);
-    if (t === undefined) refuse(`gap ${gapId}'s covering test is not in testMethods`, name);
+    if (t === undefined) {
+      // Known producer: a test codeunit renamed on disk but not republished, then `--resume`
+      // (a reused baseline or a carried batch keeps the old name). Refused, never guessed.
+      refuse(
+        `gap ${gapId}'s covering test is not in testMethods (a test codeunit renamed since a resumed run's earlier session gives this; re-run without --resume)`,
+        name,
+      );
+    }
     return {
       name,
       ...(t.file !== undefined ? { file: t.file } : {}),
@@ -1485,6 +1482,16 @@ function coveringTestsOf(
   return { coveringTests: covering, reachMeasuredMembers: measured.length };
 }
 
+/**
+ * C02-09: the report's rows grouped by gap id through `tallyGaps`, the one grouping rule `explain`
+ * and `verify` share. `undefined` when no row carries a gap id (a report written before C02-09),
+ * so the caller omits both lists rather than emitting `[]`.
+ *
+ * Rows sharing a gap id must agree on `file`, `blockStartLine`, `blockEndLine` (checked here) and
+ * `batchIndex` (checked by `tallyGaps`). The limit, stated: two different blocks on the SAME lines
+ * of one file that share an id cannot be told apart here, because the report carries block lines,
+ * not offsets. Only the manifest writer, which produced the report, catches that case.
+ */
 function blocksOf(
   report: SessionReport,
 ):

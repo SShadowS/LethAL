@@ -359,7 +359,9 @@ Each `gaps` row can also carry `coveringTests` and `reachMeasuredMembers` (R272)
 records testMethods. `coveringTests` lists every test covering one of the gap's survivors, each
 with `name`, and where known `file`, `line` (the 1-based line of the method's name),
 `reachedMembers` (how many of the gap's survivors that test reached) and `baselineDurationMs` (its
-smallest baseline duration measured in this run). `reachMeasuredMembers` is how many survivors had a
+smallest baseline duration measured in this run: al-runner's own per-test figure, or on bcdev the
+per-test call's wall clock, which is mostly call overhead, and a session's first call also pays
+the client's startup). `reachMeasuredMembers` is how many survivors had a
 measured reach, the denominator of `reachedMembers`. A test discovered at two places (two #if
 arms) has `lineAmbiguous` instead of a line. The order is a stated heuristic, not a measurement:
 most survivors reached first, then by name. Duration is shown, never used to order (R489). Without
