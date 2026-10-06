@@ -92,8 +92,12 @@ describe("R272: testMethodsOf, one record per name", () => {
     ]);
   });
 
-  test("the same place twice keeps its line; a duration is copied as measured", () => {
-    const out = testMethodsOf([ref("Foo", 7), ref("Foo", 7)], new Map([["A Tests.Foo", 42]]));
+  test("the same place twice keeps its line; the smallest of the batches' durations is kept", () => {
+    // Listed largest LAST, so keeping the last or the first measurement both read wrong.
+    const out = testMethodsOf(
+      [ref("Foo", 7), ref("Foo", 7)],
+      new Map([["A Tests.Foo", [50, 42, 90]]]),
+    );
     expect(out).toEqual([{ name: "A Tests.Foo", file: "t/A.al", line: 7, baselineDurationMs: 42 }]);
   });
 

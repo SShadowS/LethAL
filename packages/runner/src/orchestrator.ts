@@ -4540,9 +4540,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         ...(b.verdict.failureMessage !== undefined
           ? { failureMessage: b.verdict.failureMessage }
           : {}),
-        ...(ranHere.has(b.ref) && b.verdict.outcome === "pass" && measured !== undefined
-          ? { durationMs: measured }
-          : {}),
+        // `measuredDurationMs` is set on a `pass` only (TestVerdict's doc), so no outcome check.
+        ...(ranHere.has(b.ref) && measured !== undefined ? { durationMs: measured } : {}),
       };
     }),
   });

@@ -251,7 +251,7 @@ export function applyBatchInvalidations(
  */
 export function testMethodsOf(
   refs: readonly TestMethodRef[],
-  durations: ReadonlyMap<string, number>,
+  durations: ReadonlyMap<string, readonly number[]>,
 ): TestMethodRecord[] {
   const byName = new Map<string, TestMethodRef[]>();
   for (const r of refs) {
@@ -266,7 +266,9 @@ export function testMethodsOf(
       const [first] = same;
       const file = files.size === 1 ? first?.file : undefined;
       const line = places.size === 1 ? first?.line : undefined;
-      const ms = durations.get(name);
+      // The smallest of this session's measurements (one per batch): the least warm-up noise.
+      const measured = durations.get(name) ?? [];
+      const ms = measured.length > 0 ? Math.min(...measured) : undefined;
       return {
         name,
         ...(file !== undefined ? { file } : {}),
@@ -310,9 +312,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let unverifiedTestFiles: readonly string[] = [];
 
   let baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[] = [];
-  // R272: the discovered refs, and each test's smallest measured baseline duration this session.
+  // R272: the discovered refs, and each test's measured baseline durations this session.
   let discoveredTests: readonly TestMethodRef[] | undefined;
-  const baselineDurations = new Map<string, number>();
+  const baselineDurations = new Map<string, number[]>();
 
   // How many times this run entered the deploy phase — one per batch loop iteration, emitted
   // unconditionally before that batch's deploy attempt (including a failed one), so it counts
@@ -437,9 +439,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             testPageRefusedTests.add(v.name);
           }
           if (v.durationMs !== undefined) {
-            const prev = baselineDurations.get(v.name);
-            if (prev === undefined || v.durationMs < prev)
-              baselineDurations.set(v.name, v.durationMs);
+            baselineDurations.set(v.name, [...(baselineDurations.get(v.name) ?? []), v.durationMs]);
           }
         }
         break;
