@@ -737,15 +737,48 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
       // A half-parsed object with only a MISSING node (no ERROR node, so not in `unparsedObjects`)
       // makes the project opaque too: the other-table subscriber is then read by its text and
       // keeps. Revert: drop `unindexedObjects.some((n) => n.hasError)` from `opaque`.
-      it("a MISSING-only half-parsed object makes the project opaque: the old text rule keeps it", () => {
-        const broken = wrap(
-          `codeunit 50306 "Broken"\n{\n    procedure X()\n    var N: Integer\n    begin\n    end;\n}`,
+      // A codeunit missing its `var` semicolon: a MISSING node and no ERROR node (asserted).
+      const missingOnly = `codeunit 50306 "Broken"\n{\n    procedure X()\n    var N: Integer\n    begin\n    end;\n}`;
+      const expectMissingOnly = (src: string): void => {
+        const root = wrapRoot(parseAL(src));
+        const kinds = (n: ALSyntaxNode): { missing: boolean; error: boolean } =>
+          n.children.reduce(
+            (acc, c) => {
+              const k = kinds(c);
+              return { missing: acc.missing || k.missing, error: acc.error || k.error };
+            },
+            { missing: n.isMissing, error: n.rawKind === "ERROR" },
+          );
+        expect(root.hasError).toBe(true);
+        expect(kinds(root)).toEqual({ missing: true, error: false });
+      };
+      for (const [where, broken] of [
+        ["an #if-wrapped", wrap(missingOnly)],
+        ["an indexed (unwrapped)", missingOnly],
+      ] as const) {
+        // Revert: drop `symbols.parseDamaged` from `opaque`.
+        it(`${where} object with only a MISSING node makes the project opaque: the old text rule keeps it`, () => {
+          expectMissingOnly(broken);
+          const files = {
+            "P.al": par(""),
+            "B.al": broken,
+            "S.al": wrap(customSub("Table", `Database::"Oth"`)),
+            "O.al": caller("Par.Modify(false);"),
+          };
+          expect(tagged(files)).toEqual([FORCED]);
+        });
+      }
+      // Sol, run 003: a QUOTED target is a name, never an id. Revert: normalise any all-digit text
+      // as a number (then "050301" reads as 50301, matches neither name nor id, and drops).
+      it("a subscriber naming THIS table by a quoted all-digit NAME keeps it", () => {
+        const digitsTable = `table 50300 "050301"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+        const s = wrap(
+          `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::"050301", 'OnAfterModifyEvent', '', false, false)]\n  local procedure X(var Rec: Record "050301"; RunTrigger: Boolean) begin end;\n}`,
         );
         const files = {
-          "P.al": par(""),
-          "B.al": broken,
-          "S.al": wrap(customSub("Table", `Database::"Oth"`)),
-          "O.al": caller("Par.Modify(false);"),
+          "P.al": digitsTable,
+          "S.al": s,
+          "O.al": caller(`D.Modify(false);`, `D: Record "050301";`),
         };
         expect(tagged(files)).toEqual([FORCED]);
       });

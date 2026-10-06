@@ -259,11 +259,10 @@ function projectObserves(
   // from it. A trigger this reader cannot see (a split-header object, R494; an unparsed or
   // half-parsed one) can call a codeunit's event, or modify another table, whose subscriber then
   // runs. So when the project holds any such object, EVERY unindexed object keeps the old
-  // any-table text rule.
+  // any-table text rule. Sol, run 003: parse damage counts in EVERY input root, indexed objects
+  // included (an indexed codeunit with a MISSING-only error is read structurally elsewhere too).
   const opaque =
-    symbols.splitObjects.length > 0 ||
-    symbols.unparsedObjects.length > 0 ||
-    symbols.unindexedObjects.some((n) => n.hasError);
+    symbols.splitObjects.length > 0 || symbols.unparsedObjects.length > 0 || symbols.parseDamaged;
   for (const n of symbols.unindexedObjects) {
     if (opaque) {
       if (textObserves(n, unindexedText, tableName, table.id)) return true;
@@ -328,18 +327,19 @@ function subscribesToTable(content: ALSyntaxNode, tableNames: ReadonlySet<string
     if (value !== undefined && value !== "table") return false;
   }
   if (target?.rawKind === "database_reference") {
-    const name = target.namedChildren.at(-1)?.text;
+    const name = target.namedChildren.at(-1);
     return name === undefined || tableNames.has(targetKey(name));
   }
-  if (target?.rawKind === "integer") return tableNames.has(targetKey(target.text));
+  if (target?.rawKind === "integer") return tableNames.has(targetKey(target));
   return true;
 }
 
-/** A subscriber target as `tableNames` holds it: a name lower-cased without quotes, an id as an
- *  integer (`050300` is table 50300). */
-function targetKey(text: string): string {
-  const bare = text.replace(/"/g, "").trim();
-  return /^\d+$/.test(bare) ? String(Number(bare)) : bare.toLowerCase();
+/** A subscriber target node as `tableNames` holds it: an `integer` node as a number (`050300` is
+ *  table 50300), anything else as a name, lower-cased without quotes (`"050301"` is a table NAMED
+ *  that, never an id). */
+function targetKey(node: ALSyntaxNode): string {
+  if (node.rawKind === "integer") return String(Number(node.text));
+  return node.text.replace(/"/g, "").trim().toLowerCase();
 }
 
 /** An `[EventSubscriber(...)]` argument list naming one of `events` of one of `tableNames`. An
@@ -357,7 +357,7 @@ function subscribesTo(
   const ref = args.namedChildren.find((c) => c.rawKind === "database_reference");
   const target = ref?.namedChildren.at(-1);
   if (target === undefined) return true;
-  return tableNames.has(targetKey(target.text));
+  return tableNames.has(targetKey(target));
 }
 
 /**

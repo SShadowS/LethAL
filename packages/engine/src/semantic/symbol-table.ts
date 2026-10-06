@@ -181,6 +181,9 @@ export interface SymbolTable {
    * that must know whether every object of the project is visible to it asks here.
    */
   readonly splitObjects: readonly ALSyntaxNode[];
+  /** R485: some input file has parse damage, an ERROR or a MISSING node, in ANY object (indexed
+   *  ones included), so its structure cannot be trusted to show every trigger. */
+  readonly parseDamaged: boolean;
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
   /**
    * Every field of a table, by the table's own name, INCLUDING fields a project `tableextension`
@@ -554,6 +557,7 @@ export function buildSymbolTable(
     unindexedObjects,
     unparsedObjects,
     splitObjects,
+    parseDamaged: files.some((f) => f.root.hasError),
     uniqueProcedure(ownerName, procName) {
       const list = procedureNames.get(ownerName)?.get(stripQuotes(procName).toLowerCase()) ?? [];
       const [only] = list;
