@@ -31,15 +31,18 @@ export type SuggestionKind =
 
 export type GapSuggestionKind = SuggestionKind | "mixed";
 
+/** Keyed by the type, so a kind added to it cannot be left out of `SUGGESTION_KINDS`. */
+const KIND_DOMAIN: Record<GapSuggestionKind, true> = {
+  "check-the-result": true,
+  "cover-the-branch": true,
+  "cover-the-statement": true,
+  undecided: true,
+  "reader-marked": true,
+  mixed: true,
+};
+
 /** Every kind value, for the schema pin. A new value bumps `EXPLAIN_SCHEMA_VERSION` (R233). */
-export const SUGGESTION_KINDS: readonly GapSuggestionKind[] = [
-  "check-the-result",
-  "cover-the-branch",
-  "cover-the-statement",
-  "undecided",
-  "reader-marked",
-  "mixed",
-];
+export const SUGGESTION_KINDS = Object.keys(KIND_DOMAIN) as readonly GapSuggestionKind[];
 
 /** What a kind suggests, and which measured facts it is derived from. `undecided` and
  *  `reader-marked` suggest nothing, so they have no entry. */

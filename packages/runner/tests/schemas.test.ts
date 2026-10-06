@@ -26,7 +26,7 @@ import {
   TOOL_CONDITIONS,
 } from "../src/explain";
 import { assertExplainableReport, explain } from "../src/explain";
-import { SUGGESTION_KINDS, SUGGESTION_TEXTS } from "../src/explain-suggest";
+import { SUGGESTION_KINDS, SUGGESTION_TEXTS, suggest } from "../src/explain-suggest";
 import {
   CAVEAT_INTERPRETATIONS,
   ERROR_CAUSE_INTERPRETATIONS,
@@ -402,6 +402,26 @@ describe("published JSON Schemas (R152)", () => {
     expect(
       conformsTo(explainSchema, explain(assertExplainableReport(raw), { topSurvivors: 3 })),
     ).toEqual([]);
+    // R273: the same projection with `--suggest`'s section, as the CLI composes it. The report
+    // predates `guardReached`, so one survivor is given a measured reach to reach `kinds` too.
+    const reached = raw.mutants.find((m) => m.verdict === "survived");
+    if (reached === undefined) throw new Error("no survivor");
+    reached.reachGrain = "statement";
+    reached.guardReached = true;
+    reached.reachedBy = reached.coveringTests;
+    const report = assertExplainableReport(raw);
+    const suggestions = suggest(report, explain(report));
+    expect(suggestions.gaps.length).toBe(gaps.length);
+    expect(Object.keys(suggestions.kinds).length).toBeGreaterThan(0);
+    expect(conformsTo(explainSchema, { ...projection, suggestions })).toEqual([]);
+    // And the validator really reads the section: a foreign member field is rejected.
+    const [first] = suggestions.gaps;
+    if (first === undefined) throw new Error("no suggestion gaps");
+    const tampered = {
+      ...suggestions,
+      gaps: [{ ...first, members: first.members.map((m) => ({ ...m, extra: 1 })) }],
+    };
+    expect(conformsTo(explainSchema, { ...projection, suggestions: tampered })).not.toEqual([]);
   });
 
   test("R351: coverageArmNames is additive under explain v7: output without it validates, and with it", () => {

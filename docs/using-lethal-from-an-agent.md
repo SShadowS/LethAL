@@ -381,9 +381,9 @@ The kinds:
 
 | reach | attribution | kind |
 |---|---|---|
-| reached-unnoticed | any | check-the-result: the statement ran under a test and no test noticed |
-| covered-but-unreached | exact | cover-the-branch: a test enters the procedure, never this statement (or it is unreachable) |
-| unreached-and-uncovered | object, all-green | cover-the-statement: it did not run, and entry to its procedure was not measured |
+| reached-unnoticed | any | check-the-result: the statement ran under a covering test and every covering test still passed |
+| covered-but-unreached | exact | cover-the-branch: a test enters the procedure, but the statement did not run in this mutant's runs (or it is unreachable) |
+| unreached-and-uncovered | object, all-green | cover-the-statement: it did not run in this mutant's runs, and entry to its procedure was not measured |
 | not-decided | any | undecided: the report cannot tell |
 
 A survivor a reader already marked is `reader-marked`. A gap takes its members' kind when they
