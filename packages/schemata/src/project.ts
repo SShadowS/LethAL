@@ -187,9 +187,12 @@ export function coarseIdentityTupleOf(
  * body-exit guard's write is hang-refused under any `while`/`repeat` condition that names no
  * cursor method, a write feeding a guard of a `while true` loop is too, and so is a write to an
  * enclosing `for`'s control variable, so a later same-tuple twin of a refused mutant takes its
- * ordinal (prototype: 52 keys, DC 12, BC.History 40).
+ * ordinal (prototype: 52 keys, DC 12, BC.History 40). 28: R484, an open `Integer` report data item
+ * is a loop, so a write its exit guards or its own range bounds read is hang-refused and a later
+ * same-tuple twin of a refused mutant takes its ordinal (BC.History: 216 keys; fixtures, CDO, DC
+ * and DO: none).
  */
-export const IDENTITY_SCHEME = 27;
+export const IDENTITY_SCHEME = 28;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

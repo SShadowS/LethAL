@@ -37,6 +37,12 @@ import {
  * or KeepGoing`); a write to a `for` loop's end bound; a `foreach` (its list); `asserterror` as the
  * only exit; `CurrReport.Skip`.
  *
+ * R484: a report data item over the virtual `Integer` table is a loop too (BC calls its
+ * `OnAfterGetRecord` once per record), unless a narrow certificate bounds it (`dataItemExitParts`).
+ * A write in any trigger of an open item, or of an item nested in it, is refused when its exit
+ * guards or its own range bounds read the target (`enclosingExitParts`). Known exclusions (R486):
+ * exits behind calls, indirect feeds, other tables, and bounds set through another record.
+ *
  * WHAT IT DELIBERATELY DOES NOT SEE, all UNCLASSIFIED rather than proven safe (spec 3.2): a target
  * read in the loop BODY rather than its condition (beyond R446's body-exit guards); preheader
  * assignments; progress that happens through a CALL (which is both hangs in `fixtures/sandbox-hang`); a field target outside any `with`
@@ -154,7 +160,7 @@ const DIRECTIVE_MARKERS: ReadonlySet<string> = new Set([
  * tag the unsafe direction is an untagged hang-capable mutant. Directive markers are never read:
  * their condition is a preprocessor symbol, not a variable.
  */
-function conditionIdentifiers(loop: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
+function conditionIdentifiers(parts: ALSyntaxNode[], ctx: SemanticContext): ALSyntaxNode[] {
   const out: ALSyntaxNode[] = [];
   const walk = (n: ALSyntaxNode): void => {
     if (DIRECTIVE_MARKERS.has(n.rawKind)) return;
@@ -162,8 +168,326 @@ function conditionIdentifiers(loop: ALSyntaxNode, ctx: SemanticContext): ALSynta
     if (isIdentifierLike(n)) out.push(n);
     for (const c of n.namedChildren) walk(c);
   };
-  for (const part of loopExitParts(loop, ctx)) walk(part);
+  for (const part of parts) walk(part);
   return out;
+}
+
+/**
+ * R484: the exit parts of every loop enclosing `node`, innermost first: each `while`/`repeat` up to
+ * the procedure or trigger boundary (`loopExitParts`), then, when that boundary is a trigger of a
+ * report data item, every open data item from there outwards (`dataItemExitParts`). A nested data
+ * item runs once per record of its parent, so its triggers sit inside the parent's loop too.
+ */
+function enclosingExitParts(node: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[][] {
+  const out: ALSyntaxNode[][] = [];
+  let cur: ALSyntaxNode | null = node.parent;
+  while (cur !== null && !isScope(cur)) {
+    if (LOOP_KINDS.has(cur.kind)) out.push(loopExitParts(cur, ctx));
+    cur = cur.parent;
+  }
+  if (cur === null || cur.kind !== ALNodeKind.trigger) return out;
+  for (let p: ALSyntaxNode | null = cur.parent; p !== null; p = p.parent) {
+    if (p.rawKind !== "report_dataitem") continue;
+    const parts = dataItemExitParts(p, ctx);
+    if (parts !== null) out.push(parts);
+  }
+  return out;
+}
+
+/** The members of a declaration body, through `#if` arms the build does not compile out. */
+function liveMembers(body: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  const collect = (n: ALSyntaxNode): void => {
+    for (const c of n.namedChildren) {
+      if (armOfNode(ctx, c) === "inactive") continue;
+      if (c.rawKind.startsWith("preproc_")) collect(c);
+      else out.push(c);
+    }
+  };
+  collect(body);
+  return out;
+}
+
+const triggerName = (t: ALSyntaxNode): string =>
+  normalizeAlName(t.childForFieldName("name")?.text ?? "");
+
+/**
+ * R484: a report data item is a loop BC drives, calling `OnAfterGetRecord` once per record. Over the
+ * virtual `Integer` table it ends only when a bound or an exit stops it; any other table is out of
+ * scope (it ends with its records; a trigger inserting into the set it walks is a known exclusion).
+ * Returns null for a BOUNDED item, which is not a loop here. A bound holds ONLY as one of:
+ * - `MaxIteration` a literal from 1 to `ITERATION_CAP` (0 means no limit). A report-engine limit no
+ *   filter can replace, so it needs no mention scan;
+ * - `DataItemTableView` filtering `Number` by `const(...)` or a closed `filter(...)` (`closedFilter`),
+ *   AND zero mentions of the item's record (`mentionScan`), since any mention may replace it;
+ * - the SINGLE-MENTION certificate (`certified`): one literal, small `SetRange(Number, ...)`.
+ * Otherwise its exit parts, read with R446's ANY-guard walk (`exitGuards`):
+ * - the guards of `CurrReport.Break`/`Quit` and `Error` (outside `asserterror`) in its own
+ *   `OnPreDataItem` (they decide whether it iterates at all) and `OnAfterGetRecord`;
+ * - the guards of `CurrReport.Quit` and `Error` in every trigger of every nested data item (they end
+ *   the report); a nested `Break` ends only the nested item;
+ * - the arguments of every `SetRange`/`SetFilter` on its record in its triggers: a variable bound
+ *   can be mutated to 2147483647, so the writes it reads are refused too.
+ * Not exits: `exit` and an AL `break` (they end the trigger call), `CurrReport.Skip` (next record),
+ * and guards in its own `OnPostDataItem` (after the loop).
+ */
+function dataItemExitParts(item: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] | null {
+  const table = item.childForFieldName("table_name");
+  if (table === null || normalizeAlName(table.text) !== "integer") return null;
+  const name = normalizeAlName(item.childForFieldName("name")?.text ?? "");
+  const body = item.childForFieldName("body");
+  if (body === null) return null;
+  const members = liveMembers(body, ctx);
+  let viewBounded = false;
+  for (const m of members) {
+    if (m.kind !== ALNodeKind.property) continue;
+    const p = normalizeAlName(m.childForFieldName("name")?.text ?? "");
+    const v = m.childForFieldName("value");
+    if (p === "maxiteration" && v !== null && v.rawKind === "integer") {
+      const max = Number(v.text);
+      if (max > 0 && max <= ITERATION_CAP) return null;
+    }
+    if (p === "dataitemtableview" && viewBoundsNumber(m)) viewBounded = true;
+  }
+  const triggers = members.filter((m) => m.kind === ALNodeKind.trigger);
+  const scan = mentionScan(item, name, triggers);
+  if (viewBounded && scan.mentions.length + scan.calls.length === 0) return null;
+  if (certified(scan, name, triggers, ctx)) return null;
+  const parts: ALSyntaxNode[] = [];
+  for (const t of triggers) {
+    visitAll(t, (n) => {
+      const r = rangeCallOf(n, name);
+      if (r !== null) parts.push(...r.args);
+    });
+  }
+  for (const t of triggers) {
+    const tn = triggerName(t);
+    if (tn !== "onpredataitem" && tn !== "onaftergetrecord") continue;
+    const tb = t.childForFieldName("body");
+    if (tb !== null) parts.push(...exitGuards(tb, t, (n) => endsDataItem(n, t)));
+  }
+  const nested = (ms: ALSyntaxNode[]): void => {
+    for (const m of ms) {
+      if (m.rawKind !== "report_dataitem") continue;
+      const b = m.childForFieldName("body");
+      if (b === null) continue;
+      const inner = liveMembers(b, ctx);
+      for (const t of inner) {
+        const tb = t.kind === ALNodeKind.trigger ? t.childForFieldName("body") : null;
+        if (tb !== null) parts.push(...exitGuards(tb, t, (n) => endsReport(n, t)));
+      }
+      nested(inner);
+    }
+  };
+  nested(members);
+  return parts;
+}
+
+/** Is `call` a statement of `trigger`'s own block (through nested `begin`/`end` and `#if` only),
+ *  with no `exit` statement before it in the trigger? */
+function unconditional(call: ALSyntaxNode, trigger: ALSyntaxNode): boolean {
+  for (let a = call.parent; a !== null && !samePos(a, trigger); a = a.parent) {
+    if (
+      a.rawKind !== "statement_block" &&
+      a.rawKind !== "code_block" &&
+      !a.rawKind.startsWith("preproc_")
+    ) {
+      return false;
+    }
+  }
+  let exitBefore = false;
+  visitAll(trigger, (n) => {
+    if (n.rawKind === "exit_statement" && n.startIndex < call.startIndex) exitBefore = true;
+  });
+  return !exitBefore;
+}
+
+function visitAll(n: ALSyntaxNode, f: (n: ALSyntaxNode) => void): void {
+  f(n);
+  for (const c of n.namedChildren) visitAll(c, f);
+}
+
+/** `CurrReport.Break`/`Quit`, or an `Error(...)` outside `asserterror`, below `stop`. */
+function endsDataItem(n: ALSyntaxNode, stop: ALSyntaxNode): boolean {
+  if (n.rawKind === "member_expression") return isReportExit(n);
+  return isRaisedError(n, stop);
+}
+
+/** `CurrReport.Quit` (or the XMLport twin), or an `Error(...)` outside `asserterror`: ends the
+ *  report, so every enclosing data item. */
+function endsReport(n: ALSyntaxNode, stop: ALSyntaxNode): boolean {
+  if (n.rawKind === "member_expression") {
+    return isReportExit(n) && normalizeAlName(n.childForFieldName("member")?.text ?? "") === "quit";
+  }
+  return isRaisedError(n, stop);
+}
+
+/**
+ * R484: the most records a bound may admit and still count as a bound. A fixed bound above it
+ * (`1..2147483647`, `MaxIteration = 100000000`) is as open as no bound for a test run.
+ * ponytail: one fixed cap, chosen without a timing measurement; raise or lower it if a measured
+ * trigger cost says so.
+ */
+const ITERATION_CAP = 1_000_000;
+
+/** A closed filter of at most `ITERATION_CAP` records: every `|` item an integer or `a..b` with
+ *  integer ends and a <= b, counted inclusively and summed. Anything else (`<`, `>`, `*`, an open
+ *  end, a name, a reversed range) is not closed. */
+function closedFilter(text: string): boolean {
+  const s = text.replace(/^'|'$/g, "").trim();
+  if (s === "") return false;
+  let count = 0;
+  for (const item of s.split("|")) {
+    const ends = item.split("..").map((e) => e.trim());
+    if (ends.length > 2 || ends.some((e) => !/^-?\d+$/.test(e))) return false;
+    const [lo, hi] = ends.map(Number);
+    if (lo === undefined) return false;
+    if (hi !== undefined && hi < lo) return false;
+    count += hi === undefined ? 1 : hi - lo + 1;
+  }
+  return count <= ITERATION_CAP;
+}
+
+/** Does a `DataItemTableView` value filter `Number` by `const(...)` or a closed `filter(...)`? */
+function viewBoundsNumber(prop: ALSyntaxNode): boolean {
+  let found = false;
+  visitAll(prop, (n) => {
+    if (n.rawKind !== "where_condition") return;
+    const f = n.childForFieldName("field");
+    if (f === null || normalizeAlName(f.text) !== "number") return;
+    const kw = n.namedChildren.find((c) => c.rawKind.endsWith("_keyword"));
+    const v = n.childForFieldName("value");
+    if (kw === undefined || v === null) return;
+    const k = normalizeAlName(kw.text);
+    if (k === "const" || (k === "filter" && closedFilter(v.text))) found = true;
+  });
+  return found;
+}
+
+interface MentionScan {
+  /** The item's name used anywhere in the report object (not a declared name, a source table or a
+   *  member half), inactive arms included. */
+  readonly mentions: ALSyntaxNode[];
+  /** Every unqualified call in the item's own triggers: its receiver may be the implicit record. */
+  readonly calls: { readonly call: ALSyntaxNode; readonly trigger: ALSyntaxNode }[];
+}
+
+/**
+ * R484: every operational mention of the item's record. No list of filter-touching methods: as a
+ * receiver, an argument (`CopyFilter` into it, `Clear(D)`, passing it to a procedure), a `with`
+ * subject or anything else, anywhere in the report, a child trigger included. A view bound needs
+ * none; the SetRange certificate needs exactly one, its own call. Known cost: an unqualified
+ * `Error(...)` in the item's own triggers is a mention too (the safe direction).
+ */
+function mentionScan(item: ALSyntaxNode, name: string, triggers: ALSyntaxNode[]): MentionScan {
+  let scope: ALSyntaxNode = item;
+  for (let p = item.parent; p !== null; p = p.parent) {
+    scope = p;
+    if (p.kind === ALNodeKind.report || p.rawKind === "reportextension_declaration") break;
+  }
+  const mentions: ALSyntaxNode[] = [];
+  visitAll(scope, (n) => {
+    if (!isIdentifierLike(n) || normalizeAlName(n.text) !== name) return;
+    if (n.fieldName === "name" || n.fieldName === "table_name" || n.fieldName === "member") return;
+    mentions.push(n);
+  });
+  const calls: { readonly call: ALSyntaxNode; readonly trigger: ALSyntaxNode }[] = [];
+  for (const t of triggers) {
+    visitAll(t, (n) => {
+      if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return;
+      const fn = n.childForFieldName("function");
+      if (fn !== null && isIdentifierLike(fn)) calls.push({ call: n, trigger: t });
+    });
+  }
+  return { mentions, calls };
+}
+
+/**
+ * The SINGLE-MENTION certificate (R484): the scan found exactly one mention, and it is a literal
+ * `SetRange(Number, v)` or `SetRange(Number, lo, hi)` (`rangeCallOf`) in the item's own
+ * `OnPreDataItem`, unconditional, in an ACTIVE arm (not inactive, not undecided).
+ */
+function certified(
+  scan: MentionScan,
+  name: string,
+  triggers: ALSyntaxNode[],
+  ctx: SemanticContext,
+): boolean {
+  const { mentions, calls } = scan;
+  if (mentions.length + calls.length !== 1) return false;
+  // The one mention: an unqualified call, or the receiver of a qualified call.
+  let call: ALSyntaxNode | null = null;
+  let trigger: ALSyntaxNode | null = null;
+  const [c] = calls;
+  const [m] = mentions;
+  if (c !== undefined) {
+    call = c.call;
+    trigger = c.trigger;
+  } else if (m !== undefined) {
+    const member = m.parent;
+    const outer = member?.parent ?? null;
+    if (member === null || outer === null || member.rawKind !== "member_expression") return false;
+    const obj = member.childForFieldName("object");
+    const fn = outer.childForFieldName("function");
+    if (obj === null || !samePos(obj, m) || fn === null || !samePos(fn, member)) return false;
+    call = outer;
+    trigger =
+      triggers.find((t) => t.startIndex <= outer.startIndex && outer.endIndex <= t.endIndex) ??
+      null;
+  }
+  if (call === null || trigger === null || call.rawKind !== "call_expression") return false;
+  return (
+    rangeCallOf(call, name)?.literal === true &&
+    triggerName(trigger) === "onpredataitem" &&
+    armOfNode(ctx, call) === "active" &&
+    unconditional(call, trigger)
+  );
+}
+
+/** An integer literal, or a minus applied to one. */
+function intValue(a: ALSyntaxNode): number | null {
+  if (a.rawKind === "integer") return Number(a.text);
+  if (a.rawKind === "unary_expression") {
+    const op = a.childForFieldName("operand");
+    if (op !== null && op.rawKind === "integer" && a.text.trim().startsWith("-")) {
+      return -Number(op.text);
+    }
+  }
+  return null;
+}
+
+/**
+ * A `SetRange`/`SetFilter` call on the item's own record (unqualified, or qualified by its name),
+ * with its arguments after the field. `literal`: `SetRange(<f>, v)` or `SetRange(<f>, lo, hi)` with
+ * integer literals, lo <= hi and at most `ITERATION_CAP` records (a reversed range is no bound).
+ */
+function rangeCallOf(
+  n: ALSyntaxNode,
+  item: string,
+): { readonly literal: boolean; readonly args: ALSyntaxNode[] } | null {
+  if (n.rawKind !== "call_expression") return null;
+  const f = n.childForFieldName("function");
+  if (f === null) return null;
+  let method: string;
+  if (isIdentifierLike(f)) method = normalizeAlName(f.text);
+  else if (f.rawKind === "member_expression") {
+    const obj = f.childForFieldName("object");
+    const mem = f.childForFieldName("member");
+    if (obj === null || mem === null || normalizeAlName(obj.text) !== item) return null;
+    method = normalizeAlName(mem.text);
+  } else return null;
+  if (method !== "setrange" && method !== "setfilter") return null;
+  const al = n.childForFieldName("arguments");
+  const rest = (al === null ? [] : al.namedChildren).slice(1);
+  const [lo, hi, ...more] = rest.map(intValue);
+  const literal =
+    method === "setrange" &&
+    more.length === 0 &&
+    lo !== null &&
+    lo !== undefined &&
+    hi !== null &&
+    (hi === undefined || (lo <= hi && hi - lo + 1 <= ITERATION_CAP));
+  return { literal, args: literal ? [] : [...rest] };
 }
 
 /**
@@ -296,25 +620,8 @@ const REPORT_INSTANCES: ReadonlySet<string> = new Set(["currreport", "currxmlpor
  *  `break` whose nearest loop is `loop`. */
 function exitsLoop(n: ALSyntaxNode, loop: ALSyntaxNode): boolean {
   if (n.rawKind === "exit_statement") return true;
-  if (n.rawKind === "member_expression") {
-    const obj = n.childForFieldName("object");
-    const mem = n.childForFieldName("member");
-    return (
-      obj !== null &&
-      mem !== null &&
-      REPORT_INSTANCES.has(normalizeAlName(obj.text)) &&
-      REPORT_EXITS.has(normalizeAlName(mem.text))
-    );
-  }
-  if (n.rawKind === "call_expression") {
-    const f = n.childForFieldName("function");
-    if (f === null || !isIdentifierLike(f) || normalizeAlName(f.text) !== "error") return false;
-    // An error `asserterror` catches does not end the loop.
-    for (let a = n.parent; a !== null && !samePos(a, loop); a = a.parent) {
-      if (a.rawKind === "asserterror_statement") return false;
-    }
-    return true;
-  }
+  if (n.rawKind === "member_expression") return isReportExit(n);
+  if (n.rawKind === "call_expression") return isRaisedError(n, loop);
   if (n.rawKind !== "break_statement") return false;
   for (let a = n.parent; a !== null; a = a.parent) {
     if (BREAK_SCOPES.has(a.rawKind)) return samePos(a, loop);
@@ -327,12 +634,45 @@ function exitsLoop(n: ALSyntaxNode, loop: ALSyntaxNode): boolean {
 function bodyExitGuards(loop: ALSyntaxNode): ALSyntaxNode[] {
   const body = loop.childForFieldName("body");
   if (body === null) return [];
+  return exitGuards(body, loop, (n) => exitsLoop(n, loop));
+}
+
+/** `CurrReport.Quit`/`Break` or an XMLport twin, with or without `()`. */
+function isReportExit(n: ALSyntaxNode): boolean {
+  const obj = n.childForFieldName("object");
+  const mem = n.childForFieldName("member");
+  return (
+    obj !== null &&
+    mem !== null &&
+    REPORT_INSTANCES.has(normalizeAlName(obj.text)) &&
+    REPORT_EXITS.has(normalizeAlName(mem.text))
+  );
+}
+
+/** An `Error(...)` call that no `asserterror` between it and `stop` catches. */
+function isRaisedError(n: ALSyntaxNode, stop: ALSyntaxNode): boolean {
+  if (n.rawKind !== "call_expression") return false;
+  const f = n.childForFieldName("function");
+  if (f === null || !isIdentifierLike(f) || normalizeAlName(f.text) !== "error") return false;
+  for (let a = n.parent; a !== null && !samePos(a, stop); a = a.parent) {
+    if (a.rawKind === "asserterror_statement") return false;
+  }
+  return true;
+}
+
+/** The guards of every node under `body` that `isExit` names, climbing to `loop` (R446; R484
+ *  passes a data item's trigger as `loop`). */
+function exitGuards(
+  body: ALSyntaxNode,
+  loop: ALSyntaxNode,
+  isExit: (n: ALSyntaxNode) => boolean,
+): ALSyntaxNode[] {
   const out = new Map<number, ALSyntaxNode>();
   const add = (n: ALSyntaxNode | null): void => {
     if (n !== null) out.set(n.startIndex, n);
   };
   const visitN = (n: ALSyntaxNode): void => {
-    if (exitsLoop(n, loop)) {
+    if (isExit(n)) {
       for (let a = n.parent; a !== null && !samePos(a, loop); a = a.parent) {
         switch (a.rawKind) {
           case "if_statement":
@@ -399,7 +739,7 @@ function memberRefOf(n: ALSyntaxNode, ctx: SemanticContext): MemberRef | null {
 
 /** Does the loop's condition read `target`? Same arm and marker rules as `conditionIdentifiers`. */
 function conditionReadsMember(
-  loop: ALSyntaxNode,
+  parts: ALSyntaxNode[],
   target: MemberRef,
   ctx: SemanticContext,
 ): boolean {
@@ -416,7 +756,7 @@ function conditionReadsMember(
     }
     return n.namedChildren.some(walk);
   };
-  return loopExitParts(loop, ctx).some(walk);
+  return parts.some(walk);
 }
 
 /** The member target of the assignment at, or enclosing, `node`, as its receiver and member
@@ -493,10 +833,7 @@ export function loopConditionReadsByName(
     if (plainMatches && isIdentifierLike(n) && normalizeAlName(n.text) === member) return true;
     return n.namedChildren.some(walk);
   };
-  for (let cur = assignment.parent; cur !== null && !isScope(cur); cur = cur.parent) {
-    if (LOOP_KINDS.has(cur.kind) && loopExitParts(cur, ctx).some(walk)) return true;
-  }
-  return false;
+  return enclosingExitParts(assignment, ctx).some((parts) => parts.some(walk));
 }
 
 /**
@@ -604,10 +941,8 @@ export function classifyHangCapable(
         ? "loop-condition-target"
         : byNameRefusal(node, byName, ctx, "none");
     }
-    for (let cur = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
-      if (LOOP_KINDS.has(cur.kind) && conditionReadsMember(cur, ref, ctx)) {
-        return "loop-condition-target";
-      }
+    if (enclosingExitParts(node, ctx).some((parts) => conditionReadsMember(parts, ref, ctx))) {
+      return "loop-condition-target";
     }
     return byNameRefusal(node, byName, ctx, "local");
   }
@@ -628,15 +963,15 @@ export function classifyHangCapable(
       const varSym = variable === null ? null : resolveVarRef(variable, ctx);
       if (varSym !== null && sameDeclaration(varSym, targetSym)) return "loop-condition-target";
     }
-    if (LOOP_KINDS.has(cur.kind)) {
-      for (const ident of conditionIdentifiers(cur, ctx)) {
-        const identSym = resolveVarRef(ident, ctx);
-        if (identSym !== null && sameDeclaration(identSym, targetSym)) {
-          return "loop-condition-target";
-        }
+    cur = cur.parent;
+  }
+  for (const parts of enclosingExitParts(node, ctx)) {
+    for (const ident of conditionIdentifiers(parts, ctx)) {
+      const identSym = resolveVarRef(ident, ctx);
+      if (identSym !== null && sameDeclaration(identSym, targetSym)) {
+        return "loop-condition-target";
       }
     }
-    cur = cur.parent;
   }
   return byNameRefusal(node, byName, ctx, bindingOf(targetSym.node));
 }

@@ -955,3 +955,408 @@ describe("R480 known exclusions: hang-capable writes still claimed", () => {
     ).toEqual(["8|Done := true"]);
   });
 });
+
+/** R484: a report with one data item `D` over `table`: `props` and `triggers` inside it, nested
+ *  items `inner`, and report-level code `top`. */
+const report = (
+  table: string,
+  props: string[],
+  triggers: string[],
+  inner: string[] = [],
+  top: string[] = [],
+) =>
+  [
+    "report 50000 P",
+    "{",
+    "    dataset",
+    "    {",
+    `        dataitem(D; ${table})`,
+    "        {",
+    ...props.map((p) => `            ${p}`),
+    ...triggers.map((t) => `            ${t}`),
+    ...inner.map((t) => `            ${t}`),
+    "        }",
+    "    }",
+    ...top.map((t) => `    ${t}`),
+    "    var",
+    "        Continue: Boolean; Other: Integer; Skipping: Boolean; NoOfLoops: Integer; Stop: Boolean;",
+    "}",
+  ].join("\n");
+
+/** The R484 shape: a Break guarded by `Continue`, the `Continue` write, and a sibling `Other`. */
+const dimLoop = [
+  "trigger OnAfterGetRecord()",
+  "begin",
+  "    if Number > 1 then",
+  "        if not Continue then",
+  "            CurrReport.Break();",
+  "    Continue := false;",
+  "    Other := Other + 1;",
+  "end;",
+];
+const pre = (...lines: string[]) => [
+  "trigger OnPreDataItem()",
+  "begin",
+  ...lines.map((l) => `    ${l}`),
+  "end;",
+];
+const onPreReport = (...lines: string[]) => [
+  "trigger OnPreReport()",
+  "begin",
+  ...lines.map((l) => `    ${l}`),
+  "end;",
+];
+const texts = (sites: string[]) => sites.map((s) => s.split("|")[1]);
+const removed = (src: string, symbols?: string[] | "undecided") =>
+  texts(claimedSites(removeAssignment, src, symbols));
+const REFUSED = ["Other := Other + 1"];
+const CLAIMED = ["Continue := false", "Other := Other + 1"];
+const integer = (props: string[], triggers: string[], inner?: string[]) =>
+  report('"Integer"', props, triggers, inner);
+const CONST_VIEW = "DataItemTableView = where(Number = const(1));";
+const CLOSED_VIEW = "DataItemTableView = where(Number = filter(1 .. 5));";
+const childSetRange = [
+  'dataitem(Child; "Sales Line")',
+  "{",
+  "    trigger OnPreDataItem()",
+  "    begin",
+  "        D.SetRange(Number, 1, 2147483647);",
+  "    end;",
+  "}",
+];
+
+describe("R484: an open `Integer` data item is a loop; its exit guards' writes are refused", () => {
+  it("an open `filter(1 ..)` view: the Continue write is refused, the sibling claimed (revert to red: `enclosingExitParts` stops at the trigger)", () => {
+    const src = integer(["DataItemTableView = where(Number = filter(1 ..));"], dimLoop);
+    expect(removed(src)).toEqual(REFUSED);
+    expect(texts(claimedSites(flipBooleanLiteral, src))).toEqual([]);
+  });
+
+  it("a real table is bounded (revert to red: drop the `Integer` check)", () => {
+    expect(removed(report('"Sales Header"', [], dimLoop))).toEqual(CLAIMED);
+  });
+
+  it("swap-additive: a literal-operand write a Break guard reads is refused, an unrelated one emitted (revert to red: `enclosingExitParts` stops at the trigger)", () => {
+    const src = integer(
+      [],
+      [
+        "trigger OnAfterGetRecord()",
+        "begin",
+        "    Other := 2 - 1;",
+        "    NoOfLoops := 2 + 1;",
+        "    if Other = 1 then",
+        "        CurrReport.Break();",
+        "end;",
+      ],
+    );
+    expect(texts(claimedSites(swapAdditive, src))).toEqual(["2 + 1"]);
+  });
+
+  it("a variable bound is no bound, and its variable's write is refused (revert to red: drop the range arguments from the exit parts)", () => {
+    const src = integer(
+      [],
+      [
+        "trigger OnAfterGetRecord()",
+        "begin",
+        "    Other := Other + 1;",
+        "end;",
+        ...pre("NoOfLoops := 3;", "SetRange(Number, 1, NoOfLoops);"),
+      ],
+    );
+    expect(removed(src)).toEqual(["Other := Other + 1"]);
+    expect(texts(claimedSites(shiftInteger, src))).toEqual([]);
+  });
+
+  it("a Break in OnPreDataItem is an exit (revert to red: read only OnAfterGetRecord)", () => {
+    const src = integer(
+      [],
+      [...pre("Stop := true;", "if Stop then", "    CurrReport.Break();"), ...dimLoop],
+    );
+    expect(removed(src)).toEqual(REFUSED);
+  });
+
+  it("a Quit in OnPreDataItem is an exit (revert to red: drop `quit` from `REPORT_EXITS`)", () => {
+    const src = integer(
+      [],
+      [
+        ...pre("Stop := true;", "if Stop then", "    CurrReport.Quit();"),
+        "trigger OnAfterGetRecord()",
+        "begin",
+        "    Other := Other + 1;",
+        "end;",
+      ],
+    );
+    expect(removed(src)).toEqual(["Other := Other + 1"]);
+  });
+
+  it("`CurrReport.Skip()` alone is no exit (revert to red: count `skip`)", () => {
+    const src = integer(
+      [],
+      [
+        "trigger OnAfterGetRecord()",
+        "begin",
+        "    if Skipping then",
+        "        CurrReport.Skip();",
+        "    Skipping := false;",
+        "    if not Continue then",
+        "        CurrReport.Break();",
+        "    Continue := false;",
+        "end;",
+      ],
+    );
+    expect(removed(src)).toEqual(["Skipping := false"]);
+  });
+
+  it("a Break in the item's own OnPostDataItem is no exit (revert to red: read OnPostDataItem guards)", () => {
+    const src = integer(
+      [],
+      [
+        "trigger OnAfterGetRecord()",
+        "begin",
+        "    Continue := false;",
+        "end;",
+        "trigger OnPostDataItem()",
+        "begin",
+        "    if not Continue then",
+        "        CurrReport.Break();",
+        "end;",
+      ],
+    );
+    expect(removed(src)).toEqual(["Continue := false"]);
+  });
+
+  it("ANY guard: both guards above the Break are read (revert to red: read only the innermost guard)", () => {
+    const src = integer(
+      [],
+      [
+        "trigger OnAfterGetRecord()",
+        "begin",
+        "    if Other > 3 then",
+        "        if not Continue then",
+        "            CurrReport.Break();",
+        "    Other := Other + 1;",
+        "    Continue := false;",
+        "    NoOfLoops := 1;",
+        "end;",
+      ],
+    );
+    expect(removed(src)).toEqual(["NoOfLoops := 1"]);
+  });
+});
+
+describe("R484: MaxIteration, an independent bound", () => {
+  it("`MaxIteration = 10` bounds it (revert to red: drop the MaxIteration check)", () => {
+    expect(removed(integer(["MaxIteration = 10;"], dimLoop))).toEqual(CLAIMED);
+  });
+
+  it("`MaxIteration = 0` (no limit) does not (revert to red: accept 0)", () => {
+    expect(removed(integer(["MaxIteration = 0;"], dimLoop))).toEqual(REFUSED);
+  });
+
+  it("a MaxIteration above the cap is no bound (revert to red: drop the cap on MaxIteration)", () => {
+    expect(removed(integer(["MaxIteration = 100000000;"], dimLoop))).toEqual(REFUSED);
+  });
+
+  it("MaxIteration stays a bound under a widening filter (revert to red: MaxIteration needs the mention scan)", () => {
+    const src = integer(
+      ["MaxIteration = 10;"],
+      [...dimLoop, ...pre("D.SetRange(Number, 1, 2147483647);")],
+    );
+    expect(removed(src)).toEqual(CLAIMED);
+  });
+});
+
+describe("R484: a view bound holds only with zero mentions of the record", () => {
+  it("a `const(1)` view bounds it (revert to red: ignore `const`)", () => {
+    expect(removed(integer([CONST_VIEW], dimLoop))).toEqual(CLAIMED);
+  });
+
+  it("a closed `filter(1 .. 5)` view bounds it (revert to red: `closedFilter` answers false)", () => {
+    expect(removed(integer([CLOSED_VIEW], dimLoop))).toEqual(CLAIMED);
+  });
+
+  it("a closed view above the cap is no bound (revert to red: drop the cap on views)", () => {
+    const src = integer(["DataItemTableView = where(Number = filter(1 .. 2147483647));"], dimLoop);
+    expect(removed(src)).toEqual(REFUSED);
+  });
+
+  it("a reversed view range `filter(5 .. 1)` is no bound (revert to red: drop the reversed check)", () => {
+    expect(
+      removed(integer(["DataItemTableView = where(Number = filter(5 .. 1));"], dimLoop)),
+    ).toEqual(REFUSED);
+  });
+
+  it("a view union at exactly the cap bounds it (revert to red: `<` instead of `<=`)", () => {
+    const view = "DataItemTableView = where(Number = filter(1 .. 500000 | 500001 .. 1000000));";
+    expect(removed(integer([view], dimLoop))).toEqual(CLAIMED);
+  });
+
+  it("a view union whose parts are under the cap but whose total is over does not (revert to red: cap each part, not the sum)", () => {
+    const view = "DataItemTableView = where(Number = filter(1 .. 600000 | 700001 .. 1300000));";
+    expect(removed(integer([view], dimLoop))).toEqual(REFUSED);
+  });
+
+  it("a const view replaced by D.SetRange is no bound (revert to red: view bounds skip the mention scan)", () => {
+    const src = integer([CONST_VIEW], [...dimLoop, ...pre("D.SetRange(Number, 1, 2147483647);")]);
+    expect(removed(src)).toEqual(REFUSED);
+  });
+
+  it("a closed view replaced by D.SetFilter is no bound (revert to red: view bounds skip the mention scan)", () => {
+    const src = integer([CLOSED_VIEW], [...dimLoop, ...pre("D.SetFilter(Number, '1..');")]);
+    expect(removed(src)).toEqual(REFUSED);
+  });
+
+  it("a closed view replaced through a CopyFilter destination is no bound (revert to red: view bounds skip the mention scan)", () => {
+    const src = report(
+      '"Integer"',
+      [CLOSED_VIEW],
+      dimLoop,
+      [],
+      onPreReport("Src.CopyFilter(Number, D.Number);"),
+    );
+    expect(removed(src)).toEqual(REFUSED);
+  });
+
+  it("a const view replaced in a child trigger is no bound (revert to red: view bounds skip the mention scan)", () => {
+    expect(removed(integer([CONST_VIEW], dimLoop, childSetRange))).toEqual(REFUSED);
+  });
+});
+
+describe("R484: the single-mention SetRange certificate", () => {
+  /** One literal SetRange in OnPreDataItem (plus `setRange`'s other lines), report-level code
+   *  `top`, nested items `inner`. */
+  const bounded = (setRange: string, top: string[] = [], inner: string[] = []) =>
+    report('"Integer"', [], [...dimLoop, ...pre(setRange)], inner, top);
+
+  it("control: the one literal SetRange alone bounds it (revert to red: drop the certificate)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 3);"))).toEqual(CLAIMED);
+  });
+
+  const armed = integer([], [...dimLoop, ...pre("#if FOO", "SetRange(Number, 1, 3);", "#endif")]);
+
+  it("a bound in a compiled-out `#if` arm does not hold (revert to red: drop the active-arm check)", () => {
+    expect(removed(armed, [])).toEqual(REFUSED);
+  });
+
+  it("a bound in an undecided `#if` arm does not hold (revert to red: drop the active-arm check)", () => {
+    expect(removed(armed, "undecided")).toEqual(REFUSED);
+  });
+
+  it("a bound in an active `#if` arm holds (revert to red: refuse any bound inside `#if`)", () => {
+    expect(removed(armed, ["FOO"])).toEqual(CLAIMED);
+  });
+
+  it("a bound set in OnAfterGetRecord, too late, does not hold (revert to red: accept any trigger)", () => {
+    const late = [...dimLoop.slice(0, 2), "    SetRange(Number, 1, 3);", ...dimLoop.slice(2)];
+    expect(removed(integer([], late))).toEqual(REFUSED);
+  });
+
+  it("a conditional bound does not hold (revert to red: `unconditional` answers true)", () => {
+    expect(removed(bounded("if Skipping then SetRange(Number, 1, 3);"))).toEqual(REFUSED);
+  });
+
+  it("a bound after an `exit` does not hold (revert to red: drop the exit-before check)", () => {
+    expect(removed(bounded("if Skipping then exit; SetRange(Number, 1, 3);"))).toEqual(REFUSED);
+  });
+
+  it("an inverted SetRange(Number, 3, 1) is no bound (revert to red: drop lo <= hi)", () => {
+    expect(removed(bounded("SetRange(Number, 3, 1);"))).toEqual(REFUSED);
+  });
+
+  it("SetRange at exactly the cap bounds it (revert to red: `<` instead of `<=`)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 1000000);"))).toEqual(CLAIMED);
+  });
+
+  it("SetRange one above the cap does not (revert to red: drop the SetRange cap)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 1000001);"))).toEqual(REFUSED);
+  });
+
+  it("a second SetRange widening to 2147483647 voids it (revert to red: count the implicit calls once)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 3); SetRange(Number, 1, 2147483647);"))).toEqual(
+      REFUSED,
+    );
+  });
+
+  it("`SetRange(Number)` clearing it voids it (revert to red: count the implicit calls once)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 3); SetRange(Number);"))).toEqual(REFUSED);
+  });
+
+  it("a bare `Reset;` voids it (revert to red: drop the implicit-call count)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 3); Reset;"))).toEqual(REFUSED);
+  });
+
+  it("a bare `D.Reset;` voids it (revert to red: drop the name-mention count)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 3); D.Reset;"))).toEqual(REFUSED);
+  });
+
+  it("a CopyFilter whose DESTINATION is the item voids it (revert to red: count only method receivers)", () => {
+    const src = bounded(
+      "SetRange(Number, 1, 3);",
+      onPreReport("Src.CopyFilter(Number, D.Number);"),
+    );
+    expect(removed(src)).toEqual(REFUSED);
+  });
+
+  it("`D.Copy(Src)` voids it (revert to red: drop the name-mention count)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 3);", onPreReport("D.Copy(Src);")))).toEqual(
+      REFUSED,
+    );
+  });
+
+  it("`Clear(D)` outside the item voids it (revert to red: count only method receivers)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 3);", onPreReport("Clear(D);")))).toEqual(REFUSED);
+  });
+
+  it("D passed to a procedure voids it (revert to red: count only method receivers)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 3);", onPreReport("Widen(D);")))).toEqual(REFUSED);
+  });
+
+  it("a child trigger naming the parent's record voids it (revert to red: scan only the item's own triggers)", () => {
+    expect(removed(bounded("SetRange(Number, 1, 3);", [], childSetRange))).toEqual(REFUSED);
+  });
+});
+
+describe("R484: nested data items", () => {
+  const parentWrites = [
+    "trigger OnAfterGetRecord()",
+    "begin",
+    "    Continue := false;",
+    "    Other := Other + 1;",
+    "end;",
+  ];
+  const child = (stmt: string) => [
+    'dataitem(Child; "Sales Line")',
+    "{",
+    "    trigger OnAfterGetRecord()",
+    "    begin",
+    "        if not Continue then",
+    `            ${stmt}`,
+    "    end;",
+    "}",
+  ];
+
+  it("a child's Quit ends the report: the parent's Continue write is refused (revert to red: drop the nested collection)", () => {
+    expect(removed(integer([], parentWrites, child("CurrReport.Quit();")))).toEqual(REFUSED);
+  });
+
+  it("a child's Error ends the report (revert to red: `endsReport` drops `Error`)", () => {
+    expect(removed(integer([], parentWrites, child("Error('x');")))).toEqual(REFUSED);
+  });
+
+  it("a child's Break ends only the child: claimed (revert to red: `endsReport` counts Break)", () => {
+    expect(removed(integer([], parentWrites, child("CurrReport.Break();")))).toEqual(CLAIMED);
+  });
+
+  it("a write in a child's trigger is inside the parent's loop (revert to red: stop at the nearest data item)", () => {
+    const src = integer([], dimLoop, [
+      'dataitem(Child; "Sales Line")',
+      "{",
+      "    trigger OnAfterGetRecord()",
+      "    begin",
+      "        Continue := true;",
+      "    end;",
+      "}",
+    ]);
+    expect(removed(src)).toEqual(REFUSED);
+  });
+});
