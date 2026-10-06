@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**66 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**64 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -106,7 +106,7 @@ that ordering is the priority.
 - **R256** · A run recorded WITH preprocessor symbols before C02-06 can still be resumed by a run with NO symbols, so an old verdict or baseline can carry across a `#if` change · [R256.md](docs/roadmap/R256.md) · closed 2026-10-06 — already closed on master by R214's run-row build symbols (NULL never matches); pinned end…
 - **R246** · GH-24's reach marker runs on every loop iteration and slows the mutant: a kill that raced the time budget (Int32 overflow) now scores timeout-killed on itest:hang · [R246.md](docs/roadmap/R246.md) · done (0a9cc84)
 - **R268** · `lethal verify` refuses a test app whose symbol cache holds a Ready-to-Run Microsoft package (no root NavxManifest.xml) · [R268.md](docs/roadmap/R268.md) · done (63d381e)
-- **R279** · GH-24's reach latch may emit a second `var` section when a procedure's var section holds only comments (unmeasured) · [R279.md](docs/roadmap/R279.md) · open
+- **R279** · GH-24's reach latch may emit a second `var` section when a procedure's var section holds only comments (unmeasured) · [R279.md](docs/roadmap/R279.md) · closed 2026-10-06 — measured, cannot happen: such a section has no var_body, PLAN anchors the latch on the…
 - **R281** · Skipping `OnDelete` can leave child rows that a later statement collides with, so R138's "writes less, cannot add an error" reasoning does not hold for shipped `Delete(true)` mutants (unmeasured) · [R281.md](docs/roadmap/R281.md) · closed 2026-10-05 — `Delete(true) -> Delete(false)` mutants are tagged `run-trigger-skipped-delete`, narrowed…
 - **R284** · `asserterror Arr[1].Method(...)`: tree-sitter makes `[1].Method(...)` its own statement, and `void-method-call` plants a mutant on that fragment that leaves `asserterror Arr;` (compile unmeasured) · [R284.md](docs/roadmap/R284.md) · done (50e98d1), closed 2026-09-27 by tree-sitter-al 4.4.1 (#26, upstream 209d038)
 - **R285** · A `case` label split by `#if`/`#else` builds a `preproc_split_case_extended` node, which escapes R214's `preproc_conditional*` framing, and mutants are planted in the arm the compiler never builds · [R285.md](docs/roadmap/R285.md) · done (84f72d33) for its four inactive-arm mutants; the block-body empty-block loss stays open, see R304 and…
@@ -125,7 +125,7 @@ that ordering is the priority.
 - **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · done (9a308e1)
 - **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · closed 2026-10-06 — case 1 closed by R214 (0 compiled-out mutants measured on BaseApp, CDO, DC, DO), case 3…
 - **R312** · A member whose `var` section ENDS in an `#if` block of declarations gets its reach latch written on the `#endif` line, and alc rejects the artifact (AL0631) · [R312.md](docs/roadmap/R312.md) · done (4001282)
-- **R313** · A member whose `var` section tree-sitter-al cannot parse gets no reach latch: it is refused by name, and its reach is not measured · [R313.md](docs/roadmap/R313.md) · open, filed 2026-09-28
+- **R313** · A member whose `var` section tree-sitter-al cannot parse gets no reach latch: it is refused by name, and its reach is not measured · [R313.md](docs/roadmap/R313.md) · closed 2026-10-06 — stated limit: 0 members refused in 510,291 across every corpus and fixture; the refusal…
 - **R316** · A split-header procedure whose arms each have their own `var` section (`preproc_split_procedure_preamble`) has no procedure name, scope or line-map span, so coverage cannot attribute its mutants and some operators find no site in it · [R316.md](docs/roadmap/R316.md) · done (56b7e3b3..ae0793a9)
 - **R318** · A split-header procedure whose `#if` arms rename it has no procedure name, so under coverage attribution a public one's mutants read `no-coverage` · [R318.md](docs/roadmap/R318.md) · closed 2026-10-06 — stated limit: fenced bcdev and every al-runner leg attribute a renamed split member…
 - **R319** · al-runner's `--server` path compiles the target without the session's preprocessor symbols, so a symbol-dependent build is measured as the no-symbol one · [R319.md](docs/roadmap/R319.md) · done (33cfc55a)
