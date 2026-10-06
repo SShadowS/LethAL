@@ -397,7 +397,7 @@
           "other": { "type": "integer", "description": "error and known-survivor rows." },
           "unobservedBlock": {
             "type": "boolean",
-            "description": "Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run, which can drop mutants inside a block, on a quarantined run, which stops scheduling mutants mid-run, and for every gap in a file with a hang-refused excludedSites row (R447), whose loop step was refused and never generated."
+            "description": "Every RECORDED row of the block survived. Absent on an operator-narrowed run, which can drop mutants inside a block, on a line-narrowed run unless its line ranges cover every line of the block (R277; a line filter drops only sites touching no range), on a quarantined run, which stops scheduling mutants mid-run, and for every gap in a file with a hang-refused excludedSites row (R447), whose loop step was refused and never generated."
           },
           "artifactId": {
             "type": "string",
