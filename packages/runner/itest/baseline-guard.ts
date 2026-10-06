@@ -280,10 +280,10 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * (al-runner.cli-default.baseline.json), and R383's multi-object leg 2026-10-02
  * (al-runner.multiobject.baseline.json, per mutant as pre-committed in
  * docs/superpowers/specs/2026-10-02-r383-multiobject-refusal-precommitment.md). R-204b's
- * single-path hang leg (`hang.single.baseline.json`) waits for its first record run, which needs
- * its pre-commitment committed under docs/superpowers/specs/ first.
+ * single-path hang leg (`hang.single.baseline.json`) was recorded 2026-10-06 on Cronus28 (record
+ * exit 3, confirm PASS), per docs/superpowers/specs/2026-10-06-r204b-hang-single-path-precommitment.md.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = ["hang.single.baseline.json"];
+export const PENDING_FIRST_RECORD: readonly string[] = [];
 
 /** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
 export const SYMBOL_BASELINES: readonly string[] = [
