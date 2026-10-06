@@ -682,31 +682,69 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
         const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
         expect(tagged(files)).toEqual([PLAIN]);
       });
+      // A custom event's subscriber, its signature matching the publisher's (no parameters).
+      const customSub = (objectType: string, target: string): string =>
+        `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::${objectType}, ${target}, 'OnAfterModifyCheck', '', false, false)]\n  local procedure Observe() begin Error('forced'); end;\n}`;
       // Sol, R-485 run 001: a split-header extension (invisible, R494) raises a CUSTOM event from
-      // its OnAfterModify, and a wrapped codeunit subscribes to it on this table. Revert: decide
-      // the clean codeunit by `subscribes(n)` (the two built-in event names only).
-      const splitExt = (table: string) =>
-        `#if A\ntableextension 50305 "Ext A" extends "${table}"\n#else\ntableextension 50305 "Ext B" extends "${table}"\n#endif\n{\n    trigger OnAfterModify()\n    begin\n        OnAfterModifyCheck();\n    end;\n\n    [IntegrationEvent(false, false)]\n    local procedure OnAfterModifyCheck()\n    begin\n    end;\n}\n`;
-      it("an unindexed subscriber to a CUSTOM event of THIS table keeps it", () => {
-        const s = wrap(subOn(`Database::"Par"`, "OnAfterModifyCheck"));
+      // its OnAfterModify, and a wrapped codeunit subscribes to it on this table.
+      const splitExt = (table: string, body = "OnAfterModifyCheck();", vars = "") =>
+        `#if A\ntableextension 50305 "Ext A" extends "${table}"\n#else\ntableextension 50305 "Ext B" extends "${table}"\n#endif\n{\n    trigger OnAfterModify()\n${vars}    begin\n        ${body}\n    end;\n\n    [IntegrationEvent(false, false)]\n    local procedure OnAfterModifyCheck()\n    begin\n    end;\n}\n`;
+      it("sol run 001: a hidden extension's custom event, subscribed on THIS table, keeps it", () => {
         const files = {
           "P.al": par(""),
           "X.al": splitExt("Par"),
-          "S.al": s,
+          "S.al": wrap(customSub("Table", `Database::"Par"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Sol, R-485 run 002: the hidden extension calls a CODEUNIT's event, so the subscriber's
+      // object type is Codeunit. Revert: drop the `opaque` guard (read structurally anyway).
+      it("sol run 002: a hidden extension calling a codeunit's event keeps it", () => {
+        const publisher = `codeunit 50303 "Publisher"\n{\n    [IntegrationEvent(false, false)]\n    procedure OnAfterModifyCheck()\n    begin\n    end;\n}\n`;
+        const files = {
+          "P.al": par(""),
+          "X.al": splitExt(
+            "Par",
+            "Publisher.OnAfterModifyCheck();",
+            `    var\n        Publisher: Codeunit "Publisher";\n`,
+          ),
+          "C.al": publisher,
+          "S.al": wrap(customSub("Codeunit", `Codeunit::"Publisher"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Nothing hidden: the structural reading decides. Revert: decide the clean codeunit by
+      // `subscribes(n)` (the two built-in event names only).
+      it("nothing hidden: a subscriber to a custom event of THIS table keeps it", () => {
+        const files = {
+          "P.al": par(""),
+          "S.al": wrap(customSub("Table", `Database::"Par"`)),
           "O.al": caller("Par.Modify(false);"),
         };
         expect(tagged(files)).toEqual([FORCED]);
       });
       // Control. Revert: keep the tag for a subscriber of any table.
-      it("an unindexed subscriber to a custom event of ANOTHER table drops it", () => {
-        const s = wrap(subOn(`Database::"Oth"`, "OnAfterModifyCheck"));
+      it("nothing hidden: a subscriber to a custom event of ANOTHER table drops it", () => {
         const files = {
           "P.al": par(""),
-          "X.al": splitExt("Oth"),
-          "S.al": s,
+          "S.al": wrap(customSub("Table", `Database::"Oth"`)),
           "O.al": caller("Par.Modify(false);"),
         };
         expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // Revert: delete the integer branch (a bare id then counts as unreadable and keeps).
+      it("a subscriber naming ANOTHER table by a bare id drops it", () => {
+        const s = wrap(subOn("50399", "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // Revert: compare the id as text (`targetKey` without the integer normalisation).
+      it("a subscriber naming THIS table by a leading-zero id keeps it", () => {
+        const s = wrap(subOn("050300", "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
       });
       // Only an `[EventSubscriber]` observes: a clean wrapped codeunit whose attributes are all
       // something else drops it. Revert: count any attribute as a subscriber of this table.

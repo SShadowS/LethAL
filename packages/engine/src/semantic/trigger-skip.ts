@@ -255,11 +255,22 @@ function projectObserves(
   // node, an object with an ERROR or MISSING descendant, a split header, any other kind) is read by
   // its whole TEXT, for any table, as before: a broken parse's structure cannot be trusted, and
   // over-tagging is the safe direction.
+  // Sol, R-485 run 002: the narrowed reading is sound only when nothing of the project is hidden
+  // from it. A trigger this reader cannot see (a split-header object, R494; an unparsed or
+  // half-parsed one) can call a codeunit's event, or modify another table, whose subscriber then
+  // runs. So when the project holds any such object, EVERY unindexed object keeps the old
+  // any-table text rule.
+  const opaque =
+    symbols.splitObjects.length > 0 ||
+    symbols.unparsedObjects.length > 0 ||
+    symbols.unindexedObjects.some((n) => n.hasError);
   for (const n of symbols.unindexedObjects) {
-    if (!n.hasError && n.rawKind === TABLEEXTENSION_DECLARATION) {
+    if (opaque) {
+      if (textObserves(n, unindexedText, tableName, table.id)) return true;
+    } else if (n.rawKind === TABLEEXTENSION_DECLARATION) {
       const base = n.childForFieldName("base_object")?.text.replace(/"/g, "").toLowerCase();
       if (base === undefined || names.has(base)) return true;
-    } else if (!n.hasError && n.rawKind === CODEUNIT_DECLARATION) {
+    } else if (n.rawKind === CODEUNIT_DECLARATION) {
       // ANY event of this table, not only `On(Before|After)<Kind>Event` (sol, R-485 run 001): a
       // custom IntegrationEvent an extension raises from its modify trigger is invisible here
       // when that extension is (R494), and the old text rule kept the tag for it.
@@ -317,11 +328,18 @@ function subscribesToTable(content: ALSyntaxNode, tableNames: ReadonlySet<string
     if (value !== undefined && value !== "table") return false;
   }
   if (target?.rawKind === "database_reference") {
-    const name = target.namedChildren.at(-1)?.text.replace(/"/g, "").toLowerCase();
-    return name === undefined || tableNames.has(name);
+    const name = target.namedChildren.at(-1)?.text;
+    return name === undefined || tableNames.has(targetKey(name));
   }
-  if (target?.rawKind === "integer") return tableNames.has(target.text);
+  if (target?.rawKind === "integer") return tableNames.has(targetKey(target.text));
   return true;
+}
+
+/** A subscriber target as `tableNames` holds it: a name lower-cased without quotes, an id as an
+ *  integer (`050300` is table 50300). */
+function targetKey(text: string): string {
+  const bare = text.replace(/"/g, "").trim();
+  return /^\d+$/.test(bare) ? String(Number(bare)) : bare.toLowerCase();
 }
 
 /** An `[EventSubscriber(...)]` argument list naming one of `events` of one of `tableNames`. An
@@ -339,7 +357,7 @@ function subscribesTo(
   const ref = args.namedChildren.find((c) => c.rawKind === "database_reference");
   const target = ref?.namedChildren.at(-1);
   if (target === undefined) return true;
-  return tableNames.has(target.text.replace(/"/g, "").toLowerCase());
+  return tableNames.has(targetKey(target.text));
 }
 
 /**
