@@ -412,6 +412,43 @@
             "type": "string",
             "description": "R275: the lethal verify line for this gap, its artifact and gap ids filled in and <project> and <tests-dir> left to fill in (the report records neither). Present exactly when artifactId is. An optional additive field: no version bump."
           },
+          "coveringTests": {
+            "type": "array",
+            "description": "R272: every test covering one of the gap's survivors, from the report's testMethods. Ordered by reachedMembers (most first), then by name in code-unit order: a stated heuristic, not a measurement; duration is shown, never a key. Absent when the report has no testMethods (written before R272), never meaning no covering tests. An optional additive field: no version bump.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name"],
+              "properties": {
+                "name": { "type": "string", "description": "Qualified Codeunit.method." },
+                "file": { "type": "string" },
+                "line": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "1-based line of the method's name."
+                },
+                "lineAmbiguous": {
+                  "const": true,
+                  "description": "The name was discovered at more than one place (#if arms); no location given."
+                },
+                "reachedMembers": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "How many of the gap's survivors list this test in reachedBy. Absent when reachMeasuredMembers is 0."
+                },
+                "baselineDurationMs": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "The test's smallest measured baseline duration from this session's completed baseline batches (an aborted batch contributes nothing). Displayed, never a ranking key."
+                }
+              }
+            }
+          },
+          "reachMeasuredMembers": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "R272: how many of the gap's survivors have a measured reach (reachedBy); the denominator of reachedMembers. Present exactly when coveringTests is."
+          },
           "source": {
             "type": "object",
             "additionalProperties": false,

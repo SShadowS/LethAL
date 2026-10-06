@@ -355,6 +355,20 @@ is none, with the same values as on a survivor row; a gap is `carried` when any 
 lethal explain report.json --project <dir>
 ```
 
+Each `gaps` row can also carry `coveringTests` and `reachMeasuredMembers` (R272), on a report that
+records testMethods. `coveringTests` lists every test covering one of the gap's survivors, each
+with `name`, and where known `file`, `line` (the 1-based line of the method's name),
+`reachedMembers` (how many of the gap's survivors that test reached) and `baselineDurationMs` (its
+smallest baseline duration from this run's completed baseline batches, so a batch whose baseline
+aborted adds nothing: al-runner's own per-test figure, or on bcdev the
+per-test call's wall clock, which is mostly call overhead, and a session's first call also pays
+the client's startup). `reachMeasuredMembers` is how many survivors had a
+measured reach, the denominator of `reachedMembers`. A test discovered at two places (two #if
+arms) has `lineAmbiguous` instead of a line. The order is a stated heuristic, not a measurement:
+most survivors reached first, then by name. Duration is shown, never used to order (R489). Without
+testMethods (an older report) the field is absent, which never means "no covering tests". On a run
+whose coverage is object-level or not measured, a gap's list can be the whole suite.
+
 Each `gaps` row can also carry `source`. Given `--project`, it holds `startLine` (the gap's `blockStartLine`),
 `lines` (the block's lines, split on LF, with one trailing CR dropped per line) and `marks`, one per
 member in `members` order, each `{ mutantCode, startLine, startColumn, endLine, endColumn }`. Lines and

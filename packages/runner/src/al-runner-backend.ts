@@ -1287,12 +1287,23 @@ export class AlRunnerBackend implements ExecutionBackend {
 export function verdictFromRunnerTest(
   ref: TestMethodRef,
   wanted: string,
-  t: { readonly status: string; readonly message?: string },
+  t: { readonly status: string; readonly message?: string; readonly durationMs?: number },
   durationMs: number,
   coverage: CoverageMap | undefined,
 ): TestVerdict {
   if (t.status === "pass") {
-    return { ref, outcome: "pass", durationMs, ...(coverage !== undefined ? { coverage } : {}) };
+    // R272: the runner's OWN per-test figure, for the report only. `durationMs` stays wall clock
+    // for the timeout budget; under `--server` it is the whole suite's, never a per-test time.
+    const own = t.durationMs;
+    return {
+      ref,
+      outcome: "pass",
+      durationMs,
+      ...(typeof own === "number" && Number.isFinite(own) && own >= 0
+        ? { measuredDurationMs: own }
+        : {}),
+      ...(coverage !== undefined ? { coverage } : {}),
+    };
   }
   const outcome: TestOutcome =
     t.status === "fail"
