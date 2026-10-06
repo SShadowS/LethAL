@@ -252,7 +252,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R459: flip-boolean-literal's operatorVersion 1.1.0 is the only change (was b1d589cd...5e21).
       // R474: every entry gains `memberHash`, the only change (was 105d129b...b83f).
       // R477: validate-to-assign's operatorVersion 1.2.0 is the only change (was db5aef54...b4e7).
-      "59942c7a8a1595d023fda9ab2366bef4410e17c5503d2e7fb23d1d1194b14e81",
+      // R276: `gapId` values only, the gap partition unchanged (was 59942c7a...4e81).
+      "c83bdd08f26dcfe93030f9b5b6c354ea05ba5068279866c4f59a2f51dced23eb",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -266,8 +267,10 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // that key removed from the manifest give 4fb14bca...b9e6 again).
     // R477: only the manifest moved it, by validate-to-assign's operatorVersion 1.2.0 (was
     // e166345f...1358, which the same tree at 1.1.0 still gives).
+    // R276: only the manifest moved it, by its `gapId` values (was 3e3a8ec9...f6ae); gap ids are not
+    // in the instrumented AL.
     expect(all.digest("hex")).toBe(
-      "3e3a8ec9826dfaba93be6648c13fa1f2275e7ea517537c3a49146d2b47dcf6ae",
+      "d77b17a3a9eb414d1376632e5dfb2cd51ff2080982e675cfb078b914fac749ea",
     );
   }, 60_000);
 });

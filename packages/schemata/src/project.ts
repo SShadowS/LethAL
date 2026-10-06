@@ -60,15 +60,18 @@ export interface WriteInput {
   readonly identityOrdinals: ReadonlyMap<string, number>;
 }
 
-/** C02-09: a gap's id. Reads the file (separators normalised), the block's offsets and its raw
- *  source text (owner, Q1), so any edit to the block, or a move, gives a new id. */
+/** C02-09: a gap's id. Reads the file (separators normalised), the block's position and its source
+ *  text (owner, Q1), so any edit to the block, or a move, gives a new id. R276: the position is the
+ *  block's LINE span and the text has its line endings normalised, so a CRLF and an LF checkout of
+ *  one commit give one id (byte offsets and raw text differed between them). */
 export function gapIdOf(
   file: string,
-  startIndex: number,
-  endIndex: number,
+  startLine: number,
+  endLine: number,
   blockText: string,
 ): string {
-  const text = `${file.replaceAll("\\", "/")}\n${startIndex}\n${endIndex}\n${blockText}`;
+  const lf = blockText.replaceAll("\r\n", "\n");
+  const text = `${file.replaceAll("\\", "/")}\n${startLine}\n${endLine}\n${lf}`;
   return `G${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
 }
 
@@ -757,8 +760,8 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       if (gap === undefined) {
         const gapId = idOf(
           f.path,
-          block.startIndex,
-          block.endIndex,
+          lineOfIndex(starts, block.startIndex),
+          lineOfIndex(starts, block.endIndex),
           f.source.slice(block.startIndex, block.endIndex),
         );
         const blockKey = `${f.path}\n${inFile}`;
