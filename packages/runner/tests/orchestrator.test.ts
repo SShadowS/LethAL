@@ -3348,6 +3348,13 @@ describe("runSession — parallel workers", () => {
     procedure OverBudgetDetectedTwin()
     begin
     end;
+
+#if LETHAL_R491_NEVER_DEFINED
+    [Test]
+    procedure OverBudgetDetectedGone()
+    begin
+    end;
+#endif
 }
 `);
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
@@ -3358,11 +3365,36 @@ describe("runSession — parallel workers", () => {
       isolation: "full-reset",
       authoritative: false,
     };
+    // R491: one shared event log across every backend, so ORDER is read from call counters, never
+    // from a clock: each backend's seed must come before its own first run().
+    const log: { backend: number; what: "seed" | "run"; method?: string | undefined }[] = [];
     const given: string[][] = [];
+    let made = 0;
     const make = () => {
-      const b = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
+      const id = made++;
+      let current: string | undefined;
+      const b = new StubBackend(
+        caps,
+        (mutant, ref) => {
+          current = ref.method;
+          return mutant === null ? "pass" : "fail";
+        },
+        [],
+        undefined,
+        async () => {
+          log.push({ backend: id, what: "run" });
+        },
+      );
+      const run = b.run.bind(b);
       return Object.assign(b, {
+        run: async (ref: TestMethodRef, opts: RunOpts) => {
+          const v = await run(ref, opts);
+          const last = log.at(-1);
+          if (last !== undefined) last.method = current;
+          return v;
+        },
         useDiscoveredTests: (tests: readonly TestMethodRef[]) => {
+          log.push({ backend: id, what: "seed" });
           given.push(tests.map((t) => t.method).sort());
         },
       });
@@ -3375,11 +3407,20 @@ describe("runSession — parallel workers", () => {
       selectorIds,
       workers: 2,
     });
-    expect(given).toEqual([
-      ["OverBudgetDetected", "OverBudgetDetectedTwin"],
-      ["OverBudgetDetected", "OverBudgetDetectedTwin"],
-      ["OverBudgetDetected", "OverBudgetDetectedTwin"],
-    ]);
+    // The UNFILTERED list: the compiled-out `OverBudgetDetectedGone` is in it, though it never runs.
+    const all = ["OverBudgetDetected", "OverBudgetDetectedGone", "OverBudgetDetectedTwin"];
+    expect(given).toEqual([all, all, all]);
+    const ranMethods = new Set(log.filter((e) => e.what === "run").map((e) => e.method));
+    expect(ranMethods.has("OverBudgetDetected")).toBe(true);
+    expect(ranMethods.has("OverBudgetDetectedGone")).toBe(false);
+    // Every backend (the session's and both workers') is seeded, and before its first run().
+    for (let id = 0; id < made; id++) {
+      const seed = log.findIndex((e) => e.backend === id && e.what === "seed");
+      const firstRun = log.findIndex((e) => e.backend === id && e.what === "run");
+      expect(seed).toBeGreaterThanOrEqual(0);
+      expect(firstRun).toBeGreaterThan(seed);
+    }
+    expect(made).toBe(3);
     store.close();
   });
 
