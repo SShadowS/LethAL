@@ -1,0 +1,268 @@
+[
+  {
+    "key": "1eb419c4cc1f5ca0ab95cd792c1f2c5f01eb2c70ed59518e4985c9415d365d69|Hang Logic|SpinUntil|lethal.conditional-boundary|1",
+    "verdict": "killed",
+    "killingTest": "SpinUntilAtZeroExitsEarly",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "26f31406d5b9e4bd046a67b18ba0545e135a6374244fc1e3f2f3ec469623b984|Hang Logic|CountUpTo|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "CountUpToReachesTheLimit",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2ed52fd8f9a1b861a30af2d2f4866bb0ffe2d2ec37492d01f6c734c560a7babc|Hang Logic|WalkOneRow|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "WalkOneRowVisitsExactlyOneRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3f41048c013d9ddd540d10d62fbf1364a850650ed36af82e0ca66ce504aab21a|Hang Logic|DrainQueue|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "DrainQueueEmptiesTheQueue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Hang Logic|CountUpTo|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "CountUpToReachesTheLimit",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Hang Logic|DrainQueue|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "DrainQueueEmptiesTheQueue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Hang Logic|SpinUntil|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "SpinUntilReachesTheTarget",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Hang Logic|WalkOneRow|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "WalkOneRowVisitsExactlyOneRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Hang Logic|CountUpTo|lethal.shift-integer|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Hang Logic|SpinUntil|lethal.shift-integer|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Hang Logic|WalkOneRow|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "WalkOneRowVisitsExactlyOneRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7977865555164bf1784dad75d231b9434607fadb317e5a41ff5ebb15b40b0ada|Hang Logic|NextRow|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8c55bdb8637a08951045fee707015dc789f78464ec2849c92df3f575da6ac6df|Hang Logic|WalkOneRow|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9223e82ad7544c25083f5b08316d3c99343c1fd6ff40da16b8d09c55a9a1a837|Hang Logic|DrainQueue|lethal.conditional-boundary|1",
+    "verdict": "killed",
+    "killingTest": "DrainQueueEmptiesTheQueue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9223e82ad7544c25083f5b08316d3c99343c1fd6ff40da16b8d09c55a9a1a837|Hang Logic|DrainQueue|lethal.loop-skip|1",
+    "verdict": "killed",
+    "killingTest": "DrainQueueEmptiesTheQueue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "96a63130808135b948b1586ff3955d7a0691ff1d8a86e6c03212ba73831d4f29|Hang Logic|CountUpTo|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "96a63130808135b948b1586ff3955d7a0691ff1d8a86e6c03212ba73831d4f29|Hang Logic|SpinUntil|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "96a63130808135b948b1586ff3955d7a0691ff1d8a86e6c03212ba73831d4f29|Hang Logic|WalkOneRow|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "98a8775656f994e08c0d12b113e167208b0b242ce86ca8fb54e89aaa2fd465f3|Hang Logic|SpinUntil|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "SpinUntilAtZeroExitsEarly",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Hang Logic|DrainQueue|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "DrainQueueEmptiesTheQueue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bc50ff6784a20bc7db4117b111b17eeda2d700d250fb8fc9f147842dbf94b022|Hang Logic|SpinUntil|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "SpinUntilAtZeroExitsEarly",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bfde8a9e5399719cb19619ee057c24eedd9306fcf2d76c657c6b4a4378b24f00|Hang Logic|Advance|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "CountUpToReachesTheLimit",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bfde8a9e5399719cb19619ee057c24eedd9306fcf2d76c657c6b4a4378b24f00|Hang Logic|DrainQueue|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "DrainQueueEmptiesTheQueue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bfde8a9e5399719cb19619ee057c24eedd9306fcf2d76c657c6b4a4378b24f00|Hang Logic|WalkOneRow|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "WalkOneRowVisitsExactlyOneRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bfde8a9e5399719cb19619ee057c24eedd9306fcf2d76c657c6b4a4378b24f00|Hang Logic|WalkOneRow|lethal.shift-integer|1|1",
+    "verdict": "killed",
+    "killingTest": "WalkOneRowVisitsExactlyOneRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e9f91c35c1b932a144eef35ddf654188bbda19ad193a332ef3d464fd19e98317|Hang Logic|CountUpTo|lethal.void-method-call|1",
+    "verdict": "timeout-killed",
+    "killingTest": "CountUpToReachesTheLimit",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e9f91c35c1b932a144eef35ddf654188bbda19ad193a332ef3d464fd19e98317|Hang Logic|SpinUntil|lethal.void-method-call|1",
+    "verdict": "timeout-killed",
+    "killingTest": "SpinUntilReachesTheTarget",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f1a0f3f3cc6276dcf3e5bb66806a0f257d3eb62f85a03931ea3075fafafabcb5|Hang Logic|Advance|lethal.remove-assignment|1",
+    "verdict": "timeout-killed",
+    "killingTest": "CountUpToReachesTheLimit",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f1a0f3f3cc6276dcf3e5bb66806a0f257d3eb62f85a03931ea3075fafafabcb5|Hang Logic|DrainQueue|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "DrainQueueEmptiesTheQueue",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f1a0f3f3cc6276dcf3e5bb66806a0f257d3eb62f85a03931ea3075fafafabcb5|Hang Logic|WalkOneRow|lethal.remove-assignment|1",
+    "verdict": "timeout-killed",
+    "killingTest": "WalkOneRowVisitsExactlyOneRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f2ef8c3d21164eca36f322fe3316bd81133a5d3e5342e4fee6395ac3c7620389|Hang Logic|WalkOneRow|lethal.loop-truncate|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f6405ce7854b88ccbfc7a826e6b3d28f508a3ca84553097002ae69621cdff31e|Hang Logic|CountUpTo|lethal.conditional-boundary|1",
+    "verdict": "killed",
+    "killingTest": "CountUpToReachesTheLimit",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f6405ce7854b88ccbfc7a826e6b3d28f508a3ca84553097002ae69621cdff31e|Hang Logic|CountUpTo|lethal.loop-truncate|1",
+    "verdict": "killed",
+    "killingTest": "CountUpToReachesTheLimit",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f6405ce7854b88ccbfc7a826e6b3d28f508a3ca84553097002ae69621cdff31e|Hang Logic|NextRow|lethal.conditional-boundary|1",
+    "verdict": "killed",
+    "killingTest": "WalkOneRowVisitsExactlyOneRow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f6405ce7854b88ccbfc7a826e6b3d28f508a3ca84553097002ae69621cdff31e|Hang Logic|SpinUntil|lethal.conditional-boundary|1",
+    "verdict": "killed",
+    "killingTest": "SpinUntilReachesTheTarget",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f6405ce7854b88ccbfc7a826e6b3d28f508a3ca84553097002ae69621cdff31e|Hang Logic|SpinUntil|lethal.loop-truncate|1",
+    "verdict": "killed",
+    "killingTest": "SpinUntilReachesTheTarget",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f6cd7d3c984261081971434cc25de95288e6ad3949ba501b001fbaaefabbf49a|Hang Logic|NextRow|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ff378e40ff61575c2f65429649a93f17b7ba76457109be5fc557910f2107348f|Hang Logic|Advance|lethal.empty-block|1",
+    "verdict": "timeout-killed",
+    "killingTest": "CountUpToReachesTheLimit",
+    "coverageFiltered": false,
+    "errorClass": null
+  }
+]
