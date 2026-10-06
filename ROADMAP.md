@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**82 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**81 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -158,7 +158,7 @@ that ordering is the priority.
 - **R390** · R-371's reachable-set walk misses a test-app codeunit whose id the test reads from the platform (an AllObj loop); one item for shapes found after the build · [R390.md](docs/roadmap/R390.md) · open, filed 2026-10-01
 - **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · done (baaf290b)
 - **R402** · The hang tag misses a loop-condition operand that sits inside an ACTIVE #if · [R402.md](docs/roadmap/R402.md) · done (65e5cad2)
-- **R403** · Test-app readers (testpage-scan, discovery, test-digest) read every #if arm: the test app's own build symbols are not modelled · [R403.md](docs/roadmap/R403.md) · open, filed 2026-10-02
+- **R403** · Test-app readers (testpage-scan, discovery, test-digest) read every #if arm: the test app's own build symbols are not modelled · [R403.md](docs/roadmap/R403.md) · closed 2026-10-06 — discovery fixed by R-403 (phases A-C); testpage-scan and test-digest measured to err only…
 - **R404** · line-map member spans: two whole-member #if arms that declare the same name in one object are both spanned · [R404.md](docs/roadmap/R404.md) · closed 2026-10-02: measured on al-runner and bcdev, all 36 pre-committed verdicts matched; same-name…
 - **R417** · A quarantine store path that exists but is not a directory read as 'no record', so clear() said 'cleared' and the quarantine check reported clean · [R417.md](docs/roadmap/R417.md) · done (eca61946)
 - **R418** · maskAlNonCode indexes a code-point array by UTF-16 offsets, so a non-BMP character (emoji) before a comment or string shifts the blanking and can erase an object header · [R418.md](docs/roadmap/R418.md) · done (cd6e14e2)
