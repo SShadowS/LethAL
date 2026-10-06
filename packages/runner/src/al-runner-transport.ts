@@ -34,6 +34,16 @@ export interface AlRunnerRequest {
    * Absent means the flag is not sent at all, which is the pre-R220 argv byte for byte.
    */
   readonly coverageOut?: string;
+  /**
+   * R488 — whole qualified test names sent as `--exclude-test`, one each.
+   *
+   * `--test` is a case-insensitive SUBSTRING match, so `Codeunit78950.GrowPre` also selects
+   * `Codeunit78950.GrowPreTwin`. al-runner has no exact `--test` (measured on c39ad5de: no anchor,
+   * quote, regex or `--test-exact`), but its `--exclude-test` matches a WHOLE name only, so `--test X`
+   * plus one exclude per sibling selects exactly X. Never put `qualifiedTest` itself here: al-runner
+   * then exits 0 with an EMPTY test list instead of its exit 6 (measured).
+   */
+  readonly excludeTests?: readonly string[];
 }
 
 export interface AlRunnerRawTest {
@@ -530,6 +540,7 @@ export function buildAlRunnerArgv(
     | "preprocessorSymbols"
     | "platformAppsDir"
     | "coverageOut"
+    | "excludeTests"
   >,
 ): string[] {
   // R147 — the pin and `--auto-provision` are MUTUALLY EXCLUSIVE, and this is the one place that is
@@ -552,6 +563,8 @@ export function buildAlRunnerArgv(
     "test",
     "--test",
     req.qualifiedTest,
+    // R488: see `AlRunnerRequest.excludeTests`. Absent means today's argv byte for byte.
+    ...(req.excludeTests ?? []).flatMap((n) => ["--exclude-test", n]),
     // R125 (measured 2026-08-07 on al-runner 2.1.0.0): with no BC version given, the runner selects
     // the build it was COMPILED against — 28.1.49838.50794 for 2.1.0.0 — and refuses, because a
     // project's `.alpackages` hold SYMBOL-only Microsoft apps and the runtime (R2R) apps for that
