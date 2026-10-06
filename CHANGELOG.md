@@ -13,6 +13,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`lethal explain --project <dir>` shows each gap's source with its survivors marked** (R274).
+  Every gap gains `source`: the block's lines and one mark per survivor (start and end line and
+  column), as structured data. The report gains `sourceSha256`, the hash of the source generation
+  parsed; explain recomputes it over `<dir>` and refuses by name, with nothing on stdout, on any
+  difference or on a report from before this release. No source goes into the report. The output
+  with `--project` holds target source. Explain schema stays 13 (an optional additive field).
+
 - **A `reportextension` is mutated; identity scheme 17** (R254). Until now such a file was skipped
   as a non-carrier kind. BC reports a report extension's coverage as object type 22 under the
   extension's own id (measured on BC 28), and al-runner as its own Cobertura class, so both are

@@ -80,6 +80,7 @@ import type {
 } from "./backend";
 import { stopIsRetrySafe } from "./backend";
 import {
+  decodeSource,
   hashAlTree,
   hashPackage,
   hashSourceSnapshot,
@@ -878,11 +879,10 @@ export async function generateMutationSet(
       if (snapshot !== undefined && bytes === undefined) {
         throw new Error(`generateMutationSet: ${raw} is not in the source snapshot`);
       }
-      // Buffer's decode, as `readFile(..., "utf8")` does: a BOM is kept, not stripped.
+      // Buffer's decode, as `readFile(..., "utf8")` does: a BOM is kept, not stripped. The same
+      // `decodeSource` `lethal explain --project` renders with (R274).
       const source =
-        bytes !== undefined
-          ? bytes.toString("utf8")
-          : await readFile(join(projectDir, raw), "utf8");
+        bytes !== undefined ? decodeSource(bytes) : await readFile(join(projectDir, raw), "utf8");
       return { path: rel, source, root: wrapRoot(parseAL(source)) };
     }),
   );
@@ -5290,6 +5290,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       : {}),
     // R447: present only when non-empty, like `refusedFiles`.
     ...(hangRefused.length > 0 ? { hangRefusedFiles: hangRefused } : {}),
+    // R274: the source the report's positions refer to, for `lethal explain --project`. The
+    // GENERATION hash, not `runs.generation_source_sha256`, which is withheld when the source
+    // changed mid-run: the positions still refer to the bytes generation parsed.
+    sourceSha256: sourceHashAtGeneration,
     // R443: the run's numbering facts, for equivalence marks and `lethal explain`.
     numberingDigest,
     twinSites: twinTuples,

@@ -693,6 +693,14 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.gaps[].artifactId", // [verbatim] artifacts[].artifactId whose batchIndex equals the gap's
   "$.gaps[].artifactIdAbsent", // [enum] ArtifactIdAbsence
   "$.gaps[].verifyCommand", // [derived] R275: gapVerifyCommand(artifactId, gapId)
+  // R274, only under `--project`: read from the project after it hashed to report.sourceSha256.
+  "$.gaps[].source.startLine", // [verbatim] the gap's blockStartLine
+  "$.gaps[].source.lines[]", // [source] the block's lines from the verified project
+  "$.gaps[].source.marks[].mutantCode", // [verbatim] the member's mutantCode
+  "$.gaps[].source.marks[].startLine", // [derived] the row's startIndex in the verified file
+  "$.gaps[].source.marks[].startColumn", // [derived]
+  "$.gaps[].source.marks[].endLine", // [derived] the row's endIndex in the verified file
+  "$.gaps[].source.marks[].endColumn", // [derived]
   "$.noCoverageBlocks[].batchIndex", // [verbatim] (C02-09)
   "$.noCoverageBlocks[].file", // [verbatim]
   "$.noCoverageBlocks[].blockStartLine", // [verbatim]
@@ -870,9 +878,18 @@ describe("explain — the admissibility rule, made executable", () => {
     // quarantined, so that ONE leaf is the only pinned path the original fixture may miss. Every
     // other path must still come from the original fixture alone; the next test reaches the
     // conditional leaf.
+    // R274: `gaps[].source` exists only under `--project`, which needs a real project on disk;
+    // r274-explain-project.test.ts reaches exactly these paths from a real run.
     const produced = new Set(leafPathsIn(explain(fullCoverageReport())));
     expect(EXPLAIN_LEAF_PATHS.filter((p) => !produced.has(p))).toEqual([
       "$.gaps[].unobservedBlock",
+      "$.gaps[].source.startLine",
+      "$.gaps[].source.lines[]",
+      "$.gaps[].source.marks[].mutantCode",
+      "$.gaps[].source.marks[].startLine",
+      "$.gaps[].source.marks[].startColumn",
+      "$.gaps[].source.marks[].endLine",
+      "$.gaps[].source.marks[].endColumn",
     ]);
   });
 

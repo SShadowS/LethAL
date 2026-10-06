@@ -1052,6 +1052,9 @@
     "identityScheme": {
       "type": "number"
     },
+    "sourceSha256": {
+      "type": "string"
+    },
     "numberingDigest": {
       "type": "string"
     },
