@@ -487,10 +487,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **al-runner one-shot: a result naming any other test is never credited to the requested one**
   (R488). al-runner's `--test` is a case-insensitive substring match, so asking for `GrowPre` also
   ran `GrowPreTwin`, and LethAL credited both tests' coverage, and their shared deadline, to
-  `GrowPre`. al-runner has no exact `--test`, but `--exclude-test` matches a whole name. The backend
-  now discards such a result, re-runs the test with one `--exclude-test` per sibling it saw, and
-  sends those excludes on every later call; a result that still names another test is refused by
-  name. A test whose name is no part of another's runs exactly as before. `--server` was not
+  `GrowPre`. al-runner has no exact `--test`, but `--exclude-test` matches a whole name. Every
+  discovered test whose name contains the requested one is now excluded from the first call on, on
+  the session backend and on every worker. As a defence, a result that still names another test is
+  discarded, the test re-runs with that name excluded too, and a result that names one even then is
+  refused by name. A test whose name is no part of another's runs exactly as before. `--server` was not
   affected.
 
 - **A lost answer after a stop is never retried into a survivor; the single path refuses a stop

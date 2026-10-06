@@ -1273,6 +1273,32 @@ describe("AlRunnerBackend one-shot: a result naming any other test is never cred
     expect(r.calls[2]).toContain(TWIN);
   });
 
+  test("with the discovered list, even the FIRST call excludes the look-alike and runs once", async () => {
+    const r = substringRunner(true);
+    const { backend } = await makeBackend(r.spawn);
+    backend.useDiscoveredTests([
+      ref,
+      { ...ref, method: `${ref.method}Twin` },
+      { ...ref, method: "Unrelated" },
+    ]);
+    expect((await backend.run(ref, opts)).outcome).toBe("pass");
+    expect(r.calls.length).toBe(1);
+    const first = r.calls[0] ?? [];
+    expect(first.filter((a) => a === "--exclude-test").length).toBe(1);
+    expect(first[first.indexOf("--exclude-test") + 1]).toBe(TWIN);
+  });
+
+  test("a discovered name equal to the requested one IGNORING CASE is never excluded", async () => {
+    // Excluding it would empty the run: al-runner then exits 0 with no tests (measured).
+    const { calls, spawn } = okSpawn({
+      tests: [{ name: QUALIFIED, status: "pass", durationMs: 1 }],
+    });
+    const { backend } = await makeBackend(spawn);
+    backend.useDiscoveredTests([ref, { ...ref, method: ref.method.toLowerCase() }]);
+    expect((await backend.run(ref, opts)).outcome).toBe("pass");
+    expect(calls[0]).not.toContain("--exclude-test");
+  });
+
   test("a result that still names another test after its excludes is refused by name", async () => {
     const r = substringRunner(false);
     const { backend } = await makeBackend(r.spawn);

@@ -367,6 +367,29 @@ export class AlRunnerBackend implements ExecutionBackend {
    * names come from the test project, which no mutant changes.
    */
   private readonly oneShotSiblings = new Map<string, readonly string[]>();
+  /** R488 — the session's discovered test names, see `useDiscoveredTests`. */
+  private discoveredTests: readonly string[] = [];
+
+  /**
+   * R488 — seeds each requested test's excludes from the discovered list, so even the FIRST
+   * one-shot call never runs a look-alike: every name that contains the requested one, ignoring
+   * case as al-runner does, except a name equal to it ignoring case (excluding that would empty the
+   * run, and al-runner then exits 0 with no tests). The learn-and-refuse path in `run()` stays as
+   * the defence for a test discovery did not see.
+   */
+  useDiscoveredTests(tests: readonly TestMethodRef[]): void {
+    this.discoveredTests = tests.map((t) => qualifiedTestName(t.codeunitId, t.method));
+  }
+
+  private siblingsOf(wanted: string): readonly string[] {
+    const w = wanted.toLowerCase();
+    const seeded = this.discoveredTests.filter((n) => {
+      const l = n.toLowerCase();
+      return l !== w && l.includes(w);
+    });
+    const learned = this.oneShotSiblings.get(wanted) ?? [];
+    return [...seeded, ...learned.filter((n) => !seeded.includes(n))];
+  }
 
   constructor(
     private readonly cfg: AlRunnerConfig,
@@ -1010,14 +1033,13 @@ export class AlRunnerBackend implements ExecutionBackend {
     // Each sibling is learned once, by name, and excluded from then on (`--exclude-test` matches a
     // whole name only), so the requested test re-runs alone. A result that still lists another
     // test after that is refused by name.
-    // ponytail: the FIRST call for a test runs its siblings with it; if that call hits the
-    // deadline it reads `deadline-exceeded` as before R488. Feed the backend the discovered test
-    // list to exclude up front if that ever bites.
+    // Siblings in the discovered list (`useDiscoveredTests`) are excluded from the first call on;
+    // this loop is the defence for one discovery did not see.
     for (;;) {
       if (sent.res.kind !== "tests") break;
       const extras = sent.res.tests.map((x) => x.name).filter((n) => n !== wanted);
       if (extras.length === 0) break;
-      const known = this.oneShotSiblings.get(wanted) ?? [];
+      const known = this.siblingsOf(wanted);
       const fresh = extras.filter(
         (n) => !known.includes(n) && n.toLowerCase() !== wanted.toLowerCase(),
       );
@@ -1030,7 +1052,7 @@ export class AlRunnerBackend implements ExecutionBackend {
           operation: "pre-dispatch-rejected",
         };
       }
-      this.oneShotSiblings.set(wanted, [...known, ...fresh]);
+      this.oneShotSiblings.set(wanted, [...(this.oneShotSiblings.get(wanted) ?? []), ...fresh]);
       started = Date.now();
       sent = await this.sendOneShot(wanted, opts);
     }
@@ -1061,14 +1083,15 @@ export class AlRunnerBackend implements ExecutionBackend {
     return this.oneShotVerdict(ref, wanted, t, durationMs, coverageOut);
   }
 
-  /** One one-shot invocation for `wanted`, excluding every sibling R488 has learned for it. */
+  /** One one-shot invocation for `wanted`, excluding every sibling R488 knows for it. */
   private async sendOneShot(wanted: string, opts: RunOpts) {
     // R220. A file PER INVOCATION, never a shared path: al-runner writes the whole Cobertura
     // document on exit, so two invocations sharing one path would race and a test could be handed
     // another test's coverage — a wrong covering-test set, which is a wrong verdict rather than a
     // slow one.
     const coverageOut = await this.coverageOutPath();
-    const excludeTests = this.oneShotSiblings.get(wanted);
+    const siblings = this.siblingsOf(wanted);
+    const excludeTests = siblings.length > 0 ? siblings : undefined;
     const res = await this.transport.send({
       sourceDir: this.activeDir(),
       testDir: this.cfg.testDir,
