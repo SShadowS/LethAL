@@ -179,6 +179,9 @@ export type RunEventInput =
       /** R447: files where R196's hang check refused sites. Present only when non-empty, so a
        *  stream from before R447 stays valid and folds to the same report bytes. */
       readonly hangRefusedFiles?: readonly HangRefusedFile[];
+      /** R274: `hashSourceSnapshot` over the snapshot generation parsed. Optional on the wire so
+       *  an older stream still folds; the producer always writes it. */
+      readonly sourceSha256?: string;
       /** R443: `numberingDigestOf` over this run's numbered entries. Optional on the wire so a
        *  stream from before R443 still folds; the producer always writes it, with the next two. */
       readonly numberingDigest?: string;

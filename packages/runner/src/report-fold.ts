@@ -182,6 +182,8 @@ export interface FoldedReport {
   readonly groupedCalls: number;
   /** R443: absent for a stream written before R443. */
   readonly numbering?: FoldedNumbering;
+  /** R274 — see `SessionReport.sourceSha256`. Absent for an older stream. */
+  readonly sourceSha256?: string;
   /** R206 — see `SessionReport.warmKills`. */
   readonly warmKills: number;
   /** R175 — see `SessionReport.unplaceableCount`. */
@@ -255,6 +257,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let excludedByOperator = 0;
   let excludedByLines = 0;
   let numbering: FoldedNumbering | undefined;
+  let sourceSha256: string | undefined;
 
   // AND across every baseline verdict across every `baseline-batch-finished` event — mirrors
   // `orchestrator.ts`'s `baselineGreenOverall`, which starts true and is never reset once false.
@@ -347,6 +350,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         excludedByExclude = e.excludedByExclude;
         excludedByOperator = e.excludedByOperator;
         excludedByLines = e.excludedByLines ?? 0;
+        sourceSha256 = e.sourceSha256;
         {
           // R443: written together by the producer, so a stream with only some is corrupt.
           const { numberingDigest, twinSites, carryHidden } = e;
@@ -724,6 +728,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),
     ...(alRunnerPlatformAppsDir !== undefined ? { alRunnerPlatformAppsDir } : {}),
     ...(numbering !== undefined ? { numbering } : {}),
+    ...(sourceSha256 !== undefined ? { sourceSha256 } : {}),
   };
 }
 

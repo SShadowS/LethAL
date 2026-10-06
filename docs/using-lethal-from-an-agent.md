@@ -140,7 +140,7 @@ has the complete set.
 
 | flag | read by |
 |---|---|
-| `--project` | `run`, `init`, `clear-ceiling`, `force-reset-lease`, `doctor`, `export`, `campaign` |
+| `--project` | `run`, `init`, `clear-ceiling`, `force-reset-lease`, `doctor`, `explain`, `export`, `campaign` |
 | `--tests` | `run`, `doctor`, `verify` |
 | `--config` | `run`, `clear-ceiling`, `force-reset-lease`, `doctor`, `verify` |
 | `--db` | `run`, `clear-ceiling`, `verify` |
@@ -347,6 +347,25 @@ Each gap has
 exactly one of `artifactId` (the artifact to verify it against) and `artifactIdAbsent` (why there
 is none, with the same values as on a survivor row; a gap is `carried` when any of its members is).
 `--top` never shortens `gaps`: every gap is listed, even one none of whose survivors is shown.
+
+`--project <dir>` adds each gap's source (R274):
+
+```
+lethal explain report.json --project <dir>
+```
+
+Each `gaps` row can also carry `source`. Given `--project`, it holds `startLine` (the gap's `blockStartLine`),
+`lines` (the block's lines, split on LF, with one trailing CR dropped per line) and `marks`, one per
+member in `members` order, each `{ mutantCode, startLine, startColumn, endLine, endColumn }`. Lines and
+columns start at 1; a column counts UTF-16 code units (a tab is one), and the end is exclusive, so a
+site can span lines. Explain first hashes `<dir>` the way the run hashed its source (every .al
+file the target build compiles plus app.json, raw bytes, with the config's preprocessor symbols)
+and compares that with the report's sourceSha256. Any difference refuses by name (a
+ProjectSourceRefusedError, reason source-mismatch) with nothing on stdout: a CRLF/LF checkout
+difference, an app.json version bump, a changed preprocessor symbol or an edit to a test project
+nested inside the target all count. A report from before R274 has no sourceSha256 and refuses with
+reason no-source-hash. The output then holds TARGET SOURCE: do not publish it for a third party's
+code.
 
 `noCoverageBlocks` lists the no-coverage mutants by block. It is a location list, not a verify
 input: an entry has no gap id and no counts.

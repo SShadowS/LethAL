@@ -1399,6 +1399,13 @@ export interface SessionReport {
    */
   readonly identityScheme?: number;
   /**
+   * R274: sha256 of the source the report's positions refer to: `hashSourceSnapshot` over the
+   * snapshot generation parsed, with the config's `preprocessorSymbols` (baseline-snapshot.ts). A
+   * hash, never source. `lethal explain --project <dir>` recomputes it over `<dir>` and refuses to
+   * render source on any difference. Absent on a report from before R274.
+   */
+  readonly sourceSha256?: string;
+  /**
    * R443: sha256 of this run's identity numbering OUTPUT (`numberingDigestOf`, selection.ts): every
    * numbered site with its ordinal. Two runs with equal digests give every key to the same mutant.
    * An equivalence mark copies it (`lethal explain` prints the mark), and a later run matches the
@@ -2935,6 +2942,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     // `runSession` made this value and asserted generation used the same one.
     buildSymbols: [...statics.buildSymbols],
     identityScheme: IDENTITY_SCHEME,
+    ...(input.sourceSha256 !== undefined ? { sourceSha256: input.sourceSha256 } : {}),
     // R443: the recorded numbering facts a mark's proof is made from (`lethal explain`).
     ...(input.numbering !== undefined
       ? {

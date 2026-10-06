@@ -713,6 +713,8 @@ export interface ExplainCliConfig {
    * what it dropped.
    */
   readonly topSurvivors?: number;
+  /** R274: `--project <dir>`, the target whose source `gaps[].source` renders. */
+  readonly projectDir?: string;
 }
 
 /**
@@ -894,7 +896,7 @@ USAGE
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>] [--tests <dir>] [--json]
-  lethal explain           <report.json> [--top <n>]
+  lethal explain           <report.json> [--top <n>] [--project <dir>]
   lethal export            <report.json> --format mutation-elements --project <dir> --out <path>
                                          [--thresholds <high,low>]
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
@@ -1085,6 +1087,13 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
                              docs/campaign/2026-08-03-do/rung2.report.json (473 mutants, 125
                              survivors) projects to 243 KB, 206 KB of it survivors; --top 15 makes
                              it 30 KB. The uncapped output does not fit an agent's context window
+  --project <dir>            also read the target project at <dir> and give each gap its block's
+                             source lines with every survivor's site marked ('gaps[].source').
+                             <dir> must hash to the report's 'sourceSha256' (every .al file the
+                             target build compiles plus app.json, raw bytes, with the config's
+                             preprocessor symbols); any difference, or a report from before
+                             R274, is REFUSED with nothing on stdout. The output then holds
+                             TARGET SOURCE: do not publish it for a third party's code
 
 CAMPAIGN — the measurement gates, with 'committed before the run' machine-checked
   A measurement campaign states what it expects in a file, COMMITS it, and only then runs. These
@@ -1329,7 +1338,16 @@ export const FLAG_OWNERS: ReadonlyArray<{
 }> = [
   {
     flag: "project",
-    owners: ["run", "init", "clear-ceiling", "force-reset-lease", "doctor", "export", "campaign"],
+    owners: [
+      "run",
+      "init",
+      "clear-ceiling",
+      "force-reset-lease",
+      "doctor",
+      "explain",
+      "export",
+      "campaign",
+    ],
   },
   { flag: "tests", owners: ["run", "doctor", "verify"] },
   { flag: "config", owners: ["run", "clear-ceiling", "force-reset-lease", "doctor", "verify"] },
@@ -1794,6 +1812,11 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     // was wrong. `explain()` refuses the same values again on its own account — this is a second
     // check of the same contract at a different layer, not the only one.
     const top = values.top;
+    const project = values.project;
+    if (project === "") {
+      throw new Error("--project needs the target project directory the report's run measured.");
+    }
+    const projectOpt = project !== undefined ? { projectDir: project } : {};
     if (top !== undefined) {
       const n = Number(top);
       if (!Number.isInteger(n) || n < 1) {
@@ -1801,9 +1824,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
           `--top must be a positive integer (the maximum number of survivors to keep), got ${JSON.stringify(top)}. Omit it to get every survivor.`,
         );
       }
-      return { mode: "explain", reportPath, topSurvivors: n };
+      return { mode: "explain", reportPath, topSurvivors: n, ...projectOpt };
     }
-    return { mode: "explain", reportPath };
+    return { mode: "explain", reportPath, ...projectOpt };
   }
 
   if (subcommand === "campaign") {
@@ -5256,7 +5279,14 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
       `explain: ${parsed.reportPath} is not valid JSON — ${err instanceof Error ? err.message : String(err)}.`,
     );
   }
-  const options = parsed.topSurvivors !== undefined ? { topSurvivors: parsed.topSurvivors } : {};
+  // R274: read once; `explain` hashes and renders this same map. An unreadable project throws
+  // `SourceSnapshotUnreadableError` before anything is printed.
+  const options = {
+    ...(parsed.topSurvivors !== undefined ? { topSurvivors: parsed.topSurvivors } : {}),
+    ...(parsed.projectDir !== undefined
+      ? { projectSource: await readTargetSource(parsed.projectDir) }
+      : {}),
+  };
   const out = explain(assertExplainableReport(parsedJson), options);
   console.log(JSON.stringify(out, null, 2));
   // R265: the mark keys for a human, on STDERR so stdout stays one JSON document. Each key sits

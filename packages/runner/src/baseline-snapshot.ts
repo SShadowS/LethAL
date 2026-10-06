@@ -172,6 +172,15 @@ export function hashSourceSnapshot(
   return h.digest("hex");
 }
 
+/**
+ * R274: the ONE decode of a snapshot file to the text generation parses and `lethal explain
+ * --project` renders. Buffer's decode keeps a UTF-8 BOM (`TextDecoder` and `Bun.file().text()`
+ * strip it), so every offset a report records lines up with this text.
+ */
+export function decodeSource(bytes: Buffer): string {
+  return bytes.toString("utf8");
+}
+
 /** SHA-256 of a published package's bytes, the test app as the SERVER holds it. */
 export function hashPackage(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");

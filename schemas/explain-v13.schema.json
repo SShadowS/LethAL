@@ -411,6 +411,40 @@
           "verifyCommand": {
             "type": "string",
             "description": "R275: the lethal verify line for this gap, its artifact and gap ids filled in and <project> and <tests-dir> left to fill in (the report records neither). Present exactly when artifactId is. An optional additive field: no version bump."
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["startLine", "lines", "marks"],
+            "description": "R274: the gap block's source, read by lethal explain --project <dir> after <dir> hashed to the report's sourceSha256. Present exactly when --project was given. It holds TARGET SOURCE: do not publish it for a third party's code. An optional additive field: no version bump.",
+            "properties": {
+              "startLine": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "The file line lines[0] is: the gap's blockStartLine."
+              },
+              "lines": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Lines blockStartLine..blockEndLine, split on \\n with one trailing \\r dropped per line."
+              },
+              "marks": {
+                "type": "array",
+                "description": "One per member, in members order. 1-based lines, 1-based UTF-16 columns (a tab is one), end exclusive; a site can span lines.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["mutantCode", "startLine", "startColumn", "endLine", "endColumn"],
+                  "properties": {
+                    "mutantCode": { "type": "string" },
+                    "startLine": { "type": "integer", "minimum": 1 },
+                    "startColumn": { "type": "integer", "minimum": 1 },
+                    "endLine": { "type": "integer", "minimum": 1 },
+                    "endColumn": { "type": "integer", "minimum": 1 }
+                  }
+                }
+              }
+            }
           }
         }
       }
