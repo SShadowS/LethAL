@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**82 of 480 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**83 of 481 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -197,6 +197,7 @@ that ordering is the priority.
 - **R476** · `insertSkipCanRaise` misses an `OnInsert` that assigns the primary key through a procedure, so `Insert(true)` -> `Insert(false)` loses its duplicate-key tag (4 rows R464 newly untags, plus master's resolved receivers) · [R476.md](docs/roadmap/R476.md) · done (93de8f77)
 - **R480** · Loop shapes R446's body-exit-guard hang refusal does not see: measure each, then refuse or rule · [R480.md](docs/roadmap/R480.md) · open
 - **R481** · Covering tests are ordered by the host's collation on a name tie, and a warm prefix can hide a cold kill, so a verdict can differ between hosts · [R481.md](docs/roadmap/R481.md) · done (466bba2a)
+- **R484** · The hang refusal does not see report data-item loops: an open-ended `Integer` data item ended only by a `Continue` flag can be mutated to repeat forever · [R484.md](docs/roadmap/R484.md) · open, filed 2026-10-06
 
 ## Product gaps a real project hits
 
