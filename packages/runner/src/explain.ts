@@ -209,8 +209,11 @@ import type { MutantVerdict } from "./store";
  * 12: R443 added `survivors[].mark`, the whole mark a reader pastes into `lethal.equivalent.json`.
  * Additive, but `survivors[].markKey` CHANGED MEANING: a mark holding the key alone is now refused
  * (`no-proof`), so the key is no longer a usable mark by itself. A changed meaning bumps.
+ *
+ * 13: R-204b added the cause value `stop-outcome-unconfirmed` to `$.notMeasured[].cause`. A new
+ * value, so it bumps (R233); v12 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 12;
+export const EXPLAIN_SCHEMA_VERSION = 13;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

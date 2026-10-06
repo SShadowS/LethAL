@@ -697,8 +697,14 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
    */
   function heldFetch(): { fetchFn: typeof fetch; answer: (r: Response) => void } {
     let resolveWith: ((r: Response) => void) | undefined;
-    const fetchFn = ((_url: unknown, init?: RequestInit) =>
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
       new Promise<Response>((resolve, reject) => {
+        // Only RunMutant is held. R-204b's status read after a stop 408 (and R236b's readback)
+        // find no server here: unavailable evidence, which keeps today's answers.
+        if (!String(url).includes("_RunMutant?")) {
+          reject(new Error(`no ${String(url)} in this test`));
+          return;
+        }
         resolveWith = resolve;
         init?.signal?.addEventListener(
           "abort",
@@ -718,6 +724,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
       onBudgetExceeded: async () => {
         stopCalls += 1;
         answer(new Response(AL_STOP_BODY, { status: 408 }));
+        return { stopped: true };
       },
     });
     expect(stopCalls).toBe(1);
@@ -743,6 +750,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
             { status: 408 },
           ),
         );
+        return { stopped: true };
       },
     });
     expect(v.outcome).not.toBe("timeout");
@@ -756,6 +764,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
       timeoutMs: 20,
       onBudgetExceeded: async () => {
         answer(new Response("<html>Gateway Timeout</html>", { status: 408 }));
+        return { stopped: true };
       },
     });
     expect(v.outcome).not.toBe("timeout");
@@ -792,6 +801,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
         // answer arrives too late to be seen.
         await new Promise((r) => setTimeout(r, 20));
         answer(new Response(AL_STOP_BODY, { status: 408 }));
+        return { stopped: true };
       },
     });
     expect(v.outcome).toBe("timeout");
@@ -828,6 +838,7 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
       timeoutMs: 20,
       onBudgetExceeded: async () => {
         answer(new Response(JSON.stringify({ value: JSON.stringify(echo()) }), { status: 200 }));
+        return { stopped: false, reason: "already-completed" };
       },
     });
     // The echoed result is scored, NOT a manufactured timeout — scoring `timeout` here would be a
@@ -916,6 +927,7 @@ describe("RunMutantTransport.run — the budget covers the BODY phase too (R191)
       stopGraceMs: 30,
       onBudgetExceeded: async () => {
         stopCalls += 1;
+        return { stopped: true };
       },
     });
     expect(stopCalls).toBe(1);

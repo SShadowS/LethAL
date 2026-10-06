@@ -353,6 +353,7 @@ function assertNoNewCauses(report: SessionReport, leg: string): void {
     "warm-prefix-unstable",
     "warm-timeout-unconfirmed",
     "warm-confirmation-incomplete",
+    "stop-outcome-unconfirmed",
     "unstable",
   ] as const) {
     const hit = report.mutants.filter((m) => m.cause === cause);

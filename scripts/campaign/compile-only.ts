@@ -10,7 +10,10 @@
  *   bun scripts/campaign/compile-only.ts --project <dir> \
  *     --selector-id <n> --control-id <n> --table-id <n> \
  *     --alc <path/to/alc.exe> --package-cache <dir> \
- *     --control-symbol <path/to/lethal-control.app>
+ *     --control-symbol <path/to/lethal-control.app> [--config <lethal.config.json>]
+ *
+ * `--config` (default `<project>/lethal.config.json`, as `lethal run`) supplies the
+ * `preprocessorSymbols` a real run builds with, for both enumeration and alc (R379).
  *
  * `--control-symbol` is staged into `--package-cache` here, exactly as
  * `BcDevMcpBackend.stageForCompile` does for a real run — so gate 0 imposes no setup step that a
@@ -31,11 +34,11 @@ import { validateSelectorIdsForProject } from "../../packages/runner/src/cli";
 // script expect.
 import {
   type CompileOnlyArgs,
+  compileOnlyMutationSet,
   parseCompileOnlyArgs,
 } from "../../packages/runner/src/compile-only-args";
 import { injectControlDependency } from "../../packages/runner/src/harness";
 import {
-  generateMutationSet,
   identityOrdinalsOf,
   operatorTiers,
   prepareBatchProject,
@@ -51,8 +54,9 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
   await validateSelectorIdsForProject(args.projectDir, args.selectorIds);
   console.log(`[compile-only] selector ids validated against ${args.projectDir}/app.json`);
 
-  // 2. Generate + instrument, exactly as a real run does.
-  const set = await generateMutationSet(args.projectDir);
+  // 2. Generate + instrument, exactly as a real run does: under the config's preprocessor symbols
+  //    plus app.json's (R379).
+  const { set, configSymbols } = await compileOnlyMutationSet(args);
   const specCount = set.files.reduce((n, f) => n + f.specs.length, 0);
   console.log(
     `[compile-only] ${set.totalFiles} .al file(s), ${set.files.length} instrumentable, ${specCount} raw spec(s)`,
@@ -129,6 +133,8 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
         alcPath: args.alcPath,
         packageCachePath: args.packageCachePath,
         outputDir,
+        // R379: alc builds under the config's symbols too, as a real run's compile does.
+        ...(configSymbols.length > 0 ? { preprocessorSymbols: configSymbols } : {}),
       },
       defaultArtifactIo,
     );

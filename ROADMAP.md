@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**63 of 483 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**61 of 484 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -199,6 +199,7 @@ that ordering is the priority.
 - **R481** · Covering tests are ordered by the host's collation on a name tie, and a warm prefix can hide a cold kill, so a verdict can differ between hosts · [R481.md](docs/roadmap/R481.md) · done (466bba2a)
 - **R484** · The hang refusal does not see report data-item loops: an open-ended `Integer` data item ended only by a `Continue` flag can be mutated to repeat forever · [R484.md](docs/roadmap/R484.md) · done (8cfa6094)
 - **R485** · 301 BaseApp `run-trigger-forced` tags come only from `forceCanRaise`'s text check on unindexed objects: a possible over-tag (safe direction), measure first · [R485.md](docs/roadmap/R485.md) · open, filed 2026-10-06
+- **R486** · An env-tool --resume can carry kills measured under the OUTGOING test app: R247's test-app hash is read before the session publishes the new one (a false-kill path) · [R486.md](docs/roadmap/R486.md) · open, filed 2026-10-06
 - **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · open, filed 2026-10-06
 
 ## Product gaps a real project hits
@@ -453,7 +454,7 @@ that ordering is the priority.
 - **R200** · al-runner 2.10.0.0 prints NO `[provision]` sentence on a warm cache, so R147's platform-app pin had nothing to read and `itest:alrunner` refused on `platformAppsDir` again · [R200.md](docs/roadmap/R200.md) · done (`parseAlRunnerPlatformAppsDir`, basis `selected-artifact`) — 2026-09-02, same day. The pin now falls…
 - **R202** · The held request of a session ended by R53's stop can answer HTTP 400 ("Cannot establish a connection to the SQL Server/Database") instead of the 408 that names the AL StopSession call; the transport then quarantines the tier the stop existed to score · [R202.md](docs/roadmap/R202.md) · open — filed 2026-09-03 from the R198 probe (`scripts/r198-group-runner-probe/`, Cronus283): 1 of 34 stops…
 - **R203** · A successful R53 stop whose session finishes the test before `StopSession` lands makes phase 3 refuse `lease-invalid`, which the client classifies as a GENUINE lease loss and invalidates the batch, with a note that names the wrong cause · [R203.md](docs/roadmap/R203.md) · done (`0451532`, with R198) — 2026-09-03. `TryFinishRun` answers `reason: op-stopped` when the lease tuple…
-- **R204** · R53's stop can land between a test's last statement and phase 3's commit, and the 408 then scores `timeout-killed` for a test that PASSED; the window is inherited by every stop and R198 makes each one smaller but adds one per method · [R204.md](docs/roadmap/R204.md) · open — NARROWED by R198's build (`0451532`, 2026-09-03): after BC's stop 408 the transport reads the op's…
+- **R204** · R53's stop can land between a test's last statement and phase 3's commit, and the 408 then scores `timeout-killed` for a test that PASSED; the window is inherited by every stop and R198 makes each one smaller but adds one per method · [R204.md](docs/roadmap/R204.md) · open — NARROWED at both grains. Grouped: R198's build (`0451532`, 2026-09-03). Single: R-204b Part A…
 - **R206** · A grouped call runs a mutant's covering tests in ONE BC session, so `SingleInstance` state carries from test to test where the per-request path gave every test a cold session: 8 of 741 verdicts moved `survived` to `killed` on Document Output, all cache code, all killed at group position 2 or later · [R206.md](docs/roadmap/R206.md) · done (`59081aa`, control app 1.0.0.18 in `a4ece0b`) — option (A) built after five design revisions and four…
 - **R207** · al-runner's `provision` subcommand is refused by `provisionOnce` for a reason that no longer reproduces: on v2.10.0.0 the run and the subcommand both resolve every artifact at the binary's build, so the toolkit-version gap measured on 2.1.1.0 is not visible on the fixture · [R207.md](docs/roadmap/R207.md) · open — filed 2026-09-03 while sweeping stale al-runner claims at the runner author's prompting; the reason…
 - **R208** · The chunked group path (`--max-methods-per-call`) has no live gate: R198 §7/§8's two forced-chunk campaigns were never implemented, and under R206 a chunked replay is the one place where `chunkPrefix` versus `ordered` is verdict-bearing · [R208.md](docs/roadmap/R208.md) · done (`itest:chunked`, 2026-09-04) — a two-leg differential gate over…
@@ -488,7 +489,7 @@ that ordering is the priority.
 - **R338** · al-runner 2.12.0 prints its `[bc] selected BC <build> (<dir>)` line only under AL_RUNNER_VERBOSE=1, so LethAL records no `bcBuild` and itest:alrunner fails · [R338.md](docs/roadmap/R338.md) · done (01230c5c)
 - **R344** · On a `--server` session, `runSession` still re-probes the al-runner contract under the platform-app pin, an argv no mutant uses · [R344.md](docs/roadmap/R344.md) · open, filed 2026-09-29
 - **R345** · The R149 contract re-probe failed once with al-runner exit 82 (no readable --output-json) while another session was running al-runner probes; cause not measured · [R345.md](docs/roadmap/R345.md) · closed 2026-10-02: the lanes and gates run a pinned source build of upstream main (c39ad5de) that carries the…
-- **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · open
+- **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · done (32b814da)
 - **R348** · Docs state the CURRENT control-app version as a literal, so every bump leaves them stale (CLAUDE.md says 1.0.0.19 while the code requires 1.0.0.20) · [R348.md](docs/roadmap/R348.md) · done (3d756626)
 - **R375** · The full unit suite fails intermittently on Windows: `cli.test.ts`'s scratch cleanup cannot remove a `lethal-run-verify-*` folder (EBUSY), and the R358 guard then fails too · [R375.md](docs/roadmap/R375.md) · open, filed 2026-10-01
 - **R393** · A unit test that times out can still finish later and write its snapshot under the NEXT test's name, so a plain `bun test` rewrites a tracked .snap file with a bogus entry · [R393.md](docs/roadmap/R393.md) · done (427a8e85): verify.ts runs bun test with CI=true and a .snap belt; CLAUDE.md names it as the unit-suite…
@@ -496,11 +497,11 @@ that ordering is the priority.
 - **R377** · al-runner predefines `CLEANSCHEMA1` to `CLEANSCHEMA25` and alc does not, so a `#if not CLEANSCHEMA<n>` arm is still generated and compiled out on al-runner · [R377.md](docs/roadmap/R377.md) · done (0a9ba1d7)
 - **R352** · al-runner 2.12.0 compiles a test against a dependency built under other --define symbols · [R352.md](docs/roadmap/R352.md) · open, filed 2026-09-30
 - **R392** · al-runner's predefined preprocessor symbols are a hard-coded list measured on v2.12.0; nothing checks a newer al-runner's list per session · [R392.md](docs/roadmap/R392.md) · done (27c773b5)
-- **R379** · `scripts/campaign/compile-only.ts` enumerates with no config symbols, so its sites differ from a real run's · [R379.md](docs/roadmap/R379.md) · open, filed 2026-10-01
+- **R379** · `scripts/campaign/compile-only.ts` enumerates with no config symbols, so its sites differ from a real run's · [R379.md](docs/roadmap/R379.md) · done (8e6e7cde)
 - **R356** · The al-runner backend leaves its lethal-alrunner-cov-* Cobertura scratch directory behind when it closes · [R356.md](docs/roadmap/R356.md) · done (0924cd93)
 - **R358** · Something in the unit suite leaks one lethal-alrunner-canary-* temp directory per run, although the canary removes its directory in a finally · [R358.md](docs/roadmap/R358.md) · done (64488c59)
 - **R382** · `scripts/r214-capture.ts` must be updated when R-307 lands: `writeInstrumentedProject` gains a required `identityOrdinals` · [R382.md](docs/roadmap/R382.md) · done (99edf1ef)
-- **R359** · The unit-test preload's fake home (R264) and private temp folder (R358) do not reach child processes · [R359.md](docs/roadmap/R359.md) · open, filed 2026-09-30
+- **R359** · The unit-test preload's fake home (R264) and private temp folder (R358) do not reach child processes · [R359.md](docs/roadmap/R359.md) · done (d2dac025)
 - **R360** · lethal run never removes its temp scratch folder (a full instrumented copy of the project per run), because lethal verify reads the installed batch from it · [R360.md](docs/roadmap/R360.md) · done (6b7b6b56)
 - **R363** · Every batch dir copies the results database, the run's report and its progress file into the build, because prepareBatchProject copies every non-AL file in the project · [R363.md](docs/roadmap/R363.md) · done (fd418949)
 - **R383** · Upstream closed al-runner #3713 (coverage lost after a file's first object) on 2026-09-10, but LethAL still disables coverage for every multi-object file; re-measure on 2.12.0 · [R383.md](docs/roadmap/R383.md) · closed 2026-10-02: ruling (option A), the whole-run multi-object refusal stays. Upstream #3713's object loss…

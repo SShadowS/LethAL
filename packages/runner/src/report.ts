@@ -583,6 +583,8 @@ export type MutantErrorCause =
   | "group-coverage-incomplete"
   | "op-stopped"
   | "stopped-after-completion"
+  // R-204b (R202): a stop was sent, not refused, and the run's answer could not be read.
+  | "stop-outcome-unconfirmed"
   // R206: the session guard and the warm confirmation's own endings.
   | "session-reused"
   | "warm-prefix-unstable"
@@ -728,6 +730,18 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "statement and its result being recorded would otherwise score a passing test as a kill. A " +
       "narrowing, not a proof: a session killed inside that write rolls it back and still scores.",
     basis: "R204",
+  },
+  "stop-outcome-unconfirmed": {
+    meaning:
+      "LethAL sent a stop for this run because it exceeded its budget, and the run's answer could " +
+      "not be read. The stop was not refused, so whether it ended the run or the test finished " +
+      "first is not established, and the run is not retried: a hang need not recur, so a passing " +
+      "retry would prove nothing. No verdict. Re-run with `--resume` (R202).",
+    entailedNegative:
+      "Not `survived`: a retry that passed after a stop that may have ended the run is exactly how " +
+      "a real timeout became a survivor before R-204b. Not `timeout-killed` either: no stop 408 " +
+      "proved the stop ended the run. Not `stranded`: the operation reconciled clean.",
+    basis: "R202",
   },
   "session-reused": {
     meaning:
@@ -3012,7 +3026,8 @@ function summarizeRunnerContexts(
 /**
  * R206: the banner's error breakdown. `counts.unstable` keeps counting `unstable` alone; the four
  * R206 causes are listed beside it when non-zero, so a run full of them does not read
- * `error N [unstable 0]`.
+ * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
+ * when its run's answer was lost.
  */
 function errorBreakdown(r: SessionReport): string {
   const named: MutantErrorCause[] = [
@@ -3020,6 +3035,7 @@ function errorBreakdown(r: SessionReport): string {
     "warm-prefix-unstable",
     "warm-timeout-unconfirmed",
     "warm-confirmation-incomplete",
+    "stop-outcome-unconfirmed",
   ];
   const parts: string[] = [];
   for (const cause of named) {
