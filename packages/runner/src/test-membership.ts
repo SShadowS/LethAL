@@ -121,24 +121,19 @@ export class TestAppDiffersError extends Error {
 }
 
 /**
- * R486: an env-tool session resolved a `--resume` baseline against the test app the server held
- * BEFORE the lease, and the test app read back after its hook published `publishApps` differs from
- * it, or could not be read. Carrying a verdict across that would report kills measured under the
- * outgoing test app as this run's (a false kill), so it refuses before the first baseline.
- * (`--skip-known-survivors` needs no refusal: its history filter runs after the hook and compares
- * the read-back.)
+ * R486, R492: an env-tool session's resume is compared, after its hook published `publishApps`,
+ * with the test app the resumed run PROVED it measured (its recorded hash, with digests). It refuses
+ * unless the test app read back now is proven installed and is that one. Carrying a verdict across a
+ * difference would report kills measured under another test app as this run's (a false kill), so it
+ * refuses before the first baseline. `reason` says which check failed.
  */
 export class TestAppRepublishedError extends Error {
   readonly code = "test-app-republished" as const;
   readonly flag: string;
 
-  constructor(flag: string, before: string | undefined, after: string | undefined) {
+  constructor(flag: string, recorded: string | null, reason: string) {
     super(
-      `${flag}: the baseline was resolved against the test app the server held before the lease (${before ?? "unknown"}), and ${
-        after === undefined
-          ? "the test app could not be read back after the env-tool hook published publishApps"
-          : `the hook then published a different one (${after})`
-      }, so the verdicts it would carry were not measured against the test app that runs. Refusing before the first baseline (R486). Drop the flag to run from scratch.`,
+      `${flag}: the resumed run measured test app ${recorded ?? "unknown"}, and ${reason}, so the verdicts it would carry are not known to have been measured against the test app that runs. Refusing before the first baseline (R486, R492). Drop the flag to run from scratch.`,
     );
     this.name = "TestAppRepublishedError";
     this.flag = flag;

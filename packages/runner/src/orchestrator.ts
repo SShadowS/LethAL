@@ -3697,10 +3697,17 @@ function resolveResume(
   buildSymbols: readonly string[],
   /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
   refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
+  /** R492: an env-tool hook will publish the test app under the lease, so the pre-lease read can
+   *  hold the OUTGOING one: the test app is compared after the hook (`runSession`), not here. */
+  testAppAfterHook = false,
 ):
   | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
   | undefined {
   if (cfg.resume === undefined) return undefined;
+  const sameTestApp = (row: RunRow | null, flag: string): void => {
+    if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash);
+    else if (row === null) throw new Error(`${flag}: the run it found is no longer in this database`);
+  };
 
   let priorRunId: number;
   // R391: the resumed run's generation hash and `twin_tuples`, never its `source_sha256`.
@@ -3760,7 +3767,7 @@ function resolveResume(
     const foundRow = cfg.store.getRun(found);
     // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL) must
     // still never be read as a match.
-    assertSameTestApp(foundRow, "--resume", testAppHash);
+    sameTestApp(foundRow, "--resume");
     assertSameBuildSymbols(foundRow, `--resume: run ${found}`, buildSymbols);
     priorHidden = foundRow?.carryHidden ?? null;
     if (priorHidden === null) {
@@ -3796,7 +3803,7 @@ function resolveResume(
         `--resume-run ${cfg.resume} was measured under ${describeCoverageMode(row.coverageMode)}, but this session measures under coverage mode ${coverageMode}. ${COVERAGE_MODE_WHY} (R354). Drop --resume-run to run from scratch.`,
       );
     }
-    assertSameTestApp(row, `--resume-run ${cfg.resume}`, testAppHash);
+    sameTestApp(row, `--resume-run ${cfg.resume}`);
     // R214: before the fingerprint (which carries the symbols too and would refuse this run
     // anyway, as "scoped differently"). NULL is unknown and matches no build.
     assertSameBuildSymbols(row, `--resume-run ${cfg.resume}`, buildSymbols);
@@ -5119,6 +5126,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     emit,
     buildSymbols,
     testPageRefusedNames,
+    envPublishes !== undefined,
   );
 
   const runId = cfg.store.createRun({
@@ -5129,7 +5137,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     generationSourceSha256: sourceHashAtGeneration,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
-    ...(testAppHash !== undefined ? { testAppHash } : {}),
+    // R492: an env-tool session records its test app only once the read-back after the hook is
+    // proven installed (below), never the pre-lease read, which can hold the OUTGOING one.
+    ...(testAppHash !== undefined && envPublishes === undefined ? { testAppHash } : {}),
     ...(testDigests !== undefined ? { testDigests } : {}),
     ...(testDigestParts !== undefined ? { testDigestParts } : {}),
     projectPath: cfg.projectDir,
@@ -5485,6 +5495,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // may describe the OUTGOING one. Read it back under the lease, with R139's own read; nothing
     // can republish before the tests run. `envPublishes` is defined only when the hook ran.
     let readBack: PublishedTestSources | undefined;
+    let readBackProof: { readonly proven: true } | { readonly why: string } | undefined;
     if (envPublishes !== undefined) {
       const after = await reportPublishedTestApp(
         cfg,
@@ -5494,23 +5505,41 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         armPolicyApplied ? testBuildSymbols : undefined,
       );
       readBack = after.sources;
-      // R486: the row records the test app that ran, or NULL ("unknown"), never the outgoing one.
-      cfg.store.setRunTestAppHash(runId, after.packageHash ?? null);
-      // R486: the history filter runs per batch, after this, so it compares the read-back.
-      // `undefined` matches no finished run, so nothing is skipped (fail closed).
-      historyTestAppHash = after.packageHash;
-      // R486, fail closed: a resume was resolved before the lease against `testAppHash`, the
-      // pre-lease read. Its verdicts stand only if the read-back is defined and equal. First after
+      // R492: the SERVED package is this run's test app only with proof it is the installed one
+      // (`proveReadBack`); a served hash alone once recorded P2 for a run that measured P1.
+      readBackProof = await proveReadBack(cfg, envPublishes, after.sources);
+      const proven = "proven" in readBackProof ? after.packageHash : undefined;
+      // R486/R492: the row records the test app that ran, or NULL ("unknown"), never the outgoing
+      // one and never an unproven one.
+      cfg.store.setRunTestAppHash(runId, proven ?? null);
+      // The history filter runs per batch, after this. `undefined` matches no finished run, so
+      // nothing is skipped (fail closed).
+      historyTestAppHash = proven;
+      // R492, fail closed: the resume was resolved before the lease WITHOUT its test app
+      // (`testAppAfterHook`). Its verdicts stand only if this read-back is proven and equals the
+      // test app the resumed run PROVED it measured: its recorded hash, and digests, which are
+      // written only behind that proof (R373). An older row without them is refused. First after
       // the hook, before and independent of every digest check.
-      if (
-        resolvedResume !== undefined &&
-        (after.packageHash === undefined || after.packageHash !== testAppHash)
-      ) {
-        throw new TestAppRepublishedError(
-          cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
-          testAppHash,
-          after.packageHash,
-        );
+      if (resolvedResume !== undefined) {
+        const prior = cfg.store.getRun(resolvedResume.runId);
+        const recorded = prior?.testAppHash ?? null;
+        const reason =
+          after.packageHash === undefined
+            ? "the test app could not be read back after the env-tool hook published publishApps"
+            : "why" in readBackProof
+              ? `the test app read back now (${after.packageHash}) is not proven to be what runs: ${readBackProof.why}`
+              : recorded === null || cfg.store.testDigests(resolvedResume.runId) === null
+                ? `that run never proved it was the installed test app (no recorded identity, or no digests: a run recorded before R492, or one whose proof failed)`
+                : recorded !== proven
+                  ? `the test app proven to run now is a different one (${proven})`
+                  : undefined;
+        if (reason !== undefined) {
+          throw new TestAppRepublishedError(
+            cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
+            recorded,
+            reason,
+          );
+        }
       }
     }
     // R403 phase B (plan §3(b)): on an env-tool session the test app that RUNS is the
@@ -5522,15 +5551,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     }
     // R373: the env-tool run's digests, from the read-back, recorded only with proof it is what
     // runs; otherwise exactly one `test-digests-unavailable` warning, and the row stays NULL.
-    if (envPublishes !== undefined && readBack !== undefined) {
-      const got = await deferredTestDigests(
-        cfg,
-        envPublishes,
-        readBack,
-        tests,
-        testModel,
-        sourceSnapshot,
-      );
+    if (envPublishes !== undefined && readBack !== undefined && readBackProof !== undefined) {
+      // A proof implies a readable read-back; the second test only narrows the type.
+      const got =
+        "why" in readBackProof
+          ? readBackProof
+          : readBack.kind === "unavailable"
+            ? { why: readBack.why }
+            : await digestsOf(cfg, readBack, tests, testModel, sourceSnapshot);
       if ("why" in got) warnNoTestDigests(emit, got.why);
       else cfg.store.setRunTestDigests(runId, got.digests, got.parts);
     }
@@ -8039,25 +8067,20 @@ interface EnvToolPublishes {
 }
 
 /**
- * R373: an env-tool session's digests, taken after its hook published `publishApps`, from the
- * test app read back then (`sources`), with R-372's own body (`digestsOf`). Recorded only with
- * proof that the read-back is what runs: exactly one INSTALLED row at the served version for the
+ * R373, R492: proof that an env-tool session's test app read back after its hook published
+ * `publishApps` (`sources`) is what runs: exactly one INSTALLED row at the served version for the
  * test app and for every app the hook published (R-385 D2: `dev/packages` serves a version that
  * may be published but not installed), and, when a `publishApps` file is the test app, the
- * read-back's identity, version and `.al` source set equal that file's. Anything else is why there
- * are none.
+ * read-back's identity, version and `.al` source set equal that file's. Anything else is `why`.
+ * The run's test-app identity, its history hash and its digests are recorded only with this proof.
+ * It assumes BC holds one package per app id and version, so the bytes served at the installed
+ * version are the installed bytes.
  */
-async function deferredTestDigests(
+async function proveReadBack(
   cfg: SessionConfig,
   publishes: EnvToolPublishes,
   sources: PublishedTestSources,
-  tests: readonly TestMethodRef[],
-  diskModel: TestAppModel,
-  source: ReadonlyMap<string, Buffer>,
-): Promise<
-  | { readonly digests: Record<string, string>; readonly parts: TestDigestParts }
-  | { readonly why: string }
-> {
+): Promise<{ readonly proven: true } | { readonly why: string }> {
   const AFTER = "after the hook published envTool.publishApps";
   if (sources.kind === "not-published") {
     return { why: `this backend cannot read the published test app back ${AFTER}` };
@@ -8143,7 +8166,7 @@ async function deferredTestDigests(
       };
     }
   }
-  return digestsOf(cfg, sources, tests, diskModel, source);
+  return { proven: true };
 }
 
 /**
