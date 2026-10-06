@@ -219,6 +219,33 @@
         "type": "string"
       }
     },
+    "testMethods": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "number"
+          },
+          "lineAmbiguous": {
+            "const": true
+          },
+          "baselineDurationMs": {
+            "type": "number"
+          }
+        }
+      }
+    },
     "backend": {
       "type": "string"
     },

@@ -1,4 +1,5 @@
-import type { BackendCapabilities } from "./backend";
+import { compareCodeUnits } from "@lethal/schemata";
+import type { BackendCapabilities, TestMethodRef } from "./backend";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import {
@@ -15,6 +16,7 @@ import {
   type ExcludedTestRecord,
   type NotInstrumentedFile,
   type SessionOutcome,
+  type TestMethodRecord,
   mutantRef,
 } from "./report";
 import type { BatchArtifact, CarryHidden } from "./store";
@@ -177,6 +179,8 @@ export interface FoldedReport {
     readonly baselineMs: number;
   };
   readonly baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[];
+  /** R272 — see `SessionReport.testMethods`. Absent without a `tests-discovered` event. */
+  readonly testMethods?: readonly TestMethodRecord[];
   readonly untargetedTriggerCount: number;
   /** R198 — see `SessionReport.groupedCalls`. */
   readonly groupedCalls: number;
@@ -240,6 +244,39 @@ export function applyBatchInvalidations(
   }
 }
 
+/**
+ * R272: one record per qualified name (`Codeunit.method`, the shape `qualifiedTestName` and
+ * `coveringTests` use), sorted by `compareCodeUnits`. Two `#if` arms can declare one name (R403):
+ * then a location is given only where every ref agrees, and `lineAmbiguous` says why it is not.
+ */
+export function testMethodsOf(
+  refs: readonly TestMethodRef[],
+  durations: ReadonlyMap<string, number>,
+): TestMethodRecord[] {
+  const byName = new Map<string, TestMethodRef[]>();
+  for (const r of refs) {
+    const name = `${r.codeunitName}.${r.method}`;
+    byName.set(name, [...(byName.get(name) ?? []), r]);
+  }
+  return [...byName]
+    .sort(([a], [b]) => compareCodeUnits(a, b))
+    .map(([name, same]) => {
+      const files = new Set(same.map((r) => r.file));
+      const places = new Set(same.map((r) => `${r.file ?? ""}\0${r.line ?? ""}`));
+      const [first] = same;
+      const file = files.size === 1 ? first?.file : undefined;
+      const line = places.size === 1 ? first?.line : undefined;
+      const ms = durations.get(name);
+      return {
+        name,
+        ...(file !== undefined ? { file } : {}),
+        ...(line !== undefined ? { line } : {}),
+        ...(places.size > 1 ? { lineAmbiguous: true as const } : {}),
+        ...(ms !== undefined ? { baselineDurationMs: ms } : {}),
+      };
+    });
+}
+
 export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): FoldedReport {
   let sawMutationSetGenerated = false;
   let sawBaselineBatchFinished = false;
@@ -273,6 +310,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let unverifiedTestFiles: readonly string[] = [];
 
   let baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[] = [];
+  // R272: the discovered refs, and each test's smallest measured baseline duration this session.
+  let discoveredTests: readonly TestMethodRef[] | undefined;
+  const baselineDurations = new Map<string, number>();
 
   // How many times this run entered the deploy phase — one per batch loop iteration, emitted
   // unconditionally before that batch's deploy attempt (including a failed one), so it counts
@@ -396,6 +436,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           if (v.classification.includes("tests-testpage-refused")) {
             testPageRefusedTests.add(v.name);
           }
+          if (v.durationMs !== undefined) {
+            const prev = baselineDurations.get(v.name);
+            if (prev === undefined || v.durationMs < prev)
+              baselineDurations.set(v.name, v.durationMs);
+          }
         }
         break;
       case "quarantined":
@@ -415,6 +460,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         if (e.tests.length > 0) baselineGreen = false;
         break;
       case "tests-discovered":
+        discoveredTests = e.tests;
         baselineTests = e.tests.map((t) => ({
           codeunitName: t.codeunitName,
           ...(t.file !== undefined ? { file: t.file } : {}),
@@ -715,6 +761,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       : {}),
     timings: { totalMs, generateMutationSetMs, deployMs, baselineMs },
     baselineTests,
+    ...(discoveredTests !== undefined
+      ? { testMethods: testMethodsOf(discoveredTests, baselineDurations) }
+      : {}),
     untargetedTriggerCount,
     groupedCalls,
     warmKills,

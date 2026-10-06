@@ -4440,10 +4440,14 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       }
     }
   }
+  // R272: the tests whose baseline ran IN THIS SESSION. Only their durations reach the report: a
+  // reused snapshot's (R192) may predate R272, and so be al-runner `--server`'s shared suite time.
+  const ranHere = new Set<TestMethodRef>();
   for (const ref of reused !== undefined ? [] : tests) {
     const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
     if (stop) break;
     baseline.push({ ref, verdict: v });
+    ranHere.add(ref);
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
   // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined
@@ -4528,12 +4532,16 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       if (isTestPageNotRunMessage(b.verdict.failureMessage)) {
         classification.push("tests-testpage-refused");
       }
+      const measured = b.verdict.measuredDurationMs;
       return {
         name: qualifiedTestName(b.ref),
         outcome: b.verdict.outcome,
         classification,
         ...(b.verdict.failureMessage !== undefined
           ? { failureMessage: b.verdict.failureMessage }
+          : {}),
+        ...(ranHere.has(b.ref) && b.verdict.outcome === "pass" && measured !== undefined
+          ? { durationMs: measured }
           : {}),
       };
     }),

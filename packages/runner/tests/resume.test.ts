@@ -1939,6 +1939,53 @@ describe("C02-04 characterization", () => {
     ).toBe(true);
     expect(characterize(trace, store, report)).toMatchSnapshot();
   });
+
+  test("R272: a reused baseline's durations never reach the report's testMethods", async () => {
+    // Batch 1's baseline is reused on resume (R192), and its stored verdicts carry the first run's
+    // 111 ms. The resumed run measures 222 ms wherever it runs a baseline itself. The report keeps
+    // the SMALLEST measurement per test, so a reused 111 would win wherever it leaked through.
+    const dirs = await makeProject({ secondFile: true });
+    await Bun.write(
+      join(dirs.testDir, "app.json"),
+      JSON.stringify({ name: "Sandbox Tests", publisher: "LethAL", version: "1.0.0.0" }),
+    );
+    const noPackage = { fetchPublishedAppPackage: async () => undefined };
+    const measuring = <B extends CountingBackend>(b: B, ms: number): B => {
+      const run = b.run.bind(b);
+      b.run = async (ref, opts) => {
+        const v = await run(ref, opts);
+        return v.outcome === "pass" ? { ...v, measuredDurationMs: ms } : v;
+      };
+      return b;
+    };
+    const store = new ResultsStore(":memory:");
+    const firstReport = await runSession({
+      backend: Object.assign(measuring(new CountingBackend("pass", undefined, 2), 111), noPackage),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    const firstDurations = (firstReport.testMethods ?? []).map((t) => t.baselineDurationMs);
+    expect(firstDurations.length).toBeGreaterThan(0);
+    expect(firstDurations.every((d) => d === 111)).toBe(true);
+
+    const second = Object.assign(measuring(new CountingBackend("pass"), 222), noPackage);
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+    });
+    // Every batch with work left reuses its snapshot here, so this session measured no baseline:
+    // no test has a duration, rather than the reused 111.
+    expect(second.baselineRuns).toBe(0);
+    const methods = report.testMethods ?? [];
+    expect(methods.length).toBeGreaterThan(0);
+    expect(methods.filter((t) => t.baselineDurationMs !== undefined)).toEqual([]);
+  });
 });
 
 // R325: an identity key carries no version of its own, so a renumbering (R193 ordinals) can hand an

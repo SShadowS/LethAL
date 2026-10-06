@@ -3,6 +3,7 @@ import {
   type ReachGrain,
   clipMutationText,
   coarseIdentityTupleOf,
+  compareCodeUnits,
 } from "@lethal/schemata";
 import type { CoverageMode } from "./backend";
 import { decodeSource, hashSourceSnapshot } from "./baseline-snapshot";
@@ -502,10 +503,33 @@ export interface ExplainGap {
   /** R275: the `lethal verify` line for this gap (`gapVerifyCommand`), with `<project>` and
    *  `<tests-dir>` left to fill in. Present exactly when `artifactId` is. */
   readonly verifyCommand?: string;
+  /**
+   * R272: every test covering one of the gap's survivors, with where it is. Ordered by
+   * `reachedMembers` (most first), then `compareCodeUnits(name)`: a stated heuristic for which
+   * test to look at first, not a measurement. Duration is shown, never a key (R197 measured it
+   * unstable between runs). Absent when the report has no `testMethods` (written before R272),
+   * never meaning "no covering tests".
+   */
+  readonly coveringTests?: readonly ExplainCoveringTest[];
+  /** R272: how many of the gap's survivors have a measured reach (`reachedBy`); the denominator of
+   *  each covering test's `reachedMembers`. Present exactly when `coveringTests` is. */
+  readonly reachMeasuredMembers?: number;
   /** R274: the block's source, read from `lethal explain --project <dir>` after `<dir>` hashed to
    *  the report's `sourceSha256`. Present exactly when `--project` was given. TARGET SOURCE: do
    *  not publish it for a third party's code. */
   readonly source?: ExplainGapSource;
+}
+
+/** R272: one covering test of a gap, verbatim from `report.testMethods` plus a count. */
+export interface ExplainCoveringTest {
+  readonly name: string;
+  readonly file?: string;
+  readonly line?: number;
+  readonly lineAmbiguous?: true;
+  /** How many of the gap's survivors list this test in `reachedBy`. Absent when the gap's
+   *  `reachMeasuredMembers` is 0. */
+  readonly reachedMembers?: number;
+  readonly baselineDurationMs?: number;
 }
 
 /** R274: a gap block's lines, with each survivor's site marked. Structured, never spliced text. */
@@ -910,6 +934,29 @@ export function assertExplainableReport(value: unknown): SessionReport {
     !(Number.isInteger(identityScheme) && (identityScheme as number) >= 1)
   ) {
     refuse("`identityScheme` is present but is not a positive integer", identityScheme);
+  }
+  // R272: each gap's covering tests are joined to it by name and copied, so every field is read.
+  if (record.testMethods !== undefined) {
+    if (!Array.isArray(record.testMethods)) refuse("`testMethods` is not an array", "…");
+    const seen = new Set<string>();
+    const count = (v: unknown) => v === undefined || (Number.isInteger(v) && (v as number) >= 0);
+    for (const t of record.testMethods as Record<string, unknown>[]) {
+      if (
+        typeof t !== "object" ||
+        t === null ||
+        typeof t.name !== "string" ||
+        seen.has(t.name) ||
+        (t.file !== undefined && typeof t.file !== "string") ||
+        !count(t.line) ||
+        t.line === 0 ||
+        (t.lineAmbiguous !== undefined && t.lineAmbiguous !== true) ||
+        (t.baselineDurationMs !== undefined &&
+          !(typeof t.baselineDurationMs === "number" && t.baselineDurationMs >= 0))
+      ) {
+        refuse("a `testMethods` entry is malformed or repeats a name", t);
+      }
+      seen.add(t.name);
+    }
   }
   // R274: `--project` compares it, so a present value must be a digest.
   if (
@@ -1404,6 +1451,40 @@ function survivorOf(
  * of one file that share an id cannot be told apart here, because the report carries block lines,
  * not offsets. Only the manifest writer, which produced the report, catches that case.
  */
+/**
+ * R272: a gap's covering tests (the union over its survived rows' `coveringTests`), each joined to
+ * `testMethods` by name, ordered by how many of the survivors it reached, then by
+ * `compareCodeUnits(name)` (R481's key). A name missing from `testMethods` is a report
+ * inconsistency and refuses, never a row without a location.
+ */
+function coveringTestsOf(
+  gapId: string,
+  survivors: readonly MutantOutcome[],
+  testMethods: NonNullable<SessionReport["testMethods"]>,
+): { readonly coveringTests: ExplainCoveringTest[]; readonly reachMeasuredMembers: number } {
+  const byName = new Map(testMethods.map((t) => [t.name, t]));
+  const names = [...new Set(survivors.flatMap((m) => m.coveringTests))];
+  const measured = survivors.filter((m) => m.reachedBy !== undefined);
+  const covering = names.map((name): ExplainCoveringTest => {
+    const t = byName.get(name);
+    if (t === undefined) refuse(`gap ${gapId}'s covering test is not in testMethods`, name);
+    return {
+      name,
+      ...(t.file !== undefined ? { file: t.file } : {}),
+      ...(t.line !== undefined ? { line: t.line } : {}),
+      ...(t.lineAmbiguous === true ? { lineAmbiguous: true as const } : {}),
+      ...(measured.length > 0
+        ? { reachedMembers: measured.filter((m) => m.reachedBy?.includes(name) === true).length }
+        : {}),
+      ...(t.baselineDurationMs !== undefined ? { baselineDurationMs: t.baselineDurationMs } : {}),
+    };
+  });
+  covering.sort(
+    (a, b) => (b.reachedMembers ?? 0) - (a.reachedMembers ?? 0) || compareCodeUnits(a.name, b.name),
+  );
+  return { coveringTests: covering, reachMeasuredMembers: measured.length };
+}
+
 function blocksOf(
   report: SessionReport,
 ):
@@ -1526,6 +1607,13 @@ function blocksOf(
           // artifact to verify against.
           ...("artifactId" in artifact
             ? { verifyCommand: gapVerifyCommand(artifact.artifactId, gapId) }
+            : {}),
+          ...(report.testMethods !== undefined
+            ? coveringTestsOf(
+                gapId,
+                report.mutants.filter((m) => m.gapId === gapId && m.verdict === "survived"),
+                report.testMethods,
+              )
             : {}),
         },
       });

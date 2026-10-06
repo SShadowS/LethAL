@@ -13,6 +13,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`lethal explain` lists each gap's covering tests with file and line** (R272). Every gap gains
+  `coveringTests` (name, file, line, how many of its survivors each test reached, and the test's
+  measured baseline duration) ordered by survivors reached, then by name; duration is shown, not
+  used to order (R489). The report gains `testMethods`: each discovered test's location and its
+  smallest per-test baseline duration measured in this run (al-runner's own per-test figure; bcdev's
+  per-call wall clock; never a resume-reused or shared value). Both fields are optional; no schema
+  version moves.
+
 - **`lethal explain --suggest` adds a suggested fix kind per gap** (R273). A separate `suggestions`
   section, off by default and labelled as suggestions, not measurements: each gap gets
   `check-the-result`, `cover-the-branch`, `cover-the-statement`, `undecided`, `reader-marked` or

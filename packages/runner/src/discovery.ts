@@ -15,7 +15,15 @@ import { discoveredRelPaths } from "./line-filter";
 
 const CODEUNIT_HEADER_GLOBAL = /codeunit\s+(\d+)\s+("([^"]+)"|(\w+))/gi;
 const SUBTYPE_TEST = /Subtype\s*=\s*Test\s*;/i;
-const TEST_METHOD = /\[Test\]\s*(?:\[[^\]]*\]\s*)*procedure\s+("([^"]+)"|(\w+))\s*\(/gi;
+// `d`: R272 reads the name group's offset for the test's line.
+const TEST_METHOD = /\[Test\]\s*(?:\[[^\]]*\]\s*)*procedure\s+("([^"]+)"|(\w+))\s*\(/dgi;
+
+/** R272: the 1-based line of `offset` in `text`, counting `\n` (a CRLF line is one line). */
+function lineAt(text: string, offset: number): number {
+  let line = 1;
+  for (let i = 0; i < offset; i++) if (text.charCodeAt(i) === 10) line++;
+  return line;
+}
 /** R420: one `[Test]` attribute token, read on the masked source. `TEST_METHOD` starts at one of
  *  these, so on one file the regex can never match more often than this does. */
 const TEST_TOKEN = /\[\s*Test\s*\]/gi;
@@ -291,8 +299,15 @@ function regexTests(
       // Attributed to a section, test codeunit or not (a helper's `[Test]` is not lost).
       consumed.add(offset);
       if (!isTestCodeunit) continue;
+      const nameAt = sectionStart + (m.indices?.[1]?.[0] ?? m.index);
       found.push({
-        ref: { codeunitId, codeunitName, method: m[2] ?? m[3] ?? "", file: rel },
+        ref: {
+          codeunitId,
+          codeunitName,
+          method: m[2] ?? m[3] ?? "",
+          file: rel,
+          line: lineAt(masked, nameAt),
+        },
         offset,
         testOffsets: [offset],
       });
@@ -482,7 +497,13 @@ function treeTests(
         if (isTestCodeunit && nameNode !== null) {
           const [first] = pending;
           found.push({
-            ref: { codeunitId, codeunitName, method: unquote(nameNode.text), file: rel },
+            ref: {
+              codeunitId,
+              codeunitName,
+              method: unquote(nameNode.text),
+              file: rel,
+              line: nameNode.startPosition.row + 1,
+            },
             offset: first?.at ?? n.startIndex,
             testOffsets: pending.map((p) => p.at),
             procedureOffset: n.startIndex,
@@ -517,7 +538,13 @@ function treeTests(
             continue;
           }
           const [first] = tests;
-          const ref = { codeunitId, codeunitName, method: unquote(arm.name.text), file: rel };
+          const ref = {
+            codeunitId,
+            codeunitName,
+            method: unquote(arm.name.text),
+            file: rel,
+            line: arm.name.startPosition.row + 1,
+          };
           found.push({
             ref,
             offset: first?.at ?? n.startIndex,
