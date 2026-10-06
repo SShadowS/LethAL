@@ -472,6 +472,70 @@ describe("R214: a current-scheme row with no recorded symbols (NULL) never match
     );
   });
 
+  // R256: a run built WITH symbols before C02-06 has a symbol-blind digest, so a no-symbol run
+  // computes the same one and `--resume last` FINDS it. The provenance check must still refuse it.
+  async function legacySymbolRun() {
+    const dirs = await makeSymbolsProject();
+    const store = new ResultsStore(":memory:");
+    const run = (symbols: string[]) =>
+      runSession({
+        backend: new SurvivingBackend(),
+        store,
+        ...dirs,
+        selectorIds,
+        preprocessorSymbols: symbols,
+      });
+    await run([]); // finished: only its fingerprint is read
+    await run(["LETHALA"]);
+    const rows = store.db.query("SELECT id, config_fingerprint FROM runs ORDER BY id").all() as {
+      id: number;
+      config_fingerprint: string;
+    }[];
+    const [plain, withSymbols] = rows;
+    if (plain === undefined || withSymbols === undefined) throw new Error("two runs expected");
+    expect(withSymbols.config_fingerprint).not.toBe(plain.config_fingerprint);
+    return { dirs, store, plain, withSymbols };
+  }
+
+  test("R256: --resume last finds a legacy symbol run by its symbol-blind digest and refuses it by name", async () => {
+    const { dirs, store, plain, withSymbols } = await legacySymbolRun();
+    store.db.run(
+      "UPDATE runs SET config_fingerprint = ?, build_symbols = NULL, finished_at = NULL WHERE id = ?",
+      [plain.config_fingerprint, withSymbols.id],
+    );
+    await expect(
+      runSession({
+        backend: new SurvivingBackend(),
+        store,
+        ...dirs,
+        selectorIds,
+        preprocessorSymbols: [],
+        resume: "last",
+      }),
+    ).rejects.toThrow(
+      new RegExp(
+        `--resume: run ${withSymbols.id} was built with preprocessor symbols \\(not recorded\\).*\\(none\\).*R214`,
+      ),
+    );
+  });
+
+  test("R256 control: the same row with [] recorded resumes (the digest match is real)", async () => {
+    const { dirs, store, plain, withSymbols } = await legacySymbolRun();
+    store.db.run(
+      "UPDATE runs SET config_fingerprint = ?, build_symbols = '[]', finished_at = NULL WHERE id = ?",
+      [plain.config_fingerprint, withSymbols.id],
+    );
+    const report = await runSession({
+      backend: new SurvivingBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      preprocessorSymbols: [],
+      resume: "last",
+    });
+    expect(report.resumedFrom?.runId).toBe(withSymbols.id);
+  });
+
   test("--resume-run control: the same row with [] recorded resumes", async () => {
     const { dirs, store, runId } = await nullRow({ finished: false, nulled: false });
     const report = await runSession({
