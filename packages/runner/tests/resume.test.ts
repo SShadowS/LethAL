@@ -487,8 +487,10 @@ describe("sessionFingerprint (R47)", () => {
   // moved again for R-464 (scheme 22, one implicit-record resolver); it was 6aab8fc7...be41 under
   // scheme 21. It moved again for R475 (scheme 24, code-unit twin order); it was
   // 06081a49...f571 under scheme 22. It moved again for R446 (scheme 25, body-exit guards of a
-  // `while true` loop); it was e2706d8f...97bd under scheme 24.
-  const PINNED = "98154689e1c9f4192a8dd0d29793ee93d418b9764e71a0dcb5d3ced6313f145c";
+  // `while true` loop); it was e2706d8f...97bd under scheme 24. It moved again for R480 (scheme
+  // 27, body-exit guards under any non-cursor condition, feeds, `for` control variables); it was
+  // 98154689...145c under scheme 25.
+  const PINNED = "4ea3654a1fe3b9053ca090a07512ead43e480cd85f989adc6f335037219849ab";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1979,7 +1981,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 25 since R446 (body-exit guards of a `while true`
+    // Pinned by value so a bump is deliberate: 27 since R480 (body-exit guards under any
+    // non-cursor condition, indirect feeds of a `while true` guard, `for` control-variable writes;
+    // 26 is held by R-477); 25 was R446 (body-exit guards of a `while true`
     // loop); 24 was R475 (twins numbered in code-unit file order, not the host's collation; 23 is
     // unused); 22 was R-464 (one implicit-record resolver: page and TableNo `Rec`, dataitems and
     // `with` subjects resolve); 21 was R459 (a two-argument
@@ -1991,7 +1995,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
     // sites move twins).
-    expect(IDENTITY_SCHEME).toBe(25);
+    expect(IDENTITY_SCHEME).toBe(27);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

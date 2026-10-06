@@ -56,7 +56,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "totalFiles": 13,
   },
   "groupedCalls": 0,
-  "identityScheme": 25,
+  "identityScheme": 27,
   "mutants": [
     {
       "astHash": "hashA1",

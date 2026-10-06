@@ -180,9 +180,13 @@ export function coarseIdentityTupleOf(
  * differently under the two can swap ordinals (fixtures, CDO and BaseApp measured: 0 keys move).
  * 25: R446, in a loop whose condition reads no name and calls nothing (`while true`), a write a
  * body-exit guard reads is hang-refused, so a later same-tuple twin of a refused mutant takes its
- * ordinal (BC.History: 16 keys).
+ * ordinal (BC.History: 16 keys). 26 is held for R-477. 27: R480, a body-exit guard's write is
+ * hang-refused under any `while`/`repeat` condition that names no cursor method, a write feeding a
+ * guard of a `while true` loop is too, and so is a write to an enclosing `for`'s control variable,
+ * so a later same-tuple twin of a refused mutant takes its ordinal (prototype: 52 keys, DC 12,
+ * BC.History 40).
  */
-export const IDENTITY_SCHEME = 25;
+export const IDENTITY_SCHEME = 27;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
