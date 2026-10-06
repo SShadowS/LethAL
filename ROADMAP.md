@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**60 of 484 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**59 of 484 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -197,7 +197,7 @@ that ordering is the priority.
 - **R476** · `insertSkipCanRaise` misses an `OnInsert` that assigns the primary key through a procedure, so `Insert(true)` -> `Insert(false)` loses its duplicate-key tag (4 rows R464 newly untags, plus master's resolved receivers) · [R476.md](docs/roadmap/R476.md) · done (93de8f77)
 - **R480** · Loop shapes R446's body-exit-guard hang refusal does not see: measure each, then refuse or rule · [R480.md](docs/roadmap/R480.md) · done (c889237e)
 - **R481** · Covering tests are ordered by the host's collation on a name tie, and a warm prefix can hide a cold kill, so a verdict can differ between hosts · [R481.md](docs/roadmap/R481.md) · done (466bba2a)
-- **R484** · The hang refusal does not see report data-item loops: an open-ended `Integer` data item ended only by a `Continue` flag can be mutated to repeat forever · [R484.md](docs/roadmap/R484.md) · open, filed 2026-10-06
+- **R484** · The hang refusal does not see report data-item loops: an open-ended `Integer` data item ended only by a `Continue` flag can be mutated to repeat forever · [R484.md](docs/roadmap/R484.md) · done (8cfa6094)
 - **R485** · 301 BaseApp `run-trigger-forced` tags come only from `forceCanRaise`'s text check on unindexed objects: a possible over-tag (safe direction), measure first · [R485.md](docs/roadmap/R485.md) · open, filed 2026-10-06
 - **R486** · An env-tool --resume can carry kills measured under the OUTGOING test app: R247's test-app hash is read before the session publishes the new one (a false-kill path) · [R486.md](docs/roadmap/R486.md) · done (5c4d96cf)
 - **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · open, filed 2026-10-06

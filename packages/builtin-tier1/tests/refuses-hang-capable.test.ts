@@ -339,6 +339,74 @@ describe("R480: the new shapes are refused AND counted, their siblings emitted",
   }
 });
 
+/** R484: a write an open `Integer` data item's Break guard reads, through all four operators. */
+describe("R484: a data-item exit guard's write is refused AND counted, its sibling emitted", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const REPORT = `report 50490 "R" { dataset { dataitem(D; "Integer") {
+      trigger OnAfterGetRecord() begin
+        Continue := false; Total := Total + 1; I := I + 1; Flag := true; I := 4; Total := 7;
+        if (I > 3) or not Continue then CurrReport.Break();
+      end; } }
+      var Continue: Boolean; Flag: Boolean; I: Integer; Total: Integer; }`;
+  const ITEM: Case[] = [
+    {
+      op: removeAssignment,
+      src: REPORT,
+      kind: "assignment_statement",
+      refused: "I := I + 1",
+      claimed: "Total := Total + 1",
+    },
+    {
+      op: shiftInteger,
+      src: REPORT,
+      kind: "integer",
+      refused: "4",
+      refusedWithin: "I := 4",
+      claimed: "7",
+      claimedWithin: "Total := 7",
+    },
+    {
+      op: flipBooleanLiteral,
+      src: REPORT,
+      kind: "boolean",
+      refused: "false",
+      refusedWithin: "Continue := false",
+      claimed: "true",
+      claimedWithin: "Flag := true",
+    },
+    // swap-additive claims only operands the type table resolves. In a data-item trigger a bare
+    // global is not resolved (an implicit-record field could shadow it, R294); a literal operand is,
+    // and that site goes through the same hang check.
+    {
+      op: swapAdditive,
+      src: `report 50491 "R" { dataset { dataitem(D; "Integer") {
+      trigger OnAfterGetRecord() begin
+        I := 2 - 1; Total := 2 + 1;
+        if I = 1 then CurrReport.Break();
+      end; } }
+      var I: Integer; Total: Integer; }`,
+      kind: "additive_expression",
+      refused: "2 - 1",
+      claimed: "2 + 1",
+    },
+  ];
+
+  for (const c of ITEM) {
+    it(`${c.op.name}: refused AND counted where a data-item Break guard reads the write`, () =>
+      assertCounted(c));
+  }
+
+  it("lethal.swap-additive: a bare-global operand is not a site in a data-item trigger", () => {
+    const { root, ctx } = load(REPORT);
+    const n = nodeAt(root, "additive_expression", "Total + 1");
+    expect(swapAdditive.targets(n, ctx)).toBe(false);
+    expect(swapAdditive.refusesHangCapable?.(n, ctx)).toBe(false);
+  });
+});
+
 describe("R447: an earlier check refuses, the hang check would not (5.1b)", () => {
   beforeAll(async () => {
     await initParser();
