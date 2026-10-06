@@ -46,6 +46,25 @@ describe("R272: discovery gives each test the line of its name", () => {
     }
   });
 
+  test("regex path: a name at column 0 of its own line is on that line, not the one before", () => {
+    // The line-start boundary: the name's offset IS a line start.
+    const src = [
+      'codeunit 50103 "Edge Tests"',
+      "{",
+      "    Subtype = Test;",
+      "    [Test]",
+      "    procedure",
+      "AtStart()",
+      "    begin",
+      "    end;",
+      "}",
+      "",
+    ].join("\n");
+    expect(testsInAlSource("t/Edge.Codeunit.al", src).map((r) => [r.method, r.line])).toEqual([
+      ["AtStart", 6],
+    ]);
+  });
+
   test("tree path, a split header (R424): each arm at its own name's line", () => {
     const src = [
       'codeunit 50102 "Split Tests"',
