@@ -439,7 +439,7 @@
                 "baselineDurationMs": {
                   "type": "number",
                   "minimum": 0,
-                  "description": "The test's smallest measured baseline duration this session. Displayed, never a ranking key."
+                  "description": "The test's smallest measured baseline duration from this session's completed baseline batches (an aborted batch contributes nothing). Displayed, never a ranking key."
                 }
               }
             }

@@ -955,9 +955,10 @@ export interface TestMethodRecord {
   /** The name was discovered more than once (two `#if` arms, R403) at different places, so no
    *  single location is given: one of them is not in the build. */
   readonly lineAmbiguous?: true;
-  /** The smallest per-test baseline duration measured in THIS session across batches
-   *  (`TestVerdict.measuredDurationMs`). Absent: not measured per test (a resume-reused baseline,
-   *  a failing test, a backend that reports none). Displayed, never a ranking key (R272). */
+  /** The smallest per-test baseline duration from THIS session's COMPLETED baseline batches
+   *  (`TestVerdict.measuredDurationMs`); a batch whose baseline aborted (quarantine) contributes
+   *  nothing. Absent: not measured per test in a completed batch (a resume-reused baseline, a
+   *  failing test, a backend that reports none). Displayed, never a ranking key (R272). */
   readonly baselineDurationMs?: number;
 }
 

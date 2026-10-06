@@ -1986,6 +1986,54 @@ describe("C02-04 characterization", () => {
     expect(methods.length).toBeGreaterThan(0);
     expect(methods.filter((t) => t.baselineDurationMs !== undefined)).toEqual([]);
   });
+
+  test("R272: an aborted baseline batch contributes no duration (completed batches only)", async () => {
+    // Batch 1's baseline completes at 50 ms per test. Batch 2's baseline measures its first test
+    // at 17 ms and then strands the session (in-flight-unknown), so it never reaches
+    // `baseline-batch-finished`. The documented field is the smallest from COMPLETED baseline
+    // batches: that test reads 50, never 17.
+    const dirs = await makeProject({ secondFile: true });
+    // A second test, so batch 2's baseline has a call after the measured one to strand on.
+    await Bun.write(
+      join(dirs.testDir, "MoreTests.Codeunit.al"),
+      'codeunit 79910 "More Tests"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure Second()\n    begin\n    end;\n}\n',
+    );
+    const b = new CountingBackend("pass");
+    const run = b.run.bind(b);
+    let batch2Baseline = 0;
+    let aborted: string | undefined;
+    b.run = async (ref, opts) => {
+      const before = b.baselineRuns;
+      const v = await run(ref, opts);
+      if (b.baselineRuns === before) return v; // a mutant run
+      if (b.deploys === 1) return { ...v, measuredDurationMs: 50 };
+      batch2Baseline += 1;
+      if (batch2Baseline === 1) {
+        aborted = `${ref.codeunitName}.${ref.method}`;
+        return { ...v, measuredDurationMs: 17 };
+      }
+      return {
+        ref,
+        outcome: "error",
+        durationMs: 5,
+        operation: "in-flight-unknown",
+        failureMessage: "RunMutant timed out: AbortError",
+      };
+    };
+    const report = await runSession({
+      backend: b,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    expect(report.quarantined).toBeDefined();
+    expect(b.deploys).toBe(2);
+    expect(aborted).toBeDefined();
+    const durations = (report.testMethods ?? []).map((t) => [t.name, t.baselineDurationMs]);
+    expect(durations.length).toBeGreaterThan(1);
+    expect(durations.filter(([, d]) => d !== 50)).toEqual([]);
+  });
 });
 
 // R325: an identity key carries no version of its own, so a renumbering (R193 ordinals) can hand an

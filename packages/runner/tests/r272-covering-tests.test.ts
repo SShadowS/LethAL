@@ -348,6 +348,35 @@ describe("R272: explain's gaps[].coveringTests", () => {
     ]);
   });
 
+  test("equal reach: code-unit name order, never locale order, never duration", () => {
+    // Code units put `T.B` before `T.a` before `T.b`; `localeCompare` puts `T.a` first and
+    // ascending duration (B 900, a 500, b 10) would put `T.b` first, so either key reorders this.
+    const methods: SessionReport["testMethods"] = [
+      { name: "T.B", baselineDurationMs: 900 },
+      { name: "T.a", baselineDurationMs: 500 },
+      { name: "T.b", baselineDurationMs: 10 },
+    ];
+    const out = explain(
+      report(
+        [
+          {
+            code: "M1",
+            gap: "G1",
+            covering: ["T.b", "T.a", "T.B"],
+            reachedBy: ["T.b", "T.a", "T.B"],
+          },
+        ],
+        methods,
+      ),
+    );
+    const [gap] = out.gaps ?? [];
+    expect(gap?.coveringTests?.map((t) => [t.name, t.reachedMembers])).toEqual([
+      ["T.B", 1],
+      ["T.a", 1],
+      ["T.b", 1],
+    ]);
+  });
+
   test("no measured reach: no reachedMembers, and the order is by name alone", () => {
     const out = explain(
       report([{ code: "M1", gap: "G1", covering: ["T.Beta", "T.Alpha"] }], METHODS),
