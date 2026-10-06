@@ -2526,11 +2526,17 @@ async function runFenced(
   // never claimed, that is evidence about the transport, not about the request, and the counter
   // the retry consumed now sits one ahead of the server's: quarantine rather than continue on a
   // counter that would refuse the next mutant as a lease loss (review finding F3).
+  const lostAck = retryOutcome === "not-started" ? "unresolved" : retryOutcome;
   return {
     verdict: retry,
-    lostAck: retryOutcome === "not-started" ? "unresolved" : retryOutcome,
+    lostAck,
     retried: true,
     ...provenance,
+    // R-204b: the retry's own unrefused stop makes its ending unconfirmed too, never `result-lost`;
+    // an unresolved retry keeps its quarantine.
+    ...(lostAck !== "unresolved" && !stopIsRetrySafe(retry.stopState)
+      ? { cause: "stop-outcome-unconfirmed" as const }
+      : {}),
   };
 }
 
@@ -2583,12 +2589,14 @@ async function runFencedMany(
   // been accepted. The malformed and run-error endings never retry, so for them only the name moves.
   const unconfirmed = (r: RunManyResult): RunManyResult =>
     r.kind === "call" ? { ...r, cause: "stop-outcome-unconfirmed" } : r;
+  const renameMalformed = (r: RunManyResult): RunManyResult =>
+    r.kind === "call" &&
+    (r.cause === "group-answer-malformed" || r.cause === "group-run-error") &&
+    !stopIsRetrySafe(r.verdict.stopState)
+      ? unconfirmed(r)
+      : r;
   if (first.kind !== "call" || !isLostAck(first.verdict)) {
-    const malformed =
-      first.kind === "call" &&
-      (first.cause === "group-answer-malformed" || first.cause === "group-run-error") &&
-      !stopIsRetrySafe(first.verdict.stopState);
-    return { result: malformed ? unconfirmed(first) : first, lostAck: "none", retried: false };
+    return { result: renameMalformed(first), lostAck: "none", retried: false };
   }
   emit({
     type: "warning",
@@ -2629,12 +2637,17 @@ async function runFencedMany(
     ...(original !== undefined ? { original } : {}),
   };
   if (retry.kind !== "call" || !isLostAck(retry.verdict)) {
-    return { result: retry, lostAck: "none", retried: true, ...provenance };
+    return { result: renameMalformed(retry), lostAck: "none", retried: true, ...provenance };
   }
   const retryOutcome = await reconcileFencedLostAck(leaseSession, retry.verdict, groupBudgetMs);
+  const lostAck = retryOutcome === "not-started" ? "unresolved" : retryOutcome;
   return {
-    result: retry,
-    lostAck: retryOutcome === "not-started" ? "unresolved" : retryOutcome,
+    // R-204b: as for the first attempt; an unresolved retry keeps its quarantine.
+    result:
+      lostAck !== "unresolved" && !stopIsRetrySafe(retry.verdict.stopState)
+        ? unconfirmed(retry)
+        : retry,
+    lostAck,
     retried: true,
     ...provenance,
   };
