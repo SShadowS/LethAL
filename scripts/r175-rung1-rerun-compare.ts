@@ -15,6 +15,7 @@
  *
  *   bun scripts/r175-rung1-rerun-compare.ts <rung1.report.json> <rerun.report.json>
  */
+import { memberOf } from "./lib/member-key";
 
 interface MutantRow {
   readonly mutantCode: string;
@@ -143,7 +144,7 @@ export function compare(rung1: ReportDoc, rerun: ReportDoc): Comparison {
     const m = now.get(k);
     if (m !== undefined) {
       lines.push(
-        `  added ${m.mutantCode} ${k} ${m.procedureName ?? m.triggerName ?? ""}: ${m.verdict} [${m.coverageAttribution ?? "-"}] (not predicted)`,
+        `  added ${m.mutantCode} ${k} ${memberOf(m)}: ${m.verdict} [${m.coverageAttribution ?? "-"}] (not predicted)`,
       );
     }
   }
@@ -168,7 +169,7 @@ export function compare(rung1: ReportDoc, rerun: ReportDoc): Comparison {
     const want = EXPECTED_CLASSES[cls].verdict;
     if (after.verdict !== want) {
       moved.push(
-        `${before.mutantCode}->${after.mutantCode} ${cls} ${before.procedureName ?? ""}: ${before.verdict} -> ${after.verdict}, expected ${want}`,
+        `${before.mutantCode}->${after.mutantCode} ${cls} ${memberOf(before)}: ${before.verdict} -> ${after.verdict}, expected ${want}`,
       );
     }
     if (
