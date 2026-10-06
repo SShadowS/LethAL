@@ -1074,8 +1074,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
       // a healthy run and score nothing. The hook's absence keeps that path byte-for-byte as it was.
       ...(this.cfg.stopHungSessions === true && (this.pendingMutantId ?? "") !== ""
         ? {
-            onBudgetExceeded: async (): Promise<void> => {
-              const stop = await transport.stopHungRun({
+            // A REFUSAL IS AN ANSWER, and since R-204b it RESOLVES as one (`stopped: false` with its
+            // reason) instead of being thrown: a thrown hook now means the stop's outcome is
+            // unknown (its reply was lost), which is not retry-safe, while a refusal is.
+            onBudgetExceeded: (boundMs: number) =>
+              transport.stopHungRun({
                 // Captured at request-build time, not re-read here: `attemptSeq` advances per
                 // call and this closure fires on a TIMER, after the request was built. Equal
                 // today under sequential execution, but a late read could name a different
@@ -1087,18 +1090,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
                   serverGeneration: lease.serverGeneration,
                   opSeq,
                 },
-              });
-              // A REFUSAL IS AN ANSWER. Discarding it produced a wrong diagnosis: the quarantine
-              // note read "BC never answered this request with its stop confirmation" when BC had
-              // answered and named the reason (`no-session-id` for a marker written before the
-              // field existed, `already-completed` for a lost-ack-after-success). Throwing carries
-              // it through `stopHookError` into the "stop was attempted and FAILED (…)" message.
-              if (!stop.stopped) {
-                throw new Error(
-                  `StopHungRun refused: ${stop.reason ?? "no reason given"} (attempt ${attemptId}, opSeq ${opSeq})`,
-                );
-              }
-            },
+                timeoutMs: boundMs,
+              }),
           }
         : {}),
     } as const;

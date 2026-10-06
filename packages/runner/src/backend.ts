@@ -159,6 +159,27 @@ export interface TestVerdict {
    */
   readonly testRunsBefore?: number;
   readonly sessionId?: number;
+  /**
+   * R-204b (R202): what became of the stop LethAL sent for THIS call, settled before the call
+   * returned. Absent: no stop was sent. On a grouped call, `refused` only if EVERY stop attempt in
+   * it was refused. The orchestrator retries a lost answer only when this is absent or `refused`:
+   * any other state means our stop may have ended the run, so a passing retry proves nothing.
+   */
+  readonly stopState?: StopState;
+  /**
+   * R-204b Part A: set on the single path's `error` when BC answered our stop with its 408 but the
+   * op's progress row shows the method had already recorded its completion. Lifted into the step's
+   * cause, exactly like the grouped call's `stopped-after-completion`.
+   */
+  readonly stopRefusal?: "stopped-after-completion";
+}
+
+/** R-204b: see `TestVerdict.stopState`. */
+export type StopState = "issued" | "pending" | "confirmed" | "refused" | "unknown";
+
+/** R-204b: a lost answer may be retried only when no stop was sent, or every stop was refused. */
+export function stopIsRetrySafe(s: StopState | undefined): boolean {
+  return s === undefined || s === "refused";
 }
 
 /**
@@ -225,7 +246,8 @@ export type RunManyEndedBy = "complete" | "failure" | "cap";
 export type RunManyCause =
   | "group-run-error"
   | "group-answer-malformed"
-  | "stopped-after-completion";
+  | "stopped-after-completion"
+  | "stop-outcome-unconfirmed";
 
 export type RunManyResult =
   | {

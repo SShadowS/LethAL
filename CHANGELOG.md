@@ -455,6 +455,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A lost answer after a stop is never retried into a survivor; the single path refuses a stop
+  that landed after the test finished** (R202, R204; R-204b landing 1, client only). With
+  `--stop-hung-sessions`, a hung run whose answer came back unreadable (BC can answer HTTP 400
+  instead of its stop 408) used to be retried once, and a hang need not recur, so the retry could
+  pass and score a real timeout `survived`. Each call now records what became of its stop, and a
+  lost answer is retried only when no stop was sent or every stop was refused; otherwise the mutant
+  is `error` with the new cause `stop-outcome-unconfirmed` (`--resume` re-runs it). Both stop calls
+  are now time-bounded. With `--no-group-runs`, a stop 408 whose method had already recorded its
+  completion is now `error` / `stopped-after-completion`, as the grouped path already did, instead
+  of `timeout-killed`. `lethal explain` is schema v13 (one new cause value). R202 and R204 stay
+  open.
+
 - **`lethal run` refuses a test project nested inside the target** (R445). The target build copies
   every `.al` under the target folder, so a `--tests` folder inside it was mutated and published as
   target code, without a word. `lethal run` now refuses that layout by name
