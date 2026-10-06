@@ -120,6 +120,31 @@ export class TestAppDiffersError extends Error {
   }
 }
 
+/**
+ * R486: an env-tool session resolved a `--resume` baseline against the test app the server held
+ * BEFORE the lease, and the test app read back after its hook published `publishApps` differs from
+ * it, or could not be read. Carrying a verdict across that would report kills measured under the
+ * outgoing test app as this run's (a false kill), so it refuses before the first baseline.
+ * (`--skip-known-survivors` needs no refusal: its history filter runs after the hook and compares
+ * the read-back.)
+ */
+export class TestAppRepublishedError extends Error {
+  readonly code = "test-app-republished" as const;
+  readonly flag: string;
+
+  constructor(flag: string, before: string | undefined, after: string | undefined) {
+    super(
+      `${flag}: the baseline was resolved against the test app the server held before the lease (${before ?? "unknown"}), and ${
+        after === undefined
+          ? "the test app could not be read back after the env-tool hook published publishApps"
+          : `the hook then published a different one (${after})`
+      }, so the verdicts it would carry were not measured against the test app that runs. Refusing before the first baseline (R486). Drop the flag to run from scratch.`,
+    );
+    this.name = "TestAppRepublishedError";
+    this.flag = flag;
+  }
+}
+
 /** R403 phase B: an env-tool `publishApps` file that cannot be read as a BC app package before the
  *  lease. Every such file is published under the lease, where it would fail too (an unreadable one
  *  is `publishFile`'s pre-publish `ArtifactPrepareError`; a non-package one is refused by the

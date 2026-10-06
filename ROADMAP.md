@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**62 of 484 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**60 of 484 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -199,7 +199,7 @@ that ordering is the priority.
 - **R481** · Covering tests are ordered by the host's collation on a name tie, and a warm prefix can hide a cold kill, so a verdict can differ between hosts · [R481.md](docs/roadmap/R481.md) · done (466bba2a)
 - **R484** · The hang refusal does not see report data-item loops: an open-ended `Integer` data item ended only by a `Continue` flag can be mutated to repeat forever · [R484.md](docs/roadmap/R484.md) · open, filed 2026-10-06
 - **R485** · 301 BaseApp `run-trigger-forced` tags come only from `forceCanRaise`'s text check on unindexed objects: a possible over-tag (safe direction), measure first · [R485.md](docs/roadmap/R485.md) · open, filed 2026-10-06
-- **R486** · An env-tool --resume can carry kills measured under the OUTGOING test app: R247's test-app hash is read before the session publishes the new one (a false-kill path) · [R486.md](docs/roadmap/R486.md) · open, filed 2026-10-06
+- **R486** · An env-tool --resume can carry kills measured under the OUTGOING test app: R247's test-app hash is read before the session publishes the new one (a false-kill path) · [R486.md](docs/roadmap/R486.md) · done (5c4d96cf)
 - **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · open, filed 2026-10-06
 
 ## Product gaps a real project hits
@@ -315,7 +315,7 @@ that ordering is the priority.
 - **R369** · `cond-var-typing`: declarations inside a `var`-section `#if` are invisible to the semantic layer, and the tree can stretch that `#if` over whole members · [R369.md](docs/roadmap/R369.md) · closed 2026-10-05 — ruling with R364: wrong-tier rows compile and are misattributed; 0.013% of BaseApp's…
 - **R370** · `unbuildable-under-set`: a file whose text under the effective symbols is not a program (a member's only header, a case label or a call's head compiled out) still gets mutants · [R370.md](docs/roadmap/R370.md) · closed 2026-10-05 — 0 unbuildable files in BaseApp, CDO and fixtures; DC-only (R-364 census)
 - **R371** · lethal verify cannot see an edit to a helper, handler or library procedure a test calls, because the per-test digest covers the test method only · [R371.md](docs/roadmap/R371.md) · done (ecf0f1d1, 4ee63129)
-- **R373** · An env-tool run, or a bcdev run that cannot ask the dev endpoint for the test app, records no test digests, so lethal verify refuses it · [R373.md](docs/roadmap/R373.md) · open
+- **R373** · An env-tool run, or a bcdev run that cannot ask the dev endpoint for the test app, records no test digests, so lethal verify refuses it · [R373.md](docs/roadmap/R373.md) · done (5c4d96cf)
 - **R384** · lethal verify sends every new test to every survivor, so a shared-helper edit on a large suite trips too-many-new-tests; a per-survivor reachability filter would bend that curve · [R384.md](docs/roadmap/R384.md) · done (1ec0dcab)
 - **R386** · A test-app object passed as an argument to external code puts that test on the whole-source digest; narrowing it would keep verify's new-test count down · [R386.md](docs/roadmap/R386.md) · open, filed 2026-10-01
 - **R387** · `lethal run --backend al-runner` defaults to its slowest path (one-shot, recompile per mutant, no coverage), and two of the three fast switches have no CLI or config surface · [R387.md](docs/roadmap/R387.md) · done (b3928cb9, 7a84c70e); coverage default is R394
