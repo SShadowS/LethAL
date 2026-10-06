@@ -18,6 +18,7 @@ import {
   TOOL_CONDITIONS,
   assertExplainableReport,
   explain,
+  gapVerifyCommand,
   rankSurvivors,
   survivorActionabilityRank,
 } from "../src/explain";
@@ -691,6 +692,7 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.gaps[].unobservedBlock", // [derived] every recorded row survived; withheld when narrowed
   "$.gaps[].artifactId", // [verbatim] artifacts[].artifactId whose batchIndex equals the gap's
   "$.gaps[].artifactIdAbsent", // [enum] ArtifactIdAbsence
+  "$.gaps[].verifyCommand", // [derived] R275: gapVerifyCommand(artifactId, gapId)
   "$.noCoverageBlocks[].batchIndex", // [verbatim] (C02-09)
   "$.noCoverageBlocks[].file", // [verbatim]
   "$.noCoverageBlocks[].blockStartLine", // [verbatim]
@@ -1188,6 +1190,12 @@ describe("explain — the admissibility rule, made executable", () => {
     const allowed = new Set<string>([
       ...stringsIn(report), // [verbatim]
       ...report.mutants.map(markIdentityOf), // [derived] R265: survivors[].markKey
+      // [derived] R275: gaps[].verifyCommand, from the report's own gap and artifact ids.
+      ...report.mutants.flatMap((m) =>
+        m.gapId === undefined
+          ? []
+          : (report.artifacts ?? []).map((a) => gapVerifyCommand(a.artifactId, m.gapId ?? "")),
+      ),
       ...ADMISSIBLE_INTERPRETATIONS.flatMap((i) => [i.meaning, i.basis, i.entailedNegative ?? ""]),
       ...PROJECTION_AUTHORED_STRINGS,
     ]);
@@ -2648,6 +2656,7 @@ describe("explain: gaps (C02-09)", () => {
         other: 0,
         unobservedBlock: true,
         artifactId: artifactA,
+        verifyCommand: `lethal verify --db <project>/lethal.sqlite --artifact ${artifactA} --survivors G0000000000a1 --tests <tests-dir>`,
       },
       {
         gapId: "G0000000000b2",
@@ -2664,6 +2673,7 @@ describe("explain: gaps (C02-09)", () => {
         other: 3,
         unobservedBlock: false,
         artifactId: artifactB,
+        verifyCommand: `lethal verify --db <project>/lethal.sqlite --artifact ${artifactB} --survivors G0000000000b2 --tests <tests-dir>`,
       },
     ]);
   });
@@ -2725,11 +2735,14 @@ describe("explain: gaps (C02-09)", () => {
         artifactId: g.artifactId,
         artifactIdAbsent: g.artifactIdAbsent,
         exactlyOne: "artifactId" in g !== "artifactIdAbsent" in g,
+        // R275: the verify line exists exactly when there is an artifact to verify against.
+        commandWithArtifact: "verifyCommand" in g === "artifactId" in g,
       }));
     const one = (artifactId?: string, artifactIdAbsent?: ArtifactIdAbsence) => ({
       artifactId,
       artifactIdAbsent,
       exactlyOne: true,
+      commandWithArtifact: true,
     });
     // (i) the batch's artifacts[] entry.
     expect(
@@ -2784,6 +2797,73 @@ describe("explain: gaps (C02-09)", () => {
       reportFixture({ mutants: twoGapRows(), quarantined: { reason: "test in-flight-unknown" } }),
     );
     expect((quarantined.gaps ?? []).map((g) => "unobservedBlock" in g)).toEqual([false, false]);
+  });
+
+  test("R277: a line-narrowed run keeps unobservedBlock for a gap whose WHOLE block its line filter covers", () => {
+    // Gap A is src/A.Codeunit.al lines 10..20, gap B src/B.Codeunit.al lines 30..37.
+    const presence = (
+      ranges: { file: string; start: number; end: number }[],
+      over: { caveats?: Caveat[]; quarantined?: boolean } = {},
+    ) => {
+      const base = reportFixture({
+        mutants: twoGapRows(),
+        lines: { ranges, excludedSiteCount: 3 },
+        ...(over.quarantined === true ? { quarantined: { reason: "test in-flight-unknown" } } : {}),
+      });
+      const out = explain({
+        ...base,
+        validity: { ...base.validity, caveats: over.caveats ?? ["line-narrowed"] },
+      });
+      return (out.gaps ?? []).map((g) => "unobservedBlock" in g);
+    };
+    // A covered whole (file matched case-insensitively, as the filter matches it); B only in part.
+    expect(
+      presence([
+        { file: "src/a.codeunit.al", start: 1, end: 25 },
+        { file: "src/B.Codeunit.al", start: 30, end: 35 },
+      ]),
+    ).toEqual([true, false]);
+    // B covered by two adjacent ranges counts as whole; a one-line hole does not.
+    expect(
+      presence([
+        { file: "src/B.Codeunit.al", start: 30, end: 33 },
+        { file: "src/B.Codeunit.al", start: 34, end: 37 },
+      ]),
+    ).toEqual([false, true]);
+    expect(
+      presence([
+        { file: "src/B.Codeunit.al", start: 30, end: 32 },
+        { file: "src/B.Codeunit.al", start: 34, end: 37 },
+      ]),
+    ).toEqual([false, false]);
+    // Whole coverage never overrides an operator narrowing or a quarantine.
+    const all = [
+      { file: "src/A.Codeunit.al", start: 1, end: 99 },
+      { file: "src/B.Codeunit.al", start: 1, end: 99 },
+    ];
+    expect(presence(all)).toEqual([true, true]);
+    expect(presence(all, { caveats: ["line-narrowed", "operator-narrowed"] })).toEqual([
+      false,
+      false,
+    ]);
+    expect(presence(all, { quarantined: true })).toEqual([false, false]);
+    // A line-narrowed run that recorded no ranges keeps withholding.
+    const bare = reportFixture({ mutants: twoGapRows() });
+    expect(
+      (
+        explain({ ...bare, validity: { ...bare.validity, caveats: ["line-narrowed"] } }).gaps ?? []
+      ).map((g) => "unobservedBlock" in g),
+    ).toEqual([false, false]);
+    // A malformed range is refused, never read as covering or not covering a block.
+    expect(() =>
+      assertExplainableReport({
+        ...bare,
+        lines: {
+          ranges: [{ file: "src/A.Codeunit.al", start: 20, end: 10 }],
+          excludedSiteCount: 0,
+        },
+      }),
+    ).toThrow(/lines\.ranges/);
   });
 
   test("R447: unobservedBlock is withheld per FILE where a hang-refused row has sites", () => {

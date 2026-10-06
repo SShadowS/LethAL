@@ -3,6 +3,7 @@ import type { CoverageMode } from "./backend";
 import { MARK_REASON_PLACEHOLDER } from "./equivalence-marks";
 import { GapGroupingError, type GapRow, type GapTally, tallyGaps } from "./gaps";
 import type { Interpretation } from "./interpretation";
+import { spanCovered } from "./line-filter";
 import {
   CAVEAT_INTERPRETATIONS,
   COVERAGE_NOT_MEASURED_INTERPRETATION,
@@ -211,7 +212,11 @@ import type { MutantVerdict } from "./store";
  * (`no-proof`), so the key is no longer a usable mark by itself. A changed meaning bumps.
  *
  * 13: R-204b added the cause value `stop-outcome-unconfirmed` to `$.notMeasured[].cause`. A new
- * value, so it bumps (R233); v12 is frozen.
+ * value, so it bumps (R233); v12 is frozen. R275 added the optional `gaps[].verifyCommand`: an
+ * optional additive field, so no bump. R276 changed how a NEW artifact's gap ids are computed (line
+ * span and LF text, not offsets and raw text): the field is an opaque id, read verbatim, so no bump.
+ * R277 keeps `gaps[].unobservedBlock` on a line-narrowed run whose ranges cover the block: same
+ * meaning, present in more cases only where it stays provably true, so no bump.
  */
 export const EXPLAIN_SCHEMA_VERSION = 13;
 
@@ -454,7 +459,8 @@ export interface ExplainGap {
   readonly killed: number;
   readonly noCoverage: number;
   readonly other: number;
-  /** Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run, on a
+  /** Every RECORDED row of the block survived. Absent on an operator-narrowed run, on a
+   *  line-narrowed run unless its line ranges cover the block's every line (R277), on a
    *  quarantined run, and in a file with a `hang-refused` row with sites (R447). */
   readonly unobservedBlock?: boolean;
   /** The artifact to pass to `lethal verify --artifact` for this gap. Exactly one of this and
@@ -462,6 +468,9 @@ export interface ExplainGap {
   readonly artifactId?: string;
   /** Why there is no artifact to verify this gap against. Same values as on a survivor. */
   readonly artifactIdAbsent?: ArtifactIdAbsence;
+  /** R275: the `lethal verify` line for this gap (`gapVerifyCommand`), with `<project>` and
+   *  `<tests-dir>` left to fill in. Present exactly when `artifactId` is. */
+  readonly verifyCommand?: string;
 }
 
 /** C02-09: a block with at least one `no-coverage` row. A location list, not a verify input, so it
@@ -763,6 +772,8 @@ const EXPLAINABLE_REPORT_VERSIONS: readonly number[] = [2, REPORT_SCHEMA_VERSION
  *   - every mutant's `gapId` (a string), with positive integer `blockStartLine`/`blockEndLine` and
  *     a `batchIndex`, on all rows or none : C02-09, groups rows; a bad one would merge or split a gap
  *   - `quarantined` / `resumedFrom.skippedStranded` — presence and a `> 0` test emit tool conditions
+ *   - `lines.ranges` (each a string `file` with integer 1 <= `start` <= `end`) : R277, decides
+ *                                            whether a line-narrowed gap keeps `unobservedBlock`
  *
  * `verdict` is the one that shows why the rule has to be mechanical rather than intuitive.
  * Corrupting every `"survived"` to `"Survived"` in a real report produced a projection BYTE-IDENTICAL
@@ -1077,6 +1088,31 @@ export function assertExplainableReport(value: unknown): SessionReport {
   // C02-01: each survivor's `artifactId` is looked up here by `batchIndex`. Two entries for one
   // batch would make that lookup a guess. The id's 32-hex shape is a copied open value and is not
   // checked.
+  // R277: `lines.ranges` decides whether a line-narrowed gap keeps `unobservedBlock`, so a bad
+  // entry is refused rather than read as covering, or not covering, a block.
+  const { lines } = record;
+  if (lines !== undefined) {
+    const ranges =
+      typeof lines === "object" && lines !== null
+        ? (lines as Record<string, unknown>).ranges
+        : undefined;
+    if (!Array.isArray(ranges)) refuse("`lines` is present but has no `ranges` array", lines);
+    for (const r of ranges) {
+      const e = (typeof r === "object" && r !== null ? r : {}) as Record<string, unknown>;
+      const { file, start, end } = e;
+      if (
+        typeof file !== "string" ||
+        typeof start !== "number" ||
+        typeof end !== "number" ||
+        !Number.isInteger(start) ||
+        !Number.isInteger(end) ||
+        start < 1 ||
+        end < start
+      ) {
+        refuse("`lines.ranges` has an entry that is not a file with 1 <= start <= end", r);
+      }
+    }
+  }
   const { artifacts } = record;
   if (artifacts !== undefined) {
     if (!Array.isArray(artifacts)) refuse("`artifacts` is present but is not an array", artifacts);
@@ -1199,6 +1235,15 @@ function keyed<K extends string>(
  * even when this run published the same batch index. Looked up by the entry's `batchIndex` FIELD,
  * never by array position. Never throws; `assertExplainableReport` has checked the inputs.
  */
+/**
+ * R275: the one `lethal verify` line for a gap (the C02-07 recipe), its two ids filled in. The
+ * report records neither the project nor the tests folder, so those stay named placeholders, written
+ * exactly as the agent guide's recipe writes them.
+ */
+export function gapVerifyCommand(artifactId: string, gapId: string): string {
+  return `lethal verify --db <project>/lethal.sqlite --artifact ${artifactId} --survivors ${gapId} --tests <tests-dir>`;
+}
+
 function artifactOf(
   m: MutantOutcome,
   artifacts: SessionReport["artifacts"],
@@ -1339,9 +1384,17 @@ function blocksOf(
   // An operator- or line-narrowed run drops mutants INSIDE a block, and a quarantined run stops
   // scheduling mutants mid-run, so "every recorded row survived" says nothing about the block's
   // unrecorded neighbours.
-  const withhold =
+  const withholdAll =
     report.quarantined !== undefined ||
-    report.validity.caveats.some((c) => c === "operator-narrowed" || c === "line-narrowed");
+    report.validity.caveats.some((c) => c === "operator-narrowed");
+  // R277: a line filter drops only sites that touch no range, so where its ranges cover a block's
+  // EVERY line no site of that block was dropped, and the mark stays true for it. A line-narrowed
+  // run that recorded no ranges keeps withholding.
+  const lineNarrowed = report.validity.caveats.some((c) => c === "line-narrowed");
+  const withhold = (file: string, first: number, last: number): boolean =>
+    withholdAll ||
+    (lineNarrowed &&
+      (report.lines === undefined || !spanCovered(report.lines.ranges, file, first, last)));
   // R447: per FILE, where R196 refused a loop step: that step has no row, so "every recorded row
   // survived" says nothing about it. Per file, not per block: the row carries no spans.
   const hangRefusedFiles = new Set(
@@ -1372,6 +1425,11 @@ function blocksOf(
     if (t.survived > 0) {
       const member = firstMember.get(gapId);
       if (member === undefined) refuse(`gap id ${gapId} has survivors but no member row`, gapId);
+      // `carried` when ANY member is: the gap was not measured by one artifact, and verify
+      // refuses a carried member anyway.
+      const artifact = carriedGaps.has(gapId)
+        ? { artifactIdAbsent: "carried" as const }
+        : artifactOf(member, report.artifacts);
       gaps.push({
         key: gapId,
         gap: {
@@ -1382,14 +1440,15 @@ function blocksOf(
           killed: t.killed,
           noCoverage: t.noCoverage,
           other: t.other,
-          ...(withhold || hangRefusedFiles.has(r.file)
+          ...(withhold(r.file, blockStartLine, blockEndLine) || hangRefusedFiles.has(r.file)
             ? {}
             : { unobservedBlock: t.unobservedBlock }),
-          // `carried` when ANY member is: the gap was not measured by one artifact, and verify
-          // refuses a carried member anyway.
-          ...(carriedGaps.has(gapId)
-            ? { artifactIdAbsent: "carried" as const }
-            : artifactOf(member, report.artifacts)),
+          ...artifact,
+          // R275: the C02-07 recipe, filled in with this gap's ids; only where there is an
+          // artifact to verify against.
+          ...("artifactId" in artifact
+            ? { verifyCommand: gapVerifyCommand(artifact.artifactId, gapId) }
+            : {}),
         },
       });
     }

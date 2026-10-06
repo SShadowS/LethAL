@@ -214,7 +214,9 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // operatorVersion 1.0.0 -> 1.1.0; sites, tags and ids unchanged.
   // R474 re-pinned (was 105d129b...b83f): every entry gains `memberHash`, the only change.
   // R477 re-pinned (was db5aef54...b4e7): provenance only, `validate-to-assign` 1.1.0 -> 1.2.0.
-  const pinned = "59942c7a8a1595d023fda9ab2366bef4410e17c5503d2e7fb23d1d1194b14e81";
+  // R276 re-pinned (was 59942c7a...4e81): `gapId` values only (a gap's line span and LF text are
+  // hashed instead of its byte offsets and raw text); sites, ids and every other field unchanged.
+  const pinned = "c83bdd08f26dcfe93030f9b5b6c354ea05ba5068279866c4f59a2f51dced23eb";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(
