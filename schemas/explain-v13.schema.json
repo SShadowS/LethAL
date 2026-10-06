@@ -407,6 +407,10 @@
             "type": "string",
             "enum": ["carried", "not-recorded", "not-published"],
             "description": "Why there is no artifact to verify this gap against. Same values as on a survivor; carried when any member is carried."
+          },
+          "verifyCommand": {
+            "type": "string",
+            "description": "R275: the lethal verify line for this gap, its artifact and gap ids filled in and <project> and <tests-dir> left to fill in (the report records neither). Present exactly when artifactId is. An optional additive field: no version bump."
           }
         }
       }

@@ -211,7 +211,9 @@ import type { MutantVerdict } from "./store";
  * (`no-proof`), so the key is no longer a usable mark by itself. A changed meaning bumps.
  *
  * 13: R-204b added the cause value `stop-outcome-unconfirmed` to `$.notMeasured[].cause`. A new
- * value, so it bumps (R233); v12 is frozen.
+ * value, so it bumps (R233); v12 is frozen. R275 added the optional `gaps[].verifyCommand`: an
+ * optional additive field, so no bump. R276 changed how a NEW artifact's gap ids are computed (line
+ * span and LF text, not offsets and raw text): the field is an opaque id, read verbatim, so no bump.
  */
 export const EXPLAIN_SCHEMA_VERSION = 13;
 
@@ -462,6 +464,9 @@ export interface ExplainGap {
   readonly artifactId?: string;
   /** Why there is no artifact to verify this gap against. Same values as on a survivor. */
   readonly artifactIdAbsent?: ArtifactIdAbsence;
+  /** R275: the `lethal verify` line for this gap (`gapVerifyCommand`), with `<project>` and
+   *  `<tests-dir>` left to fill in. Present exactly when `artifactId` is. */
+  readonly verifyCommand?: string;
 }
 
 /** C02-09: a block with at least one `no-coverage` row. A location list, not a verify input, so it
@@ -1199,6 +1204,15 @@ function keyed<K extends string>(
  * even when this run published the same batch index. Looked up by the entry's `batchIndex` FIELD,
  * never by array position. Never throws; `assertExplainableReport` has checked the inputs.
  */
+/**
+ * R275: the one `lethal verify` line for a gap (the C02-07 recipe), its two ids filled in. The
+ * report records neither the project nor the tests folder, so those stay named placeholders, written
+ * exactly as the agent guide's recipe writes them.
+ */
+export function gapVerifyCommand(artifactId: string, gapId: string): string {
+  return `lethal verify --db <project>/lethal.sqlite --artifact ${artifactId} --survivors ${gapId} --tests <tests-dir>`;
+}
+
 function artifactOf(
   m: MutantOutcome,
   artifacts: SessionReport["artifacts"],
@@ -1372,6 +1386,11 @@ function blocksOf(
     if (t.survived > 0) {
       const member = firstMember.get(gapId);
       if (member === undefined) refuse(`gap id ${gapId} has survivors but no member row`, gapId);
+      // `carried` when ANY member is: the gap was not measured by one artifact, and verify
+      // refuses a carried member anyway.
+      const artifact = carriedGaps.has(gapId)
+        ? { artifactIdAbsent: "carried" as const }
+        : artifactOf(member, report.artifacts);
       gaps.push({
         key: gapId,
         gap: {
@@ -1385,11 +1404,12 @@ function blocksOf(
           ...(withhold || hangRefusedFiles.has(r.file)
             ? {}
             : { unobservedBlock: t.unobservedBlock }),
-          // `carried` when ANY member is: the gap was not measured by one artifact, and verify
-          // refuses a carried member anyway.
-          ...(carriedGaps.has(gapId)
-            ? { artifactIdAbsent: "carried" as const }
-            : artifactOf(member, report.artifacts)),
+          ...artifact,
+          // R275: the C02-07 recipe, filled in with this gap's ids; only where there is an
+          // artifact to verify against.
+          ...("artifactId" in artifact
+            ? { verifyCommand: gapVerifyCommand(artifact.artifactId, gapId) }
+            : {}),
         },
       });
     }
