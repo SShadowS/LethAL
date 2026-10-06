@@ -1164,9 +1164,33 @@ describe("R484: MaxIteration, an independent bound", () => {
     );
     expect(removed(src)).toEqual(CLAIMED);
   });
+
+  const ifMax = integer(["#if FOO", "MaxIteration = 10;", "#endif"], dimLoop);
+
+  it("a MaxIteration in an undecided `#if` arm is no bound (revert to red: certificates read undecided `#if` arms)", () => {
+    expect(removed(ifMax, "undecided")).toEqual(REFUSED);
+  });
+
+  it("a MaxIteration in an active `#if` arm bounds it (revert to red: certificates ignore `#if` arms)", () => {
+    expect(removed(ifMax, ["FOO"])).toEqual(CLAIMED);
+  });
+
+  it("a direct MaxIteration in an undecided file still bounds it, as the engine's `liveMembers` keeps it (revert to red: certificates need an active arm everywhere)", () => {
+    expect(removed(integer(["MaxIteration = 10;"], dimLoop), "undecided")).toEqual(CLAIMED);
+  });
 });
 
 describe("R484: a view bound holds only with zero mentions of the record", () => {
+  const ifView = integer(["#if FOO", CONST_VIEW, "#endif"], dimLoop);
+
+  it("a view in an undecided `#if` arm is no bound (revert to red: certificates read undecided `#if` arms)", () => {
+    expect(removed(ifView, "undecided")).toEqual(REFUSED);
+  });
+
+  it("a view in an active `#if` arm bounds it (revert to red: certificates ignore `#if` arms)", () => {
+    expect(removed(ifView, ["FOO"])).toEqual(CLAIMED);
+  });
+
   it("a `const(1)` view bounds it (revert to red: ignore `const`)", () => {
     expect(removed(integer([CONST_VIEW], dimLoop))).toEqual(CLAIMED);
   });

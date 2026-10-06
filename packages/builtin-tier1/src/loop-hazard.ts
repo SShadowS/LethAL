@@ -194,17 +194,24 @@ function enclosingExitParts(node: ALSyntaxNode, ctx: SemanticContext): ALSyntaxN
   return out;
 }
 
-/** The members of a declaration body, through `#if` arms the build does not compile out. */
-function liveMembers(body: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
+/**
+ * The members of a data item's body, through `#if` arms the build does not compile out. By default
+ * an UNDECIDED arm is kept: exit guards are read from these, and for a refusal the safe direction
+ * reads too much. `certain` keeps, inside a `#if`, only an ACTIVE arm, as the engine's
+ * `liveMembers` does for object members (which does not descend into a data item's
+ * `preproc_conditional_report`): a bound certificate must hold in the build.
+ */
+function itemMembers(body: ALSyntaxNode, ctx: SemanticContext, certain = false): ALSyntaxNode[] {
   const out: ALSyntaxNode[] = [];
-  const collect = (n: ALSyntaxNode): void => {
+  const collect = (n: ALSyntaxNode, insideIf: boolean): void => {
     for (const c of n.namedChildren) {
-      if (armOfNode(ctx, c) === "inactive") continue;
-      if (c.rawKind.startsWith("preproc_")) collect(c);
-      else out.push(c);
+      const arm = armOfNode(ctx, c);
+      if (arm === "inactive") continue;
+      if (c.rawKind.startsWith("preproc_")) collect(c, true);
+      else if (!(certain && insideIf && arm !== "active")) out.push(c);
     }
   };
-  collect(body);
+  collect(body, false);
   return out;
 }
 
@@ -237,9 +244,11 @@ function dataItemExitParts(item: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNo
   const name = normalizeAlName(item.childForFieldName("name")?.text ?? "");
   const body = item.childForFieldName("body");
   if (body === null) return null;
-  const members = liveMembers(body, ctx);
+  const members = itemMembers(body, ctx);
   let viewBounded = false;
-  for (const m of members) {
+  // A bound property counts only where the build surely has it: a direct member, or one inside a
+  // `#if` whose arm is ACTIVE (an undecided arm is dropped), as the SetRange certificate requires.
+  for (const m of itemMembers(body, ctx, true)) {
     if (m.kind !== ALNodeKind.property) continue;
     const p = normalizeAlName(m.childForFieldName("name")?.text ?? "");
     const v = m.childForFieldName("value");
@@ -271,7 +280,7 @@ function dataItemExitParts(item: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNo
       if (m.rawKind !== "report_dataitem") continue;
       const b = m.childForFieldName("body");
       if (b === null) continue;
-      const inner = liveMembers(b, ctx);
+      const inner = itemMembers(b, ctx);
       for (const t of inner) {
         const tb = t.kind === ALNodeKind.trigger ? t.childForFieldName("body") : null;
         if (tb !== null) parts.push(...exitGuards(tb, t, (n) => endsReport(n, t)));
