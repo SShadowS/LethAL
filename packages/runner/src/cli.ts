@@ -75,7 +75,8 @@ import { loadEquivalenceMarks } from "./equivalence-marks";
 // Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
 export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
 import type { EventSubscriber } from "./events";
-import { assertExplainableReport, explain } from "./explain";
+import { type ExplainOutput, assertExplainableReport, explain } from "./explain";
+import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
 import { HarnessVerifier } from "./harness";
 import type { LeaseSnapshot } from "./harness";
@@ -715,6 +716,8 @@ export interface ExplainCliConfig {
   readonly topSurvivors?: number;
   /** R274: `--project <dir>`, the target whose source `gaps[].source` renders. */
   readonly projectDir?: string;
+  /** R273: `--suggest`, the opt-in suggestions section (explain-suggest.ts). */
+  readonly suggest?: boolean;
 }
 
 /**
@@ -896,7 +899,7 @@ USAGE
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>] [--tests <dir>] [--json]
-  lethal explain           <report.json> [--top <n>] [--project <dir>]
+  lethal explain           <report.json> [--top <n>] [--project <dir>] [--suggest]
   lethal export            <report.json> --format mutation-elements --project <dir> --out <path>
                                          [--thresholds <high,low>]
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
@@ -1094,6 +1097,11 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
                              preprocessor symbols); any difference, or a report from before
                              R274, is REFUSED with nothing on stdout. The output then holds
                              TARGET SOURCE: do not publish it for a third party's code
+  --suggest                  add a separate 'suggestions' section: a suggested fix kind per gap,
+                             LABELLED as a suggestion, not a measurement, derived only from each
+                             survivor's measured reach and coverage attribution ('undecided' where
+                             the report cannot tell). Everything else in the output is unchanged.
+                             Refused on a report without gap ids
 
 CAMPAIGN — the measurement gates, with 'committed before the run' machine-checked
   A measurement campaign states what it expects in a file, COMMITS it, and only then runs. These
@@ -1256,6 +1264,8 @@ export const RUN_FLAGS = {
   // R150: `lethal explain --top <n>`. In the shared table for the same reason as every flag above —
   // `parseArgs` runs in strict mode over ONE option set for every subcommand.
   top: { type: "string" },
+  // R273: `lethal explain --suggest`, the opt-in suggestions section. Owned by `explain` alone.
+  suggest: { type: "boolean", default: false },
   // R178: `lethal export`. In the shared table for the same strict-mode reason as every flag above,
   // and owned by `export` alone in FLAG_OWNERS so another subcommand cannot swallow one silently.
   format: { type: "string" },
@@ -1380,6 +1390,11 @@ export const FLAG_OWNERS: ReadonlyArray<{
     instead: "It pre-commits a mutant count for `lethal campaign freeze`.",
   },
   { flag: "top", owners: ["explain"], instead: "It bounds `lethal explain`'s survivor list." },
+  {
+    flag: "suggest",
+    owners: ["explain"],
+    instead: "It adds `lethal explain`'s opt-in suggestions section.",
+  },
   {
     flag: "format",
     owners: ["export"],
@@ -1816,7 +1831,10 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     if (project === "") {
       throw new Error("--project needs the target project directory the report's run measured.");
     }
-    const projectOpt = project !== undefined ? { projectDir: project } : {};
+    const projectOpt = {
+      ...(project !== undefined ? { projectDir: project } : {}),
+      ...(values.suggest === true ? { suggest: true } : {}),
+    };
     if (top !== undefined) {
       const n = Number(top);
       if (!Number.isInteger(n) || n < 1) {
@@ -5287,8 +5305,13 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
       ? { projectSource: await readTargetSource(parsed.projectDir) }
       : {}),
   };
-  const out = explain(assertExplainableReport(parsedJson), options);
-  console.log(JSON.stringify(out, null, 2));
+  const report = assertExplainableReport(parsedJson);
+  const out = explain(report, options);
+  // R273: composed HERE, never inside `explain()`, so the default output is unchanged by
+  // construction. Built before anything prints, so a refusal leaves stdout empty.
+  const printed: ExplainOutput | ExplainSuggestedOutput =
+    parsed.suggest === true ? { ...out, suggestions: suggest(report, out) } : out;
+  console.log(JSON.stringify(printed, null, 2));
   // R265: the mark keys for a human, on STDERR so stdout stays one JSON document. Each key sits
   // under its survivor; the stale statement, when there is one, comes first.
   if (out.markKeysStale !== undefined) {

@@ -225,7 +225,9 @@ import type { MutantVerdict } from "./store";
  * R277 keeps `gaps[].unobservedBlock` on a line-narrowed run whose ranges cover the block: same
  * meaning, present in more cases only where it stays provably true, so no bump.
  * R274 added the optional `gaps[].source`, present only under `--project`: an optional additive
- * field, so no bump.
+ * field, so no bump. R273 added the optional root `suggestions`, present only under `--suggest` and
+ * composed by the CLI outside `ExplainOutput` (explain-suggest.ts): an optional additive field, so
+ * no bump; a value added later to its kind domain bumps (R233).
  */
 export const EXPLAIN_SCHEMA_VERSION = 13;
 
@@ -1316,11 +1318,18 @@ function artifactOf(
     : { artifactIdAbsent: "not-published" };
 }
 
-function survivorOf(
+/**
+ * A survivor's `attribution`, `guardEvidence` and `reach`, the one derivation `survivorOf` and
+ * `lethal explain --suggest` (explain-suggest.ts, R273) both read, so the two cannot disagree.
+ */
+export function survivorEvidenceOf(
   m: MutantOutcome,
-  artifacts: SessionReport["artifacts"],
   coverageMode: CoverageMode | undefined,
-): ExplainSurvivor {
+): {
+  readonly attribution: ExplainAttribution;
+  readonly guardEvidence: GuardEvidence;
+  readonly reach: SurvivorReach;
+} {
   const measured = m.coverageAttribution;
   if (measured === undefined && coverageMode !== "none") {
     // Unreachable via `explain` (validated above); kept because this function is where the claim
@@ -1338,6 +1347,15 @@ function survivorOf(
         ? "reached-unnoticed"
         : "not-decided"
       : survivorReachOf(measured, guardEvidence, m.guardReached, m.reachGrain, m.carried === true);
+  return { attribution, guardEvidence, reach };
+}
+
+function survivorOf(
+  m: MutantOutcome,
+  artifacts: SessionReport["artifacts"],
+  coverageMode: CoverageMode | undefined,
+): ExplainSurvivor {
+  const { attribution, guardEvidence, reach } = survivorEvidenceOf(m, coverageMode);
   return {
     mutantCode: m.mutantCode,
     file: m.file,
