@@ -70,7 +70,9 @@ describe("R272: discovery gives each test the line of its name", () => {
   });
 
   test("tree path: both #if arms of one test are discovered, each at its own line", () => {
-    // R403's whole-member shape: the regex and tree counts differ, so the tree path decides.
+    // R403's whole-member shape. The `#pragma` between `[Test]` and `procedure` stops the regex
+    // matching that arm, so the `[Test]` count (2) differs from the regex count (1) and the TREE
+    // path decides (`testsOfFile`); the arm spellings differ in case, as AL allows.
     const src = [
       'codeunit 50101 "Arm Tests"',
       "{",
@@ -78,22 +80,24 @@ describe("R272: discovery gives each test the line of its name", () => {
       "",
       "#if LETHALX",
       "    [Test]",
+      "#pragma warning disable AA0137",
       "    procedure Foo()",
       "    begin",
       "    end;",
       "#else",
       "    [Test]",
-      "    procedure Foo()",
+      "    procedure FOO()",
       "    begin",
       "    end;",
       "#endif",
       "}",
       "",
     ].join("\n");
+    expect(Array.from(src.matchAll(/\[Test\]\s*procedure/gi)).length).toBe(1); // the regex path's view
     const refs = testsInAlSource("t/Arm.Codeunit.al", src);
     expect(refs.map((r) => [r.method, r.line])).toEqual([
-      ["Foo", 7],
-      ["Foo", 12],
+      ["Foo", 8],
+      ["FOO", 13],
     ]);
   });
 });
@@ -111,6 +115,15 @@ describe("R272: testMethodsOf, one record per name", () => {
     const out = testMethodsOf([ref("Foo", 7), ref("Foo", 12), ref("Bar", 20)], new Map());
     expect(out).toEqual([
       { name: "A Tests.Bar", file: "t/A.al", line: 20 },
+      { name: "A Tests.Foo", file: "t/A.al", lineAmbiguous: true },
+    ]);
+  });
+
+  test("Foo and FOO in two arms are one test at two places: a row each, both ambiguous", () => {
+    const out = testMethodsOf([ref("Foo", 7), ref("FOO", 12), ref("Bar", 20)], new Map());
+    expect(out).toEqual([
+      { name: "A Tests.Bar", file: "t/A.al", line: 20 },
+      { name: "A Tests.FOO", file: "t/A.al", lineAmbiguous: true },
       { name: "A Tests.Foo", file: "t/A.al", lineAmbiguous: true },
     ]);
   });
@@ -175,6 +188,12 @@ describe("R272: each backend's duration is the test's own", () => {
     // A recovered reply's duration is the time until it was declared lost (R236b).
     answers.push({ ref, outcome: "pass", durationMs: 600, replyRecovered: "readback" });
     expect("measuredDurationMs" in (await run("none"))).toBe(false);
+    // A clock stepped back gives a negative `Date.now()` delta: not a duration (it would make
+    // `testMethods` invalid and explain refuse the whole report). 0 is a real, if quick, one.
+    answers.push({ ref, outcome: "pass", durationMs: -3 });
+    expect("measuredDurationMs" in (await run("procedure"))).toBe(false);
+    answers.push({ ref, outcome: "pass", durationMs: 0 });
+    expect((await run("procedure")).measuredDurationMs).toBe(0);
   });
 });
 

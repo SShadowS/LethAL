@@ -18,11 +18,21 @@ const SUBTYPE_TEST = /Subtype\s*=\s*Test\s*;/i;
 // `d`: R272 reads the name group's offset for the test's line.
 const TEST_METHOD = /\[Test\]\s*(?:\[[^\]]*\]\s*)*procedure\s+("([^"]+)"|(\w+))\s*\(/dgi;
 
-/** R272: the 1-based line of `offset` in `text`, counting `\n` (a CRLF line is one line). */
-function lineAt(text: string, offset: number): number {
-  let line = 1;
-  for (let i = 0; i < offset; i++) if (text.charCodeAt(i) === 10) line++;
-  return line;
+/** R272: `text`'s 1-based line of an offset, counting `\n` (a CRLF line is one line). The line
+ *  starts are indexed once per file, so each lookup is a binary search. */
+function lineIndex(text: string): (offset: number) => number {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+  return (offset) => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if ((starts[mid] ?? 0) <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
 }
 /** R420: one `[Test]` attribute token, read on the masked source. `TEST_METHOD` starts at one of
  *  these, so on one file the regex can never match more often than this does. */
@@ -275,6 +285,7 @@ function regexTests(
 ): { readonly found: FoundTest[]; readonly consumed: Set<number> } {
   const found: FoundTest[] = [];
   const consumed = new Set<number>();
+  const lineAt = lineIndex(masked);
   // R79: section on CODE only. Prose of the shape `codeunit 50100 "Sales Post"` used to open a
   // bogus section and swallow every [Test] below it, without a word anywhere.
   const codeunitMatches = Array.from(masked.matchAll(CODEUNIT_HEADER_GLOBAL));
@@ -306,7 +317,7 @@ function regexTests(
           codeunitName,
           method: m[2] ?? m[3] ?? "",
           file: rel,
-          line: lineAt(masked, nameAt),
+          line: lineAt(nameAt),
         },
         offset,
         testOffsets: [offset],

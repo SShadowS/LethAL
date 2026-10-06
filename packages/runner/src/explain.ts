@@ -35,6 +35,7 @@ import type {
   ReportValidity,
   SessionReport,
   SurvivorReach,
+  TestMethodRecord,
 } from "./report";
 import { ATTRIBUTION_INTERPRETATIONS, twinSiteOf } from "./selection";
 import type { CoverageAttribution } from "./selection";
@@ -1450,18 +1451,17 @@ function survivorOf(
 function coveringTestsOf(
   gapId: string,
   survivors: readonly MutantOutcome[],
-  testMethods: NonNullable<SessionReport["testMethods"]>,
+  byName: ReadonlyMap<string, TestMethodRecord>,
 ): { readonly coveringTests: ExplainCoveringTest[]; readonly reachMeasuredMembers: number } {
-  const byName = new Map(testMethods.map((t) => [t.name, t]));
   const names = [...new Set(survivors.flatMap((m) => m.coveringTests))];
   const measured = survivors.filter((m) => m.reachedBy !== undefined);
   const covering = names.map((name): ExplainCoveringTest => {
     const t = byName.get(name);
     if (t === undefined) {
-      // Known producer: a test codeunit renamed on disk but not republished, then `--resume`
-      // (a reused baseline or a carried batch keeps the old name). Refused, never guessed.
+      // Known producers: a test or test codeunit renamed or removed on disk but not republished,
+      // then `--resume` (a reused baseline or a carried batch keeps the old name). Refused.
       refuse(
-        `gap ${gapId}'s covering test is not in testMethods (a test codeunit renamed since a resumed run's earlier session gives this; re-run without --resume)`,
+        `gap ${gapId}'s covering test is not in testMethods (a test or test codeunit renamed or removed on disk since a resumed run's earlier session gives this; re-run without --resume)`,
         name,
       );
     }
@@ -1498,6 +1498,11 @@ function blocksOf(
   | { readonly gaps: ExplainGap[]; readonly noCoverageBlocks: ExplainNoCoverageBlock[] }
   | undefined {
   if (!report.mutants.some((m) => m.gapId !== undefined)) return undefined;
+  // R272: built once, not per gap.
+  const testMethodsByName =
+    report.testMethods !== undefined
+      ? new Map(report.testMethods.map((t) => [t.name, t]))
+      : undefined;
   const firstRow = new Map<string, MutantOutcome>();
   const firstMember = new Map<string, MutantOutcome>();
   const carriedGaps = new Set<string>();
@@ -1615,11 +1620,11 @@ function blocksOf(
           ...("artifactId" in artifact
             ? { verifyCommand: gapVerifyCommand(artifact.artifactId, gapId) }
             : {}),
-          ...(report.testMethods !== undefined
+          ...(testMethodsByName !== undefined
             ? coveringTestsOf(
                 gapId,
                 report.mutants.filter((m) => m.gapId === gapId && m.verdict === "survived"),
-                report.testMethods,
+                testMethodsByName,
               )
             : {}),
         },

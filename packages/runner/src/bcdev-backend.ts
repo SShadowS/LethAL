@@ -968,8 +968,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
         ? await this.runOnHub(ref, opts)
         : await this.runViaTransport(ref, opts);
     // R272: one call per test on both paths, so `durationMs` is this test's own wall clock. Not a
-    // recovered reply (R236b), whose duration is the time until the reply was declared lost.
-    return v.outcome === "pass" && v.replyRecovered === undefined
+    // recovered reply (R236b), whose duration is the time until the reply was declared lost. Not a
+    // negative one: a `Date.now()` delta goes below 0 when the clock steps back.
+    return v.outcome === "pass" && v.replyRecovered === undefined && v.durationMs >= 0
       ? { ...v, measuredDurationMs: v.durationMs }
       : v;
   }

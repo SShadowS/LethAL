@@ -248,19 +248,26 @@ export function applyBatchInvalidations(
  * R272: one record per qualified name (`Codeunit.method`, the shape `qualifiedTestName` and
  * `coveringTests` use), sorted by `compareCodeUnits`. Two `#if` arms can declare one name (R403):
  * then a location is given only where every ref agrees, and `lineAmbiguous` says why it is not.
+ * Agreement is decided over the test's IDENTITY (`codeunitId::method`, case-insensitive like AL),
+ * so arms spelling one method `Foo` and `FOO` are one test at two places; each spelling keeps its
+ * own row, since that is the name `coveringTests` uses.
  */
 export function testMethodsOf(
   refs: readonly TestMethodRef[],
   durations: ReadonlyMap<string, readonly number[]>,
 ): TestMethodRecord[] {
+  const identityOf = (r: TestMethodRef) => `${r.codeunitId}::${r.method.toLowerCase()}`;
   const byName = new Map<string, TestMethodRef[]>();
+  const byIdentity = new Map<string, TestMethodRef[]>();
   for (const r of refs) {
     const name = `${r.codeunitName}.${r.method}`;
     byName.set(name, [...(byName.get(name) ?? []), r]);
+    byIdentity.set(identityOf(r), [...(byIdentity.get(identityOf(r)) ?? []), r]);
   }
   return [...byName]
     .sort(([a], [b]) => compareCodeUnits(a, b))
-    .map(([name, same]) => {
+    .map(([name, own]) => {
+      const same = [...new Set(own.flatMap((r) => byIdentity.get(identityOf(r)) ?? []))];
       const files = new Set(same.map((r) => r.file));
       const places = new Set(same.map((r) => `${r.file ?? ""}\0${r.line ?? ""}`));
       const [first] = same;
