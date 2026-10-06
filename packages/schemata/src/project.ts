@@ -180,9 +180,12 @@ export function coarseIdentityTupleOf(
  * differently under the two can swap ordinals (fixtures, CDO and BaseApp measured: 0 keys move).
  * 25: R446, in a loop whose condition reads no name and calls nothing (`while true`), a write a
  * body-exit guard reads is hang-refused, so a later same-tuple twin of a refused mutant takes its
- * ordinal (BC.History: 16 keys).
+ * ordinal (BC.History: 16 keys). 26: R477, `validate-to-assign` emits the bare `F := V` where
+ * R-464 refused a bare `Validate(F, V)` and nothing at the call declares F, so a new mutant earlier
+ * in a procedure with the same tuple as an existing one takes ordinal 0 and moves that one's key
+ * (corpora: 47 sites added, 0 keys moved; the move is pinned on a constructed table).
  */
-export const IDENTITY_SCHEME = 25;
+export const IDENTITY_SCHEME = 26;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**84 of 480 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**83 of 480 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -334,7 +334,7 @@ that ordering is the priority.
 - **R467** · `empty-block` never empties a `repeat` body; the safe half (an `until` that advances a cursor) is ~11,500 BaseApp sites with no coarse mutant · [R467.md](docs/roadmap/R467.md) · open
 - **R462** · `StaleTestAppError` says the published test app is OLDER when it may be being REPLACED under the running baseline; its remedy (republish) is then wrong in cause · [R462.md](docs/roadmap/R462.md) · done (65e20ee8)
 - **R463** · Tier 2 never claims a record call inside a `reportextension`: `receiver.ts` knows table and page extensions only · [R463.md](docs/roadmap/R463.md) · open
-- **R477** · Guarded bare fallback for the validate-to-assign sites R464 refuses (35: 29 previously mutated, 6 new) · [R477.md](docs/roadmap/R477.md) · open
+- **R477** · Guarded bare fallback for the validate-to-assign sites R464 refuses (35: 29 previously mutated, 6 new) · [R477.md](docs/roadmap/R477.md) · done (467e2faf)
 - **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · closed 2026-10-05 — neither shape reaches the prefix proof today: no Tier-2 claim is made inside a…
 - **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · open, filed 2026-10-05
 
