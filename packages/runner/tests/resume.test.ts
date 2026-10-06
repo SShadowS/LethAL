@@ -35,6 +35,8 @@ import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
+import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -3092,5 +3094,217 @@ describe("R247: no verdict crosses a test-app change", () => {
       r.first.counts.survived,
     );
     expect(historyWarnings(events)).toEqual([]);
+  });
+});
+
+/**
+ * R389 (sol's re-review): the closed-world guard's answer is part of what resume, survivor skips
+ * and baseline reuse compare. A real published package (manifest id + the test source) and a
+ * counting DependentCount, so the guard actually engages; "0" is closed-world, "1" open.
+ */
+describe("R389: no verdict or baseline crosses a closed-world guard flip", () => {
+  const TEST_ID = "4b3a2c1d-0e9f-4a8b-8c7d-6e5f4a3b2c1d";
+  const PKG = buildFakeAppWithEntries({
+    "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${TEST_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.0" /><InternalsVisibleTo /></Package>`,
+    "src/SandboxTests.Codeunit.al": TEST_AL,
+  });
+  class GuardBackend extends CountingBackend {
+    asked = 0;
+    constructor(
+      private readonly answer: (call: number) => number,
+      abortFromDeploy?: number,
+    ) {
+      super("pass", undefined, abortFromDeploy);
+    }
+    async fetchPublishedAppPackage(): Promise<Uint8Array> {
+      return PKG;
+    }
+    microsoftMode() {
+      return fakeMicrosoftMode();
+    }
+    async dependentCount(): Promise<number> {
+      this.asked += 1;
+      return this.answer(this.asked);
+    }
+  }
+  const project = async (secondFile: boolean) => {
+    const dirs = await makeProject({ secondFile });
+    await Bun.write(
+      join(dirs.testDir, "app.json"),
+      JSON.stringify({
+        id: TEST_ID,
+        name: "Sandbox Tests",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+      }),
+    );
+    return dirs;
+  };
+  const session = (
+    dirs: Awaited<ReturnType<typeof project>>,
+    store: ResultsStore,
+    backend: CountingBackend,
+    extra: Partial<Parameters<typeof runSession>[0]> = {},
+  ) => runSession({ backend, store, ...dirs, selectorIds, maxGuardsPerBatch: 1, ...extra });
+  const hashes = (store: ResultsStore) =>
+    (
+      store.db.query("SELECT test_app_hash AS h FROM runs ORDER BY id").all() as { h: string }[]
+    ).map((r) => r.h);
+  const FLIPS = [
+    [0, 1],
+    [1, 0],
+  ] as const;
+  const SAME = [
+    [0, 0],
+    [1, 1],
+  ] as const;
+
+  for (const [a, b] of [...FLIPS, ...SAME]) {
+    const flip = a !== b;
+    test(`--resume: recorded with count ${a}, resumed with ${b}: ${flip ? "refused, nothing runs" : "carries"}`, async () => {
+      const dirs = await project(true);
+      const store = new ResultsStore(":memory:");
+      const first = new GuardBackend(() => a, 2); // batch 1 aborts on its first mutant
+      expect((await session(dirs, store, first)).quarantined).toBeDefined();
+      expect(first.asked).toBe(a === 0 ? 2 : 1); // closed: before and after; open: once
+      const second = new GuardBackend(() => b);
+      const resumed = session(dirs, store, second, { resume: "last" });
+      if (flip) {
+        await expect(resumed).rejects.toThrow(/R247/);
+        expect(second.deploys + second.baselineRuns + second.mutantRuns).toBe(0);
+      } else {
+        const report = await resumed;
+        expect(report.mutants.filter((m) => m.carried === true).length).toBeGreaterThan(0);
+      }
+      store.close();
+    });
+
+    test(`--skip-known-survivors: recorded with count ${a}, then ${b}: ${flip ? "skips nothing" : "skips the survivors"}`, async () => {
+      const dirs = await project(false);
+      const store = new ResultsStore(":memory:");
+      const first = await session(dirs, store, new GuardBackend(() => a));
+      expect(first.counts.survived).toBeGreaterThan(0);
+      const report = await session(dirs, store, new GuardBackend(() => b), {
+        skipKnownSurvivors: true,
+      });
+      const known = report.mutants.filter((m) => m.verdict === "known-survivor").length;
+      expect(known).toBe(flip ? 0 : first.counts.survived);
+      store.close();
+    });
+
+    // Real reuse: run 1 (answer a) measured both batch baselines. Run 2 (answer b) aborts in
+    // batch 1, and its own snapshots are removed, so resuming it can reuse batch 1's baseline only
+    // from run 1. Across a flip it must measure that baseline again.
+    test(`baseline reuse: snapshot from count ${a}, resume under ${b}: ${flip ? "re-measured" : "reused"}`, async () => {
+      const dirs = await project(true);
+      const store = new ResultsStore(":memory:");
+      await session(dirs, store, new GuardBackend(() => a, 2));
+      const run1 = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      // Run 1 is the unfinished run "last" would pick; finish it so run 2 is the resumable one.
+      store.db.run("UPDATE runs SET finished_at = datetime('now') WHERE id = ?", [run1]);
+      await session(dirs, store, new GuardBackend(() => b, 2));
+      const run2 = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [run2]);
+      expect(
+        (
+          store.db
+            .query("SELECT COUNT(*) AS n FROM baseline_snapshots WHERE run_id = ?")
+            .get(run1) as {
+            n: number;
+          }
+        ).n,
+      ).toBeGreaterThan(0);
+      const third = new GuardBackend(() => b);
+      const events: RunEvent[] = [];
+      await session(dirs, store, third, { resume: run2, emit: [(e) => events.push(e)] });
+      const reused = events.filter(
+        (e) => e.type === "warning" && e.code === "resume-baseline-reused",
+      );
+      if (flip) {
+        expect(reused).toEqual([]);
+        expect(third.baselineRuns).toBeGreaterThan(0);
+      } else {
+        expect(reused).toHaveLength(1);
+        expect(third.baselineRuns).toBe(0);
+      }
+      store.close();
+    });
+  }
+
+  // A run killed after scoring, before its post-execution confirmation: its identity and its
+  // snapshots stay pending, so the same answer neither resumes it nor reuses its baseline.
+  test("interrupted before confirmation: nothing carries, no baseline is reused; control: confirmed carries", async () => {
+    class KilledAtConfirm extends ResultsStore {
+      override confirmClosedWorld(): void {
+        throw new Error("killed before confirmation");
+      }
+    }
+    const dirs = await project(true);
+    const store = new KilledAtConfirm(":memory:");
+    await expect(session(dirs, store, new GuardBackend(() => 0, 2))).rejects.toThrow(
+      "killed before confirmation",
+    );
+    const [h] = hashes(store);
+    expect(h).toMatch(/\|closed-world:public\+internal\|pending$/);
+    const snaps = store.db.query("SELECT test_app_hash AS h FROM baseline_snapshots").all() as {
+      h: string;
+    }[];
+    expect(snaps.length).toBeGreaterThan(0);
+    for (const s of snaps) expect(s.h).toMatch(/\|pending$/);
+    const second = new GuardBackend(() => 0);
+    await expect(session(dirs, store, second, { resume: "last" })).rejects.toThrow(/R247/);
+    expect(second.deploys + second.baselineRuns + second.mutantRuns).toBe(0);
+    // The pending owner is excluded by the lookup too, even under its own (pending) key.
+    const pendingSnap = store.db
+      .query("SELECT batch_hash, test_app_hash FROM baseline_snapshots")
+      .get() as {
+      batch_hash: string;
+      test_app_hash: string;
+    };
+    expect(
+      store.findBaselineSnapshot(pendingSnap.batch_hash, pendingSnap.test_app_hash, CAPS.coverage),
+    ).toBeNull();
+    store.close();
+  });
+
+  test("findBaselineSnapshot excludes a revoked owner; revocation updates run and snapshots together", async () => {
+    const dirs = await project(true);
+    const store = new ResultsStore(":memory:");
+    await session(dirs, store, new GuardBackend(() => 0, 2));
+    const run1 = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const snap = store.db
+      .query("SELECT batch_hash, test_app_hash FROM baseline_snapshots")
+      .get() as {
+      batch_hash: string;
+      test_app_hash: string;
+    };
+    // Control: confirmed, the snapshot is found by its key.
+    expect(
+      store.findBaselineSnapshot(snap.batch_hash, snap.test_app_hash, CAPS.coverage),
+    ).not.toBeNull();
+    // A revoked owner whose snapshot kept the key (the state a non-atomic revoke could leave).
+    store.db.run(
+      "UPDATE runs SET test_app_hash = test_app_hash || '|closed-world:revoked' WHERE id = ?",
+      [run1],
+    );
+    expect(
+      store.findBaselineSnapshot(snap.batch_hash, snap.test_app_hash, CAPS.coverage),
+    ).toBeNull();
+    // The real revoke is one transaction: a failure after the run update rolls it back.
+    store.db.run("UPDATE runs SET test_app_hash = ? WHERE id = ?", [snap.test_app_hash, run1]);
+    store.db.run(
+      "CREATE TRIGGER fail_snap BEFORE UPDATE ON baseline_snapshots BEGIN SELECT RAISE(ABORT, 'killed'); END",
+    );
+    expect(() => store.revokeTestAppHash(run1, "|closed-world:revoked")).toThrow("killed");
+    expect(hashes(store)[0]).toBe(snap.test_app_hash);
+    store.db.run("DROP TRIGGER fail_snap");
+    store.revokeTestAppHash(run1, "|closed-world:revoked");
+    expect(hashes(store)[0]).toMatch(/\|closed-world:revoked$/);
+    expect(
+      (
+        store.db.query("SELECT test_app_hash AS h FROM baseline_snapshots").all() as { h: string }[]
+      ).every((r) => r.h.endsWith("|closed-world:revoked")),
+    ).toBe(true);
+    store.close();
   });
 });

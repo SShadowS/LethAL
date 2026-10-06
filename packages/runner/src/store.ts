@@ -734,8 +734,8 @@ export class ResultsStore {
     return r.id;
   }
 
-  /** R389: replaces the run's open-world test digests with the closed-world ones, once the guard
-   *  gave the same closed answer after execution as before it. */
+  /** R389: replaces the run's open-world test digests with the closed-world ones, for a run that
+   *  recorded no test-app identity (nothing to make reusable). */
   setTestDigests(runId: number, digests: Readonly<Record<string, string>>, parts: unknown): void {
     const changed = this.db
       .query("UPDATE runs SET test_digests = ?, test_digest_parts = ? WHERE id = ?")
@@ -743,19 +743,54 @@ export class ResultsStore {
     if (changed !== 1) throw new Error(`store.ts: setTestDigests: no run ${runId}`);
   }
 
-  /** R389: the guard's answer changed during the run. Its test-app identity, and that of every
-   *  baseline snapshot it recorded, gets `suffix`, so no later session carries or reuses from it. */
+  /**
+   * R389: the guard gave the same closed answer after execution as before it. In ONE transaction:
+   * the closed-world digests replace the open-world ones, and the run's test-app identity and its
+   * baseline snapshots lose `pending` (`PENDING_SUFFIX`), which makes them reusable. Until then
+   * no key a session computes can match them, so a run killed before this never supplies a
+   * verdict or a baseline.
+   */
+  confirmClosedWorld(
+    runId: number,
+    pending: string,
+    digests: Readonly<Record<string, string>>,
+    parts: unknown,
+  ): void {
+    const strip = "substr(test_app_hash, 1, length(test_app_hash) - length(?1))";
+    this.db.transaction(() => {
+      const changed = this.db
+        .query(
+          `UPDATE runs SET test_digests = ?2, test_digest_parts = ?3, test_app_hash = ${strip}
+           WHERE id = ?4 AND substr(test_app_hash, -length(?1)) = ?1`,
+        )
+        .run(pending, JSON.stringify(digests), JSON.stringify(parts), runId).changes;
+      if (changed !== 1)
+        throw new Error(`store.ts: confirmClosedWorld: run ${runId} holds no pending identity`);
+      this.db
+        .query(
+          `UPDATE baseline_snapshots SET test_app_hash = ${strip}
+           WHERE run_id = ?2 AND substr(test_app_hash, -length(?1)) = ?1`,
+        )
+        .run(pending, runId);
+    })();
+  }
+
+  /** R389: the guard's answer changed during the run. In ONE transaction, the run's test-app
+   *  identity and every baseline snapshot it recorded get `suffix`, so no later session carries or
+   *  reuses from it (and `findBaselineSnapshot` excludes a revoked owner besides). */
   revokeTestAppHash(runId: number, suffix: string): void {
-    const changed = this.db
-      .query(
-        "UPDATE runs SET test_app_hash = test_app_hash || ? WHERE id = ? AND test_app_hash IS NOT NULL",
-      )
-      .run(suffix, runId).changes;
-    if (changed !== 1)
-      throw new Error(`store.ts: revokeTestAppHash: run ${runId} has no test app hash`);
-    this.db
-      .query("UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ? WHERE run_id = ?")
-      .run(suffix, runId);
+    this.db.transaction(() => {
+      const changed = this.db
+        .query(
+          "UPDATE runs SET test_app_hash = test_app_hash || ? WHERE id = ? AND test_app_hash IS NOT NULL",
+        )
+        .run(suffix, runId).changes;
+      if (changed !== 1)
+        throw new Error(`store.ts: revokeTestAppHash: run ${runId} has no test app hash`);
+      this.db
+        .query("UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ? WHERE run_id = ?")
+        .run(suffix, runId);
+    })();
   }
 
   /** R391: records the run's `twin_tuples` once generation has numbered its sites. Called before
@@ -1556,7 +1591,9 @@ export class ResultsStore {
       .query(
         `SELECT run_id, batch_index, batch_hash, test_app_hash, payload FROM baseline_snapshots
          WHERE batch_hash = ? AND test_app_hash = ?
-           AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ? AND coverage_mode = ?)
+           AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ? AND coverage_mode = ?
+             AND COALESCE(test_app_hash, '') NOT LIKE '%|closed-world:revoked%'
+             AND COALESCE(test_app_hash, '') NOT LIKE '%|pending')
          ORDER BY id DESC LIMIT 1`,
       )
       .get(batchHash, testAppHash, IDENTITY_SCHEME, coverageMode) as {

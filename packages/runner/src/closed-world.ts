@@ -43,7 +43,9 @@ const open = (why: string, warn = false): ClosedWorldResult => ({
   warn,
 });
 
-const isClosed = (cw: ClosedWorld): boolean => cw.public || cw.internal;
+/** Whether an answer narrows anything (either flag closed). */
+export const isClosedWorld = (cw: ClosedWorld): boolean => cw.public || cw.internal;
+const isClosed = isClosedWorld;
 
 /** The id and internalsVisibleTo of a package's `NavxManifest.xml`; unknowns stay undefined. */
 export function digestedAppOfPackage(pkg: Uint8Array): DigestedApp {
@@ -149,6 +151,11 @@ export class ClosedWorldChangedError extends Error {
     this.name = "ClosedWorldChangedError";
   }
 }
+
+/** R389: the suffix a closed-world run's identity and snapshots carry until the post-execution
+ *  recheck confirms them (`ResultsStore.confirmClosedWorld`). No session computes it, so a pending
+ *  owner, a run killed before confirmation included, never supplies a verdict or a baseline. */
+export const PENDING_SUFFIX = "|pending";
 
 /** The suffix a run's recorded identity gets when its post-execution check failed: matches nothing. */
 export const REVOKED_SUFFIX = "|closed-world:revoked";

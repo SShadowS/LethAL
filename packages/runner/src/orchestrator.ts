@@ -92,10 +92,12 @@ import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import {
   type ClosedWorldResult,
+  PENDING_SUFFIX,
   REVOKED_SUFFIX,
   closedWorldGuard,
   digestedAppOfPackage,
   guardedTestAppHash,
+  isClosedWorld,
   sameClosedWorld,
 } from "./closed-world";
 import type { PublishOutcome } from "./deployment-verifier";
@@ -4439,7 +4441,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       runId,
       batchIndex: batchIdx,
       batchHash: snapshotKey.batchHash,
-      testAppHash,
+      // R389: a closed-world snapshot stays pending (unmatchable) until the run's recheck confirms.
+      testAppHash:
+        input.snapshot !== undefined && isClosedWorld(input.snapshot.closedWorld)
+          ? `${testAppHash}${PENDING_SUFFIX}`
+          : testAppHash,
       baseline: baseline as BaselineObservation[],
     });
   }
@@ -5085,7 +5091,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     generationSourceSha256: sourceHashAtGeneration,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
-    ...(testAppHash !== undefined ? { testAppHash } : {}),
+    // R389: a closed-world run's identity is recorded PENDING (unmatchable) until its
+    // post-execution recheck confirms it; a run killed before that never supplies a verdict.
+    ...(testAppHash !== undefined
+      ? {
+          testAppHash:
+            pendingClosedWorld !== undefined ? `${testAppHash}${PENDING_SUFFIX}` : testAppHash,
+        }
+      : {}),
     ...(testDigests !== undefined ? { testDigests } : {}),
     ...(testDigestParts !== undefined ? { testDigestParts } : {}),
     projectPath: cfg.projectDir,
@@ -6526,7 +6539,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   if (pendingClosedWorld !== undefined) {
     const again = await pendingClosedWorld.recheck();
     if (sameClosedWorld(pendingClosedWorld.guard, again)) {
-      cfg.store.setTestDigests(runId, pendingClosedWorld.digests, pendingClosedWorld.parts);
+      // One transaction: the closed-world digests, and reuse enabled for the run and its snapshots.
+      if (testAppHash !== undefined) {
+        cfg.store.confirmClosedWorld(
+          runId,
+          PENDING_SUFFIX,
+          pendingClosedWorld.digests,
+          pendingClosedWorld.parts,
+        );
+      } else {
+        cfg.store.setTestDigests(runId, pendingClosedWorld.digests, pendingClosedWorld.parts);
+      }
     } else {
       if (testAppHash !== undefined) cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX);
       emit({

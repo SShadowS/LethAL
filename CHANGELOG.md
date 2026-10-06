@@ -461,7 +461,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   about the package actually digested (the published test app), asks again after execution and
   keeps open-world digests unless the answer held, and is part of the run's test-app identity, so
   `--resume`, `--skip-known-survivors` and baseline reuse carry nothing across a changed answer.
-  Verify fails with `ClosedWorldChangedError` when the answer changed while it ran.
+  Until that recheck confirms it, a closed-world run and its baseline snapshots are recorded as
+  pending and are never reused, so a run killed before it supplies nothing. Verify fails with
+  `ClosedWorldChangedError` when the answer changed while it ran. Stated limit: LethAL assumes that
+  no app depending on the test app is published, installed, uninstalled or unpublished between the
+  first guard query and the post-execution recheck; the run does not detect a violation, and a
+  concurrent publish already breaks the fenced run's assumptions in other ways.
 - **A carried verdict no longer lands on a statement whose procedure changed around it** (R474).
   When the source changed since the recorded run, `--resume` and `--skip-known-survivors` matched a
   mutant on its file and statement alone, so inserting `exit;` before an unchanged statement carried
