@@ -455,6 +455,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`lethal run` refuses a test project nested inside the target** (R445). The target build copies
+  every `.al` under the target folder, so a `--tests` folder inside it was mutated and published as
+  target code, without a word. `lethal run` now refuses that layout by name
+  (`test-project-nested`), both ways round (the test folder inside the target, or containing it),
+  before it reads or builds anything, with the same fix as `lethal verify` (R-260): move the test
+  project beside the target and pass that folder as `--tests`. Campaign stages run through
+  `lethal run`, so they are covered; `lethal run --dry-run` takes no `--tests` and still lists a
+  nested project's test files as mutants.
 - **A carried verdict no longer lands on a statement whose procedure changed around it** (R474).
   When the source changed since the recorded run, `--resume` and `--skip-known-survivors` matched a
   mutant on its file and statement alone, so inserting `exit;` before an unchanged statement carried

@@ -635,7 +635,8 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
     const parsed: RunCliConfig = {
       mode: "run",
       projectDir,
-      testDir: projectDir,
+      // R445: a sibling, never the target folder itself (run refuses that layout by name).
+      testDir: scratch("lethal-r387-tests-"),
       backendKind: "al-runner",
       dbPath: ":memory:",
       configPath,
