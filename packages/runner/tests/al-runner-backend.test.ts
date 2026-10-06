@@ -648,13 +648,11 @@ describe("AlRunnerBackend.run", () => {
 
   // The lookup must use the SAME qualified name the `--test` filter sent (one helper builds
   // both). Matching on the bare method would miss every v2 row; matching too loosely would
-  // score a mutant off whatever test happened to be in the payload.
+  // score a mutant off whatever test happened to be in the payload. (Since R488 a payload that ALSO
+  // names another test is never credited at all; see the R488 block below.)
   test("finds the requested test by its qualified name", async () => {
     const { spawn } = okSpawn({
-      tests: [
-        { name: "Codeunit79100.SomeoneElse", status: "fail", message: "not ours" },
-        { name: "Codeunit79100.OverBudgetDetected", status: "pass" },
-      ],
+      tests: [{ name: "Codeunit79100.OverBudgetDetected", status: "pass" }],
     });
     const { backend } = await makeBackend(spawn);
     const v = await backend.run(
@@ -1231,5 +1229,66 @@ describe("AlRunnerBackend.close() removes its coverage scratch directory (R356)"
     expect(await exists(dir)).toBe(true);
     await backend.close();
     expect(await exists(dir)).toBe(false);
+  });
+});
+
+// R488. al-runner's `--test` is a substring match: asking for `...PostingUpdatesTotal` also runs
+// `...PostingUpdatesTotalTwin`, in one process, under one deadline, into one Cobertura file. A
+// fake al-runner that behaves that way, honouring `--exclude-test` by whole name as the real one
+// does (measured on c39ad5de, see the R-488 selector probe).
+describe("AlRunnerBackend one-shot: a result naming any other test is never credited (R488)", () => {
+  const TWIN = `${QUALIFIED}Twin`;
+  const opts = { coverage: "none", timeoutMs: 5000 } as const;
+
+  /** `merged` is what the substring match returns; the wanted test FAILS there and passes alone,
+   *  so a credited merged result reads as a kill. */
+  function substringRunner(honoursExclude: boolean) {
+    const calls: string[][] = [];
+    const spawn: SpawnFn = async (argv) => {
+      calls.push([...argv]);
+      const excluded = honoursExclude && argv.includes("--exclude-test");
+      const tests = excluded
+        ? [{ name: QUALIFIED, status: "pass", durationMs: 1 }]
+        : [
+            { name: QUALIFIED, status: "fail", durationMs: 1, message: "twin's state" },
+            { name: TWIN, status: "pass", durationMs: 1 },
+          ];
+      return { exitCode: 0, stdout: alRunnerStdout({ tests }), stderr: "" };
+    };
+    return { calls, spawn };
+  }
+
+  test("a merged result is discarded and the test re-runs alone with --exclude-test per sibling", async () => {
+    const r = substringRunner(true);
+    const { backend } = await makeBackend(r.spawn);
+    const v = await backend.run(ref, opts);
+    expect(v.outcome).toBe("pass");
+    expect(r.calls.length).toBe(2);
+    expect(r.calls[0]).not.toContain("--exclude-test");
+    const second = r.calls[1] ?? [];
+    expect(second[second.indexOf("--exclude-test") + 1]).toBe(TWIN);
+    // Learned once: the next call excludes up front and runs once.
+    expect((await backend.run(ref, opts)).outcome).toBe("pass");
+    expect(r.calls.length).toBe(3);
+    expect(r.calls[2]).toContain(TWIN);
+  });
+
+  test("a result that still names another test after its excludes is refused by name", async () => {
+    const r = substringRunner(false);
+    const { backend } = await makeBackend(r.spawn);
+    const v = await backend.run(ref, opts);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain(TWIN);
+    expect(r.calls.length).toBe(2);
+  });
+
+  test("an exact single-test result is credited from one call with today's argv", async () => {
+    const { calls, spawn } = okSpawn({
+      tests: [{ name: QUALIFIED, status: "fail", durationMs: 1 }],
+    });
+    const { backend } = await makeBackend(spawn);
+    expect((await backend.run(ref, opts)).outcome).toBe("fail");
+    expect(calls.length).toBe(1);
+    expect(calls[0]).not.toContain("--exclude-test");
   });
 });

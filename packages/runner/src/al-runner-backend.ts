@@ -36,6 +36,7 @@ import {
 import type {
   AlRunnerBcBuild,
   AlRunnerMissingImplementation,
+  AlRunnerRawTest,
   AlRunnerTransport,
 } from "./al-runner-transport";
 import type { CompiledArtifact } from "./artifact";
@@ -360,6 +361,12 @@ export class AlRunnerBackend implements ExecutionBackend {
    * single worst thing this cache could do.
    */
   private serverSuite: ServerSuiteResults | undefined;
+  /**
+   * R488 — per requested test, the OTHER tests al-runner's substring `--test` was seen to select
+   * with it, sent back as `--exclude-test` on every later one-shot call. Kept for the session: the
+   * names come from the test project, which no mutant changes.
+   */
+  private readonly oneShotSiblings = new Map<string, readonly string[]>();
 
   constructor(
     private readonly cfg: AlRunnerConfig,
@@ -994,14 +1001,74 @@ export class AlRunnerBackend implements ExecutionBackend {
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     if (this.server !== undefined) return this.runViaServer(ref, opts);
-    const started = Date.now();
     // ONE name for both the `--test` filter and the lookup below — see qualifiedTestName.
     const wanted = qualifiedTestName(ref.codeunitId, ref.method);
+    let started = Date.now();
+    let sent = await this.sendOneShot(wanted, opts);
+    // R488. `--test` is a substring match, so a result can carry tests we did not ask for, and its
+    // ONE Cobertura file and ONE deadline are shared with them. Such a result is never credited.
+    // Each sibling is learned once, by name, and excluded from then on (`--exclude-test` matches a
+    // whole name only), so the requested test re-runs alone. A result that still lists another
+    // test after that is refused by name.
+    // ponytail: the FIRST call for a test runs its siblings with it; if that call hits the
+    // deadline it reads `deadline-exceeded` as before R488. Feed the backend the discovered test
+    // list to exclude up front if that ever bites.
+    for (;;) {
+      if (sent.res.kind !== "tests") break;
+      const extras = sent.res.tests.map((x) => x.name).filter((n) => n !== wanted);
+      if (extras.length === 0) break;
+      const known = this.oneShotSiblings.get(wanted) ?? [];
+      const fresh = extras.filter(
+        (n) => !known.includes(n) && n.toLowerCase() !== wanted.toLowerCase(),
+      );
+      if (fresh.length === 0) {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: Date.now() - started,
+          failureMessage: `al-runner ran tests other than the requested "${wanted}" (${extras.join(", ")}) despite --exclude-test for each; a merged run is never credited to one test (R488)`,
+          operation: "pre-dispatch-rejected",
+        };
+      }
+      this.oneShotSiblings.set(wanted, [...known, ...fresh]);
+      started = Date.now();
+      sent = await this.sendOneShot(wanted, opts);
+    }
+    const { res, coverageOut } = sent;
+    const durationMs = Date.now() - started;
+    if (res.kind === "deadline") return { ref, outcome: "deadline-exceeded", durationMs };
+    if (res.kind === "error")
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: res.detail,
+        operation: "pre-dispatch-rejected",
+      };
+    const t = res.tests.find((x) => x.name === wanted);
+    if (!t)
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        // Naming both sides: a mismatch here means the runner ran something other than what
+        // we asked for, and "missing the requested test" alone left nobody able to see which.
+        failureMessage: `al-runner output has no test named "${wanted}" (it returned: ${
+          res.tests.map((x) => x.name).join(", ") || "<no tests>"
+        })`,
+        operation: "pre-dispatch-rejected",
+      };
+    return this.oneShotVerdict(ref, wanted, t, durationMs, coverageOut);
+  }
+
+  /** One one-shot invocation for `wanted`, excluding every sibling R488 has learned for it. */
+  private async sendOneShot(wanted: string, opts: RunOpts) {
     // R220. A file PER INVOCATION, never a shared path: al-runner writes the whole Cobertura
     // document on exit, so two invocations sharing one path would race and a test could be handed
     // another test's coverage — a wrong covering-test set, which is a wrong verdict rather than a
     // slow one.
     const coverageOut = await this.coverageOutPath();
+    const excludeTests = this.oneShotSiblings.get(wanted);
     const res = await this.transport.send({
       sourceDir: this.activeDir(),
       testDir: this.cfg.testDir,
@@ -1026,30 +1093,18 @@ export class AlRunnerBackend implements ExecutionBackend {
       testTimeoutSeconds: Math.max(1, Math.floor(opts.timeoutMs / 2000)),
       deadlineMs: opts.timeoutMs,
       ...(coverageOut !== undefined ? { coverageOut } : {}),
+      ...(excludeTests !== undefined ? { excludeTests } : {}),
     });
-    const durationMs = Date.now() - started;
-    if (res.kind === "deadline") return { ref, outcome: "deadline-exceeded", durationMs };
-    if (res.kind === "error")
-      return {
-        ref,
-        outcome: "error",
-        durationMs,
-        failureMessage: res.detail,
-        operation: "pre-dispatch-rejected",
-      };
-    const t = res.tests.find((x) => x.name === wanted);
-    if (!t)
-      return {
-        ref,
-        outcome: "error",
-        durationMs,
-        // Naming both sides: a mismatch here means the runner ran something other than what
-        // we asked for, and "missing the requested test" alone left nobody able to see which.
-        failureMessage: `al-runner output has no test named "${wanted}" (it returned: ${
-          res.tests.map((x) => x.name).join(", ") || "<no tests>"
-        })`,
-        operation: "pre-dispatch-rejected",
-      };
+    return { res, coverageOut };
+  }
+
+  private async oneShotVerdict(
+    ref: TestMethodRef,
+    wanted: string,
+    t: AlRunnerRawTest,
+    durationMs: number,
+    coverageOut: string | undefined,
+  ): Promise<TestVerdict> {
     // How a non-pass becomes a verdict, and the rule is FAIL-CLOSED on purpose.
     //
     // `fail` is al-runner's word for "the test's own assertion went red", so it is a kill.
