@@ -4966,6 +4966,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     envPublishes?.testApp,
   );
   const { tests, armPolicyApplied } = chooseTestSuite(discovery, testArmEvidence);
+  // R488: the UNFILTERED list, every arm read: a look-alike al-runner would also select must be
+  // excluded whether or not this session runs it. Given again to every worker below.
+  cfg.backend.useDiscoveredTests?.(discovery.unfiltered);
   // Discovery returns the whole list in one parse — 1,000+ per-item events at one instant would
   // be false granularity, not liveness (see events.ts's doc comment on `tests-discovered`).
   // R403 phase C. With no compiled evidence the unfiltered suite runs, so a `compiled-out` record
@@ -5573,6 +5576,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             `runSession: the session backend sends al-runner's pinned platform-app directory (${platformAppsDir}) but worker backend ${i} declined it, so the baseline and the mutants would run under different argv (R147, R242).`,
           );
         }
+        // R488: each worker starts with an empty sibling cache, so it needs the list too.
+        worker.useDiscoveredTests?.(discovery.unfiltered);
         workerBackends.push(worker);
       }
     }

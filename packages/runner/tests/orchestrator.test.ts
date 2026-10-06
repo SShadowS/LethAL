@@ -3331,6 +3331,58 @@ describe("runSession — parallel workers", () => {
     store.close();
   });
 
+  // R488: each worker builds its own backend with an empty sibling cache, so without the list its
+  // FIRST al-runner call for `OverBudgetDetected` would also run the look-alike
+  // `OverBudgetDetectedTwin` and merge their coverage.
+  test("the session backend and every worker get the discovered tests, look-alikes included (R488)", async () => {
+    const dirs = await makeProject(`codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+
+    [Test]
+    procedure OverBudgetDetectedTwin()
+    begin
+    end;
+}
+`);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const store = new ResultsStore(":memory:");
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    const given: string[][] = [];
+    const make = () => {
+      const b = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
+      return Object.assign(b, {
+        useDiscoveredTests: (tests: readonly TestMethodRef[]) => {
+          given.push(tests.map((t) => t.method).sort());
+        },
+      });
+    };
+    await runSession({
+      backend: make(),
+      backendFactory: make,
+      store,
+      ...dirs,
+      selectorIds,
+      workers: 2,
+    });
+    expect(given).toEqual([
+      ["OverBudgetDetected", "OverBudgetDetectedTwin"],
+      ["OverBudgetDetected", "OverBudgetDetectedTwin"],
+      ["OverBudgetDetected", "OverBudgetDetectedTwin"],
+    ]);
+    store.close();
+  });
+
   test("a worker deploy failure does not double-record a mutant step 5 already marked no-coverage", async () => {
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
