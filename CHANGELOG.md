@@ -115,6 +115,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   named, with its reason, in the run's `EQUIVALENCE MARKS REFUSED` console lines and in
   `readerMarkedEquivalent.refused`. A report from an older
   release records no numbering facts, so explain prints no `mark` for it; re-run first.
+- **`validate-to-assign` mutates a bare `Validate(F, V)` whose receiver it cannot spell; identity
+  scheme 26** (R477; operator 1.2.0). R464 refused such a site where no receiver spelling (`Rec`,
+  a dataitem's name, a `with` subject) could be proven to bind the call's record. The mutant is
+  now the bare `F := V`, but only where nothing at the call declares `F` (no local, parameter,
+  named return value, trigger local or object global, including inside `#if`); otherwise it is
+  still refused. `alc` was used to measure which symbol each shape binds, and every emitted shape
+  compiles. Measured against master `963ee476`: 47 new mutants (Intrastat 39, SAF-T 3, BaseApp 1,
+  CDO 2, DO 2); 2 sites stay refused; DC, the fixtures and the examples are unchanged. No existing
+  key moved in any corpus, but a new mutant can take ordinal 0 ahead of a same-tuple twin in the
+  same procedure, so re-check equivalence marks.
 - **A write a body-exit guard reads, in a `while true` loop, is hang-refused; identity scheme 25**
   (R446; 24 was R475, 23 is unused, 22 was R464). When a loop's condition reads no name and calls nothing
   (`while true`, `until false`), the four value operators now also refuse a write that the guard

@@ -41,6 +41,9 @@ import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/o
  * each manifest with that key removed hashes to its old pin (sandbox-app 24960578...5641,
  * sandbox-data 257d5dde...752e, sandbox-hang cdfb8da1...dd3b, sandbox-harden 71fe65be...94b4,
  * sandbox-coverage-probe da594088...3cc). No `.al` file moved.
+ * R477: sandbox-data's and sandbox-harden's manifests re-pinned for provenance only: their
+ * `validate-to-assign` entries carry operatorVersion 1.2.0 (at 1.1.0 both hash to their old pins,
+ * e01e5bc8...c9c0 and 523f3eec...9e3e). No site, tag or id moved.
  */
 const PINNED: Record<
   string,
@@ -118,7 +121,7 @@ const PINNED: Record<
         "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
-      "mutant-manifest.json": "e01e5bc8260426433127bc50f96a3829f757046b23a38020aa75292471dcc9c0",
+      "mutant-manifest.json": "12c9b7f035cb0d3d954877ee7529c40066ed56bdea9551e83a70f454284e5a41",
     },
   },
   "sandbox-hang": {
@@ -145,7 +148,7 @@ const PINNED: Record<
         "761229a7c2c2edaa674509cd00a51e53118742a676a957645d3d33cb3f30966d",
       "MutationUpgrade.Codeunit.al":
         "4a52c84af5a27079132374f5737fb95f13d9721f616e70c2b62f83e6d90d7378",
-      "mutant-manifest.json": "523f3eec2147e39de5f6ea2ed9077f5f74d67b22667989f2c92cff557b279e3e",
+      "mutant-manifest.json": "d3a1c187801a9260fc601b707073dee0387f0b878d5a74ee10c439ce8f3d0a7a",
     },
   },
   "sandbox-coverage-probe": {

@@ -759,6 +759,31 @@ export function bareReceiverText(node: ALSyntaxNode, ctx: SemanticContext): stri
 }
 
 /**
+ * R477: may the BARE assignment `field := V` stand for a bare `Validate(field, V)` at `node` whose
+ * receiver spelling `bareReceiverText` cannot prove? Only where the call's innermost record scope
+ * has a table and `field` is PROVABLY undeclared at the call (`declarationAt` is `null`): no
+ * trigger local, local, parameter, named return value or object global, matched case-insensitively
+ * with quotes stripped; an `#if`-only, unindexed or symbol-less declaration is `"unknown"` and
+ * refuses. Measured with alc 18.0.43 (coord handoff `R-477`): a local, parameter or return value
+ * captures a bare assignment everywhere but inside `with`, and an object global does in a table or
+ * tableextension, so all of those are refused (globals elsewhere too, conservatively). With nothing
+ * declared the name binds the innermost record's field: the `with` subject over a competing `Rec`,
+ * the inner dataitem. Not checked, and measured harmless: a field named like a system method or an
+ * enum type binds the field; a procedure named like the field (another tableextension, a
+ * dependency table) breaks the original `Validate` too; a dependency table's or page's global
+ * does not capture.
+ */
+export function bareFieldAssignable(
+  node: ALSyntaxNode,
+  field: string,
+  ctx: SemanticContext,
+): boolean {
+  const [scope] = recordScopesAt(node, ctx.symbols);
+  if (scope === undefined || scope.table === null) return false;
+  return declarationAt(stripQuotes(field), node, ctx.symbols) === null;
+}
+
+/**
  * R-464: the declaration a bare `name` binds to at `node`, in three states: `null` only when
  * PROVABLY absent; `"unknown"` for any refusal that is not absence (`lookupDeclaredState`), and
  * also whenever the visible source text declares `name` where the index does not show it (inside
