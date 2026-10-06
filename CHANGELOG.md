@@ -104,6 +104,28 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A report data item over `Integer` counts as a loop for the hang refusal; identity scheme 28**
+  (R484). BC calls a data item's `OnAfterGetRecord` once per record. Over the virtual `Integer` table
+  the item ends only when a trigger calls `CurrReport.Break` or `Quit`, raises an `Error`, or a bound
+  stops it.
+
+  Such an item now counts as a loop unless one of three bounds holds:
+  - a positive `MaxIteration` of at most 1,000,000;
+  - a `const` or closed view filter of at most 1,000,000 records, with no other mention of the
+    item's record in the report;
+  - exactly one mention of the record, and that mention is a literal `SetRange(Number, lo, hi)` in
+    its `OnPreDataItem`.
+
+  In an open item, a write that its exit guards or its own range bounds read is hang-refused and
+  counted.
+
+  Measured against master: 609 BC.History mutants move from emitted to hang-refused (remove-assignment
+  362, flip-boolean-literal 172, shift-integer 75). Nothing else changes, and no gate fixture moves.
+  216 identity keys move, all in BaseApp, so marks files need `"identityScheme": 28` after you
+  re-check each mark (R325).
+
+  Most of these refusals are not proven hangs. In a hand sample about one in three was a real hang;
+  the rest are the conservative direction. The shapes still not refused are listed in R487.
 - **More loop shapes refuse a hang-capable mutant; identity scheme 27** (R480). R446 refused a
   write a body-exit guard reads only in a `while true` loop. Now: any `while`/`repeat` gets its
   body-exit guards unless its condition names a cursor method (`Next`, `Read`, `EOS`, `MoveNext`),

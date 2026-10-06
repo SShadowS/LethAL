@@ -40,7 +40,7 @@ import {
  * R484: a report data item over the virtual `Integer` table is a loop too (BC calls its
  * `OnAfterGetRecord` once per record), unless a narrow certificate bounds it (`dataItemExitParts`).
  * A write in any trigger of an open item, or of an item nested in it, is refused when its exit
- * guards or its own range bounds read the target (`enclosingExitParts`). Known exclusions (R486):
+ * guards or its own range bounds read the target (`enclosingExitParts`). Known exclusions (R487):
  * exits behind calls, indirect feeds, other tables, and bounds set through another record.
  *
  * WHAT IT DELIBERATELY DOES NOT SEE, all UNCLASSIFIED rather than proven safe (spec 3.2): a target
