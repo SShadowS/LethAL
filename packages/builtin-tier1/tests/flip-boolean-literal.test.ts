@@ -682,7 +682,33 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
         const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
         expect(tagged(files)).toEqual([PLAIN]);
       });
-      // Revert: drop `subscribesTo`'s unreadable-target match (no `database_reference` here).
+      // Sol, R-485 run 001: a split-header extension (invisible, R494) raises a CUSTOM event from
+      // its OnAfterModify, and a wrapped codeunit subscribes to it on this table. Revert: decide
+      // the clean codeunit by `subscribes(n)` (the two built-in event names only).
+      const splitExt = (table: string) =>
+        `#if A\ntableextension 50305 "Ext A" extends "${table}"\n#else\ntableextension 50305 "Ext B" extends "${table}"\n#endif\n{\n    trigger OnAfterModify()\n    begin\n        OnAfterModifyCheck();\n    end;\n\n    [IntegrationEvent(false, false)]\n    local procedure OnAfterModifyCheck()\n    begin\n    end;\n}\n`;
+      it("an unindexed subscriber to a CUSTOM event of THIS table keeps it", () => {
+        const s = wrap(subOn(`Database::"Par"`, "OnAfterModifyCheck"));
+        const files = {
+          "P.al": par(""),
+          "X.al": splitExt("Par"),
+          "S.al": s,
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Control. Revert: keep the tag for a subscriber of any table.
+      it("an unindexed subscriber to a custom event of ANOTHER table drops it", () => {
+        const s = wrap(subOn(`Database::"Oth"`, "OnAfterModifyCheck"));
+        const files = {
+          "P.al": par(""),
+          "X.al": splitExt("Oth"),
+          "S.al": s,
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // Revert: drop `subscribesToTable`'s integer-target match.
       it("an unindexed subscriber naming the table by a bare id keeps it", () => {
         const s = wrap(subOn("50300", "OnAfterModifyEvent"));
         const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };

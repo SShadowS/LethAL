@@ -260,7 +260,14 @@ function projectObserves(
       const base = n.childForFieldName("base_object")?.text.replace(/"/g, "").toLowerCase();
       if (base === undefined || names.has(base)) return true;
     } else if (!n.hasError && n.rawKind === CODEUNIT_DECLARATION) {
-      if (subscribes(n)) return true;
+      // ANY event of this table, not only `On(Before|After)<Kind>Event` (sol, R-485 run 001): a
+      // custom IntegrationEvent an extension raises from its modify trigger is invisible here
+      // when that extension is (R494), and the old text rule kept the tag for it.
+      let found = false;
+      visit(n, (a) => {
+        if (!found && a.rawKind === "attribute_content") found = subscribesToTable(a, names);
+      });
+      if (found) return true;
     } else if (textObserves(n, unindexedText, tableName, table.id)) {
       return true;
     }
@@ -290,6 +297,31 @@ function textObserves(
   return (
     /\btableextension\b/.test(text) && (text.includes(tableName) || text.includes(String(tableId)))
   );
+}
+
+/**
+ * R485: an `[EventSubscriber(...)]` whose target MAY be one of `tableNames`, whatever its event.
+ * Only a subscriber proven to target something else is `false`: an object type read as other than
+ * `Table`, or a `Database::` name or bare id read as another table. Anything unreadable (no
+ * arguments, an object type or target of another shape) counts as this table.
+ */
+function subscribesToTable(content: ALSyntaxNode, tableNames: ReadonlySet<string>): boolean {
+  if (content.childForFieldName("name")?.text.toLowerCase() !== "eventsubscriber") return false;
+  const args = content
+    .childForFieldName("arguments")
+    ?.namedChildren.find((c) => c.rawKind === "attribute_argument_list")?.namedChildren;
+  if (args === undefined) return true;
+  const [objectType, target] = args;
+  if (objectType?.rawKind === "qualified_enum_value") {
+    const value = objectType.childForFieldName("value")?.text.replace(/"/g, "").toLowerCase();
+    if (value !== undefined && value !== "table") return false;
+  }
+  if (target?.rawKind === "database_reference") {
+    const name = target.namedChildren.at(-1)?.text.replace(/"/g, "").toLowerCase();
+    return name === undefined || tableNames.has(name);
+  }
+  if (target?.rawKind === "integer") return tableNames.has(target.text);
+  return true;
 }
 
 /** An `[EventSubscriber(...)]` argument list naming one of `events` of one of `tableNames`. An
