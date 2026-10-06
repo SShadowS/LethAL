@@ -116,6 +116,7 @@ import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
 import {
+  TestProjectNestedError,
   VERIFY_EXIT,
   VerifyError,
   type VerifyOutput,
@@ -126,6 +127,7 @@ import {
   parseVerifyRequest,
   refusalOutput,
   runVerify,
+  testProjectNestedProblem,
 } from "./verify";
 
 /**
@@ -3753,6 +3755,11 @@ export async function runFromCli(
     quarantineDir?: string;
   } = {},
 ): Promise<SessionReport> {
+  // R-445: a test project inside the target (or containing it) is refused by name before anything
+  // reads or builds the target: the build copies every .al under the target, so its tests would be
+  // mutated and published as target code. Campaign stages run through here too.
+  const nested = await testProjectNestedProblem(parsed.projectDir, parsed.testDir, "lethal run");
+  if (nested !== null) throw new TestProjectNestedError(nested);
   const configFile = await loadLethalConfigFile(parsed.configPath);
   // R205: the target's source, read ONCE before anything else reads it. The `--changed-since`
   // lines, the al-runner coverage guard and the session's build all use this snapshot, so an edit

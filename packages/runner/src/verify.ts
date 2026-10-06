@@ -676,29 +676,48 @@ export async function assertTestProjectSeparate(
   projectPath: string,
   testDir: string,
 ): Promise<void> {
+  const problem = await testProjectNestedProblem(projectPath, testDir, "verify");
+  if (problem !== null) throw new VerifyError("test-project-nested", problem);
+}
+
+/**
+ * R-445: R-260's rule, shared by `lethal verify` and `lethal run`: the message naming why the two
+ * folders are not apart, or `null` when they are. `run` adds this because the target build copies
+ * every .al under the target, so a nested test project is mutated and published as target code.
+ */
+export async function testProjectNestedProblem(
+  projectPath: string,
+  testDir: string,
+  tool: "verify" | "lethal run",
+): Promise<string | null> {
   const fix =
-    "Move the test project out of the target folder so it sits beside the target, update the --tests you pass to both lethal run and lethal verify to that folder, run lethal run again, then verify with its artifact id.";
+    tool === "verify"
+      ? "Move the test project out of the target folder so it sits beside the target, update the --tests you pass to both lethal run and lethal verify to that folder, run lethal run again, then verify with its artifact id."
+      : "Move the test project out of the target folder so it sits beside the target, update the --tests you pass to both lethal run and lethal verify to that folder, then run lethal run again.";
   let target: string;
   let tests: string;
   try {
     [target, tests] = await Promise.all([realpath(projectPath), realpath(testDir)]);
   } catch (e) {
-    throw new VerifyError(
-      "test-project-nested",
-      `cannot resolve the real path of the target ${projectPath} or the test project ${testDir} (${e instanceof Error ? e.message : String(e)}), so verify cannot show the test project lies outside the target. Check that --tests names an existing folder. ${fix}`,
-    );
+    // `run` needs no refusal here: a folder it cannot resolve fails its own read straight after.
+    if (tool === "lethal run") return null;
+    return `cannot resolve the real path of the target ${projectPath} or the test project ${testDir} (${e instanceof Error ? e.message : String(e)}), so ${tool} cannot show the test project lies outside the target. Check that --tests names an existing folder. ${fix}`;
   }
   if (isSameOrInside(target, tests)) {
-    throw new VerifyError(
-      "test-project-nested",
-      `the test project ${tests} ${tests === target ? "is" : "lies inside"} the target project ${target}: the target build compiles every .al under its folder, so these tests are part of the installed target app. ${fix}`,
-    );
+    return `the test project ${tests} ${tests === target ? "is" : "lies inside"} the target project ${target}: the target build compiles every .al under its folder, so these tests are part of the ${tool === "verify" ? "installed target app" : "target app this run would build"}. ${fix}`;
   }
   if (isSameOrInside(tests, target)) {
-    throw new VerifyError(
-      "test-project-nested",
-      `the test project ${tests} contains the target project ${target}, so the target's code is part of the test build. ${fix}`,
-    );
+    return `the test project ${tests} contains the target project ${target}, so the target's code is part of the test build. ${fix}`;
+  }
+  return null;
+}
+
+/** R-445: `lethal run` refuses a test project nested in the target (or containing it) by name,
+ *  before anything reads the target. */
+export class TestProjectNestedError extends Error {
+  constructor(message: string) {
+    super(`test-project-nested: ${message} (R445)`);
+    this.name = "TestProjectNestedError";
   }
 }
 
