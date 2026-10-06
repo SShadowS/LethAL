@@ -377,4 +377,11 @@ export interface ExecutionBackend {
    * versions. Throws `DependencyUnreadableError` when it cannot be built.
    */
   microsoftMode?(): MicrosoftMode;
+
+  /**
+   * R488, OPTIONAL: every test the session discovered, every arm read, given before the baseline
+   * and to every worker. A backend whose test selector is a substring match (al-runner one-shot)
+   * excludes the look-alikes up front with it.
+   */
+  useDiscoveredTests?(tests: readonly TestMethodRef[]): void;
 }
