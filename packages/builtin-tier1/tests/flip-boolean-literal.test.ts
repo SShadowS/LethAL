@@ -431,11 +431,35 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     expect(tagged({ "P.al": par(""), "O.al": page })).toEqual(["false->true -"]);
     const own = par("    procedure Modify(Run: Boolean) begin end;\n");
     expect(tagged({ "P.al": own, "O.al": page })).toEqual(["true->false -", "false->true -"]);
-    const extOwn = `pageextension 50312 "Ext2" extends "Customer Card" { trigger OnOpenPage() begin Delete(true); end; local procedure Delete(Run: Boolean) begin end; }`;
-    expect(tagged({ "O.al": extOwn })).toEqual(["true->false -"]);
+    const extOwn = `pageextension 50312 "Ext2" extends "Customer Card" { trigger OnOpenPage() begin Delete(true); Delete(false); end; local procedure Delete(Run: Boolean) begin end; }`;
+    expect(tagged({ "O.al": extOwn })).toEqual(["true->false -", "false->true -"]);
     const mgt = `codeunit 50303 "Mgt" { procedure Modify(Run: Boolean) begin end; }`;
-    const withCu = `pageextension 50313 "Ext3" extends "Customer Card" { trigger OnOpenPage() var Mgt: Codeunit "Mgt"; begin with Mgt do Modify(true); end; }`;
-    expect(tagged({ "M.al": mgt, "O.al": withCu })).toEqual(["true->false -"]);
+    const withCu = `pageextension 50313 "Ext3" extends "Customer Card" { trigger OnOpenPage() var Mgt: Codeunit "Mgt"; begin with Mgt do begin Modify(true); Modify(false); end; end; }`;
+    expect(tagged({ "M.al": mgt, "O.al": withCu })).toEqual(["true->false -", "false->true -"]);
+  });
+
+  // F15 (R479, sol final r1). The reportextension case (outside the claimable object kinds, so every
+  // bare record call there counts as unresolved) still honours both exclusions, both directions:
+  // - an added dataitem on Par: tagged (the control); on a Par that DECLARES `Modify`, the call is
+  //   Par's own procedure, untagged. Revert: drop the `projectDeclaresProcedureOnTable` check.
+  // - `with Mgt do`, Mgt a codeunit declared in the extension: untagged. Revert: drop the
+  //   `withSubjectIsNonRecord` check.
+  it("keeps a reportextension's bare project procedure and codeunit `with` untagged", () => {
+    const rx = (body: string, vars = "") =>
+      `reportextension 50315 "RX2" extends "Customer - List" { dataset { add(Customer) { dataitem(ParItem; "Par") { trigger OnAfterGetRecord() ${vars} begin ${body} end; } } } }`;
+    const both = "Modify(true); Modify(false);";
+    expect(tagged({ "P.al": par(""), "O.al": rx(both) })).toEqual([
+      "true->false run-trigger-skipped-modify",
+      "false->true run-trigger-forced",
+    ]);
+    const own = par("    procedure Modify(Run: Boolean) begin end;\n");
+    expect(tagged({ "P.al": own, "O.al": rx(both) })).toEqual(["true->false -", "false->true -"]);
+    const mgt = `codeunit 50303 "Mgt" { procedure Modify(Run: Boolean) begin end; }`;
+    const withCu = rx(`with Mgt do begin ${both} end;`, `var Mgt: Codeunit "Mgt";`);
+    expect(tagged({ "P.al": par(""), "M.al": mgt, "O.al": withCu })).toEqual([
+      "true->false -",
+      "false->true -",
+    ]);
   });
 
   // F8. Revert: drop `claimsRecordMethod` (tag by method name alone).

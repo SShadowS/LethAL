@@ -290,29 +290,52 @@ export function receiverUnresolved(
  * (`recordScopesAt`). It is unresolved when that record exists but its table is not provable (a
  * pageextension's `Rec`, a reportextension request page or `modify`, a `with` subject that is not
  * a provable table), or when it sits outside `OBJECT_KINDS` (a reportextension's added dataitem),
- * where `claimsRecordMethod` refuses every call. No record scope at all (a codeunit outside a
- * TableNo `OnRun`, a page without `SourceTable`) means the call is not a record method, and a
- * `with` subject that resolves to a non-record is not unresolved either (R460's control). Neither
- * is a name the enclosing object declares as its own procedure (rule 3's own-object guard).
+ * where `claimsRecordMethod` refuses every call. NOT unresolved, checked before the reportextension
+ * case: no record scope at all (a codeunit outside a TableNo `OnRun`, a page without
+ * `SourceTable`: the call is not a record method); a procedure of that name declared by the
+ * enclosing object, or by the project on the scope's known table or a tableextension of it (rule
+ * 3); a `with` subject DECLARED as a non-record (R460's control). A `with` subject that is not
+ * declared where the index can see it counts as unresolved and is tagged.
  */
 function implicitRecordUnresolved(node: ALSyntaxNode, ctx: SemanticContext, name: string): boolean {
   const symbols = ctx.symbols;
+  const armOf = rawArmOf(ctx);
   const [scope] = recordScopesAt(node, symbols);
   if (scope === undefined) return false;
   const objectNode = enclosingObject(node);
   let owner = objectNode;
   for (let p = node.parent; owner === null && p !== null; p = p.parent)
     if (p.kind === ALNodeKind.reportextension) owner = p;
-  if (owner !== null && declaresProcedure(owner, name, rawArmOf(ctx))) return false;
+  if (owner !== null && declaresProcedure(owner, name, armOf)) return false;
+  if (scope.table !== null && projectDeclaresProcedureOnTable(symbols, scope.table, name, armOf))
+    return false;
+  if (
+    scope.kind === "with" &&
+    scope.at !== undefined &&
+    withSubjectIsNonRecord(scope.at, owner, symbols)
+  )
+    return false;
   if (objectNode === null) return true;
-  if (scope.table !== null) return false;
-  if (scope.kind !== "with" || scope.at === undefined) return true;
-  const subject = scope.at.childForFieldName("record");
+  return scope.table === null;
+}
+
+/** R479: is a `with` statement's subject declared as a non-record (a codeunit, a Text...)? Inside a
+ *  reportextension, outside `OBJECT_KINDS`, the extension's own variable scope is read directly. */
+function withSubjectIsNonRecord(
+  at: ALSyntaxNode,
+  owner: ALSyntaxNode | null,
+  symbols: SymbolTable,
+): boolean {
+  const subject = at.childForFieldName("record");
   const subjectName = subject === null ? null : identifierText(subject);
-  return (
-    subjectName === null ||
-    resolveReceiverName(subjectName, scope.at, symbols).kind !== "non-record"
-  );
+  if (subjectName === null) return false;
+  if (owner?.kind !== ALNodeKind.reportextension)
+    return resolveReceiverName(subjectName, at, symbols).kind === "non-record";
+  const extensionName = objectNameOf(owner);
+  if (extensionName === null) return false;
+  const scopeKey = extensionScopeKey("reportextension", extensionName);
+  const declared = lookupVar(subjectName, at, scopeKey, symbols);
+  return declared !== null && classifyDeclaredType(declared).kind === "non-record";
 }
 
 /**

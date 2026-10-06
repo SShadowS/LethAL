@@ -511,7 +511,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `run-trigger-skipped-*` tag, while `Rec.Insert(true)` in the same place did. Now the bare form is
   treated like the qualified one, in both directions (`true` keeps its skip tag, `false` gets
   `run-trigger-forced`), also in a reportextension and under a `with` whose subject LethAL cannot
-  resolve. A procedure the object declares itself, or a `with` on a codeunit, stays untagged.
+  resolve. The same rule reaches every RunTrigger argument the operator tags, so a bare
+  `ModifyAll(..., true)`, `DeleteAll(true)` or `Insert(true, X)` there is tagged too. Untagged:
+  a name the enclosing object declares as its own procedure, a name the project declares on the
+  record's known table (or a tableextension of it), and a `with` whose subject is declared as a
+  non-record such as a codeunit. A `with` subject LethAL cannot find a declaration for is tagged.
   Tags only: no mutant added or removed and no identity key moved. Measured: no change on
   BC.History, CDO, DC, DO or the fixtures, none of which has this shape.
 - **The test-app scan reads a TableNo codeunit's `Rec` in its `OnRun` only** (R466), as AL does,
