@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**81 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**77 of 482 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -133,11 +133,11 @@ that ordering is the priority.
 - **R323** · A named return value is not a declaration to type resolution, so when a global shares its name the global's type authorizes a mutant that does not compile · [R323.md](docs/roadmap/R323.md) · done (a1f0e093..c65ffb5c)
 - **R324** · A call's type is taken from the first procedure of that name, so an overloaded name can type a call by the wrong overload and authorize a mutant that does not compile · [R324.md](docs/roadmap/R324.md) · done (db641338)
 - **R325** · Identity keys carry no scheme version, so an engine change that renumbers ordinals can hand an old mutant's verdict to a new mutant through history, resume or equivalence marks · [R325.md](docs/roadmap/R325.md) · done (f10a1051)
-- **R327** · A split-header procedure after an object-level `var` section parses INSIDE that section; before the R-302 fix round its names typed by the object's GLOBALS, an `alc`-failing false site · [R327.md](docs/roadmap/R327.md) · open, filed 2026-09-29 (engine guarded; the grammar defect stays)
+- **R327** · A split-header procedure after an object-level `var` section parses INSIDE that section; before the R-302 fix round its names typed by the object's GLOBALS, an `alc`-failing false site · [R327.md](docs/roadmap/R327.md) · closed 2026-10-06 — stated limit: 0 swallowed members in 20,598 corpus files; the engine guard holds…
 - **R330** · The symbol table does not index declarations inside a `#if` region, so name resolution reads through them: a call is typed as unique and a local fails to hide a global · [R330.md](docs/roadmap/R330.md) · done (7b8409c7, d0a0a9e4)
 - **R331** · The Tier-2 rule-3 guard does not see a `#if`-wrapped procedure, so a table's own procedure of a built-in name can be claimed as the built-in · [R331.md](docs/roadmap/R331.md) · done (84f38b9f)
-- **R336** · The grammar does not parse `tableextension ... extends <number>`, so the whole extension becomes a root ERROR node · [R336.md](docs/roadmap/R336.md) · open, filed 2026-09-29, reported upstream
-- **R339** · A `#if` inside one procedure header (around a named return or its type) makes the whole member an ERROR node, so no mutant is generated in that member (measured on a one-member file) · [R339.md](docs/roadmap/R339.md) · open, filed 2026-09-29
+- **R336** · The grammar does not parse `tableextension ... extends <number>`, so the whole extension becomes a root ERROR node · [R336.md](docs/roadmap/R336.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files, no wrong mutant…
+- **R339** · A `#if` inside one procedure header (around a named return or its type) makes the whole member an ERROR node, so no mutant is generated in that member (measured on a one-member file) · [R339.md](docs/roadmap/R339.md) · closed 2026-10-06 — stated limit: 0 such members in 20,598 corpus files, no wrong mutant; the whole file is…
 - **R341** · A QUOTED use of a named return value (`"My Result"`) is not typed: `computeType` handles `identifier` only, so typed operators lose that site · [R341.md](docs/roadmap/R341.md) · closed 2026-10-05 — ruled not worth fixing: the R-294 census found 0 sites lost and 0 wrong mutants on every…
 - **R342** · `fixtures/sandbox-symbols` has six `unplaced`-grain mutants that GH-24's every-fixture reach-grain test would reject, but that test's fixture list leaves the symbol pair out · [R342.md](docs/roadmap/R342.md) · done (38a82a55)
 - **R343** · Typed operators emit nothing inside an object wrapped in `#if`: the symbol table leaves wrapped objects unindexed (R331's fail-safe), and no item records that loss · [R343.md](docs/roadmap/R343.md) · open, filed 2026-09-29
@@ -338,7 +338,7 @@ that ordering is the priority.
 - **R463** · Tier 2 never claims a record call inside a `reportextension`: `receiver.ts` knows table and page extensions only · [R463.md](docs/roadmap/R463.md) · open
 - **R477** · Guarded bare fallback for the validate-to-assign sites R464 refuses (35: 29 previously mutated, 6 new) · [R477.md](docs/roadmap/R477.md) · done (467e2faf)
 - **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · closed 2026-10-05 — neither shape reaches the prefix proof today: no Tier-2 claim is made inside a…
-- **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · open, filed 2026-10-05
+- **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files; correction: the extension's members ARE mutated…
 
 ## Backends and tooling
 
