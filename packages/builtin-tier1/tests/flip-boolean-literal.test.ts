@@ -734,6 +734,21 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
         };
         expect(tagged(files)).toEqual([PLAIN]);
       });
+      // A half-parsed object with only a MISSING node (no ERROR node, so not in `unparsedObjects`)
+      // makes the project opaque too: the other-table subscriber is then read by its text and
+      // keeps. Revert: drop `unindexedObjects.some((n) => n.hasError)` from `opaque`.
+      it("a MISSING-only half-parsed object makes the project opaque: the old text rule keeps it", () => {
+        const broken = wrap(
+          `codeunit 50306 "Broken"\n{\n    procedure X()\n    var N: Integer\n    begin\n    end;\n}`,
+        );
+        const files = {
+          "P.al": par(""),
+          "B.al": broken,
+          "S.al": wrap(customSub("Table", `Database::"Oth"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
       // Revert: delete the integer branch (a bare id then counts as unreadable and keeps).
       it("a subscriber naming ANOTHER table by a bare id drops it", () => {
         const s = wrap(subOn("50399", "OnAfterModifyEvent"));
