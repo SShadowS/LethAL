@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -196,13 +196,22 @@ describe("R307 T8: one refused file beside a good one", () => {
 
 /** Holds a refusal no call ever threw, as a transport does after a stop outlives its bound. */
 class LateRefusalBackend extends SurviveBackend {
-  deactivations = 0;
+  /** Ordered calls: "deactivate" for each activate(null), "take" for takeLateRefusal. */
+  calls: string[] = [];
   override async activate(id: string | null): Promise<void> {
-    if (id === null) this.deactivations++;
+    if (id === null) this.calls.push("deactivate");
     await super.activate(id);
   }
   takeLateRefusal(): UnfilteredExtensionsQueryError {
+    this.calls.push("take");
     return new UnfilteredExtensionsQueryError("late refusal held at teardown");
+  }
+}
+
+/** The session is already failing: its first `run` throws. */
+class FailingLateRefusalBackend extends LateRefusalBackend {
+  override async run(ref: TestMethodRef): Promise<TestVerdict> {
+    throw new Error("earlier failure");
   }
 }
 
@@ -223,6 +232,32 @@ describe("R-496: a refusal still pending at session teardown", () => {
     );
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect((err as Error).message).toContain("late refusal held at teardown");
-    expect(backend.deactivations).toBeGreaterThan(0);
+    // Teardown order: the teardown deactivation is the last thing before the refusal is taken.
+    expect(backend.calls.slice(-2)).toEqual(["deactivate", "take"]);
+    expect(backend.calls.filter((c) => c === "take")).toHaveLength(1);
+  });
+
+  test("a session already failing keeps its own error; the refusal goes to console.warn", async () => {
+    const dirs = await project({ [GOOD]: GOOD_AL });
+    const backend = new FailingLateRefusalBackend();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const err = await runSession({
+        backend,
+        store: new ResultsStore(":memory:"),
+        ...dirs,
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+      }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect((err as Error).message).toContain("earlier failure");
+      expect(backend.calls).toContain("take");
+      expect(warn.mock.calls.flat().join("\n")).toContain("late refusal held at teardown");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

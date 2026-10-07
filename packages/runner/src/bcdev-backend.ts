@@ -329,8 +329,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // server-side. The transport is built at deploy() once the target's identity is known.
   private pendingMutantId: string | null = null;
   private runMutantTransport: RunMutantTransport | undefined;
-  // R-496: a late refusal taken from a transport that a re-deploy/attach replaced.
-  private retiredLateRefusal: UnfilteredExtensionsQueryError | undefined;
+  // R-496: transports a re-deploy/attach replaced; a refusal can still land on one until teardown.
+  private retiredTransports: RunMutantTransport[] = [];
   // Monotonic per-backend attempt id, echoed by RunMutant and validated by the transport (§I5).
   private attemptSeq = 0;
   // Layer 5C-B1: the machine-global lease this session holds, bound by the orchestrator (Task 8)
@@ -800,18 +800,28 @@ export class BcDevMcpBackend implements ExecutionBackend {
     return artifact;
   }
 
-  /** Swap the bound transport, keeping any refusal the old one still held (R-496). */
+  /** Swap the bound transport; the old one is kept, as a refusal can still land on it (R-496). */
   private bindTransport(next: RunMutantTransport | undefined): void {
-    // `?.()`: test doubles bind transport stubs without the method
-    this.retiredLateRefusal ??= this.runMutantTransport?.takeLateRefusal?.();
+    if (this.runMutantTransport !== undefined) this.retiredTransports.push(this.runMutantTransport);
     this.runMutantTransport = next;
   }
 
-  /** R-496: a refusal no call has thrown yet, for the session teardown to surface. */
+  /**
+   * R-496: a refusal no call has thrown yet, for the session teardown to surface. Checks every
+   * retired transport and the current one; returns the first found. Every transport is drained,
+   * and any further refusal is logged (a warning line), not thrown: one error reaches the caller.
+   */
   takeLateRefusal(): UnfilteredExtensionsQueryError | undefined {
-    const late = this.retiredLateRefusal ?? this.runMutantTransport?.takeLateRefusal?.();
-    this.retiredLateRefusal = undefined;
-    return late;
+    let first: UnfilteredExtensionsQueryError | undefined;
+    for (const t of [...this.retiredTransports, this.runMutantTransport]) {
+      // `?.()`: test doubles bind transport stubs without the method
+      const late = t?.takeLateRefusal?.();
+      if (late === undefined) continue;
+      if (first === undefined) first = late;
+      else console.warn(`[lethal] a further refused unfiltered extensions query: ${late.message}`);
+    }
+    this.retiredTransports = [];
+    return first;
   }
 
   /**
