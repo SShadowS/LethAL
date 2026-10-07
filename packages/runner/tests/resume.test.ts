@@ -15,6 +15,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
@@ -33,15 +34,14 @@ import type { ResumeIndex, SessionFingerprintInput } from "../src/resume";
 import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
-import type { MicrosoftMode } from "../src/digest-inputs";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
+import type { Trace } from "./helpers/characterize";
 import {
   servedIsInstalled,
   servesTestApp,
   testAppJson,
   testAppPackage,
 } from "./helpers/proven-test-app";
-import type { Trace } from "./helpers/characterize";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -3129,7 +3129,7 @@ describe("R247: no verdict crosses a test-app change", () => {
           again(r, new PackageBackend(APP_A), { resume: target(r.runId) }),
         ).rejects.toThrow(
           new RegExp(
-            `run ${r.runId} was measured against test app unknown \\(it recorded no proven test-app identity\\), and this session's test app is ${hashOf(APP_A)}\\..*R247`,
+            `run ${r.runId} was measured against test app unknown \\(it recorded none: its test app was not proven installed, or it ran before R247\\), and this session's test app is ${hashOf(APP_A)}\\..*R247`,
           ),
         );
       });

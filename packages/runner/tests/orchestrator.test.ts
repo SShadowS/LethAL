@@ -8291,6 +8291,14 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       /** R492 (sol run 001): the test app served after the hook, one per read in order (the last
        *  repeats), instead of `post` for every read. */
       readonly postSequence?: readonly Uint8Array[];
+      /** R495: the test app served BEFORE the hook (every read on a `noHook` session), one per read
+       *  in order (the last repeats), instead of `pre`. */
+      readonly preSequence?: readonly Uint8Array[];
+      /** R495 (B1): the backend cannot form the test-app request (bcdev with no dev-endpoint
+       *  credentials): every test-app read answers `undefined`. */
+      readonly notRequested?: boolean;
+      /** R495: the backend has no `microsoftMode`, so it cannot read installed versions. */
+      readonly noMicrosoftMode?: boolean;
     }
 
     async function envRun(o: EnvRun) {
@@ -8306,12 +8314,19 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       let readsDuringHook = 0;
       const installedCalls: string[] = [];
       let postReads = 0;
+      let preReads = 0;
       const fetch = async (app: { readonly name: string }) => {
         if (hooked) fetchesAfterHook++;
         if (inHook) readsDuringHook++;
         if (app.name === DEP.name) {
           if (o.dep === undefined) return null;
           return hooked ? o.dep.post : o.dep.pre;
+        }
+        if (o.notRequested === true) return undefined;
+        if (!hooked && o.preSequence !== undefined) {
+          const served = o.preSequence[Math.min(preReads, o.preSequence.length - 1)];
+          preReads++;
+          return served ?? null;
         }
         if (hooked && o.postSequence !== undefined) {
           const served = o.postSequence[Math.min(postReads, o.postSequence.length - 1)];
@@ -8324,12 +8339,16 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       const { lease } = leaseCfg(client);
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
-        microsoftMode: () => {
-          if (o.microsoftModeThrows === true) {
-            throw new DependencyUnreadableError("this bcdev backend has no harness verifier");
-          }
-          return mode(o.installed ?? { [APP_ID]: ["1.0.0.2"] }, installedCalls);
-        },
+        ...(o.noMicrosoftMode === true
+          ? {}
+          : {
+              microsoftMode: () => {
+                if (o.microsoftModeThrows === true) {
+                  throw new DependencyUnreadableError("this bcdev backend has no harness verifier");
+                }
+                return mode(o.installed ?? { [APP_ID]: ["1.0.0.2"] }, installedCalls);
+              },
+            }),
       });
       const store = o.store ?? new ResultsStore(":memory:");
       const events: RunEvent[] = [];
@@ -8868,6 +8887,15 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     // sessions (they share the backend name and fingerprint). Run 1 is served P2 while P1 is
     // installed, so it MEASURES P1; the later session has P2 served and installed.
     describe("R495: no unproven test-app identity crosses sessions, hook or not", () => {
+      const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+      /** P2 served and installed: a session that proves P2, with or without a hook. */
+      const provenP2 = { pre: P2, post: P2, installed: { [APP_ID]: ["1.0.0.2"] } } as const;
+      const count = (s: ResultsStore, sql: string, ...args: number[]) =>
+        (s.db.query(sql).get(...args) as { n: number }).n;
+      const carriedAfter = (s: ResultsStore, runId: number) =>
+        count(s, "SELECT COUNT(*) AS n FROM mutants WHERE run_id > ? AND carried = 1", runId);
+      /** `first`'s run lends nothing to a proven `later` session: its resume is refused by name
+       *  before anything is carried, and the history filter skips nothing and says why. */
       const resumeAndSkip = async (
         first: (extra: Partial<SessionConfig>) => ReturnType<typeof envRun>,
         later: { noHook?: boolean },
@@ -8875,22 +8903,22 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         const r1 = await first({});
         expect(r1.outcome).not.toBeInstanceOf(Error);
         const resumed = await envRun({
-          pre: P2,
-          post: P2,
-          installed: { [APP_ID]: ["1.0.0.2"] },
+          ...provenP2,
           ...later,
           dirs: r1.dirs,
           store: r1.store,
           extra: { resume: r1.runId },
         });
-        expect(resumed.outcome).toBeInstanceOf(Error);
+        // A hook session resolves the resume after its hook (R492); one without, before its run row.
+        expect(resumed.outcome).toBeInstanceOf(
+          later.noHook === true ? Error : TestAppRepublishedError,
+        );
+        expect((resumed.outcome as Error).message).toContain("not proven installed");
+        expect(carriedAfter(resumed.store, r1.runId)).toBe(0);
         resumed.store.close();
-        const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
         const s1 = await first(skip);
         const skipped = await envRun({
-          pre: P2,
-          post: P2,
-          installed: { [APP_ID]: ["1.0.0.2"] },
+          ...provenP2,
           ...later,
           dirs: s1.dirs,
           store: s1.store,
@@ -8898,8 +8926,188 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         });
         expect(skipped.outcome).not.toBeInstanceOf(Error);
         expect(skipped.knownSurvivors).toBe(0);
+        expect(skipped.historyWarning).toHaveLength(1);
+        expect(skipped.historyWarning[0]).toContain("not proven installed");
         skipped.store.close();
       };
+      /** `first`'s run lends to a proven `later` session: its resume carries, its R192 snapshot is
+       *  reused, and the history filter skips its survivors. */
+      const lends = async (
+        first: (extra: Partial<SessionConfig>) => ReturnType<typeof envRun>,
+        later: { noHook?: boolean },
+      ) => {
+        const r1 = await first({});
+        expect(r1.outcome).not.toBeInstanceOf(Error);
+        expect(r1.store.getRun(r1.runId)?.testAppProven).toBe(true);
+        // Unfinished with work left, so the resumed batch is deployed and consults the snapshot.
+        r1.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [r1.runId]);
+        const victim = r1.store.db
+          .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+          .get(r1.runId) as { id: number };
+        r1.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+        const resumed = await envRun({
+          ...provenP2,
+          ...later,
+          dirs: r1.dirs,
+          store: r1.store,
+          extra: { resume: r1.runId },
+        });
+        expect(resumed.outcome).not.toBeInstanceOf(Error);
+        expect(carriedAfter(resumed.store, r1.runId)).toBeGreaterThan(0);
+        expect(resumed.reuseWarning).toHaveLength(1);
+        resumed.store.close();
+        const s1 = await first(skip);
+        const skipped = await envRun({
+          ...provenP2,
+          ...later,
+          dirs: s1.dirs,
+          store: s1.store,
+          extra: skip,
+        });
+        expect(skipped.outcome).not.toBeInstanceOf(Error);
+        expect(skipped.knownSurvivors).toBeGreaterThan(0);
+        expect(skipped.historyWarning).toEqual([]);
+        skipped.store.close();
+      };
+      const noHookProvenP2 = (extra: Partial<SessionConfig>) =>
+        envRun({ noHook: true, ...provenP2, extra });
+      const hookProvenP2 = (extra: Partial<SessionConfig>) => envRun({ ...provenP2, extra });
+      for (const [from, to] of [
+        ["no hook", "no hook"],
+        ["a hook", "no hook"],
+        ["no hook", "a hook"],
+        ["a hook", "a hook"],
+      ] as const) {
+        test(`control: a proven run with ${from} lends to a proven session with ${to}`, async () => {
+          await lends(from === "no hook" ? noHookProvenP2 : hookProvenP2, {
+            noHook: to === "no hook",
+          });
+        });
+      }
+      // A run recorded before R495 under R492's proof (hash and digests) has no flag: the one-time
+      // cost. It lends nothing to either kind, though its hash is the very one proven now.
+      const oldProvenRow = async (extra: Partial<SessionConfig>) => {
+        const r = await hookProvenP2(extra);
+        expect(r.store.testDigests(r.runId)).not.toBeNull();
+        r.store.db.run("UPDATE runs SET test_app_proven = NULL WHERE id = ?", [r.runId]);
+        return r;
+      };
+      for (const to of ["no hook", "a hook"] as const) {
+        test(`a row from before R495 (hash and digests, no flag) lends nothing to a session with ${to}`, async () => {
+          await resumeAndSkip(oldProvenRow, { noHook: to === "no hook" });
+        });
+      }
+      // B1: a bcdev session that cannot form the request identifies its test app by the SOURCE
+      // tree, but BC runs the published app: not proven. Revert: prove by the `source:` prefix.
+      test("B1: a bcdev session whose read is not-requested records no identity and lends nothing", async () => {
+        const first = (extra: Partial<SessionConfig>) =>
+          envRun({ noHook: true, ...provenP2, notRequested: true, extra });
+        const r = await first({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+        r.store.close();
+        await resumeAndSkip(first, { noHook: true });
+      });
+      // B2: the proof reads the PACKAGE's version, never the local app.json's. The local app.json
+      // says 1.0.0.2, which is installed; the served package is 1.0.0.1, which is not. Revert:
+      // prove with the local app.json's version.
+      test("B2: a served package not installed at its own version is unproven, whatever app.json says", async () => {
+        const r = await envRun({
+          noHook: true,
+          pre: P1,
+          post: P1,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(TESTS_APP.version).toBe("1.0.0.2");
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.installedCalls).toContain(APP_ID);
+        r.store.close();
+        // Control: the same package installed at its own version is proven.
+        const c = await envRun({
+          noHook: true,
+          pre: P1,
+          post: P1,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+        });
+        expect(c.store.getRun(c.runId)?.testAppHash).toBe(`package:${hashPackage(P1)}`);
+        expect(c.store.getRun(c.runId)?.testAppProven).toBe(true);
+        c.store.close();
+      });
+      test("a backend that cannot read installed versions records no identity", async () => {
+        const r = await envRun({ noHook: true, ...provenP2, noMicrosoftMode: true });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+        r.store.close();
+      });
+      // I1: a session that proved P2 reads P1 at batch 1. Two files, one batch each.
+      const twoBatches = async () => {
+        const dirs = await makeProject(BODY_B);
+        await Bun.write(
+          join(dirs.projectDir, "SandboxExtra.Codeunit.al"),
+          'codeunit 79002 "Sandbox Extra"\n{\n    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean\n    begin\n        exit(Amount < Limit);\n    end;\n}\n',
+        );
+        return dirs;
+      };
+      const drifted = (r: { outcome: unknown; store: ResultsStore; runId: number }) => {
+        expect(r.outcome).toBeInstanceOf(TestAppDriftedError);
+        const e = r.outcome as TestAppDriftedError;
+        expect([e.proven, e.now, e.batchIndex]).toEqual([
+          `package:${hashPackage(P2)}`,
+          `package:${hashPackage(P1)}`,
+          1,
+        ]);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+        // Batch 1 recorded nothing; batch 0 did.
+        const rows = (min: number) =>
+          count(
+            r.store,
+            "SELECT COUNT(*) AS n FROM mutants WHERE run_id = ? AND batch_index >= ?",
+            r.runId,
+            min,
+          );
+        expect(rows(1)).toBe(0);
+        expect(rows(0)).toBeGreaterThan(0);
+      };
+      // The read in `scoreBatch`. Revert: drop `assertNoTestAppDrift` there.
+      test("I1: a session whose batch read differs from its proven test app refuses there", async () => {
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P1],
+          dirs: await twoBatches(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        drifted(r);
+        r.store.close();
+      });
+      // The read before a batch carried whole (R192), which never reaches `scoreBatch`. Revert:
+      // drop the drift check before `replayCarriedBatch`.
+      test("I1: a resumed session refuses at a carried batch whose read differs, carrying nothing from it", async () => {
+        const dirs = await twoBatches();
+        const r1 = await envRun({
+          noHook: true,
+          ...provenP2,
+          dirs,
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        expect(r1.outcome).not.toBeInstanceOf(Error);
+        r1.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [r1.runId]);
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P1],
+          dirs,
+          store: r1.store,
+          extra: { maxGuardsPerBatch: 1, resume: r1.runId },
+        });
+        drifted(r);
+        expect(carriedAfter(r.store, r1.runId)).toBeGreaterThan(0);
+        r.store.close();
+      });
       // A plain bcdev run served P2 with P1 installed.
       const noHookMeasuringP1 = (extra: Partial<SessionConfig>) =>
         envRun({ noHook: true, pre: P2, post: P2, installed: { [APP_ID]: ["1.0.0.1"] }, extra });

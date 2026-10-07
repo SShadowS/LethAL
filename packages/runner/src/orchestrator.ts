@@ -3666,13 +3666,10 @@ function assertSameTestApp(
     return;
   }
   throw new Error(
-    `${flag}: run ${row.id} was measured against test app ${describeTestApp(row.testAppHash)}${
-      row.testAppHash === null
-        ? " (it recorded no proven test-app identity)"
-        : row.testAppProven
-          ? ""
-          : ` (${TEST_APP_UNPROVEN})`
-    }, and this session's test app is ${describeTestApp(testAppHash)}${
+    `${flag}: run ${row.id} was measured against test app ${describeTestApp(row.testAppHash)}${recordedTestAppNote(
+      row.testAppHash,
+      row.testAppProven,
+    )}, and this session's test app is ${describeTestApp(testAppHash)}${
       testAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
     }. ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495). Drop the resume flag to run from scratch.`,
   );
@@ -3681,6 +3678,14 @@ function assertSameTestApp(
 /** R495: why an identity lends nothing, said the same way on every path. */
 const TEST_APP_UNPROVEN =
   "not proven installed: the identity was read from a package or source not proven to be the test app that ran, or recorded before R495";
+
+/** R495: what a recorded run's test-app identity is worth, for a refusal or warning. */
+function recordedTestAppNote(hash: string | null, proven: boolean): string {
+  if (hash === null) {
+    return " (it recorded none: its test app was not proven installed, or it ran before R247)";
+  }
+  return proven ? "" : ` (${TEST_APP_UNPROVEN})`;
+}
 
 /** R214: a symbol list for a message. `null` is a row recorded before the column existed. */
 const symbolList = (s: readonly string[] | null): string =>
@@ -5927,9 +5932,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             emit({
               type: "warning",
               code: "history-test-app-changed",
-              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}${
-                old.testAppHash !== null && !old.proven ? ` (${TEST_APP_UNPROVEN})` : ""
-              }, and this session's test app is ${describeTestApp(historyTestAppHash)}${
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}${recordedTestAppNote(
+                old.testAppHash,
+                old.proven,
+              )}, and this session's test app is ${describeTestApp(historyTestAppHash)}${
                 historyTestAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
               }. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247, R495).`,
             });
