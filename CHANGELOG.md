@@ -138,7 +138,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   unfiltered extensions query. The same now holds for every request LethAL sends to BC (the
   shared BC fetch never follows a redirect, so the dev-endpoint package download and the control
   web service fail on one too); and `lethal doctor` now stops on a refused extensions query instead
-  of listing it as one failed check.
+  of listing it as one failed check. An activation call answered with a redirect counts as sent
+  (its effect unknown, never retried), and a refused extensions query now stops the deployment
+  check, the permission canary and the grouped run's progress watchdog instead of being reported
+  as unavailable, inconclusive or "nothing yet".
 
 - **al-runner scores a `#if`-wrapped object that is alone in its file; identity scheme 29**
   (R-300b, R300). al-runner (one-shot, `--server` and resource modes) now scores such an object,

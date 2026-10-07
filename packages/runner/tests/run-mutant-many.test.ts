@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
+import { UnfilteredExtensionsQueryError } from "../src/harness";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import type { RunMutantManyRequest, RunMutantManyResult } from "../src/run-mutant-transport";
 import { scratchDirs } from "./helpers/scratch";
@@ -1315,5 +1316,39 @@ describe("runMany, a connection failure keeps the watchdog's story (R289)", () =
     expect(warnings[0]).toContain("trace write failed 1 times");
     // Bounded: `dispatch`, then the first `poll-sent` that threw, and nothing after it.
     expect(writes.length).toBe(2);
+  });
+});
+
+describe("R-496 review round 3: a refused extensions query stops the watchdog and the call", () => {
+  test("a progress poll refused as an unfiltered extensions query rejects runMany, polling stops", async () => {
+    const f = fakes({
+      many: "hold",
+      status: () => new UnfilteredExtensionsQueryError("refused poll"),
+    });
+    const err = await within(
+      transport(f.fetchFn)
+        .runMany(req())
+        .catch((e: unknown) => e),
+      3_000,
+      "runMany",
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.polls()).toBe(1);
+  });
+
+  test("a StopHungRunAt refused as an unfiltered extensions query rejects runMany", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => new UnfilteredExtensionsQueryError("refused stop"),
+    });
+    const err = await within(
+      transport(f.fetchFn)
+        .runMany(req({ stopHungSessions: true }))
+        .catch((e: unknown) => e),
+      3_000,
+      "runMany",
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.stops.length).toBe(1);
   });
 });

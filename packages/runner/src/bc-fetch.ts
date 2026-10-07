@@ -48,7 +48,8 @@ export function withFreshConnectionOnHttps(inner: FetchFn): FetchFn {
  * sends a request no caller's guard ever saw, and a 302/303 to BC's unfiltered `extensions` list
  * is the request that hung BC 28.4 (R433). When the Location (resolved against the request URL)
  * is one R433's guard refuses, the guard's own `UnfilteredExtensionsQueryError` is thrown; any
- * other redirect throws a plain error naming the status and the Location. LethAL expects no
+ * other redirect throws `BcRedirectRefusedError` naming the status and the Location. Both mean
+ * the request was dispatched and answered. LethAL expects no
  * redirect from BC, so neither is followed.
  */
 export function refuseRedirects(inner: FetchFn): FetchFn {
@@ -62,11 +63,22 @@ export function refuseRedirects(inner: FetchFn): FetchFn {
       const tenant = new URL(url).searchParams.get("tenant") ?? undefined;
       refuseUnfilteredExtensionsQuery(dest.pathname, [...dest.searchParams], tenant);
     }
-    throw new Error(
+    throw new BcRedirectRefusedError(
       `BC answered ${url} with HTTP ${res.status} redirect to ${JSON.stringify(location)}; LethAL never follows a redirect from BC (R-496)`,
     );
   };
   return Object.assign(request, { preconnect: inner.preconnect });
+}
+
+/**
+ * R-496: BC answered with a redirect, and `refuseRedirects` did not follow it. The request WAS
+ * dispatched and answered, so this is never a pre-dispatch failure and never retry-safe.
+ */
+export class BcRedirectRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BcRedirectRefusedError";
+  }
 }
 
 /** The `fetch` every BC-facing client defaults to. Tests inject their own and never see this. */

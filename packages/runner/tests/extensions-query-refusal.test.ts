@@ -1,13 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import type { ActivationConfig } from "../src/activation";
-import { refuseRedirects } from "../src/bc-fetch";
+import { type ActivationConfig, MutationControlClient } from "../src/activation";
+import { BcRedirectRefusedError, refuseRedirects } from "../src/bc-fetch";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
+import { DeploymentVerifier } from "../src/deployment-verifier";
 import { type MicrosoftMode, dependencyFingerprint } from "../src/digest-inputs";
+import { ActivationFailure } from "../src/failure-classes";
 import {
   HarnessVerificationError,
   HarnessVerifier,
   UnfilteredExtensionsQueryError,
 } from "../src/harness";
+import { isRetrySafe } from "../src/operation-outcome";
+import { PermissionCanaryClient, runPermissionCanary } from "../src/permission-canary";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 
@@ -477,7 +481,7 @@ describe("R-496 review: no BC request follows a redirect (bc-fetch's refuseRedir
     const harmless = "http://bc:7048/BC/somewhere-else";
     const { urls, fetchFn } = autoFollowing(302, harmless);
     const err = await fetchFn("http://bc:7048/BC/ODataV4/x").catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(BcRedirectRefusedError);
     expect(err).not.toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(String(err)).toContain("HTTP 302");
     expect(String(err)).toContain(harmless);
@@ -523,5 +527,38 @@ describe("R-496 review: no BC request follows a redirect (bc-fetch's refuseRedir
     } finally {
       server.stop(true);
     }
+  });
+
+  // R-496 review round 3: a redirect answer means the POST was dispatched, so never retry-safe.
+  for (const location of [UNFILTERED, "http://bc:7048/BC/somewhere-else"]) {
+    test(`an activation POST answered by a redirect (${location.includes("somewhere") ? "harmless" : "unfiltered"}) is dispatched, not retry-safe`, async () => {
+      const { urls, fetchFn } = autoFollowing(302, location);
+      const err = await new MutationControlClient(CFG, fetchFn)
+        .setActive("M0001")
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ActivationFailure);
+      const outcome = (err as ActivationFailure).outcome;
+      expect(outcome).toBe("completed-effect-unknown");
+      expect(isRetrySafe(outcome)).toBe(false);
+      expect(urls).toHaveLength(1);
+    });
+  }
+
+  test("DeploymentVerifier.verify rejects with the refusal instead of resolving unavailable", async () => {
+    const { urls, fetchFn } = autoFollowing(303, UNFILTERED);
+    const err = await new DeploymentVerifier(CFG, fetchFn)
+      .verify({ artifactId: "0123456789abcdef0123456789abcdef", appId: GUID })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(urls).toHaveLength(1);
+  });
+
+  test("runPermissionCanary rejects with the refusal instead of resolving inconclusive", async () => {
+    const { urls, fetchFn } = autoFollowing(302, UNFILTERED);
+    const err = await runPermissionCanary(new PermissionCanaryClient(CFG, fetchFn)).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(urls).toHaveLength(1);
   });
 });

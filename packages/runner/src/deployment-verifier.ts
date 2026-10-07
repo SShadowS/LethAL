@@ -1,6 +1,7 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { CompiledArtifact } from "./artifact";
 import { bcFetch } from "./bc-fetch";
+import { UnfilteredExtensionsQueryError } from "./harness";
 
 /**
  * The only shape a generated artifact id, or an id `LethALControl_RegisteredArtifact` reports
@@ -92,6 +93,8 @@ export class DeploymentVerifier {
     try {
       reported = await this.readRegisteredArtifact(expected.appId);
     } catch (err) {
+      // R-496: a redirect to an unfiltered extensions list is a refused request, not evidence.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       return {
         status: "unavailable",
         detail: err instanceof Error ? err.message : String(err),

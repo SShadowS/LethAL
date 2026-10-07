@@ -3,6 +3,7 @@ import type { ActivationConfig, FetchFn } from "./activation";
 import type { StopState, TestMethodRef, TestOutcome, TestVerdict } from "./backend";
 import { bcFetch } from "./bc-fetch";
 import { describeThrown } from "./describe-error";
+import { UnfilteredExtensionsQueryError } from "./harness";
 import { assertAttemptId, parseOperationStatus } from "./lease";
 import type { LeaseTuple, OperationStatus } from "./lease";
 import { runMutantLineCountMessage } from "./stale-test-app";
@@ -967,6 +968,14 @@ export class RunMutantTransport {
           r();
         };
       });
+    // R-496: a watchdog request refused as an unfiltered extensions query stops the call: the main
+    // request is aborted and the watchdog rejects with the refusal, which every return path below
+    // reaches through its `await watchdog`.
+    const refuseOnUnfiltered = (err: unknown) => {
+      if (!(err instanceof UnfilteredExtensionsQueryError)) return;
+      controller.abort();
+      throw err;
+    };
     const watchdog = (async () => {
       while (!settled) {
         await sleep(pollMs);
@@ -980,6 +989,7 @@ export class RunMutantTransport {
         } catch (err) {
           pollsFailed++;
           trace("poll-failed", { seq, sentAt, error: describeThrown(err) });
+          refuseOnUnfiltered(err);
           continue; // a failed poll is "nothing yet"
         }
         pollsOk++;
@@ -1052,6 +1062,7 @@ export class RunMutantTransport {
           stopAttempts[attempt] = "unknown";
           stopAnsweredAt = Date.now() - started;
           trace("stop-threw", { error: describeThrown(err) });
+          refuseOnUnfiltered(err);
           stopHookError = err;
           continue;
         }
@@ -1078,6 +1089,9 @@ export class RunMutantTransport {
         );
       }
     })();
+    // Handled here so a refusal is not reported as unhandled before the `await watchdog` below
+    // reads it; that await still rejects.
+    watchdog.catch(() => {});
     const settle = () => {
       settled = true;
       clearTimeout(hardTimer);
