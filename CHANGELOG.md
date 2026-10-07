@@ -498,6 +498,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **An env-tool run's test app is recorded only when proven installed** (R492). The server can serve a
+  test app that is not the installed one; such a run recorded the served hash, so a later `--resume`,
+  `--skip-known-survivors` or reused baseline could carry verdicts measured under another test app.
+  The recorded identity, the history and the digests now need one installed proof; an env-tool resume
+  is compared after the hook with the resumed run's proven identity (older env-tool runs are refused,
+  and a hook that restores the resumed run's test app now resumes); a baseline snapshot is reused only
+  from a run that recorded its hash (and, on an env-tool session, digests). Sessions without a hook:
+  R495.
+
 - **al-runner one-shot: a result with two rows for the requested test is refused by name** (R491).
   Two rows carrying the requested name, exactly or ignoring case, were credited from the first row
   and that call's coverage; now the run is an `error` naming the test. That refusal, and R488's
