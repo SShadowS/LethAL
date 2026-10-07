@@ -4207,7 +4207,7 @@ async function closeLeaseScope(a: {
   safety: SessionSafety;
   leaseSession: LeaseSession | undefined;
   emit: RunEmitter;
-}): Promise<void> {
+}): Promise<Error | undefined> {
   // Best-effort cleanup: deliberately swallow errors here (unlike the
   // retrying activation calls in scoreBatch and the covering loop) since
   // this only runs to leave every backend deactivated on exit, and a
@@ -4236,6 +4236,25 @@ async function closeLeaseScope(a: {
   // ClearActive (above) still runs under the lease it was taken with.
   if (a.leaseSession !== undefined) await a.leaseSession.finish();
   a.emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
+  // R-496: a redirect to an unfiltered extensions query that arrived after the last call returned
+  // has no next call to throw it. Handed back AFTER the cleanup above, for the caller to throw.
+  for (const backend of [a.backend, ...a.workerBackends]) {
+    const late = (backend as { takeLateRefusal?: () => Error | undefined }).takeLateRefusal?.();
+    if (late !== undefined) return late;
+  }
+  return undefined;
+}
+
+/**
+ * R-496: throw the refusal `closeLeaseScope` handed back, unless the session is already failing:
+ * then the earlier error stays and the refusal is logged (a warning line), never dropped silently.
+ */
+function surfaceLateRefusal(late: Error | undefined, alreadyFailing: boolean): void {
+  if (late === undefined) return;
+  if (!alreadyFailing) throw late;
+  console.warn(
+    `[lethal] a refused unfiltered extensions query arrived after the session's last call, while it was already failing: ${late.message}`,
+  );
 }
 
 /** C02-04: design section 6's invalidation of the batch a lost lease was measured under. */
@@ -5619,6 +5638,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // `buildReport` at the very end — the whole point is that it survives into `--out` JSON and gets
   // repeated after the score, not that it flashes past once in stderr.
   let permissionCanary: PermissionCanaryResult | undefined;
+  let failing = false; // R-496: an error is already unwinding through the teardown
 
   try {
     if (cfg.lease !== undefined) {
@@ -6897,15 +6917,21 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // a session failure: the latch already recorded WHY, this batch's verdicts are invalidated
     // below, and the report carries `quarantined`. Rejecting here instead would throw all of that
     // away. Every other error still propagates untouched.
-    if (!(err instanceof SessionUnsafeError)) throw err;
+    if (!(err instanceof SessionUnsafeError)) {
+      failing = true;
+      throw err;
+    }
   } finally {
-    await closeLeaseScope({
-      backend: cfg.backend,
-      workerBackends,
-      safety,
-      leaseSession,
-      emit,
-    });
+    surfaceLateRefusal(
+      await closeLeaseScope({
+        backend: cfg.backend,
+        workerBackends,
+        safety,
+        leaseSession,
+        emit,
+      }),
+      failing,
+    );
   }
 
   // Layer 5C-B1 (design §6, verbatim): "at session end — after the batch loop breaks, before
@@ -7367,6 +7393,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   const outcomes: SessionOutcome[] = [];
   const strict = cfg.requireEveryMethodGreen === true;
   const baselineTests = baselineTestsOf(named);
+  let failing = false; // R-496: an error is already unwinding through the teardown
   const rerunRefs = cfg.rerunOnUnmutated ?? [];
   const baselineRan = new Map<string, TestVerdict>();
   const rerunRan = new Map<string, UnmutatedRun>();
@@ -7471,9 +7498,15 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       }
     }
   } catch (err) {
-    if (!(err instanceof SessionUnsafeError)) throw err;
+    if (!(err instanceof SessionUnsafeError)) {
+      failing = true;
+      throw err;
+    }
   } finally {
-    await closeLeaseScope({ backend, workerBackends: [], safety, leaseSession, emit });
+    surfaceLateRefusal(
+      await closeLeaseScope({ backend, workerBackends: [], safety, leaseSession, emit }),
+      failing,
+    );
   }
   emitLeaseLostInvalidation(leaseSession, safety, emit);
   applyBatchInvalidations(outcomes, invalidations);

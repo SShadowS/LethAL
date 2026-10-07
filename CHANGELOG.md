@@ -563,7 +563,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   skips nothing on `--skip-known-survivors` and re-runs every baseline. A non-hook bcdev run now
   walks its dependencies a second time, under the lease (about 4.3 s on the measured closure). Not
   covered: apps outside the closure, a dependency changed during the batches, and the control
-  app's own bytes. No report schema, store schema version or identity scheme changes.
+  app's own bytes. No report schema, store schema version or identity scheme changes. A redirect to
+  an unfiltered extensions query that arrives after a call has returned is now thrown when the
+  session tears down (after cleanup, never over an earlier error); the wider gap is filed as R499.
 
 - **A run lends its test-app identity only when it proved it, on every backend** (R495). A bcdev
   session without an env-tool hook recorded the served test-app package's hash without proving it

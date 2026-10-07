@@ -475,6 +475,17 @@ export class RunMutantTransport {
   /** R-496: a refusal recorded after its call exited; the next call's boundary throws it. */
   private lateRefusal: UnfilteredExtensionsQueryError | undefined;
 
+  /** R-496: hand over (and clear) a refusal no call has thrown yet; the session teardown asks once. */
+  takeLateRefusal(): UnfilteredExtensionsQueryError | undefined {
+    const late = this.lateRefusal;
+    this.lateRefusal = undefined;
+    return late === undefined
+      ? undefined
+      : new UnfilteredExtensionsQueryError(
+          `a BC redirect to an unfiltered extensions query arrived after a mutant's verdict was returned, so that verdict's session may not be trustworthy: ${late.message}`,
+        );
+  }
+
   /**
    * R-496: run one public call; if any fetch inside it (a swallowed catch, a stop timer, the status
    * read) was refused as an unfiltered extensions query, throw that refusal at exit, whatever the

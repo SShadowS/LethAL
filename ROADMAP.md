@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**57 of 495 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**58 of 496 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -209,6 +209,7 @@ that ordering is the priority.
 - **R493** · R484 follow-ups: three report data-item shapes still emit hang-capable mutants, and an OnPostDataItem write is over-refused · [R493.md](docs/roadmap/R493.md) · open, filed 2026-10-06
 - **R495** · A session without an env-tool hook records the pre-lease served test-app hash without proving it is the installed one · [R495.md](docs/roadmap/R495.md) · done (98748740)
 - **R496** · `test_app_hash` hashes only the test app's bytes: two proven runs whose hook-published dependency changed still match · [R496.md](docs/roadmap/R496.md) · done (47179723)
+- **R499** · Outstanding stop requests are not drained before a score is published · [R499.md](docs/roadmap/R499.md) · open, filed 2026-10-07
 
 ## Product gaps a real project hits
 

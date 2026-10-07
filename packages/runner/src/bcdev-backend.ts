@@ -329,6 +329,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // server-side. The transport is built at deploy() once the target's identity is known.
   private pendingMutantId: string | null = null;
   private runMutantTransport: RunMutantTransport | undefined;
+  // R-496: a late refusal taken from a transport that a re-deploy/attach replaced.
+  private retiredLateRefusal: UnfilteredExtensionsQueryError | undefined;
   // Monotonic per-backend attempt id, echoed by RunMutant and validated by the transport (§I5).
   private attemptSeq = 0;
   // Layer 5C-B1: the machine-global lease this session holds, bound by the orchestrator (Task 8)
@@ -794,8 +796,22 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // The deployment is confirmed — bind a RunMutant transport to THIS artifact's identity so
     // run() (coverage: "none") executes each mutant against the exact target/artifact just
     // published. The transport echoes and validates this identity tuple on every call (§I5).
-    this.runMutantTransport = this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId);
+    this.bindTransport(this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId));
     return artifact;
+  }
+
+  /** Swap the bound transport, keeping any refusal the old one still held (R-496). */
+  private bindTransport(next: RunMutantTransport | undefined): void {
+    // `?.()`: test doubles bind transport stubs without the method
+    this.retiredLateRefusal ??= this.runMutantTransport?.takeLateRefusal?.();
+    this.runMutantTransport = next;
+  }
+
+  /** R-496: a refusal no call has thrown yet, for the session teardown to surface. */
+  takeLateRefusal(): UnfilteredExtensionsQueryError | undefined {
+    const late = this.retiredLateRefusal ?? this.runMutantTransport?.takeLateRefusal?.();
+    this.retiredLateRefusal = undefined;
+    return late;
   }
 
   /**
@@ -806,7 +822,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
    */
   async attach(artifact: BoundArtifact): Promise<void> {
     // Unbind first, so a refused attach leaves NO transport, not the previous artifact's.
-    this.runMutantTransport = undefined;
+    this.bindTransport(undefined);
     const deployment = this.deployment;
     if (deployment === undefined) {
       throw new InstalledArtifactError(
@@ -837,7 +853,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         `indexing ${artifact.appPath}: ${describeThrown(err)}`,
       );
     }
-    this.runMutantTransport = this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId);
+    this.bindTransport(this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId));
   }
 
   /**
