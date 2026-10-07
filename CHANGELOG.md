@@ -134,14 +134,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   active files is refused by name. On `--server`, a statement in such a file whose own procedure
   name disagrees with its position is dropped, with a warning. If such a file's instrumented text
   re-parses with `#if` arms that cannot be evaluated, its mutants read `no-coverage` with that
-  refusal named; they are never scored by the all-tests fallback. Two-arm, nested and multi-object
+  refusal named; they are never scored by the all-tests fallback, nor carried by
+  `--skip-known-survivors` or a full-batch `--resume` before that refusal is known. Two-arm, nested and multi-object
   wrapped files, and every BC coverage path (fenced, hub, `lethal verify`), still refuse by name.
   No key moves and the emitted AL is unchanged, but a key whose verdict was a refusal's
   `no-coverage` can now be scored, so history, `--resume` and marks recorded under 28 (bcdev
   included) are not carried: marks files need `"identityScheme": 29` after you re-check each mark
   (R325). Measured offline on BC.History under an al-runner build: 137 admitted files with 6,984
   mutation sites move from refused to scored; CDO and the gate fixtures have none. A new
-  `itest:alrunner` leg (`fixtures/sandbox-wrapped`) pins it once its baseline is first recorded.
+  `itest:alrunner` leg (`fixtures/sandbox-wrapped`) pins it: 22 killed / 9 survived / 3 no-coverage
+  per mutant, with al-runner's `--define` measured to add to `app.json`'s symbols.
 
 - **A report data item over `Integer` counts as a loop for the hang refusal; identity scheme 28**
   (R484). BC calls a data item's `OnAfterGetRecord` once per record. Over the virtual `Integer` table
