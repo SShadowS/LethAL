@@ -25,6 +25,8 @@ import {
 } from "@lethal/engine";
 import {
   CARRIER_KINDS,
+  FLAT_NAMES_FILENAME,
+  type FlatNames,
   IDENTITY_SCHEME,
   type IdentityEntry,
   type InstrumentedFile,
@@ -37,6 +39,8 @@ import {
   coarseIdentityTupleOf,
   dedupeSpecs,
   describeObjectKinds,
+  flatNamesFor,
+  flatNamesSidecar,
   identityEntriesOf,
   identityFieldsOf,
   identitySiteKey,
@@ -1879,6 +1883,9 @@ async function prepareArtifactDir(args: {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
     args.subset === undefined ? args.files : narrowFilesToSubset(args.files, args.subset);
+  // R219: ONE flat-name map over the whole project, for both writers: built over the batch's own
+  // files, a duplicate whose twin is not instrumented here would get another name than its copy.
+  const flatNames = flatNamesFor(await batchAlFiles(args.projectDir, args.source));
   await writeInstrumentedProject({
     targetDir: args.targetDir,
     files,
@@ -1887,6 +1894,7 @@ async function prepareArtifactDir(args: {
     targetAppId: targetAppIdOf(args.projectManifest),
     operatorTiers,
     identityOrdinals: args.identityOrdinals,
+    flatNames,
   });
   return await prepareBatchProject(
     args.projectDir,
@@ -1895,6 +1903,7 @@ async function prepareArtifactDir(args: {
     args.appVersion,
     args.source,
     args.excludeOutputs,
+    flatNames,
   );
 }
 
@@ -9454,6 +9463,17 @@ function isToolResourcePath(rel: string): boolean {
   return rel.split(/[\\/]/).some((segment) => segment.startsWith("."));
 }
 
+/** The target's `.al` files a batch directory holds: the generation snapshot's when given (C02-06),
+ *  else `targetAlFiles`. R219: also the list every flat name is decided over. */
+async function batchAlFiles(
+  projectDir: string,
+  source: ReadonlyMap<string, Buffer> | undefined,
+): Promise<readonly string[]> {
+  return source !== undefined
+    ? [...source.keys()].filter((rel) => rel.toLowerCase().endsWith(".al"))
+    : await targetAlFiles(projectDir);
+}
+
 /**
  * Spec §5: the instrumented app must keep the target app's id, carry the
  * per-artifact version reserved via `reserveAppVersion` (app-version.ts —
@@ -9483,6 +9503,8 @@ export async function prepareBatchProject(
   appVersion: string,
   source?: ReadonlyMap<string, Buffer>,
   excludeOutputs: readonly string[] = [],
+  /** R219: the map `writeInstrumentedProject` named its files by; built here when absent. */
+  flatNamesIn?: FlatNames,
 ): Promise<readonly AppJsonPathChange[]> {
   const pathChanges = await writeStampedAppJson(batchDir, projectManifest, appVersion);
   // R363: the run's own output files (the results database and its sidecars, `--out`,
@@ -9497,35 +9519,24 @@ export async function prepareBatchProject(
   // landed in a different batch, or that have no mutable sites at all) so
   // the batch dir holds the FULL project alc needs to compile.
   //
-  // The flattening to `basename` is dictated by `writeInstrumentedProject`, which writes its
-  // emissions that way. It makes two same-named files in different folders collide, and the
-  // `pathExists` skip below — there to leave an instrumented emission alone — would silently
-  // swallow the second one, dropping an AL object from the published app with no diagnostic.
-  // So collisions are detected here on the SOURCE paths, independently of what is already on
-  // disk, and refused loudly. (Continia Document Output has 551 distinct basenames across 551
-  // files, so the flattening survives there — by luck, not by design.)
+  // The flattening is dictated by `writeInstrumentedProject`, which writes its emissions that way,
+  // and the `pathExists` skip below is there to leave such an emission alone. R219: two same-named
+  // files in different folders get distinct flat names (`flatNamesFor`, the one map both writers
+  // use), so neither replaces the other; before, this refused the project (Continia Document
+  // Capture: two `ScannerUI.al`). The map still refuses a name it cannot make unique.
   // C02-06: the `.al` set and bytes come from `source`, the snapshot generation hashed and parsed,
   // so every batch compiles exactly the recorded bytes whatever happens on disk meanwhile. Without
   // one, `targetAlFiles`, which `hashTargetSource` enumerates too.
-  const alFiles =
-    source !== undefined
-      ? [...source.keys()].filter((rel) => rel.toLowerCase().endsWith(".al"))
-      : await targetAlFiles(projectDir);
-  const alBySeenBasename = new Map<string, string>();
+  const alFiles = await batchAlFiles(projectDir, source);
+  const flatNames = flatNamesIn ?? flatNamesFor(alFiles);
   for (const rel of alFiles) {
-    const base = basename(rel);
-    const previous = alBySeenBasename.get(base.toLowerCase());
-    if (previous !== undefined) {
-      throw new Error(
-        `cannot build the batch project: two source files share the basename "${base}" (${previous} and ${rel}). Instrumented files are written flat, so one would silently replace the other and its AL objects would be missing from the published app. Rename one of them.`,
-      );
-    }
-    alBySeenBasename.set(base.toLowerCase(), rel);
-    const dest = join(batchDir, base);
+    const dest = join(batchDir, flatNames.flatOf(rel));
     if (await pathExists(dest)) continue;
     if (source !== undefined) await writeFile(dest, snapshotBytes(source, rel));
     else await copyFile(join(projectDir, rel), dest);
   }
+  const sidecar = flatNamesSidecar(flatNames.renamed);
+  if (sidecar !== undefined) await writeFile(join(batchDir, FLAT_NAMES_FILENAME), sidecar);
 
   // Every directory that holds at least one `.al` file. A resource named relative to an AL file is
   // named relative to ITS directory, and the `.al` files above were just flattened onto the batch

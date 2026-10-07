@@ -53,6 +53,7 @@ import {
   type LineMapEntry,
   activeEntries,
   alRunnerAdmitsWrappedFile,
+  batchDisplayPaths,
   duplicateObjectRefusals,
   fileHoldsWrappedObject,
   fileLineMapEntries,
@@ -254,6 +255,10 @@ export async function buildAlRunnerCoverageIndex(
     .map((e) => e.toString())
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .sort();
+  // R219: every key stays the batch's own flat name (what al-runner compiled and Cobertura
+  // reports); a file QUOTED to a user is named by its project path when the batch renamed it.
+  const display = await batchDisplayPaths(instrumentedDir);
+  const shown = (rel: string): string => normalizeSlashes(display(rel));
 
   const byFile = new Map<string, readonly LineMapEntry[]>();
   const multiObjectFiles: string[] = [];
@@ -272,7 +277,7 @@ export async function buildAlRunnerCoverageIndex(
     const root = wrapRoot(parseAL(source));
     const admitted = alRunnerAdmitsWrappedFile(root);
     if (fileHoldsWrappedObject(root) && !admitted) {
-      const file = normalizeSlashes(rel);
+      const file = shown(rel);
       refusedFiles.push(file);
       skippedFiles.push(normalizeFileKey(rel));
       for (const [key, reason] of refusedObjectsOfFile(root, file, "al-runner")) {
@@ -289,7 +294,7 @@ export async function buildAlRunnerCoverageIndex(
       // undecided (R303's emitted ERROR nodes do).
       const arms = evaluateArms(root, source, symbols);
       if (arms.kind === "undecided") {
-        const file = normalizeSlashes(rel);
+        const file = shown(rel);
         refusedFiles.push(file);
         skippedFiles.push(normalizeFileKey(rel));
         for (const e of fileEntries) {
@@ -308,7 +313,7 @@ export async function buildAlRunnerCoverageIndex(
     if (refusedAsMultiObject(root)) {
       // Forward slashes so the warning reads the same on every platform: `readdir` hands back
       // `src\X.al` on Windows, and this string is quoted to a user who has to find the file.
-      multiObjectFiles.push(normalizeSlashes(rel));
+      multiObjectFiles.push(shown(rel));
       for (const e of fileEntries) exempt.add(`${e.objectType.toLowerCase()}:${e.objectId}`);
       // Not indexed, so nothing can resolve against a file al-runner reports in the wrong frame.
       if (options.admitMultiObjectFiles !== true) {
@@ -317,7 +322,7 @@ export async function buildAlRunnerCoverageIndex(
       }
     }
     candidates.push({
-      file: normalizeSlashes(rel),
+      file: shown(rel),
       key: normalizeFileKey(rel),
       entries: fileEntries,
     });

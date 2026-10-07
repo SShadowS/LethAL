@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { InstalledArtifactError } from "./artifact";
 import { describeThrown } from "./describe-error";
-import type { AlSource } from "./line-map";
+import { type AlSource, batchDisplayPaths } from "./line-map";
 
 /**
  * R360: a published batch's installed files could not be stored. Extends `Error` directly. The run
@@ -145,9 +145,13 @@ export async function readBatchBundle(
   } catch (err) {
     throw new InstalledBundleError("bundle-unreadable", `${batchDir}: ${describeThrown(err)}`);
   }
+  // R219: a file the batch wrote under a disambiguated flat name is stored under its project path,
+  // the one every refusal of the verify path quotes. Unrenamed paths (every batch before R219, so
+  // every recorded digest) are unchanged.
+  const display = await batchDisplayPaths(batchDir);
   const alPaths = entries
     .filter((e) => e.toLowerCase().endsWith(".al"))
-    .map((e) => ({ path: e.replaceAll("\\", "/"), native: e }))
+    .map((e) => ({ path: display(e.replaceAll("\\", "/")), native: e }))
     .sort(byPath);
   const digest = new PayloadDigest(appJson);
   const files: Array<{ path: string; textGz: Uint8Array }> = [];

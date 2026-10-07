@@ -8,7 +8,7 @@ import { gzipSync } from "node:zlib";
 import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
-import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
+import { flatNamesFor, withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import {
   AlcCompileError,
@@ -3164,24 +3164,30 @@ codeunit 79312 "Mixed Code"
     expect(report.mutants.some((m) => m.file.includes("Bad.Mixed"))).toBe(false);
   });
 
-  test("R307: a refused file and a good file sharing a basename still abort with the duplicate-basename message", async () => {
+  // R219 replaced this test's refusal ("two source files share the basename ... Rename one of
+  // them."): a shared basename now gets two distinct flat names, so the refused file and the good
+  // one BOTH reach the deployed batch, neither replacing the other.
+  test("R307, R219: a refused file and a good file sharing a basename both reach the batch, under distinct names", async () => {
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "a", "Dup.Codeunit.al"), R307_BAD_AL);
-    await Bun.write(
-      join(dirs.projectDir, "b", "Dup.Codeunit.al"),
-      TARGET_AL.replace("79000", "79003").replace("Sandbox Logic", "Dup Logic"),
-    );
-    // The message below is thrown for ANY two files sharing a basename, so prove a/Dup is refused.
+    const good = TARGET_AL.replace("79000", "79003").replace("Sandbox Logic", "Dup Logic");
+    await Bun.write(join(dirs.projectDir, "b", "Dup.Codeunit.al"), good);
     const set = await generateMutationSet(dirs.projectDir);
     expect(set.refusedFiles.map((r) => [r.file, r.shape])).toEqual([
       ["a/Dup.Codeunit.al", "object-mix"],
     ]);
     const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
     const store = new ResultsStore(":memory:");
-    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
-      /cannot build the batch project: two source files share the basename "Dup\.Codeunit\.al" \(.*Dup\.Codeunit\.al and .*Dup\.Codeunit\.al\)\. Instrumented files are written flat, so one would silently replace the other and its AL objects would be missing from the published app\. Rename one of them\./,
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const [batch] = backend.deploys;
+    if (batch === undefined) throw new Error("nothing was deployed");
+    const names = flatNamesFor(["a/Dup.Codeunit.al", "b/Dup.Codeunit.al"]);
+    // The refused file verbatim, the good one instrumented (its own object, under its own name).
+    expect(readFileSync(join(batch, names.flatOf("a/Dup.Codeunit.al")), "utf8")).toBe(R307_BAD_AL);
+    expect(readFileSync(join(batch, names.flatOf("b/Dup.Codeunit.al")), "utf8")).toContain(
+      "Dup Logic",
     );
-    expect(backend.deploys.length).toBe(0);
+    expect(await Bun.file(join(batch, "Dup.Codeunit.al")).exists()).toBe(false);
   });
 
   test("missing app.json aborts with a clear error before deploy", async () => {

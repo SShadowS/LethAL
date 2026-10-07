@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -14,6 +14,7 @@ import {
 } from "@lethal/engine";
 import { type TierResolver, dedupeSpecs } from "./dedup";
 import type { ReachGrain } from "./dispatch-plan";
+import { type FlatNames, flatNamesFor } from "./flat-names";
 import { type IdedSpec, assignMutantIds, compareCodeUnits } from "./ids";
 import { emitOneFile } from "./project-emit";
 import { type PlannedMutant, attributeHeader, objectHeadersOf, planOneFile } from "./project-plan";
@@ -58,6 +59,13 @@ export interface WriteInput {
    * is refused, never defaulted to 0.
    */
   readonly identityOrdinals: ReadonlyMap<string, number>;
+  /**
+   * R219: the flat name of each written file, built over the WHOLE project's `.al` list so a
+   * duplicate basename is named as every other writer and reader names it (`flatNamesFor`).
+   * Absent: built over `files` alone, which is only right when no unwritten project file shares a
+   * basename with one of them (tests and scripts writing a hand-built set). A real run passes it.
+   */
+  readonly flatNames?: FlatNames;
 }
 
 /** C02-09: a gap's id. Reads the file (separators normalised), the block's position and its source
@@ -678,6 +686,7 @@ export function instrumentOneFile(
 
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
   await mkdir(input.targetDir, { recursive: true });
+  const flatNames = input.flatNames ?? flatNamesFor(input.files.map((f) => f.path));
 
   // Dedup runs BEFORE ids are assigned and BEFORE compilation: dropping a mutant only while
   // building the manifest would leave it compiled into the emitted dispatch chain holding an
@@ -708,7 +717,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         `writeInstrumentedProject: ${f.path}: the plan holds ${mutants.length} mutant(s) for ${ided.length} ided spec(s); first unmatched: ${unmatched}`,
       );
     }
-    await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
+    await writeFile(join(input.targetDir, flatNames.flatOf(f.path)), compiled, "utf8");
     // RUST-03 S4.2a: per file, not per mutant: the line index, and each gap block's id and lines.
     const starts = lineStartsOf(f.source);
     const gapOf = new Map<

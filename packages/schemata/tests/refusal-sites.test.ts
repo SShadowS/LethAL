@@ -201,6 +201,8 @@ const NEITHER_MODULES = [
   /** The re-export barrel. No PLAN, EMIT or composition module may import it. */
   "packages/schemata/src/dispatch.ts",
   "packages/schemata/src/duplicate.ts",
+  /** R219: a batch file's flat name and the way back; refuses nothing per file. */
+  "packages/schemata/src/flat-names.ts",
   "packages/schemata/src/id-ranges.ts",
   "packages/schemata/src/ids.ts",
   "packages/schemata/src/index.ts",

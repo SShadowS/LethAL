@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { FLAT_NAMES_FILENAME, flatNamesFor } from "@lethal/schemata";
 import { prepareBatchProject } from "../src/orchestrator";
 
 /**
@@ -197,26 +198,38 @@ describe("prepareBatchProject — non-AL resources", () => {
   });
 });
 
-describe("prepareBatchProject — .al basename collisions are loud", () => {
-  it("throws, naming both source paths, when two project .al files share a basename", async () => {
-    // Flattening plus a silent `if (exists) continue` would drop the second file from the
-    // artifact without a word — an object silently missing from the published app, which reads
-    // downstream as a mutation-scoring problem rather than a lost source file.
+describe("prepareBatchProject — .al basename collisions drop nothing (R219)", () => {
+  // Flattening plus a silent `if (exists) continue` would drop the second file from the artifact
+  // without a word. This used to refuse the project; R219 gives each duplicate its own flat name.
+  it("writes both of two same-basename files, each under its own flat name, and records them", async () => {
     await withDirs(async (projectDir, batchDir) => {
       await write(projectDir, "app.json", JSON.stringify(manifest));
       await write(projectDir, "Sales/Helper.Codeunit.al", "codeunit 1 A { }");
       await write(projectDir, "Purchase/Helper.Codeunit.al", "codeunit 2 B { }");
 
-      const err = await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0").then(
-        () => undefined,
-        (e: unknown) => e,
-      );
+      await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0");
 
-      expect(err).toBeInstanceOf(Error);
-      const message = err instanceof Error ? err.message : "";
-      expect(message).toContain("Helper.Codeunit.al");
-      expect(message).toContain(join("Sales", "Helper.Codeunit.al"));
-      expect(message).toContain(join("Purchase", "Helper.Codeunit.al"));
+      const names = flatNamesFor(["Sales/Helper.Codeunit.al", "Purchase/Helper.Codeunit.al"]);
+      const sales = names.flatOf("Sales/Helper.Codeunit.al");
+      const purchase = names.flatOf("Purchase/Helper.Codeunit.al");
+      expect(sales).not.toBe(purchase);
+      expect(await readFile(join(batchDir, sales), "utf8")).toBe("codeunit 1 A { }");
+      expect(await readFile(join(batchDir, purchase), "utf8")).toBe("codeunit 2 B { }");
+      expect(await exists(join(batchDir, "Helper.Codeunit.al"))).toBe(false);
+      expect(JSON.parse(await readFile(join(batchDir, FLAT_NAMES_FILENAME), "utf8"))).toEqual({
+        [sales]: "Sales/Helper.Codeunit.al",
+        [purchase]: "Purchase/Helper.Codeunit.al",
+      });
+    });
+  });
+
+  it("writes no flat-name record when every basename is unique", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      await write(projectDir, "app.json", JSON.stringify(manifest));
+      await write(projectDir, "Sales/Helper.Codeunit.al", "codeunit 1 A { }");
+      await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0");
+      expect(await exists(join(batchDir, "Helper.Codeunit.al"))).toBe(true);
+      expect(await exists(join(batchDir, FLAT_NAMES_FILENAME))).toBe(false);
     });
   });
 
