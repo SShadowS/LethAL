@@ -1553,20 +1553,31 @@ export class ResultsStore {
    * R354: and only from a run of the SAME coverage mode. A snapshot holds the green tests and the
    * coverage the batch's mutants are selected by, measured under its run's mode; another mode's
    * (or a pre-R354 run's, NULL) would select them by another rule. `=` never matches NULL.
+   * R492: and only from a run whose own recorded `test_app_hash` equals the key. An env-tool run
+   * served P2 while P1 was installed keyed its snapshot under P2 with P1's baseline; reused for a
+   * P2 run, a test green under P1 and red under P2 would be sent as covering and score a false
+   * kill. Such a run now records NULL (its read-back was not proven installed), so it lends none.
+   * `requireDigests` (an env-tool session): the run must also have recorded digests, written only
+   * behind the installed proof since R373, because an env-tool row recorded before R492 holds the
+   * served, unproven hash. A run without that proof lends no snapshot: the batch re-runs its
+   * baseline.
    */
   findBaselineSnapshot(
     batchHash: string,
     testAppHash: string,
     coverageMode: CoverageMode,
+    requireDigests = false,
   ): BaselineSnapshot | null {
     const row = this.db
       .query(
         `SELECT run_id, batch_index, batch_hash, test_app_hash, payload FROM baseline_snapshots
          WHERE batch_hash = ? AND test_app_hash = ?
-           AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ? AND coverage_mode = ?)
+           AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ? AND coverage_mode = ?
+             AND test_app_hash = baseline_snapshots.test_app_hash
+             AND (? = 0 OR test_digests IS NOT NULL))
          ORDER BY id DESC LIMIT 1`,
       )
-      .get(batchHash, testAppHash, IDENTITY_SCHEME, coverageMode) as {
+      .get(batchHash, testAppHash, IDENTITY_SCHEME, coverageMode, requireDigests ? 1 : 0) as {
       run_id: number;
       batch_index: number;
       batch_hash: string;
@@ -1801,14 +1812,17 @@ export class ResultsStore {
       }) => void;
       /** R247: the test app differs, or is unknown. Checked after the coverage mode. */
       readonly testAppChanged?: (info: { runId: number; testAppHash: string | null }) => void;
+      /** R492: an env-tool session: the latest run must also have recorded digests (its proof). */
+      readonly requireDigests?: boolean;
     } = {},
   ): PriorSurvivors {
     const none = NO_PRIOR_SURVIVORS;
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, carry_hidden, generation_source_sha256, twin_tuples FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_digests IS NOT NULL AS proven, carry_hidden, generation_source_sha256, twin_tuples FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
+      proven: number;
       carry_hidden: string | null;
       generation_source_sha256: string | null;
       twin_tuples: string | null;
@@ -1828,7 +1842,13 @@ export class ResultsStore {
       on.coverageModeChanged?.({ runId: run.id, coverageMode: recorded });
       return none;
     }
-    if (run.test_app_hash === null || run.test_app_hash !== testAppHash) {
+    // R492: for an env-tool session, only a run that PROVED its test app (digests are written only
+    // behind the installed proof since R373): an older env-tool row recorded the served, unproven hash.
+    if (
+      run.test_app_hash === null ||
+      run.test_app_hash !== testAppHash ||
+      (on.requireDigests === true && run.proven === 0)
+    ) {
       on.testAppChanged?.({ runId: run.id, testAppHash: run.test_app_hash });
       return none;
     }

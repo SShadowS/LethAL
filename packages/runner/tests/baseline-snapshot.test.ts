@@ -193,6 +193,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
+      testAppHash: "package:t",
     });
     const ref = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
     store.recordBaselineSnapshot({
@@ -219,7 +220,10 @@ describe("ResultsStore baseline snapshots (R192)", () => {
   // R318 (final review I1): R318 leaves the emitted AL byte-identical, so a run of the previous
   // identity scheme records a snapshot under the same two hashes, but its coverage was named by the
   // old attribution. Reuse is bound to the current scheme, so that snapshot is never found.
-  function snapshotAtScheme(scheme: number): { store: ResultsStore; id: number } {
+  function snapshotAtScheme(
+    scheme: number,
+    runTestAppHash = "package:t",
+  ): { store: ResultsStore; id: number } {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
       coverageMode: "procedure",
@@ -228,6 +232,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
+      testAppHash: runTestAppHash,
     });
     const ref = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
     store.recordBaselineSnapshot({
@@ -260,5 +265,24 @@ describe("ResultsStore baseline snapshots (R192)", () => {
     }
     store.db.run("UPDATE runs SET coverage_mode = NULL WHERE id = ?", [id]);
     expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
+  });
+
+  // R492: a snapshot is trusted only when its own run recorded the same test app. An env-tool run
+  // served P2 while P1 was installed keyed its snapshot under P2 but now records NULL (unproven).
+  test("R492: a snapshot whose run recorded another or no test app is not reused", () => {
+    const { store, id } = snapshotAtScheme(IDENTITY_SCHEME, "package:other");
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
+    store.db.run("UPDATE runs SET test_app_hash = NULL WHERE id = ?", [id]);
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
+  });
+
+  // R492: an env-tool session (`requireDigests`) also needs the run's digests, its installed proof:
+  // a row recorded before R492 holds the served hash, unproven, with NULL digests.
+  test("R492: requireDigests reuses only a snapshot whose run recorded digests", () => {
+    const { store, id } = snapshotAtScheme(IDENTITY_SCHEME);
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure", true)).toBeNull();
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure")?.runId).toBe(id);
+    store.setRunTestDigests(id, { "Tests.A": "d" }, null);
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure", true)?.runId).toBe(id);
   });
 });

@@ -8266,6 +8266,15 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       readonly pre?: Uint8Array | null;
       /** The backend's `microsoftMode` throws, as bcdev's does with no harness verifier. */
       readonly microsoftModeThrows?: boolean;
+      /** R492 item 3: the hook awaits this before it publishes, so a caller that did not await
+       *  the hook would read back (and record) while it is still running. */
+      readonly gate?: Promise<void>;
+      /** R492 (sol run 001): called when the hook is entered, with a live count of the test-app
+       *  reads made while it runs, so a test can assert while the hook is still parked. */
+      readonly onHookEntered?: (readsSoFar: () => number) => void;
+      /** R492 (sol run 001): the test app served after the hook, one per read in order (the last
+       *  repeats), instead of `post` for every read. */
+      readonly postSequence?: readonly Uint8Array[];
     }
 
     async function envRun(o: EnvRun) {
@@ -8276,13 +8285,22 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       writeFileSync(testAppFile, P1);
       if (o.dep !== undefined) writeFileSync(depFile, o.dep.pre);
       let hooked = false;
+      let inHook = false;
       let fetchesAfterHook = 0;
+      let readsDuringHook = 0;
       const installedCalls: string[] = [];
+      let postReads = 0;
       const fetch = async (app: { readonly name: string }) => {
         if (hooked) fetchesAfterHook++;
+        if (inHook) readsDuringHook++;
         if (app.name === DEP.name) {
           if (o.dep === undefined) return null;
           return hooked ? o.dep.post : o.dep.pre;
+        }
+        if (hooked && o.postSequence !== undefined) {
+          const served = o.postSequence[Math.min(postReads, o.postSequence.length - 1)];
+          postReads++;
+          return served ?? null;
         }
         return hooked ? o.post : o.pre === undefined ? P1 : o.pre;
       };
@@ -8311,9 +8329,13 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         emit: [createEmitter([(e) => events.push(e)])],
         afterLeaseAcquired: async () => {
           if (o.hookThrows === true) throw new Error("the env tool died mid-publish");
+          inHook = true;
+          o.onHookEntered?.(() => readsDuringHook);
+          if (o.gate !== undefined) await o.gate;
           writeFileSync(testAppFile, o.file ?? o.post ?? P2);
           if (o.dep !== undefined) writeFileSync(depFile, o.dep.post);
           hooked = true;
+          inHook = false;
         },
         afterLeaseAcquiredPublishes: [
           ...(o.dep !== undefined ? [depFile] : []),
@@ -8333,6 +8355,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         mismatchWarning: warningsOf("published-test-app-mismatch"),
         unreadableWarning: warningsOf("published-test-app-unreadable"),
         historyWarning: warningsOf("history-test-app-changed"),
+        reuseWarning: warningsOf("resume-baseline-reused"),
         knownSurvivors: (
           store.db
             .query(
@@ -8341,6 +8364,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             .get(runId) as { n: number }
         ).n,
         fetchesAfterHook: () => fetchesAfterHook,
+        readsDuringHook: () => readsDuringHook,
         installedCalls,
       };
     }
@@ -8467,14 +8491,49 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       r.store.close();
     });
 
-    test("test_app_hash is the post-hook package's, also when the digests are NULL", async () => {
+    // R492 corrects R486's expectation: a served package that is not proven installed is NOT this
+    // run's test app (here P1 is installed, so the run measures P1 while P2 is served).
+    test("test_app_hash is the post-hook package's only when proven installed, else NULL", async () => {
       const recorded = await envRun({ post: P2 });
       expect(recorded.store.getRun(recorded.runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
       recorded.store.close();
-      const refused = await envRun({ post: P2, installed: { [APP_ID]: ["1.0.0.1"] } });
-      expect(refused.store.testDigests(refused.runId)).toBeNull();
-      expect(refused.store.getRun(refused.runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
-      refused.store.close();
+      const unproven = await envRun({ post: P2, installed: { [APP_ID]: ["1.0.0.1"] } });
+      expect(unproven.store.testDigests(unproven.runId)).toBeNull();
+      expect(unproven.store.getRun(unproven.runId)?.testAppHash).toBeNull();
+      unproven.store.close();
+    });
+
+    // R492 item 3: the hook is AWAITED. It parks on a gate; nothing is read back while it runs.
+    // Sol, run 001: released only after an explicit hook-entered handshake, and checked WHILE the
+    // hook is parked, so a fire-and-forget hook call cannot pass by the gate opening early.
+    test("nothing is read back or recorded until the hook returns", async () => {
+      let open = (): void => {};
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const store = new ResultsStore(":memory:");
+      const whileParked: { reads?: number; hash?: string | null; digests?: unknown } = {};
+      const r = await envRun({
+        post: P2,
+        gate,
+        store,
+        onHookEntered: (readsSoFar) => {
+          // Give a caller that did not await the hook every chance to run on first.
+          setTimeout(() => {
+            const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+              .id;
+            whileParked.reads = readsSoFar();
+            whileParked.hash = store.getRun(runId)?.testAppHash ?? null;
+            whileParked.digests = store.testDigests(runId);
+            open();
+          }, 30);
+        },
+      });
+      expect(r.outcome).not.toBeInstanceOf(Error);
+      expect(whileParked).toEqual({ reads: 0, hash: null, digests: null });
+      expect(r.fetchesAfterHook()).toBeGreaterThan(0);
+      expect(r.store.testDigests(r.runId)).not.toBeNull();
+      r.store.close();
     });
 
     test("a hook that throws leaves the row NULL and never reads the test app back", async () => {
@@ -8557,6 +8616,220 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         const first = await priorRun({});
         const r = await envRun({ post: P2, dirs: first.dirs, store: first.store });
         expect(r.outcome).not.toBeInstanceOf(Error);
+        r.store.close();
+      });
+    });
+
+    // R492 item 1: the server serves P2 while P1 is still installed, so run 1 MEASURES P1. Later P2
+    // is installed. A run whose recorded identity was never proven installed must not lend its
+    // verdicts to a P2 run: not through --resume, not through --skip-known-survivors.
+    describe("R492: an unproven served hash is never a test-app identity", () => {
+      const measuredP1ServedP2 = (extra: Partial<SessionConfig>) =>
+        envRun({ post: P2, installed: { [APP_ID]: ["1.0.0.1"] }, extra });
+      const provenP2 = { pre: P2, post: P2, installed: { [APP_ID]: ["1.0.0.2"] } } as const;
+      const P3 = testPkg({ version: "1.0.0.3", body: BODY_B });
+      const refusal = (
+        r: { outcome: unknown; store: ResultsStore; runId: number },
+        flag: string,
+      ) => {
+        expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((r.outcome as TestAppRepublishedError).flag).toBe(flag);
+        expect(r.store.baselineTests(r.runId)).toEqual([]);
+        return (r.outcome as Error).message;
+      };
+      test("--resume-run of it into a proven P2 run is refused", async () => {
+        const first = await measuredP1ServedP2({});
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        expect(first.store.getRun(first.runId)?.testAppHash).toBeNull();
+        const r = await envRun({
+          ...provenP2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("never proved");
+        r.store.close();
+      });
+      // The proof half: the resumed run proved P2, this one is served P2 with P1 installed.
+      test("a proven P2 run resumed by a session whose P2 is not proven installed is refused", async () => {
+        const first = await envRun({ post: P2 });
+        expect(first.store.getRun(first.runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+        const r = await envRun({
+          pre: P2,
+          post: P2,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("not proven to be what runs");
+        r.store.close();
+      });
+      // The history direction: the prior run proved P2, this one is served P2 with P1 installed.
+      test("--skip-known-survivors in an unproven session takes nothing from a proven run", async () => {
+        const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+        const first = await envRun({ post: P2, extra: skip });
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const r = await envRun({
+          pre: P2,
+          post: P2,
+          installed: { [APP_ID]: ["1.0.0.1"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: skip,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        r.store.close();
+      });
+      // B1': an older row (hash recorded, no digests) lends no R192 baseline snapshot to an env-tool
+      // session. Run A records a snapshot; run B, the one resumed, is made unfinished with work left
+      // and loses its own snapshot, so the only candidate is A's. Revert: pass `requireDigests:
+      // false` to the snapshot from `runSession`.
+      for (const aProven of [false, true]) {
+        test(`resume: a snapshot from a run ${aProven ? "with" : "without"} digests is ${aProven ? "reused (control)" : "not reused"}`, async () => {
+          const a = await envRun({ post: P2 });
+          expect(a.outcome).not.toBeInstanceOf(Error);
+          if (!aProven) {
+            a.store.db.run(
+              "UPDATE runs SET test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
+              [a.runId],
+            );
+          }
+          const b = await envRun({ post: P2, dirs: a.dirs, store: a.store });
+          expect(b.outcome).not.toBeInstanceOf(Error);
+          a.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [b.runId]);
+          a.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [b.runId]);
+          const victim = a.store.db
+            .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+            .get(b.runId) as { id: number };
+          a.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+          const r = await envRun({
+            ...provenP2,
+            dirs: a.dirs,
+            store: a.store,
+            extra: { resume: b.runId },
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.reuseWarning).toHaveLength(aProven ? 1 : 0);
+          r.store.close();
+        });
+      }
+      // Sol, run 001: donor A PROVED P1 and recorded a P1 snapshot; this session proves P2, then a
+      // later unpinned read serves P1 (published but not installed). A's proof is real, but it is not
+      // the test app that runs here. Revert: drop `runsWhatWasRead` from the reuse condition.
+      test("a later read that differs from this session's proven test app reuses nothing", async () => {
+        const a = await envRun({ post: P1, file: P1, installed: { [APP_ID]: ["1.0.0.1"] } });
+        expect(a.outcome).not.toBeInstanceOf(Error);
+        expect(a.store.getRun(a.runId)?.testAppHash).toBe(`package:${hashPackage(P1)}`);
+        const b = await envRun({ post: P2, dirs: a.dirs, store: a.store });
+        expect(b.outcome).not.toBeInstanceOf(Error);
+        a.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [b.runId]);
+        a.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [b.runId]);
+        const victim = a.store.db
+          .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+          .get(b.runId) as { id: number };
+        a.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+        const r = await envRun({
+          pre: P2,
+          post: P2,
+          // The read-back and the proof see P2; the batch's own read then sees P1.
+          postSequence: [P2, P2, P1],
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          dirs: a.dirs,
+          store: a.store,
+          extra: { resume: b.runId },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+        expect(r.reuseWarning).toEqual([]);
+        r.store.close();
+      });
+      // The same older row lends no known survivors to a proven env-tool session either.
+      test("--skip-known-survivors takes nothing from an older row (hash, no digests)", async () => {
+        const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+        const first = await envRun({ post: P2, extra: skip });
+        first.store.db.run(
+          "UPDATE runs SET test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
+          [first.runId],
+        );
+        const r = await envRun({ ...provenP2, dirs: first.dirs, store: first.store, extra: skip });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
+        r.store.close();
+        // Control: with its digests, the same row's survivors are skipped.
+        const second = await envRun({ post: P2, extra: skip });
+        const again = await envRun({
+          ...provenP2,
+          dirs: second.dirs,
+          store: second.store,
+          extra: skip,
+        });
+        expect(again.knownSurvivors).toBeGreaterThan(0);
+        again.store.close();
+      });
+      // A row recorded before R492 holds a hash with no digests: its identity was never proven.
+      test("an older row (hash recorded, no digests) is refused even when the hashes are equal", async () => {
+        const first = await envRun({ post: P2 });
+        first.store.db.run(
+          "UPDATE runs SET test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
+          [first.runId],
+        );
+        const r = await envRun({
+          ...provenP2,
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("never proved");
+        r.store.close();
+      });
+      // Item 2: another session installed P3; this session's hook restores the P2 the resumed run
+      // proved. The pre-lease read (P3) no longer decides.
+      test("a hook that restores the resumed run's proven test app proceeds", async () => {
+        const first = await envRun({ post: P2 });
+        const r = await envRun({
+          pre: P3,
+          post: P2,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        r.store.close();
+      });
+      test("a hook that publishes a different, proven test app is refused", async () => {
+        const first = await envRun({ post: P2 });
+        const r = await envRun({
+          pre: P2,
+          post: P3,
+          installed: { [APP_ID]: ["1.0.0.3"] },
+          dirs: first.dirs,
+          store: first.store,
+          extra: { resume: first.runId },
+        });
+        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("a different one");
+        r.store.close();
+      });
+      // Q1: a hook-published dependency not proven installed withholds the identity too.
+      test("a dependency not proven installed records a NULL test_app_hash", async () => {
+        const r = await envRun({
+          post: P2,
+          dep: { pre: depPkg("one"), post: depPkg("two") },
+          installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["0.9.0.0"] },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        r.store.close();
+      });
+      test("--skip-known-survivors takes nothing from it in a proven P2 run", async () => {
+        const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+        const first = await measuredP1ServedP2(skip);
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const r = await envRun({ ...provenP2, dirs: first.dirs, store: first.store, extra: skip });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.knownSurvivors).toBe(0);
         r.store.close();
       });
     });
