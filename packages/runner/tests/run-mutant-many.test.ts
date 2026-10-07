@@ -1073,6 +1073,18 @@ describe("RunMutantTransport.runMany: a lost reply is read back (R236b)", () => 
     expect(f.calls).toEqual(["RunMutantMany", "GetOpAnswer"]);
   });
 
+  test("R-496: a readback refused as an unfiltered extensions query rejects runMany", async () => {
+    const f = fakes({
+      many: truncated(),
+      kept: () => new UnfilteredExtensionsQueryError("refused readback"),
+    });
+    const err = await transport(f.fetchFn)
+      .runMany(TWO)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.calls).toEqual(["RunMutantMany", "GetOpAnswer"]);
+  });
+
   test("2. a kept answer carrying runError is not accepted", async () => {
     const f = fakes({ many: truncated(), kept: found(answer({ runError: "boom" })) });
     const msg = keptUnknown(await transport(f.fetchFn).runMany(TWO));

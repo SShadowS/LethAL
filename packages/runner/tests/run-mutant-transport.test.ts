@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
+import { UnfilteredExtensionsQueryError } from "../src/harness";
 import { MAX_ATTEMPT_ID_LENGTH } from "../src/lease";
 import {
   FencedCoverageError,
@@ -960,7 +961,12 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
   /** The live shape: everything but the envelope's final `}`. */
   const TRUNCATED = wrap(FAILED).slice(0, -1);
   const KEY = { attemptId: "a1", opSeq: 7, epoch: 3, generation: "gen-1" };
-  type Kept = { readonly status: number; readonly body: string } | "throw" | "hang" | "deaf";
+  type Kept =
+    | { readonly status: number; readonly body: string }
+    | "throw"
+    | "refused"
+    | "hang"
+    | "deaf";
   /** A readback that never answers ends here, so a broken bound FAILS the test instead of hanging the run. */
   const UNBOUNDED_MS = 3000;
   const found = (answer: string, key: Record<string, unknown> = KEY): Kept => ({
@@ -980,6 +986,7 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
       if (action === "GetOpAnswer") {
         bodies.push(JSON.parse(String(init?.body)));
         if (kept === "throw") throw new Error("ECONNRESET");
+        if (kept === "refused") throw new UnfilteredExtensionsQueryError("refused readback");
         if (kept === "hang" || kept === "deaf") {
           return new Promise<Response>((_resolve, reject) => {
             setTimeout(() => reject(new Error("readback not bounded")), UNBOUNDED_MS);
@@ -1025,6 +1032,15 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
     expect(v.fencedOp).toEqual(FENCE);
     expect(v.replyRecovered).toBeUndefined();
   };
+
+  test("R-496: a readback refused as an unfiltered extensions query rejects run", async () => {
+    const calls: string[] = [];
+    const err = await transport(routed("truncated", "refused", calls))
+      .run(REQ)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(calls).toEqual(["RunMutant", "GetOpAnswer"]);
+  });
 
   test("1. body lost, kept answer is a completed fail: it is the verdict, no second RunMutant is sent", async () => {
     const calls: string[] = [];

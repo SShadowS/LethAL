@@ -807,6 +807,8 @@ export class RunMutantTransport {
       // `KEPT_ANSWER_READ_MS` alone bounds this read: a group's budget is minutes.
       kept = await this.readKeptAnswerBounded(req.lease, fencedOp, KEPT_ANSWER_READ_MS);
     } catch (err) {
+      // R-496: a refused extensions query is thrown, never folded into the unknown's message.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       return keep(`answer readback failed: ${describeThrown(err)}`);
     }
     if (!kept.found) {
@@ -1557,6 +1559,8 @@ export class RunMutantTransport {
         Math.min(KEPT_ANSWER_READ_MS, req.timeoutMs),
       );
     } catch (err) {
+      // R-496: a refused extensions query is thrown, never folded into the unknown's message.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       return keep(`answer readback failed: ${describeThrown(err)}`);
     }
     if (!kept.found) {
