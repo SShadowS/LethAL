@@ -8342,6 +8342,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         mismatchWarning: warningsOf("published-test-app-mismatch"),
         unreadableWarning: warningsOf("published-test-app-unreadable"),
         historyWarning: warningsOf("history-test-app-changed"),
+        reuseWarning: warningsOf("resume-baseline-reused"),
         knownSurvivors: (
           store.db
             .query(
@@ -8650,6 +8651,39 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(r.knownSurvivors).toBe(0);
         r.store.close();
       });
+      // B1': an older row (hash recorded, no digests) lends no R192 baseline snapshot to an env-tool
+      // session. Run A records a snapshot; run B, the one resumed, is made unfinished with work left
+      // and loses its own snapshot, so the only candidate is A's. Revert: pass `requireDigests:
+      // false` to the snapshot from `runSession`.
+      for (const aProven of [false, true]) {
+        test(`resume: a snapshot from a run ${aProven ? "with" : "without"} digests is ${aProven ? "reused (control)" : "not reused"}`, async () => {
+          const a = await envRun({ post: P2 });
+          expect(a.outcome).not.toBeInstanceOf(Error);
+          if (!aProven) {
+            a.store.db.run(
+              "UPDATE runs SET test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
+              [a.runId],
+            );
+          }
+          const b = await envRun({ post: P2, dirs: a.dirs, store: a.store });
+          expect(b.outcome).not.toBeInstanceOf(Error);
+          a.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [b.runId]);
+          a.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [b.runId]);
+          const victim = a.store.db
+            .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+            .get(b.runId) as { id: number };
+          a.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+          const r = await envRun({
+            ...provenP2,
+            dirs: a.dirs,
+            store: a.store,
+            extra: { resume: b.runId },
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.reuseWarning).toHaveLength(aProven ? 1 : 0);
+          r.store.close();
+        });
+      }
       // The same older row lends no known survivors to a proven env-tool session either.
       test("--skip-known-survivors takes nothing from an older row (hash, no digests)", async () => {
         const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
