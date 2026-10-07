@@ -149,7 +149,7 @@ function decodePercentEscapes(path: string): { text: string; leftover: boolean }
  *  query or fragment, and the query must be exactly one `$filter: "id eq <GUID>"` plus at most one
  *  `tenant` equal to `tenant`, the configured one. `query` is a LIST (R-441 review): a map would
  *  keep one of two `$filter`s while the URL sends both. */
-function refuseUnfilteredExtensionsQuery(
+export function refuseUnfilteredExtensionsQuery(
   path: string,
   query: readonly (readonly [string, string])[],
   tenant: string | undefined,
@@ -553,6 +553,7 @@ export class HarnessVerifier {
         signal: controller.signal,
       });
     } catch (err) {
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       throw new HarnessVerificationError(`${what} unreachable: ${String(err)}`);
     } finally {
       clearTimeout(timer);
@@ -759,6 +760,8 @@ export class HarnessVerifier {
         signal: controller.signal,
       });
     } catch (err) {
+      // R-496: a redirect to an unfiltered extensions list, refused by `bcFetch`, stays itself.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       throw new HarnessVerificationError(`HarnessInfo unreachable: ${String(err)}`);
     } finally {
       clearTimeout(timer);

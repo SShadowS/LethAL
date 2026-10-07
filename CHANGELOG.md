@@ -135,7 +135,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   against. Each check is the per-app `$filter=id eq <GUID>` read, about 0.05 s per partner app; no
   committed fixture has one, so no gate moves. A BC API list read (companies, extensions) that is
   answered with a redirect now fails instead of following it, so a redirect cannot send an
-  unfiltered extensions query; and `lethal doctor` now stops on a refused extensions query instead
+  unfiltered extensions query. The same now holds for every request LethAL sends to BC (the
+  shared BC fetch never follows a redirect, so the dev-endpoint package download and the control
+  web service fail on one too); and `lethal doctor` now stops on a refused extensions query instead
   of listing it as one failed check.
 
 - **al-runner scores a `#if`-wrapped object that is alone in its file; identity scheme 29**

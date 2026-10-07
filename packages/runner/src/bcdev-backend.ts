@@ -30,7 +30,7 @@ import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
 import { DependencyUnreadableError, type MicrosoftMode } from "./digest-inputs";
-import { injectControlDependency } from "./harness";
+import { UnfilteredExtensionsQueryError, injectControlDependency } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
 import {
@@ -371,7 +371,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * version), and no second credential source. `versionText` is left empty, which asks for whatever
    * the server has.
    *
-   * NEVER throws. Every reachable failure — no server configured, no credentials, a 404 on an
+   * NEVER throws, except `UnfilteredExtensionsQueryError` (R-496: the default fetch refused a
+   * redirect to an unfiltered extensions list). Every other reachable failure — no server configured, no credentials, a 404 on an
    * environment whose dev endpoint does not serve packages, a refused connection, a timeout — is a
    * `null`, because a proactive check that cannot read must not be able to stop a run that check 1
    * would otherwise complete or refuse on the authoritative signal.
@@ -401,7 +402,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
       });
       if (!res.ok) return null;
       return new Uint8Array(await res.arrayBuffer());
-    } catch {
+    } catch (err) {
+      // R-496: the one exception. A redirect to an unfiltered extensions list is a refused
+      // request (R433), not an unreadable package, and must stop the run.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       // Deliberately swallowed, and deliberately not narrowed: network stacks report a refused
       // connection, a DNS failure and an abort as three unrelated error shapes, and every one of
       // them means the same thing here — this check has nothing to say.

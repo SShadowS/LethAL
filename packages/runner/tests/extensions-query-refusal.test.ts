@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
+import { refuseRedirects } from "../src/bc-fetch";
+import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { type MicrosoftMode, dependencyFingerprint } from "../src/digest-inputs";
 import {
   HarnessVerificationError,
@@ -411,5 +413,115 @@ describe("R-496 review: fetchApiRows never follows a redirect", () => {
       HarnessVerificationError,
     );
     expect(urls).toHaveLength(1);
+  });
+});
+
+describe("R-496 review: no BC request follows a redirect (bc-fetch's refuseRedirects)", () => {
+  const UNFILTERED = `http://bc:7048/BC/${EXT}?tenant=default`;
+  const BCDEV_CFG = {
+    mcpCommand: ["bun", "x", "bc-dev-mcp"],
+    project: "/project",
+    server: "http://bc",
+    serverInstance: "BC",
+    tenant: "default",
+    packageCachePath: "/cache",
+    controlSymbolPath: "/control.app",
+    env: { BC_DEV_USER: "u", BC_DEV_PASSWORD: "p" },
+  };
+  const APP = { publisher: "Microsoft", name: "System" };
+
+  /** Answers the FIRST request with `status` to `location`, and follows it as real fetch does
+   *  unless `redirect: "manual"` was passed, so a missing opt-out shows up as a second request. */
+  function autoFollowing(status: number, location: string) {
+    const urls: string[] = [];
+    const fetchFn = (async (url: unknown, init?: RequestInit): Promise<Response> => {
+      urls.push(String(url));
+      if (urls.length === 1) {
+        const r = new Response(null, { status, headers: { location } });
+        return init?.redirect === "manual" ? r : fetchFn(location, init);
+      }
+      return new Response(JSON.stringify({ value: [] }), { status: 200 });
+    }) as typeof fetch;
+    return { urls, fetchFn: refuseRedirects(fetchFn) };
+  }
+
+  for (const status of [302, 303]) {
+    test(`HarnessInfo answered ${status} to the unfiltered extensions list throws the refusal, one request`, async () => {
+      const { urls, fetchFn } = autoFollowing(status, UNFILTERED);
+      const err = await new HarnessVerifier(CFG, fetchFn).checkReachable().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain("/ODataV4/LethALControl_HarnessInfo");
+    });
+
+    test(`the dev-endpoint package download answered ${status} to the unfiltered extensions list throws the refusal, one request`, async () => {
+      const { urls, fetchFn } = autoFollowing(status, UNFILTERED);
+      const err = await new BcDevMcpBackend(BCDEV_CFG)
+        .fetchPublishedAppPackage(APP, fetchFn)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain("/dev/packages?");
+    });
+
+    test(`a companies read through the wrapper answered ${status} to the unfiltered list keeps the refusal's type`, async () => {
+      const { urls, fetchFn } = autoFollowing(status, UNFILTERED);
+      await expect(new HarnessVerifier(CFG, fetchFn).fetchCompanies()).rejects.toBeInstanceOf(
+        UnfilteredExtensionsQueryError,
+      );
+      expect(urls).toHaveLength(1);
+    });
+  }
+
+  test("a redirect to a harmless URL is not followed: the wrapper throws an ordinary error naming status and Location", async () => {
+    const harmless = "http://bc:7048/BC/somewhere-else";
+    const { urls, fetchFn } = autoFollowing(302, harmless);
+    const err = await fetchFn("http://bc:7048/BC/ODataV4/x").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(String(err)).toContain("HTTP 302");
+    expect(String(err)).toContain(harmless);
+    expect(urls).toHaveLength(1);
+    // Through the callers: HarnessInfo fails as a transport error, the package read as "unreadable".
+    const viaHarness = autoFollowing(303, harmless);
+    await expect(
+      new HarnessVerifier(CFG, viaHarness.fetchFn).checkReachable(),
+    ).rejects.toBeInstanceOf(HarnessVerificationError);
+    expect(viaHarness.urls).toHaveLength(1);
+    const viaDev = autoFollowing(302, harmless);
+    expect(
+      await new BcDevMcpBackend(BCDEV_CFG).fetchPublishedAppPackage(APP, viaDev.fetchFn),
+    ).toBeNull();
+    expect(viaDev.urls).toHaveLength(1);
+  });
+
+  test("bcFetch itself, on a real socket: HarnessInfo's 303 to the unfiltered list is refused, the list never requested", async () => {
+    const paths: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const u = new URL(req.url);
+        paths.push(u.pathname);
+        if (u.pathname.includes("HarnessInfo")) {
+          return new Response(null, {
+            status: 303,
+            headers: { location: `/BC/${EXT}?tenant=default` },
+          });
+        }
+        return new Response(JSON.stringify({ value: [] }), { status: 200 });
+      },
+    });
+    try {
+      const err = await new HarnessVerifier({
+        ...CFG,
+        baseUrl: `http://127.0.0.1:${server.port}/BC`,
+      })
+        .checkReachable()
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect(paths).toEqual(["/BC/ODataV4/LethALControl_HarnessInfo"]);
+    } finally {
+      server.stop(true);
+    }
   });
 });
