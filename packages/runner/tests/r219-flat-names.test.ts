@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -251,6 +251,32 @@ describe("R219: two same-basename files in different directories", () => {
         }
       });
     }
+    // Sol run 001 (5): the --server scope warning quotes the project path, not the batch name.
+    // Revert: quote `file.file` in `alRunnerCoverageFromServer`.
+    test("a --server scope warning on a renamed file names its project path", async () => {
+      const index = await buildAlRunnerCoverageIndex(run.batch);
+      const [line] = await covered(SALES);
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        alRunnerCoverageFromServer(
+          {
+            test: "Codeunit50190.X",
+            coverage: [
+              {
+                file: `/tmp/lethal-x/run-1-batch-0/${names.flatOf(SALES)}`,
+                statements: [{ scope: "NotPick", line: line ?? 0, hits: 1 }],
+              },
+            ],
+          },
+          index,
+        );
+        const said = warn.mock.calls.map((c) => String(c[0])).join("\n");
+        expect(said).toContain(`at ${SALES}:${line}`);
+        expect(said).not.toContain(names.flatOf(SALES));
+      } finally {
+        warn.mockRestore();
+      }
+    });
     test("a bare duplicate basename names neither file: refused by name, on both transports", async () => {
       const index = await buildAlRunnerCoverageIndex(run.batch);
       const why = /names neither by its project folder nor by its batch name/;
