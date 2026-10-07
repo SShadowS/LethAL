@@ -28,6 +28,9 @@ import { buildTypeTable } from "./types";
 
 export interface SemanticContext {
   readonly symbols: SymbolTable;
+  /** R487: the project's files, for project-wide questions the symbol table does not index (which
+   *  reportextensions extend a report). Absent on a hand-built context: callers answer conservatively. */
+  readonly files?: readonly SourceFile[];
   readonly types: TypeTable;
   readonly callers: CallerIndex;
   cfgFor(procedure: ProcedureSymbol): CFG;
@@ -88,6 +91,7 @@ export function buildSemanticContext(
   const cfgCache = new WeakMap<object, CFG>();
   return {
     symbols,
+    files,
     types,
     callers,
     ...(armOf !== undefined ? { armOf } : {}),

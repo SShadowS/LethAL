@@ -339,24 +339,30 @@ describe("R480: the new shapes are refused AND counted, their siblings emitted",
   }
 });
 
-/** R484: a write an open `Integer` data item's Break guard reads, through all four operators. */
-describe("R484: a data-item exit guard's write is refused AND counted, its sibling emitted", () => {
+/** R484, R487 blanket rule: every site in an open `Integer` data item is refused AND counted,
+ *  through all four operators; the claimed control sits in a BOUNDED sibling item (`B`). The
+ *  refused sites write names (`J`, `Done`) no guard reads, so only the blanket rule refuses them. */
+describe("R484/R487: an open data item's sites are refused AND counted, a bounded item's emitted", () => {
   beforeAll(async () => {
     await initParser();
   });
 
   const REPORT = `report 50490 "R" { dataset { dataitem(D; "Integer") {
       trigger OnAfterGetRecord() begin
-        Continue := false; Total := Total + 1; I := I + 1; Flag := true; I := 4; Total := 7;
+        J := J + 1; J := 4; Done := false;
         if (I > 3) or not Continue then CurrReport.Break();
+      end; }
+      dataitem(B; "Integer") { MaxIteration = 1;
+      trigger OnAfterGetRecord() begin
+        Total := Total + 1; Flag := true; Total := 7;
       end; } }
-      var Continue: Boolean; Flag: Boolean; I: Integer; Total: Integer; }`;
+      var Continue: Boolean; Done: Boolean; Flag: Boolean; I: Integer; J: Integer; Total: Integer; }`;
   const ITEM: Case[] = [
     {
       op: removeAssignment,
       src: REPORT,
       kind: "assignment_statement",
-      refused: "I := I + 1",
+      refused: "J := J + 1",
       claimed: "Total := Total + 1",
     },
     {
@@ -364,7 +370,7 @@ describe("R484: a data-item exit guard's write is refused AND counted, its sibli
       src: REPORT,
       kind: "integer",
       refused: "4",
-      refusedWithin: "I := 4",
+      refusedWithin: "J := 4",
       claimed: "7",
       claimedWithin: "Total := 7",
     },
@@ -373,7 +379,7 @@ describe("R484: a data-item exit guard's write is refused AND counted, its sibli
       src: REPORT,
       kind: "boolean",
       refused: "false",
-      refusedWithin: "Continue := false",
+      refusedWithin: "Done := false",
       claimed: "true",
       claimedWithin: "Flag := true",
     },
@@ -384,10 +390,12 @@ describe("R484: a data-item exit guard's write is refused AND counted, its sibli
       op: swapAdditive,
       src: `report 50491 "R" { dataset { dataitem(D; "Integer") {
       trigger OnAfterGetRecord() begin
-        I := 2 - 1; Total := 2 + 1;
+        J := 2 - 1;
         if I = 1 then CurrReport.Break();
-      end; } }
-      var I: Integer; Total: Integer; }`,
+      end; }
+      dataitem(B; "Integer") { MaxIteration = 1;
+      trigger OnAfterGetRecord() begin Total := 2 + 1; end; } }
+      var I: Integer; J: Integer; Total: Integer; }`,
       kind: "additive_expression",
       refused: "2 - 1",
       claimed: "2 + 1",
@@ -395,7 +403,7 @@ describe("R484: a data-item exit guard's write is refused AND counted, its sibli
   ];
 
   for (const c of ITEM) {
-    it(`${c.op.name}: refused AND counted where a data-item Break guard reads the write`, () =>
+    it(`${c.op.name}: refused AND counted in the open item, emitted in the bounded one`, () =>
       assertCounted(c));
   }
 
