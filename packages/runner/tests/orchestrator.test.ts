@@ -132,6 +132,7 @@ import { testDigestsOfModel, testDigestsOfSources } from "../src/test-digest";
 import {
   PublishAppUnreadableError,
   TestAppDiffersError,
+  TestAppDriftedError,
   TestAppRepublishedError,
 } from "../src/test-membership";
 import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
@@ -149,6 +150,7 @@ import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
+import { servesTestApp, testAppJson, testAppPackage } from "./helpers/proven-test-app";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
 {
@@ -2375,6 +2377,9 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
             }
           : { outcome: "pass" as const, procedure: "IsOverBudget" },
       );
+      // R495: as bcdev, a served test app, installed, so a run's identity is proven and the
+      // resume cases below can resume (as a real bcdev's is). As al-runner, no package read.
+      if (caps.authoritative) Object.assign(this, servesTestApp());
     }
     override capabilities() {
       return this.caps;
@@ -2390,6 +2395,7 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
   async function project(testAl = PAGE_TEST_AL) {
     const dirs = await makeProject(testAl);
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
     return dirs;
   }
   const FENCED = { ...CAPS_NST, coverage: "fenced" as const };
@@ -2624,10 +2630,13 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     const store = new ResultsStore(":memory:");
     // Run 1: the test opens no TestPage yet, passes, covers IsUnderBudget and kills its 3 mutants.
     const first = await runSession({
-      backend: new QualificationBackend((method: string) =>
-        method === "UnsupportedTest"
-          ? { outcome: "pass" as const, procedure: "IsUnderBudget" }
-          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      backend: Object.assign(
+        new QualificationBackend((method: string) =>
+          method === "UnsupportedTest"
+            ? { outcome: "pass" as const, procedure: "IsUnderBudget" }
+            : { outcome: "pass" as const, procedure: "IsOverBudget" },
+        ),
+        servesTestApp(),
       ),
       store,
       ...dirs,
@@ -2640,12 +2649,10 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
 
     // Run 2: the test now has a reachable call that may open a TestPage.
     await Bun.write(join(dirs.testDir, "SandboxTests.Codeunit.al"), PAGE_TEST_AL);
-    // R247: this backend's test-app identity is the source tree, which the edit above moved, so a
-    // resume would be refused. R-236c's case is the published app unchanged while the source
-    // scan refuses a test, so run 1 is recorded under the identity run 2 computes.
-    store.db.run("UPDATE runs SET test_app_hash = ?", [
-      (await testAppHashFor(undefined, dirs.testDir)) ?? null,
-    ]);
+    // R-236c's case is the published app unchanged while the source scan refuses a test. R495:
+    // both runs' backends serve the same package, installed, which is that case as it happens: the
+    // identity is the package, which the source edit above does not move. (Before R495 this test
+    // rewrote run 1's hash to the edited source tree's.)
     const backend = new RecordingBackend(CAPS_NST);
     const events: RunEvent[] = [];
     const report = await runSession({
@@ -5426,9 +5433,12 @@ describe("runSession — Layer 5A deployment identity", () => {
   // R192's baseline key hashes AL bytes only and would reuse measurements made under old symbols.
   test("a resume under other preprocessor symbols is refused; the same symbols in another order resume", async () => {
     const dirs = await makeProject();
+    // R495: a served test app, installed, so run 1's identity is proven and resumable.
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    const backend = () => Object.assign(new PhaseBackend(), servesTestApp());
     const store = new ResultsStore(":memory:");
     await runSession({
-      backend: new PhaseBackend(),
+      backend: backend(),
       store,
       ...dirs,
       selectorIds,
@@ -5436,7 +5446,7 @@ describe("runSession — Layer 5A deployment identity", () => {
     });
     const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
     const resumed = await runSession({
-      backend: new PhaseBackend(),
+      backend: backend(),
       store,
       ...dirs,
       selectorIds,
@@ -5446,7 +5456,7 @@ describe("runSession — Layer 5A deployment identity", () => {
     expect(resumed.validity.caveats).toContain("resumed");
     await expect(
       runSession({
-        backend: new PhaseBackend(),
+        backend: backend(),
         store,
         ...dirs,
         selectorIds,
@@ -5983,8 +5993,10 @@ async function seedPriorSurvivor(
 ): Promise<void> {
   const runId = store.createRun({
     coverageMode: "procedure",
-    // R247: measured against the same test app, or no survivor from it is ever skipped.
-    testAppHash: (await testAppHashFor(undefined, dirs.testDir)) ?? "",
+    // R247: measured against the same test app, or no survivor from it is ever skipped. R495: and
+    // proven: the package the session's backend serves installed (`servesTestApp`).
+    testAppHash: `package:${hashPackage(testAppPackage())}`,
+    testAppProven: true,
     projectPath: dirs.projectDir,
     identityScheme: IDENTITY_SCHEME,
     buildSymbols: [],
@@ -6034,6 +6046,8 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
 
     const store = new ResultsStore(":memory:");
     await seedPriorSurvivor(store, dirs, boundary);
+    // R495: the backend serves the seeded run's test app, installed, so history may skip from it.
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
 
     // The whole-artifact deploy fails as long as the conditional-boundary spec is present.
     // `execute` (skipKnownSurvivors: true) excludes it, but the compiled artifact — what this
@@ -6058,7 +6072,7 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
       },
     );
     const report = await runSession({
-      backend,
+      backend: Object.assign(backend, servesTestApp()),
       store,
       ...dirs,
       selectorIds,
@@ -8653,7 +8667,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           store: first.store,
           extra: { resume: first.runId },
         });
-        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("never proved");
+        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("not proven installed");
         r.store.close();
       });
       // The proof half: the resumed run proved P2, this one is served P2 with P1 installed.
@@ -8688,17 +8702,19 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(r.knownSurvivors).toBe(0);
         r.store.close();
       });
-      // B1': an older row (hash recorded, no digests) lends no R192 baseline snapshot to an env-tool
+      // B1': an older row (hash recorded, no proof) lends no R192 baseline snapshot to an env-tool
       // session. Run A records a snapshot; run B, the one resumed, is made unfinished with work left
-      // and loses its own snapshot, so the only candidate is A's. Revert: pass `requireDigests:
-      // false` to the snapshot from `runSession`.
+      // and loses its own snapshot, so the only candidate is A's. R495: the proof is the row's
+      // `test_app_proven` flag (it replaced R492's digests marker), so an older row is made by
+      // clearing it, with its digests, as a row recorded before either has neither. Revert: drop
+      // `test_app_proven = 1` from `findBaselineSnapshot`.
       for (const aProven of [false, true]) {
-        test(`resume: a snapshot from a run ${aProven ? "with" : "without"} digests is ${aProven ? "reused (control)" : "not reused"}`, async () => {
+        test(`resume: a snapshot from a run ${aProven ? "with" : "without"} its proof is ${aProven ? "reused (control)" : "not reused"}`, async () => {
           const a = await envRun({ post: P2 });
           expect(a.outcome).not.toBeInstanceOf(Error);
           if (!aProven) {
             a.store.db.run(
-              "UPDATE runs SET test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
+              "UPDATE runs SET test_app_proven = NULL, test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
               [a.runId],
             );
           }
@@ -8723,8 +8739,10 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       }
       // Sol, run 001: donor A PROVED P1 and recorded a P1 snapshot; this session proves P2, then a
       // later unpinned read serves P1 (published but not installed). A's proof is real, but it is not
-      // the test app that runs here. Revert: drop `runsWhatWasRead` from the reuse condition.
-      test("a later read that differs from this session's proven test app reuses nothing", async () => {
+      // the test app that runs here. R495 (I1): the session now REFUSES at that batch, clearing its
+      // run's identity, before anything is reused or recorded. Revert: drop `assertNoTestAppDrift`
+      // from `scoreBatch` (then this reuses nothing only through `runsWhatWasRead`, and proceeds).
+      test("a later read that differs from this session's proven test app refuses and reuses nothing", async () => {
         const a = await envRun({ post: P1, file: P1, installed: { [APP_ID]: ["1.0.0.1"] } });
         expect(a.outcome).not.toBeInstanceOf(Error);
         expect(a.store.getRun(a.runId)?.testAppHash).toBe(`package:${hashPackage(P1)}`);
@@ -8746,24 +8764,28 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           store: a.store,
           extra: { resume: b.runId },
         });
-        expect(r.outcome).not.toBeInstanceOf(Error);
-        expect(r.store.getRun(r.runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+        expect(r.outcome).toBeInstanceOf(TestAppDriftedError);
+        expect((r.outcome as TestAppDriftedError).proven).toBe(`package:${hashPackage(P2)}`);
+        expect((r.outcome as TestAppDriftedError).now).toBe(`package:${hashPackage(P1)}`);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
         expect(r.reuseWarning).toEqual([]);
+        expect(r.store.baselineTests(r.runId)).toEqual([]);
         r.store.close();
       });
       // The same older row lends no known survivors to a proven env-tool session either.
-      test("--skip-known-survivors takes nothing from an older row (hash, no digests)", async () => {
+      test("--skip-known-survivors takes nothing from an older row (hash, no proof)", async () => {
         const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
         const first = await envRun({ post: P2, extra: skip });
         first.store.db.run(
-          "UPDATE runs SET test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
+          "UPDATE runs SET test_app_proven = NULL, test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
           [first.runId],
         );
         const r = await envRun({ ...provenP2, dirs: first.dirs, store: first.store, extra: skip });
         expect(r.outcome).not.toBeInstanceOf(Error);
         expect(r.knownSurvivors).toBe(0);
         r.store.close();
-        // Control: with its digests, the same row's survivors are skipped.
+        // Control: with its proof, the same row's survivors are skipped.
         const second = await envRun({ post: P2, extra: skip });
         const again = await envRun({
           ...provenP2,
@@ -8775,10 +8797,12 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         again.store.close();
       });
       // A row recorded before R492 holds a hash with no digests: its identity was never proven.
-      test("an older row (hash recorded, no digests) is refused even when the hashes are equal", async () => {
+      // R495: and no proven flag (the marker that replaced digests); a row with digests but no
+      // flag is the next test's case.
+      test("an older row (hash recorded, no proof) is refused even when the hashes are equal", async () => {
         const first = await envRun({ post: P2 });
         first.store.db.run(
-          "UPDATE runs SET test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
+          "UPDATE runs SET test_app_proven = NULL, test_digests = NULL, test_digest_parts = NULL WHERE id = ?",
           [first.runId],
         );
         const r = await envRun({
@@ -8787,7 +8811,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           store: first.store,
           extra: { resume: first.runId },
         });
-        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("never proved");
+        expect(refusal(r, `--resume-run ${first.runId}`)).toContain("not proven installed");
         r.store.close();
       });
       // Item 2: another session installed P3; this session's hook restores the P2 the resumed run
@@ -13507,10 +13531,18 @@ describe("R206: the warm confirmation and the session guard", () => {
         fencedOp: composed.fencedOp,
       };
     };
-    const a = await session(first, { store });
+    // R495: both sessions serve the same test app, installed, so run 1's identity is proven and
+    // resumable (as a real bcdev's is).
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    const a = await session(Object.assign(first, servesTestApp()), { store, dirs });
     expect(m1(a)?.killPosition).toBe(2);
     expect(a.report.quarantined).toBeDefined();
-    const second = await session(makeBackend(), { store, resume: true, dirs: a.dirs });
+    const second = await session(Object.assign(makeBackend(), servesTestApp()), {
+      store,
+      resume: true,
+      dirs: a.dirs,
+    });
     const carried = m1(second);
     expect(carried?.verdict).toBe("killed");
     expect(carried?.killPosition).toBe(2);
