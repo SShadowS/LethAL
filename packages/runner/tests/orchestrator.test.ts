@@ -9114,7 +9114,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(store.testDigests(runId)).toEqual({ a: "1" });
     expect(store.testDigestParts(runId)).toEqual({ p: 1 });
     expect(() => store.setRunTestDigests(runId + 1, { a: "1" }, {})).toThrow("does not exist");
-    expect(() => store.setRunTestAppHash(runId + 1, null)).toThrow("no run");
+    expect(() => store.setRunTestAppHash(runId + 1, null, false)).toThrow("no run");
     store.close();
   });
 

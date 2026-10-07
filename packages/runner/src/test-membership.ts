@@ -140,6 +140,27 @@ export class TestAppRepublishedError extends Error {
   }
 }
 
+/** R495: a session that PROVED its test app read a different one at a batch. Its run's identity is
+ *  cleared first (no later session borrows from it), and that batch records nothing: carrying a
+ *  verdict, skipping a survivor or reusing a snapshot there would rest on the proven app, not the
+ *  one that now runs. */
+export class TestAppDriftedError extends Error {
+  readonly code = "test-app-drifted" as const;
+  readonly proven: string;
+  readonly now: string;
+  readonly batchIndex: number;
+
+  constructor(proven: string, now: string, batchIndex: number) {
+    super(
+      `the test app changed during the session: it was proven to be ${proven}, and at batch ${batchIndex} it reads ${now}. Verdicts carried, survivors skipped and snapshots reused from there would describe the proven test app, not the one that runs, so the session stops before batch ${batchIndex} records anything, and its run keeps no test-app identity (R495). Re-run once nothing republishes the test app mid-run.`,
+    );
+    this.name = "TestAppDriftedError";
+    this.proven = proven;
+    this.now = now;
+    this.batchIndex = batchIndex;
+  }
+}
+
 /** R403 phase B: an env-tool `publishApps` file that cannot be read as a BC app package before the
  *  lease. Every such file is published under the lease, where it would fail too (an unreadable one
  *  is `publishFile`'s pre-publish `ArtifactPrepareError`; a non-package one is refused by the

@@ -214,6 +214,7 @@ import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
   PublishAppUnreadableError,
+  TestAppDriftedError,
   TestAppRepublishedError,
   type TestArmEvidence,
   assertTestMembership,
@@ -3647,6 +3648,8 @@ const TEST_APP_WHY =
  * Unknown on either side (a run from before R247, or a package this session could not read) never
  * matches, NULL against NULL included. It covers every carried verdict, whole batches (R192) and
  * single rows alike, because it refuses the run before any resume index is built from it.
+ * R495: both sides must be PROVEN: `testAppHash` is this session's proven identity (`undefined`
+ * when unproven), and the row must carry `testAppProven`.
  */
 function assertSameTestApp(
   row: RunRow | null,
@@ -3654,15 +3657,30 @@ function assertSameTestApp(
   testAppHash: string | undefined,
 ): void {
   if (row === null) throw new Error(`${flag}: the run it found is no longer in this database`);
-  if (row.testAppHash !== null && testAppHash !== undefined && row.testAppHash === testAppHash) {
+  if (
+    row.testAppProven &&
+    row.testAppHash !== null &&
+    testAppHash !== undefined &&
+    row.testAppHash === testAppHash
+  ) {
     return;
   }
   throw new Error(
     `${flag}: run ${row.id} was measured against test app ${describeTestApp(row.testAppHash)}${
-      row.testAppHash === null ? " (it recorded no test-app identity; the run predates R247)" : ""
-    }, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so none of its verdicts is carried (R247). Drop the resume flag to run from scratch.`,
+      row.testAppHash === null
+        ? " (it recorded no proven test-app identity)"
+        : row.testAppProven
+          ? ""
+          : ` (${TEST_APP_UNPROVEN})`
+    }, and this session's test app is ${describeTestApp(testAppHash)}${
+      testAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
+    }. ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495). Drop the resume flag to run from scratch.`,
   );
 }
+
+/** R495: why an identity lends nothing, said the same way on every path. */
+const TEST_APP_UNPROVEN =
+  "not proven installed: the identity was read from a package or source not proven to be the test app that ran, or recorded before R495";
 
 /** R214: a symbol list for a message. `null` is a row recorded before the column existed. */
 const symbolList = (s: readonly string[] | null): string =>
@@ -3973,11 +3991,10 @@ interface ScoreBatchInput {
     readonly batchDir: string;
     readonly testDir: string;
     readonly allowReuse: boolean;
-    /** R492: an env-tool session reuses only a snapshot whose run recorded digests (its proof). */
-    readonly requireDigests: boolean;
-    /** R492 (sol run 001): an env-tool session's PROVEN test app (`undefined`: unproven). Reuse
-     *  needs the batch's own package read to equal it: a later unpinned read can serve a
-     *  published-but-not-installed package, whose snapshot another run did prove. */
+    /** R492 (sol run 001), R495: the session's PROVEN test app (`undefined`: unproven). Reuse
+     *  needs the batch's own read to equal it: a later unpinned read can serve a
+     *  published-but-not-installed package, whose snapshot another run did prove. A different
+     *  read stops the session (`assertNoTestAppDrift`). */
     readonly provenTestAppHash?: string;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
@@ -4343,6 +4360,46 @@ async function dispatchUnmutated(
  * section G attestation gate, in exactly the order `runSession` ran them inline. Which mutants
  * run against which tests is the caller's `select`; this function does not choose.
  */
+/** R192/R462: the per-batch test-app read, by `testAppHashFor`'s rule over the backend's package
+ *  read. The request identity is read ONCE, so a re-read at a refusal asks for the same app even if
+ *  the local app.json changed meanwhile. */
+async function batchTestAppReader(
+  backend: ExecutionBackend,
+  testDir: string,
+): Promise<() => Promise<string | undefined>> {
+  const packageReader = backend.fetchPublishedAppPackage;
+  const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
+  return () =>
+    testAppHashFor(
+      packageReader === undefined
+        ? undefined
+        : async () =>
+            manifest === undefined
+              ? undefined
+              : packageReader.call(backend, { publisher: manifest.publisher, name: manifest.name }),
+      testDir,
+    );
+}
+
+/**
+ * R495: a session that PROVED its test app (`proven`) and reads a different one (`now`) at a batch
+ * clears its run's identity and flag, so no later session borrows from it, then throws before the
+ * batch records anything. A failed read (`undefined`) is not a difference; a session with nothing
+ * proven has nothing to lend or borrow. The read runs once per batch, so a republish during a
+ * batch's mutant loop is caught at the next one, and an install-only change is not caught.
+ */
+function assertNoTestAppDrift(
+  store: ResultsStore,
+  runId: number,
+  proven: string | undefined,
+  now: string | undefined,
+  batchIdx: number,
+): void {
+  if (proven === undefined || now === undefined || now === proven) return;
+  store.setRunTestAppHash(runId, null, false);
+  throw new TestAppDriftedError(proven, now, batchIdx);
+}
+
 async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<ScoreBatchResult> {
   const {
     backend,
@@ -4387,36 +4444,18 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
   let hashTestApp: (() => Promise<string | undefined>) | undefined;
   if (input.snapshot !== undefined) {
-    const { batchDir, testDir, allowReuse, requireDigests } = input.snapshot;
+    const { batchDir, testDir, allowReuse, provenTestAppHash } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
-    const packageReader = backend.fetchPublishedAppPackage;
-    // R462: the request identity is read ONCE, so the re-read at a refusal asks for the same app
-    // even if the local app.json changed meanwhile.
-    const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
-    hashTestApp = () =>
-      testAppHashFor(
-        packageReader === undefined
-          ? undefined
-          : async () => {
-              return manifest === undefined
-                ? undefined
-                : packageReader.call(backend, {
-                    publisher: manifest.publisher,
-                    name: manifest.name,
-                  });
-            },
-        testDir,
-      );
+    hashTestApp = await batchTestAppReader(backend, testDir);
     const testAppHash = await hashTestApp();
-    // R492 (sol run 001): on an env-tool session the package that runs is the PROVEN one; a read
+    // R495: before `select` carries anything or a snapshot is reused.
+    assertNoTestAppDrift(store, runId, provenTestAppHash, testAppHash, batchIdx);
+    // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
     // here that differs from it (or a session with nothing proven) reuses nothing.
-    const runsWhatWasRead =
-      !requireDigests ||
-      (input.snapshot.provenTestAppHash !== undefined &&
-        testAppHash === input.snapshot.provenTestAppHash);
+    const runsWhatWasRead = provenTestAppHash !== undefined && testAppHash === provenTestAppHash;
     const reusable =
       allowReuse && testAppHash !== undefined && runsWhatWasRead
-        ? store.findBaselineSnapshot(batchHash, testAppHash, caps.coverage, requireDigests)
+        ? store.findBaselineSnapshot(batchHash, testAppHash, caps.coverage)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
     // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
@@ -5063,6 +5102,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     sourceSnapshot,
     envPublishes !== undefined,
   );
+  // R495: the identity resume, history and the R192 snapshot may use, `undefined` unless proven.
+  // A hook session proves it after the hook, under the lease (below); this read may be outgoing.
+  const provenTestAppHash =
+    envPublishes === undefined &&
+    testAppHash !== undefined &&
+    (await provenWithoutHook(cfg, buildBackend.kind, publishedRead))
+      ? testAppHash
+      : undefined;
   const sourceSymbols = cfg.preprocessorSymbols ?? [];
   const sourceHashAtGeneration = hashSourceSnapshot(sourceSnapshot, sourceSymbols);
   // R214: the EFFECTIVE symbols (config plus app.json), read from the same snapshot generation
@@ -5135,7 +5182,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     backendName,
     configFingerprint,
     caps.coverage,
-    testAppHash,
+    provenTestAppHash,
     emit,
     buildSymbols,
     testPageRefusedNames,
@@ -5152,7 +5199,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(resourceKey !== undefined ? { resourceKey } : {}),
     // R492: an env-tool session records its test app only once the read-back after the hook is
     // proven installed (below), never the pre-lease read, which can hold the OUTGOING one.
-    ...(testAppHash !== undefined && envPublishes === undefined ? { testAppHash } : {}),
+    // R495: any other session records it only when proven, and the flag with it.
+    ...(provenTestAppHash !== undefined
+      ? { testAppHash: provenTestAppHash, testAppProven: true }
+      : {}),
     ...(testDigests !== undefined ? { testDigests } : {}),
     ...(testDigestParts !== undefined ? { testDigestParts } : {}),
     projectPath: cfg.projectDir,
@@ -5430,7 +5480,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let historyTestAppWarned = false;
   // R486: the test app the history filter compares. On an env-tool session it becomes the one
   // read back after the hook published the test apps (below), never the pre-lease read.
-  let historyTestAppHash = testAppHash;
+  // R495: always the PROVEN identity, `undefined` (matches nothing) when unproven.
+  let historyTestAppHash = provenTestAppHash;
   // R442: likewise for its untrusted-run and hidden-files warnings.
   let historyCarryWarned = false;
 
@@ -5524,15 +5575,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const proven = "proven" in readBackProof ? after.packageHash : undefined;
       // R486/R492: the row records the test app that ran, or NULL ("unknown"), never the outgoing
       // one and never an unproven one.
-      cfg.store.setRunTestAppHash(runId, proven ?? null);
+      cfg.store.setRunTestAppHash(runId, proven ?? null, proven !== undefined);
       // The history filter runs per batch, after this. `undefined` matches no finished run, so
       // nothing is skipped (fail closed).
       historyTestAppHash = proven;
       // R492, fail closed: the resume was resolved before the lease WITHOUT its test app
       // (`testAppAfterHook`). Its verdicts stand only if this read-back is proven and equals the
-      // test app the resumed run PROVED it measured: its recorded hash, and digests, which are
-      // written only behind that proof (R373). An older row without them is refused. First after
-      // the hook, before and independent of every digest check.
+      // test app the resumed run PROVED it measured (R495: its recorded hash and its proven flag).
+      // An older row without the flag is refused. First after the hook, before and independent of
+      // every digest check.
       if (resolvedResume !== undefined) {
         const prior = cfg.store.getRun(resolvedResume.runId);
         const recorded = prior?.testAppHash ?? null;
@@ -5541,8 +5592,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             ? "the test app could not be read back after the env-tool hook published publishApps"
             : "why" in readBackProof
               ? `the test app read back now (${after.packageHash}) is not proven to be what runs: ${readBackProof.why}`
-              : recorded === null || cfg.store.testDigests(resolvedResume.runId) === null
-                ? `that run never proved it was the installed test app (no recorded identity, or no digests: a run recorded before R492, a run whose proof failed, a run without an env-tool hook, or one whose digests could not be taken after the proof; it then warned test-digests-unavailable)`
+              : recorded === null || prior?.testAppProven !== true
+                ? `that run's test app was ${TEST_APP_UNPROVEN} (no recorded identity, or no proof: its proof failed, or it could not read installed versions)`
                 : recorded !== proven
                   ? `the test app proven to run now is a different one (${proven})`
                   : undefined;
@@ -5757,6 +5808,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         resumeState !== undefined &&
         batchCarriesEntirely(resumeState.index, manifest.mutants, cfg.retryStranded ?? false)
       ) {
+        // R495: this path never reaches `scoreBatch`'s read, so the drift check reads here.
+        if (historyTestAppHash !== undefined) {
+          const now = await (await batchTestAppReader(cfg.backend, cfg.testDir))();
+          assertNoTestAppDrift(cfg.store, runId, historyTestAppHash, now, batchIdx);
+        }
         replayCarriedBatch(cfg, runId, manifest.mutants, batchIdx, resumeState, outcomes, emit);
         continue;
       }
@@ -5838,8 +5894,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         buildSymbols,
         carryHidden.files,
         {
-          // R492: an env-tool session borrows only from a run that proved its test app.
-          requireDigests: envPublishes !== undefined,
           schemeChanged: (old) => {
             if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
             historySchemeWarned = true;
@@ -5873,7 +5927,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             emit({
               type: "warning",
               code: "history-test-app-changed",
-              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(historyTestAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}${
+                old.testAppHash !== null && !old.proven ? ` (${TEST_APP_UNPROVEN})` : ""
+              }, and this session's test app is ${describeTestApp(historyTestAppHash)}${
+                historyTestAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
+              }. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247, R495).`,
             });
           },
           carryUntrusted: (old) => {
@@ -6584,7 +6642,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           allowReuse:
             resumeState !== undefined &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
-          requireDigests: envPublishes !== undefined,
           ...(historyTestAppHash !== undefined ? { provenTestAppHash: historyTestAppHash } : {}),
         },
         select,
@@ -8081,6 +8138,43 @@ interface EnvToolPublishes {
     readonly name: string;
     readonly publisher: string;
   }>;
+}
+
+/**
+ * R495: whether a session WITHOUT a hook measures the test app it identified (`read`). al-runner
+ * compiles the test source it hashed, so its `no-fetch` identity is proven by construction (decided
+ * by the BACKEND, never by a `source:` prefix: bcdev runs the published app, not the disk). bcdev's
+ * served package is proven only when its OWN manifest's id and version (never the local app.json's)
+ * have exactly one installed row (`checkInstalled`, as `proveReadBack` does). Anything else: false.
+ */
+async function provenWithoutHook(
+  cfg: SessionConfig,
+  backendKind: string,
+  read: PublishedTestAppRead,
+): Promise<boolean> {
+  if (backendKind === "al-runner") return read.kind === "no-fetch";
+  if (read.kind !== "bytes") return false;
+  let got: ReturnType<typeof readAppIdentity>;
+  try {
+    got = readAppIdentity(Buffer.from(read.bytes));
+  } catch {
+    return false; // not an app package with a readable manifest
+  }
+  try {
+    const mode = cfg.backend.microsoftMode?.();
+    if (mode?.kind !== "bytes") return false;
+    await checkInstalled(
+      mode,
+      { id: got.id.toLowerCase(), name: got.name, publisher: got.publisher, version: got.version },
+      got.version,
+    );
+    return true;
+  } catch (err) {
+    // bcdev's `microsoftMode` throws `DependencyUnreadableError` with no harness verifier, and
+    // `checkInstalled` throws it when the proof fails: an unproven identity, never a session abort.
+    if (!(err instanceof DependencyUnreadableError)) throw err;
+    return false;
+  }
 }
 
 /**

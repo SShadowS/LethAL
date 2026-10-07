@@ -245,6 +245,11 @@ export interface RunRow {
    *  `source:<hash>`). `null` when unknown, including every row recorded before the column: never
    *  equal to anything, NULL included. */
   readonly testAppHash: string | null;
+  /** R495: the recorded `testAppHash` was PROVEN to be the test app the run measured (the hook's
+   *  read-back proof, the installed check of the served package, or al-runner compiling its own
+   *  test source). Every consumer (resume, history, the R192 snapshot) requires it. `false` on every
+   *  row recorded before the column. */
+  readonly testAppProven: boolean;
   /** R442: what the run numbered no ordinal for. `null` on a row recorded before the column, or a
    *  run that died before generation: untrusted, so no history or resume carries from it. */
   readonly carryHidden: CarryHidden | null;
@@ -370,6 +375,7 @@ CREATE TABLE IF NOT EXISTS runs (
   identity_scheme INTEGER,
   coverage_mode TEXT,
   test_app_hash TEXT,
+  test_app_proven INTEGER,
   test_digests TEXT,
   test_digest_parts TEXT
 );
@@ -632,6 +638,8 @@ export class ResultsStore {
       ["runs", "coverage_mode TEXT", runCols],
       // R247: NULL on an older row, read as "test app unknown", which never matches.
       ["runs", "test_app_hash TEXT", runCols],
+      // R495: NULL on an older row, read as "not proven": it lends nothing to any session.
+      ["runs", "test_app_proven INTEGER", runCols],
       // R-278: NULL on an older row; verify refuses it as source-predates-verify.
       ["runs", "test_digests TEXT", runCols],
       // R-371: NULL on an older row; verify's too-many-new-tests refusal then names no cause.
@@ -688,6 +696,9 @@ export class ResultsStore {
     /** R247: the test app this run measures against. Absent is recorded NULL, "unknown", which
      *  no resume or history read ever matches. */
     testAppHash?: string;
+    /** R495: `testAppHash` is proven to be the test app this run measures. Recorded as the run's
+     *  `test_app_proven` (only together with a hash); absent is "not proven". */
+    testAppProven?: boolean;
     /** R-278: every discovered test's source digest, by `testDigestKey`. Absent is recorded NULL,
      *  which `lethal verify` refuses as a run that predates it. */
     testDigests?: Readonly<Record<string, string>>;
@@ -709,8 +720,8 @@ export class ResultsStore {
     // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -722,6 +733,7 @@ export class ResultsStore {
         info.coverageMode,
         info.resourceKey ?? null,
         info.testAppHash ?? null,
+        info.testAppHash !== undefined && info.testAppProven === true ? 1 : null,
         info.testDigests !== undefined ? JSON.stringify(info.testDigests) : null,
         info.testDigestParts !== undefined ? JSON.stringify(info.testDigestParts) : null,
         info.carryHidden != null ? JSON.stringify(info.carryHidden) : null,
@@ -773,12 +785,13 @@ export class ResultsStore {
     }
   }
 
-  /** R486: an env-tool run's test-app identity, read again after its hook published the test app.
-   *  `null` records "unknown" (the read-back was unavailable), which no resume or history matches. */
-  setRunTestAppHash(runId: number, testAppHash: string | null): void {
+  /** R486, R495: the run's test-app identity and whether it is proven, written TOGETHER in one
+   *  UPDATE so a hash never stands without its flag. `null` records "unknown", which no resume,
+   *  history or snapshot matches; `proven` is stored only with a hash. */
+  setRunTestAppHash(runId: number, testAppHash: string | null, proven: boolean): void {
     const changed = this.db
-      .query("UPDATE runs SET test_app_hash = ? WHERE id = ?")
-      .run(testAppHash, runId).changes;
+      .query("UPDATE runs SET test_app_hash = ?, test_app_proven = ? WHERE id = ?")
+      .run(testAppHash, testAppHash !== null && proven ? 1 : null, runId).changes;
     if (changed !== 1) throw new Error(`store.ts: setRunTestAppHash: no run ${runId}`);
   }
 
@@ -945,9 +958,10 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest FROM runs WHERE id = ?",
       )
       .get(runId) as {
+      test_app_proven: number | null;
       carry_hidden: string | null;
       generation_source_sha256: string | null;
       twin_tuples: string | null;
@@ -973,6 +987,7 @@ export class ResultsStore {
       buildSymbols: parseBuildSymbols(row.build_symbols),
       coverageMode: parseCoverageMode(row.coverage_mode, row.id),
       testAppHash: row.test_app_hash,
+      testAppProven: row.test_app_proven === 1,
       carryHidden: parseCarryHidden(row.carry_hidden, row.id),
       generationSourceSha256: row.generation_source_sha256,
       twinTuples: parseTwinTuples(row.twin_tuples, row.id),
@@ -1557,16 +1572,13 @@ export class ResultsStore {
    * served P2 while P1 was installed keyed its snapshot under P2 with P1's baseline; reused for a
    * P2 run, a test green under P1 and red under P2 would be sent as covering and score a false
    * kill. Such a run now records NULL (its read-back was not proven installed), so it lends none.
-   * `requireDigests` (an env-tool session): the run must also have recorded digests, written only
-   * behind the installed proof since R373, because an env-tool row recorded before R492 holds the
-   * served, unproven hash. A run without that proof lends no snapshot: the batch re-runs its
-   * baseline.
+   * R495: and the run must have PROVEN that hash (`test_app_proven = 1`), for every session kind.
+   * A run without that proof lends no snapshot: the batch re-runs its baseline.
    */
   findBaselineSnapshot(
     batchHash: string,
     testAppHash: string,
     coverageMode: CoverageMode,
-    requireDigests = false,
   ): BaselineSnapshot | null {
     const row = this.db
       .query(
@@ -1574,10 +1586,10 @@ export class ResultsStore {
          WHERE batch_hash = ? AND test_app_hash = ?
            AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ? AND coverage_mode = ?
              AND test_app_hash = baseline_snapshots.test_app_hash
-             AND (? = 0 OR test_digests IS NOT NULL))
+             AND test_app_proven = 1)
          ORDER BY id DESC LIMIT 1`,
       )
-      .get(batchHash, testAppHash, IDENTITY_SCHEME, coverageMode, requireDigests ? 1 : 0) as {
+      .get(batchHash, testAppHash, IDENTITY_SCHEME, coverageMode) as {
       run_id: number;
       batch_index: number;
       batch_hash: string;
@@ -1810,19 +1822,22 @@ export class ResultsStore {
         runId: number;
         coverageMode: CoverageMode | null;
       }) => void;
-      /** R247: the test app differs, or is unknown. Checked after the coverage mode. */
-      readonly testAppChanged?: (info: { runId: number; testAppHash: string | null }) => void;
-      /** R492: an env-tool session: the latest run must also have recorded digests (its proof). */
-      readonly requireDigests?: boolean;
+      /** R247: the test app differs, or is unknown; R495: or was not proven installed (`proven`
+       *  false). Checked after the coverage mode. */
+      readonly testAppChanged?: (info: {
+        runId: number;
+        testAppHash: string | null;
+        proven: boolean;
+      }) => void;
     } = {},
   ): PriorSurvivors {
     const none = NO_PRIOR_SURVIVORS;
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_digests IS NOT NULL AS proven, carry_hidden, generation_source_sha256, twin_tuples FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, carry_hidden, generation_source_sha256, twin_tuples FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
-      proven: number;
+      test_app_proven: number | null;
       carry_hidden: string | null;
       generation_source_sha256: string | null;
       twin_tuples: string | null;
@@ -1842,14 +1857,18 @@ export class ResultsStore {
       on.coverageModeChanged?.({ runId: run.id, coverageMode: recorded });
       return none;
     }
-    // R492: for an env-tool session, only a run that PROVED its test app (digests are written only
-    // behind the installed proof since R373): an older env-tool row recorded the served, unproven hash.
+    // R495: only a run that PROVED its test app was the one it measured, for every session kind: a
+    // run served P2 while P1 was installed recorded P2 and measured P1.
     if (
       run.test_app_hash === null ||
       run.test_app_hash !== testAppHash ||
-      (on.requireDigests === true && run.proven === 0)
+      run.test_app_proven !== 1
     ) {
-      on.testAppChanged?.({ runId: run.id, testAppHash: run.test_app_hash });
+      on.testAppChanged?.({
+        runId: run.id,
+        testAppHash: run.test_app_hash,
+        proven: run.test_app_proven === 1,
+      });
       return none;
     }
     const recordedSymbols = parseBuildSymbols(run.build_symbols);

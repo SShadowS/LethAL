@@ -58,6 +58,9 @@ export function recording(inner: ExecutionBackend, trace: Trace, tag: string): E
     inner as { measurePredefinedSymbols?: (pin?: string) => Promise<unknown> }
   ).measurePredefinedSymbols?.bind(inner);
   if (measure !== undefined) Object.assign(b, { measurePredefinedSymbols: measure });
+  // R495: forwarded untraced too; it proves the test app installed (the recorded identity's proof).
+  const microsoftMode = inner.microsoftMode?.bind(inner);
+  if (microsoftMode !== undefined) b.microsoftMode = microsoftMode;
   const many = inner.runMany?.bind(inner);
   if (many !== undefined) {
     b.runMany = async (o) => {
