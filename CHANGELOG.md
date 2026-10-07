@@ -498,6 +498,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **al-runner one-shot: a result with two rows for the requested test is refused by name** (R491).
+  Two rows carrying the requested name, exactly or ignoring case, were credited from the first row
+  and that call's coverage; now the run is an `error` naming the test. That refusal, and R488's
+  "ran other tests despite `--exclude-test`" refusal, are no longer labelled pre-dispatch: the test
+  was dispatched, so the orchestrator no longer re-sends it as a retry-safe failure. The R488 unit
+  tests now run against a fake that selects as al-runner does (excluding the requested test itself
+  drops it), with coverage on, and with an order check on the discovered-list seeding.
+
 - **al-runner one-shot: a result naming any other test is never credited to the requested one**
   (R488). al-runner's `--test` is a case-insensitive substring match, so asking for `GrowPre` also
   ran `GrowPreTwin`, and LethAL credited both tests' coverage, and their shared deadline, to
