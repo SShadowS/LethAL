@@ -48,7 +48,8 @@ import {
  * that code reaches by name. Known exclusions, none shown safe: code that runs before the item
  * (`OnPreReport`, an earlier sibling), procedures in other objects, items over ordinary tables and
  * `Date`, XMLport `Integer` elements, reportextensions outside the project, a `while`/`repeat`
- * inside a bounded item's code (R196/R446/R480's loop rules only), and condition-side mutants.
+ * inside a bounded item's code (R196/R446/R480's loop rules only), all filed as R500, and
+ * condition-side mutants and the exit's own removal, filed as R501.
  *
  * WHAT IT DELIBERATELY DOES NOT SEE, all UNCLASSIFIED rather than proven safe (spec 3.2): a target
  * read in the loop BODY rather than its condition (beyond R446's body-exit guards); preheader

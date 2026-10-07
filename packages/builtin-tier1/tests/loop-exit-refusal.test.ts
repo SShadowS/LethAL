@@ -1298,7 +1298,7 @@ describe("R484: nested data items", () => {
     "}",
   ];
 
-  it("a write in a child's trigger is inside the open parent's loop: refused; under a bounded parent: claimed (revert to red: drop the blanket check AND the parent's guard on `Continue`; the open-parent half is also refused by R484's guard rule)", () => {
+  it("a write in a child's trigger is inside the open parent's loop: refused; under a bounded parent: claimed (revert to red: drop the blanket check)", () => {
     const inner = [
       'dataitem(Child; "Sales Line")',
       "{",
