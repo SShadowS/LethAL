@@ -9857,6 +9857,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       // T8: a hook session's fingerprint is taken after the hook it awaited.
       test("T8: a hook that republishes the dependency records the post-hook fingerprint", async () => {
         const r = await envRun({
+          pre: P2D,
           post: P2D,
           installed: INSTALLED,
           dep: { pre: depPkg("one"), post: depPkg("two") },
