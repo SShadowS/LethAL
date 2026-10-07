@@ -153,6 +153,7 @@ import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import {
   servedIsInstalled,
+  servedTestAppDeps,
   servesTestApp,
   testAppJson,
   testAppPackage,
@@ -6323,6 +6324,8 @@ async function seedPriorSurvivor(
     // proven: the package the session's backend serves installed (`servesTestApp`).
     testAppHash: `package:${hashPackage(testAppPackage())}`,
     testAppProven: true,
+    // R496: and against the same dependency closure the session fingerprints under its lease.
+    testAppDeps: await servedTestAppDeps(dirs.projectDir),
     projectPath: dirs.projectDir,
     identityScheme: IDENTITY_SCHEME,
     buildSymbols: [],
@@ -7875,10 +7878,15 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
     expect(rawVerdicts.every((r) => r.verdict === "error")).toBe(true);
     // The original guard still holds independently: an unfinished run is invisible to
     // priorSurvivorKeys, so this does not rely on the correction alone.
+    // R496: the identity is the hash and the dependency fingerprint the run itself recorded.
+    const sourceHash = await testAppHashFor(undefined, dirs.testDir);
+    const recordedDeps = (
+      store.db.query("SELECT MAX(test_app_deps) AS d FROM runs").get() as { d: string | null }
+    ).d;
     const keys = store.priorSurvivorKeys(
       dirs.projectDir,
       backend.capabilities().coverage,
-      await testAppHashFor(undefined, dirs.testDir),
+      sourceHash === undefined ? undefined : { hash: sourceHash, deps: recordedDeps ?? "" },
       [],
       [],
     );
@@ -9611,7 +9619,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       r.store.close();
     });
 
-    test("a plain bcdev run (no hook) never reads back, rewrites test_app_hash or defers digests", async () => {
+    test("a plain bcdev run (no hook) never reads back or defers digests, and records its identity once, under the lease", async () => {
       const dirs = await makeProject(BODY_B);
       await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
       const store = new ResultsStore(":memory:");
@@ -9631,12 +9639,18 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         lease: leaseCfg(new FakeLeaseClient()).lease,
       }).catch((e: unknown) => e);
       expect(outcome).not.toBeInstanceOf(Error);
-      expect(setHash).not.toHaveBeenCalled();
       expect(setDigests).not.toHaveBeenCalled();
       const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
-      // Recorded at createRun from the one pre-lease read, as before R373.
+      // R496: the identity (hash, flag and dependency fingerprint) is written ONCE, under the lease,
+      // after the fingerprint is taken there; the pre-lease read's hash with it.
+      const row = store.getRun(runId);
+      expect(row?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+      expect(setHash.mock.calls).toEqual([
+        [runId, `package:${hashPackage(P2)}`, true, row?.testAppDeps ?? "missing"],
+      ]);
+      // The digests are recorded at createRun from the one pre-lease read, as before R373.
       expect(store.testDigests(runId)).not.toBeNull();
-      expect(store.getRun(runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+      expect(row?.testAppHash).toBe(`package:${hashPackage(P2)}`);
       store.close();
     });
 
@@ -9736,7 +9750,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(store.testDigests(runId)).toEqual({ a: "1" });
     expect(store.testDigestParts(runId)).toEqual({ p: 1 });
     expect(() => store.setRunTestDigests(runId + 1, { a: "1" }, {})).toThrow("does not exist");
-    expect(() => store.setRunTestAppHash(runId + 1, null, false)).toThrow("no run");
+    expect(() => store.setRunTestAppHash(runId + 1, null, false, null)).toThrow("no run");
     store.close();
   });
 

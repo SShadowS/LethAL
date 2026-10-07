@@ -216,7 +216,7 @@ import {
 } from "./stale-test-app";
 import { sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
-import type { CarryHidden, MutantVerdict, RunRow, RunnerKind } from "./store";
+import type { CarryHidden, MutantVerdict, RunRow, RunnerKind, TestAppIdentity } from "./store";
 import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
@@ -4038,8 +4038,9 @@ interface ScoreBatchInput {
     /** R492 (sol run 001), R495: the session's PROVEN test app (`undefined`: unproven). Reuse
      *  needs the batch's own read to equal it: a later unpinned read can serve a
      *  published-but-not-installed package, whose snapshot another run did prove. A different
-     *  read stops the session (`assertNoTestAppDrift`). */
-    readonly provenTestAppHash?: string;
+     *  read stops the session (`assertNoTestAppDrift`). R496: with its dependency fingerprint,
+     *  which a reused snapshot's run must have recorded too. */
+    readonly provenTestApp?: TestAppIdentity;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
   readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
@@ -4442,7 +4443,7 @@ function assertNoTestAppDrift(
   batchIdx: number,
 ): void {
   if (proven === undefined || now === proven) return;
-  store.setRunTestAppHash(runId, null, false);
+  store.setRunTestAppHash(runId, null, false, null);
   throw new TestAppDriftedError(proven, now, batchIdx);
 }
 
@@ -4490,18 +4491,19 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
   let hashTestApp: (() => Promise<string | undefined>) | undefined;
   if (input.snapshot !== undefined) {
-    const { batchDir, testDir, allowReuse, provenTestAppHash } = input.snapshot;
+    const { batchDir, testDir, allowReuse, provenTestApp } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
     hashTestApp = await batchTestAppReader(backend, testDir);
     const testAppHash = await hashTestApp();
     // R495: before `select` carries anything or a snapshot is reused.
-    assertNoTestAppDrift(store, runId, provenTestAppHash, testAppHash, batchIdx);
+    assertNoTestAppDrift(store, runId, provenTestApp?.hash, testAppHash, batchIdx);
     // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
     // here that differs from it (or a session with nothing proven) reuses nothing.
-    const runsWhatWasRead = provenTestAppHash !== undefined && testAppHash === provenTestAppHash;
+    // R496: and the snapshot's run must have recorded the same dependency fingerprint.
+    const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
     const reusable =
       allowReuse && testAppHash !== undefined && runsWhatWasRead
-        ? store.findBaselineSnapshot(batchHash, testAppHash, caps.coverage)
+        ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
     // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
@@ -4680,8 +4682,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     // R495 (sol, final review): a re-read that is not the proven test app (changed, or unreadable)
     // withdraws the run's proof, so neither this run's snapshots, the one just recorded included,
     // nor its verdicts lend anything later.
-    const proven = input.snapshot?.provenTestAppHash;
-    if (proven !== undefined && after !== proven) store.setRunTestAppHash(runId, null, false);
+    const proven = input.snapshot?.provenTestApp?.hash;
+    if (proven !== undefined && after !== proven) store.setRunTestAppHash(runId, null, false, null);
     throw testAppRefusal(missingFromServer, snapshotKey?.testAppHash, after);
   }
 
@@ -5161,6 +5163,19 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     (await provenWithoutHook(cfg, buildBackend.kind, publishedRead))
       ? testAppHash
       : undefined;
+  // R496: al-runner has no lease and no server, so its dependency fingerprint (its app.json and
+  // package folders) is complete here and is recorded with the run row. Every other session takes
+  // it under the lease (below).
+  let alRunnerTestApp: TestAppIdentity | undefined;
+  if (provenTestAppHash !== undefined && buildBackend.kind === "al-runner") {
+    const got = await takeTestAppDependencies(cfg, "not-published", sourceSnapshot);
+    if ("deps" in got) alRunnerTestApp = { hash: provenTestAppHash, deps: got.deps };
+    else
+      warnTestAppDependenciesUnproven(
+        emit,
+        `its dependencies could not be fingerprinted: ${got.why}`,
+      );
+  }
   const sourceSymbols = cfg.preprocessorSymbols ?? [];
   const sourceHashAtGeneration = hashSourceSnapshot(sourceSnapshot, sourceSymbols);
   // R214: the EFFECTIVE symbols (config plus app.json), read from the same snapshot generation
@@ -5254,8 +5269,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // R492: an env-tool session records its test app only once the read-back after the hook is
     // proven installed (below), never the pre-lease read, which can hold the OUTGOING one.
     // R495: any other session records it only when proven, and the flag with it.
-    ...(provenTestAppHash !== undefined
-      ? { testAppHash: provenTestAppHash, testAppProven: true }
+    // R496: and with its dependency fingerprint. Only al-runner has one here; a bcdev session
+    // records all three under the lease, after its fingerprint is taken there.
+    ...(alRunnerTestApp !== undefined
+      ? {
+          testAppHash: alRunnerTestApp.hash,
+          testAppProven: true,
+          testAppDeps: alRunnerTestApp.deps,
+        }
       : {}),
     ...(testDigests !== undefined ? { testDigests } : {}),
     ...(testDigestParts !== undefined ? { testDigestParts } : {}),
@@ -5554,7 +5575,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R486: the test app the history filter compares. On an env-tool session it becomes the one
   // read back after the hook published the test apps (below), never the pre-lease read.
   // R495: always the PROVEN identity, `undefined` (matches nothing) when unproven.
-  let historyTestAppHash = provenTestAppHash;
+  // R496: the hash AND the dependency fingerprint, set only under the lease, after the step that
+  // takes the fingerprint there (below), so history and the R192 snapshot compare that value.
+  let historyTestApp: TestAppIdentity | undefined;
   // R442: likewise for its untrusted-run and hidden-files warnings.
   let historyCarryWarned = false;
 
@@ -5633,10 +5656,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // can republish before the tests run. `envPublishes` is defined only when the hook ran.
     let readBack: PublishedTestSources | undefined;
     let readBackProof: { readonly proven: true } | { readonly why: string } | undefined;
+    // R496: the read-back's dependency fingerprint, taken after the hook it awaited.
+    let readBackDeps: { readonly deps: string } | { readonly why: string } | undefined;
     if (envPublishes !== undefined) {
+      const afterRead = await fetchPublishedTestApp(cfg);
       const after = await reportPublishedTestApp(
         cfg,
-        await fetchPublishedTestApp(cfg),
+        afterRead,
         tests,
         emit,
         armPolicyApplied ? testBuildSymbols : undefined,
@@ -5646,12 +5672,30 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // (`proveReadBack`); a served hash alone once recorded P2 for a run that measured P1.
       readBackProof = await proveReadBack(cfg, envPublishes, after.sources);
       const proven = "proven" in readBackProof ? after.packageHash : undefined;
+      // R496: proof covers the whole closure: this fingerprint checks every extension in it
+      // installed, including the ones the hook did not publish. From the served package's
+      // manifest (F8), under the lease and after the hook (the race is impossible by order).
+      if (proven !== undefined) {
+        readBackDeps =
+          afterRead.kind === "bytes"
+            ? await takeTestAppDependencies(cfg, afterRead.bytes, sourceSnapshot)
+            : { why: "the test app read back after the hook has no package bytes" };
+      }
+      const identity =
+        proven !== undefined && readBackDeps !== undefined && "deps" in readBackDeps
+          ? { hash: proven, deps: readBackDeps.deps }
+          : undefined;
       // R486/R492: the row records the test app that ran, or NULL ("unknown"), never the outgoing
-      // one and never an unproven one.
-      cfg.store.setRunTestAppHash(runId, proven ?? null, proven !== undefined);
+      // one and never an unproven one. R496: with its dependency fingerprint, or nothing.
+      cfg.store.setRunTestAppHash(
+        runId,
+        identity?.hash ?? null,
+        identity !== undefined,
+        identity?.deps ?? null,
+      );
       // The history filter runs per batch, after this. `undefined` matches no finished run, so
       // nothing is skipped (fail closed).
-      historyTestAppHash = proven;
+      historyTestApp = identity;
       // R492, fail closed: the resume was resolved before the lease WITHOUT its test app
       // (`testAppAfterHook`). Its verdicts stand only if this read-back is proven and equals the
       // test app the resumed run PROVED it measured (R495: its recorded hash and its proven flag).
@@ -5695,9 +5739,86 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           ? readBackProof
           : readBack.kind === "unavailable"
             ? { why: readBack.why }
-            : await digestsOf(cfg, readBack, tests, testModel, sourceSnapshot);
+            : readBackDeps !== undefined && "why" in readBackDeps
+              ? {
+                  why: `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${readBackDeps.why}`,
+                }
+              : await digestsOf(
+                  cfg,
+                  readBack,
+                  tests,
+                  testModel,
+                  sourceSnapshot,
+                  readBackDeps?.deps,
+                );
       if ("why" in got) warnNoTestDigests(emit, got.why);
       else cfg.store.setRunTestDigests(runId, got.digests, got.parts);
+    }
+
+    // R496 (plan step 3): every session's test-app identity is its hash AND its dependency
+    // fingerprint, and a session WITHOUT a hook takes that fingerprint HERE, under the lease, never
+    // from the pre-lease walk: another lease holder may have published a dependency while this
+    // session waited. Before the batch loop, so before any carry, history skip or snapshot reuse.
+    if (envPublishes === undefined) {
+      if (buildBackend.kind === "al-runner") {
+        // No lease and no server: taken before the run row and recorded with it.
+        historyTestApp = alRunnerTestApp;
+      } else if (provenTestAppHash !== undefined) {
+        const got =
+          publishedRead.kind === "bytes"
+            ? await takeTestAppDependencies(cfg, publishedRead.bytes, sourceSnapshot)
+            : { why: "the served test-app package was not read" };
+        // F9: the pre-lease digests' `D` part must equal the value taken here. Compared, and the
+        // run invalidated, BEFORE any usable identity is published or a resume authorised.
+        // The parts record the fingerprint's first 16 hex digits (`testDigestsOfModel`'s `short`).
+        // A changed length there would read as a change here: fail closed.
+        const pre = testDigestParts?.dependencies;
+        const why =
+          "why" in got
+            ? `its dependencies could not be fingerprinted under the lease: ${got.why}`
+            : pre !== undefined && pre !== got.deps.slice(0, 16)
+              ? `a dependency changed while this session waited for the lease (its digests were taken over dependencies ${pre}, and under the lease they are ${got.deps})`
+              : undefined;
+        if (why === undefined && "deps" in got) {
+          cfg.store.setRunTestAppHash(runId, provenTestAppHash, true, got.deps);
+          historyTestApp = { hash: provenTestAppHash, deps: got.deps };
+        } else {
+          // In one step: no identity, no digests, one warning; `historyTestApp` stays undefined.
+          cfg.store.setRunTestAppHash(runId, null, false, null);
+          if (testDigests !== undefined) {
+            cfg.store.clearRunTestDigests(runId);
+            warnNoTestDigests(
+              emit,
+              `${why}, so neither its digests nor its test-app identity describe what runs (R496)`,
+            );
+          } else {
+            warnTestAppDependenciesUnproven(emit, String(why));
+          }
+        }
+      }
+    }
+    // R496 (F1): a requested resume carries only from a run that proved the SAME identity: hash and
+    // dependency fingerprint, for every session kind. An unproven session refuses (any kind, as
+    // R495's post-hook rule does), and so does a run that recorded no fingerprint.
+    if (resolvedResume !== undefined) {
+      const prior = cfg.store.getRun(resolvedResume.runId);
+      const reason =
+        historyTestApp === undefined
+          ? "this session's test app is not proven: a dependency changed while it waited for the lease, or could not be read"
+          : prior?.testAppProven !== true || prior.testAppHash !== historyTestApp.hash
+            ? `that run's test app was ${TEST_APP_UNPROVEN}, or another one`
+            : prior.testAppDeps === null
+              ? "it recorded no dependency fingerprint (it ran before R496, or its fingerprint could not be taken)"
+              : prior.testAppDeps !== historyTestApp.deps
+                ? `the test app's dependencies changed (${prior.testAppDeps}, now ${historyTestApp.deps})`
+                : undefined;
+      if (reason !== undefined) {
+        throw new TestAppRepublishedError(
+          cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
+          prior?.testAppHash ?? null,
+          reason,
+        );
+      }
     }
 
     // R26: run it EXACTLY ONCE, here — after the lease is acquired above (the canary drives the
@@ -5784,9 +5905,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // R495: a proven session checks its test app FIRST, before anything this batch records: a
       // whole-batch carry, history's known survivors, a compile failure's error rows or a baseline.
       // (`scoreBatch` reads again before its baseline.)
-      if (historyTestAppHash !== undefined) {
+      if (historyTestApp !== undefined) {
         const now = await (await batchTestAppReader(cfg.backend, cfg.testDir))();
-        assertNoTestAppDrift(cfg.store, runId, historyTestAppHash, now, batchIdx);
+        assertNoTestAppDrift(cfg.store, runId, historyTestApp.hash, now, batchIdx);
       }
       // 1. write the instrumented project for this artifact — currently
       // always every file `generateMutationSet` found (single artifact).
@@ -5968,7 +6089,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const prior = cfg.store.priorSurvivorKeys(
         cfg.projectDir,
         caps.coverage,
-        historyTestAppHash,
+        historyTestApp,
         buildSymbols,
         carryHidden.files,
         {
@@ -6008,9 +6129,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}${recordedTestAppNote(
                 old.testAppHash,
                 old.proven,
-              )}, and this session's test app is ${describeTestApp(historyTestAppHash)}${
-                historyTestAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-              }. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247, R495).`,
+              )}, with dependencies ${old.deps ?? "not recorded"}, and this session's test app is ${describeTestApp(historyTestApp?.hash)}${
+                historyTestApp === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
+              }, with dependencies ${historyTestApp?.deps ?? "unknown"}. ${TEST_APP_WHY}; so does a changed dependency. No survivor from it is skipped: every mutant is executed (R247, R495, R496).`,
             });
           },
           carryUntrusted: (old) => {
@@ -6728,7 +6849,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           allowReuse:
             resumeState !== undefined &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
-          ...(historyTestAppHash !== undefined ? { provenTestAppHash: historyTestAppHash } : {}),
+          ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
         },
         select,
         ...(workers > 1 ? { executeCovering } : {}),
@@ -8148,6 +8269,65 @@ function warnNoTestDigests(emit: RunEmitter, why: string): void {
 }
 
 /**
+ * R-371's dependency fingerprint of the test app that RUNS, shared by the digests and (R496) the
+ * test-app identity. On a backend that publishes, `pkg` is the SERVED test-app package: its
+ * manifest's dependencies (R496 F8: the manifest, never its `.al` entries, so a package without
+ * source fingerprints too) and the server's resident dependency packages, each proven installed
+ * (F5). On al-runner (`"not-published"`), the test project's app.json and the package folders it
+ * is handed. Throws `DependencyUnreadableError` when it cannot be taken.
+ */
+async function testAppDependencies(
+  cfg: SessionConfig,
+  pkg: Uint8Array | "not-published",
+  source: ReadonlyMap<string, Buffer>,
+): Promise<string> {
+  const fetchPackage = cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend);
+  const published = pkg !== "not-published";
+  const inputs = published ? appInputsOfPackage(pkg) : await readAppJsonInputs(cfg.testDir);
+  const read =
+    published && fetchPackage !== undefined
+      ? publishedPackageReader(fetchPackage)
+      : packageFolderReader(cfg.backend.dependencyPackageDirs?.() ?? []);
+  // R-385: the published path reads Microsoft apps, System and the control app's dependencies by
+  // the bytes the server holds (the backend's microsoftMode, required there: never a fallback to
+  // declared versions); al-runner keeps declared versions under a tag (D6).
+  let microsoft: MicrosoftMode = { kind: "declared" };
+  if (published) {
+    if (cfg.backend.microsoftMode === undefined) {
+      throw new DependencyUnreadableError(
+        "this backend publishes the test app but cannot read the Microsoft dependencies, System or the control app's dependencies from the server (it has no microsoftMode)",
+      );
+    }
+    microsoft = cfg.backend.microsoftMode();
+  }
+  return dependencyFingerprint(inputs, read, microsoft, await targetOf(cfg.projectDir, source));
+}
+
+/** R496: `testAppDependencies`, or why it could not be taken. */
+async function takeTestAppDependencies(
+  cfg: SessionConfig,
+  pkg: Uint8Array | "not-published",
+  source: ReadonlyMap<string, Buffer>,
+): Promise<{ readonly deps: string } | { readonly why: string }> {
+  try {
+    return { deps: await testAppDependencies(cfg, pkg, source) };
+  } catch (err) {
+    if (!(err instanceof DependencyUnreadableError)) throw err;
+    return { why: err.message };
+  }
+}
+
+/** R496: one warning when a test app proven installed loses its identity because its dependency
+ *  fingerprint could not be taken (and no `test-digests-unavailable` warning says so already). */
+function warnTestAppDependenciesUnproven(emit: RunEmitter, why: string): void {
+  emit({
+    type: "warning",
+    code: "test-app-dependencies-unproven",
+    message: `[lethal] this session's test app is not proven: ${why}. It lends nothing to a later --resume, --skip-known-survivors or baseline reuse, and borrows nothing (R496).`,
+  });
+}
+
+/**
  * R-372's digest body, split out by R373 so the env-tool step after the hook runs the same code on
  * its read-back. The digests, or why there are none.
  */
@@ -8157,41 +8337,21 @@ async function digestsOf(
   tests: readonly TestMethodRef[],
   diskModel: TestAppModel,
   source: ReadonlyMap<string, Buffer>,
+  /** R496: the fingerprint already taken under the lease for this read-back, so it is not walked
+   *  twice. Absent: walked here. */
+  takenDependencies?: string,
 ): Promise<
   | { readonly digests: Record<string, string>; readonly parts: TestDigestParts }
   | { readonly why: string }
 > {
   try {
-    // R-371: the dependency fingerprint and build inputs of the app that RUNS. On a backend that
-    // publishes, the published package's manifest and the server's resident dependency packages;
-    // on al-runner, the test project's app.json and the package folders it is handed.
-    const fetchPackage = cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend);
     const published = sources.kind === "published";
     const inputs = published
       ? appInputsOfPackage(sources.pkg)
       : await readAppJsonInputs(cfg.testDir);
-    const read =
-      published && fetchPackage !== undefined
-        ? publishedPackageReader(fetchPackage)
-        : packageFolderReader(cfg.backend.dependencyPackageDirs?.() ?? []);
-    // R-385: the published path reads Microsoft apps, System and the control app's dependencies by
-    // the bytes the server holds (the backend's microsoftMode, required there: never a fallback to
-    // declared versions); al-runner keeps declared versions under a tag (D6).
-    let microsoft: MicrosoftMode = { kind: "declared" };
-    if (published) {
-      if (cfg.backend.microsoftMode === undefined) {
-        throw new DependencyUnreadableError(
-          "this backend publishes the test app but cannot read the Microsoft dependencies, System or the control app's dependencies from the server (it has no microsoftMode)",
-        );
-      }
-      microsoft = cfg.backend.microsoftMode();
-    }
-    const dependencies = await dependencyFingerprint(
-      inputs,
-      read,
-      microsoft,
-      await targetOf(cfg.projectDir, source),
-    );
+    const dependencies =
+      takenDependencies ??
+      (await testAppDependencies(cfg, published ? sources.pkg : "not-published", source));
     const { digests, parts } = testDigestsOfModel(
       published ? buildTestAppModel(sources.files) : diskModel,
       tests,

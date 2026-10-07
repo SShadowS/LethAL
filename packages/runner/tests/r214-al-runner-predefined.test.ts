@@ -182,6 +182,12 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
 
   test("an al-runner run builds only al-runner's arms and records its set; bcdev keeps alc's", async () => {
     await withProject(async (root) => {
+      // R496: an al-runner run proves its identity only with a dependency fingerprint, which reads
+      // the test project's app.json (every real test project has one).
+      await Bun.write(
+        join(root, "tests", "app.json"),
+        JSON.stringify({ name: "t", publisher: "x", version: "1.0.0.0" }),
+      );
       const store = new ResultsStore(":memory:");
       const ar = await session(root, store, false);
       expect(linesOf(ar)).toEqual([8]);
@@ -209,17 +215,23 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
       // R495: run 1 (al-runner) proves its source identity by construction; run 2 (a bcdev stub
       // with no package read) proves none and records NULL. The al-runner session below reads the
       // same source identity as run 1, so that is the one to give every row.
-      const natural = db.query("SELECT test_app_hash AS h FROM runs WHERE id = 1").get() as {
+      const natural = db
+        .query("SELECT test_app_hash AS h, test_app_deps AS d FROM runs WHERE id = 1")
+        .get() as {
         h: string | null;
+        d: string | null;
       };
       expect(natural.h).toStartWith("source:");
       expect(db.query("SELECT test_app_hash AS h FROM runs WHERE id = 2").get()).toEqual({
         h: null,
       });
-      db.run("UPDATE runs SET test_app_hash = 'same-test-app', test_app_proven = 1");
+      db.run(
+        "UPDATE runs SET test_app_hash = 'same-test-app', test_app_proven = 1, test_app_deps = 'same-deps'",
+      );
+      const sameApp = { hash: "same-test-app", deps: "same-deps" };
       const refusedOnSymbols = (symbols: readonly string[]) => {
         let changed = false;
-        store.priorSurvivorKeys(join(root, "app"), "procedure", "same-test-app", symbols, [], {
+        store.priorSurvivorKeys(join(root, "app"), "procedure", sameApp, symbols, [], {
           symbolsChanged: () => {
             changed = true;
           },
@@ -231,7 +243,9 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
       // The history warning names the al-runner predefines when they are the whole difference.
       // Put the al-runner source identity back on every row, proven, so the symbols are the only
       // thing the session can refuse on.
-      db.run(`UPDATE runs SET test_app_hash = '${natural.h}', test_app_proven = 1`);
+      db.run(
+        `UPDATE runs SET test_app_hash = '${natural.h}', test_app_proven = 1, test_app_deps = '${natural.d}'`,
+      );
       const events: RunEvent[] = [];
       await runSession({
         backend: new StubBackend(false),

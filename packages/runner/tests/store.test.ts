@@ -17,6 +17,8 @@ const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "Posting
 const APP = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
 /** R442: a run that hid nothing from identity numbering, as `runSession` records a clean one. */
 const NO_HIDDEN = { tuples: [], files: [] };
+/** R496: the proven identity the seeded "T" runs record (hash and dependency fingerprint). */
+const T_APP = { hash: "T", deps: "D" } as const;
 
 function mutantRow(verdict: MutantVerdict, over: Record<string, unknown> = {}) {
   return {
@@ -44,6 +46,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -55,7 +58,7 @@ describe("ResultsStore", () => {
     store.recordMutant(runId, mutantRow("killed", { killingTest: "PostingUpdatesTotal" }));
     store.recordMutant(runId, mutantRow("survived", { mutantCode: "M0002", astHash: "def456" }));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(
       new Set(["def456|Sample|Post|conditional-boundary|1"]),
     );
     store.close();
@@ -67,6 +70,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -80,6 +84,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -89,7 +94,7 @@ describe("ResultsStore", () => {
     });
     store.recordMutant(r2, mutantRow("killed"));
     store.finishRun(r2, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys.size).toBe(0);
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys.size).toBe(0);
     store.close();
   });
 
@@ -105,6 +110,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -114,7 +120,7 @@ describe("ResultsStore", () => {
     });
     store.recordMutant(r1, mutantRow("survived"));
     store.finishRun(r1, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(new Set([key]));
 
     // Run 2 skips re-testing it (skip-known-survivors) and records it as
     // "known-survivor" instead of re-deriving "survived".
@@ -122,6 +128,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -138,13 +145,14 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "3",
     });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(new Set([key]));
     store.close();
   });
 
@@ -158,6 +166,7 @@ describe("ResultsStore", () => {
         coverageMode: "procedure",
         testAppHash: "T",
         testAppProven: true,
+        testAppDeps: "D",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -177,6 +186,7 @@ describe("ResultsStore", () => {
         coverageMode: "procedure",
         testAppHash: "T",
         testAppProven: true,
+        testAppDeps: "D",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -204,6 +214,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -235,6 +246,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -276,6 +288,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -325,6 +338,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -410,6 +424,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -443,6 +458,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -501,7 +517,7 @@ describe("ResultsStore", () => {
     store.finishRun(1, { batchCount: 1, baselineGreen: true });
     const seen: unknown[] = [];
     expect(
-      store.priorSurvivorKeys("P", "procedure", "T", [], [], {
+      store.priorSurvivorKeys("P", "procedure", T_APP, [], [], {
         coverageModeChanged: (i) => seen.push(i),
       }).keys.size,
     ).toBe(0);
@@ -557,18 +573,19 @@ describe("ResultsStore", () => {
     expect(store.getRun(1)?.testAppHash).toBeNull();
     store.recordMutant(1, mutantRow("survived"));
     store.finishRun(1, { batchCount: 1, baselineGreen: true });
-    for (const current of ["T", undefined]) {
+    for (const current of [T_APP, undefined]) {
       const seen: unknown[] = [];
       const keys = store.priorSurvivorKeys("P", "procedure", current, [], [], {
         testAppChanged: (i) => seen.push(i),
       }).keys;
       expect(keys.size).toBe(0);
-      expect(seen).toEqual([{ runId: 1, testAppHash: null, proven: false }]);
+      expect(seen).toEqual([{ runId: 1, testAppHash: null, proven: false, deps: null }]);
     }
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "package:abc",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -662,21 +679,25 @@ describe("ResultsStore", () => {
     const store = new ResultsStore(path);
     const cols = store.db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
     expect(cols.map((c) => c.name)).toContain("test_app_proven");
+    // R496: the column is added too, and the old row reads NULL.
+    expect(cols.map((c) => c.name)).toContain("test_app_deps");
+    expect(store.getRun(1)?.testAppDeps).toBeNull();
     expect(store.getRun(1)?.testAppHash).toBe("package:a");
     expect(store.getRun(1)?.testAppProven).toBe(false);
     store.setCarryHidden(1, NO_HIDDEN);
     store.recordMutant(1, mutantRow("survived"));
     store.finishRun(1, { batchCount: 1, baselineGreen: true });
     const seen: unknown[] = [];
-    const keys = store.priorSurvivorKeys("P", "procedure", "package:a", [], [], {
+    const A = { hash: "package:a", deps: "D" };
+    const keys = store.priorSurvivorKeys("P", "procedure", A, [], [], {
       testAppChanged: (i) => seen.push(i),
     }).keys;
     expect(keys.size).toBe(0);
-    expect(seen).toEqual([{ runId: 1, testAppHash: "package:a", proven: false }]);
+    expect(seen).toEqual([{ runId: 1, testAppHash: "package:a", proven: false, deps: null }]);
     // Control: proven again (and given the facts later checks need), the same row lends.
-    store.setRunTestAppHash(1, "package:a", true);
+    store.setRunTestAppHash(1, "package:a", true, "D");
     store.db.run("UPDATE runs SET build_symbols = '[]', twin_tuples = '[]' WHERE id = 1");
-    expect(store.priorSurvivorKeys("P", "procedure", "package:a", [], []).keys.size).toBe(1);
+    expect(store.priorSurvivorKeys("P", "procedure", A, [], []).keys.size).toBe(1);
     store.close();
     rmSync(path, { force: true });
   });
@@ -687,6 +708,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "package:a",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -696,13 +718,106 @@ describe("ResultsStore", () => {
     });
     store.recordMutant(runId, mutantRow("survived"));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "package:a", [], []).keys.size).toBe(1);
+    expect(
+      store.priorSurvivorKeys("/p", "procedure", { hash: "package:a", deps: "D" }, [], []).keys
+        .size,
+    ).toBe(1);
     const seen: unknown[] = [];
-    const keys = store.priorSurvivorKeys("/p", "procedure", "package:b", [], [], {
-      testAppChanged: (i) => seen.push(i),
-    }).keys;
+    const keys = store.priorSurvivorKeys(
+      "/p",
+      "procedure",
+      { hash: "package:b", deps: "D" },
+      [],
+      [],
+      { testAppChanged: (i) => seen.push(i) },
+    ).keys;
     expect(keys.size).toBe(0);
-    expect(seen).toEqual([{ runId, testAppHash: "package:a", proven: true }]);
+    expect(seen).toEqual([{ runId, testAppHash: "package:a", proven: true, deps: "D" }]);
+    store.close();
+  });
+
+  // R496 (F2, F4): the same proven test app against another dependency closure, or a run that
+  // recorded no fingerprint (an R495-era row), lends no survivor.
+  test("R496: priorSurvivorKeys returns nothing across a dependency change, or from NULL deps", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      coverageMode: "procedure",
+      testAppHash: "package:a",
+      testAppProven: true,
+      testAppDeps: "one",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+      carryHidden: NO_HIDDEN,
+    });
+    store.recordMutant(runId, mutantRow("survived"));
+    store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+    const seen: unknown[] = [];
+    const ask = (deps: string) =>
+      store.priorSurvivorKeys("/p", "procedure", { hash: "package:a", deps }, [], [], {
+        testAppChanged: (i) => seen.push(i),
+      }).keys.size;
+    expect(ask("one")).toBe(1);
+    expect(ask("two")).toBe(0);
+    expect(seen).toEqual([{ runId, testAppHash: "package:a", proven: true, deps: "one" }]);
+    // An R495-era row: proven, the same hash, NULL deps.
+    store.db.run("UPDATE runs SET test_app_deps = NULL WHERE id = ?", [runId]);
+    expect(ask("one")).toBe(0);
+    store.close();
+  });
+
+  // R496: the invariant `test_app_proven = 1` implies `test_app_deps IS NOT NULL`, at both writers.
+  test("R496: a run is recorded proven only with a dependency fingerprint, and a clear clears all three", () => {
+    const store = new ResultsStore(":memory:");
+    const base = {
+      coverageMode: "procedure" as const,
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+    };
+    const noDeps = store.createRun({ ...base, testAppHash: "package:a", testAppProven: true });
+    expect(store.getRun(noDeps)?.testAppProven).toBe(false);
+    expect(store.getRun(noDeps)?.testAppDeps).toBeNull();
+    const unproven = store.createRun({ ...base, testAppHash: "package:a", testAppDeps: "D" });
+    expect(store.getRun(unproven)?.testAppDeps).toBeNull();
+    store.setRunTestAppHash(noDeps, "package:a", true, null);
+    expect(store.getRun(noDeps)?.testAppProven).toBe(false);
+    store.setRunTestAppHash(noDeps, "package:a", true, "D");
+    expect(store.getRun(noDeps)).toMatchObject({
+      testAppHash: "package:a",
+      testAppProven: true,
+      testAppDeps: "D",
+    });
+    store.setRunTestAppHash(noDeps, null, false, null);
+    expect(store.getRun(noDeps)).toMatchObject({
+      testAppHash: null,
+      testAppProven: false,
+      testAppDeps: null,
+    });
+    store.close();
+  });
+
+  // R496 F9: a run's pre-lease digests withdrawn when its dependencies moved under the lease.
+  test("R496: clearRunTestDigests clears the digests and their parts, and refuses an unknown run", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+      testDigests: { "1::m": "a" },
+      testDigestParts: { dependencies: "one" },
+    });
+    store.clearRunTestDigests(runId);
+    expect(store.testDigests(runId)).toBeNull();
+    expect(store.testDigestParts(runId)).toBeNull();
+    expect(() => store.clearRunTestDigests(runId + 1)).toThrow(/no run/);
     store.close();
   });
 
@@ -736,6 +851,7 @@ describe("ResultsStore", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -821,6 +937,7 @@ CREATE TABLE IF NOT EXISTS mutants (
           coverageMode: "procedure",
           testAppHash: "T",
           testAppProven: true,
+          testAppDeps: "D",
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -831,7 +948,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         store.recordMutant(runId, mutantRow("survived"));
         store.finishRun(runId, { batchCount: 1, baselineGreen: true });
         // The identity must round-trip through the new column, not silently key on the old tuple.
-        expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(
+        expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(
           new Set(["abc123|Sample|Post|conditional-boundary|1"]),
         );
         store.close();
@@ -864,6 +981,7 @@ CREATE TABLE IF NOT EXISTS mutants (
           coverageMode: "procedure",
           testAppHash: "T",
           testAppProven: true,
+          testAppDeps: "D",
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -899,6 +1017,7 @@ CREATE TABLE IF NOT EXISTS mutants (
           coverageMode: "procedure",
           testAppHash: "T",
           testAppProven: true,
+          testAppDeps: "D",
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -939,6 +1058,7 @@ CREATE TABLE IF NOT EXISTS mutants (
           coverageMode: "procedure",
           testAppHash: "T",
           testAppProven: true,
+          testAppDeps: "D",
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -963,6 +1083,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         coverageMode: "procedure",
         testAppHash: "T",
         testAppProven: true,
+        testAppDeps: "D",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -983,6 +1104,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         coverageMode: "procedure",
         testAppHash: "T",
         testAppProven: true,
+        testAppDeps: "D",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -1024,6 +1146,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1061,6 +1184,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "Q",
@@ -1085,6 +1209,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1102,6 +1227,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1112,6 +1238,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1180,6 +1307,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1219,6 +1347,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1236,6 +1365,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1256,6 +1386,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1266,6 +1397,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1289,6 +1421,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1300,13 +1433,14 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     store.recordArtifact(a, artifact(0, A0, { appPath: "x.app", instrumentedDir: "d" }));
     store.recordMutant(a, mutantRow("survived", { carried: false, coveringTests: [] }));
     store.finishRun(a, { batchCount: 1, baselineGreen: true });
-    const aKeys = store.priorSurvivorKeys("P", "procedure", "T", [], []);
+    const aKeys = store.priorSurvivorKeys("P", "procedure", T_APP, [], []);
     expect(aKeys.keys.size).toBe(1);
     // Run B, the verify row, created exactly as decision 4 says.
     const b = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1323,7 +1457,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       carryableVerdicts: [...CARRYABLE_VERDICTS],
     };
     expect(store.findResumableRun(query)).toBeNull();
-    expect(store.priorSurvivorKeys("P", "procedure", "T", [], [])).toEqual(aKeys);
+    expect(store.priorSurvivorKeys("P", "procedure", T_APP, [], [])).toEqual(aKeys);
     expect(store.artifactRecordById(A0)?.runId).toBe(a);
 
     // Negative control: a row with A's backend and fingerprint and a survivor IS found, so the
@@ -1332,6 +1466,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",

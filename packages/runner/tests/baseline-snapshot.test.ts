@@ -195,6 +195,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
       appVersion: "1",
       testAppHash: "package:t",
       testAppProven: true,
+      testAppDeps: "D",
     });
     const ref = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
     store.recordBaselineSnapshot({
@@ -211,11 +212,11 @@ describe("ResultsStore baseline snapshots (R192)", () => {
       testAppHash: "package:t",
       baseline: [{ ref, verdict: { ref, outcome: "pass", durationMs: 34 } }],
     });
-    const found = store.findBaselineSnapshot("b", "package:t", "procedure");
+    const found = store.findBaselineSnapshot("b", "package:t", "D", "procedure");
     expect(found?.runId).toBe(id);
     expect(found?.baseline[0]?.verdict.durationMs).toBe(34);
-    expect(store.findBaselineSnapshot("b", "package:other", "procedure")).toBeNull();
-    expect(store.findBaselineSnapshot("other", "package:t", "procedure")).toBeNull();
+    expect(store.findBaselineSnapshot("b", "package:other", "D", "procedure")).toBeNull();
+    expect(store.findBaselineSnapshot("other", "package:t", "D", "procedure")).toBeNull();
   });
 
   // R318 (final review I1): R318 leaves the emitted AL byte-identical, so a run of the previous
@@ -235,6 +236,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
       appVersion: "1",
       testAppHash: runTestAppHash,
       testAppProven: true,
+      testAppDeps: "D",
     });
     const ref = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
     store.recordBaselineSnapshot({
@@ -249,33 +251,33 @@ describe("ResultsStore baseline snapshots (R192)", () => {
 
   test("R318: a snapshot recorded at the current identity scheme is reused", () => {
     const { store, id } = snapshotAtScheme(IDENTITY_SCHEME);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure")?.runId).toBe(id);
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")?.runId).toBe(id);
   });
 
   test("R318: a snapshot recorded at the previous identity scheme is NOT reused", () => {
     const { store } = snapshotAtScheme(IDENTITY_SCHEME - 1);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")).toBeNull();
   });
 
   // R354 run 002: a snapshot is reused only by a session of the run's own coverage mode, and a run
   // from before R354 (NULL) matches no mode.
   test("R354: a snapshot is found only under its run's coverage mode; NULL matches none", () => {
     const { store, id } = snapshotAtScheme(IDENTITY_SCHEME);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure")?.runId).toBe(id);
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")?.runId).toBe(id);
     for (const other of ["none", "line", "fenced", "al-runner"] as const) {
-      expect(store.findBaselineSnapshot("b", "package:t", other)).toBeNull();
+      expect(store.findBaselineSnapshot("b", "package:t", "D", other)).toBeNull();
     }
     store.db.run("UPDATE runs SET coverage_mode = NULL WHERE id = ?", [id]);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")).toBeNull();
   });
 
   // R492: a snapshot is trusted only when its own run recorded the same test app. An env-tool run
   // served P2 while P1 was installed keyed its snapshot under P2 but now records NULL (unproven).
   test("R492: a snapshot whose run recorded another or no test app is not reused", () => {
     const { store, id } = snapshotAtScheme(IDENTITY_SCHEME, "package:other");
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")).toBeNull();
     store.db.run("UPDATE runs SET test_app_hash = NULL WHERE id = ?", [id]);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")).toBeNull();
   });
 
   // R495 (replaces R492's digests marker): every session reuses only a snapshot whose run PROVED its
@@ -283,12 +285,23 @@ describe("ResultsStore baseline snapshots (R192)", () => {
   // another app than the one it measured; digests no longer stand in for the proof.
   test("R495: a snapshot whose run did not prove its test app is not reused, digests or not", () => {
     const { store, id } = snapshotAtScheme(IDENTITY_SCHEME);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure")?.runId).toBe(id);
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")?.runId).toBe(id);
     store.db.run("UPDATE runs SET test_app_proven = NULL WHERE id = ?", [id]);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")).toBeNull();
     store.setRunTestDigests(id, { "Tests.A": "d" }, null);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
-    store.setRunTestAppHash(id, "package:t", true);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure")?.runId).toBe(id);
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")).toBeNull();
+    store.setRunTestAppHash(id, "package:t", true, "D");
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")?.runId).toBe(id);
+  });
+
+  // R496 T3s (F3, F4): the same proven test app against another dependency closure is another test
+  // app, so its snapshot is not reused; a run that recorded no fingerprint (an R495-era row) lends
+  // none either.
+  test("R496: a snapshot whose run recorded other or NULL dependencies is not reused", () => {
+    const { store, id } = snapshotAtScheme(IDENTITY_SCHEME);
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")?.runId).toBe(id);
+    expect(store.findBaselineSnapshot("b", "package:t", "other", "procedure")).toBeNull();
+    store.db.run("UPDATE runs SET test_app_deps = NULL WHERE id = ?", [id]);
+    expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")).toBeNull();
   });
 });
