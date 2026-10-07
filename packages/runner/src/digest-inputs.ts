@@ -42,7 +42,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { readPackageEntry } from "./app-package";
-import { CONTROL_APP_ID } from "./harness";
+import { CONTROL_APP_ID, UnfilteredExtensionsQueryError } from "./harness";
 import { readAppIdentity } from "./published-test-app";
 
 export interface AppDependency {
@@ -383,10 +383,13 @@ export async function dependencyFingerprint(
 }
 
 /**
- * R-385 D2 (R496: any publisher's): a package the server serves must be the one INSTALLED: exactly one installed
- * row, at the hashed manifest's version. `dev/packages` returns "a version you have", which during
- * a staged upgrade may be published but not installed; hashing that would call it resident.
- * R373: the env-tool deferred digest step applies it to every app its hook published.
+ * R-385 D2 (R496: any publisher's): a package the server serves must be the one INSTALLED: exactly
+ * one installed row, at the hashed manifest's version. `dev/packages` returns "a version you have",
+ * which during a staged upgrade may be published but not installed; hashing that would call it
+ * resident. R373: the env-tool deferred digest step applies it to every app its hook published.
+ * R496: an `UnfilteredExtensionsQueryError` (a read not filtered by one app id, refused before it
+ * was sent) is a caller-contract violation inside LethAL, so it propagates: it is never read as
+ * "not installed", which would only make the run unproven.
  */
 export async function checkInstalled(
   mode: Extract<MicrosoftMode, { kind: "bytes" }>,
@@ -397,6 +400,7 @@ export async function checkInstalled(
   try {
     installed = await mode.installed(dep.id);
   } catch (err) {
+    if (err instanceof UnfilteredExtensionsQueryError) throw err;
     throw new DependencyUnreadableError(
       `the installed version of "${dep.name}" (${dep.id}) could not be read: ${message(err)}`,
     );

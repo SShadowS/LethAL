@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
+import { type MicrosoftMode, dependencyFingerprint } from "../src/digest-inputs";
 import {
   HarnessVerificationError,
   HarnessVerifier,
   UnfilteredExtensionsQueryError,
 } from "../src/harness";
+import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 
 /**
  * R433 / R-385 T0: BC's automation `extensions` list, asked for every row (no `$filter`) or
@@ -264,5 +267,104 @@ describe("fetchExtensionInstalled refuses a non-GUID id before any request (R433
     for (const u of ext) {
       expect(new URL(u).searchParams.get("$filter")).toBe(`id eq ${GUID}`);
     }
+  });
+});
+
+/**
+ * R496: the dependency fingerprint now checks EVERY extension it hashes installed (partner ones and
+ * transitive ones too), so those reads multiply. Each must be the per-app `$filter=id eq <GUID>`
+ * read, never a list, and a read that is not one is refused before it is sent and aborts the walk
+ * (never read as "not installed").
+ */
+describe("R496: the fingerprint's installed checks are per-app filtered reads only", () => {
+  const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+  const A = { id: "aaaaaaaa-0000-4000-8000-00000000000a", name: "Partner A", publisher: "P" };
+  const B = { id: "bbbbbbbb-0000-4000-8000-00000000000b", name: "Partner B", publisher: "P" };
+  const pkg = (app: typeof A, dep?: typeof B) =>
+    new Uint8Array(
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${app.id}" Name="${app.name}" Publisher="${app.publisher}" Version="1.0.0.0" />${
+          dep === undefined
+            ? ""
+            : `<Dependencies><Dependency Id="${dep.id}" Name="${dep.name}" Publisher="${dep.publisher}" MinVersion="1.0.0.0" /></Dependencies>`
+        }</Package>`,
+        "src/X.al": `// ${app.name}`,
+      }),
+    );
+  /** The test app depends on A, which depends on B: both partner apps, B transitive. */
+  const root = {
+    dependencies: [{ ...A, version: "1.0.0.0" }],
+    application: undefined,
+    platform: undefined,
+    buildInputs: "",
+  };
+  const read = async (dep: { readonly id: string }) =>
+    dep.id === A.id ? [pkg(A, B)] : dep.id === B.id ? [pkg(B)] : null;
+  /** A server whose extensions endpoint answers the filtered id with one installed 1.0.0.0 row. */
+  function server() {
+    const urls: string[] = [];
+    const fetchFn = (async (url: unknown) => {
+      urls.push(String(url));
+      const u = new URL(String(url));
+      if (!u.pathname.includes("/extensions")) {
+        return new Response(JSON.stringify({ value: [{ id: "c-1", name: "CRONUS Danmark A/S" }] }));
+      }
+      const id = (u.searchParams.get("$filter") ?? "").replace(/^id eq /, "");
+      return new Response(
+        JSON.stringify({
+          value: [
+            {
+              id,
+              isInstalled: true,
+              versionMajor: 1,
+              versionMinor: 0,
+              versionBuild: 0,
+              versionRevision: 0,
+            },
+          ],
+        }),
+      );
+    }) as typeof fetch;
+    return { urls, fetchFn };
+  }
+  const bytesMode = (installed: (id: string) => Promise<readonly string[]>): MicrosoftMode => {
+    const base = fakeMicrosoftMode();
+    if (base.kind !== "bytes") throw new Error("fakeMicrosoftMode is not bytes mode");
+    return { ...base, installed };
+  };
+
+  // Allowed direction: if the guard refused every extensions read, this walk could not finish.
+  test("every partner extension in the closure is read once, each by its own `id eq <GUID>`", async () => {
+    const { urls, fetchFn } = server();
+    const v = new HarnessVerifier(CFG, fetchFn);
+    const fp = await dependencyFingerprint(
+      root,
+      read,
+      bytesMode((id) => v.fetchInstalledVersions(id)),
+    );
+    expect(fp).toMatch(/^[0-9a-f]{64}$/);
+    const ext = urls.filter((u) => u.toLowerCase().includes("extensions"));
+    expect(ext.map((u) => new URL(u).searchParams.get("$filter")).sort()).toEqual([
+      `id eq ${A.id}`,
+      `id eq ${B.id}`,
+    ]);
+  });
+
+  // Refused direction: an installed read that would go out unfiltered is refused before any request
+  // and aborts the fingerprint with the typed error (it is not turned into "unproven").
+  test("an installed read that is not filtered by one GUID is refused before it is sent, and propagates", async () => {
+    const { urls, fetchFn } = server();
+    const v = new HarnessVerifier(CFG, fetchFn);
+    const err = await dependencyFingerprint(
+      root,
+      read,
+      bytesMode(async () => {
+        await rowsOf(v)(EXT, "extensions list");
+        return ["1.0.0.0"];
+      }),
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(Object.getPrototypeOf(UnfilteredExtensionsQueryError.prototype)).toBe(Error.prototype);
+    expect(urls.filter((u) => u.toLowerCase().includes("extensions"))).toEqual([]);
   });
 });
