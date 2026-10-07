@@ -662,6 +662,213 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
       expect(tagged(files, [])).toEqual([PLAIN]);
     });
 
+    // R485: an `#if`-wrapped object is read for THIS table when it parses cleanly, and by its whole
+    // text for any table when it does not. Each test names the revert that turns it red.
+    describe("unindexed objects, scoped to the table (R485)", () => {
+      const wrap = (object: string): string => `#if X\n${object}\n#endif\n`;
+      const subOn = (target: string, event: string): string =>
+        `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, ${target}, '${event}', '', false, false)]\n  local procedure X(var Rec: Record "Par"; RunTrigger: Boolean) begin end;\n}`;
+      const SKIPPED_MODIFY = "true->false run-trigger-skipped-modify";
+
+      // Revert: drop the clean-codeunit `subscribes(n)` arm (return false there).
+      it("an unindexed subscriber of THIS table keeps the tag", () => {
+        const s = wrap(subOn(`Database::"Par"`, "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Revert: the old any-table text rule for a clean codeunit.
+      it("an unindexed subscriber of ANOTHER table drops it", () => {
+        const s = wrap(subOn(`Database::"Oth"`, "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // A custom event's subscriber, its signature matching the publisher's (no parameters).
+      const customSub = (objectType: string, target: string): string =>
+        `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::${objectType}, ${target}, 'OnAfterModifyCheck', '', false, false)]\n  local procedure Observe() begin Error('forced'); end;\n}`;
+      // Sol, R-485 run 001: a split-header extension (invisible, R494) raises a CUSTOM event from
+      // its OnAfterModify, and a wrapped codeunit subscribes to it on this table.
+      const splitExt = (table: string, body = "OnAfterModifyCheck();", vars = "") =>
+        `#if A\ntableextension 50305 "Ext A" extends "${table}"\n#else\ntableextension 50305 "Ext B" extends "${table}"\n#endif\n{\n    trigger OnAfterModify()\n${vars}    begin\n        ${body}\n    end;\n\n    [IntegrationEvent(false, false)]\n    local procedure OnAfterModifyCheck()\n    begin\n    end;\n}\n`;
+      it("sol run 001: a hidden extension's custom event, subscribed on THIS table, keeps it", () => {
+        const files = {
+          "P.al": par(""),
+          "X.al": splitExt("Par"),
+          "S.al": wrap(customSub("Table", `Database::"Par"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Sol, R-485 run 002: the hidden extension calls a CODEUNIT's event, so the subscriber's
+      // object type is Codeunit. Revert: drop the `opaque` guard (read structurally anyway).
+      it("sol run 002: a hidden extension calling a codeunit's event keeps it", () => {
+        const publisher = `codeunit 50303 "Publisher"\n{\n    [IntegrationEvent(false, false)]\n    procedure OnAfterModifyCheck()\n    begin\n    end;\n}\n`;
+        const files = {
+          "P.al": par(""),
+          "X.al": splitExt(
+            "Par",
+            "Publisher.OnAfterModifyCheck();",
+            `    var\n        Publisher: Codeunit "Publisher";\n`,
+          ),
+          "C.al": publisher,
+          "S.al": wrap(customSub("Codeunit", `Codeunit::"Publisher"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Nothing hidden: the structural reading decides. Revert: decide the clean codeunit by
+      // `subscribes(n)` (the two built-in event names only).
+      it("nothing hidden: a subscriber to a custom event of THIS table keeps it", () => {
+        const files = {
+          "P.al": par(""),
+          "S.al": wrap(customSub("Table", `Database::"Par"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Control. Revert: keep the tag for a subscriber of any table.
+      it("nothing hidden: a subscriber to a custom event of ANOTHER table drops it", () => {
+        const files = {
+          "P.al": par(""),
+          "S.al": wrap(customSub("Table", `Database::"Oth"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // A half-parsed object with only a MISSING node (no ERROR node, so not in `unparsedObjects`)
+      // makes the project opaque too: the other-table subscriber is then read by its text and
+      // keeps. Revert: drop `unindexedObjects.some((n) => n.hasError)` from `opaque`.
+      // A codeunit missing its `var` semicolon: a MISSING node and no ERROR node (asserted).
+      const missingOnly = `codeunit 50306 "Broken"\n{\n    procedure X()\n    var N: Integer\n    begin\n    end;\n}`;
+      const expectMissingOnly = (src: string): void => {
+        const root = wrapRoot(parseAL(src));
+        const kinds = (n: ALSyntaxNode): { missing: boolean; error: boolean } =>
+          n.children.reduce(
+            (acc, c) => {
+              const k = kinds(c);
+              return { missing: acc.missing || k.missing, error: acc.error || k.error };
+            },
+            { missing: n.isMissing, error: n.rawKind === "ERROR" },
+          );
+        expect(root.hasError).toBe(true);
+        expect(kinds(root)).toEqual({ missing: true, error: false });
+      };
+      for (const [where, broken] of [
+        ["an #if-wrapped", wrap(missingOnly)],
+        ["an indexed (unwrapped)", missingOnly],
+      ] as const) {
+        // Revert: drop `symbols.parseDamaged` from `opaque`.
+        it(`${where} object with only a MISSING node makes the project opaque: the old text rule keeps it`, () => {
+          expectMissingOnly(broken);
+          const files = {
+            "P.al": par(""),
+            "B.al": broken,
+            "S.al": wrap(customSub("Table", `Database::"Oth"`)),
+            "O.al": caller("Par.Modify(false);"),
+          };
+          expect(tagged(files)).toEqual([FORCED]);
+        });
+      }
+      // Sol, run 003: a QUOTED target is a name, never an id. Revert: normalise any all-digit text
+      // as a number (then "050301" reads as 50301, matches neither name nor id, and drops).
+      it("a subscriber naming THIS table by a quoted all-digit NAME keeps it", () => {
+        const digitsTable = `table 50300 "050301"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+        const s = wrap(
+          `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::"050301", 'OnAfterModifyEvent', '', false, false)]\n  local procedure X(var Rec: Record "050301"; RunTrigger: Boolean) begin end;\n}`,
+        );
+        const files = {
+          "P.al": digitsTable,
+          "S.al": s,
+          "O.al": caller(`D.Modify(false);`, `D: Record "050301";`),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Revert: delete the integer branch (a bare id then counts as unreadable and keeps).
+      it("a subscriber naming ANOTHER table by a bare id drops it", () => {
+        const s = wrap(subOn("50399", "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // Revert: compare the id as text (`targetKey` without the integer normalisation).
+      it("a subscriber naming THIS table by a leading-zero id keeps it", () => {
+        const s = wrap(subOn("050300", "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Only an `[EventSubscriber]` observes: a clean wrapped codeunit whose attributes are all
+      // something else drops it. Revert: count any attribute as a subscriber of this table.
+      it("an unindexed codeunit with only non-subscriber attributes drops it", () => {
+        const s = wrap(
+          `codeunit 50304 "Helper"\n{\n    [Scope('OnPrem')]\n    procedure Touch(var Rec: Record "Par")\n    begin\n    end;\n}`,
+        );
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // Revert: drop `subscribesToTable`'s integer-target match.
+      it("an unindexed subscriber naming the table by a bare id keeps it", () => {
+        const s = wrap(subOn("50300", "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Revert: the old any-table substring rule for a clean tableextension.
+      it("an unindexed tableextension of ANOTHER table whose text names this one drops it", () => {
+        const x = wrap(
+          `tableextension 50306 "Oth Ext" extends "Oth"\n{\n    procedure P()\n    var R: Record "Par";\n    begin\n    end;\n}`,
+        );
+        const files = { "P.al": par(""), "X.al": x, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // Revert: read a `hasError` object structurally (drop the `!n.hasError &&` guards).
+      it("a half-parsed unindexed tableextension naming the table keeps it by its whole text", () => {
+        const x = wrap(
+          `tableextension 50306 "Q Ext" extends Microsoft.Sales.Par\n{\n    trigger OnBeforeModify()\n    begin\n    end;\n}`,
+        );
+        const files = { "P.al": par(""), "X.al": x, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Revert: make `textObserves` return false for an unparsed (ERROR) object.
+      // The codeunit half of the `hasError` guard alone. Its subscription names ANOTHER table, so
+      // only the whole-text fallback keeps the tag. Revert: drop `!n.hasError &&` on the codeunit
+      // branch.
+      it("a half-parsed unindexed codeunit keeps it by its whole text", () => {
+        const s = wrap(
+          `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::"Oth", 'OnAfterModifyEvent', '', false, false)]\n  local procedure X(var Rec: Record "Par"; RunTrigger: Boolean)\n  var N: Integer;\n  begin\n    N := ;\n  end;\n}`,
+        );
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      it("an unparsed ERROR object still keeps the any-table text rule", () => {
+        const broken = `@@ OnBeforeModify @@ )))\n`;
+        const files = { "P.al": par(""), "B.al": broken, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Any kind but a clean tableextension or codeunit keeps the any-table text rule. Revert:
+      // return false for other kinds instead of `textObserves`.
+      it("an unindexed object of another kind naming On(Before|After)Modify keeps it by its text", () => {
+        const pg = wrap(
+          `page 50308 "Par Page"\n{\n    trigger OnOpenPage()\n    begin\n        OnBeforeModifyShown();\n    end;\n    local procedure OnBeforeModifyShown() begin end;\n}`,
+        );
+        const files = { "P.al": par(""), "G.al": pg, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // The insert kind, both directions. Revert: judge insert by another kind's events.
+      it("insert: an unindexed subscriber keeps it only for THIS table", () => {
+        const mine = wrap(subOn(`Database::"Par"`, "OnAfterInsertEvent"));
+        const other = wrap(subOn(`Database::"Oth"`, "OnAfterInsertEvent"));
+        const o = caller("Par.Insert(false);");
+        expect(tagged({ "P.al": par(""), "S.al": mine, "O.al": o })).toEqual([FORCED]);
+        expect(tagged({ "P.al": par(""), "S.al": other, "O.al": o })).toEqual([PLAIN]);
+      });
+      // A SKIPPED tag (`skipCanRaise` shares `projectObserves`), both directions.
+      // No `OnModify`, so only an observer can keep the skipped tag.
+      it("a skipped modify: an unindexed subscriber keeps it only for THIS table", () => {
+        const mine = wrap(subOn(`Database::"Par"`, "OnAfterModifyEvent"));
+        const other = wrap(subOn(`Database::"Oth"`, "OnAfterModifyEvent"));
+        const o = caller("Par.ModifyAll(Amount, 1, true);");
+        expect(tagged({ "P.al": par(""), "S.al": mine, "O.al": o })).toEqual([SKIPPED_MODIFY]);
+        expect(tagged({ "P.al": par(""), "S.al": other, "O.al": o })).toEqual(["true->false -"]);
+      });
+    });
+
     // Revert: drop the unindexed-object check in `projectObserves`.
     it("keeps the tag when an #if-wrapped project tableextension of the table exists", () => {
       const wrapped = `#if X\ntableextension 50305 "Par Ext" extends "Par"\n{\n}\n#endif\n`;
