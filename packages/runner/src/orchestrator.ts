@@ -1886,7 +1886,7 @@ async function prepareArtifactDir(args: {
     args.subset === undefined ? args.files : narrowFilesToSubset(args.files, args.subset);
   // R219: ONE flat-name map over the whole project, for both writers: built over the batch's own
   // files, a duplicate whose twin is not instrumented here would get another name than its copy.
-  const flatNames = flatNamesFor(await batchAlFiles(args.projectDir, args.source));
+  const flatNames = await batchFlatNames(args.projectDir, args.source);
   await writeInstrumentedProject({
     targetDir: args.targetDir,
     files,
@@ -9572,6 +9572,19 @@ function isToolResourcePath(rel: string): boolean {
   return rel.split(/[\\/]/).some((segment) => segment.startsWith("."));
 }
 
+/**
+ * R219: THE flat-name map of a batch, over the project's `.al` files as the batch copies them.
+ * Every writer of one batch takes this one instance: `writeInstrumentedProject`'s `flatNames` and
+ * `prepareBatchProject`'s last argument. Two maps over different file lists would name a duplicate
+ * two ways, and alc would see one file twice (sol run 001, `compile-only.ts`).
+ */
+export async function batchFlatNames(
+  projectDir: string,
+  source?: ReadonlyMap<string, Buffer>,
+): Promise<FlatNames> {
+  return flatNamesFor(await batchAlFiles(projectDir, source));
+}
+
 /** The target's `.al` files a batch directory holds: the generation snapshot's when given (C02-06),
  *  else `targetAlFiles`. R219: also the list every flat name is decided over. */
 async function batchAlFiles(
@@ -9644,8 +9657,15 @@ export async function prepareBatchProject(
     if (source !== undefined) await writeFile(dest, snapshotBytes(source, rel));
     else await copyFile(join(projectDir, rel), dest);
   }
-  const sidecar = flatNamesSidecar(flatNames.renamed);
-  if (sidecar !== undefined) await writeFile(join(batchDir, FLAT_NAMES_FILENAME), sidecar);
+  // R219 (sol run 001): `FLAT_NAMES_FILENAME` at the batch root is LethAL's, so a project resource
+  // that would land there, copied as it is or rebased, is refused rather than overwriting it or
+  // being overwritten. The record itself is written last, below.
+  const reserved = FLAT_NAMES_FILENAME.toLowerCase();
+  const refuseReserved = (rel: string): never => {
+    throw new Error(
+      `cannot build the batch project: the project resource "${rel}" would be written to the batch directory as "${FLAT_NAMES_FILENAME}", a name LethAL reserves for its record of renamed .al files (R219). Rename the resource.`,
+    );
+  };
 
   // Every directory that holds at least one `.al` file. A resource named relative to an AL file is
   // named relative to ITS directory, and the `.al` files above were just flattened onto the batch
@@ -9680,6 +9700,7 @@ export async function prepareBatchProject(
     if (basename(lower) === "app.json") continue;
     if (isToolResourcePath(rel)) continue;
     if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
+    if (lower.replaceAll("\\", "/") === reserved) refuseReserved(rel);
     const dest = join(batchDir, rel);
     await mkdir(dirname(dest), { recursive: true });
     await copyFile(join(projectDir, rel), dest);
@@ -9691,6 +9712,7 @@ export async function prepareBatchProject(
     const tail = relative(owner, rel);
     if (join(batchDir, tail) === dest) continue;
     const key = tail.toLowerCase();
+    if (key.replaceAll("\\", "/") === reserved) refuseReserved(rel);
     const group = rebased.get(key) ?? { tail, owners: [] };
     group.owners.push(rel);
     rebased.set(key, group);
@@ -9715,6 +9737,8 @@ export async function prepareBatchProject(
     await mkdir(dirname(rebasedDest), { recursive: true });
     await copyFile(join(projectDir, only), rebasedDest);
   }
+  const sidecar = flatNamesSidecar(flatNames.renamed);
+  if (sidecar !== undefined) await writeFile(join(batchDir, FLAT_NAMES_FILENAME), sidecar);
   return pathChanges;
 }
 

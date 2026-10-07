@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { FLAT_NAMES_FILENAME, flatNamesFor } from "@lethal/schemata";
-import { alRunnerCoverageFrom, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
+import {
+  alRunnerCoverageFrom,
+  alRunnerCoverageFromServer,
+  buildAlRunnerCoverageIndex,
+} from "../src/al-runner-coverage";
 import { AlcCompileError, ArtifactCompiler } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -163,15 +167,106 @@ describe("R219: two same-basename files in different directories", () => {
     );
   });
 
-  test("al-runner coverage on a flat name is credited to that file's object", async () => {
-    const index = await buildAlRunnerCoverageIndex(run.batch);
-    // `if X > 1 then` is line 5 of each file; al-runner names the file it compiled.
-    const hit = (file: string) =>
-      alRunnerCoverageFrom([{ file: `/bundle/${file}`, line: 5, hits: 1 }], index).entries.map(
-        (e) => e.objectId,
-      );
-    expect(hit(names.flatOf(SALES))).toEqual([50100]);
-    expect(hit(names.flatOf(PURCHASE))).toEqual([50101]);
+  // Sol run 001 (1, 4). MEASURED on al-runner c39ad5de (2026-10-07, probe in the lane scratchpad),
+  // both transports: for a duplicate pair written flat, al-runner labels coverage with the path it
+  // knows for this app id, either the project SOURCE path (`proj/Sales/Helper.Codeunit.al`) or a
+  // batch's own flat path (`batch/Helper.Codeunit.8de4e0ea.al`); lines and scopes are the compiled
+  // file's. Both shapes must credit the right file, with complete entries, at emitted lines.
+  describe("al-runner coverage of a renamed file, in each measured path shape and transport", () => {
+    /**
+     * The 1-based line of the emitted `file` holding `needle` in the ORIGINAL arm, the dispatch's
+     * final `end else begin` (the statements an unmutated run executes), verified: exactly one
+     * such arm, and the line's text is the statement itself.
+     */
+    const lineOf = async (file: string, needle: string): Promise<number> => {
+      const lines = (await readFile(join(run.batch, file), "utf8")).split("\n");
+      const arms = lines.flatMap((l, i) => (l.trim() === "end else begin" ? [i] : []));
+      expect(arms).toHaveLength(1);
+      const start = arms[0] ?? 0;
+      const at = lines.findIndex((l, i) => i > start && l.includes(needle));
+      expect(lines[at]?.trim()).toBe(needle === "if X > 1 then" ? needle : `${needle};`);
+      return at + 1;
+    };
+    // Asymmetric, as the probe's two tests were: Sales takes the `exit(1)` arm, Purchase `exit(0)`.
+    const covered = async (path: string) => {
+      const flat = names.flatOf(path);
+      return [
+        await lineOf(flat, "if X > 1 then"),
+        await lineOf(flat, path === SALES ? "exit(1)" : "exit(0)"),
+      ];
+    };
+    const shapes = [
+      ["the project source path", (p: string) => `/work/somewhere/app/${p}`],
+      ["a batch's own flat path", (p: string) => `/tmp/lethal-x/run-1-batch-0/${names.flatOf(p)}`],
+    ] as const;
+    for (const [what, label] of shapes) {
+      test(`one-shot Cobertura labelled with ${what}`, async () => {
+        const index = await buildAlRunnerCoverageIndex(run.batch);
+        for (const [path, id] of [
+          [SALES, 50100],
+          [PURCHASE, 50101],
+        ] as const) {
+          const lines = await covered(path);
+          const map = alRunnerCoverageFrom(
+            lines.map((line) => ({ file: label(path), line, hits: 1 })),
+            index,
+          );
+          expect(map.entries).toEqual(
+            lines.map((line) => ({
+              objectType: "Codeunit",
+              objectId: id,
+              procedure: "Pick",
+              line,
+            })),
+          );
+        }
+      });
+      test(`--server statements labelled with ${what}`, async () => {
+        const index = await buildAlRunnerCoverageIndex(run.batch);
+        for (const [path, id] of [
+          [SALES, 50100],
+          [PURCHASE, 50101],
+        ] as const) {
+          const lines = await covered(path);
+          const map = alRunnerCoverageFromServer(
+            {
+              test: "Codeunit50190.X",
+              coverage: [
+                {
+                  file: label(path),
+                  statements: lines.map((line) => ({ scope: "Pick", line, hits: 1 })),
+                },
+              ],
+            },
+            index,
+          );
+          expect(map.entries).toEqual(
+            lines.map((line) => ({
+              objectType: "Codeunit",
+              objectId: id,
+              procedure: "Pick",
+              line,
+            })),
+          );
+        }
+      });
+    }
+    test("a bare duplicate basename names neither file: refused by name, on both transports", async () => {
+      const index = await buildAlRunnerCoverageIndex(run.batch);
+      const why = /names neither by its project folder nor by its batch name/;
+      expect(() =>
+        alRunnerCoverageFrom([{ file: "/x/Helper.Codeunit.al", line: 5, hits: 1 }], index),
+      ).toThrow(why);
+      expect(() =>
+        alRunnerCoverageFromServer(
+          {
+            test: "Codeunit50190.X",
+            coverage: [{ file: "/x/Helper.Codeunit.al", statements: [{ line: 5, hits: 1 }] }],
+          },
+          index,
+        ),
+      ).toThrow(why);
+    });
   });
 
   test("a file quoted from the batch (line map, refusals) is named by its project path", async () => {

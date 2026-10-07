@@ -233,6 +233,25 @@ describe("prepareBatchProject — .al basename collisions drop nothing (R219)", 
     });
   });
 
+  // Sol run 001 (2): the record's name is reserved, both for a resource copied to the batch root
+  // as it is and for one rebased there, so neither overwrites the record nor is overwritten by it.
+  for (const [shape, rel] of [
+    ["at the project root", FLAT_NAMES_FILENAME],
+    ["rebased from an AL folder", `Sales/${FLAT_NAMES_FILENAME}`],
+  ] as const) {
+    it(`refuses a project resource named like the record, ${shape}`, async () => {
+      await withDirs(async (projectDir, batchDir) => {
+        await write(projectDir, "app.json", JSON.stringify(manifest));
+        await write(projectDir, "Sales/Helper.Codeunit.al", "codeunit 1 A { }");
+        await write(projectDir, "Purchase/Helper.Codeunit.al", "codeunit 2 B { }");
+        await write(projectDir, rel, '{"Helper.Codeunit.al":"Purchase/Helper.Codeunit.al"}');
+        await expect(
+          prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0"),
+        ).rejects.toThrow("a name LethAL reserves for its record of renamed .al files (R219)");
+      });
+    });
+  }
+
   it("does not mistake the instrumented copy of a file for a collision with its own original", async () => {
     await withDirs(async (projectDir, batchDir) => {
       await write(projectDir, "app.json", JSON.stringify(manifest));

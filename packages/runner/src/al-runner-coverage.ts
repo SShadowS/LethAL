@@ -154,6 +154,14 @@ export interface AlRunnerCoverageIndex {
    * multi-object file is in `byFile`, so it is never here.
    */
   readonly skippedFiles: readonly string[];
+  /**
+   * R219: the lower-cased basenames the batch gave a disambiguated flat name. A reported path that
+   * ends in one of them and matches no key cannot be attributed to either file, so it is refused
+   * by name (`indexedFile`) rather than dropped. Absent: none (indexes built by hand in tests).
+   */
+  readonly renamedBasenames?: ReadonlySet<string>;
+  /** R219: how to quote a reported path to a user (a renamed flat name becomes its project path). */
+  readonly displayOf?: (path: string) => string;
 }
 
 /**
@@ -255,10 +263,22 @@ export async function buildAlRunnerCoverageIndex(
     .map((e) => e.toString())
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .sort();
-  // R219: every key stays the batch's own flat name (what al-runner compiled and Cobertura
-  // reports); a file QUOTED to a user is named by its project path when the batch renamed it.
+  // R219: a file the batch renamed is QUOTED by its project path. And it is KEYED by both names:
+  // al-runner labels coverage with whichever path it knows for this app id, measured on c39ad5de
+  // on both transports as the project SOURCE path (`proj/Sales/Helper.Codeunit.al`) or a batch's
+  // own flat path (`batch/Helper.Codeunit.8de4e0ea.al`), never a bare duplicate basename.
   const display = await batchDisplayPaths(instrumentedDir);
   const shown = (rel: string): string => normalizeSlashes(display(rel));
+  const keysOf = (rel: string): string[] => {
+    const flat = normalizeFileKey(rel);
+    const project = normalizeFileKey(display(rel));
+    return project === flat ? [flat] : [flat, project];
+  };
+  const renamedBasenames = new Set(
+    rels
+      .filter((rel) => display(rel) !== rel)
+      .map((rel) => normalizeFileKey(display(rel)).split("/").pop() ?? ""),
+  );
 
   const byFile = new Map<string, readonly LineMapEntry[]>();
   const multiObjectFiles: string[] = [];
@@ -270,7 +290,7 @@ export async function buildAlRunnerCoverageIndex(
   const refusals = new Map<string, string>();
   const admittedWrappedFiles = new Set<string>();
   /** Files that pass every per-file rule, before the duplicate-key pass. */
-  const candidates: { file: string; key: string; entries: LineMapEntry[] }[] = [];
+  const candidates: { file: string; keys: string[]; entries: LineMapEntry[] }[] = [];
 
   for (const rel of rels) {
     const source = await readFile(join(instrumentedDir, rel), "utf8");
@@ -279,7 +299,7 @@ export async function buildAlRunnerCoverageIndex(
     if (fileHoldsWrappedObject(root) && !admitted) {
       const file = shown(rel);
       refusedFiles.push(file);
-      skippedFiles.push(normalizeFileKey(rel));
+      skippedFiles.push(...keysOf(rel));
       for (const [key, reason] of refusedObjectsOfFile(root, file, "al-runner")) {
         exempt.add(key);
         refusals.set(key, reason);
@@ -296,7 +316,7 @@ export async function buildAlRunnerCoverageIndex(
       if (arms.kind === "undecided") {
         const file = shown(rel);
         refusedFiles.push(file);
-        skippedFiles.push(normalizeFileKey(rel));
+        skippedFiles.push(...keysOf(rel));
         for (const e of fileEntries) {
           const key = `${e.objectType.toLowerCase()}:${e.objectId}`;
           const reason = undecidedArmsReason(e.objectType, e.objectId, file, arms.reason);
@@ -317,16 +337,16 @@ export async function buildAlRunnerCoverageIndex(
       for (const e of fileEntries) exempt.add(`${e.objectType.toLowerCase()}:${e.objectId}`);
       // Not indexed, so nothing can resolve against a file al-runner reports in the wrong frame.
       if (options.admitMultiObjectFiles !== true) {
-        skippedFiles.push(normalizeFileKey(rel));
+        skippedFiles.push(...keysOf(rel));
         continue;
       }
     }
     candidates.push({
       file: shown(rel),
-      key: normalizeFileKey(rel),
+      keys: keysOf(rel),
       entries: fileEntries,
     });
-    if (admitted) admittedWrappedFiles.add(normalizeFileKey(rel));
+    if (admitted) for (const k of keysOf(rel)) admittedWrappedFiles.add(k);
   }
 
   // LOWER-CASED to match `line-map.ts`'s own `keyOf`. Getting this wrong does not throw: the
@@ -347,11 +367,13 @@ export async function buildAlRunnerCoverageIndex(
   for (const c of candidates) {
     const kept = c.entries.filter((e) => !duplicates.has(keyOfEntry(e)));
     if (kept.length === 0) {
-      skippedFiles.push(c.key);
-      admittedWrappedFiles.delete(c.key);
+      for (const k of c.keys) {
+        skippedFiles.push(k);
+        admittedWrappedFiles.delete(k);
+      }
       continue;
     }
-    byFile.set(c.key, kept);
+    for (const k of c.keys) byFile.set(k, kept);
     for (const e of kept) declared.add(keyOfEntry(e));
     entries.push(...kept);
   }
@@ -367,6 +389,8 @@ export async function buildAlRunnerCoverageIndex(
     exempt,
     refusals,
     skippedFiles,
+    renamedBasenames,
+    displayOf: (path) => normalizeSlashes(display(path)),
   };
 }
 
@@ -416,10 +440,19 @@ function indexedFile(
   index: AlRunnerCoverageIndex,
   skipped: ReadonlySet<string>,
 ): { readonly key: string; readonly entries: readonly LineMapEntry[] } | undefined {
-  for (const cand of fileKeyCandidates(file)) {
+  const cands = fileKeyCandidates(file);
+  for (const cand of cands) {
     if (skipped.has(cand)) return undefined;
     const hit = index.byFile.get(cand);
     if (hit !== undefined) return { key: cand, entries: hit };
+  }
+  // R219: a bare duplicate basename names neither renamed file. Dropping it would read a covered
+  // mutant `no-coverage`, and guessing would credit the other file; refused by name instead.
+  const base = cands.at(-1);
+  if (base !== undefined && index.renamedBasenames?.has(base) === true) {
+    throw new Error(
+      `al-runner reported coverage for "${file}", but this batch holds two or more files named "${base}" (renamed by their folder, R219), and the path names neither by its project folder nor by its batch name. Refusing rather than dropping that coverage or crediting it to the wrong file. Rename one of the files, or run with "alRunner.coverage": "none".`,
+    );
   }
   return undefined;
 }
@@ -511,6 +544,8 @@ export function alRunnerCoverageFromServer(
     const found = indexedFile(file.file, index, skipped);
     if (found === undefined) continue;
     const objects = found.entries;
+    // R219: a renamed batch file is quoted by its project path.
+    const shownFile = index.displayOf?.(file.file) ?? file.file;
     // R-300b (I3): in an admitted wrapped file a disagreement drops the line instead.
     const strict = index.admittedWrappedFiles.has(found.key);
     for (const st of file.statements ?? []) {
@@ -535,13 +570,13 @@ export function alRunnerCoverageFromServer(
           if (byPosition !== undefined) {
             if (strict && st.scope?.toLowerCase() !== byPosition.toLowerCase()) {
               console.warn(
-                `[lethal] al-runner --server named the covered statement at ${file.file}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}", in a #if-wrapped file; the line is dropped (R300).`,
+                `[lethal] al-runner --server named the covered statement at ${shownFile}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}", in a #if-wrapped file; the line is dropped (R300).`,
               );
               continue;
             }
             if (st.scope?.toLowerCase() !== byPosition.toLowerCase()) {
               console.warn(
-                `[lethal] al-runner --server named the covered statement at ${file.file}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}"; the position wins (R383).`,
+                `[lethal] al-runner --server named the covered statement at ${shownFile}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}"; the position wins (R383).`,
               );
             }
             procedure = byPosition;
