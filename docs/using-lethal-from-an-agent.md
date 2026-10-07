@@ -640,7 +640,7 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
 {
-  "identityScheme": 29,
+  "identityScheme": 30,
   "marks": [
     {
       "key": "...",
