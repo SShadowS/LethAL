@@ -8271,6 +8271,12 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       readonly gate?: Promise<void>;
       /** R495: a plain bcdev session, no env-tool hook: the server serves `pre` throughout. */
       readonly noHook?: boolean;
+      /** R492 (sol run 001): called when the hook is entered, with a live count of the test-app
+       *  reads made while it runs, so a test can assert while the hook is still parked. */
+      readonly onHookEntered?: (readsSoFar: () => number) => void;
+      /** R492 (sol run 001): the test app served after the hook, one per read in order (the last
+       *  repeats), instead of `post` for every read. */
+      readonly postSequence?: readonly Uint8Array[];
     }
 
     async function envRun(o: EnvRun) {
@@ -8285,12 +8291,18 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       let fetchesAfterHook = 0;
       let readsDuringHook = 0;
       const installedCalls: string[] = [];
+      let postReads = 0;
       const fetch = async (app: { readonly name: string }) => {
         if (hooked) fetchesAfterHook++;
         if (inHook) readsDuringHook++;
         if (app.name === DEP.name) {
           if (o.dep === undefined) return null;
           return hooked ? o.dep.post : o.dep.pre;
+        }
+        if (hooked && o.postSequence !== undefined) {
+          const served = o.postSequence[Math.min(postReads, o.postSequence.length - 1)];
+          postReads++;
+          return served ?? null;
         }
         return hooked ? o.post : o.pre === undefined ? P1 : o.pre;
       };
@@ -8323,6 +8335,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
               afterLeaseAcquired: async () => {
                 if (o.hookThrows === true) throw new Error("the env tool died mid-publish");
                 inHook = true;
+                o.onHookEntered?.(() => readsDuringHook);
                 if (o.gate !== undefined) await o.gate;
                 writeFileSync(testAppFile, o.file ?? o.post ?? P2);
                 if (o.dep !== undefined) writeFileSync(depFile, o.dep.post);
@@ -8497,15 +8510,33 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     });
 
     // R492 item 3: the hook is AWAITED. It parks on a gate; nothing is read back while it runs.
+    // Sol, run 001: released only after an explicit hook-entered handshake, and checked WHILE the
+    // hook is parked, so a fire-and-forget hook call cannot pass by the gate opening early.
     test("nothing is read back or recorded until the hook returns", async () => {
       let open = (): void => {};
       const gate = new Promise<void>((resolve) => {
         open = resolve;
       });
-      setTimeout(() => open(), 30);
-      const r = await envRun({ post: P2, gate });
+      const store = new ResultsStore(":memory:");
+      const whileParked: { reads?: number; hash?: string | null; digests?: unknown } = {};
+      const r = await envRun({
+        post: P2,
+        gate,
+        store,
+        onHookEntered: (readsSoFar) => {
+          // Give a caller that did not await the hook every chance to run on first.
+          setTimeout(() => {
+            const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+              .id;
+            whileParked.reads = readsSoFar();
+            whileParked.hash = store.getRun(runId)?.testAppHash ?? null;
+            whileParked.digests = store.testDigests(runId);
+            open();
+          }, 30);
+        },
+      });
       expect(r.outcome).not.toBeInstanceOf(Error);
-      expect(r.readsDuringHook()).toBe(0);
+      expect(whileParked).toEqual({ reads: 0, hash: null, digests: null });
       expect(r.fetchesAfterHook()).toBeGreaterThan(0);
       expect(r.store.testDigests(r.runId)).not.toBeNull();
       r.store.close();
@@ -8690,6 +8721,36 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           r.store.close();
         });
       }
+      // Sol, run 001: donor A PROVED P1 and recorded a P1 snapshot; this session proves P2, then a
+      // later unpinned read serves P1 (published but not installed). A's proof is real, but it is not
+      // the test app that runs here. Revert: drop `runsWhatWasRead` from the reuse condition.
+      test("a later read that differs from this session's proven test app reuses nothing", async () => {
+        const a = await envRun({ post: P1, file: P1, installed: { [APP_ID]: ["1.0.0.1"] } });
+        expect(a.outcome).not.toBeInstanceOf(Error);
+        expect(a.store.getRun(a.runId)?.testAppHash).toBe(`package:${hashPackage(P1)}`);
+        const b = await envRun({ post: P2, dirs: a.dirs, store: a.store });
+        expect(b.outcome).not.toBeInstanceOf(Error);
+        a.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [b.runId]);
+        a.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [b.runId]);
+        const victim = a.store.db
+          .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+          .get(b.runId) as { id: number };
+        a.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+        const r = await envRun({
+          pre: P2,
+          post: P2,
+          // The read-back and the proof see P2; the batch's own read then sees P1.
+          postSequence: [P2, P2, P1],
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          dirs: a.dirs,
+          store: a.store,
+          extra: { resume: b.runId },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+        expect(r.reuseWarning).toEqual([]);
+        r.store.close();
+      });
       // The same older row lends no known survivors to a proven env-tool session either.
       test("--skip-known-survivors takes nothing from an older row (hash, no digests)", async () => {
         const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
