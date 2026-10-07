@@ -43,6 +43,7 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -65,6 +66,7 @@ describe("ResultsStore", () => {
     const r1 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -77,6 +79,7 @@ describe("ResultsStore", () => {
     const r2 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -101,6 +104,7 @@ describe("ResultsStore", () => {
     const r1 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -117,6 +121,7 @@ describe("ResultsStore", () => {
     const r2 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -132,6 +137,7 @@ describe("ResultsStore", () => {
     store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -151,6 +157,7 @@ describe("ResultsStore", () => {
       const runId = store.createRun({
         coverageMode: "procedure",
         testAppHash: "T",
+        testAppProven: true,
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -169,6 +176,7 @@ describe("ResultsStore", () => {
       const runId = store.createRun({
         coverageMode: "procedure",
         testAppHash: "T",
+        testAppProven: true,
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -195,6 +203,7 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -225,6 +234,7 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -265,6 +275,7 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -313,6 +324,7 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -397,6 +409,7 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -429,6 +442,7 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -549,11 +563,12 @@ describe("ResultsStore", () => {
         testAppChanged: (i) => seen.push(i),
       }).keys;
       expect(keys.size).toBe(0);
-      expect(seen).toEqual([{ runId: 1, testAppHash: null }]);
+      expect(seen).toEqual([{ runId: 1, testAppHash: null, proven: false }]);
     }
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "package:abc",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -561,6 +576,7 @@ describe("ResultsStore", () => {
       appVersion: "0.0.0.0",
     });
     expect(store.getRun(runId)?.testAppHash).toBe("package:abc");
+    expect(store.getRun(runId)?.testAppProven).toBe(true);
     store.close();
     rmSync(path, { force: true });
   });
@@ -614,11 +630,63 @@ describe("ResultsStore", () => {
     rmSync(path, { force: true });
   });
 
+  // R495: a runs table from before R495 gains test_app_proven, and its rows read NULL (not proven):
+  // a recorded hash, even with digests, lends nothing until a run proves it again.
+  test("migrates a pre-R495 runs table: test_app_proven is added and an existing row lends nothing", () => {
+    const path = join(tmpdir(), `lethal-store-r495-${Date.now()}.sqlite`);
+    const legacy = new Database(path);
+    legacy.exec(`CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    project_path TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    batch_count INTEGER,
+    baseline_green INTEGER,
+    app_id TEXT,
+    artifact_id TEXT,
+    artifact_sha256 TEXT,
+    config_fingerprint TEXT,
+    source_sha256 TEXT,
+    identity_scheme INTEGER,
+    coverage_mode TEXT,
+    test_app_hash TEXT,
+    test_digests TEXT
+  );`);
+    legacy.exec(
+      `INSERT INTO runs (project_path, backend, app_version, identity_scheme, coverage_mode, test_app_hash, test_digests) VALUES ('P','bcdev','0.0.0.0', ${IDENTITY_SCHEME}, 'procedure', 'package:a', '{}')`,
+    );
+    legacy.close();
+
+    const store = new ResultsStore(path);
+    const cols = store.db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain("test_app_proven");
+    expect(store.getRun(1)?.testAppHash).toBe("package:a");
+    expect(store.getRun(1)?.testAppProven).toBe(false);
+    store.setCarryHidden(1, NO_HIDDEN);
+    store.recordMutant(1, mutantRow("survived"));
+    store.finishRun(1, { batchCount: 1, baselineGreen: true });
+    const seen: unknown[] = [];
+    const keys = store.priorSurvivorKeys("P", "procedure", "package:a", [], [], {
+      testAppChanged: (i) => seen.push(i),
+    }).keys;
+    expect(keys.size).toBe(0);
+    expect(seen).toEqual([{ runId: 1, testAppHash: "package:a", proven: false }]);
+    // Control: proven again (and given the facts later checks need), the same row lends.
+    store.setRunTestAppHash(1, "package:a", true);
+    store.db.run("UPDATE runs SET build_symbols = '[]', twin_tuples = '[]' WHERE id = 1");
+    expect(store.priorSurvivorKeys("P", "procedure", "package:a", [], []).keys.size).toBe(1);
+    store.close();
+    rmSync(path, { force: true });
+  });
+
   test("priorSurvivorKeys returns a same-test-app run's survivors and none across a change", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "package:a",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
@@ -634,7 +702,7 @@ describe("ResultsStore", () => {
       testAppChanged: (i) => seen.push(i),
     }).keys;
     expect(keys.size).toBe(0);
-    expect(seen).toEqual([{ runId, testAppHash: "package:a" }]);
+    expect(seen).toEqual([{ runId, testAppHash: "package:a", proven: true }]);
     store.close();
   });
 
@@ -667,6 +735,7 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -751,6 +820,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         const runId = store.createRun({
           coverageMode: "procedure",
           testAppHash: "T",
+          testAppProven: true,
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -793,6 +863,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         const runId = store.createRun({
           coverageMode: "procedure",
           testAppHash: "T",
+          testAppProven: true,
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -827,6 +898,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         const runId = store.createRun({
           coverageMode: "procedure",
           testAppHash: "T",
+          testAppProven: true,
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -866,6 +938,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         const runId = store.createRun({
           coverageMode: "procedure",
           testAppHash: "T",
+          testAppProven: true,
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -889,6 +962,7 @@ CREATE TABLE IF NOT EXISTS mutants (
       const runId = store.createRun({
         coverageMode: "procedure",
         testAppHash: "T",
+        testAppProven: true,
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -908,6 +982,7 @@ CREATE TABLE IF NOT EXISTS mutants (
       const runId = store.createRun({
         coverageMode: "procedure",
         testAppHash: "T",
+        testAppProven: true,
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -948,6 +1023,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -984,6 +1060,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const other = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "Q",
@@ -1007,6 +1084,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1023,6 +1101,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const r1 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1032,6 +1111,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const r2 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1099,6 +1179,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1137,6 +1218,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1153,6 +1235,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const later = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1172,6 +1255,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const a = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1181,6 +1265,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const b = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1203,6 +1288,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const a = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1220,6 +1306,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const b = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1244,6 +1331,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const c = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",

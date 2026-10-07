@@ -15,6 +15,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
@@ -35,6 +36,12 @@ import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
+import {
+  servedIsInstalled,
+  servesTestApp,
+  testAppJson,
+  testAppPackage,
+} from "./helpers/proven-test-app";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -108,6 +115,7 @@ async function makeProject(opts: { secondFile?: boolean } = {}) {
   }
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), TEST_AL);
+  await Bun.write(join(testDir, "app.json"), testAppJson());
   return { projectDir, testDir, instrumentedDir };
 }
 
@@ -146,6 +154,15 @@ class CountingBackend implements ExecutionBackend {
     /** R354: the coverage mode this backend reports (default CAPS's, `procedure`). */
     private readonly coverage: CoverageMode = CAPS.coverage,
   ) {}
+  /** R495: the served test-app package, installed at its own version, as a real bcdev backend's
+   *  is, so a run's test-app identity is proven. `null` is a failed read. */
+  served: Uint8Array | null = testAppPackage();
+  async fetchPublishedAppPackage(): Promise<Uint8Array | null> {
+    return this.served;
+  }
+  microsoftMode(): MicrosoftMode {
+    return servedIsInstalled(() => this.served);
+  }
   capabilities(): BackendCapabilities {
     return { ...CAPS, coverage: this.coverage };
   }
@@ -1378,10 +1395,10 @@ describe("runSession --resume (R47)", () => {
       selectorIds,
       maxGuardsPerBatch: 1,
     });
-    // Edit the test project: the source-tree hash (no package concept on this backend) moves.
-    const { writeFile: write } = await import("node:fs/promises");
-    await write(join(dirs.testDir, "Extra.Codeunit.al"), 'codeunit 79999 "Extra" { }', "utf8");
+    // Republish the test app: the served package's hash moves. (R495: on a bcdev-shaped backend
+    // the package, not the disk, is the identity; a backend with no package read proves none.)
     const second = new CountingBackend("pass");
+    second.served = testAppPackage("1.0.0.0", "<!-- republished -->");
     await expect(
       runSession({
         backend: second,
@@ -1900,17 +1917,13 @@ describe("C02-04 characterization", () => {
   test("R192: the resumed run reuses batch 1's baseline snapshot", async () => {
     // From "R192 (second half): a batch with work left is deployed but its baseline is NOT re-run
     // when nothing it measured changed". Two additions, so the snapshot-hash read shows in the
-    // trace: a test-app app.json (the hash reads it to name the package) and a package reader that
-    // answers `undefined`, which is the "cannot form the request" answer and falls through to the
-    // same source-tree hash the original test uses. Neither changes which hash is compared.
+    // trace: a test-app app.json (the hash reads it to name the package) and a package reader.
+    // R495: the reader serves the package, installed at its version (CountingBackend's default):
+    // it used to answer `undefined` ("cannot form the request"), whose source-tree fallback a bcdev
+    // run no longer counts as proven, so it would lend no snapshot.
     const dirs = await makeProject({ secondFile: true });
-    await Bun.write(
-      join(dirs.testDir, "app.json"),
-      JSON.stringify({ name: "Sandbox Tests", publisher: "LethAL", version: "1.0.0.0" }),
-    );
-    const noPackage = { fetchPublishedAppPackage: async () => undefined };
     const store = new ResultsStore(":memory:");
-    const first = Object.assign(new CountingBackend("pass", undefined, 2), noPackage);
+    const first = new CountingBackend("pass", undefined, 2);
     const firstReport = await runSession({
       backend: first,
       store,
@@ -1921,7 +1934,7 @@ describe("C02-04 characterization", () => {
     expect(firstReport.quarantined).toBeDefined();
 
     const trace: Trace = [];
-    const second = Object.assign(new CountingBackend("pass"), noPackage);
+    const second = new CountingBackend("pass");
     const report = await runSession({
       backend: recording(second, trace, "primary"),
       store,
@@ -1946,12 +1959,9 @@ describe("C02-04 characterization", () => {
     // Batch 1's baseline is reused on resume (R192), and its stored verdicts carry the first run's
     // 111 ms. The resumed run measures 222 ms wherever it runs a baseline itself. The report keeps
     // the SMALLEST measurement per test, so a reused 111 would win wherever it leaked through.
+    // R495: CountingBackend serves its package, installed, so the run's identity is proven and
+    // lends its snapshot (a reader answering `undefined` proves nothing on a bcdev backend).
     const dirs = await makeProject({ secondFile: true });
-    await Bun.write(
-      join(dirs.testDir, "app.json"),
-      JSON.stringify({ name: "Sandbox Tests", publisher: "LethAL", version: "1.0.0.0" }),
-    );
-    const noPackage = { fetchPublishedAppPackage: async () => undefined };
     const measuring = <B extends CountingBackend>(b: B, ms: number): B => {
       const run = b.run.bind(b);
       b.run = async (ref, opts) => {
@@ -1962,7 +1972,7 @@ describe("C02-04 characterization", () => {
     };
     const store = new ResultsStore(":memory:");
     const firstReport = await runSession({
-      backend: Object.assign(measuring(new CountingBackend("pass", undefined, 2), 111), noPackage),
+      backend: measuring(new CountingBackend("pass", undefined, 2), 111),
       store,
       ...dirs,
       selectorIds,
@@ -1972,7 +1982,7 @@ describe("C02-04 characterization", () => {
     expect(firstDurations.length).toBeGreaterThan(0);
     expect(firstDurations.every((d) => d === 111)).toBe(true);
 
-    const second = Object.assign(measuring(new CountingBackend("pass"), 222), noPackage);
+    const second = measuring(new CountingBackend("pass"), 222);
     const report = await runSession({
       backend: second,
       store,
@@ -2629,6 +2639,10 @@ class R318Backend implements ExecutionBackend {
     private readonly abortAfter?: number,
     private readonly mutantOutcome: "fail" | "pass" = "fail",
   ) {}
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
     return CAPS;
   }
@@ -2719,6 +2733,7 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     await Bun.write(join(dirs.projectDir, "Repro.Codeunit.al"), R318_TARGET);
     await Bun.write(join(dirs.projectDir, "app.json"), APP_JSON);
     await Bun.write(join(dirs.testDir, "ReproTests.Codeunit.al"), R318_TESTS);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
     const store = new ResultsStore(":memory:");
 
     // Run 1 sees the member as a pre-R318 line map did: its 10 mutants read no-coverage, Plain's
@@ -2831,6 +2846,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
     await Bun.write(join(dirs.projectDir, "Repro.Codeunit.al"), R318_R3_TARGET);
     await Bun.write(join(dirs.projectDir, "app.json"), APP_JSON);
     await Bun.write(join(dirs.testDir, "ReproTests.Codeunit.al"), R318_TESTS);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
     const store = new ResultsStore(":memory:");
     const first = await runSession({
       backend: r3Backend("choose", finished ? undefined : 2),
@@ -3018,19 +3034,14 @@ describe("R247: no verdict crosses a test-app change", () => {
   /** A bcdev-shaped backend: the server holds a test-app package, read by `fetchPublishedAppPackage`.
    *  `null` is a failed read (identity unknown). */
   class PackageBackend extends CountingBackend {
-    constructor(
-      readonly pkg: Uint8Array | null,
-      abortFromDeploy?: number,
-    ) {
+    constructor(pkg: Uint8Array | null, abortFromDeploy?: number) {
       super("pass", undefined, abortFromDeploy);
-    }
-    async fetchPublishedAppPackage(): Promise<Uint8Array | null> {
-      return this.pkg;
+      // R495: served, and installed at its own version (CountingBackend's microsoftMode).
+      this.served = pkg;
     }
   }
   /** Two packages that differ ONLY in the version stamp, as a re-stamp-only republish produces. */
-  const pkg = (version: string) =>
-    new TextEncoder().encode(`PK <NavxManifest><App Name="Sandbox Tests" Version="${version}"/>`);
+  const pkg = (version: string) => testAppPackage(version);
   const APP_A = pkg("1.0.0.0");
   const APP_B = pkg("1.0.0.1");
   const hashOf = (b: Uint8Array) => `package:${Bun.SHA256.hash(b, "hex")}`;
@@ -3108,7 +3119,7 @@ describe("R247: no verdict crosses a test-app change", () => {
         const backend = new PackageBackend(APP_B);
         await expect(again(r, backend, { resume: target(r.runId) })).rejects.toThrow(
           new RegExp(
-            `^${flag(r.runId)}: run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is ${hashOf(APP_B)}\\. .*version stamp.*byte for byte.*\\(R247\\)\\. Drop the resume flag to run from scratch\\.$`,
+            `^${flag(r.runId)}: run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is ${hashOf(APP_B)}\\. .*version stamp.*byte for byte.*\\(R247, R495\\)\\. Drop the resume flag to run from scratch\\.$`,
           ),
         );
         expect(backend.deploys).toBe(0);
@@ -3122,7 +3133,7 @@ describe("R247: no verdict crosses a test-app change", () => {
           again(r, new PackageBackend(APP_A), { resume: target(r.runId) }),
         ).rejects.toThrow(
           new RegExp(
-            `run ${r.runId} was measured against test app unknown \\(it recorded no test-app identity; the run predates R247\\), and this session's test app is ${hashOf(APP_A)}\\..*R247`,
+            `run ${r.runId} was measured against test app unknown \\(it recorded none: its test app was not proven installed, or it ran before R247\\), and this session's test app is ${hashOf(APP_A)}\\..*R247`,
           ),
         );
       });
@@ -3133,12 +3144,12 @@ describe("R247: no verdict crosses a test-app change", () => {
           again(r, new PackageBackend(null), { resume: target(r.runId) }),
         ).rejects.toThrow(
           new RegExp(
-            `run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is unknown\\..*R247`,
+            `run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is unknown \\(not proven installed: .*\\)\\..*R247`,
           ),
         );
       });
 
-      test("single carried rows too: a run aborted mid-batch is refused after a test source edit", async () => {
+      test("single carried rows too: a run aborted mid-batch is refused after a test app republish", async () => {
         const dirs = await makeProject();
         const store = new ResultsStore(":memory:");
         await runSession({
@@ -3148,12 +3159,12 @@ describe("R247: no verdict crosses a test-app change", () => {
           selectorIds,
         });
         const runId = (store.db.query("SELECT id FROM runs").get() as { id: number }).id;
-        // No package on this backend (al-runner's shape): the identity is the test source tree.
-        await Bun.write(join(dirs.testDir, "Extra.Codeunit.al"), 'codeunit 79999 "Extra" { }');
+        // R495: the identity is the served package (a source edit alone changes nothing BC runs).
         const backend = new CountingBackend("pass");
+        backend.served = testAppPackage("1.0.0.0", "<!-- republished -->");
         await expect(
           runSession({ backend, store, ...dirs, selectorIds, resume: target(runId) }),
-        ).rejects.toThrow(new RegExp(`run ${runId} was measured against test app source:.*R247`));
+        ).rejects.toThrow(new RegExp(`run ${runId} was measured against test app package:.*R247`));
         expect(backend.mutantRuns + backend.baselineRuns).toBe(0);
       });
     });

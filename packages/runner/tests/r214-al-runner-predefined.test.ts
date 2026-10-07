@@ -206,10 +206,17 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
           db: { run(sql: string): void; query(sql: string): { get(): unknown } };
         }
       ).db;
-      const natural = db.query("SELECT test_app_hash AS h FROM runs WHERE id = 2").get() as {
+      // R495: run 1 (al-runner) proves its source identity by construction; run 2 (a bcdev stub
+      // with no package read) proves none and records NULL. The al-runner session below reads the
+      // same source identity as run 1, so that is the one to give every row.
+      const natural = db.query("SELECT test_app_hash AS h FROM runs WHERE id = 1").get() as {
         h: string | null;
       };
-      db.run("UPDATE runs SET test_app_hash = 'same-test-app'");
+      expect(natural.h).toStartWith("source:");
+      expect(db.query("SELECT test_app_hash AS h FROM runs WHERE id = 2").get()).toEqual({
+        h: null,
+      });
+      db.run("UPDATE runs SET test_app_hash = 'same-test-app', test_app_proven = 1");
       const refusedOnSymbols = (symbols: readonly string[]) => {
         let changed = false;
         store.priorSurvivorKeys(join(root, "app"), "procedure", "same-test-app", symbols, [], {
@@ -222,8 +229,9 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
       expect([refusedOnSymbols(CLEANSCHEMA_1_TO_25), refusedOnSymbols([])]).toEqual([true, false]);
 
       // The history warning names the al-runner predefines when they are the whole difference.
-      // Put run 2's own test-app hash back, so the symbols are the only thing the session can refuse on.
-      db.run(`UPDATE runs SET test_app_hash = ${natural.h === null ? "NULL" : `'${natural.h}'`}`);
+      // Put the al-runner source identity back on every row, proven, so the symbols are the only
+      // thing the session can refuse on.
+      db.run(`UPDATE runs SET test_app_hash = '${natural.h}', test_app_proven = 1`);
       const events: RunEvent[] = [];
       await runSession({
         backend: new StubBackend(false),
