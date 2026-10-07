@@ -866,6 +866,45 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
   });
 
+  test("R-496 review 5: a StopHungRun refused after run returned is thrown by the NEXT run, before it sends anything", async () => {
+    const held = heldFetch();
+    const sent: string[] = [];
+    let refuseStop: () => void = () => {};
+    const fetchFn = ((url: unknown, init?: RequestInit) => {
+      sent.push(String(url));
+      if (String(url).includes("_StopHungRun?")) {
+        return new Promise<Response>((_res, rej) => {
+          refuseStop = () => rej(new UnfilteredExtensionsQueryError("late refused stop"));
+        });
+      }
+      return held.fetchFn(url as string, init);
+    }) as typeof fetch;
+    const t = transport(fetchFn);
+    const failed = echo({
+      codeunitResults: JSON.stringify({
+        testResults: [{ method: "OverBudgetDetected", result: 1, message: "boom" }],
+      }),
+    });
+    const v = await t.run({
+      ...REQ,
+      timeoutMs: 20,
+      stopGraceMs: 60,
+      onBudgetExceeded: async () => {
+        // the stop request stays pending past the grace; the held request answers meanwhile
+        t.stopHungRun({ attemptId: "a1", lease: LEASE, timeoutMs: 1000 }).catch(() => {});
+        held.answer(new Response(JSON.stringify({ value: JSON.stringify(failed) })));
+        return { stopped: false };
+      },
+    });
+    expect(v.outcome).toBe("fail");
+    refuseStop();
+    await new Promise((r) => setTimeout(r, 10));
+    const before = sent.length;
+    const err = await t.run({ ...REQ, timeoutMs: 30 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(sent.length).toBe(before);
+  });
+
   test("names a FAILED stop in the quarantine message", async () => {
     const { fetchFn } = heldFetch();
     const v = await transport(fetchFn).run({
@@ -1101,6 +1140,23 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
         : inner(url as string, init)) as typeof fetch;
     const err = await transport(fetchFn)
       .run(REQ)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(calls).toEqual(["GetOpAnswer"]);
+  });
+
+  test("R-496 review 5: a refused main coverage request rejects runWithCoverage though a kept pass with coverage is on file", async () => {
+    const calls: string[] = [];
+    const kept = found(
+      JSON.stringify(echo({ coverage: [{ objectType: 5, objectId: 79100, lineNo: 12, hits: 3 }] })),
+    );
+    const inner = routed("ok", kept, calls);
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_RunMutantWithCoverage?")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused main coverage"))
+        : inner(url as string, init)) as typeof fetch;
+    const err = await transport(fetchFn)
+      .runWithCoverage(REQ)
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(calls).toEqual(["GetOpAnswer"]);

@@ -464,13 +464,16 @@ function parseCoverageStats(result: RunMutantResult): FencedCoverageStats | unde
 }
 
 /** R-496: the per-call record `refusalBoundary` reads; see there. */
-const refusalScope = new AsyncLocalStorage<{ refusal?: UnfilteredExtensionsQueryError }>();
+type RefusalHolder = { refusal?: UnfilteredExtensionsQueryError; closed?: boolean };
+const refusalScope = new AsyncLocalStorage<RefusalHolder>();
 
 export class RunMutantTransport {
   /** R289: `LETHAL_R289_TRACE`, read once here; an empty string counts as unset. */
   private readonly tracePath: string | undefined;
   private readonly traceWrite: (path: string, line: string) => void;
   private readonly fetchFn: FetchFn;
+  /** R-496: a refusal recorded after its call exited; the next call's boundary throws it. */
+  private lateRefusal: UnfilteredExtensionsQueryError | undefined;
 
   /**
    * R-496: run one public call; if any fetch inside it (a swallowed catch, a stop timer, the status
@@ -478,12 +481,21 @@ export class RunMutantTransport {
    * call would otherwise have returned or thrown.
    */
   private async refusalBoundary<T>(fn: () => Promise<T>): Promise<T> {
-    const holder: { refusal?: UnfilteredExtensionsQueryError } = {};
+    // A refusal that landed after an earlier call exited (a stop still pending past its bound) is
+    // thrown here, before anything is sent, and cleared only by being thrown.
+    const late = this.lateRefusal;
+    if (late !== undefined) {
+      this.lateRefusal = undefined;
+      throw late;
+    }
+    const holder: RefusalHolder = {};
     let outcome: { ok: true; value: T } | { ok: false; error: unknown };
     try {
       outcome = { ok: true, value: await refusalScope.run(holder, fn) };
     } catch (error) {
       outcome = { ok: false, error };
+    } finally {
+      holder.closed = true;
     }
     if (holder.refusal !== undefined) throw holder.refusal;
     if (!outcome.ok) throw outcome.error;
@@ -499,17 +511,25 @@ export class RunMutantTransport {
   ) {
     // R-496: every fetch this transport makes records an unfiltered-extensions refusal for the
     // CURRENT public call (async-local, so concurrent calls never share a record), then rethrows.
-    this.fetchFn = (async (url, init) => {
+    const recording = async (url: string | URL | Request, init?: RequestInit) => {
       try {
         return await injectedFetch(url, init);
       } catch (err) {
         if (err instanceof UnfilteredExtensionsQueryError) {
           const holder = refusalScope.getStore();
-          if (holder !== undefined && holder.refusal === undefined) holder.refusal = err;
+          if (holder === undefined) {
+            // outside any call: nothing to attach it to, so keep it for the next one
+            this.lateRefusal ??= err;
+          } else if (holder.closed === true) {
+            this.lateRefusal ??= err;
+          } else if (holder.refusal === undefined) {
+            holder.refusal = err;
+          }
         }
         throw err;
       }
-    }) as FetchFn;
+    };
+    this.fetchFn = Object.assign(recording, { preconnect: injectedFetch.preconnect });
     const p = process.env.LETHAL_R289_TRACE;
     this.tracePath = p === undefined || p === "" ? undefined : p;
     this.traceWrite = opts.traceWrite ?? appendFileSync;
@@ -1530,7 +1550,7 @@ export class RunMutantTransport {
    * describe only its own execution and per-test attribution is sound.
    */
   async runWithCoverage(req: RunMutantRequest): Promise<RunMutantWithCoverageResult> {
-    return this.execute(req, true);
+    return this.refusalBoundary(() => this.execute(req, true));
   }
 
   /**

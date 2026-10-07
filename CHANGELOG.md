@@ -143,7 +143,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   check, the permission canary and the grouped run's progress watchdog instead of being reported
   as unavailable, inconclusive or "nothing yet". `run` and `runMany` also throw it at exit
   whenever any request inside the call was refused, even one a stop timer or a status read had
-  swallowed, so a refusal can no longer end as a recovered or timed-out verdict.
+  swallowed, so a refusal can no longer end as a recovered or timed-out verdict; `runWithCoverage`
+  does the same, and a refusal that arrives after its call has returned (a stop still pending past
+  its bound) is thrown by the next call before it sends anything.
 
 - **al-runner scores a `#if`-wrapped object that is alone in its file; identity scheme 29**
   (R-300b, R300). al-runner (one-shot, `--server` and resource modes) now scores such an object,
