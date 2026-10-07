@@ -505,6 +505,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A run lends its test-app identity only when it proved it, on every backend** (R495). A bcdev
+  session without an env-tool hook recorded the served test-app package's hash without proving it
+  was the installed one, so a run that measured P1 while P2 was served could pass its verdicts, its
+  known survivors and its saved baselines to a later P2 session (a false kill), and hook and non-hook
+  sessions consumed each other's rows. Each run now records a proven flag with its identity
+  (`runs.test_app_proven`, an additive column): proven by the env-tool read-back (as since R492), by
+  the served package's own version having exactly one installed row (no hook), or by construction on
+  al-runner. `--resume`, `--resume-run`, `--skip-known-survivors` and baseline reuse require it;
+  R492's digests marker is gone. An unproven run records no identity and lends nothing. A session
+  whose test app changes after it was proven stops at the next batch with `TestAppDriftedError`
+  (code `test-app-drifted`) before that batch records anything. **One-time cost:** rows recorded
+  before this release carry no proof, so the first run after upgrading carries nothing on
+  `--resume`, skips nothing on `--skip-known-survivors` and re-runs every baseline. No report
+  schema, store schema version or identity scheme changes.
+
 - **An env-tool run's test app is recorded only when proven installed** (R492). The server can serve a
   test app that is not the installed one; such a run recorded the served hash, so a later `--resume`,
   `--skip-known-survivors` or reused baseline could carry verdicts measured under another test app.

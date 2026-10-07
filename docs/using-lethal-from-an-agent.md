@@ -796,6 +796,28 @@ baseline (R486). `--skip-known-survivors` compares the read-back instead: after 
 an unreadable read-back, it skips nothing and warns `history-test-app-changed`. The run records the
 read-back's identity, or none when it could not be read.
 
+**A run lends its test-app identity to a later session only when it PROVED it (R495).** `--resume`,
+`--resume-run`, `--skip-known-survivors` and the reuse of a saved baseline all require the earlier
+run to have proven that the test app it recorded is the one it ran. The proof, by backend:
+- bcdev with an env-tool hook: the read-back after the hook, as above;
+- bcdev without a hook: the served package's own id and version (from the package, never from the
+  local `app.json`) has exactly one installed row on the server. A served package that is published
+  but not installed, a backend that cannot read installed versions, or no package read at all (no
+  dev-endpoint credentials: the source on disk is not what BC runs) proves nothing;
+- al-runner: it compiles the test source it hashed, so its identity is proven by construction.
+
+An unproven run records no identity. It still runs and reports normally, and it lends nothing: a
+later `--resume` of it is refused by name ("not proven installed"), and `--skip-known-survivors`
+skips none of its survivors and warns `history-test-app-changed`. A session that proved its test app
+and then reads a different one at a later batch stops there with `TestAppDriftedError` (code
+`test-app-drifted`), before that batch records anything, and its run keeps no identity. The read runs
+once per batch, so a republish during a batch is caught at the next one; a change to what is
+installed that leaves the served package unchanged is not caught.
+
+**One-time cost on upgrade.** Runs recorded before R495 carry no proof, so the first run after the
+upgrade carries nothing on `--resume`, skips nothing on `--skip-known-survivors` and re-runs every
+baseline. The runs it records are proven, so the next session lends normally again.
+
 ### After verify (guidance)
 
 A verify `killed` proves the test kills that mutant in the installed build. Make it the record
