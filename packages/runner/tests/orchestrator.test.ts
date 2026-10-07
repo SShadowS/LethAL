@@ -8269,6 +8269,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       /** R492 item 3: the hook awaits this before it publishes, so a caller that did not await
        *  the hook would read back (and record) while it is still running. */
       readonly gate?: Promise<void>;
+      /** R495: a plain bcdev session, no env-tool hook: the server serves `pre` throughout. */
+      readonly noHook?: boolean;
     }
 
     async function envRun(o: EnvRun) {
@@ -8315,19 +8317,23 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         quarantineDir: freshTmpDir(),
         lease,
         emit: [createEmitter([(e) => events.push(e)])],
-        afterLeaseAcquired: async () => {
-          if (o.hookThrows === true) throw new Error("the env tool died mid-publish");
-          inHook = true;
-          if (o.gate !== undefined) await o.gate;
-          writeFileSync(testAppFile, o.file ?? o.post ?? P2);
-          if (o.dep !== undefined) writeFileSync(depFile, o.dep.post);
-          hooked = true;
-          inHook = false;
-        },
-        afterLeaseAcquiredPublishes: [
-          ...(o.dep !== undefined ? [depFile] : []),
-          ...(o.testAppInPublishApps === false ? [] : [testAppFile]),
-        ],
+        ...(o.noHook === true
+          ? {}
+          : {
+              afterLeaseAcquired: async () => {
+                if (o.hookThrows === true) throw new Error("the env tool died mid-publish");
+                inHook = true;
+                if (o.gate !== undefined) await o.gate;
+                writeFileSync(testAppFile, o.file ?? o.post ?? P2);
+                if (o.dep !== undefined) writeFileSync(depFile, o.dep.post);
+                hooked = true;
+                inHook = false;
+              },
+              afterLeaseAcquiredPublishes: [
+                ...(o.dep !== undefined ? [depFile] : []),
+                ...(o.testAppInPublishApps === false ? [] : [testAppFile]),
+              ],
+            }),
         ...o.extra,
       }).catch((e: unknown) => e);
       const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
@@ -8770,6 +8776,65 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(r.outcome).not.toBeInstanceOf(Error);
         expect(r.knownSurvivors).toBe(0);
         r.store.close();
+      });
+    });
+
+    // R495: the same false carry where a session has NO hook, and across hook and non-hook
+    // sessions (they share the backend name and fingerprint). Run 1 is served P2 while P1 is
+    // installed, so it MEASURES P1; the later session has P2 served and installed.
+    describe("R495: no unproven test-app identity crosses sessions, hook or not", () => {
+      const resumeAndSkip = async (
+        first: (extra: Partial<SessionConfig>) => ReturnType<typeof envRun>,
+        later: { noHook?: boolean },
+      ) => {
+        const r1 = await first({});
+        expect(r1.outcome).not.toBeInstanceOf(Error);
+        const resumed = await envRun({
+          pre: P2,
+          post: P2,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          ...later,
+          dirs: r1.dirs,
+          store: r1.store,
+          extra: { resume: r1.runId },
+        });
+        expect(resumed.outcome).toBeInstanceOf(Error);
+        resumed.store.close();
+        const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+        const s1 = await first(skip);
+        const skipped = await envRun({
+          pre: P2,
+          post: P2,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          ...later,
+          dirs: s1.dirs,
+          store: s1.store,
+          extra: skip,
+        });
+        expect(skipped.outcome).not.toBeInstanceOf(Error);
+        expect(skipped.knownSurvivors).toBe(0);
+        skipped.store.close();
+      };
+      // A plain bcdev run served P2 with P1 installed.
+      const noHookMeasuringP1 = (extra: Partial<SessionConfig>) =>
+        envRun({ noHook: true, pre: P2, post: P2, installed: { [APP_ID]: ["1.0.0.1"] }, extra });
+      // A hook run recorded before R492: served P2, P1 installed, the served hash written.
+      const oldHookRowMeasuringP1 = async (extra: Partial<SessionConfig>) => {
+        const r = await envRun({ post: P2, installed: { [APP_ID]: ["1.0.0.1"] }, extra });
+        r.store.db.run("UPDATE runs SET test_app_hash = ? WHERE id = ?", [
+          `package:${hashPackage(P2)}`,
+          r.runId,
+        ]);
+        return r;
+      };
+      test("a session without a hook: an unproven served hash lends nothing", async () => {
+        await resumeAndSkip(noHookMeasuringP1, { noHook: true });
+      });
+      test("a non-hook session lends nothing from an old hook row", async () => {
+        await resumeAndSkip(oldHookRowMeasuringP1, { noHook: true });
+      });
+      test("a hook session lends nothing from a non-hook row (its digests prove nothing)", async () => {
+        await resumeAndSkip(noHookMeasuringP1, {});
       });
     });
 
