@@ -150,7 +150,12 @@ import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
-import { servesTestApp, testAppJson, testAppPackage } from "./helpers/proven-test-app";
+import {
+  servedIsInstalled,
+  servesTestApp,
+  testAppJson,
+  testAppPackage,
+} from "./helpers/proven-test-app";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
 {
@@ -2244,6 +2249,50 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
         expect((err as Error).message).toContain(`package:${hashPackage(B)}`);
         expect((err as TestAppChangedError).missingTests).toEqual([
           "Sandbox Tests.UnsupportedTest",
+        ]);
+      });
+
+      // R495 (sol, final review): a session that PROVED its test app and sees another one at the
+      // refusal's re-read withdraws the run's proof: the snapshot it just recorded under the first
+      // app, and its verdicts, must lend nothing later. Revert: drop the clear before
+      // `testAppRefusal` in `scoreBatch`.
+      test("R495: a proven session's A -> B refusal withdraws its run's proof; A -> A keeps it", async () => {
+        const PA = testAppPackage("1.0.0.0");
+        const PB = testAppPackage("1.0.0.1");
+        const proven = async (after: Uint8Array) => {
+          const dirs = await qualProject();
+          await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+          const backend = new QualificationBackend(missingFor);
+          const run = backend.run.bind(backend);
+          let baselineRan = false;
+          const served = () => (baselineRan ? after : PA);
+          const store = new ResultsStore(":memory:");
+          const err = await runSession({
+            backend: Object.assign(backend, {
+              fetchPublishedAppPackage: async () => served(),
+              microsoftMode: () => servedIsInstalled(served),
+              run: (ref: TestMethodRef, opts: RunOpts) => {
+                baselineRan = true;
+                return run(ref, opts);
+              },
+            }),
+            store,
+            ...dirs,
+            selectorIds,
+          }).then(
+            () => undefined,
+            (e: unknown) => e,
+          );
+          return { err, row: store.getRun(1) };
+        };
+        const changed = await proven(PB);
+        expect(changed.err).toBeInstanceOf(TestAppChangedError);
+        expect([changed.row?.testAppHash, changed.row?.testAppProven]).toEqual([null, false]);
+        const same = await proven(PA);
+        expect(same.err).toBeInstanceOf(StaleTestAppError);
+        expect([same.row?.testAppHash, same.row?.testAppProven]).toEqual([
+          `package:${hashPackage(PA)}`,
+          true,
         ]);
       });
 
@@ -8293,7 +8342,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       readonly postSequence?: readonly Uint8Array[];
       /** R495: the test app served BEFORE the hook (every read on a `noHook` session), one per read
        *  in order (the last repeats), instead of `pre`. */
-      readonly preSequence?: readonly Uint8Array[];
+      readonly preSequence?: readonly (Uint8Array | null)[];
       /** R495 (B1): the backend cannot form the test-app request (bcdev with no dev-endpoint
        *  credentials): every test-app read answers `undefined`. */
       readonly notRequested?: boolean;
@@ -9051,14 +9100,15 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         );
         return dirs;
       };
-      const drifted = (r: { outcome: unknown; store: ResultsStore; runId: number }) => {
+      const drifted = (
+        r: { outcome: unknown; store: ResultsStore; runId: number },
+        /** What the drifted read returned; `null` stands for a failed read (`undefined`). */
+        nowOrFailed: string | null = `package:${hashPackage(P1)}`,
+      ) => {
+        const now = nowOrFailed ?? undefined;
         expect(r.outcome).toBeInstanceOf(TestAppDriftedError);
         const e = r.outcome as TestAppDriftedError;
-        expect([e.proven, e.now, e.batchIndex]).toEqual([
-          `package:${hashPackage(P2)}`,
-          `package:${hashPackage(P1)}`,
-          1,
-        ]);
+        expect([e.proven, e.now, e.batchIndex]).toEqual([`package:${hashPackage(P2)}`, now, 1]);
         expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
         expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
         // Batch 1 recorded nothing; batch 0 did.
@@ -9072,20 +9122,83 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(rows(1)).toBe(0);
         expect(rows(0)).toBeGreaterThan(0);
       };
-      // The read in `scoreBatch`. Revert: drop `assertNoTestAppDrift` there.
+      // A proven session reads its test app at the top of each batch and again in `scoreBatch`
+      // before the baseline. Reads: 1 the session's, 2 and 3 batch 0's, 4 and 5 batch 1's.
+      // The top-of-batch read. Revert: drop `assertNoTestAppDrift` at the top of the batch loop.
       test("I1: a session whose batch read differs from its proven test app refuses there", async () => {
         const r = await envRun({
           noHook: true,
           ...provenP2,
-          preSequence: [P2, P2, P1],
+          preSequence: [P2, P2, P2, P1],
           dirs: await twoBatches(),
           extra: { maxGuardsPerBatch: 1 },
         });
         drifted(r);
         r.store.close();
       });
-      // The read before a batch carried whole (R192), which never reaches `scoreBatch`. Revert:
-      // drop the drift check before `replayCarriedBatch`.
+      // The read in `scoreBatch`: the top of batch 1 still saw P2. Revert: drop it there.
+      test("I1: a change between the top of a batch and its baseline refuses too", async () => {
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P2, P2, P1],
+          dirs: await twoBatches(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        drifted(r);
+        r.store.close();
+      });
+      // Sol, final review: a failed read cannot show the proven app still runs. Revert: let
+      // `assertNoTestAppDrift` pass an `undefined` read.
+      test("I1: an unreadable test app at a batch refuses as well, and withdraws the proof", async () => {
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P2, null],
+          dirs: await twoBatches(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        drifted(r, null);
+        r.store.close();
+      });
+      // Sol, final review: `--skip-known-survivors` records a batch's known survivors before its
+      // baseline, so the check must come first. Control: without the change, batch 1 skips some.
+      test("I1: a drifted batch records no known survivor", async () => {
+        const dirs = await twoBatches();
+        const first = await envRun({
+          noHook: true,
+          ...provenP2,
+          dirs,
+          extra: { ...skip, maxGuardsPerBatch: 1 },
+        });
+        expect(first.outcome).not.toBeInstanceOf(Error);
+        const control = await envRun({
+          noHook: true,
+          ...provenP2,
+          dirs,
+          store: first.store,
+          extra: { ...skip, maxGuardsPerBatch: 1 },
+        });
+        expect(
+          count(
+            control.store,
+            "SELECT COUNT(*) AS n FROM mutants WHERE run_id = ? AND batch_index = 1 AND verdict = 'known-survivor'",
+            control.runId,
+          ),
+        ).toBeGreaterThan(0);
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P2, P1],
+          dirs,
+          store: first.store,
+          extra: { ...skip, maxGuardsPerBatch: 1 },
+        });
+        drifted(r);
+        r.store.close();
+      });
+      // The read before a batch carried whole (R192), which never reaches `scoreBatch`: the
+      // top-of-batch read. Reads: 1 the session's, 2 batch 0's (carried), 3 batch 1's.
       test("I1: a resumed session refuses at a carried batch whose read differs, carrying nothing from it", async () => {
         const dirs = await twoBatches();
         const r1 = await envRun({

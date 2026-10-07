@@ -514,8 +514,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   the served package's own version having exactly one installed row (no hook), or by construction on
   al-runner. `--resume`, `--resume-run`, `--skip-known-survivors` and baseline reuse require it;
   R492's digests marker is gone. An unproven run records no identity and lends nothing. A session
-  whose test app changes after it was proven stops at the next batch with `TestAppDriftedError`
-  (code `test-app-drifted`) before that batch records anything. **One-time cost:** rows recorded
+  whose test app changes after it was proven, or can no longer be read, stops at the next batch with
+  `TestAppDriftedError` (code `test-app-drifted`) before that batch records anything, and its run
+  keeps no identity. **One-time cost:** rows recorded
   before this release carry no proof, so the first run after upgrading carries nothing on
   `--resume`, skips nothing on `--skip-known-survivors` and re-runs every baseline. No report
   schema, store schema version or identity scheme changes.

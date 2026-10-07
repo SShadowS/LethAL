@@ -514,6 +514,10 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       },
     },
     {
+      "call": "fetchPublishedAppPackage",
+      "tag": "primary",
+    },
+    {
       "event": {
         "phase": "deploy",
         "seq": 17,

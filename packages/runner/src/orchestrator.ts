@@ -4389,9 +4389,11 @@ async function batchTestAppReader(
 /**
  * R495: a session that PROVED its test app (`proven`) and reads a different one (`now`) at a batch
  * clears its run's identity and flag, so no later session borrows from it, then throws before the
- * batch records anything. A failed read (`undefined`) is not a difference; a session with nothing
- * proven has nothing to lend or borrow. The read runs once per batch, so a republish during a
- * batch's mutant loop is caught at the next one, and an install-only change is not caught.
+ * batch records anything. A failed read (`undefined`) is treated the same (sol, final review): it
+ * cannot show the proven app still runs, and carrying, skipping or recording under the proof would
+ * rest on that. A session with nothing proven has nothing to lend or borrow. The read runs at the
+ * top of each batch (and again before its baseline), so a republish during a batch's mutant loop is
+ * caught at the next one, and an install-only change is not caught.
  */
 function assertNoTestAppDrift(
   store: ResultsStore,
@@ -4400,7 +4402,7 @@ function assertNoTestAppDrift(
   now: string | undefined,
   batchIdx: number,
 ): void {
-  if (proven === undefined || now === undefined || now === proven) return;
+  if (proven === undefined || now === proven) return;
   store.setRunTestAppHash(runId, null, false);
   throw new TestAppDriftedError(proven, now, batchIdx);
 }
@@ -4636,6 +4638,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   if (missingFromServer.length > 0) {
     // R462: a failed re-read proves nothing, so it is `undefined`, never a guess.
     const after = await hashTestApp?.().catch(() => undefined);
+    // R495 (sol, final review): a re-read that is not the proven test app (changed, or unreadable)
+    // withdraws the run's proof, so neither this run's snapshots, the one just recorded included,
+    // nor its verdicts lend anything later.
+    const proven = input.snapshot?.provenTestAppHash;
+    if (proven !== undefined && after !== proven) store.setRunTestAppHash(runId, null, false);
     throw testAppRefusal(missingFromServer, snapshotKey?.testAppHash, after);
   }
 
@@ -5712,6 +5719,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // individually fence-validated. The heartbeat runs on a timer and can observe the loss at
       // any moment, so it needs the current batch index, not the one the mutant loop last saw.
       if (leaseSession !== undefined) leaseSession.currentBatchIndex = batchIdx;
+      // R495: a proven session checks its test app FIRST, before anything this batch records: a
+      // whole-batch carry, history's known survivors, a compile failure's error rows or a baseline.
+      // (`scoreBatch` reads again before its baseline.)
+      if (historyTestAppHash !== undefined) {
+        const now = await (await batchTestAppReader(cfg.backend, cfg.testDir))();
+        assertNoTestAppDrift(cfg.store, runId, historyTestAppHash, now, batchIdx);
+      }
       // 1. write the instrumented project for this artifact — currently
       // always every file `generateMutationSet` found (single artifact).
       // `batchIdx` MUST come from `.entries()`, not a hoisted constant:
@@ -5813,11 +5827,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         resumeState !== undefined &&
         batchCarriesEntirely(resumeState.index, manifest.mutants, cfg.retryStranded ?? false)
       ) {
-        // R495: this path never reaches `scoreBatch`'s read, so the drift check reads here.
-        if (historyTestAppHash !== undefined) {
-          const now = await (await batchTestAppReader(cfg.backend, cfg.testDir))();
-          assertNoTestAppDrift(cfg.store, runId, historyTestAppHash, now, batchIdx);
-        }
         replayCarriedBatch(cfg, runId, manifest.mutants, batchIdx, resumeState, outcomes, emit);
         continue;
       }

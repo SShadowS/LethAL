@@ -809,10 +809,13 @@ run to have proven that the test app it recorded is the one it ran. The proof, b
 An unproven run records no identity. It still runs and reports normally, and it lends nothing: a
 later `--resume` of it is refused by name ("not proven installed"), and `--skip-known-survivors`
 skips none of its survivors and warns `history-test-app-changed`. A session that proved its test app
-and then reads a different one at a later batch stops there with `TestAppDriftedError` (code
-`test-app-drifted`), before that batch records anything, and its run keeps no identity. The read runs
-once per batch, so a republish during a batch is caught at the next one; a change to what is
-installed that leaves the served package unchanged is not caught.
+and then reads a different one at a later batch, or cannot read it at all, stops there with
+`TestAppDriftedError` (code `test-app-drifted`), before that batch records anything (no carried
+verdict, no known survivor, no error row, no baseline), and its run keeps no identity. The same
+happens to the run's proof when a stale-test-app refusal's re-read finds another test app. The read
+runs at the top of each batch and again before its baseline, so a republish during a batch is
+caught at the next one; a change to what is installed that leaves the served package unchanged is
+not caught.
 
 **One-time cost on upgrade.** Runs recorded before R495 carry no proof, so the first run after the
 upgrade carries nothing on `--resume`, skips nothing on `--skip-known-survivors` and re-runs every
