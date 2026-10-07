@@ -74,8 +74,8 @@ beforeAll(async () => {
 });
 
 describe("R477: the bare fallback moves a same-tuple twin's key", () => {
-  test("the identity scheme is 28 (26 for this key move, 25 R446, 27 R480, 28 R484)", () => {
-    expect(IDENTITY_SCHEME).toBe(28);
+  test("the identity scheme is 29 (26 for this key move, 25 R446, 27 R480, 28 R484, 29 R-300b)", () => {
+    expect(IDENTITY_SCHEME).toBe(29);
   });
 
   test("the new bare mutant takes ordinal 0 and the old Rec.Name mutant moves to ordinal 1", () => {

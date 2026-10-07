@@ -2092,6 +2092,8 @@ function memberOf(e: MutantManifestEntry): string {
 function refusedObjectsOfSources(sources: readonly AlSource[]): ReadonlyMap<string, string> {
   return coverageRefusedObjects(
     sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
+    // R-300b: verify reads the fenced line map's coverage (bcdev), which still refuses.
+    "bcdev",
   );
 }
 

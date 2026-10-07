@@ -133,7 +133,14 @@ import {
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { discoveredRelPaths, isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
-import { type AlSource, ManifestDeclarationError, coverageRefusedObjects } from "./line-map";
+import {
+  type AlSource,
+  ManifestDeclarationError,
+  activeObjectKeys,
+  alRunnerAdmitsWrappedFile,
+  coverageRefusedObjects,
+  duplicateObjectRefusals,
+} from "./line-map";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -418,6 +425,13 @@ export interface RefusedFile extends Omit<FileRefusalFields, "site"> {
 
 export interface MutationSetResult {
   readonly files: readonly InstrumentedFile[];
+  /**
+   * R-300b (C1): object keys declared, in an arm this build compiles, by more than one of the
+   * project's files (every parsed file, `--only` or not) -> the refusal sentence
+   * (`duplicateObjectRefusals`, the function the al-runner index uses). `runSession` refuses them
+   * in selection on the al-runner path. Usually empty: alc rejects such a project.
+   */
+  readonly duplicateObjects: ReadonlyMap<string, string>;
   /** Files with >=1 spec that no selector var could be injected into — see doc comment above. */
   readonly skipped: readonly NotInstrumentedFile[];
   /** Every `.al` source file scanned (excluding emitted `Mutation*` artifacts) — the denominator
@@ -1301,6 +1315,12 @@ export async function generateMutationSet(
   }
   return {
     files,
+    duplicateObjects: duplicateObjectRefusals(
+      parsed.map(({ path, root }) => {
+        const arms = armsByRoot.get(root);
+        return { path, keys: arms === undefined ? [] : activeObjectKeys(root, arms) };
+      }),
+    ),
     skipped,
     totalFiles: entries.length,
     excludedByOnly,
@@ -3926,6 +3946,25 @@ function pinPlatformAppsDir(backend: ExecutionBackend, dir: string, who: string)
 }
 
 /**
+ * Sol run 001 (I): `base` plus the objects the backend's deployed coverage index refused by name
+ * (al-runner only; a backend without the method adds nothing). The base sentence wins a tie.
+ */
+async function withBackendRefusals(
+  backend: ExecutionBackend,
+  base: ReadonlyMap<string, string>,
+): Promise<ReadonlyMap<string, string>> {
+  const r = backend as { coverageRefusals?: () => Promise<ReadonlyMap<string, string>> };
+  if (typeof r.coverageRefusals !== "function") return base;
+  return new Map([...(await r.coverageRefusals()), ...base]);
+}
+
+/** R-300b: hands the session's effective build symbols to a backend that takes them. */
+function handBuildSymbols(backend: ExecutionBackend, symbols: readonly string[]): void {
+  const taker = backend as { useBuildSymbols?: (s: readonly string[]) => void };
+  if (typeof taker.useBuildSymbols === "function") taker.useBuildSymbols(symbols);
+}
+
+/**
  * C02-04: the session-level values `scoreBatch` needs. Built once per session by `runSession`,
  * after the lease is open, and shared by every batch.
  */
@@ -5077,6 +5116,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     sourceSnapshot,
     buildBackend,
   );
+  // R-300b: the al-runner coverage index evaluates `#if` arms under this same set. Structural,
+  // like `usePlatformAppsDir`: a backend without it builds no such index.
+  handBuildSymbols(cfg.backend, buildSymbols);
   const symbolsWarning = marksSymbolsWarning(
     marksUnderOtherSymbols(cfg.equivalenceMarks ?? [], buildSymbols),
     buildSymbols,
@@ -5193,6 +5235,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const generateStartedMs = Date.now();
   const {
     files: allFiles,
+    duplicateObjects,
     skipped: notInstrumentedFiles,
     totalFiles: totalAlFiles,
     excludedByOnly,
@@ -5271,7 +5314,25 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   }
   // R298: objects declared inside, or after, a #if object wrapper, by the line map's own rule.
   // Passed to BOTH `coverageFilter` calls so no coverage mode and no fallback scores their mutants.
-  const coverageRefused = coverageRefusedObjects(allFiles);
+  // R-300b: per coverage path. On al-runner an admitted wrapped file is scored, and a key two
+  // files declare is refused by the sentence the index prints (C1).
+  const coverageRefused: ReadonlyMap<string, string> = new Map([
+    ...coverageRefusedObjects(allFiles, backendName),
+    ...(backendName === "al-runner" ? duplicateObjects : []),
+  ]);
+  // Sol run 002: on al-runner the index can refuse an ADMITTED wrapped file's objects after deploy
+  // (its instrumented text re-parses undecided), which the source read here cannot see. So no
+  // verdict is carried for such a file's mutants before that (known-survivor, full-batch resume);
+  // the ordinary resume carry runs after the post-deploy split and is safe.
+  const carryBarredFiles = new Set(
+    backendName === "al-runner"
+      ? allFiles
+          .filter((f) => alRunnerAdmitsWrappedFile(f.root))
+          .map((f) => f.path.replaceAll("\\", "/"))
+      : [],
+  );
+  const carryBarred = (m: MutantManifestEntry): boolean =>
+    carryBarredFiles.has(m.file.replaceAll("\\", "/"));
   // R92: raw site count (every spec that made it into an instrumentable file) vs the DEPLOYED
   // count once per-file dedup (`dedupeSpecs`) collapses same-site operator collisions into one
   // winner — the same collapse `writeInstrumentedProject` runs at compile time, per file (identity
@@ -5617,6 +5678,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             `runSession: the session backend sends al-runner's pinned platform-app directory (${platformAppsDir}) but worker backend ${i} declined it, so the baseline and the mutants would run under different argv (R147, R242).`,
           );
         }
+        handBuildSymbols(worker, buildSymbols);
         // R488: each worker starts with an empty sibling cache, so it needs the list too.
         worker.useDiscoveredTests?.(discovery.unfiltered);
         workerBackends.push(worker);
@@ -5753,8 +5815,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // needed for a verdict that already exists. A batch with one mutant to execute, one
       // colliding key, or one carried row from before the coverage columns existed takes the
       // ordinary path unchanged.
+      // Sol run 002: a batch holding a `carryBarred` mutant deploys, so the index can refuse it.
       if (
         resumeState !== undefined &&
+        !manifest.mutants.some(carryBarred) &&
         batchCarriesEntirely(resumeState.index, manifest.mutants, cfg.retryStranded ?? false)
       ) {
         replayCarriedBatch(cfg, runId, manifest.mutants, batchIdx, resumeState, outcomes, emit);
@@ -5896,11 +5960,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           },
         },
       );
-      const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
+      // Sol run 002: never a mutant whose refusal is known only after deploy (`carryBarred`).
+      const knownSurvivors = filterHistory([...manifest.mutants], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
         ...(carryDisabled !== undefined ? { carryDisabled } : {}),
         current: carryCurrent,
-      });
+      }).knownSurvivors.filter((m) => !carryBarred(m));
+      const skipped = new Set(knownSurvivors);
+      const execute = manifest.mutants.filter((m) => !skipped.has(m));
       for (const m of knownSurvivors)
         record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
 
@@ -6135,6 +6202,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       }> = [];
       let refusedThisBatch = new Map<string, string>();
       let testPageThisBatch = new Map<string, string>();
+      // Sol run 001 (I): plus what THIS batch's deployed index refused by name, read after deploy
+      // and before any mutant is scored. Selection read the original source, which can decide
+      // where the instrumented text does not.
+      const batchRefused = await withBackendRefusals(cfg.backend, coverageRefused);
       const select = (baseline: readonly BaselineRow[]): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -6256,7 +6327,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // get the same answer. Spelling it as a comparison against one mode's NAME meant every
             // new source-parsing mode silently opted into the widening it must not have.
             isHubCoverageMode(caps.coverage),
-            coverageRefused,
+            batchRefused,
           );
           perMutantTests = split.covered;
           refusedIds = split.refused;
@@ -6297,13 +6368,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             ? new Map<string, readonly TestMethodRef[]>()
             : coverageFilter(
                 // R298: a refused mutant was decided by the green split; it is left out here so
-                // its refusal is not warned a second time. `coverageRefused` stays as the guard.
+                // its refusal is not warned a second time. `batchRefused` stays as the guard.
                 uncovered.filter((m) => !refusedIds.has(m.mutantId)),
                 unsupportedIndex,
                 unsupportedBaseline.map((b) => b.ref),
                 undefined,
                 true,
-                coverageRefused,
+                batchRefused,
               ).covered;
         // R69 (closed): a mutant covered ONLY by a test this session cannot run is NAMED rather
         // than silently scored `no-coverage`. Recording is deferred until after the fenced mutant

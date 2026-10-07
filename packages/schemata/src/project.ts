@@ -193,9 +193,12 @@ export function coarseIdentityTupleOf(
  * ordinal (prototype: 52 keys, DC 12, BC.History 40). 28: R484, an open `Integer` report data item
  * is a loop, so a write its exit guards or its own range bounds read is hang-refused and a later
  * same-tuple twin of a refused mutant takes its ordinal (BC.History: 216 keys; fixtures, CDO, DC
- * and DO: none).
+ * and DO: none). 29: R-300b, no key tuple moves and the emitted AL is byte-identical, but on
+ * al-runner a `#if`-wrapped object alone in its file is now scored, so a key whose verdict was a
+ * refusal's `no-coverage` can now be scored (R318's scheme-4 reason). The bump is global: history,
+ * `--resume` and marks recorded under 28 are not carried, bcdev's included.
  */
-export const IDENTITY_SCHEME = 28;
+export const IDENTITY_SCHEME = 29;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

@@ -2286,8 +2286,8 @@ export function alRunnerAdvisory(
  * R387: an `alRunner.coverage: "al-runner"` request, checked against the project before anything
  * is built. al-runner reports every object after a file's first in a frame LethAL cannot convert
  * (R383, measured on v2.12.0-main.c39ad5de; upstream #3713's object loss is fixed, this is a
- * different defect), and the index drops a file holding a `#if`-wrapped object
- * (`fileHoldsWrappedObject`, R298, pending R300), so either would turn real coverage into wrong
+ * different defect), and the index drops a file holding a `#if`-wrapped object of a shape it does
+ * not admit (`alRunnerAdmitsWrappedFile`, R298, R-300b), so either would turn real coverage into wrong
  * coverage. Such a run falls back to `"none"` with ONE warning naming the files. Called once per
  * session, so the warning is not repeated per worker.
  */
@@ -2323,7 +2323,7 @@ async function applyAlRunnerCoverageGuard(
         ]
       : []),
     ...(support.wrappedObjectFiles.length > 0
-      ? ["how a compiled #if arm is numbered is not measured (R300)"]
+      ? ["the #if object wrapper is of a shape not measured on al-runner (R300)"]
       : []),
   ];
   warn(

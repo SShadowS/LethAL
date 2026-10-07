@@ -257,6 +257,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "al-runner.cli-default.baseline.json",
     "itest:alrunner",
   ),
+  "al-runner.wrapped.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
+    "al-runner.wrapped.baseline.json",
+    "itest:alrunner",
+  ),
   "bcdev.baseline.json": gateHow("LETHAL_ITEST_BCDEV=1", "bcdev.baseline.json", "itest:bcdev"),
   "envtool.baseline.json": gateHow(
     "LETHAL_ITEST_ENVTOOL=1",
@@ -282,6 +287,9 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * docs/superpowers/specs/2026-10-02-r383-multiobject-refusal-precommitment.md). R-204b's
  * single-path hang leg (`hang.single.baseline.json`) was recorded 2026-10-06 on Cronus28 (record
  * exit 3, confirm PASS), per docs/superpowers/specs/2026-10-06-r204b-hang-single-path-precommitment.md.
+ * R-300b's wrapped leg (`al-runner.wrapped.baseline.json`) was recorded 2026-10-06 on al-runner
+ * v2.12.0-main.c39ad5de (record exit 3, confirm PASS; `--define` measured to ADD to app.json's
+ * symbols), per docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md.
  */
 export const PENDING_FIRST_RECORD: readonly string[] = [];
 

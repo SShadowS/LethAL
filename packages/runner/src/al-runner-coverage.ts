@@ -44,13 +44,16 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { initParser, parseAL } from "@lethal/engine";
+import { evaluateArms, initParser, parseAL } from "@lethal/engine";
 import { wrapRoot } from "@lethal/engine";
 import type { ServerPerTestCoverage } from "./al-runner-server";
 import type { CoverageEntry, CoverageMap } from "./backend";
 import {
   LineMap,
   type LineMapEntry,
+  activeEntries,
+  alRunnerAdmitsWrappedFile,
+  duplicateObjectRefusals,
   fileHoldsWrappedObject,
   fileLineMapEntries,
   objectIdentityOf,
@@ -58,7 +61,9 @@ import {
   refusedAsMultiObject,
   refusedObjectsOfFile,
   resolveFileLine,
+  undecidedArmsReason,
 } from "./line-map";
+import { effectiveBuildSymbols } from "./preprocessor-symbols";
 
 /** One `<line>` of one `<class>`, as al-runner writes it. */
 export interface CoberturaLine {
@@ -113,12 +118,17 @@ export interface AlRunnerCoverageIndex {
    */
   readonly multiObjectFiles: readonly string[];
   /**
-   * R298: project-relative paths (forward slashes) holding a `#if`-wrapped object. Refused WHOLE,
-   * because coverage here is per file: every object in one reads `no-coverage` until R300 measures
-   * how al-runner numbers a compiled arm. A refused file is in none of `byFile`, the line map's
+   * R298: project-relative paths (forward slashes) holding a `#if`-wrapped object of a shape
+   * al-runner is not measured on (R-300b: `alRunnerAdmitsWrappedFile` false). Refused WHOLE,
+   * because coverage here is per file. A refused file is in none of `byFile`, the line map's
    * declared set, or `multiObjectFiles`.
    */
   readonly refusedFiles: readonly string[];
+  /**
+   * R-300b: the `byFile` keys of ADMITTED wrapped files. On `--server` a statement there whose
+   * scope disagrees with its position is dropped, not overruled (I3).
+   */
+  readonly admittedWrappedFiles: ReadonlySet<string>;
   /** R-307 section 4: the parsed declarations, `type:id` lower-cased: Direction B's `declared`. */
   readonly declared: ReadonlySet<string>;
   /**
@@ -128,8 +138,17 @@ export interface AlRunnerCoverageIndex {
    */
   readonly exempt: ReadonlySet<string>;
   /**
+   * Every object this index refuses BY NAME (a wrapped file not admitted, an admitted one whose
+   * instrumented text is undecided, a duplicate key), `type:id` lower-cased -> the sentence.
+   * Sol run 001 (I): selection reads the ORIGINAL source, so the orchestrator merges this map into
+   * its refusal map before scoring; otherwise an undecided re-parse is invisible to selection.
+   * Multi-object files are not here: their exemption is not a per-object refusal.
+   */
+  readonly refusals: ReadonlyMap<string, string>;
+  /**
    * Every `.al` path scanned but NOT in `byFile` (lower-cased keys): refused, multi-object and not
-   * admitted, or holding no indexed object. A coverage row stops at its own path here instead of
+   * admitted, or holding no indexed object (R-300b: compiled out, undecided, or every object a
+   * duplicate key). A coverage row stops at its own path here instead of
    * falling through to a shorter ending another file owns (R298, R383 r2). An admitted
    * multi-object file is in `byFile`, so it is never here.
    */
@@ -152,7 +171,8 @@ export interface AlRunnerCoverageIndex {
  * object after a file's first, measured on v2.12.0-main.c39ad5de).
  *
  * R387: `wrappedObjectFiles` uses the SAME rule the index uses to refuse a file
- * (`fileHoldsWrappedObject`), so the guard and the index cannot drift. Such a file's objects are
+ * (`fileHoldsWrappedObject`, and since R-300b not `alRunnerAdmitsWrappedFile`), so the guard and
+ * the index cannot drift. Such a file's objects are
  * dropped from the index, so trusting coverage would read every one of them `no-coverage`.
  * `supported` still answers the multi-object question alone, as before: R298 keeps coverage on for
  * a wrapped file and refuses its objects in selection, by name. The CLI is stricter and falls back
@@ -181,7 +201,10 @@ export async function alRunnerCoverageSupport(
     const text =
       snapshot?.get(rel)?.toString("utf8") ?? (await readFile(join(projectDir, rel), "utf8"));
     const root = wrapRoot(parseAL(text));
-    if (fileHoldsWrappedObject(root)) wrapped.push(normalizeSlashes(rel));
+    // R-300b: an admitted wrapped file is scored, so it does not turn coverage off.
+    if (fileHoldsWrappedObject(root) && !alRunnerAdmitsWrappedFile(root)) {
+      wrapped.push(normalizeSlashes(rel));
+    }
     // R383 r2: the same predicate as the index skip below. An enum then a codeunit puts the
     // codeunit second, and al-runner reports a later object in the wrong frame whatever the first.
     if (refusedAsMultiObject(root)) multi.push(normalizeSlashes(rel));
@@ -205,12 +228,28 @@ export async function alRunnerCoverageSupport(
  * A multi-object file is NAMED and, by default, not indexed (R383, this module's header).
  * `admitMultiObjectFiles` indexes every object of it, resolved by position; only tests pass it
  * until upstream reports every object in the instrumented frame.
+ *
+ * R-300b: `symbols` is the session's EFFECTIVE build symbol set (`effectiveBuildSymbols`), under
+ * which each file's arms are evaluated (`evaluateArms`), the same set generation used. A
+ * declaration in a compiled-out arm is not indexed and not declared; an `undecided` file is not
+ * indexed (it has no mutant). An admitted wrapped file (`alRunnerAdmitsWrappedFile`) is indexed
+ * with base line 1, so `resolveFileLine` reads al-runner's FILE line as the object line (H1).
+ * Then a key still declared in more than one indexed file is removed, refused by name
+ * (`duplicateObjectRefusals`) and exempt (C1). Every file left with no entry is in `skippedFiles`.
  */
 export async function buildAlRunnerCoverageIndex(
   instrumentedDir: string,
-  options: { readonly admitMultiObjectFiles?: boolean } = {},
+  options: {
+    readonly admitMultiObjectFiles?: boolean;
+    readonly symbols?: readonly string[];
+  } = {},
 ): Promise<AlRunnerCoverageIndex> {
   await initParser();
+  // ponytail: absent `symbols` means the bundle's own app.json symbols only (unit tests). The
+  // backend always passes the session's set and refuses a coverage deploy without one.
+  const symbols =
+    options.symbols ??
+    (await effectiveBuildSymbols(instrumentedDir, [], undefined, { kind: "bcdev" }));
   const rels = (await readdir(instrumentedDir, { recursive: true }))
     .map((e) => e.toString())
     .filter((e) => e.toLowerCase().endsWith(".al"))
@@ -223,21 +262,49 @@ export async function buildAlRunnerCoverageIndex(
   const entries: LineMapEntry[] = [];
   const declared = new Set<string>();
   const exempt = new Set<string>();
+  const refusals = new Map<string, string>();
+  const admittedWrappedFiles = new Set<string>();
+  /** Files that pass every per-file rule, before the duplicate-key pass. */
+  const candidates: { file: string; key: string; entries: LineMapEntry[] }[] = [];
 
   for (const rel of rels) {
     const source = await readFile(join(instrumentedDir, rel), "utf8");
     const root = wrapRoot(parseAL(source));
-    if (fileHoldsWrappedObject(root)) {
+    const admitted = alRunnerAdmitsWrappedFile(root);
+    if (fileHoldsWrappedObject(root) && !admitted) {
       const file = normalizeSlashes(rel);
       refusedFiles.push(file);
       skippedFiles.push(normalizeFileKey(rel));
-      for (const [key, reason] of refusedObjectsOfFile(root, file)) {
+      for (const [key, reason] of refusedObjectsOfFile(root, file, "al-runner")) {
         exempt.add(key);
+        refusals.set(key, reason);
         console.warn(`[lethal] ${reason}`);
       }
       continue;
     }
-    const fileEntries = fileLineMapEntries(root, objectIdentityOf);
+    let fileEntries = fileLineMapEntries(root, objectIdentityOf);
+    if (admitted) {
+      // R-300b: only a wrapped file can hold a declaration in an inactive arm, so arms are read
+      // only here; a plain file is indexed as before, even if its instrumented text re-parses
+      // undecided (R303's emitted ERROR nodes do).
+      const arms = evaluateArms(root, source, symbols);
+      if (arms.kind === "undecided") {
+        const file = normalizeSlashes(rel);
+        refusedFiles.push(file);
+        skippedFiles.push(normalizeFileKey(rel));
+        for (const e of fileEntries) {
+          const key = `${e.objectType.toLowerCase()}:${e.objectId}`;
+          const reason = undecidedArmsReason(e.objectType, e.objectId, file, arms.reason);
+          exempt.add(key);
+          refusals.set(key, reason);
+          console.warn(`[lethal] ${reason}`);
+        }
+        continue;
+      }
+      // The one object carries the line map's `refused` mark; it is dropped here, and its base
+      // is 1 (it is the file's only object), so al-runner's FILE line is the object line (H1).
+      fileEntries = activeEntries(fileEntries, arms).map(({ refused: _refused, ...e }) => e);
+    }
     if (refusedAsMultiObject(root)) {
       // Forward slashes so the warning reads the same on every platform: `readdir` hands back
       // `src\X.al` on Windows, and this string is quoted to a user who has to find the file.
@@ -249,28 +316,51 @@ export async function buildAlRunnerCoverageIndex(
         continue;
       }
     }
-    if (fileEntries.length === 0) {
-      skippedFiles.push(normalizeFileKey(rel));
+    candidates.push({
+      file: normalizeSlashes(rel),
+      key: normalizeFileKey(rel),
+      entries: fileEntries,
+    });
+    if (admitted) admittedWrappedFiles.add(normalizeFileKey(rel));
+  }
+
+  // LOWER-CASED to match `line-map.ts`'s own `keyOf`. Getting this wrong does not throw: the
+  // `LineMap` constructor skips an object it thinks is undeclared, and `lookup` then returns
+  // undefined for every line of it, so every entry silently loses its `procedure` and coverage
+  // degrades to object-level without a word. Caught by the tests asserting a NAME.
+  const keyOfEntry = (e: LineMapEntry) => `${e.objectType.toLowerCase()}:${e.objectId}`;
+  // R-300b (C1): the `LineMap` keeps one entry per key, so a key in two files would name one
+  // file's hits from the other's procedures.
+  const duplicates = duplicateObjectRefusals(
+    candidates.map((c) => ({ path: c.file, keys: c.entries.map(keyOfEntry) })),
+  );
+  for (const [key, reason] of duplicates) {
+    exempt.add(key);
+    refusals.set(key, reason);
+    console.warn(`[lethal] ${reason}`);
+  }
+  for (const c of candidates) {
+    const kept = c.entries.filter((e) => !duplicates.has(keyOfEntry(e)));
+    if (kept.length === 0) {
+      skippedFiles.push(c.key);
+      admittedWrappedFiles.delete(c.key);
       continue;
     }
-    byFile.set(normalizeFileKey(rel), fileEntries);
-    for (const e of fileEntries) {
-      // LOWER-CASED to match `line-map.ts`'s own `keyOf`. Getting this wrong does not throw: the
-      // `LineMap` constructor skips an object it thinks is undeclared, and `lookup` then returns
-      // undefined for every line of it, so every entry silently loses its `procedure` and coverage
-      // degrades to object-level without a word. Caught by the tests below asserting a NAME.
-      declared.add(`${e.objectType.toLowerCase()}:${e.objectId}`);
-    }
-    entries.push(...fileEntries);
+    byFile.set(c.key, kept);
+    for (const e of kept) declared.add(keyOfEntry(e));
+    entries.push(...kept);
   }
+  skippedFiles.sort();
 
   return {
     byFile,
     lineMap: new LineMap(entries, declared, await readRenamedMemberNames(instrumentedDir)),
     multiObjectFiles,
     refusedFiles,
+    admittedWrappedFiles,
     declared,
     exempt,
+    refusals,
     skippedFiles,
   };
 }
@@ -312,10 +402,19 @@ function objectsForFile(
   index: AlRunnerCoverageIndex,
   skipped: ReadonlySet<string>,
 ): readonly LineMapEntry[] | undefined {
+  return indexedFile(file, index, skipped)?.entries;
+}
+
+/** `objectsForFile`, with the matched `byFile` key (R-300b: the I3 rule reads it). */
+function indexedFile(
+  file: string,
+  index: AlRunnerCoverageIndex,
+  skipped: ReadonlySet<string>,
+): { readonly key: string; readonly entries: readonly LineMapEntry[] } | undefined {
   for (const cand of fileKeyCandidates(file)) {
     if (skipped.has(cand)) return undefined;
     const hit = index.byFile.get(cand);
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) return { key: cand, entries: hit };
   }
   return undefined;
 }
@@ -387,6 +486,11 @@ export function alRunnerCoverageFrom(
  *
  * In a single-object file steps 1 and 2 give the pre-R383 output exactly; step 3 differs only where
  * the server and the span disagree, which no measured shape does.
+ *
+ * R-300b (I3): in an ADMITTED `#if`-wrapped file (`admittedWrappedFiles`) step 3's disagreement
+ * DROPS the statement, with a named warning, instead of letting the position win: the probe
+ * measured the server naming the compiled arm, so a disagreement there means the frame is not the
+ * one measured.
  */
 export function alRunnerCoverageFromServer(
   entry: ServerPerTestCoverage,
@@ -399,8 +503,11 @@ export function alRunnerCoverageFromServer(
   // same few lines many times.
   const named = new Map<string, string | undefined>();
   for (const file of entry.coverage ?? []) {
-    const objects = objectsForFile(file.file, index, skipped);
-    if (objects === undefined) continue;
+    const found = indexedFile(file.file, index, skipped);
+    if (found === undefined) continue;
+    const objects = found.entries;
+    // R-300b (I3): in an admitted wrapped file a disagreement drops the line instead.
+    const strict = index.admittedWrappedFiles.has(found.key);
     for (const st of file.statements ?? []) {
       // Same rule as the Cobertura path: a reported-but-unhit statement is evidence the file was
       // COMPILED, never that this test reached it. Treating it as coverage is [[R63]]'s
@@ -421,6 +528,12 @@ export function alRunnerCoverageFromServer(
           }
           const byPosition = named.get(memo);
           if (byPosition !== undefined) {
+            if (strict && st.scope?.toLowerCase() !== byPosition.toLowerCase()) {
+              console.warn(
+                `[lethal] al-runner --server named the covered statement at ${file.file}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}", in a #if-wrapped file; the line is dropped (R300).`,
+              );
+              continue;
+            }
             if (st.scope?.toLowerCase() !== byPosition.toLowerCase()) {
               console.warn(
                 `[lethal] al-runner --server named the covered statement at ${file.file}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}"; the position wins (R383).`,

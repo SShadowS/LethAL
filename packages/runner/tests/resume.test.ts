@@ -491,8 +491,10 @@ describe("sessionFingerprint (R47)", () => {
   // validate-to-assign's guarded bare fallback); it was 98154689...145c under scheme 25. It moved
   // again for R480 (scheme 27, body-exit guards under any non-cursor condition, feeds, `for`
   // control variables); it was cbbd9d28...3a65 under scheme 26. It moved again for R484 (scheme
-  // 28, open `Integer` report data items are loops); it was 4ea3654a...49ab under scheme 27.
-  const PINNED = "1ce22835a23c22c1a59d466ce75f3fa72bc9223ed80c74807d48f568b94b7dd7";
+  // 28, open `Integer` report data items are loops); it was 4ea3654a...49ab under scheme 27. It
+  // moved again for R-300b (scheme 29, al-runner scores a `#if`-wrapped object alone in its file);
+  // it was 1ce22835...7dd7 under scheme 28.
+  const PINNED = "514067297e1726ad30f85570a44c426791a02595c2fcca315b6fb661a4301b37";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2078,7 +2080,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 28 since R484 (an open `Integer` report data item is
+    // Pinned by value so a bump is deliberate: 29 since R-300b (al-runner scores a `#if`-wrapped
+    // object alone in its file, so a refused key's verdict can now be scored; no key moves); 28 was
+    // R484 (an open `Integer` report data item is
     // a loop; writes its exit guards or range bounds read are hang-refused); 27 was R480 (body-exit
     // guards under any non-cursor condition, indirect feeds of a `while true` guard, `for`
     // control-variable writes); 26 was R477 (validate-to-assign's guarded bare fallback adds same-tuple twins); 25 was R446
@@ -2094,7 +2098,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
     // sites move twins).
-    expect(IDENTITY_SCHEME).toBe(28);
+    expect(IDENTITY_SCHEME).toBe(29);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

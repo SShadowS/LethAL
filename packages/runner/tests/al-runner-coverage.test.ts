@@ -260,8 +260,9 @@ codeunit 50108 "Split B"
 codeunit 50108 "Split B"
 #endif
 ${R298_BODY("Q")}`;
+/** R-300b: a two-arm wrapper is a shape al-runner is not admitted on, named as such. */
 const R298_REFUSED =
-  "[lethal] coverage refused for Codeunit:50103 (src/B2.Codeunit.al): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.";
+  "[lethal] coverage refused for Codeunit:50103 (src/B2.Codeunit.al): its file holds a #if object wrapper of a shape not measured on al-runner (R300). Its mutants read no-coverage.";
 
 describe("R298: a file holding a #if-wrapped object is refused whole", () => {
   test("the wrapped file is named in refusedFiles and indexed nowhere; the plain file is indexed", async () => {
@@ -511,7 +512,10 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
   });
 });
 
-/** R298 end to end: a wrapped TABLE's trigger, through the al-runner conversion into selection. */
+/**
+ * R298 end to end: a wrapped TABLE's trigger, through the al-runner conversion into selection.
+ * R-300b: two arms, so al-runner still refuses it (a one-arm table alone in its file is admitted).
+ */
 const R298_WRAPPED_TABLE = `#if not CLEAN27
 table 50110 "Wrapped T"
 {
@@ -524,6 +528,14 @@ table 50110 "Wrapped T"
     begin
         Message('x');
     end;
+}
+#else
+table 50110 "Wrapped T"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
 }
 #endif
 `;
@@ -538,6 +550,7 @@ describe("R298 end to end (al-runner): a wrapped table trigger reads no-coverage
       await initParser();
       const refused = coverageRefusedObjects(
         Object.entries(files).map(([path, text]) => ({ path, root: wrapRoot(parseAL(text)) })),
+        "al-runner",
       );
       expect([...refused.keys()]).toEqual(["table:50110"]);
       const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
@@ -668,9 +681,11 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
       await initParser();
       const refused = coverageRefusedObjects(
         Object.entries(files).map(([path, text]) => ({ path, root: wrapRoot(parseAL(text)) })),
+        "al-runner",
       );
+      // R-300b: a bare object beside a wrapper is a shape al-runner is not measured on.
       const sentence =
-        "coverage refused for Table:50110 (src/T.Table.al): its file also holds a #if ... #endif object wrapper, and al-runner refuses such a file whole (R298, R300). Its mutants read no-coverage.";
+        "coverage refused for Table:50110 (src/T.Table.al): its file holds a #if object wrapper of a shape not measured on al-runner (R300). Its mutants read no-coverage.";
       expect(refused.get("table:50110")).toBe(sentence);
       // al-runner names the table with the SAME sentence selection uses, not "inside, or after".
       expect(warn.mock.calls.map((c) => String(c[0]))).toContain(`[lethal] ${sentence}`);

@@ -9,6 +9,7 @@ import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
 import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
+import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import {
   AlcCompileError,
   ArtifactPrepareError,
@@ -1117,6 +1118,282 @@ interface "I Probe"
         warnSpy.mockRestore();
         store.close();
       }
+    });
+
+    // R-300b (c): the SAME wrapped codeunit, one session per backend kind. The kind comes from
+    // `authoritative` (bcdev true, al-runner false). Only the al-runner session scores it.
+    describe("R-300b: a #if-wrapped codeunit alone in its file, per backend", () => {
+      async function wrappedRun(caps: BackendCapabilities) {
+        const dirs = await makeProject();
+        await Bun.write(
+          join(dirs.projectDir, "SandboxLogic.Codeunit.al"),
+          `#if not NEVERDEFINED\n${TARGET_AL}#endif\n`,
+        );
+        const backend = new StubBackend(caps, () => "pass", ["IsOverBudget"]);
+        const store = new ResultsStore(":memory:");
+        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          return await runSession({ backend, store, ...dirs, selectorIds });
+        } finally {
+          warnSpy.mockRestore();
+          store.close();
+        }
+      }
+
+      test("bcdev: every mutant reads no-coverage, refused by name", async () => {
+        const report = await wrappedRun(CAPS_NST);
+        expect(report.mutants.length).toBeGreaterThan(0);
+        for (const m of report.mutants) {
+          expect(m.verdict).toBe("no-coverage");
+          expect(m.failureNote).toContain("coverage refused for Codeunit:79000");
+        }
+      });
+
+      test("al-runner: the mutants are covered and run (survived), with no refusal", async () => {
+        const report = await wrappedRun(CAPS_NST_WORKERS);
+        expect(report.mutants.length).toBeGreaterThan(0);
+        for (const m of report.mutants) {
+          expect(m.verdict).toBe("survived");
+          expect(m.failureNote ?? "").not.toContain("coverage refused");
+        }
+      });
+
+      test("the session's build symbols reach the session backend AND every worker backend", async () => {
+        const dirs = await makeProject();
+        // Sol run 001 (minor): DISTINCT app and config symbols, so an empty or partial handoff
+        // cannot match the expected set the way three equal empty sets matched each other.
+        await Bun.write(
+          join(dirs.projectDir, "app.json"),
+          JSON.stringify({ ...JSON.parse(APP_JSON), preprocessorSymbols: ["APPSYM"] }),
+        );
+        const got: (readonly string[])[] = [];
+        class Taking extends StubBackend {
+          useBuildSymbols(s: readonly string[]): void {
+            got.push(s);
+          }
+        }
+        const make = () => new Taking(CAPS_NST_WORKERS, () => "pass", ["IsOverBudget"]);
+        const store = new ResultsStore(":memory:");
+        try {
+          await runSession({
+            backend: make(),
+            backendFactory: make,
+            workers: 2,
+            store,
+            ...dirs,
+            selectorIds,
+            preprocessorSymbols: ["CFGSYM"],
+          });
+        } finally {
+          store.close();
+        }
+        // app.json's, the config's and al-runner's predefined set (R392), sorted and unique.
+        const { symbols: predefined } = await measuredV2_12();
+        const expected = [...new Set(["APPSYM", "CFGSYM", ...predefined])].sort();
+        // One session backend plus two workers, each given exactly that set.
+        expect(got).toEqual([expected, expected, expected]);
+      });
+
+      // Sol run 001 (I): an admitted wrapped file whose INSTRUMENTED text re-parses with undecided
+      // arms is dropped by the al-runner index, which refuses its objects. Selection read the
+      // ORIGINAL source, which decides, so it held no refusal: a reached procedure read plain
+      // no-coverage and a table trigger took the all-green fallback and was SCORED. The fake
+      // builds the real index over the deployed batch, as AlRunnerBackend does.
+      describe("an index-only refusal (instrumented text undecided)", () => {
+        async function undecidedProject() {
+          const dirs = await makeProject();
+          // R318's seed: `Other`'s nested `#if` in a conditional var section parses in the original
+          // but not once instrumented. Wrapped, so the file is an admitted wrapped file.
+          const otherProc = `    procedure Other(X: Integer);
+#if not CLEAN27
+    var
+        K: Integer;
+#if A
+        N: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+`;
+          await Bun.write(
+            join(dirs.projectDir, "Repro.Codeunit.al"),
+            `#if not NEVERDEFINED
+codeunit 50100 "Repro R"
+{
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K);
+    end;
+
+${otherProc}}
+#endif
+`,
+          );
+          await Bun.write(
+            join(dirs.projectDir, "SandboxTable.Table.al"),
+            `#if not NEVERDEFINED
+table 79001 "Sandbox Table"
+{
+    fields
+    {
+        field(1; "No."; Code[20])
+        {
+            trigger OnValidate()
+            begin
+                if "No." = '' then
+                    Error('blank');
+            end;
+        }
+    }
+
+${otherProc}}
+#endif
+`,
+          );
+          return dirs;
+        }
+        class Indexing extends StubBackend {
+          symbols: readonly string[] = [];
+          useBuildSymbols(s: readonly string[]): void {
+            this.symbols = s;
+          }
+          async coverageRefusals(): Promise<ReadonlyMap<string, string>> {
+            const dir = this.deploys.at(-1);
+            if (dir === undefined) throw new Error("coverageRefusals before deploy");
+            return (await buildAlRunnerCoverageIndex(dir, { symbols: this.symbols })).refusals;
+          }
+        }
+        // Coverage names the reached procedures of BOTH wrapped objects, as al-runner would have
+        // reported them had the index not dropped the files. `Plain` has no `coverageRefusals`, so
+        // it records what a run before sol run 001's fix recorded: the wrapped mutants `survived`.
+        function covering<T extends StubBackend>(backend: T): T {
+          backend.coverageEntriesFor = () => [
+            { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
+            { objectType: "Codeunit", objectId: 50100, procedure: "Pick" },
+            { objectType: "Codeunit", objectId: 50100, procedure: "Other" },
+          ];
+          return backend;
+        }
+        const indexing = () => covering(new Indexing(CAPS_NST_WORKERS, () => "pass"));
+        const plain = () => covering(new StubBackend(CAPS_NST_WORKERS, () => "pass"));
+        function expectRefused(report: SessionReport): void {
+          for (const [file, key] of [
+            ["Repro", "Codeunit:50100"],
+            ["SandboxTable", "Table:79001"],
+          ] as const) {
+            const ms = report.mutants.filter((m) => m.file.includes(file));
+            expect([file, ms.length > 0]).toEqual([file, true]);
+            for (const m of ms) {
+              expect([m.mutantCode, m.verdict]).toEqual([m.mutantCode, "no-coverage"]);
+              expect(m.failureNote).toContain(`coverage refused for ${key} (${file}.`);
+              expect(m.failureNote).toContain("its #if arms could not be evaluated as alc does");
+            }
+          }
+          // No trigger took the all-green fallback; the plain codeunit still runs.
+          expect(report.untargetedTriggerCount).toBe(0);
+        }
+        async function quietly<T>(f: () => Promise<T>): Promise<T> {
+          const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+          try {
+            return await f();
+          } finally {
+            warnSpy.mockRestore();
+          }
+        }
+
+        test("reaches fresh scoring by name", async () => {
+          const dirs = await undecidedProject();
+          const store = new ResultsStore(":memory:");
+          try {
+            const report = await quietly(() =>
+              runSession({ backend: indexing(), store, ...dirs, selectorIds }),
+            );
+            expectRefused(report);
+            expect(report.counts.survived).toBeGreaterThan(0);
+          } finally {
+            store.close();
+          }
+        });
+
+        // Sol run 002: a stored `survived` from a run before the fix (same identity scheme) must
+        // not be carried past the current index's refusal, by either carry path.
+        test("a stored survived is not skipped as a known survivor", async () => {
+          const dirs = await undecidedProject();
+          const store = new ResultsStore(":memory:");
+          try {
+            const first = await quietly(() =>
+              runSession({ backend: plain(), store, ...dirs, selectorIds }),
+            );
+            expect(first.mutants.filter((m) => m.file.includes("Repro"))[0]?.verdict).toBe(
+              "survived",
+            );
+            const report = await quietly(() =>
+              runSession({
+                backend: indexing(),
+                store,
+                ...dirs,
+                selectorIds,
+                skipKnownSurvivors: true,
+              }),
+            );
+            expectRefused(report);
+            // The plain codeunit's survivors ARE skipped: the gate is not blanket.
+            expect(report.mutants.some((m) => m.verdict === "known-survivor")).toBe(true);
+          } finally {
+            store.close();
+          }
+        });
+
+        test("a stored survived is not carried by a full-batch --resume", async () => {
+          const dirs = await undecidedProject();
+          const store = new ResultsStore(":memory:");
+          try {
+            const first = await quietly(() =>
+              runSession({ backend: plain(), store, ...dirs, selectorIds }),
+            );
+            expect(first.mutants.filter((m) => m.file.includes("Repro"))[0]?.verdict).toBe(
+              "survived",
+            );
+            store.db.run("UPDATE runs SET finished_at = NULL");
+            const report = await quietly(() =>
+              runSession({ backend: indexing(), store, ...dirs, selectorIds, resume: 1 }),
+            );
+            expectRefused(report);
+            // The plain codeunit's verdicts still carry.
+            expect(report.mutants.some((m) => m.carried === true)).toBe(true);
+          } finally {
+            store.close();
+          }
+        });
+      });
+
+      test("al-runner (C1): a key two active files declare is refused in selection by name", async () => {
+        const dirs = await makeProject();
+        await Bun.write(join(dirs.projectDir, "Twin.Codeunit.al"), TARGET_AL);
+        const backend = new StubBackend(CAPS_NST_WORKERS, () => "pass", ["IsOverBudget"]);
+        const store = new ResultsStore(":memory:");
+        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const report = await runSession({ backend, store, ...dirs, selectorIds });
+          expect(report.mutants.length).toBeGreaterThan(0);
+          for (const m of report.mutants) {
+            expect(m.verdict).toBe("no-coverage");
+            expect(m.failureNote).toContain(
+              "coverage refused for codeunit:79000: it is declared in SandboxLogic.Codeunit.al and Twin.Codeunit.al",
+            );
+          }
+        } finally {
+          warnSpy.mockRestore();
+          store.close();
+        }
+      });
     });
 
     test("a #if-wrapped table's trigger mutants read no-coverage, named, not all-green (R298)", async () => {

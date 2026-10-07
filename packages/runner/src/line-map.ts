@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  type ArmEvaluation,
   initParser,
   isProcedureLike,
   objectDeclarationsOf,
@@ -10,8 +11,10 @@ import {
   procedureLikeArmNames,
   procedureLikeNameNode,
   renamedMemberCoverageNames,
+  startsInInactiveArm,
   wrapRoot,
 } from "@lethal/engine";
+import type { BuildBackend } from "./preprocessor-symbols";
 
 /**
  * R58: maps a BC `Code Coverage` row's `(objectType, objectId, lineNo)` to the procedure that owns
@@ -140,6 +143,20 @@ export function refusedCoverageReason(objectType: string, objectId: number, file
 /** R298: the sentence for a bare object refused only because its FILE holds an object wrapper. */
 export function refusedWholeFileReason(objectType: string, objectId: number, file: string): string {
   return `coverage refused for ${objectType}:${objectId} (${file}): its file also holds a #if ... #endif object wrapper, and al-runner refuses such a file whole (R298, R300). Its mutants read no-coverage.`;
+}
+
+/** R-300b: the sentence for an object in a `#if`-wrapped file al-runner does not admit. */
+export function refusedUnmeasuredShapeReason(
+  objectType: string,
+  objectId: number,
+  file: string,
+): string {
+  return `coverage refused for ${objectType}:${objectId} (${file}): its file holds a #if object wrapper of a shape not measured on al-runner (R300). Its mutants read no-coverage.`;
+}
+
+/** R-300b (C1): the sentence for an object key two files declare. */
+export function duplicateObjectReason(key: string, fileA: string, fileB: string): string {
+  return `coverage refused for ${key}: it is declared in ${fileA} and ${fileB}; coverage cannot tell them apart (R300). Its mutants read no-coverage.`;
 }
 
 /**
@@ -895,8 +912,98 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
 }
 
 /**
+ * R-300b: does al-runner score this `#if`-wrapped file? True only for the shapes measured on both
+ * al-runner legs (H1: the original file's line numbers, `alrunner-results.md`) and pinned live by
+ * `fixtures/sandbox-wrapped`: exactly ONE top-level wrapper holding an object, with no `#else` or
+ * `#elif` at its top level, no nested object wrapper, exactly one object inside it (one with a
+ * coverage identity), and no object of any kind before or after it. Namespace, using and comment
+ * lines may sit before the `#if` or inside it, and a statement-level `#if` inside the object is
+ * allowed. Such a file has one object, so `refusedAsMultiObject` is false for it by construction.
+ * The index, the CLI guard and selection all read this one predicate (R387's precedent).
+ */
+export function alRunnerAdmitsWrappedFile(root: ALSyntaxNode): boolean {
+  if (root.namedChildren.some(isTopLevelObject)) return false;
+  const wrappers = root.namedChildren.filter(
+    (c) => c.rawKind === "preproc_conditional_object" && wrapperHoldsObject(c),
+  );
+  const [wrapper] = wrappers;
+  if (wrappers.length !== 1 || wrapper === undefined) return false;
+  const nested = wrapper.namedChildren.some(
+    (c) =>
+      c.rawKind === "preproc_else" ||
+      c.rawKind === "preproc_elif" ||
+      c.rawKind === "preproc_conditional_object",
+  );
+  if (nested) return false;
+  const objects = containerNodesOf(wrapper).filter(isTopLevelObject);
+  const [only] = objects;
+  return objects.length === 1 && only !== undefined && objectIdentityOf(only) !== null;
+}
+
+/**
+ * R-300b (C1): the entries of a file whose declarations this build compiles. One starting in an
+ * inactive arm is dropped; an `undecided` file gives none (it has no mutant either).
+ */
+export function activeEntries(
+  entries: readonly LineMapEntry[],
+  arms: ArmEvaluation,
+): LineMapEntry[] {
+  if (arms.kind === "undecided") return [];
+  return entries.filter((e) => !startsInInactiveArm(arms.inactive, e.root.startIndex));
+}
+
+/**
+ * R-300b (C1): every object key declared in more than one file -> `duplicateObjectReason`, naming
+ * the first two files. The ONE function the al-runner index and selection share. A key repeated
+ * inside one file (two arms of one wrapper) is not a duplicate.
+ */
+export function duplicateObjectRefusals(
+  files: readonly { readonly path: string; readonly keys: Iterable<string> }[],
+): Map<string, string> {
+  const firstFile = new Map<string, string>();
+  const out = new Map<string, string>();
+  for (const f of files) {
+    for (const key of new Set(f.keys)) {
+      const seen = firstFile.get(key);
+      if (seen === undefined) firstFile.set(key, f.path);
+      else if (!out.has(key)) out.set(key, duplicateObjectReason(key, seen, f.path));
+    }
+  }
+  return out;
+}
+
+/**
+ * R-300b (C1): the keys of a file's compiled declarations, as `duplicateObjectRefusals` reads
+ * them. Only a file holding an object wrapper can have a declaration in an inactive arm, so arms
+ * are applied only there; a plain file's keys never depend on them (an `undecided` plain file
+ * keeps its keys, as the index keeps its entries).
+ */
+export function activeObjectKeys(root: ALSyntaxNode, arms: ArmEvaluation): string[] {
+  const entries = fileLineMapEntries(root, objectIdentityOf);
+  return (fileHoldsWrappedObject(root) ? activeEntries(entries, arms) : entries).map((e) =>
+    keyOf(e.objectType, e.objectId),
+  );
+}
+
+/** R-300b: the sentence for an admitted wrapped file whose arms `evaluateArms` cannot decide. */
+export function undecidedArmsReason(
+  objectType: string,
+  objectId: number,
+  file: string,
+  reason: string,
+): string {
+  return `coverage refused for ${objectType}:${objectId} (${file}): its #if arms could not be evaluated as alc does (${reason}), so which declaration is compiled is unknown (R300). Its mutants read no-coverage.`;
+}
+
+/**
  * R298: the refused objects of the project's parsed files, `type:id` (lower-cased, the same key
  * `selection.ts`'s `objectKeyOf` builds) -> the refusal sentence.
+ *
+ * R-300b: per coverage path. `backendKind` is REQUIRED, so no caller can forget which path it asks
+ * for. Under `"bcdev"` the result is exactly the pre-R-300b one. Under `"al-runner"` a file
+ * `alRunnerAdmitsWrappedFile` admits adds no refusal, and every other wrapped file's objects are
+ * refused with `refusedUnmeasuredShapeReason`. Duplicate keys (C1) are refused by the caller from
+ * `duplicateObjectRefusals`, which needs the build's arms.
  *
  * The UNION of two rules, so selection refuses at least what any coverage path refuses: the line
  * map's per-object rule (`fileLineMapEntries`: inside a wrapper, or after the first wrapper that
@@ -911,10 +1018,15 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
  */
 export function coverageRefusedObjects(
   files: readonly { readonly path: string; readonly root: ALSyntaxNode }[],
+  backendKind: BuildBackend["kind"],
 ): ReadonlyMap<string, string> {
   const out = new Map<string, string>();
   for (const f of files) {
-    for (const [key, reason] of refusedObjectsOfFile(f.root, normalizeSlashes(f.path))) {
+    for (const [key, reason] of refusedObjectsOfFile(
+      f.root,
+      normalizeSlashes(f.path),
+      backendKind,
+    )) {
       out.set(key, reason);
     }
   }
@@ -924,14 +1036,25 @@ export function coverageRefusedObjects(
 /**
  * R298: one file's refused objects, by the union rule `coverageRefusedObjects` documents. A bare
  * object BEFORE the wrapper gets its own sentence (`refusedWholeFileReason`), since "inside, or
- * after" would be false for it. al-runner's index prints exactly these sentences.
+ * after" would be false for it. R-300b: under `"al-runner"` an admitted file refuses nothing and
+ * every other wrapped file's objects get `refusedUnmeasuredShapeReason`. al-runner's index prints
+ * exactly these sentences.
  */
-export function refusedObjectsOfFile(root: ALSyntaxNode, file: string): Map<string, string> {
+export function refusedObjectsOfFile(
+  root: ALSyntaxNode,
+  file: string,
+  backendKind: BuildBackend["kind"],
+): Map<string, string> {
   const out = new Map<string, string>();
   const wholeFile = fileHoldsWrappedObject(root);
+  const alRunner = backendKind === "al-runner";
+  if (alRunner && alRunnerAdmitsWrappedFile(root)) return out;
   for (const e of fileLineMapEntries(root, objectIdentityOf, file)) {
     const reason =
-      e.refused ?? (wholeFile ? refusedWholeFileReason(e.objectType, e.objectId, file) : undefined);
+      alRunner && wholeFile
+        ? refusedUnmeasuredShapeReason(e.objectType, e.objectId, file)
+        : (e.refused ??
+          (wholeFile ? refusedWholeFileReason(e.objectType, e.objectId, file) : undefined));
     if (reason !== undefined) out.set(keyOf(e.objectType, e.objectId), reason);
   }
   return out;
@@ -1050,6 +1173,7 @@ export async function coverageRefusedFromSources(
   await initParser();
   return coverageRefusedObjects(
     sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
+    "bcdev",
   );
 }
 

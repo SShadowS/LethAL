@@ -24,6 +24,11 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Multi B` | 79801 | `sandbox-multiobject` | R383 target, the SECOND object of the same file: `Reached`, then `Unreached` on the line right after `Reached`'s last statement. See "sandbox-multiobject (R383)" below. |
 | `Multi Control` | 79802 | `sandbox-multiobject` | R383 single-object control file: `Double`. |
 | `Multi Tests` | 79850 | `sandbox-multiobject-tests` | `ReachedBothWays` (calls `Multi B.Reached` with 20 and 5) and `ControlDoubles`. Asserts via `Error()`. |
+| `Wrapped Top` / `Wrapped Top Twin` | 78901 / 78902 | `sandbox-wrapped` | R-300b: a `#if WRAPDEF` wrapper alone in its file (namespace inside, a statement-level `#if` in `Twice`), and the same text unwrapped. See "sandbox-wrapped (R-300b)" below. |
+| `Wrapped Pre` / `Wrapped Pre Twin` | 78903 / 78904 | `sandbox-wrapped` | R-300b: namespace, using and a comment BEFORE the wrapper, and its unwrapped twin. |
+| `Wrapped Pair` | 78905 | `sandbox-wrapped` | R-300b C1: one object in two files, `WrappedPairA` (`#if WRAPDEF and WRAPAPP`) and `WrappedPairB` (the opposite). |
+| `Wrapped Arms` | 78906 | `sandbox-wrapped` | R-300b refusal control: a two-arm wrapper. |
+| `Wrapped Tests` | 78950 | `sandbox-wrapped-tests` | One test per procedure, `Grow*`/`Twice*` per file and twin, `PairPick`, `ArmsPick`. Asserts via `Error()`. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on
 `sandbox-app` only (id `df1aa9ff-6539-4c86-a9d0-ad702b61ac9a`) and declares the same
@@ -38,7 +43,7 @@ The injected Mutation Selector/Control/Active object ids (`79197`–`79199`, see
 the project already declares. Every fixture here follows it against its own ranges (`sandbox-app`
 79197-79199, `sandbox-data` 79397-79399, `sandbox-hang` 79447-79449, `sandbox-harden` 79547-79549,
 `gift-card` 90197-90199, `sandbox-symbols` 79647-79649, `sandbox-layout` 79747-79749,
-`sandbox-multiobject` 79847-79849), and two fixtures must never share the three
+`sandbox-multiobject` 79847-79849, `sandbox-wrapped` 78947-78949), and two fixtures must never share the three
 ids, which is R169.
 They didn't always: the original ids (`50000`–`50002`) compiled fine against al-runner but
 fail real `alc.exe` with `AL0297` ("object identifier is not valid ... allowed ranges") —
@@ -386,6 +391,28 @@ pre-committed in `docs/superpowers/specs/2026-09-30-r353-stale-layout-precommitm
 `.alpackages` is gitignored. Create an `.alpackages` directory in `sandbox-layout` (it may stay
 empty: the target needs no symbols), and `alc` the target into `sandbox-layout-tests/.alpackages`
 from current source before compiling. al-runner compiles both from source and needs neither.
+
+## sandbox-wrapped (R-300b)
+
+`#if`-wrapped codeunits alone in their files, which al-runner scores by the original file's line
+numbers (R-300b), each with an unwrapped twin whose text sits on the same lines. `itest:alrunner`
+runs it one-shot, `--server` and resource, with `WRAPDEF` as the config symbol (`--define`) while
+the target's `app.json` defines `WRAPAPP`. Each wrapped file must score exactly as its twin per
+mutant; the twins also carry a `swap-additive` mutant the wrapped files lack, because typed
+operators see nothing inside a wrapped object (R343).
+
+As in `sandbox-layout`, `Twice`'s header comment is load-bearing: `Twice`'s lines in the original
+text lie inside the instrumented `Grow`, so a frame misread moves `Twice`'s mutants to `no-coverage`.
+`packages/runner/tests/wrapped-fixture.test.ts` fails offline if those spans move. The `Wrapped
+Pair` files are decided by both symbols: whether al-runner's `--define` adds to `app.json`'s symbols
+or replaces them is unmeasured, and under "replaces" al-runner compiles `WrappedPairB`, which LethAL
+reads as compiled out, so `WrappedPairA`'s mutants read `no-coverage`, never another file's
+coverage. The per-mutant table under both readings is pre-committed in
+`docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md`.
+
+`.alpackages` is gitignored. The target compiles under `symbol-sets.json` (`[["WRAPDEF"]]`); `alc`
+it with `/define:WRAPDEF` into `sandbox-wrapped-tests/.alpackages` from current source before
+compiling the tests. al-runner compiles both from source and needs neither.
 
 ## sandbox-multiobject (R383)
 
