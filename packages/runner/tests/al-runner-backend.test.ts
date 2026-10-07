@@ -685,6 +685,23 @@ describe("AlRunnerBackend.run", () => {
     expect(v.outcome).toBe("deadline-exceeded");
   });
 
+  // R490 (closed as a ruling): a look-alike that discovery did NOT see runs in the same call and
+  // hangs it to OUR deadline. That call carries no test list, so nothing is learned, but the
+  // outcome must stay deadline-exceeded (an error), never `timeout`, which scoring reads as a kill.
+  test("a hang from an undiscovered look-alike is deadline-exceeded, never a kill (R490)", async () => {
+    const calls: string[][] = [];
+    const spawn = async (argv: string[]) => {
+      calls.push(argv);
+      return new Promise<never>(() => {});
+    };
+    const { backend } = await makeBackend(spawn as never);
+    backend.useDiscoveredTests([ref]); // discovery saw only the requested test
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 50 });
+    expect(v.outcome).toBe("deadline-exceeded");
+    expect(v.outcome).not.toBe("timeout");
+    expect(calls.length).toBe(1);
+  });
+
   // Regression guard for the timeout-margin bug: the backend's own derivation of the runner's
   // per-test budget (from opts.timeoutMs) must leave al-runner's internal timeout comfortably
   // BELOW our client deadline, never >= it. Otherwise our AbortController always wins the
