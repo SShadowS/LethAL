@@ -145,6 +145,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `itest:alrunner` leg (`fixtures/sandbox-wrapped`) pins it: 22 killed / 9 survived / 3 no-coverage
   per mutant, with al-runner's `--define` measured to add to `app.json`'s symbols.
 
+- **Trigger tags read `#if`-wrapped objects for the table they concern** (R485). A clean
+  `#if`-wrapped tableextension or codeunit now keeps a `run-trigger-*` tag only when it extends or
+  subscribes to THAT table; broken parses and other kinds keep the old any-table text check. On
+  BaseApp one wrapped codeunit (Booking Manager) had kept the tag on every table: 331 tags drop (12
+  `run-trigger-forced`, 319 `run-trigger-skipped-modify`), none on a table with an observer. No tag
+  moves in CDO, DC, DO or the fixtures; no mutant identity moves.
+
 - **A report data item over `Integer` counts as a loop for the hang refusal; identity scheme 28**
   (R484). BC calls a data item's `OnAfterGetRecord` once per record. Over the virtual `Integer` table
   the item ends only when a trigger calls `CurrReport.Break` or `Quit`, raises an `Error`, or a bound
@@ -517,6 +524,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   On al-runner nothing changes: the scan runs on bcdev only.
 
 ### Fixed
+
+- **al-runner one-shot: a result with two rows for the requested test is refused by name** (R491).
+  Two rows carrying the requested name, exactly or ignoring case, were credited from the first row
+  and that call's coverage; now the run is an `error` naming the test. That refusal, and R488's
+  "ran other tests despite `--exclude-test`" refusal, are no longer labelled pre-dispatch: the test
+  was dispatched, so the orchestrator no longer re-sends it as a retry-safe failure. The R488 unit
+  tests now run against a fake that selects as al-runner does (excluding the requested test itself
+  drops it), with coverage on, and with an order check on the discovered-list seeding.
 
 - **al-runner one-shot: a result naming any other test is never credited to the requested one**
   (R488). al-runner's `--test` is a case-insensitive substring match, so asking for `GrowPre` also

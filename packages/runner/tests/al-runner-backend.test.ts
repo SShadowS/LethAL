@@ -6,7 +6,9 @@ import { AL_RUNNER_UNCLASSIFIED_ERROR, AlRunnerBackend } from "../src/al-runner-
 import type { ServerSpawnFn } from "../src/al-runner-server";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
+import { runOnce } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
+import { SessionSafety } from "../src/session-safety";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -674,7 +676,8 @@ describe("AlRunnerBackend.run", () => {
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain(QUALIFIED);
     expect(v.failureMessage).toContain("Codeunit79100.SomethingElse");
-    expect(v.operation).toBe("pre-dispatch-rejected");
+    // R491: this is R488's refusal, and the test WAS dispatched, so it is not pre-dispatch.
+    expect(v.operation).toBe("completed-accepted");
   });
 
   test("our own deadline is outcome=deadline-exceeded, not timeout", async () => {
@@ -1242,23 +1245,142 @@ describe("AlRunnerBackend one-shot: a result naming any other test is never cred
   const TWIN = `${QUALIFIED}Twin`;
   const opts = { coverage: "none", timeoutMs: 5000 } as const;
 
-  /** `merged` is what the substring match returns; the wanted test FAILS there and passes alone,
-   *  so a credited merged result reads as a kill. */
-  function substringRunner(honoursExclude: boolean) {
+  /** Each test's one covered line in `One.Codeunit.al` (see `COVERED_AL`): 5 is in `Reached`, 10 in
+   *  `Other`. */
+  const LINE: Record<string, number> = { [QUALIFIED]: 5, [TWIN]: 10 };
+  const COVERED_AL = `codeunit 79150 "Probe One"
+{
+    procedure Reached()
+    begin
+        exit;
+    end;
+
+    procedure Other()
+    begin
+        exit;
+    end;
+}
+`;
+
+  /** Selects as the real al-runner does (measured on c39ad5de, R-491 brief / R-488 selector probe):
+   *  `--test` keeps every name CONTAINING it, ignoring case; each `--exclude-test` drops one WHOLE
+   *  name, ignoring case, the requested test included, and excluding that leaves NO tests (exit 0,
+   *  probe row x). `honoursExclude: false` models a runner that ignores the excludes. The wanted
+   *  test FAILS when the twin ran with it and passes alone, so a credited merged result reads as a
+   *  kill, unless `mergedPasses`. With `--coverage-out`, the file holds every test that ran. */
+  function substringRunner(honoursExclude: boolean, mergedPasses = false) {
     const calls: string[][] = [];
     const spawn: SpawnFn = async (argv) => {
       calls.push([...argv]);
-      const excluded = honoursExclude && argv.includes("--exclude-test");
-      const tests = excluded
-        ? [{ name: QUALIFIED, status: "pass", durationMs: 1 }]
-        : [
-            { name: QUALIFIED, status: "fail", durationMs: 1, message: "twin's state" },
-            { name: TWIN, status: "pass", durationMs: 1 },
-          ];
+      const pattern = (argv[argv.indexOf("--test") + 1] ?? "").toLowerCase();
+      const excluded = honoursExclude
+        ? argv.filter((_, i) => argv[i - 1] === "--exclude-test").map((n) => n.toLowerCase())
+        : [];
+      const ran = [QUALIFIED, TWIN].filter(
+        (n) => n.toLowerCase().includes(pattern) && !excluded.includes(n.toLowerCase()),
+      );
+      const merged = ran.includes(TWIN);
+      const tests = ran.map((name) =>
+        name === QUALIFIED && merged && !mergedPasses
+          ? { name, status: "fail", durationMs: 1, message: "twin's state" }
+          : { name, status: "pass", durationMs: 1 },
+      );
+      const o = argv.indexOf("--coverage-out");
+      const out = o >= 0 ? argv[o + 1] : undefined;
+      if (out !== undefined) {
+        const lines = ran.map((n) => `<line number="${LINE[n]}" hits="1"/>`).join("");
+        await writeFile(
+          out,
+          `<coverage><packages><package><classes><class name="x" filename="One.Codeunit.al"><lines>${lines}</lines></class></classes></package></packages></coverage>`,
+          "utf8",
+        );
+      }
       return { exitCode: 0, stdout: alRunnerStdout({ tests }), stderr: "" };
     };
     return { calls, spawn };
   }
+
+  test("the fake is as strict as al-runner: excluding the requested test itself drops it", async () => {
+    const r = substringRunner(true);
+    const names = async (...excl: string[]) => {
+      const argv = [
+        "al-runner",
+        "--test",
+        QUALIFIED,
+        ...excl.flatMap((n) => ["--exclude-test", n]),
+      ];
+      const out = await r.spawn(argv, {});
+      const env = JSON.parse(out.stdout.slice(out.stdout.indexOf("\n{\n") + 1));
+      return (env.tests as { name: string }[]).map((t) => t.name);
+    };
+    expect(await names(QUALIFIED.toLowerCase())).toEqual([TWIN]);
+    expect(await names(QUALIFIED, TWIN)).toEqual([]); // probe row x: exit 0, no tests
+  });
+
+  test("an excluded REQUESTED test is never learned: the run is not emptied by its own exclude", async () => {
+    // A learn step that also excluded `wanted` would get al-runner's empty answer (probe row x).
+    const r = substringRunner(true);
+    const { backend } = await makeBackend(r.spawn);
+    expect((await backend.run(ref, opts)).outcome).toBe("pass");
+    for (const argv of r.calls) {
+      const excludes = argv.filter((_, i) => argv[i - 1] === "--exclude-test");
+      expect(excludes.map((n) => n.toLowerCase())).not.toContain(QUALIFIED.toLowerCase());
+    }
+  });
+
+  test("coverage on: the credited coverage is the re-run's Cobertura, never the merged call's", async () => {
+    const r = substringRunner(true, true);
+    const dir = scratch("lethal-r491-cov-");
+    await writeFile(join(dir, "One.Codeunit.al"), COVERED_AL, "utf8");
+    await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        coverage: "al-runner",
+      },
+      r.spawn,
+    );
+    const v = await backend.run(ref, opts);
+    await backend.close();
+    expect(v.outcome).toBe("pass");
+    expect(r.calls.length).toBe(2);
+    // The merged first call covered BOTH procedures; only the re-run's `Reached` may be credited.
+    expect((v.coverage?.entries ?? []).map((e) => e.procedure)).toEqual(["Reached"]);
+  });
+
+  test("a result listing the requested test TWICE is refused by name, never credited (R491)", async () => {
+    const { calls, spawn } = okSpawn({
+      tests: [
+        { name: QUALIFIED, status: "pass", durationMs: 1 },
+        { name: QUALIFIED, status: "fail", durationMs: 1 },
+      ],
+    });
+    const { backend } = await makeBackend(spawn);
+    // Through `runOnce`, which re-sends a retry-safe failure once: the test WAS dispatched, so the
+    // refusal must be `completed-accepted` and must not be re-sent.
+    const v = await runOnce(backend, new SessionSafety(), ref, opts);
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("completed-accepted");
+    expect(v.failureMessage).toContain(`"${QUALIFIED}"`);
+    expect(v.failureMessage).toContain("2 rows");
+    expect(calls.length).toBe(1);
+  });
+
+  test("two rows equal to the requested test IGNORING CASE are refused the same way (R491)", async () => {
+    const { spawn } = okSpawn({
+      tests: [
+        { name: QUALIFIED, status: "pass", durationMs: 1 },
+        { name: QUALIFIED.toLowerCase(), status: "fail", durationMs: 1 },
+      ],
+    });
+    const { backend } = await makeBackend(spawn);
+    const v = await backend.run(ref, opts);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("2 rows");
+  });
 
   test("a merged result is discarded and the test re-runs alone with --exclude-test per sibling", async () => {
     const r = substringRunner(true);
@@ -1308,6 +1430,8 @@ describe("AlRunnerBackend one-shot: a result naming any other test is never cred
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain(TWIN);
     expect(r.calls.length).toBe(2);
+    // R491: the test WAS dispatched and ran, so the refusal is not retry-safe pre-dispatch.
+    expect(v.operation).toBe("completed-accepted");
   });
 
   test("an exact single-test result is credited from one call with today's argv", async () => {

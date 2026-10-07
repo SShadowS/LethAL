@@ -1068,9 +1068,24 @@ export class AlRunnerBackend implements ExecutionBackend {
     // test after that is refused by name.
     // Siblings in the discovered list (`useDiscoveredTests`) are excluded from the first call on;
     // this loop is the defence for one discovery did not see.
+    // A refusal here is `completed-accepted`, not `pre-dispatch-rejected`: the test WAS dispatched
+    // and ran, so re-sending it is no retry-safe recovery (R491).
     for (;;) {
       if (sent.res.kind !== "tests") break;
-      const extras = sent.res.tests.map((x) => x.name).filter((n) => n !== wanted);
+      const names = sent.res.tests.map((x) => x.name);
+      // R491: two rows for the requested name (exactly, or ignoring case as al-runner matches) leave
+      // no way to tell which row is ours; `.find()` would credit the first and the call's coverage.
+      const same = names.filter((n) => n.toLowerCase() === wanted.toLowerCase());
+      if (same.length > 1) {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: Date.now() - started,
+          failureMessage: `al-runner returned ${same.length} rows for the requested "${wanted}" (${same.join(", ")}); a duplicate is never credited to one test (R491)`,
+          operation: "completed-accepted",
+        };
+      }
+      const extras = names.filter((n) => n !== wanted);
       if (extras.length === 0) break;
       const known = this.siblingsOf(wanted);
       const fresh = extras.filter(
@@ -1082,7 +1097,7 @@ export class AlRunnerBackend implements ExecutionBackend {
           outcome: "error",
           durationMs: Date.now() - started,
           failureMessage: `al-runner ran tests other than the requested "${wanted}" (${extras.join(", ")}) despite --exclude-test for each; a merged run is never credited to one test (R488)`,
-          operation: "pre-dispatch-rejected",
+          operation: "completed-accepted",
         };
       }
       this.oneShotSiblings.set(wanted, [...(this.oneShotSiblings.get(wanted) ?? []), ...fresh]);

@@ -175,6 +175,15 @@ export interface SymbolTable {
    * see `projectDeclaresProcedureOnTable`.
    */
   readonly unparsedObjects: readonly ALSyntaxNode[];
+  /**
+   * R485: every object declaration whose HEADER is split by `#if` (`preproc_split_declaration`),
+   * at any depth (top-level or inside a `#if` wrapper). Indexed nowhere else (R494), so a reader
+   * that must know whether every object of the project is visible to it asks here.
+   */
+  readonly splitObjects: readonly ALSyntaxNode[];
+  /** R485: some input file has parse damage, an ERROR or a MISSING node, in ANY object (indexed
+   *  ones included), so its structure cannot be trusted to show every trigger. */
+  readonly parseDamaged: boolean;
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
   /**
    * Every field of a table, by the table's own name, INCLUDING fields a project `tableextension`
@@ -444,11 +453,15 @@ export function buildSymbolTable(
 
   const unindexedObjects: ALSyntaxNode[] = [];
   const unparsedObjects: ALSyntaxNode[] = [];
+  const splitObjects: ALSyntaxNode[] = [];
   for (const file of files) {
     const collectErrors = (n: ALSyntaxNode): void => {
       for (const c of n.children) {
         if (c.rawKind === "ERROR") unparsedObjects.push(c);
-        else collectErrors(c);
+        else {
+          if (c.rawKind === "preproc_split_declaration") splitObjects.push(c);
+          collectErrors(c);
+        }
       }
     };
     collectErrors(file.root);
@@ -543,6 +556,8 @@ export function buildSymbolTable(
     resolveProcedureAt,
     unindexedObjects,
     unparsedObjects,
+    splitObjects,
+    parseDamaged: files.some((f) => f.root.hasError),
     uniqueProcedure(ownerName, procName) {
       const list = procedureNames.get(ownerName)?.get(stripQuotes(procName).toLowerCase()) ?? [];
       const [only] = list;
