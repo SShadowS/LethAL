@@ -1343,6 +1343,7 @@ describe("AlRunnerBackend one-shot: a result naming any other test is never cred
       },
       r.spawn,
     );
+    backend.useBuildSymbols([]); // R-300b: what runSession hands over before the first deploy
     const v = await backend.run(ref, opts);
     await backend.close();
     expect(v.outcome).toBe("pass");
