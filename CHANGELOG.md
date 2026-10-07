@@ -125,6 +125,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Trigger tags read `#if`-wrapped objects for the table they concern** (R485). A clean
+  `#if`-wrapped tableextension or codeunit now keeps a `run-trigger-*` tag only when it extends or
+  subscribes to THAT table; broken parses and other kinds keep the old any-table text check. On
+  BaseApp one wrapped codeunit (Booking Manager) had kept the tag on every table: 331 tags drop (12
+  `run-trigger-forced`, 319 `run-trigger-skipped-modify`), none on a table with an observer. No tag
+  moves in CDO, DC, DO or the fixtures; no mutant identity moves.
+
 - **A report data item over `Integer` counts as a loop for the hang refusal; identity scheme 28**
   (R484). BC calls a data item's `OnAfterGetRecord` once per record. Over the virtual `Integer` table
   the item ends only when a trigger calls `CurrReport.Break` or `Quit`, raises an `Error`, or a bound
