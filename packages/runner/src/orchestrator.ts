@@ -5532,7 +5532,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             : "why" in readBackProof
               ? `the test app read back now (${after.packageHash}) is not proven to be what runs: ${readBackProof.why}`
               : recorded === null || cfg.store.testDigests(resolvedResume.runId) === null
-                ? `that run never proved it was the installed test app (no recorded identity, or no digests: a run recorded before R492, or one whose proof failed)`
+                ? `that run never proved it was the installed test app (no recorded identity, or no digests: a run recorded before R492, a run whose proof failed, a run without an env-tool hook, or one whose digests could not be taken after the proof; it then warned test-digests-unavailable)`
                 : recorded !== proven
                   ? `the test app proven to run now is a different one (${proven})`
                   : undefined;

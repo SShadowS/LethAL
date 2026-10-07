@@ -133,7 +133,7 @@ export class TestAppRepublishedError extends Error {
 
   constructor(flag: string, recorded: string | null, reason: string) {
     super(
-      `${flag}: the resumed run measured test app ${recorded ?? "unknown"}, and ${reason}, so the verdicts it would carry are not known to have been measured against the test app that runs. Refusing before the first baseline (R486, R492). Drop the flag to run from scratch.`,
+      `${flag}: the resumed run recorded test app ${recorded ?? "unknown"}, and ${reason}, so the verdicts it would carry are not known to have been measured against the test app that runs. Refusing before the first baseline (R486, R492). Drop the flag to run from scratch.`,
     );
     this.name = "TestAppRepublishedError";
     this.flag = flag;
