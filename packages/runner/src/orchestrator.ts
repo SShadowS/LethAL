@@ -3975,6 +3975,10 @@ interface ScoreBatchInput {
     readonly allowReuse: boolean;
     /** R492: an env-tool session reuses only a snapshot whose run recorded digests (its proof). */
     readonly requireDigests: boolean;
+    /** R492 (sol run 001): an env-tool session's PROVEN test app (`undefined`: unproven). Reuse
+     *  needs the batch's own package read to equal it: a later unpinned read can serve a
+     *  published-but-not-installed package, whose snapshot another run did prove. */
+    readonly provenTestAppHash?: string;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
   readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
@@ -4404,8 +4408,14 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         testDir,
       );
     const testAppHash = await hashTestApp();
+    // R492 (sol run 001): on an env-tool session the package that runs is the PROVEN one; a read
+    // here that differs from it (or a session with nothing proven) reuses nothing.
+    const runsWhatWasRead =
+      !requireDigests ||
+      (input.snapshot.provenTestAppHash !== undefined &&
+        testAppHash === input.snapshot.provenTestAppHash);
     const reusable =
-      allowReuse && testAppHash !== undefined
+      allowReuse && testAppHash !== undefined && runsWhatWasRead
         ? store.findBaselineSnapshot(batchHash, testAppHash, caps.coverage, requireDigests)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
@@ -6575,6 +6585,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             resumeState !== undefined &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           requireDigests: envPublishes !== undefined,
+          ...(historyTestAppHash !== undefined ? { provenTestAppHash: historyTestAppHash } : {}),
         },
         select,
         ...(workers > 1 ? { executeCovering } : {}),
