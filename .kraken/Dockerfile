@@ -46,13 +46,16 @@ RUN ALV="$(curl -fsS -X POST -H 'Content-Type: application/json' -H 'Accept: app
 ARG ALRUNNER_SHA=c39ad5ded38e3bfb3c690f1b48450446754bfa18
 ARG ALRUNNER_VERSION=2.12.0-main.c39ad5de
 ARG ALRUNNER_BC=28.5.54151.55132
-RUN git clone --filter=blob:none https://github.com/StefanMaron/BusinessCentral.AL.Runner.git /tmp/alr \
+# Build-time HOME is /home/dev, so dotnet and NuGet would leave root-owned ~/.dotnet and ~/.nuget there:
+# give root RUNs that write a cache a throwaway HOME and delete it in the same layer
+RUN export HOME=/tmp/build-home \
+    && git clone --filter=blob:none https://github.com/StefanMaron/BusinessCentral.AL.Runner.git /tmp/alr \
     && git -C /tmp/alr checkout --detach $ALRUNNER_SHA \
     && dotnet pack /tmp/alr/AlRunner/AlRunner.csproj -c Release -p:Version=$ALRUNNER_VERSION \
          -p:AllowBcArtifactDownload=true -p:ServiceTierPath=/tmp/alr-bc/$ALRUNNER_BC -o /tmp/alr-nupkg \
     && dotnet tool install MSDyn365BC.AL.Runner --tool-path /opt/al-runner/c39ad5de \
          --add-source /tmp/alr-nupkg --version $ALRUNNER_VERSION \
-    && rm -rf /tmp/alr /tmp/alr-nupkg /tmp/alr-bc /root/.nuget/packages \
+    && rm -rf /tmp/alr /tmp/alr-nupkg /tmp/alr-bc /tmp/build-home \
     && /opt/al-runner/c39ad5de/al-runner --version
 # PowerShell from Microsoft's apt repo (the .deb installs its signing key and list). The base is Ubuntu 26.04
 # and Microsoft's 26.04 repo has no powershell package yet (measured 2026-10-03), so this uses the 24.04 repo;
@@ -69,7 +72,8 @@ RUN ln -s /work/src /home/dev/src && chown -h dev:dev /home/dev/src
 # pi coding agent (newest). Its state and login (auth.json, settings, sessions) default to ~/.pi/agent,
 # which is not on a volume; PI_CODING_AGENT_DIR (read by pi's getAgentDir) moves it under the config
 # volume so it survives a container recreation. Login shells (ssh) get it from /etc/profile.d.
-RUN npm install -g @earendil-works/pi-coding-agent && pi --version
+RUN HOME=/tmp/build-home npm install -g --cache /tmp/npm-cache @earendil-works/pi-coding-agent \
+    && HOME=/tmp/build-home pi --version && rm -rf /tmp/npm-cache /tmp/build-home
 ENV PI_CODING_AGENT_DIR=/home/dev/.config/pi
 RUN printf '%s\n' 'export PI_CODING_AGENT_DIR=/home/dev/.config/pi' > /etc/profile.d/lethal-pi.sh
 # ends as root: the base entrypoint drops to dev
