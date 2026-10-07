@@ -194,6 +194,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
       backend: "bcdev",
       appVersion: "1",
       testAppHash: "package:t",
+      testAppProven: true,
     });
     const ref = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
     store.recordBaselineSnapshot({
@@ -233,6 +234,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
       backend: "bcdev",
       appVersion: "1",
       testAppHash: runTestAppHash,
+      testAppProven: true,
     });
     const ref = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
     store.recordBaselineSnapshot({
@@ -276,13 +278,17 @@ describe("ResultsStore baseline snapshots (R192)", () => {
     expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
   });
 
-  // R492: an env-tool session (`requireDigests`) also needs the run's digests, its installed proof:
-  // a row recorded before R492 holds the served hash, unproven, with NULL digests.
-  test("R492: requireDigests reuses only a snapshot whose run recorded digests", () => {
+  // R495 (replaces R492's digests marker): every session reuses only a snapshot whose run PROVED its
+  // test app. A row recorded before the flag (NULL) or unproven holds a served hash that may name
+  // another app than the one it measured; digests no longer stand in for the proof.
+  test("R495: a snapshot whose run did not prove its test app is not reused, digests or not", () => {
     const { store, id } = snapshotAtScheme(IDENTITY_SCHEME);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure", true)).toBeNull();
     expect(store.findBaselineSnapshot("b", "package:t", "procedure")?.runId).toBe(id);
+    store.db.run("UPDATE runs SET test_app_proven = NULL WHERE id = ?", [id]);
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
     store.setRunTestDigests(id, { "Tests.A": "d" }, null);
-    expect(store.findBaselineSnapshot("b", "package:t", "procedure", true)?.runId).toBe(id);
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
+    store.setRunTestAppHash(id, "package:t", true);
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure")?.runId).toBe(id);
   });
 });

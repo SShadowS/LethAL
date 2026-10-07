@@ -17,6 +17,7 @@ import type { RunEvent } from "../src/events";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
+import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
 
 /**
  * R391: an identity key carries no file. Twins (one identity tuple: here a table and a codeunit
@@ -110,6 +111,10 @@ class SiteBackend implements ExecutionBackend {
   /** `<file basename>:<line>` of every mutant activated, so a test can tell "ran" from "carried". */
   readonly activated: string[] = [];
   constructor(private readonly outcomes: Readonly<Record<string, Outcome>>) {}
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
     return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
   }
@@ -180,6 +185,7 @@ async function project(a: readonly string[], b: readonly string[]) {
   await Bun.write(join(projectDir, B), CODEUNIT_AL(b));
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "TwinTests.Codeunit.al"), TEST_AL);
+  await Bun.write(join(testDir, "app.json"), testAppJson());
   return {
     dirs: { projectDir, testDir, instrumentedDir },
     dbPath: join(root, "lethal.sqlite"),
@@ -568,6 +574,7 @@ describe("R391: a recorded verdict carries only under rule 1 or rule 2", () => {
     await Bun.write(join(dirs.projectDir, Z), CODEUNIT_AL([TWIN]));
     await Bun.write(join(dirs.projectDir, "app.json"), APP_JSON);
     await Bun.write(join(dirs.testDir, "TwinTests.Codeunit.al"), TEST_AL);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
     const set = await generateMutationSet(dirs.projectDir, { emit: () => {} });
     const maxGuardsPerBatch = set.files.find((f) => f.path.endsWith(AA))?.specs.length;
     if (maxGuardsPerBatch === undefined) throw new Error("Aa produced no specs");

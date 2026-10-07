@@ -293,7 +293,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "code": "test-digests-unavailable",
-        "message": "[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: the published test app could not be requested from the server (no dev server, no dev-endpoint credentials, or no readable test app.json), and the source on disk is not known to be the body it runs",
+        "message": "[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: the published test app "Sandbox Tests" carries no AL source, so the body the server runs cannot be digested. Build the test app so its .app includes its source",
         "seq": 4,
         "type": "warning",
       },
@@ -370,6 +370,10 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "seq": 11,
         "type": "warning",
       },
+    },
+    {
+      "call": "fetchPublishedAppPackage",
+      "tag": "primary",
     },
     {
       "event": {
@@ -508,6 +512,10 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "unplaceableMutants": [],
         "untargetedTriggerCount": 0,
       },
+    },
+    {
+      "call": "fetchPublishedAppPackage",
+      "tag": "primary",
     },
     {
       "event": {

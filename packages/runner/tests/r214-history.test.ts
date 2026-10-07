@@ -16,6 +16,7 @@ import { runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
 import { ResultsStore } from "../src/store";
+import { servesTestApp } from "./helpers/proven-test-app";
 
 // R214 Task 8: history, resume and marks apply only between runs built under the IDENTICAL
 // effective symbol set (C1), and the scheme N-1 to N transition on the same-text key (I4).
@@ -58,6 +59,10 @@ const selectorIds = { selectorId: 79647, controlId: 79648, tableId: 79649 };
 /** Every test passes, so every covered mutant survives; the baseline covers `Rate`. */
 class SurvivingBackend implements ExecutionBackend {
   private active: string | null = null;
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
     return CAPS;
   }

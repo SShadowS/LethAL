@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**58 of 493 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**57 of 494 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -201,13 +201,13 @@ that ordering is the priority.
 - **R485** · 301 BaseApp `run-trigger-forced` tags come only from `forceCanRaise`'s text check on unindexed objects: a possible over-tag (safe direction), measure first · [R485.md](docs/roadmap/R485.md) · done (cfaf0f6e)
 - **R486** · An env-tool --resume can carry kills measured under the OUTGOING test app: R247's test-app hash is read before the session publishes the new one (a false-kill path) · [R486.md](docs/roadmap/R486.md) · done (5c4d96cf)
 - **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · open, filed 2026-10-06
-- **R488** · al-runner one-shot runs every test whose name CONTAINS the requested one, and LethAL credits the merged coverage to the requested test · [R488.md](docs/roadmap/R488.md) · done (0cbc8cf6)
-- **R490** · al-runner one-shot: a look-alike test that discovery did not see and that hangs scores the requested test's mutant timeout-killed · [R490.md](docs/roadmap/R490.md) · open, filed 2026-10-06
+- **R488** · al-runner one-shot runs every test whose name CONTAINS the requested one, and LethAL credits the merged coverage to the requested test · [R488.md](docs/roadmap/R488.md) · done (0cbc8cf6); upstream exact-match ask filed 2026-10-07 as StefanMaron/BusinessCentral.AL.Runner#5439
+- **R490** · al-runner one-shot: a look-alike test that discovery did not see and that hangs scores the requested test's mutant timeout-killed · [R490.md](docs/roadmap/R490.md) · closed 2026-10-07 — ruling: no false kill is possible; the shape is absent in every corpus, and a test-only…
 - **R494** · a top-level (or `#if`-wrapped) split-header object declaration is invisible to `projectObserves`: a possible under-tag · [R494.md](docs/roadmap/R494.md) · open, filed 2026-10-06
 - **R491** · R488 follow-ups: a duplicate row for the requested test is credited, and three R488 tests would pass with the guarantee broken · [R491.md](docs/roadmap/R491.md) · done (276698c4)
 - **R492** · Env-tool runs record the served package hash before the installed version is proven, so a later --resume can carry another test app's verdicts · [R492.md](docs/roadmap/R492.md) · done (cd64dad4)
 - **R493** · R484 follow-ups: three report data-item shapes still emit hang-capable mutants, and an OnPostDataItem write is over-refused · [R493.md](docs/roadmap/R493.md) · open, filed 2026-10-06
-- **R495** · A session without an env-tool hook records the pre-lease served test-app hash without proving it is the installed one · [R495.md](docs/roadmap/R495.md) · open, filed 2026-10-07
+- **R495** · A session without an env-tool hook records the pre-lease served test-app hash without proving it is the installed one · [R495.md](docs/roadmap/R495.md) · done (98748740)
 - **R496** · `test_app_hash` hashes only the test app's bytes: two proven runs whose hook-published dependency changed still match · [R496.md](docs/roadmap/R496.md) · open, filed 2026-10-07
 
 ## Product gaps a real project hits
@@ -266,7 +266,7 @@ that ordering is the priority.
 - **R213** · `ModifyAll(Field, Value, true)` clears R13's bar and `DeleteAll(true)` does not, measured — extend `swap-modify-flag` to the first only · [R213.md](docs/roadmap/R213.md) · closed 2026-10-05 — RULING: not built. R213's probe read the LAST argument, so `ModifyAll(F, true)`…
 - **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call or an assignment there is not a statement site: real, measured, and inert on every app corpus (assignments added 2026-09-27) · [R216.md](docs/roadmap/R216.md) · closed 2026-09-27: not admitted: measured 0 deployable product sites on seven fixture targets…
 - **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over, and the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · done (557404f7) — the container list is pinned against the grammar; options 1 and 2 are not built
-- **R219** · A real project with two control add-ins cannot be instrumented at all: the flat write refuses on colliding resource basenames, and un-flattening is blocked by an al-runner source-root convention · [R219.md](docs/roadmap/R219.md) · open, filed 2026-09-09, measured on Continia Document Output and against al-runner 2.11.0
+- **R219** · A real project with two same-named .al files in different folders cannot be instrumented: the flat batch write refused it (was: colliding control add-in resource basenames, fixed by #20) · [R219.md](docs/roadmap/R219.md) · open, filed 2026-09-09, measured on Continia Document Output and against al-runner 2.11.0
 - **R220** · al-runner grew `--coverage` and `--server`, and LethAL uses neither: the two facts behind `authoritative: false` and behind 65 s per test are both addressable now · [R220.md](docs/roadmap/R220.md) · done 2026-09-09 (9425a2b), all four items: coverage wired, R183 residual re-measured, the --server daemon…
 - **R221** · `--exclude <glob>`: the complement of `--only`, so a project can say which folders must never be mutated · [R221.md](docs/roadmap/R221.md) · done 2026-09-09, requested by the maintainer after pointing LethAL at a real project
 - **R222** · al-runner does NOT require a recompile per mutant: a source-backed resource file is a runtime host-to-AL channel, measured at 0.1 s per mutant against a full compile · [R222.md](docs/roadmap/R222.md) · done 2026-09-09, opt-in as `selectorMode: "resource"`, gate leg 4 asserts per-mutant equality with the…
@@ -350,6 +350,7 @@ that ordering is the priority.
 - **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · closed 2026-10-05 — neither shape reaches the prefix proof today: no Tier-2 claim is made inside a…
 - **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files; correction: the extension's members ARE mutated…
 - **R489** · explain's covering tests are not ordered by duration: no measurement shows a per-test baseline duration is stable enough to rank by · [R489.md](docs/roadmap/R489.md) · open
+- **R497** · BC paths score `#if`-wrapped objects (fenced under H1a, hub by name), and the line map's H1b rule is wrong for a bare object after a wrapper · [R497.md](docs/roadmap/R497.md) · open, filed 2026-10-07
 
 ## Backends and tooling
 
