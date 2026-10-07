@@ -201,7 +201,7 @@ that ordering is the priority.
 - **R485** · 301 BaseApp `run-trigger-forced` tags come only from `forceCanRaise`'s text check on unindexed objects: a possible over-tag (safe direction), measure first · [R485.md](docs/roadmap/R485.md) · done (cfaf0f6e)
 - **R486** · An env-tool --resume can carry kills measured under the OUTGOING test app: R247's test-app hash is read before the session publishes the new one (a false-kill path) · [R486.md](docs/roadmap/R486.md) · done (5c4d96cf)
 - **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · open, filed 2026-10-06
-- **R488** · al-runner one-shot runs every test whose name CONTAINS the requested one, and LethAL credits the merged coverage to the requested test · [R488.md](docs/roadmap/R488.md) · done (0cbc8cf6)
+- **R488** · al-runner one-shot runs every test whose name CONTAINS the requested one, and LethAL credits the merged coverage to the requested test · [R488.md](docs/roadmap/R488.md) · done (0cbc8cf6); upstream exact-match ask filed 2026-10-07 as StefanMaron/BusinessCentral.AL.Runner#5439
 - **R490** · al-runner one-shot: a look-alike test that discovery did not see and that hangs scores the requested test's mutant timeout-killed · [R490.md](docs/roadmap/R490.md) · open, filed 2026-10-06
 - **R494** · a top-level (or `#if`-wrapped) split-header object declaration is invisible to `projectObserves`: a possible under-tag · [R494.md](docs/roadmap/R494.md) · open, filed 2026-10-06
 - **R491** · R488 follow-ups: a duplicate row for the requested test is credited, and three R488 tests would pass with the guarantee broken · [R491.md](docs/roadmap/R491.md) · done (276698c4)
