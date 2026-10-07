@@ -41,6 +41,8 @@ import {
 import { PublishFailedError } from "../src/bcdev-backend";
 import { type RunCliConfig, afterLeaseAcquiredFor, runFromCli, withEnvTeardown } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
+// R-496 review: namespace import so T7f can craft two fingerprints that share a 16-hex prefix.
+import * as digestInputsModule from "../src/digest-inputs";
 import { EnvToolClient, EnvToolError, EnvToolNotStartedError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { EnvToolPublisher } from "../src/env-tool-publisher";
@@ -9827,6 +9829,34 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(got.resume.carried).toBe(0);
         expect(got.history.skipped).toBe(0);
         expect(got.snapshot.reused).toBe(0);
+      });
+      // T7f (F9, full precision, R-496 review): the pre-lease and under-lease fingerprints agree on
+      // their first 16 hex digits (all the stored parts keep) and differ after. Still a mismatch.
+      test("T7f: fingerprints equal in their first 16 hex digits but not after still invalidate", async () => {
+        const real = digestInputsModule.dependencyFingerprint;
+        const seen: string[] = [];
+        const spy = spyOn(digestInputsModule, "dependencyFingerprint").mockImplementation(
+          async (...args) => {
+            await real(...args);
+            seen.push(`${"a".repeat(16)}${(seen.length === 0 ? "b" : "c").repeat(48)}`);
+            return seen[seen.length - 1] ?? "";
+          },
+        );
+        try {
+          const r = await session("N", "one")({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          // The pre-lease digests' walk, then the identity's under the lease.
+          expect(seen).toHaveLength(2);
+          unproven(r);
+          expect(r.store.testDigests(r.runId)).toBeNull();
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain(
+            "a dependency changed while this session waited for the lease",
+          );
+          r.store.close();
+        } finally {
+          spy.mockRestore();
+        }
       });
       // T7d (over-strict: throw on a fresh run): the same race without a resume flag runs.
       test("T7d: a fresh run that loses the race runs unproven and records nothing usable", async () => {

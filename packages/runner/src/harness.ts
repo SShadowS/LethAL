@@ -548,12 +548,26 @@ export class HarnessVerifier {
           authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
           accept: "application/json",
         },
+        // R-496 review: a followed redirect would send a request the guard above never saw.
+        redirect: "manual",
         signal: controller.signal,
       });
     } catch (err) {
       throw new HarnessVerificationError(`${what} unreachable: ${String(err)}`);
     } finally {
       clearTimeout(timer);
+    }
+    if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
+      // Never followed. A destination the guard refuses throws the guard's own error, so it
+      // propagates like any refused extensions query; any other redirect fails as a transport error.
+      const location = res.headers.get("location");
+      if (location !== null) {
+        const dest = new URL(location, sent);
+        refuseUnfilteredExtensionsQuery(dest.pathname, [...dest.searchParams], this.cfg.tenant);
+      }
+      throw new HarnessVerificationError(
+        `${what} failed: HTTP ${res.status} redirect to ${JSON.stringify(location)} was not followed; BC API lists are read only at the URL the guard checked (R-496)`,
+      );
     }
     if (!res.ok) {
       let bodyText = "";

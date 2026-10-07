@@ -368,3 +368,48 @@ describe("R496: the fingerprint's installed checks are per-app filtered reads on
     expect(urls.filter((u) => u.toLowerCase().includes("extensions"))).toEqual([]);
   });
 });
+
+describe("R-496 review: fetchApiRows never follows a redirect", () => {
+  /** The unfiltered extensions URL, built from EXT so this file carries no unfiltered text. */
+  const UNFILTERED = `http://bc:7048/BC/${EXT}?tenant=default`;
+
+  /** Answers the FIRST request with a 302 to `location`; follows it as real fetch does unless the
+   *  caller asked for `redirect: "manual"`, so a missing opt-out shows up as a second request. */
+  function redirecting(location: string) {
+    const urls: string[] = [];
+    const fetchFn = (async (url: unknown, init?: RequestInit): Promise<Response> => {
+      urls.push(String(url));
+      if (urls.length === 1) {
+        const r = new Response(null, { status: 302, headers: { location } });
+        return init?.redirect === "manual" ? r : fetchFn(location, init);
+      }
+      return new Response(JSON.stringify({ value: [] }), { status: 200 });
+    }) as typeof fetch;
+    return { urls, fetchFn };
+  }
+
+  test("a filtered extensions read redirected to the unfiltered list throws the refusal, one request", async () => {
+    const { urls, fetchFn } = redirecting(UNFILTERED);
+    const err = await rowsOf(new HarnessVerifier(CFG, fetchFn))(EXT, "x", {
+      $filter: `id eq ${GUID}`,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(urls).toEqual([ALLOWED_URL]);
+  });
+
+  test("a companies read redirected to the unfiltered extensions list throws the refusal, one request", async () => {
+    const { urls, fetchFn } = redirecting(UNFILTERED);
+    await expect(new HarnessVerifier(CFG, fetchFn).fetchCompanies()).rejects.toBeInstanceOf(
+      UnfilteredExtensionsQueryError,
+    );
+    expect(urls).toEqual(["http://bc:7048/BC/api/v2.0/companies?tenant=default"]);
+  });
+
+  test("a redirect to a harmless URL is not followed either, and fails as a transport error", async () => {
+    const { urls, fetchFn } = redirecting("http://bc:7048/BC/api/v2.0/companies?tenant=other");
+    await expect(new HarnessVerifier(CFG, fetchFn).fetchCompanies()).rejects.toBeInstanceOf(
+      HarnessVerificationError,
+    );
+    expect(urls).toHaveLength(1);
+  });
+});

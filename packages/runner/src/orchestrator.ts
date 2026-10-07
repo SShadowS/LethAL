@@ -5144,17 +5144,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // snapshot, so each compiles exactly the hashed bytes.
   const sourceSnapshot = cfg.source ?? (await readTargetSource(cfg.projectDir));
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
-  const { testAppHash, testDigests, testDigestParts } = await testAppIdentity(
-    cfg,
-    publishedRead,
-    tests,
-    testModel,
-    emit,
-    // R403 phase B: R139's source-to-source comparison filters both sides alike.
-    armPolicyApplied ? testBuildSymbols : undefined,
-    sourceSnapshot,
-    envPublishes !== undefined,
-  );
+  const { testAppHash, testDigests, testDigestParts, testDigestDependencies } =
+    await testAppIdentity(
+      cfg,
+      publishedRead,
+      tests,
+      testModel,
+      emit,
+      // R403 phase B: R139's source-to-source comparison filters both sides alike.
+      armPolicyApplied ? testBuildSymbols : undefined,
+      sourceSnapshot,
+      envPublishes !== undefined,
+    );
   // R495: the identity resume, history and the R192 snapshot may use, `undefined` unless proven.
   // A hook session proves it after the hook, under the lease (below); this read may be outgoing.
   const provenTestAppHash =
@@ -5770,13 +5771,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             : { why: "the served test-app package was not read" };
         // F9: the pre-lease digests' `D` part must equal the value taken here. Compared, and the
         // run invalidated, BEFORE any usable identity is published or a resume authorised.
-        // The parts record the fingerprint's first 16 hex digits (`testDigestsOfModel`'s `short`).
-        // A changed length there would read as a change here: fail closed.
-        const pre = testDigestParts?.dependencies;
+        // The FULL fingerprint, never the parts' 16-hex diagnostic prefix (R-496 review).
+        const pre = testDigestDependencies;
         const why =
           "why" in got
             ? `its dependencies could not be fingerprinted under the lease: ${got.why}`
-            : pre !== undefined && pre !== got.deps.slice(0, 16)
+            : pre !== undefined && pre !== got.deps
               ? `a dependency changed while this session waited for the lease (its digests were taken over dependencies ${pre}, and under the lease they are ${got.deps})`
               : undefined;
         if (why === undefined && "deps" in got) {
@@ -8229,6 +8229,8 @@ async function testAppIdentity(
   testAppHash: string | undefined;
   testDigests?: Record<string, string>;
   testDigestParts?: TestDigestParts;
+  /** R496 F9: the full dependency fingerprint the digests were taken over. */
+  testDigestDependencies?: string;
 }> {
   const { testAppHash, sources } = await reportPublishedTestApp(
     cfg,
@@ -8256,7 +8258,12 @@ async function testAppIdentity(
   if (sources.kind === "unavailable") return none(sources.why);
   const got = await digestsOf(cfg, sources, tests, diskModel, source);
   if ("why" in got) return none(got.why);
-  return { testAppHash, testDigests: got.digests, testDigestParts: got.parts };
+  return {
+    testAppHash,
+    testDigests: got.digests,
+    testDigestParts: got.parts,
+    testDigestDependencies: got.dependencies,
+  };
 }
 
 /** R-278: the one `test-digests-unavailable` warning, said the same way on every path. */
@@ -8341,7 +8348,12 @@ async function digestsOf(
    *  twice. Absent: walked here. */
   takenDependencies?: string,
 ): Promise<
-  | { readonly digests: Record<string, string>; readonly parts: TestDigestParts }
+  | {
+      readonly digests: Record<string, string>;
+      readonly parts: TestDigestParts;
+      /** The FULL fingerprint the digests were taken over (the parts keep only 16 hex), for F9. */
+      readonly dependencies: string;
+    }
   | { readonly why: string }
 > {
   try {
@@ -8357,7 +8369,7 @@ async function digestsOf(
       tests,
       { dependencies, buildInputs: inputs.buildInputs },
     );
-    return { digests, parts };
+    return { digests, parts, dependencies };
   } catch (err) {
     if (err instanceof DependencyUnreadableError) {
       return {

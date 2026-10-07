@@ -133,7 +133,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   (`dependency-unreadable`), and the refusal names the app and its served and installed versions.
   This is intended: a digest over a staged dependency would describe a package no test runs
   against. Each check is the per-app `$filter=id eq <GUID>` read, about 0.05 s per partner app; no
-  committed fixture has one, so no gate moves.
+  committed fixture has one, so no gate moves. A BC API list read (companies, extensions) that is
+  answered with a redirect now fails instead of following it, so a redirect cannot send an
+  unfiltered extensions query; and `lethal doctor` now stops on a refused extensions query instead
+  of listing it as one failed check.
 
 - **al-runner scores a `#if`-wrapped object that is alone in its file; identity scheme 29**
   (R-300b, R300). al-runner (one-shot, `--server` and resource modes) now scores such an object,
