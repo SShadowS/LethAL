@@ -125,6 +125,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal verify` refuses a run whose test-app dependencies include a staged partner app**
+  (R496). On bcdev, every app the dependency fingerprint hashes, partner and transitive ones too,
+  must now have exactly one installed row at the version the server serves; before, only
+  Microsoft's apps were checked. A partner dependency that is published but not installed (a
+  staged upgrade) makes the run's digests unavailable, so verify refuses it by name
+  (`dependency-unreadable`), and the refusal names the app and its served and installed versions.
+  This is intended: a digest over a staged dependency would describe a package no test runs
+  against. Each check is the per-app `$filter=id eq <GUID>` read, about 0.05 s per partner app; no
+  committed fixture has one, so no gate moves.
+
 - **al-runner scores a `#if`-wrapped object that is alone in its file; identity scheme 29**
   (R-300b, R300). al-runner (one-shot, `--server` and resource modes) now scores such an object,
   joining its coverage by the original file's line numbers (measured on both al-runner legs, two
@@ -524,6 +534,24 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   On al-runner nothing changes: the scan runs on bcdev only.
 
 ### Fixed
+
+- **A run lends its verdicts only to a session whose test app runs against the same dependencies**
+  (R496). Two proven runs with the same test-app bytes matched even when a dependency of the test
+  app had been rebuilt between them (republished out of band, or by an env-tool hook that publishes
+  only the dependency), so `--resume`, `--resume-run`, `--skip-known-survivors` and baseline reuse
+  carried verdicts measured against the old dependency. Each run now records its test app's
+  dependency fingerprint (`runs.test_app_deps`, an additive column, R-371's fingerprint) with its
+  identity, and all three compare it; a run without one lends nothing. A session without a hook
+  takes the fingerprint under the lease, so a dependency another session published while this one
+  waited is seen; if its pre-lease digests then disagree, the run keeps neither its identity nor its
+  digests (one `test-digests-unavailable` warning), runs unproven, and a requested resume refuses
+  with `TestAppRepublishedError`. A source-less test app now fingerprints from its manifest, so it
+  stays resumable without a hook. **One-time cost:** rows recorded before this release, R495's
+  included, carry no fingerprint, so the first run after upgrading carries nothing on `--resume`,
+  skips nothing on `--skip-known-survivors` and re-runs every baseline. A non-hook bcdev run now
+  walks its dependencies a second time, under the lease (about 4.3 s on the measured closure). Not
+  covered: apps outside the closure, a dependency changed during the batches, and the control
+  app's own bytes. No report schema, store schema version or identity scheme changes.
 
 - **A run lends its test-app identity only when it proved it, on every backend** (R495). A bcdev
   session without an env-tool hook recorded the served test-app package's hash without proving it

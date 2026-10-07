@@ -632,7 +632,7 @@ The set of reasons is checked; the advice is guidance.
 | `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. It can also mean the test app was never published. |
 | `coverage-mode-changed` | The source run was measured under another coverage mode, or before runs recorded one (R354), so its covering tests and verdicts do not apply. Run `lethal run` again under this configuration, then verify with its artifact id. |
 | `too-many-new-tests` | The new or edited tests need more extra test runs than the budget, `--max-new-tests` (default 50) x (survivors + 2). With the reach filter off this is the old rule, more new tests than `--max-new-tests`. With it on, verify refuses before the lease when the one unmutated run per new test alone exceeds the budget, and otherwise after those unmutated runs, before any mutant, when the runs left after the filter still do (a second unmutated run per new test sent to a survivor, plus one run per survivor a new test joins); the detail then says the unmutated runs had already run. The detail names the count, the runs with and without the filter, the exact value to pass, what made the tests new (a subscriber, an object, the whole-source fallback, a procedure, a dependency) and up to five changed procedures. Pass `--max-new-tests <n>` to pay for them, or run `lethal run` again so this source is the recorded one. |
-| `dependency-unreadable` | A dependency's package on the server could not be read, or did not check out (R385): a Microsoft package in the closure, `System`, or the `LethAL Control` package (which must be the version the running control app reports) was not served or was another app, or a Microsoft app has no installed version, two, or one that differs from the package served (an upgrade in progress). The detail names the app. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
+| `dependency-unreadable` | A dependency's package on the server could not be read, or did not check out (R385): a Microsoft package in the closure, `System`, or the `LethAL Control` package (which must be the version the running control app reports) was not served or was another app, or an app in the closure (any publisher since R496) has no installed version, two, or one that differs from the package served (an upgrade in progress). The detail names the app and its served and installed versions. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
 
 ### Marking an equivalent survivor (checked)
 
@@ -718,8 +718,11 @@ codeunit in the test app (every test is then new), or a dependency, by the bytes
 server holds (R385: Microsoft ones too, so a rebuild or an upgrade at an unchanged declared version is
 seen). Every test also covers `System`, `Application` when the test app declares one, and Test
 Runner, which the `LethAL Control` app runs every test through, so a platform or Base App update
-makes every test new. A Microsoft app must have exactly one installed version, the one the server
-serves, or verify refuses `dependency-unreadable` naming it. This adds about 4.3 s per run and per
+makes every test new. Every app in the walk, Microsoft's and partner ones alike (R496: before, only
+Microsoft's were checked), must have exactly one installed version, the one the server serves, or
+verify refuses `dependency-unreadable` naming it. That includes a partner dependency that is
+published but not installed (a staged upgrade): this refusal is intended, since a digest over it
+would describe a package no test runs against. This adds about 4.3 s per run and per
 verify (14 packages, 68.9 MB, on BC 28.4). A test with a call the walk cannot follow (an interface,
 a `RecordRef` insert, a run by id) is new after ANY test-app edit. So one shared-helper edit can make
 many tests new.
@@ -820,6 +823,31 @@ not caught.
 **One-time cost on upgrade.** Runs recorded before R495 carry no proof, so the first run after the
 upgrade carries nothing on `--resume`, skips nothing on `--skip-known-survivors` and re-runs every
 baseline. The runs it records are proven, so the next session lends normally again.
+
+**The identity includes the test app's dependencies (R496).** A run's identity is its test-app hash
+AND its dependency fingerprint: every app the test app depends on, transitive ones too, hashed by
+the package the server holds, each with exactly one installed row at that version. A session lends
+to another only when both are equal, so a library the tests depend on that was rebuilt between two
+runs (same id and version, other bytes) carries nothing across. Where the fingerprint is taken:
+- bcdev without a hook: under the lease, from the served test-app package's manifest (a package
+  without `.al` source is fingerprinted too). If a dependency changed while the session waited for
+  the lease, so that its pre-lease digests no longer match, the run keeps neither its identity nor
+  its digests and warns `test-digests-unavailable` once; a fresh run then runs unproven, and a
+  requested resume refuses with `TestAppRepublishedError`;
+- bcdev with a hook: from the read-back after the hook;
+- al-runner: from the test project's `app.json` and the `.app` files in its package folders.
+
+A fingerprint that cannot be taken (a dependency not served, or not installed at the served
+version) leaves the run unproven, with a `test-app-dependencies-unproven` or
+`test-digests-unavailable` warning naming the app. A resume refused for this reason says "the test
+app's dependencies changed (A, now B)" or "it recorded no dependency fingerprint". Not covered: an
+installed app outside the dependency closure, a dependency changed during the batches, and the
+control app's own bytes (only its version and its dependencies count). A hook session whose test app
+has no `.al` source is never proven (R498).
+
+**Second one-time cost on upgrade.** Runs recorded before R496, R495's included, carry no
+fingerprint, so the first run after this upgrade carries nothing on `--resume`, skips nothing on
+`--skip-known-survivors` and re-runs every baseline.
 
 ### After verify (guidance)
 
