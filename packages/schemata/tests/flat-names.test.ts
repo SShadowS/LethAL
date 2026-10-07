@@ -34,6 +34,11 @@ describe("flatNamesFor (R219)", () => {
     const win = flatNamesFor(both.map((p) => p.replaceAll("/", "\\")));
     expect(win.flatOf("Sales\\Helper.Codeunit.al")).toBe(posix.flatOf("Sales/Helper.Codeunit.al"));
     expect(posix.flatOf("Sales/Helper.Codeunit.al")).toBe("Helper.Codeunit.8de4e0ea.al");
+    // A NESTED directory pins the separator the hash reads: `/`, from either input form.
+    const nested = ["UserControls/Label/ScannerUI.al", "UserControls/ScannerUI/ScannerUI.al"];
+    for (const paths of [nested, nested.map((p) => p.replaceAll("/", "\\"))]) {
+      expect(flatNamesFor(paths).flatOf(paths[0] ?? "")).toBe("ScannerUI.b00bb38f.al");
+    }
     expect(
       flatNamesFor(["sales/Helper.Codeunit.al", "Purchase/Helper.Codeunit.al"]).flatOf(
         "sales/Helper.Codeunit.al",

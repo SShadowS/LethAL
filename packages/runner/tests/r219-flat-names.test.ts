@@ -13,6 +13,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { readBatchBundle } from "../src/installed-bundle";
 import { readAlSources } from "../src/line-map";
 import { runSession } from "../src/orchestrator";
 import { serializeKey } from "../src/selection";
@@ -204,6 +205,18 @@ describe("R219: two same-basename files in different directories", () => {
     expect((err as Error).message).toContain(`${flat}(5,12): error AL0118`);
     expect((err as Error).message).toContain(`${flat} is ${PURCHASE}`);
     expect((err as Error).message).not.toContain(`${names.flatOf(SALES)} is ${PURCHASE}`);
+  });
+
+  // The verify path's refusals quote the stored bundle's paths, so a renamed file is stored under
+  // its project path. Revert: store `e` instead of `display(e)` in `readBatchBundle`.
+  test("the installed bundle stores a renamed file under its project path", async () => {
+    const appPath = join(run.batch, "..", "r219.app");
+    await Bun.write(appPath, "app");
+    const bundle = await readBatchBundle(run.batch, appPath, Bun.SHA256.hash("app", "hex"));
+    const paths = bundle.files.map((f) => f.path);
+    expect(paths).toContain(SALES);
+    expect(paths).toContain(PURCHASE);
+    expect(paths.some((p) => p.includes(names.flatOf(SALES)))).toBe(false);
   });
 
   test("the batch records the renamed files", async () => {

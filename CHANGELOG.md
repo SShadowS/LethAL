@@ -525,6 +525,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A project with two `.al` files of the same name in different folders can be instrumented**
+  (R219). Batches are written flat, so such a project used to be refused ("two source files share
+  the basename"). That is how Continia Document Capture failed, with its two `ScannerUI.al`. Now
+  each duplicate is written as `<stem>.<8 hex of its folder>.al`, and nothing replaces anything.
+  Every message that quotes a batch file still names the project file: coverage and line-map
+  refusals, and alc's compile errors, which gain a note naming each renamed file. A project without
+  duplicate names builds byte-identical batches, so no verdict, digest or gate figure moves.
+
 - **An env-tool run's test app is recorded only when proven installed** (R492). The server can serve a
   test app that is not the installed one; such a run recorded the served hash, so a later `--resume`,
   `--skip-known-survivors` or reused baseline could carry verdicts measured under another test app.
