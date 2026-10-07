@@ -246,6 +246,12 @@ export interface AlRunnerConfig {
   readonly alRunnerPath: string; // path to the al-runner executable
   readonly instrumentedDir: string; // schemata output (LethAL-owned scratch)
   readonly testDir: string;
+  /**
+   * R219 run 003: the target project. al-runner can label coverage with its source paths (it
+   * discovers the project beside the test app), and the coverage index resolves a path whose file
+   * name two files share against this directory exactly.
+   */
+  readonly sourceProjectDir?: string;
   readonly packagesDir?: string; // --package-cache symbol resolution
   readonly selectorObjectId: number; // id used when rewriting MutationSelector.Codeunit.al
   /**
@@ -680,7 +686,12 @@ export class AlRunnerBackend implements ExecutionBackend {
         "AlRunnerBackend: coverage is on but the session's build symbols were never handed over (useBuildSymbols), so the #if arms of the bundle are unknown; refusing rather than guessing them (R-300b).",
       );
     }
-    return buildAlRunnerCoverageIndex(dir, { symbols });
+    return buildAlRunnerCoverageIndex(dir, {
+      symbols,
+      ...(this.cfg.sourceProjectDir !== undefined
+        ? { sourceProjectDir: this.cfg.sourceProjectDir }
+        : {}),
+    });
   }
 
   /**

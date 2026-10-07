@@ -43,7 +43,7 @@
  * only tests use it today.
  */
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { evaluateArms, initParser, parseAL } from "@lethal/engine";
 import { wrapRoot } from "@lethal/engine";
 import type { ServerPerTestCoverage } from "./al-runner-server";
@@ -155,13 +155,28 @@ export interface AlRunnerCoverageIndex {
    */
   readonly skippedFiles: readonly string[];
   /**
-   * R219: the lower-cased basenames the batch gave a disambiguated flat name. A reported path that
-   * ends in one of them and matches no key cannot be attributed to either file, so it is refused
-   * by name (`indexedFile`) rather than dropped. Absent: none (indexes built by hand in tests).
+   * R219 run 003: how a reported path whose LAST SEGMENT two or more files own is resolved. Such a
+   * path is never matched by suffix (sol run 002: `Sales/Helper.al` against `X/Sales/Helper.al`, or
+   * a project path against another file's flat name). It is resolved exactly, in two namespaces:
+   * under `projectDir` it is a project-relative path; directly in `batchDir` it is a flat name.
+   * Neither, or both to different files, is refused. Absent: no contested segment (indexes built
+   * by hand in tests).
    */
-  readonly renamedBasenames?: ReadonlySet<string>;
+  readonly exact?: ExactResolution;
   /** R219: how to quote a reported path to a user (a renamed flat name becomes its project path). */
   readonly displayOf?: (path: string) => string;
+}
+
+/** R219 run 003: see `AlRunnerCoverageIndex.exact`. Paths are resolved, `/`-separated, lower-cased. */
+export interface ExactResolution {
+  readonly batchDir: string;
+  readonly projectDir?: string;
+  /** Last segments (lower-cased) that the keys of two or more files end in. */
+  readonly contested: ReadonlySet<string>;
+  /** Lower-cased flat name -> the file's flat `byFile` key. */
+  readonly byFlatName: ReadonlyMap<string, string>;
+  /** Lower-cased project-relative path -> the file's flat `byFile` key. */
+  readonly byProjectPath: ReadonlyMap<string, string>;
 }
 
 /**
@@ -251,6 +266,12 @@ export async function buildAlRunnerCoverageIndex(
   options: {
     readonly admitMultiObjectFiles?: boolean;
     readonly symbols?: readonly string[];
+    /**
+     * R219 run 003: the project al-runner may label coverage under (it discovers the source
+     * project beside the test app, measured on c39ad5de). Without it, a source-path label for a
+     * contested file name is refused.
+     */
+    readonly sourceProjectDir?: string;
   } = {},
 ): Promise<AlRunnerCoverageIndex> {
   await initParser();
@@ -274,11 +295,7 @@ export async function buildAlRunnerCoverageIndex(
     const project = normalizeFileKey(display(rel));
     return project === flat ? [flat] : [flat, project];
   };
-  const renamedBasenames = new Set(
-    rels
-      .filter((rel) => display(rel) !== rel)
-      .map((rel) => normalizeFileKey(display(rel)).split("/").pop() ?? ""),
-  );
+  const exact = exactResolutionOf(rels, keysOf, display, instrumentedDir, options.sourceProjectDir);
 
   const byFile = new Map<string, readonly LineMapEntry[]>();
   const multiObjectFiles: string[] = [];
@@ -389,9 +406,88 @@ export async function buildAlRunnerCoverageIndex(
     exempt,
     refusals,
     skippedFiles,
-    renamedBasenames,
+    ...(exact !== undefined ? { exact } : {}),
     displayOf: (path) => normalizeSlashes(display(path)),
   };
+}
+
+/** A directory as `ExactResolution` compares it: absolute, `/`-separated, lower-cased, no trailing `/`. */
+function dirKey(dir: string): string {
+  return normalizeFileKey(resolve(dir)).replace(/\/+$/, "");
+}
+
+/**
+ * R219 run 003. Refuses two files whose keys collide once lower-cased (sol run 002:
+ * `Sales/Helper.al` and `sales/Helper.al` on a case-sensitive file system, where one alias would
+ * silently replace the other), then returns the exact maps when any last segment is contested.
+ */
+function exactResolutionOf(
+  rels: readonly string[],
+  keysOf: (rel: string) => string[],
+  display: (rel: string) => string,
+  batchDir: string,
+  projectDir: string | undefined,
+): ExactResolution | undefined {
+  const owner = new Map<string, string>();
+  const ownersOfSegment = new Map<string, Set<string>>();
+  for (const rel of rels) {
+    for (const key of keysOf(rel)) {
+      const other = owner.get(key);
+      if (other !== undefined && other !== rel) {
+        throw new Error(
+          `cannot index al-runner coverage: "${normalizeSlashes(display(other))}" and "${normalizeSlashes(display(rel))}" both answer to "${key}" once case is ignored, so a coverage path naming one could be credited to the other (R219). Rename one of the files.`,
+        );
+      }
+      owner.set(key, rel);
+      const segment = key.split("/").pop() ?? key;
+      const owners = ownersOfSegment.get(segment) ?? new Set<string>();
+      owners.add(rel);
+      ownersOfSegment.set(segment, owners);
+    }
+  }
+  const contested = new Set(
+    [...ownersOfSegment].filter(([, owners]) => owners.size > 1).map(([segment]) => segment),
+  );
+  if (contested.size === 0) return undefined;
+  return {
+    batchDir: dirKey(batchDir),
+    ...(projectDir !== undefined ? { projectDir: dirKey(projectDir) } : {}),
+    contested,
+    byFlatName: new Map(rels.map((rel) => [normalizeFileKey(rel), normalizeFileKey(rel)])),
+    byProjectPath: new Map(
+      rels.map((rel) => [normalizeFileKey(display(rel)), normalizeFileKey(rel)]),
+    ),
+  };
+}
+
+/**
+ * R219 run 003: a reported path whose last segment is contested, resolved exactly (see
+ * `AlRunnerCoverageIndex.exact`). Returns the file's flat key; throws when the path names no
+ * file, or two different ones.
+ */
+function resolveContested(file: string, exact: ExactResolution): string {
+  // The one-shot transport reports paths relative to al-runner's cwd, which is LethAL's own
+  // (measured on c39ad5de: `../../tmp/.../batch/X.al`); `--server` reports them absolute.
+  const abs = dirKey(file);
+  const { projectDir } = exact;
+  const inProject =
+    projectDir !== undefined && abs.startsWith(`${projectDir}/`)
+      ? exact.byProjectPath.get(abs.slice(projectDir.length + 1))
+      : undefined;
+  const inBatch =
+    dirname(abs) === exact.batchDir ? exact.byFlatName.get(abs.split("/").pop() ?? "") : undefined;
+  if (inProject !== undefined && inBatch !== undefined && inProject !== inBatch) {
+    throw new Error(
+      `al-runner reported coverage for "${file}", which names one file as a project path and another as a batch file name (R219). Refusing rather than crediting either. Rename one of the files, or run with "alRunner.coverage": "none".`,
+    );
+  }
+  const hit = inProject ?? inBatch;
+  if (hit === undefined) {
+    throw new Error(
+      `al-runner reported coverage for "${file}", but two or more files of this batch end in that name (renamed by their folder, R219), and the path is neither inside the project (${projectDir ?? "not known"}) nor directly in the batch (${exact.batchDir}). Refusing rather than dropping that coverage or crediting it to the wrong file. Rename one of the files, or run with "alRunner.coverage": "none".`,
+    );
+  }
+  return hit;
 }
 
 /**
@@ -441,18 +537,18 @@ function indexedFile(
   skipped: ReadonlySet<string>,
 ): { readonly key: string; readonly entries: readonly LineMapEntry[] } | undefined {
   const cands = fileKeyCandidates(file);
+  // R219 run 003: a contested last segment is resolved exactly, never by the longest suffix.
+  const { exact } = index;
+  if (exact?.contested.has(cands.at(-1) ?? "") === true) {
+    const key = resolveContested(file, exact);
+    if (skipped.has(key)) return undefined;
+    const hit = index.byFile.get(key);
+    return hit !== undefined ? { key, entries: hit } : undefined;
+  }
   for (const cand of cands) {
     if (skipped.has(cand)) return undefined;
     const hit = index.byFile.get(cand);
     if (hit !== undefined) return { key: cand, entries: hit };
-  }
-  // R219: a bare duplicate basename names neither renamed file. Dropping it would read a covered
-  // mutant `no-coverage`, and guessing would credit the other file; refused by name instead.
-  const base = cands.at(-1);
-  if (base !== undefined && index.renamedBasenames?.has(base) === true) {
-    throw new Error(
-      `al-runner reported coverage for "${file}", but this batch holds two or more files named "${base}" (renamed by their folder, R219), and the path names neither by its project folder nor by its batch name. Refusing rather than dropping that coverage or crediting it to the wrong file. Rename one of the files, or run with "alRunner.coverage": "none".`,
-    );
   }
   return undefined;
 }

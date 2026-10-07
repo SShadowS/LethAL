@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { initParser } from "@lethal/engine";
 import { FLAT_NAMES_FILENAME, flatNamesFor } from "@lethal/schemata";
 import {
@@ -19,7 +19,7 @@ import type {
 } from "../src/backend";
 import { readBatchBundle } from "../src/installed-bundle";
 import { readAlSources } from "../src/line-map";
-import { runSession } from "../src/orchestrator";
+import { prepareBatchProject, runSession } from "../src/orchestrator";
 import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 
@@ -195,13 +195,25 @@ describe("R219: two same-basename files in different directories", () => {
         await lineOf(flat, path === SALES ? "exit(1)" : "exit(0)"),
       ];
     };
+    // Run 003: resolved EXACTLY against the project and the batch, so the labels use the real
+    // directories. The one-shot transport reports them relative to its cwd (measured), `--server`
+    // absolute.
+    const indexOf = () =>
+      buildAlRunnerCoverageIndex(run.batch, { sourceProjectDir: run.projectDir });
     const shapes = [
-      ["the project source path", (p: string) => `/work/somewhere/app/${p}`],
-      ["a batch's own flat path", (p: string) => `/tmp/lethal-x/run-1-batch-0/${names.flatOf(p)}`],
+      ["the project source path", (p: string) => join(run.projectDir, p)],
+      ["the batch's flat path", (p: string) => join(run.batch, names.flatOf(p))],
+      [
+        "the batch's flat path, relative to the cwd",
+        (p: string) => relative(process.cwd(), join(run.batch, names.flatOf(p))),
+      ],
+      // Measured: from a copy, al-runner named the FIRST batch it compiled. A flat name has one
+      // owner, so its last segment is not contested and the suffix match is exact.
+      ["another batch directory's flat path", (p: string) => `/tmp/lethal-x/b0/${names.flatOf(p)}`],
     ] as const;
     for (const [what, label] of shapes) {
       test(`one-shot Cobertura labelled with ${what}`, async () => {
-        const index = await buildAlRunnerCoverageIndex(run.batch);
+        const index = await indexOf();
         for (const [path, id] of [
           [SALES, 50100],
           [PURCHASE, 50101],
@@ -222,7 +234,7 @@ describe("R219: two same-basename files in different directories", () => {
         }
       });
       test(`--server statements labelled with ${what}`, async () => {
-        const index = await buildAlRunnerCoverageIndex(run.batch);
+        const index = await indexOf();
         for (const [path, id] of [
           [SALES, 50100],
           [PURCHASE, 50101],
@@ -254,7 +266,7 @@ describe("R219: two same-basename files in different directories", () => {
     // Sol run 001 (5): the --server scope warning quotes the project path, not the batch name.
     // Revert: quote `file.file` in `alRunnerCoverageFromServer`.
     test("a --server scope warning on a renamed file names its project path", async () => {
-      const index = await buildAlRunnerCoverageIndex(run.batch);
+      const index = await indexOf();
       const [line] = await covered(SALES);
       const warn = spyOn(console, "warn").mockImplementation(() => {});
       try {
@@ -263,7 +275,7 @@ describe("R219: two same-basename files in different directories", () => {
             test: "Codeunit50190.X",
             coverage: [
               {
-                file: `/tmp/lethal-x/run-1-batch-0/${names.flatOf(SALES)}`,
+                file: join(run.batch, names.flatOf(SALES)),
                 statements: [{ scope: "NotPick", line: line ?? 0, hits: 1 }],
               },
             ],
@@ -277,22 +289,138 @@ describe("R219: two same-basename files in different directories", () => {
         warn.mockRestore();
       }
     });
-    test("a bare duplicate basename names neither file: refused by name, on both transports", async () => {
-      const index = await buildAlRunnerCoverageIndex(run.batch);
-      const why = /names neither by its project folder nor by its batch name/;
-      expect(() =>
-        alRunnerCoverageFrom([{ file: "/x/Helper.Codeunit.al", line: 5, hits: 1 }], index),
-      ).toThrow(why);
+    // A shared file name outside both known directories names no file exactly: refused, never
+    // matched by suffix.
+    for (const file of [
+      "/x/Helper.Codeunit.al",
+      "Helper.Codeunit.al",
+      "/x/Sales/Helper.Codeunit.al",
+    ]) {
+      test(`"${file}" names no file exactly: refused by name, on both transports`, async () => {
+        const index = await indexOf();
+        const why = /neither inside the project .* nor directly in the batch/;
+        expect(() => alRunnerCoverageFrom([{ file, line: 5, hits: 1 }], index)).toThrow(why);
+        expect(() =>
+          alRunnerCoverageFromServer(
+            { test: "Codeunit50190.X", coverage: [{ file, statements: [{ line: 5, hits: 1 }] }] },
+            index,
+          ),
+        ).toThrow(why);
+      });
+    }
+  });
+
+  // Sol run 002: three constructions where a suffix or case-folded alias credited the wrong file.
+  describe("exact resolution: sol's run 002 constructions", () => {
+    const APP = {
+      id: "21921921-2192-4192-8192-219219219219",
+      name: "R219",
+      publisher: "LethAL",
+      version: "1.0.0.0",
+      idRanges: [{ from: 50100, to: 50199 }],
+    };
+    /** Writes `files` as a project and its flat batch (`batchDir`, default beside the project). */
+    const batchOf = async (
+      files: readonly (readonly [string, number])[],
+      batchAt?: (projectDir: string) => string,
+    ) => {
+      const root = await mkdtemp(join(tmpdir(), "lethal-r219-exact-"));
+      roots.push(root);
+      const projectDir = join(root, "X");
+      const batch = batchAt?.(projectDir) ?? join(root, "batch");
+      await Bun.write(join(projectDir, "app.json"), JSON.stringify(APP));
+      for (const [path, id] of files) await Bun.write(join(projectDir, path), helper(id, `H${id}`));
+      await mkdir(batch, { recursive: true });
+      await prepareBatchProject(projectDir, batch, APP, APP.version);
+      const flat = flatNamesFor(files.map(([p]) => p));
+      return { projectDir, batch, flat };
+    };
+    // Lines 5 and 6 of `helper` (`if X > 1 then`, `exit(1)`): a plain copy, not instrumented.
+    const both = (file: string, index: Awaited<ReturnType<typeof buildAlRunnerCoverageIndex>>) => [
+      alRunnerCoverageFrom(
+        [5, 6].map((line) => ({ file, line, hits: 1 })),
+        index,
+      ).entries,
+      alRunnerCoverageFromServer(
+        {
+          test: "Codeunit50190.X",
+          coverage: [
+            { file, statements: [5, 6].map((line) => ({ scope: "Pick", line, hits: 1 })) },
+          ],
+        },
+        index,
+      ).entries,
+    ];
+    const entriesOf = (id: number) =>
+      [5, 6].map((line) => ({ objectType: "Codeunit", objectId: id, procedure: "Pick", line }));
+
+    // (a) The longest suffix of `<root>/X/Sales/Helper.al` is the OTHER file's project path.
+    // Revert: drop the `exact` branch of `indexedFile`.
+    test("a nested shared suffix: Sales/Helper.al under a root named X is not X/Sales/Helper.al", async () => {
+      const b = await batchOf([
+        ["Sales/Helper.al", 50100],
+        ["X/Sales/Helper.al", 50101],
+      ]);
+      const index = await buildAlRunnerCoverageIndex(b.batch, { sourceProjectDir: b.projectDir });
+      for (const [path, id] of [
+        ["Sales/Helper.al", 50100],
+        ["X/Sales/Helper.al", 50101],
+      ] as const) {
+        for (const label of [join(b.projectDir, path), join(b.batch, b.flat.flatOf(path))]) {
+          for (const entries of both(label, index)) expect(entries).toEqual(entriesOf(id));
+        }
+      }
+    });
+
+    // (a') A project file literally named like another file's flat name.
+    const collidingNames = (flatSales: string) =>
+      [
+        ["Sales/Helper.Codeunit.al", 50100],
+        ["Purchase/Helper.Codeunit.al", 50101],
+        [`active/${flatSales}`, 50102],
+        [`Other/${flatSales}`, 50103],
+      ] as const;
+    const FLAT_SALES = flatNamesFor([SALES, PURCHASE]).flatOf(SALES);
+    test("a project file named like another's flat name: each namespace credits its own file", async () => {
+      const b = await batchOf(collidingNames(FLAT_SALES), (p) => join(p, "..", "worker", "active"));
+      const index = await buildAlRunnerCoverageIndex(b.batch, { sourceProjectDir: b.projectDir });
+      // The batch label is Sales's; the project label is the file under active/.
+      for (const entries of both(join(b.batch, FLAT_SALES), index)) {
+        expect(entries).toEqual(entriesOf(50100));
+      }
+      for (const entries of both(join(b.projectDir, "active", FLAT_SALES), index)) {
+        expect(entries).toEqual(entriesOf(50102));
+      }
+    });
+    // Revert: let `resolveContested` prefer either namespace when both hit.
+    test("a path that is one file's project path AND another's batch path is refused", async () => {
+      const b = await batchOf(collidingNames(FLAT_SALES), (p) => join(p, "active"));
+      const index = await buildAlRunnerCoverageIndex(b.batch, { sourceProjectDir: b.projectDir });
+      const label = join(b.projectDir, "active", FLAT_SALES);
+      expect(() => both(label, index)).toThrow(/one file as a project path and another as a batch/);
       expect(() =>
         alRunnerCoverageFromServer(
-          {
-            test: "Codeunit50190.X",
-            coverage: [{ file: "/x/Helper.Codeunit.al", statements: [{ line: 5, hits: 1 }] }],
-          },
+          { test: "T", coverage: [{ file: label, statements: [{ line: 5, hits: 1 }] }] },
           index,
         ),
-      ).toThrow(why);
+      ).toThrow(/one file as a project path and another as a batch/);
     });
+
+    // (b) On a case-sensitive file system both exist; their project aliases fold to one key.
+    // Revert: drop the owner check in `exactResolutionOf`. Not on Windows, where the two paths are
+    // one directory.
+    test.skipIf(process.platform === "win32")(
+      "two project paths that differ only by case are refused before indexing",
+      async () => {
+        const b = await batchOf([
+          ["Sales/Helper.al", 50100],
+          ["sales/Helper.al", 50101],
+        ]);
+        await expect(
+          buildAlRunnerCoverageIndex(b.batch, { sourceProjectDir: b.projectDir }),
+        ).rejects.toThrow(/both answer to "sales\/helper.al" once case is ignored/);
+      },
+    );
   });
 
   test("a file quoted from the batch (line map, refusals) is named by its project path", async () => {

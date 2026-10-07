@@ -3002,6 +3002,7 @@ export async function buildBackend(
         alRunnerPath: c.alRunnerPath,
         instrumentedDir: join(scratchDir, "al-runner-active"),
         testDir: parsed.testDir,
+        sourceProjectDir: parsed.projectDir,
         ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
         selectorObjectId: selectorIds.selectorId,
         serverMode: t.serverMode,
