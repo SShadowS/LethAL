@@ -1085,6 +1085,38 @@ describe("RunMutantTransport.runMany: a lost reply is read back (R236b)", () => 
     expect(f.calls).toEqual(["RunMutantMany", "GetOpAnswer"]);
   });
 
+  test("R-496 T-a: a refused main request rejects runMany even though a kept answer is on file", async () => {
+    const f = fakes({ many: truncated(), kept: found(RAN_TWO) });
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_RunMutantMany")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused main"))
+        : f.fetchFn(url as string, init)) as typeof fetch;
+    const err = await transport(fetchFn)
+      .runMany(TWO)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.calls).toEqual(["GetOpAnswer"]);
+  });
+
+  test("R-496 T-b: a status read refused after a confirmed stop and an AL-stop 408 rejects runMany", async () => {
+    let after408 = false;
+    const f = fakes({
+      many: "hold",
+      status: () => (after408 ? new UnfilteredExtensionsQueryError("refused status") : statusOf()),
+      stopAt: () => {
+        setTimeout(() => {
+          after408 = true;
+          f.release(new Response(AL_STOP_BODY, { status: 408 }));
+        }, 5);
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const err = await transport(f.fetchFn)
+      .runMany(req({ stopHungSessions: true }))
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
   test("2. a kept answer carrying runError is not accepted", async () => {
     const f = fakes({ many: truncated(), kept: found(answer({ runError: "boom" })) });
     const msg = keptUnknown(await transport(f.fetchFn).runMany(TWO));

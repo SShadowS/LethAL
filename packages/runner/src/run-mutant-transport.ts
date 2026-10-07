@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFileSync } from "node:fs";
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { StopState, TestMethodRef, TestOutcome, TestVerdict } from "./backend";
@@ -462,18 +463,53 @@ function parseCoverageStats(result: RunMutantResult): FencedCoverageStats | unde
   return { runMs, serializeMs, scannedRows, emittedRows };
 }
 
+/** R-496: the per-call record `refusalBoundary` reads; see there. */
+const refusalScope = new AsyncLocalStorage<{ refusal?: UnfilteredExtensionsQueryError }>();
+
 export class RunMutantTransport {
   /** R289: `LETHAL_R289_TRACE`, read once here; an empty string counts as unset. */
   private readonly tracePath: string | undefined;
   private readonly traceWrite: (path: string, line: string) => void;
+  private readonly fetchFn: FetchFn;
+
+  /**
+   * R-496: run one public call; if any fetch inside it (a swallowed catch, a stop timer, the status
+   * read) was refused as an unfiltered extensions query, throw that refusal at exit, whatever the
+   * call would otherwise have returned or thrown.
+   */
+  private async refusalBoundary<T>(fn: () => Promise<T>): Promise<T> {
+    const holder: { refusal?: UnfilteredExtensionsQueryError } = {};
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+    try {
+      outcome = { ok: true, value: await refusalScope.run(holder, fn) };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+    if (holder.refusal !== undefined) throw holder.refusal;
+    if (!outcome.ok) throw outcome.error;
+    return outcome.value;
+  }
 
   constructor(
     private readonly cfg: ActivationConfig,
     private readonly targetAppId: string,
     private readonly artifactId: string,
-    private readonly fetchFn: FetchFn = bcFetch,
+    injectedFetch: FetchFn = bcFetch,
     opts: { readonly traceWrite?: (path: string, line: string) => void } = {},
   ) {
+    // R-496: every fetch this transport makes records an unfiltered-extensions refusal for the
+    // CURRENT public call (async-local, so concurrent calls never share a record), then rethrows.
+    this.fetchFn = (async (url, init) => {
+      try {
+        return await injectedFetch(url, init);
+      } catch (err) {
+        if (err instanceof UnfilteredExtensionsQueryError) {
+          const holder = refusalScope.getStore();
+          if (holder !== undefined && holder.refusal === undefined) holder.refusal = err;
+        }
+        throw err;
+      }
+    }) as FetchFn;
     const p = process.env.LETHAL_R289_TRACE;
     this.tracePath = p === undefined || p === "" ? undefined : p;
     this.traceWrite = opts.traceWrite ?? appendFileSync;
@@ -741,7 +777,7 @@ export class RunMutantTransport {
   }
 
   async run(req: RunMutantRequest): Promise<TestVerdict> {
-    return (await this.execute(req, false)).verdict;
+    return this.refusalBoundary(async () => (await this.execute(req, false)).verdict);
   }
 
   /**
@@ -761,7 +797,7 @@ export class RunMutantTransport {
    */
   async runMany(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
     const trace = { failures: 0 };
-    const r = await this.runManyScored(req, trace);
+    const r = await this.refusalBoundary(() => this.runManyScored(req, trace));
     // R289: a trace that stopped writing is named once per call on stderr, never in a verdict:
     // a verdict's `failureMessage` feeds `killingTestFailure`, the store and verify.ts's
     // callstack match, so a diagnostic suffix there would change what a kill is classified as.

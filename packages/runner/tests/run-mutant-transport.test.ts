@@ -816,6 +816,56 @@ describe("RunMutantTransport.run — R53 server-side stop", () => {
     expect(v.operation).toBe("in-flight-unknown");
   });
 
+  test("R-496 T-b: a status read refused after a confirmed stop and an AL-stop 408 rejects run", async () => {
+    const held = heldFetch();
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_GetOperationStatus")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused status"))
+        : held.fetchFn(url as string, init)) as typeof fetch;
+    const err = await transport(fetchFn)
+      .run({
+        ...REQ,
+        timeoutMs: 20,
+        onBudgetExceeded: async () => {
+          held.answer(new Response(AL_STOP_BODY, { status: 408 }));
+          return { stopped: true };
+        },
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("R-496 T-c: a refused StopHungRun rejects run even when the held request returns a valid failure", async () => {
+    const held = heldFetch();
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_StopHungRun?")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused stop"))
+        : held.fetchFn(url as string, init)) as typeof fetch;
+    const t = transport(fetchFn);
+    const failed = echo({
+      codeunitResults: JSON.stringify({
+        testResults: [{ method: "OverBudgetDetected", result: 1, message: "boom" }],
+      }),
+    });
+    const err = await t
+      .run({
+        ...REQ,
+        timeoutMs: 20,
+        stopGraceMs: 500,
+        onBudgetExceeded: async () => {
+          try {
+            await t.stopHungRun({ attemptId: "a1", lease: LEASE, timeoutMs: 1000 });
+          } catch {
+            // the hook swallows it, as a careless caller would
+          }
+          held.answer(new Response(JSON.stringify({ value: JSON.stringify(failed) })));
+          return { stopped: false };
+        },
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
   test("names a FAILED stop in the quarantine message", async () => {
     const { fetchFn } = heldFetch();
     const v = await transport(fetchFn).run({
@@ -1040,6 +1090,20 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(calls).toEqual(["RunMutant", "GetOpAnswer"]);
+  });
+
+  test("R-496 T-a: a refused main request rejects run even though a kept failure is on file", async () => {
+    const calls: string[] = [];
+    const inner = routed("ok", found(JSON.stringify(FAILED)), calls);
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_RunMutant?")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused main"))
+        : inner(url as string, init)) as typeof fetch;
+    const err = await transport(fetchFn)
+      .run(REQ)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(calls).toEqual(["GetOpAnswer"]);
   });
 
   test("1. body lost, kept answer is a completed fail: it is the verdict, no second RunMutant is sent", async () => {
