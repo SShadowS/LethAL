@@ -276,7 +276,11 @@ async function runOnce(
       ...(fixture.symbols.length > 0 ? { preprocessorSymbols: fixture.symbols } : {}),
     });
     backendRef = backend;
-    return await runSession({
+    // R518: the R123 contract line runSession emits after pinning (one-shot legs only). A fact that
+    // does not match already makes runSession THROW; this also prints the line and asserts the new
+    // `timeout-exit-readable` fact was measured and matched, so its absence cannot pass.
+    const contractLines: string[] = [];
+    const report = await runSession({
       backend,
       store,
       projectDir: fixture.projectDir,
@@ -288,7 +292,22 @@ async function runOnce(
       ...(fixture.maxGuardsPerBatch !== undefined
         ? { maxGuardsPerBatch: fixture.maxGuardsPerBatch }
         : {}),
+      emit: [
+        (e) => {
+          if (e.type === "warning" && e.code === "al-runner-contract-pinned")
+            contractLines.push(e.message);
+        },
+      ],
     });
+    if (report.validity.executionContexts.some((c) => c.platformAppsDir !== undefined)) {
+      const [line] = contractLines;
+      assert.ok(
+        line?.includes("timeout-exit-readable=matches") === true,
+        `R518: a pinned one-shot leg must emit the R123 contract line with timeout-exit-readable=matches; got ${JSON.stringify(contractLines)}`,
+      );
+      console.log(`  ${line}`);
+    }
+    return report;
   } finally {
     store.close();
     await backendRef?.close();

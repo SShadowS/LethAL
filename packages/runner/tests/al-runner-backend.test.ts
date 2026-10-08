@@ -1871,4 +1871,58 @@ describe("AlRunnerBackend one-shot: a test timeout exits 3 (R518)", () => {
     expect(v.reportedStopMs).toBe(40_000);
     expect(calls.length).toBe(1);
   });
+
+  // Plan D2's last point: a hang in the test codeunit's OnRun trigger (or a RunnerOutOfScopeException)
+  // can give a TEST-TIMEOUT abort whose row is not a timeout wording. The transport accepts the
+  // envelope (the row is explained by the abort); the backend scores it the fail-closed `error`,
+  // never `timeout`.
+  test("an OnRun-trigger exit 3 is accepted as rows but scored a fail-closed error, never timeout", async () => {
+    const onRun = {
+      ...timeoutExit3,
+      tests: [{ name: QUALIFIED, status: "error", durationMs: 40_072, message: "OnRun trigger did not complete" }],
+    };
+    const { calls, spawn } = okSpawn(onRun, 3);
+    const { backend } = await makeBackend(spawn);
+    const v = await backend.run(ref, opts);
+    expect(v.outcome).toBe("error");
+    // The row's own message, so the transport read the envelope (its refusal would carry stderr).
+    expect(v.failureMessage).toContain(AL_RUNNER_UNCLASSIFIED_ERROR);
+    expect(v.failureMessage).toContain("OnRun trigger did not complete");
+    expect(v.reportedStopMs).toBeUndefined();
+    expect(calls.length).toBe(1);
+  });
+
+  // `--test` is a substring match (R488). If the look-alike sibling hangs first, its row and the
+  // abort name IT, and the wanted test has no row: the backend learns the sibling and re-sends the
+  // wanted test alone.
+  test("a sibling that hangs first is learned from the exit 3 and the wanted test re-runs alone", async () => {
+    const TWIN = `${QUALIFIED}Twin`;
+    const calls: string[][] = [];
+    const spawn: SpawnFn = async (argv) => {
+      calls.push([...argv]);
+      if (argv.includes("--exclude-test")) {
+        const tests = [{ name: QUALIFIED, status: "pass", durationMs: 3 }];
+        return { exitCode: 0, stdout: alRunnerStdout({ tests }), stderr: "" };
+      }
+      const hung = {
+        ...timeoutExit3,
+        tests: [{ name: TWIN, status: "error", durationMs: 40_072, message: "Test exceeded 40s timeout." }],
+        suiteErrors: [
+          {
+            file: "/tests",
+            errors: [
+              "tests: TEST-TIMEOUT-ABORT: Sandbox Tests (Codeunit79100).PostingUpdatesTotalTwin: watchdog timeout aborted the run — 0 further [Test] method(s) in this codeunit did not run (0 total)",
+            ],
+          },
+        ],
+      };
+      return { exitCode: 3, stdout: alRunnerStdout(hung), stderr: "stderr text" };
+    };
+    const { backend } = await makeBackend(spawn);
+    const v = await runOnce(backend, new SessionSafety(), ref, opts);
+    expect(v.outcome).toBe("pass");
+    expect(calls.length).toBe(2);
+    const second = calls[1] ?? [];
+    expect(second[second.indexOf("--exclude-test") + 1]).toBe(TWIN);
+  });
 });
