@@ -216,12 +216,17 @@ export function coarseIdentityTupleOf(
  * 33: R501, the same scope is hang-refused for EVERY operator at dispatch (`openItemHangRefuses`,
  * no exemption), and so is a site that deletes or alters a bounded item's only `SetRange` bound,
  * so a later same-tuple twin of a refused mutant takes its ordinal (BC.History: 13,435 mutants
- * refused, 378 keys; fixtures, CDO, DC and DO: none). 34 is held for R-343.
+ * refused, 378 keys; fixtures, CDO, DC and DO: none).
+ * 34: R343, an object wrapped whole in `#if` is indexed when the build compiles its arm, so typed
+ * operators gain its sites and Tier 1 cedes the ones Tier 2 claims, and a new or ceded mutant
+ * earlier in a procedure moves a same-tuple twin's ordinal (BC.History: 4 keys; fixtures, CDO, DC
+ * and DO: none).
  * 35: R500, the dispatch check also refuses `Date` items, one-hop callees of open-item code in other
  * objects (codeunits, records, interface implementers, event subscribers), outside filter calls on
  * an open item, and two stated limits (a preset exit name's writes, a self-inserting item's own
- * filter), so a later same-tuple twin of a refused mutant takes its ordinal (BC.History: 23,944
- * deployed mutants removed, 165 keys; CDO and DO 2 removed, 0 keys; fixtures and DC: none).
+ * filter), so a later same-tuple twin of a refused mutant takes its ordinal (measured against master
+ * 15c3a620, BC.History: 23,944 deployed mutants removed, 165 keys; CDO and DO 2 removed, 0 keys;
+ * fixtures and DC: none).
  */
 export const IDENTITY_SCHEME = 35;
 
