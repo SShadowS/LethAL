@@ -11514,9 +11514,9 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
         emit: [(e) => events.push(e)],
       }).catch((e: unknown) => e),
     );
+    expect(calls.ReleaseLease ?? 0).toBe(0);
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(warnings(events, "lease-marker-read-failed")).toHaveLength(1);
-    expect(calls.ReleaseLease ?? 0).toBe(0);
   });
 
   test("R5: a refusal on the reconciling status read leaves a lost ack unresolved, never recovered or killed", async () => {

@@ -252,8 +252,8 @@ describe("startEnvToolSession", () => {
         },
         stateDir: scratch("lethal-envstate-"),
       }).catch((e: unknown) => e);
-      expect(err).toBeInstanceOf(BcAnswerUnreadError);
       expect(publishFileCalls).toBe(0);
+      expect(err).toBeInstanceOf(BcAnswerUnreadError);
     });
   }
 
