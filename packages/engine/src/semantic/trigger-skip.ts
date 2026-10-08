@@ -301,6 +301,19 @@ function projectObserves(
   for (const n of symbols.unparsedObjects) {
     if (textObserves(n, unindexedText, tableName, table.id)) return true;
   }
+  // R494: a split-header object (`#if` around its header, at the top level or in a wrapper) is in
+  // no index above, so a tableextension or subscriber codeunit written so was invisible and the tag
+  // dropped. It is read by the any-table text rule, and, like an unindexed codeunit (R-485), by
+  // any subscriber to ANY event of this table, which the text rule alone misses for a custom event.
+  // Both can only over-tag.
+  for (const n of symbols.splitObjects) {
+    if (textObserves(n, unindexedText, tableName, table.id)) return true;
+    let found = false;
+    visit(n, (a) => {
+      if (!found && a.rawKind === "attribute_content") found = subscribesToTable(a, names);
+    });
+    if (found) return true;
+  }
   for (const cu of symbols.objects) {
     if (cu.kind === "codeunit" && subscribes(cu.node)) return true;
   }

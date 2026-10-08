@@ -582,7 +582,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   baseline would stop it: the run is quarantined, never a kill. A `timeout-killed` recorded on a
   reused baseline BEFORE this fix is still carried by `--resume`; re-run without `--resume` to
   re-score it (R514).
-
+- **A tableextension or subscriber codeunit whose header is split by `#if` now keeps a table's
+  trigger tags** (R494). Such an object was in no index the trigger-skip rule reads, so a
+  `run-trigger-skipped-*` or `run-trigger-forced` tag it should have kept was dropped. It is now
+  read by the conservative text rule and by any subscriber to the table's events. A procedure such
+  an extension declares now also blocks the claim that a same-named call is the built-in method.
+  Measured: no change on fixtures or any corpus.
 - **A baseline saved for `--resume` is no longer reused once a run measured against it answered
   without attesting the deployed binary** (a stale or wrong container) (R512). The mark is written
   at that answer, so it also holds when the session throws or is killed before the batch ends, and
