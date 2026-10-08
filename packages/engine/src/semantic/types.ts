@@ -15,12 +15,14 @@ import { ALNodeKind, isBinaryExpressionKind } from "../ast/node-kinds";
  *   - Literal kinds are `integer`, `decimal`, `string_literal`, `boolean`
  *     (mapped via ALNodeKind.integer_literal etc.).
  */
+import { nameSegments } from "../ast/qualified-name";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { declarationMembers, findEnclosingProcedure } from "../ast/tree-walks";
 import {
   enclosingObjectScopeKey,
   enclosingTrigger,
   objectScopeKey,
+  qualifiedObjectName,
   triggerLocalNames,
 } from "./symbol-table";
 import type { SourceFile, SymbolTable } from "./symbol-table";
@@ -74,13 +76,30 @@ function computeType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
 }
 
 /** `Record "Data Main"` / `Record DataMain` -> `Data Main`; anything else -> `null`. */
-function recordTableName(typeText: string | null): string | null {
+function recordTableName(typeText: string | null, symbols: SymbolTable): string | null {
   if (typeText === null) return null;
   const match = /^\s*Record\s+(.+?)\s*$/i.exec(typeText);
   const raw = match?.[1];
   if (raw === undefined) return null;
-  const unquoted = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+  const unquoted = objectNameIn(raw, "table", symbols);
   return unquoted.length === 0 ? null : unquoted;
+}
+
+/** A name, possibly dotted. Not one: `"Sales Line" temporary` (R502 keeps that path unchanged). */
+const NAME_PATH = /^(?:"[^"]*"|[^\s".]+)(?:\.(?:"[^"]*"|[^\s".]+))*$/;
+
+/**
+ * R502: the object name a type's reference text means. A clean dotted path
+ * (`System.Utilities.Integer`) goes through `qualifiedObjectName`, as the receiver's AST reads do;
+ * anything else is unquoted as before.
+ */
+function objectNameIn(
+  raw: string,
+  kind: "table" | "codeunit",
+  symbols: Pick<SymbolTable, "objects">,
+): string {
+  if (NAME_PATH.test(raw)) return qualifiedObjectName(nameSegments(raw), kind, symbols) ?? "";
+  return raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
 }
 
 /**
@@ -104,7 +123,7 @@ function memberType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
   // Only a plain identifier receiver. A chained `A.B.C` would need the middle to resolve to a
   // record type, which this layer does not model, so it refuses rather than guessing.
   if (objectNode.kind !== ALNodeKind.identifier) return null;
-  const tableName = recordTableName(resolveIdentifierType(objectNode, symbols));
+  const tableName = recordTableName(resolveIdentifierType(objectNode, symbols), symbols);
   if (tableName === null) return null;
   const memberName = stripQuotes(memberNode.text).toLowerCase();
   for (const field of symbols.fieldsOf(tableName)) {
@@ -154,8 +173,8 @@ function callType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
     const match = /^\s*(?:Codeunit|Record)\s+(.+?)\s*$/i.exec(receiverType);
     const raw = match?.[1];
     if (raw === undefined) return null;
-    const ownerName = stripQuotes(raw);
     const kind = /^\s*Codeunit\b/i.test(receiverType) ? "codeunit" : "table";
+    const ownerName = objectNameIn(raw, kind, symbols);
     return (
       symbols.uniqueProcedure(objectScopeKey(kind, ownerName), method.text)?.returnType ?? null
     );

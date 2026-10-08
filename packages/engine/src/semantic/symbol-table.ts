@@ -45,6 +45,11 @@ export interface ObjectSymbol {
   readonly id: number;
   readonly name: string;
   readonly node: ALSyntaxNode;
+  /**
+   * R502: the file's `namespace` (`Contoso.Sales`), segments unquoted and joined by `.`; absent
+   * when the file declares none. Read by `qualifiedObjectName`, never by an unqualified lookup.
+   */
+  readonly namespace?: string;
 }
 
 /**
@@ -272,6 +277,43 @@ export function objectScopeKey(kind: ObjectSymbol["kind"], objectName: string): 
 }
 
 /**
+ * R502: the name to look a referenced object up by, from the reference's segments
+ * (`fieldSegments`/`nameSegments`). One segment is returned as it is, so an unqualified reference
+ * reads exactly as before. A qualified one (`Microsoft.Sales.Customer`) is returned as its last
+ * segment only when the project declares EXACTLY ONE object of that kind and name and that object's
+ * file declares exactly the qualifier as its namespace. Otherwise it is the dotted text with every
+ * segment quoted (`"Microsoft"."Sales"."Customer"`), which names no project object, so the
+ * reference stays UNRESOLVED as before R502.
+ *
+ * Why so strict (opus, R-502 plan review, C1): a qualified name is the spelling AL needs precisely
+ * when a name collides. Binding `Microsoft.Sales.Customer` to the project's own `Contoso.Sales`
+ * `Customer` would read the wrong table's triggers and drop a trigger-skip tag, the unsafe
+ * direction for a screen. And `resolveObject` returns the FIRST same-named object, so a second
+ * same-named object in another namespace would make even a matching namespace unsafe to return.
+ * Returns null for no segments.
+ */
+export function qualifiedObjectName(
+  segments: readonly string[],
+  kind: ObjectSymbol["kind"],
+  symbols: Pick<SymbolTable, "objects">,
+): string | null {
+  const name = segments.at(-1);
+  if (name === undefined) return null;
+  if (segments.length === 1) return name;
+  const qualifier = segments.slice(0, -1).join(".").toLowerCase();
+  const same = symbols.objects.filter(
+    (o) => o.kind === kind && o.name.toLowerCase() === name.toLowerCase(),
+  );
+  const [only] = same;
+  if (same.length === 1 && only !== undefined && only.namespace?.toLowerCase() === qualifier) {
+    return only.name;
+  }
+  // Every segment quoted: no object name can contain `"`, so this can never resolve, not even to a
+  // project table literally named `"Sales.Setup"` (opus, R-502 build review, minor 1).
+  return segments.map((s) => `"${s}"`).join(".");
+}
+
+/**
  * `objectScopeKey` for a parsed object NODE — the form a mutation operator has in hand, where the
  * kind is an `ALNodeKind` rather than an `ObjectSymbol["kind"]`. Returns `null` for a node that is
  * not an object declaration this table indexes, so a caller cannot silently key on a guess.
@@ -465,6 +507,14 @@ export function buildSymbolTable(
       }
     };
     collectErrors(file.root);
+    // R502: `namespace Contoso.Sales;` -> "Contoso.Sales", for `qualifiedObjectName`.
+    const namespaceName = file.root.namedChildren
+      .find((c) => c.rawKind === "namespace_declaration")
+      ?.childForFieldName("name");
+    const fileNamespace =
+      namespaceName === undefined || namespaceName === null
+        ? undefined
+        : namespaceName.namedChildren.map((c) => stripQuotes(c.text)).join(".");
     for (const c of file.root.namedChildren)
       if (c.rawKind === "preproc_conditional_object")
         unindexedObjects.push(...objectDeclarationsOf(c));
@@ -519,7 +569,11 @@ export function buildSymbolTable(
       }
       const header = parseObjectHeader(objectNode);
       if (header === null) continue;
-      objects.push({ ...header, node: objectNode });
+      objects.push({
+        ...header,
+        node: objectNode,
+        ...(fileNamespace !== undefined ? { namespace: fileNamespace } : {}),
+      });
       if (header.kind === "table") indexFields(objectNode, header.name);
       // R70: scope is keyed by (kind, name). A bare-name key let a page named after its table
       // overwrite the table's variables wholesale.

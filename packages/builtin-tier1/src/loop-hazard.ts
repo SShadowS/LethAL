@@ -7,6 +7,7 @@ import {
   declarationMembers,
   isObjectContainer,
   isProcedureLike,
+  lastFieldChild,
   normalizeAlName,
   objectDeclarationsOf,
   procedureLikeArmNames,
@@ -361,8 +362,7 @@ function modifiedItemOpen(ext: ALSyntaxNode, mod: ALSyntaxNode, ctx: SemanticCon
 
 /** A qualified `System.Utilities.Integer` has one `table_name` child per segment; the table is the LAST. */
 function isIntegerItem(item: ALSyntaxNode): boolean {
-  const table = item.namedChildren.filter((c) => c.fieldName === "table_name").at(-1);
-  return normalizeAlName(table?.text ?? "") === "integer";
+  return normalizeAlName(lastFieldChild(item, "table_name")?.text ?? "") === "integer";
 }
 
 /** The engine cap: a literal `MaxIteration` from 1 to `ITERATION_CAP` the build surely has. */

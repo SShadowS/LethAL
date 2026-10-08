@@ -195,6 +195,8 @@ const NEITHER_MODULES = [
   "packages/engine/src/ast/parser-wasm.ts",
   "packages/engine/src/ast/parser.ts",
   "packages/engine/src/ast/preproc-arms.ts",
+  /** R502: the segments of a namespace-qualified name. */
+  "packages/engine/src/ast/qualified-name.ts",
   "packages/engine/src/ast/syntax-node.ts",
   "packages/engine/src/ast/tree-walks.ts",
   "packages/schemata/src/dedup.ts",

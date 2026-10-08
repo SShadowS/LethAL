@@ -567,6 +567,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A namespace-qualified table or codeunit reference is read as the object it names** (R502).
+  `Record System.Utilities.Integer`, `dataitem(X; Microsoft.Sales.Customer)` and a qualified
+  `SourceTable` were read by their FIRST segment (`System`), or by the whole dotted text, so the
+  receiver never found its table. Now the project's object of that name is used, but only when it is
+  the only one and its file declares that namespace. Otherwise the reference stays unresolved and
+  every trigger-skip tag is kept, as before. Measured: 0 changes on fixtures and the three customer
+  corpora; 2 added specs in BC.History's BaseApp; no tag and no identity key moved.
 - **A BC answer that starts but never finishes no longer holds LethAL forever on the harness
   check, the deployment check or the permission canary** (R506, R507); a package read-back now also
   ends on a fetch that ignores its abort. Each
@@ -576,7 +583,6 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   redirect to BC's unfiltered extensions list now ends the session as itself instead of reading as
   "unreachable", and `force-reset-lease` says the reset may have been applied unless BC answered
   with an error status.
-
 - **A lease call whose answer BC starts but never finishes no longer holds the session forever**
   (R504). The lease client's 30 s timeout now covers the response body as well as the headers, and
   an unanswered call fails the way an unreachable one does: never a kill, and never a lease
