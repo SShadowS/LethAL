@@ -4,6 +4,8 @@
  * each result changes are pre-committed in
  * `docs/superpowers/specs/2026-10-08-r514-reuse-probe-precommitment.md`; this script checks each
  * prediction and prints PASS or FAIL. Evidence, not a gate: no baseline file, no receipt.
+ * r3 (after run 1 BLOCKED on P4): P4 by a dispatch counter, M1/M2 from the first mutant-covered
+ * row; see the amended pre-commitment `probe-precommitment-r3.md` (R-514 handoff).
  *
  *   LETHAL_R514_PROBE=1 bun scripts/r514-probe/probe.ts
  *
@@ -118,6 +120,31 @@ class StopBeforeSecondMutant extends BcDevMcpBackend {
   }
 }
 
+/**
+ * r3 P4: run 2's test dispatches in order, each the mutant id it carries (null = UNMUTATED).
+ * `activate` on bcdev is bookkeeping only: it sets the pending mutant id that the NEXT `run` or
+ * `runMany` sends (`pendingMutantId ?? ""`), and RunMutant clears after itself. So a dispatch is
+ * unmutated iff the last `activate` argument was null (or there was none yet). An `activate(null)`
+ * on its own (the baseline phase's deactivate, ClearActive at teardown) dispatches nothing and is
+ * not logged; an R514 confirm is logged as null but comes after a mutated dispatch.
+ */
+const run2Dispatches: Array<string | null> = [];
+class CountDispatches extends BcDevMcpBackend {
+  private active: string | null = null;
+  override async activate(mutantId: string | null): Promise<void> {
+    this.active = mutantId;
+    await super.activate(mutantId);
+  }
+  override run(...a: Parameters<BcDevMcpBackend["run"]>) {
+    run2Dispatches.push(this.active);
+    return super.run(...a);
+  }
+  override runMany(...a: Parameters<BcDevMcpBackend["runMany"]>) {
+    run2Dispatches.push(this.active);
+    return super.runMany(...a);
+  }
+}
+
 interface Check {
   readonly id: string;
   readonly pass: boolean;
@@ -130,7 +157,7 @@ function check(id: string, pass: boolean, detail: string): boolean {
   return pass;
 }
 
-async function makeBackend(scratch: string, label: string, stopper: boolean) {
+async function makeBackend(scratch: string, label: string, Backend: typeof BcDevMcpBackend) {
   const raw = await readFile(itestConfigPath(PROJECT_DIR), "utf8").catch((err: unknown) => {
     throw new Error(
       `cannot read ${itestConfigName()} under fixtures/sandbox-hang: ${err instanceof Error ? err.message : String(err)}`,
@@ -166,7 +193,6 @@ async function makeBackend(scratch: string, label: string, stopper: boolean) {
     ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
   };
   const harnessVerifier = new HarnessVerifier(odataCfg);
-  const Backend = stopper ? StopBeforeSecondMutant : BcDevMcpBackend;
   const backend = new Backend(
     {
       mcpCommand: bcdev.mcpCommand,
@@ -261,14 +287,21 @@ function run2Checks(
     readonly run2: number;
   },
 ): void {
-  // P4
+  // P4 (r3): no unmutated dispatch before mutant 2's first covering run, by the dispatch log. Run
+  // 2's NULL-mutant_row_id rows are R192's copies of run 1's baseline, not dispatches (run 1 BLOCK).
   const reuse = warnings.filter((w) => w.startsWith("resume-baseline-reused:"));
+  const firstMutated = run2Dispatches.findIndex((d) => d !== null);
+  const unmutatedBefore = (
+    firstMutated === -1 ? run2Dispatches : run2Dispatches.slice(0, firstMutated)
+  ).filter((d) => d === null).length;
+  const unmutatedTotal = run2Dispatches.filter((d) => d === null).length;
   check(
     "P4",
     reuse.length === 1 &&
       reuse[0]?.includes(`run ${ctx.run1}'s batch 0`) === true &&
-      rows.every((r) => r.mutant_row_id !== null),
-    `${reuse.length} resume-baseline-reused warning(s) (naming run ${ctx.run1}'s batch 0: ${reuse.some((w) => w.includes(`run ${ctx.run1}'s batch 0`))}); ${rows.filter((r) => r.mutant_row_id === null).length} baseline row(s) in run 2`,
+      firstMutated !== -1 &&
+      unmutatedBefore === 0,
+    `${reuse.length} resume-baseline-reused warning(s) (naming run ${ctx.run1}'s batch 0: ${reuse.some((w) => w.includes(`run ${ctx.run1}'s batch 0`))}); ${run2Dispatches.length} dispatch(es), first mutated at #${firstMutated + 1}${firstMutated === -1 ? " (NONE)" : ` (${run2Dispatches[firstMutated]})`}; ${unmutatedBefore} unmutated before it, ${unmutatedTotal} unmutated in all; ${rows.filter((r) => r.mutant_row_id === null).length} copied baseline row(s) (not dispatches)`,
   );
   // P5
   const carried = report.mutants.filter((m) => m.carried === true);
@@ -370,40 +403,47 @@ function run2Checks(
 
 function measure(store: ResultsStore, run1: number, run2: number): void {
   const rows2 = rowsOf(store, run2);
-  const steady = (key: string, exceptId: number) =>
+  // r3: only rows with a non-null mutant_code are real calls in run 2; the rest are R192's copies
+  // of run 1's baseline or confirms. Steady state = the same test's LATER such rows that pass.
+  const covered = rows2.filter((r) => r.mutant_code !== null);
+  const steady = (key: string, afterId: number) =>
     median(
-      rows2
-        .filter(
-          (r) =>
-            r.id !== exceptId &&
-            testKey(r) === key &&
-            r.outcome === "pass" &&
-            r.mutant_code !== null,
-        )
+      covered
+        .filter((r) => r.id > afterId && testKey(r) === key && r.outcome === "pass")
         .map((r) => r.duration_ms),
     );
-  const first = rows2[0];
+  const first = covered[0];
   if (first === undefined) {
-    check("M1", false, "run 2 recorded no test_results row");
+    check("M1", false, "run 2 recorded no mutant-covered test_results row");
   } else {
     const med = steady(testKey(first), first.id);
     firstCallVerdict(
       "M1",
-      `${testKey(first)} (${first.mutant_code ?? "unmutated"}, ${first.outcome}, ${first.duration_ms} ms, median ${med ?? "?"} ms)`,
+      `${testKey(first)} (${first.mutant_code}, ${first.outcome}, ${first.duration_ms} ms, median ${med ?? "?"} ms)`,
       med === undefined ? undefined : first.duration_ms - med,
     );
   }
   const seen = new Set<string>();
-  for (const r of rows2) {
+  for (const r of covered) {
     const key = testKey(r);
     if (seen.has(key)) continue;
     seen.add(key);
     const med = steady(key, r.id);
+    if (med === undefined) {
+      console.log(
+        `  M2 SKIPPED: ${key} (first mutant-covered row ${r.mutant_code} ${r.outcome} ${r.duration_ms} ms): no later mutant-covered pass row`,
+      );
+      continue;
+    }
     firstCallVerdict(
       "M2",
-      `${key} (${r.outcome}, ${r.duration_ms} ms, median ${med ?? "?"} ms)`,
-      med === undefined ? undefined : r.duration_ms - med,
+      `${key} (${r.mutant_code}, ${r.outcome}, ${r.duration_ms} ms, median ${med} ms)`,
+      r.duration_ms - med,
     );
+  }
+  const uncovered = [...new Set(rows2.map(testKey))].filter((k) => !seen.has(k));
+  if (uncovered.length > 0) {
+    console.log(`  M2 SKIPPED (no mutant-covered row in run 2): ${uncovered.join(", ")}`);
   }
   const base1 = rowsOf(store, run1).find((r) => r.mutant_row_id === null);
   if (base1 !== undefined) {
@@ -429,6 +469,7 @@ async function teardown(odataCfg: ActivationConfig): Promise<void> {
 }
 
 async function main(): Promise<number> {
+  console.log("R514 probe r3");
   if (process.env.LETHAL_R514_PROBE !== "1") {
     console.error(
       "refused: this probe drives a live BC container. Set LETHAL_R514_PROBE=1 under the Cronus28 lease (docs/superpowers/specs/2026-10-08-r514-reuse-probe-precommitment.md).",
@@ -441,7 +482,7 @@ async function main(): Promise<number> {
   try {
     // Run 1: stop before the second mutant.
     console.log("R514 probe, run 1 (stops before the second mutant)");
-    const one = await makeBackend(scratch, "run1", true);
+    const one = await makeBackend(scratch, "run1", StopBeforeSecondMutant);
     odataCfg = one.odataCfg;
     let rejection: unknown;
     try {
@@ -489,7 +530,7 @@ async function main(): Promise<number> {
 
     // Run 2: resume with reuse.
     console.log("R514 probe, run 2 (resume, baseline reused)");
-    const two = await makeBackend(scratch, "run2", false);
+    const two = await makeBackend(scratch, "run2", CountDispatches);
     odataCfg = two.odataCfg;
     const warnings: string[] = [];
     let report: SessionReport;
