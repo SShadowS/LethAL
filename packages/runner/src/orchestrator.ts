@@ -4123,7 +4123,7 @@ interface BatchScope {
   readonly emit: RunEmitter;
   readonly outcomes: SessionOutcome[];
   readonly killLedger: KillLedger;
-  readonly sessionReuse: { warned: boolean };
+  readonly sessionReuse: { warned: boolean; stopWarned?: boolean };
   readonly groupRuns: GroupRunSettings | undefined;
   readonly minMutantBudgetMs: number;
   /** `cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT`; also the covering loop's fallback. */
@@ -5818,6 +5818,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
 
   // R47: the configured floor for a mutant run's time budget — see `SessionConfig.mutantTimeoutMs`.
   const minMutantBudgetMs = cfg.mutantTimeoutMs ?? MIN_MUTANT_BUDGET_MS;
+  const baselineTimeoutMs = cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT;
+  // R517: before the first run; every worker gets the same pair below. al-runner --server starts
+  // its daemon with the larger of the two as its one in-run stop.
+  cfg.backend.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
   // R198: group runs, on a backend that has the call. `undefined` is the sequential loop.
   const groupRuns = resolveGroupRuns({
     groupRuns: cfg.groupRuns,
@@ -6174,6 +6178,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         handBuildSymbols(worker, buildSymbols);
         // R488: each worker starts with an empty sibling cache, so it needs the list too.
         worker.useDiscoveredTests?.(discovery.unfiltered);
+        worker.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
         workerBackends.push(worker);
       }
     }
@@ -6199,7 +6204,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       sessionReuse,
       groupRuns,
       minMutantBudgetMs,
-      baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
+      baselineTimeoutMs,
       testPageRefused,
     };
     // R-422: the backslash-path warning fires once per session; every batch re-reads the same
@@ -8895,18 +8900,44 @@ async function closeIfSupported(backend: ExecutionBackend): Promise<void> {
   }
 }
 
+/** R517: the figures a position-1 timeout confirm was judged on. */
+interface JudgedConfirm {
+  /** The confirm's own duration (`measuredDurationMs ?? durationMs`), the figure judged. */
+  readonly confirmMs: number;
+  /** The confirm's wall clock (`durationMs`). */
+  readonly wallMs: number;
+  /** `min(budget, reported stop, inRunStopMs)`. */
+  readonly stopMs: number;
+}
+
+/** R517: the judged figure, plus the wall clock where it differs. */
+function durationsText(j: JudgedConfirm): string {
+  return j.confirmMs === j.wallMs
+    ? `${j.confirmMs} ms`
+    : `${j.confirmMs} ms by its own figure (${j.wallMs} ms wall clock)`;
+}
+
+/** R517: what the confirm was weighed against: the budget, or the reported stop below it. */
+function stopText(stopMs: number, budgetMs: number, setFrom: string): string {
+  return stopMs < budgetMs
+    ? `${stopMs} ms in-run stop al-runner reported (below the ${budgetMs} ms budget ${setFrom})`
+    : `${budgetMs} ms budget ${setFrom}`;
+}
+
 /**
  * R516 (I3 b): the note of a position-1 timeout whose unmutated confirm passed in more than half the
- * budget the run was sent. It prints both durations and their ratio; the 1.25 threshold picks the
- * wording only, never a verdict.
+ * budget the run was sent (R517: or the lower stop al-runner reported it enforced). It prints both
+ * durations and their ratio; the 1.25 threshold picks the wording only, never a verdict.
  */
 function timeoutUnconfirmedNote(
   method: string,
-  confirmMs: number,
+  judged: JudgedConfirm,
   budgetMs: number,
   source: BudgetSource,
 ): string {
   const d = source.durationMs;
+  // The ratio compares like with like: the confirm's wall clock against the budget's source.
+  const confirmMs = judged.wallMs;
   const from =
     source.kind === "confirm"
       ? `the confirm of mutant ${source.confirmOf}, ${d} ms (R515)`
@@ -8920,11 +8951,18 @@ function timeoutUnconfirmedNote(
       : source.kind === "confirm"
         ? "the budget is twice that confirm's duration"
         : "the budget is twice its measured duration, or on al-runner one-shot the compile counts against it";
-  const band =
-    ratio <= 1.25
+  // R517: failed by the in-run stop alone (twice the test's own run fits the budget, not the stop).
+  const stopBound = judged.stopMs < budgetMs && 2 * judged.confirmMs <= budgetMs;
+  const band = stopBound
+    ? `the test's own run (${judged.confirmMs} ms) is more than half the ${judged.stopMs} ms in-run stop, which is below its budget; the stop is the larger of --mutant-timeout-ms and the baseline timeout, so raising --mutant-timeout-ms above twice this test's own run raises the stop and re-scores it`
+    : ratio <= 1.25
       ? `the test ran about as fast as when its budget was set, so this is R516's boundary band (${why}); raise --mutant-timeout-ms above twice this test's duration to re-score it`
       : "the test is slower now than when its budget was set, or this worker's tier is slower than the baseline's; raise --mutant-timeout-ms to re-score it";
-  return `timeout-unconfirmed ${method}: timed out at position 1 under the mutant; unmutated it completed in ${confirmMs} ms on this backend, more than half its ${budgetMs} ms budget, which was set from ${from}; ratio ${confirmMs}/${d} = ${Number.isFinite(ratio) ? ratio.toFixed(2) : "inf"}. The timeout is not attributed to the mutant (R53's 2x margin, R516). ${band[0]?.toUpperCase() ?? ""}${band.slice(1)}.`;
+  const half =
+    judged.stopMs < budgetMs
+      ? `the ${judged.stopMs} ms in-run stop al-runner reported (below its ${budgetMs} ms budget, which was set from ${from})`
+      : `its ${budgetMs} ms budget, which was set from ${from}`;
+  return `timeout-unconfirmed ${method}: timed out at position 1 under the mutant; unmutated it completed in ${durationsText(judged)} on this backend, more than half ${half}; ratio ${confirmMs}/${d} = ${Number.isFinite(ratio) ? ratio.toFixed(2) : "inf"}. The timeout is not attributed to the mutant (R53's 2x margin, R516). ${band[0]?.toUpperCase() ?? ""}${band.slice(1)}.`;
 }
 
 /**
@@ -9479,8 +9517,9 @@ async function runMutantsOnBackend(args: {
   readonly memberCountsByTest: ReadonlyMap<string, number>;
   /** R198: group-run settings, or `undefined` for the sequential loop. */
   readonly groupRuns?: GroupRunSettings | undefined;
-  /** R206 §2.1: session-scoped, shared across batches and shards: the once-only warning flag. */
-  readonly sessionReuse: { warned: boolean };
+  /** R206 §2.1: session-scoped, shared across batches and shards: the once-only warning flag.
+   *  R517 (M-a): `stopWarned`, the same for a reported stop that is not the configured one. */
+  readonly sessionReuse: { warned: boolean; stopWarned?: boolean };
   /** R514: this batch's baseline came from a stored snapshot (R192), so its durations, and every
    *  budget derived from them, are from another day. Since R516 every position-1 `timeout` is
    *  confirmed unmutated with R53's 2x margin on every batch; this field only names the cause of
@@ -9695,6 +9734,22 @@ async function runMutantsOnBackend(args: {
           message: `[lethal] session-reuse-observed: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the call for ${ref.method} (mutant ${m.mutantId}) started — this environment hands LethAL sessions other calls have used; a failure or timeout measured in such a session is recorded as \`session-reused\`, never as a kill (R206)`,
         });
       }
+      // R517 (M-a): al-runner enforced a stop other than the --test-timeout it was started with
+      // (a build that ignores the flag). The confirm already judges against the reported one.
+      const configuredStop = args.backend.inRunStopMs;
+      if (
+        v.reportedStopMs !== undefined &&
+        configuredStop !== undefined &&
+        v.reportedStopMs !== configuredStop &&
+        args.sessionReuse.stopWarned !== true
+      ) {
+        args.sessionReuse.stopWarned = true;
+        args.emit({
+          type: "warning",
+          code: "alrunner-stop-mismatch",
+          message: `[lethal] alrunner-stop-mismatch: al-runner reported a ${v.reportedStopMs / 1000}s stop although it was started with --test-timeout ${configuredStop / 1000} (${ref.method}, mutant ${m.mutantId}); a timeout is judged against the stop it reported (R517)`,
+        });
+      }
       if (reused && v.outcome !== "pass") {
         verdict = "error";
         cause = "session-reused";
@@ -9895,18 +9950,42 @@ async function runMutantsOnBackend(args: {
           // which must therefore read the budget the timed-out run was SENT (`budget`), never a
           // recomputed one (R516 M2): recomputed now, it would already include this measurement.
           if (timedOut) noteMeasured(ref, confirm.durationMs, m.mutantId);
-          if (timedOut && 2 * confirm.durationMs > budget) {
-            // R514, R516: the test passes unmutated but takes more than half the budget it was
-            // sent, so a budget measured now would be larger: the timeout is not the mutant's. The
+          // R517: the stop the run really enforced. al-runner reports it on its timeout row;
+          // `--server` (which declares `inRunStopMs`) must, or the timeout stays unconfirmed.
+          // bcdev reports none and declares none: the stop is the budget, as before.
+          const reported = v.reportedStopMs;
+          const stopUnreported = args.backend.inRunStopMs !== undefined && reported === undefined;
+          const stopMs = Math.min(
+            budget,
+            reported ?? Number.POSITIVE_INFINITY,
+            args.backend.inRunStopMs ?? Number.POSITIVE_INFINITY,
+          );
+          // The test's own duration, on the stop's clock (al-runner's per-test figure, not the
+          // suite's or the process's wall clock); bcdev's is its wall clock.
+          const confirmMs = confirm.measuredDurationMs ?? confirm.durationMs;
+          if (timedOut && (stopUnreported || 2 * confirmMs > stopMs)) {
+            // R514, R516: the test passes unmutated but takes more than half the stop it ran
+            // under, so a budget measured now would be larger: the timeout is not the mutant's. The
             // cause follows where that budget came from (I3 c).
             verdict = "error";
             const source = step.testBudgetSource;
-            if (args.baselineReused !== undefined && source.kind !== "confirm") {
+            const judged = { confirmMs, wallMs: confirm.durationMs, stopMs };
+            // R517: the in-run stop failed it, not the budget: a re-measured baseline would not
+            // help, so never `reused-budget-stale`.
+            const stopBound = stopMs < budget && 2 * confirmMs <= budget;
+            if (stopUnreported) {
+              cause = "timeout-unconfirmed";
+              failureNote = `timeout-unconfirmed ${ref.method}: timed out at position 1 under the mutant, but al-runner did not say which stop it enforced (its row has no "Test exceeded <N>s timeout."), so the timeout cannot be weighed against the ${confirmMs} ms the test took unmutated and is not attributed to the mutant (R517)`;
+            } else if (
+              args.baselineReused !== undefined &&
+              source.kind !== "confirm" &&
+              !stopBound
+            ) {
               cause = "reused-budget-stale";
-              failureNote = `reused-budget-stale ${ref.method}: completed unmutated in ${confirm.durationMs} ms, more than half the ${budget} ms budget set from run ${args.baselineReused.runId}'s reused baseline (R192), so the timeout at position 1 is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`;
+              failureNote = `reused-budget-stale ${ref.method}: completed unmutated in ${durationsText(judged)}, more than half the ${stopText(stopMs, budget, `set from run ${args.baselineReused.runId}'s reused baseline (R192)`)}, so the timeout at position 1 is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`;
             } else {
               cause = "timeout-unconfirmed";
-              failureNote = timeoutUnconfirmedNote(ref.method, confirm.durationMs, budget, source);
+              failureNote = timeoutUnconfirmedNote(ref.method, judged, budget, source);
             }
             break;
           }

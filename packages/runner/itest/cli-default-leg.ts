@@ -170,6 +170,16 @@ export function cliDefaultMechanismFailures(
   if (servers !== backends) {
     out.push(`server: expected ${backends} --server spawn(s), saw ${servers}`);
   }
+  // R517: the daemon's one in-run stop is LethAL's, `ceil(max(floor, baseline timeout) / 1000)`;
+  // no leg sets either, so 180. Without the flag al-runner stops every test at its own 60 s.
+  for (const argv of record.serverArgv.filter((a) => a.includes("--server"))) {
+    const stops = argv.flatMap((a, i) => (a === "--test-timeout" ? [argv[i + 1]] : []));
+    if (stops.length !== 1 || stops[0] !== "180") {
+      out.push(
+        `server: expected --test-timeout 180 exactly once on the daemon argv, saw ${JSON.stringify(stops)}`,
+      );
+    }
+  }
   // An EXACT allow-list (see `expectedOneShotArgvs`), not a `--test` filter or a sentinel search: a
   // whole-suite run carries no `--test`, and a real test run can carry the sentinel as a stray
   // element. Measured live 2026-10-01: `provisionOnce` runs under `--server` too, and `runSession`
