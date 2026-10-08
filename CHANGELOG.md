@@ -567,6 +567,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A baseline saved for `--resume` is no longer reused once a run measured against it answered
+  without attesting the deployed binary** (a stale or wrong container) (R512). The mark is written
+  at that answer, so it also holds when the session throws or is killed before the batch ends, and
+  when the baseline was itself reused from an earlier run. Before, such a baseline could make a
+  test that hangs on the real binary score a timeout kill. **A batch whose lease was lost is now
+  recorded in the results store at the moment of loss** (R513), and `--resume` reads every verdict
+  of that batch as an error, so a verdict recorded after the loss and before a crash or kill is no
+  longer carried.
 - **A field of a temporary record now has a type** (R509). The type table read the type text
   `Record "Sales Line" temporary` with the keyword still on, found no table of that name, and gave
   every field of a temporary record no type, so `swap-additive` emitted nothing there. Measured:
