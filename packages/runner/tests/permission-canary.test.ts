@@ -11,6 +11,7 @@ import {
   permissionCanaryWarnings,
   runPermissionCanary,
 } from "../src/permission-canary";
+import { deafBody, deafFetch, emptyBody, notJsonBody, stalledBody } from "./helpers/lease-wire";
 
 // ————————————————————————————————————————————————————————————————————————
 // ROADMAP R26: the permission canary. The two things these tests are actually protecting are:
@@ -638,4 +639,37 @@ describe("LethAL Control AL declarations the canary's meaning depends on", () =>
     expect(code).toContain('table 91008 "LC Permission Probe"');
     expect(code.filter((l) => l.includes("InherentPermissions"))).toEqual([]);
   });
+});
+
+// R506: the canary's bound spans the headers AND the body (it was cleared at the headers). No
+// wall-clock asserts: a missing bound goes red by bun's 5 s test timeout.
+describe("R506: PermissionCanaryClient bounds the body read", () => {
+  async function inconclusiveDetail(fetchFn: typeof fetch): Promise<string> {
+    const r = await runPermissionCanary(new PermissionCanaryClient(CFG, fetchFn, 20));
+    expect(r.verdict).toBe("inconclusive");
+    return r.detail ?? "";
+  }
+
+  for (const [name, make] of [
+    ["P1 a stalled body", () => stalledBody().fetchFn],
+    ["P2 a deaf body", deafBody],
+    ["P2 a deaf fetch", deafFetch],
+  ] as const) {
+    test(`${name} is inconclusive with a timeout phrase`, async () => {
+      expect(await inconclusiveDetail(make())).toMatch(
+        /body not read within 20 ms|gave no answer within 20 ms/,
+      );
+    });
+  }
+
+  for (const [name, make] of [
+    ["not JSON", notJsonBody],
+    ["empty", emptyBody],
+  ] as const) {
+    test(`P3 a ${name} 2xx body is inconclusive 'could not be read or parsed'`, async () => {
+      expect(await inconclusiveDetail(make())).toContain(
+        "LethALControl_PermissionCanary 2xx body could not be read or parsed",
+      );
+    });
+  }
 });
