@@ -6,7 +6,7 @@ import type { ServerSpawnFn } from "../../src/al-runner-server";
  */
 export function fakeAlRunnerServer(
   tests: ReadonlyArray<{ name: string; status: string; message?: string }>,
-  opts: { silent?: boolean; onRunTests?: () => void } = {},
+  opts: { silent?: boolean; onRunTests?: () => void; perTestCoverage?: readonly unknown[] } = {},
 ): { spawn: ServerSpawnFn; runs: () => number } {
   let runs = 0;
   const spawn: ServerSpawnFn = () => {
@@ -27,7 +27,16 @@ export function fakeAlRunnerServer(
           opts.onRunTests?.();
           if (opts.silent === true) return;
           for (const t of tests) emit(JSON.stringify({ type: "test", ...t }));
-          emit(JSON.stringify({ type: "summary", exitCode: 0, total: tests.length }));
+          emit(
+            JSON.stringify({
+              type: "summary",
+              exitCode: 0,
+              total: tests.length,
+              ...(opts.perTestCoverage !== undefined
+                ? { perTestCoverage: opts.perTestCoverage }
+                : {}),
+            }),
+          );
         }
         if (req.command === "shutdown") emit('{"status":"shutting down"}');
       },

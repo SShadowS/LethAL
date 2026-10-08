@@ -326,9 +326,8 @@ describe("R387: buildBackend's al-runner defaults", () => {
     expect(backend.capabilities().coverage).toBe("al-runner");
   });
 
-  // R219 run 003: the coverage index resolves a shared file name against the project al-runner
-  // labels coverage under. Revert: drop `sourceProjectDir` from `buildBackend`'s al-runner config.
-  test("the coverage index of a renamed batch knows the project directory", async () => {
+  /** A project with `Helper.Codeunit.al` twice (root and `Sub/`) and its renamed flat batch. */
+  async function renamedBatch(): Promise<{ proj: string; dir: string }> {
     const proj = await project();
     const unit = (id: number) => `codeunit ${id} "H${id}"\n{\n}\n`;
     await writeFile(join(proj, "Helper.Codeunit.al"), unit(79100), "utf8");
@@ -341,6 +340,13 @@ describe("R387: buildBackend's al-runner defaults", () => {
       JSON.stringify({ artifactId: "b".repeat(32), mutants: [] }),
       "utf8",
     );
+    return { proj, dir };
+  }
+
+  // R219 run 003: the coverage index resolves a shared file name against the project al-runner
+  // labels coverage under. Revert: drop `sourceProjectDir` from `buildBackend`'s al-runner config.
+  test("the coverage index of a renamed batch knows the project directory", async () => {
+    const { proj, dir } = await renamedBatch();
     const backend = (await buildBackend(
       runConfig(proj),
       {
@@ -360,9 +366,46 @@ describe("R387: buildBackend's al-runner defaults", () => {
     await backend.deploy(dir);
     await backend.coverageRefusals();
     const { coverageIndex } = backend as unknown as { coverageIndex?: AlRunnerCoverageIndex };
-    expect(coverageIndex?.exact?.projectDir).toBe(
-      proj.split("\\").join("/").toLowerCase(),
-    );
+    expect(coverageIndex?.exact?.projectDir).toBe(proj.split("\\").join("/").toLowerCase());
+  });
+
+  // R-219c (M2): on --server a coverage refusal stops the session, as it does one-shot, instead of
+  // reading as an `error` verdict per test. Revert: drop the `ServerCoverageRefusal` rethrow in
+  // `runViaServer`.
+  test("a --server coverage refusal propagates out of run()", async () => {
+    const { proj, dir } = await renamedBatch();
+    const server = fakeAlRunnerServer([TEST], {
+      perTestCoverage: [
+        {
+          test: TEST.name,
+          coverage: [{ file: "/x/Helper.Codeunit.al", statements: [{ line: 2, hits: 1 }] }],
+        },
+      ],
+    });
+    const backend = (await buildBackend(
+      runConfig(proj),
+      {
+        alRunner: {
+          alRunnerPath: "al-runner.exe",
+          coverage: "al-runner",
+          serverMode: true,
+          selectorMode: "static",
+        },
+      },
+      scratch("lethal-r219-srv-"),
+      undefined,
+      { alRunnerServerSpawn: server.spawn },
+      IDS,
+    )) as AlRunnerBackend;
+    backend.useBuildSymbols([]);
+    await backend.deploy(dir);
+    try {
+      await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(
+        /neither inside the project .* nor directly in the batch/,
+      );
+    } finally {
+      await backend.close();
+    }
   });
 });
 
