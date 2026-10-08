@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**60 of 511 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**62 of 513 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -224,7 +224,9 @@ that ordering is the priority.
 - **R511** · A namespace-qualified `extends` or `implements` does not parse, so the extension is indexed under one segment of the name · [R511.md](docs/roadmap/R511.md) · open, filed 2026-10-08
 - **R512** · The attestation gate invalidates a batch's verdicts but its R192 baseline snapshot is still reused · [R512.md](docs/roadmap/R512.md) · done (7d4c56fc)
 - **R513** · A verdict recorded after a lease-loss note and before a crash is still carried by --resume · [R513.md](docs/roadmap/R513.md) · done (7d4c56fc)
-- **R514** · A reused baseline lets a position-1 timeout score a kill with no unmutated confirm · [R514.md](docs/roadmap/R514.md) · open, filed 2026-10-08
+- **R514** · A reused baseline lets a position-1 timeout score a kill with no unmutated confirm · [R514.md](docs/roadmap/R514.md) · fixed in e461bc90, live gate pending
+- **R515** · A confirm that finds a reused duration stale does not correct later budgets · [R515.md](docs/roadmap/R515.md) · open, filed 2026-10-08
+- **R516** · A fresh baseline's position-1 timeout is scored with no unmutated confirm · [R516.md](docs/roadmap/R516.md) · open, filed 2026-10-08
 
 ## Product gaps a real project hits
 

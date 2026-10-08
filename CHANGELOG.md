@@ -125,6 +125,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal explain` schema v14: the cause value `reused-budget-stale`** (R514). v13 is kept so a
+  stored v13 document stays checkable.
+
 - **`lethal verify` refuses a run whose test-app dependencies include a staged partner app**
   (R496). On bcdev, every app the dependency fingerprint hashes, partner and transitive ones too,
   must now have exactly one installed row at the version the server serves; before, only
@@ -566,6 +569,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   extension (R506).
 
 ### Fixed
+
+- **A resumed batch that reused a stored baseline (R192) no longer scores a timeout as
+  `timeout-killed` without an unmutated confirm** (R514). The test is re-run once with no mutant,
+  and the kill stands only if it finishes in at most half its budget (R53's margin); otherwise the
+  mutant is an `error` with the new cause `reused-budget-stale`. The same 2x margin applies to the
+  warm replay of a timeout at a later position in a grouped call on such a batch. A batch whose
+  baseline was measured in the same run is scored as before. With the default
+  `--mutant-timeout-ms` a test that overruns its budget even unmutated is stopped as a re-run
+  baseline would stop it: the run is quarantined, never a kill. A `timeout-killed` recorded on a
+  reused baseline BEFORE this fix is still carried by `--resume`; re-run without `--resume` to
+  re-score it (R514).
 
 - **A baseline saved for `--resume` is no longer reused once a run measured against it answered
   without attesting the deployed binary** (a stale or wrong container) (R512). The mark is written
