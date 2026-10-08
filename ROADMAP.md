@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**55 of 514 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**54 of 514 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -140,7 +140,7 @@ that ordering is the priority.
 - **R339** · A `#if` inside one procedure header (around a named return or its type) makes the whole member an ERROR node, so no mutant is generated in that member (measured on a one-member file) · [R339.md](docs/roadmap/R339.md) · closed 2026-10-06 — stated limit: 0 such members in 20,598 corpus files, no wrong mutant; the whole file is…
 - **R341** · A QUOTED use of a named return value (`"My Result"`) is not typed: `computeType` handles `identifier` only, so typed operators lose that site · [R341.md](docs/roadmap/R341.md) · closed 2026-10-05 — ruled not worth fixing: the R-294 census found 0 sites lost and 0 wrong mutants on every…
 - **R342** · `fixtures/sandbox-symbols` has six `unplaced`-grain mutants that GH-24's every-fixture reach-grain test would reject, but that test's fixture list leaves the symbol pair out · [R342.md](docs/roadmap/R342.md) · done (38a82a55)
-- **R343** · Typed operators emit nothing inside an object wrapped in `#if`: the symbol table leaves wrapped objects unindexed (R331's fail-safe), and no item records that loss · [R343.md](docs/roadmap/R343.md) · open, filed 2026-09-29
+- **R343** · Typed operators emit nothing inside an object wrapped in `#if`: the symbol table leaves wrapped objects unindexed (R331's fail-safe), and no item records that loss · [R343.md](docs/roadmap/R343.md) · done (30033b86)
 - **R346** · Every gate's catch prints err.stack, which Bun can strip of its message after a GC: only the baseline errors are protected · [R346.md](docs/roadmap/R346.md) · done (4e131268)
 - **R349** · al-runner's coverage index is built once per backend and never reset on deploy(), so a multi-batch run maps batch 2's coverage lines through batch 1's layout · [R349.md](docs/roadmap/R349.md) · done (e210b79f)
 - **R351** · A renamed split member reports and orders under the empty procedure name · [R351.md](docs/roadmap/R351.md) · done (33364019..b6ddf1b6)

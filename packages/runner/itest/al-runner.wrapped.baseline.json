@@ -175,9 +175,23 @@
     "errorClass": null
   },
   {
+    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Pre|Grow|lethal.swap-additive|1",
+    "verdict": "killed",
+    "killingTest": "GrowPre",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Top Twin|Grow|lethal.swap-additive|1",
     "verdict": "killed",
     "killingTest": "GrowTopTwin",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Wrapped Top|Grow|lethal.swap-additive|1",
+    "verdict": "killed",
+    "killingTest": "GrowTop",
     "coverageFiltered": false,
     "errorClass": null
   },

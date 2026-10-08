@@ -1,11 +1,11 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { initParser, parseAL } from "../../src/ast/parser";
 /**
  * R343: an object wrapped whole in `#if` is indexed like a root object when the BUILD compiles it
  * (its arm decided active under the build's symbols), and stays unindexed otherwise, as R331 and
  * R-364 rely on. Each rule here is one direction of that, red-checked.
  */
 import { evaluateArms } from "../../src/ast/preproc-arms";
-import { initParser, parseAL } from "../../src/ast/parser";
 import { wrapRoot } from "../../src/ast/syntax-node";
 import { buildSemanticContext } from "../../src/semantic/context";
 
@@ -50,9 +50,12 @@ describe("R343: which wrapped objects the symbol table indexes", () => {
     expect(names(s)).toEqual([]);
   });
 
+  // Opus build review 1: the file must PARSE clean but be undecided (a bad `#define`), or the
+  // object is an ERROR node and never reaches the arm check. Revert: index `armOf !== "inactive"`.
   it("an object in an undecided file stays unindexed", () => {
-    const s = symbolsOf(`#if (CLEANX\n${W}\n#endif\n`, []);
+    const s = symbolsOf(`#define 1X\n#if not CLEANX\n${W}\n#endif\n`, []);
     expect(names(s)).toEqual([]);
+    expect(unindexedNames(s)).toEqual(["W"]);
   });
 
   // Revert: drop `isCleanObjectDeclaration`. R-364's by-name fallback covers this object.
@@ -88,5 +91,12 @@ describe("R343: which wrapped objects the symbol table indexes", () => {
   it("a namespace declared inside the live arm is the wrapped object's namespace", () => {
     const s = symbolsOf(`#if not CLEANX\nnamespace Contoso.Sales;\n\n${W}\n#endif\n`, []);
     expect(s.objects.map((o) => o.namespace)).toEqual(["Contoso.Sales"]);
+  });
+
+  // Opus build review 2. Revert: drop `live &&` from the namespace branch.
+  it("a namespace in a compiled-out arm does not name the live arm's object", () => {
+    const s = symbolsOf(`#if CLEANX\nnamespace Contoso.Old;\n#else\n${W}\n#endif\n`, []);
+    expect(names(s)).toEqual(["W"]);
+    expect(s.objects.map((o) => o.namespace)).toEqual([undefined]);
   });
 });

@@ -100,16 +100,19 @@ beforeAll(async () => {
     operatorTiers,
   });
   const m = JSON.parse(await readFile(join(out, "mutant-manifest.json"), "utf8")) as {
-    mutants: { file: string; startLine: number; operatorName: string; platformKillMechanism?: string }[];
+    mutants: {
+      file: string;
+      startLine: number;
+      operatorName: string;
+      platformKillMechanism?: string;
+    }[];
   };
   deployed = {};
   for (const e of m.mutants) {
     const file = e.file.replaceAll("\\", "/");
-    (deployed[file] ??= []).push({
-      line: e.startLine,
-      op: e.operatorName,
-      plat: e.platformKillMechanism ?? "-",
-    });
+    const rows = deployed[file] ?? [];
+    rows.push({ line: e.startLine, op: e.operatorName, plat: e.platformKillMechanism ?? "-" });
+    deployed[file] = rows;
   }
   for (const rows of Object.values(deployed))
     rows.sort((a, b) => a.line - b.line || a.op.localeCompare(b.op));
