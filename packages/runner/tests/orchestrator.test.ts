@@ -12025,7 +12025,8 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
     await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
     return dirs;
   }
-  type Answer = "pass" | "fail" | "timeout" | "lease-lost" | "transport-error";
+  /** R512: "unattested" passes but observes no guard, the wrong-binary answer. */
+  type Answer = "pass" | "fail" | "timeout" | "lease-lost" | "transport-error" | "unattested";
   /**
    * `verdictOf(batch, mutantId)` answers a mutated run; the baseline always passes. `before` runs
    * inside a mutated run before it answers; `close` becomes the backend's `close()`.
@@ -12062,6 +12063,14 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
           }
           if (v === "transport-error") {
             return { ref, outcome: "error" as const, durationMs: 1, failureMessage: "wire down" };
+          }
+          if (v === "unattested") {
+            return {
+              ref,
+              outcome: "pass" as const,
+              durationMs: 1,
+              attestation: { observedAny: false, identityMismatch: false },
+            };
           }
           return {
             ref,
@@ -12250,10 +12259,105 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
         .filter((r) => r.code === "M0002")
         .map((r) => [r.b, r.verdict]),
     ).toEqual([[0, "error"]]);
-    const { events } = await resume(common);
+    const { second, events } = await resume(common);
     expect(reusedWarnings(events).filter((m) => m.includes(`run ${run1}'s batch 0`))).toHaveLength(
       1,
     );
+    // R512/R513 (plan item 15): a crash with no lease loss and no unattested answer leaves no
+    // negative record, and run 1 is the run resumed.
+    expect(store.db.query("SELECT * FROM lost_batches").all()).toEqual([]);
+    expect(store.db.query("SELECT * FROM suspect_snapshots").all()).toEqual([]);
+    expect(second.resumedFrom?.runId).toBe(run1);
+    store.close();
+  });
+
+  /**
+   * R512 (review C2): a throw before the gate. Batch 1's M0001 answers unattested, then M0002's
+   * run fails twice on the wire, so the session throws "backend transport error" and the gate
+   * never runs. The mark was written at M0001's answer, so the resume does not lend the snapshot.
+   * `onMark` (test 5) reads the store inside M0002's run, before teardown, the gate or any
+   * `finally`.
+   */
+  async function unattestedThenThrow(onMark?: (marked: boolean) => void) {
+    const { store, common } = await setup();
+    const events: RunEvent[] = [];
+    const err = await runSession({
+      ...common,
+      backend: batchBackend(
+        (b, m) =>
+          b === 1 && m === "M0001"
+            ? "unattested"
+            : b === 1 && m === "M0002"
+              ? "transport-error"
+              : "pass",
+        {
+          before: async (b, m) => {
+            if (b !== 1 || m !== "M0002") return;
+            const run = lastRunId(store);
+            onMark?.(
+              store.db
+                .query("SELECT 1 FROM suspect_snapshots WHERE run_id = ? AND batch_index = 1")
+                .get(run) !== null,
+            );
+          },
+        },
+      ),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      emit: [(e: RunEvent) => events.push(e)],
+    }).catch((e: unknown) => e);
+    return { store, common, err, events, run1: lastRunId(store) };
+  }
+
+  test("R512 C2: a throw before the gate still leaves the snapshot marked, so the resume does not reuse it", async () => {
+    const { store, common, err, events, run1 } = await unattestedThenThrow();
+    expect(String(err)).toContain("backend transport error");
+    // The gate never ran for batch 1...
+    expect(events.some((e) => e.type === "batch-invalidated" && e.batchIndex === 1)).toBe(false);
+    // ...but the snapshot it would have measured against is marked, by run 1.
+    expect(snapsOf(store, run1)).toEqual([{ b: 0 }, { b: 1 }]);
+    expect(
+      store.db
+        .query("SELECT run_id AS run, batch_index AS b, marked_by_run AS by FROM suspect_snapshots")
+        .all(),
+    ).toEqual([{ run: run1, b: 1, by: run1 }]);
+    const { events: resumed } = await resume(common);
+    expect(reusedWarnings(resumed).filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
+    store.close();
+  });
+
+  test("R512 crash stand-in: the mark is in the store before the next run starts, ahead of any gate, finally or teardown", async () => {
+    const seen: boolean[] = [];
+    const { store, err } = await unattestedThenThrow((marked) => seen.push(marked));
+    expect(String(err)).toContain("backend transport error");
+    // Every call of M0002's run (the one after the unattested answer) saw the mark.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((m) => m)).toBe(true);
+    store.close();
+  });
+
+  test("R513: a lost batch's snapshot is not lent even when every drop of it fails", async () => {
+    const { store, common } = await setup();
+    const drop = store.dropBaselineSnapshot.bind(store);
+    store.dropBaselineSnapshot = () => {
+      throw FIXED;
+    };
+    const { out: err } = await capturingWarn(() =>
+      runSession({
+        ...common,
+        backend: batchBackend(LOSE),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(LostBatchNotStoredError);
+    const run1 = lastRunId(store);
+    // Precondition: the snapshot is still there, and the batch is recorded lost.
+    expect(snapsOf(store, run1)).toEqual([{ b: 0 }, { b: 1 }]);
+    expect(
+      store.db.query("SELECT run_id AS run, batch_index AS b FROM lost_batches").all(),
+    ).toEqual([{ run: run1, b: 1 }]);
+    store.dropBaselineSnapshot = drop;
+    const { events } = await resume(common);
+    expect(reusedWarnings(events).filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
     store.close();
   });
 
@@ -12414,14 +12518,46 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
   });
 
   /**
-   * R513 repro. The crash stand-in (the store breaks when teardown starts, so the `finally`'s
-   * write fails) combined with a verdict recorded AFTER the loss note (the heartbeat notes the
-   * loss inside M0002's run, which then answers). Only `onLost` wrote, and it wrote before M0002's
-   * row existed, so that row keeps its verdict. Then a resume carries it.
+   * R513: the crash stand-in for the lost-batch readers. Like `breakableInvalidate`, but all three
+   * of the loss's writes (`markBatchLost`, `invalidateBatch`, `dropBaselineSnapshot`) throw FIXED
+   * between `fail()` and `heal()`, so a test cannot tell the `finally`'s writes from `onLost`'s:
+   * only `onLost`'s land.
+   */
+  function breakableStore(store: ResultsStore): { fail: () => void; heal: () => void } {
+    const invalidate = breakableInvalidate(store);
+    const markLost = store.markBatchLost.bind(store);
+    const drop = store.dropBaselineSnapshot.bind(store);
+    let broken = false;
+    store.markBatchLost = (runId, batchIndex, note) => {
+      if (broken) throw FIXED;
+      markLost(runId, batchIndex, note);
+    };
+    store.dropBaselineSnapshot = (runId, batchIndex) => {
+      if (broken) throw FIXED;
+      return drop(runId, batchIndex);
+    };
+    return {
+      fail: () => {
+        broken = true;
+        invalidate.fail();
+      },
+      heal: () => {
+        broken = false;
+        invalidate.heal();
+      },
+    };
+  }
+
+  /**
+   * R513. The crash stand-in (the store breaks when teardown starts, so the `finally`'s writes
+   * fail) combined with a verdict recorded AFTER the loss note (the heartbeat notes the loss inside
+   * M0002's run, which then answers). Only `onLost` wrote, and it wrote before M0002's row
+   * existed, so that row keeps its stored verdict. `onLost`'s `lost_batches` row makes every resume
+   * reader read it as `error`, so the resume carries nothing of the batch.
    */
   async function lateVerdictThenCrash(late: Answer, stopHungSessions: boolean) {
     const { store, common } = await setup();
-    const broken = breakableInvalidate(store);
+    const broken = breakableStore(store);
     const client = new FakeLeaseClient();
     client.renewQueue = [{ renewed: false }];
     const timers = new FakeTimers();
@@ -12463,10 +12599,18 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
     return { store, run1, run2, r1, r2: rowsOf(store, run2) };
   }
 
-  test("R513 repro: a timeout-killed recorded after the loss note survives a crash and is carried by --resume --stop-hung-sessions", async () => {
-    const { r1, r2, run1, run2 } = await lateVerdictThenCrash("timeout", true);
-    console.log("R513 timeout run1", run1, JSON.stringify(r1));
-    console.log("R513 timeout run2", run2, JSON.stringify(r2));
+  /** Control (plan item 14): every batch-0 row is carried, with run 1's verdict. */
+  const batch0Carried = (r1: ReturnType<typeof rowsOf>, r2: ReturnType<typeof rowsOf>) => {
+    const b0 = r2.filter((r) => r.b === 0);
+    expect(b0.length).toBe(3);
+    expect(b0.every((r) => r.carried === 1)).toBe(true);
+    expect(b0.map((r) => [r.code, r.verdict])).toEqual(
+      r1.filter((r) => r.b === 0).map((r) => [r.code, r.verdict]),
+    );
+  };
+
+  test("R513: a timeout-killed recorded after the loss note is not carried by --resume --stop-hung-sessions after a crash", async () => {
+    const { r1, r2 } = await lateVerdictThenCrash("timeout", true);
     // Precondition (the residue): the row recorded after the note keeps its kill, since onLost
     // wrote before it existed and the finally's write failed. The fix is in the readers.
     expect(r1.filter((r) => r.b === 1).map((r) => [r.code, r.verdict])).toEqual([
@@ -12475,20 +12619,17 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
     ]);
     // Fixed: the resume carries nothing of the lost batch.
     expect(r2.filter((r) => r.b === 1 && r.carried === 1)).toEqual([]);
-    // Control: batch 0 still carries.
-    expect(r2.filter((r) => r.b === 0).every((r) => r.carried === 1)).toBe(true);
+    batch0Carried(r1, r2);
   });
 
-  test("R513 repro: a survived recorded after the loss note survives a crash and is carried by --resume", async () => {
-    const { r1, r2, run1, run2 } = await lateVerdictThenCrash("pass", false);
-    console.log("R513 survived run1", run1, JSON.stringify(r1));
-    console.log("R513 survived run2", run2, JSON.stringify(r2));
+  test("R513: a survived recorded after the loss note is not carried by --resume after a crash", async () => {
+    const { r1, r2 } = await lateVerdictThenCrash("pass", false);
     expect(r1.filter((r) => r.b === 1).map((r) => [r.code, r.verdict])).toEqual([
       ["M0001", "error"],
       ["M0002", "survived"],
     ]);
     expect(r2.filter((r) => r.b === 1 && r.carried === 1)).toEqual([]);
-    expect(r2.filter((r) => r.b === 0).every((r) => r.carried === 1)).toBe(true);
+    batch0Carried(r1, r2);
   });
 });
 
@@ -15798,6 +15939,86 @@ describe("R206: the warm confirmation and the session guard", () => {
     expect(second.report.warmKills).toBe(1);
     expect(second.report.validity.caveats).toContain("resumed");
     store.close();
+  });
+});
+
+/**
+ * R512 (review I3): the warm replay is the batch's FIRST answer. M0001's covering call is a 408 at
+ * position 2 (no attestation), so `confirmWarm` replays [T1, T2] unmutated, and the replay answers
+ * `observedAny: false`. Every other answer in the session carries no attestation, so nothing else
+ * can mark the snapshot or clear the mark. Two variants, one per `confirmWarm` site: the replay
+ * completes (`verdicts`, the `rv` site) or answers at call level (`call`, the `verdict` site).
+ */
+describe("R512: a warm replay's unattested answer marks the snapshot in use", () => {
+  const strip = (v: TestVerdict): TestVerdict => {
+    const { attestation: _, ...rest } = v;
+    return rest;
+  };
+  const wrong = (v: TestVerdict): TestVerdict => ({
+    ...v,
+    attestation: { observedAny: false, identityMismatch: false },
+  });
+  async function replayFirst(site: "rv" | "verdict") {
+    const backend = new WarmStubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    backend.timeoutFor = (mutant, ref) =>
+      mutant === "M0001" && ref.method === "T2" ? 30_000 : undefined;
+    const single = backend.run.bind(backend);
+    backend.run = async (ref, opts) => strip(await single(ref, opts));
+    let replays = 0;
+    backend.manyOverride = (call, _opts, composed) => {
+      if (call !== 0) {
+        return composed.kind === "verdicts"
+          ? { ...composed, verdicts: composed.verdicts.map(strip) }
+          : { ...composed, verdict: strip(composed.verdict) };
+      }
+      replays += 1;
+      if (composed.kind !== "verdicts") return composed;
+      if (site === "rv") return { ...composed, verdicts: composed.verdicts.map(wrong) };
+      const t2 = composed.verdicts[1];
+      if (t2 === undefined) return composed;
+      return {
+        kind: "call",
+        methodIndex: 2,
+        verdict: wrong({ ...t2, outcome: "fail", failureMessage: "R512 replay call-level" }),
+        fencedOp: composed.fencedOp,
+      };
+    };
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      stopHungSessions: true,
+    });
+    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const marks = store.db
+      .query("SELECT run_id AS run, batch_index AS b, marked_by_run AS by FROM suspect_snapshots")
+      .all();
+    store.close();
+    const replayed = backend.manyCalls
+      .filter((c) => c.confirmation === true)
+      .map((c) => c.methods.map((x) => x.ref.method));
+    return { report, runId, marks, replays, replayed };
+  }
+
+  test("the replay completes: its `rv` answers mark the snapshot", async () => {
+    const { runId, marks, replays, replayed } = await replayFirst("rv");
+    // Precondition: exactly one replay, of M0001's warm timeout at position 2.
+    expect(replays).toBe(1);
+    expect(replayed).toEqual([["T1", "T2"]]);
+    expect(marks).toEqual([{ run: runId, b: 0, by: runId }]);
+  });
+
+  test("the replay answers at call level: its `verdict` answer marks the snapshot", async () => {
+    const { report, runId, marks, replays, replayed } = await replayFirst("verdict");
+    expect(replays).toBe(1);
+    expect(replayed).toEqual([["T1", "T2"]]);
+    expect(report.mutants.find((m) => m.mutantCode === "M0001")?.cause).toBe(
+      "warm-confirmation-incomplete",
+    );
+    expect(marks).toEqual([{ run: runId, b: 0, by: runId }]);
   });
 });
 
