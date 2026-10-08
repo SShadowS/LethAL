@@ -1,5 +1,5 @@
 import type { ActivationConfig, FetchFn } from "./activation";
-import { bcFetch } from "./bc-fetch";
+import { bcFetch, bounded } from "./bc-fetch";
 
 /**
  * OData client for the Layer 5C-B1 machine-global lease + operation-marker surface
@@ -44,7 +44,8 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * outcome, never thrown — the caller (Task 8) branches on `reason` for that. Task 8 also throws
  * THIS SAME class itself, separately, once its bounded backoff-with-jitter is exhausted (design
  * §8: "`LeaseUnavailableError` — acquire `held`/backoff-exhausted. Aborts.") — this module only
- * throws it for the transport/shape failures listed above.
+ * throws it for the transport/shape failures listed above. R504: an answer not read within the
+ * client's timeout (headers AND body) is one of them.
  */
 export class LeaseUnavailableError extends Error {
   /**
@@ -328,21 +329,53 @@ function assertTtlBound(ttlSeconds: number): void {
  * doc comment). Throws `LeaseUnavailableError` for any failure that means the client cannot
  * even learn the lease's state: unreachable, non-2xx, or a malformed body. A well-formed
  * REFUSAL (e.g. `{granted:false, reason:"held"}`) is a normal 2xx JSON object and is returned
- * here like any other result — callers map it to a typed outcome, never treat it as failure. */
+ * here like any other result — callers map it to a typed outcome, never treat it as failure.
+ * R504: the timeout spans the headers AND the body, and holds for a fetch that ignores its abort. */
 async function postLeaseAction(
   cfg: ActivationConfig,
   fetchFn: FetchFn,
   action: string,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  const ms = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // AbortSignal.timeout() is unreliable in this Bun/Windows env (see activation.ts) — manual
+  // AbortController + setTimeout instead. Armed BEFORE `bounded`'s guard, so at equal `ms` the
+  // abort usually ends a normal fetch first; the guard holds the bound if the fetch ignores it.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  // Set when the request itself settles: a rejection while it is still pending can only be
+  // `bounded`'s own, which is told apart by this flag, never by its text.
+  let settled = false;
+  const call = (async () => {
+    try {
+      return await readLeaseAnswer(cfg, fetchFn, action, body, controller.signal, ms);
+    } finally {
+      clearTimeout(timer);
+      settled = true;
+    }
+  })();
+  try {
+    return await bounded(call, ms, `LethALControl_${action}`);
+  } catch (err) {
+    if (err instanceof LeaseUnavailableError) throw err;
+    if (!settled) {
+      throw new LeaseUnavailableError(`LethALControl_${action} gave no answer within ${ms} ms`);
+    }
+    throw new LeaseUnavailableError(`LethALControl_${action} failed: ${String(err)}`);
+  }
+}
+
+async function readLeaseAnswer(
+  cfg: ActivationConfig,
+  fetchFn: FetchFn,
+  action: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+  ms: number,
+): Promise<Record<string, unknown>> {
   const params = new URLSearchParams({ company: cfg.company });
   if (cfg.tenant !== undefined) params.set("tenant", cfg.tenant);
   const url = `${cfg.baseUrl}/ODataV4/LethALControl_${action}?${params.toString()}`;
-
-  // AbortSignal.timeout() is unreliable in this Bun/Windows env (see activation.ts) — manual
-  // AbortController + setTimeout instead.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetchFn(url, {
@@ -352,12 +385,10 @@ async function postLeaseAction(
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal,
     });
   } catch (err) {
     throw new LeaseUnavailableError(`LethALControl_${action} unreachable: ${String(err)}`);
-  } finally {
-    clearTimeout(timer);
   }
   if (!res.ok) {
     throw new LeaseUnavailableError(`LethALControl_${action} failed: HTTP ${res.status}`);
@@ -365,8 +396,11 @@ async function postLeaseAction(
   let envelope: unknown;
   try {
     envelope = await res.json();
-  } catch {
-    throw new LeaseUnavailableError(`LethALControl_${action} 2xx body is not JSON`);
+  } catch (err) {
+    if (signal.aborted) {
+      throw new LeaseUnavailableError(`LethALControl_${action} body not read within ${ms} ms`);
+    }
+    throw new LeaseUnavailableError(`LethALControl_${action} 2xx body is not JSON: ${String(err)}`);
   }
   const value = isRecord(envelope) ? envelope.value : undefined;
   if (typeof value !== "string") {

@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFileSync } from "node:fs";
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { StopState, TestMethodRef, TestOutcome, TestVerdict } from "./backend";
-import { bcFetch } from "./bc-fetch";
+import { bcFetch, bounded } from "./bc-fetch";
 import { describeThrown } from "./describe-error";
 import { UnfilteredExtensionsQueryError } from "./harness";
 import { assertAttemptId, parseOperationStatus } from "./lease";
@@ -81,19 +81,6 @@ export interface RunMutantRequest {
 export interface StopHookAnswer {
   readonly stopped: boolean;
   readonly reason?: string;
-}
-
-/** R-204b: `p`, or a rejection once `ms` has passed, for a fetch that ignores its abort signal. */
-function bounded<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
-  let guard: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    p,
-    new Promise<never>((_resolve, reject) => {
-      guard = setTimeout(() => reject(new Error(`${what} gave no answer within ${ms} ms`)), ms);
-    }),
-  ]).finally(() => {
-    if (guard !== undefined) clearTimeout(guard);
-  });
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
+import { UnfilteredExtensionsQueryError } from "../src/harness";
 import {
   type Lease,
   LeaseCallerContractError,
@@ -8,6 +9,7 @@ import {
   MAX_ATTEMPT_ID_LENGTH,
   MAX_TTL_SECONDS,
 } from "../src/lease";
+import { deafBody, deafFetch, stalledBody } from "./helpers/lease-wire";
 
 const CFG: ActivationConfig = {
   baseUrl: "http://bc:7048/BC",
@@ -603,5 +605,178 @@ describe("LeaseClient — caller-contract violations are instanceof-distinguisha
     await expect(client(five00).acquire("o", 15, "n", "g")).rejects.not.toBeInstanceOf(
       LeaseCallerContractError,
     );
+  });
+});
+
+// R504: the lease client's timeout spans the headers AND the body. A missing bound goes red by
+// the test timing out (bun's 5 s), never by a wall-clock assert.
+describe("R504: every lease action is bounded through its response body", () => {
+  const FAST: ActivationConfig = { ...CFG, timeoutMs: 20 };
+
+  /** One row per `LeaseClient` action: its wire name, the call, a normal answer, and its check. */
+  const ACTIONS: ReadonlyArray<
+    readonly [
+      string,
+      (c: LeaseClient) => Promise<unknown>,
+      Record<string, unknown>,
+      (out: unknown) => void,
+    ]
+  > = [
+    [
+      "AcquireLease",
+      (c) => c.acquire("host:1:run1", 15, "nonce-1", "gen-0"),
+      { granted: false, reason: "held" },
+      (o) => expect(o).toEqual({ granted: false, reason: "held" }),
+    ],
+    [
+      "RenewLease",
+      (c) => c.renew(LEASE, 15),
+      { renewed: true, expiresAt: "x" },
+      (o) => expect(o).toEqual({ renewed: true, expiresAt: "x" }),
+    ],
+    [
+      "ReleaseLease",
+      (c) => c.release(LEASE),
+      { released: true },
+      (o) => expect(o).toEqual({ released: true }),
+    ],
+    [
+      "BeginPublish",
+      (c) => c.beginPublish(LEASE, "a1", 6),
+      { begun: true },
+      (o) => expect(o).toEqual({ begun: true }),
+    ],
+    [
+      "EndPublish",
+      (c) => c.endPublish(LEASE, "a1", 6, "succeeded"),
+      { ended: true },
+      (o) => expect(o).toEqual({ ended: true }),
+    ],
+    [
+      "GetOperationStatus",
+      (c) => c.getOperationStatus(LEASE, "", 0),
+      { opKind: "none", opAttemptId: "", opSeq: 5, lastCompletedOpSeq: 5, completed: true },
+      (o) => expect(o).toMatchObject({ opKind: "none", lastCompletedOpSeq: 5, completed: true }),
+    ],
+    [
+      "RecoverOp",
+      (c) => c.recoverOp(LEASE, "a1", 6, true),
+      { recovered: true },
+      (o) => expect(o).toEqual({ recovered: true }),
+    ],
+    [
+      "ForceResetLease",
+      (c) => c.forceResetLease("0".repeat(32)),
+      { reset: false, reason: "generation-changed" },
+      (o) => expect(o).toEqual({ reset: false, reason: "generation-changed" }),
+    ],
+  ];
+
+  async function rejection(p: Promise<unknown>): Promise<LeaseUnavailableError> {
+    const err = await p.then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    if (!(err instanceof LeaseUnavailableError)) {
+      throw new Error(`expected a LeaseUnavailableError, got ${String(err)}`);
+    }
+    return err;
+  }
+
+  // L1. Which of the abort and the race ends the call first is a timer race, so either label is
+  // accepted; what is pinned is that the STREAM saw the abort, i.e. the timer stayed armed.
+  test.each(ACTIONS)("L1 %s: a stalled body is aborted and rejects", async (action, call) => {
+    const { fetchFn, aborted, abortSeen } = stalledBody();
+    const err = await rejection(call(new LeaseClient(FAST, fetchFn)));
+    expect(err.message).toContain(`LethALControl_${action}`);
+    expect(err.message).toMatch(/body not read within 20 ms|gave no answer within 20 ms/);
+    expect(err.beginPublishRefusal).toBeUndefined();
+    // Not a timing assert: a bounded wait for an event the fix guarantees and the bug never sends.
+    await Promise.race([abortSeen, Bun.sleep(1000)]);
+    expect(aborted()).toBe(true);
+  });
+
+  test.each(ACTIONS)(
+    "L2 %s: a body that ignores the abort is ended by the race",
+    async (action, call) => {
+      const err = await rejection(call(new LeaseClient(FAST, deafBody())));
+      expect(err.message).toBe(`LethALControl_${action} gave no answer within 20 ms`);
+    },
+  );
+
+  test.each(ACTIONS)(
+    "L3 %s: a fetch that never resolves is ended by the race",
+    async (action, call) => {
+      const err = await rejection(call(new LeaseClient(FAST, deafFetch())));
+      expect(err.message).toBe(`LethALControl_${action} gave no answer within 20 ms`);
+    },
+  );
+
+  // L4, over-strict control: a slow but complete body is NOT cut.
+  test.each(ACTIONS)(
+    "L4 %s: a body that arrives in two chunks resolves normally",
+    async (_action, call, inner, check) => {
+      const text = JSON.stringify({ value: JSON.stringify(inner) });
+      const half = Math.floor(text.length / 2);
+      // Errors on the fetch's abort, as Bun's body does, so a cut at the headers would show.
+      const fetchFn = (async (_url: unknown, init?: RequestInit) =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              init?.signal?.addEventListener("abort", () =>
+                controller.error(new Error("The operation was aborted.")),
+              );
+              controller.enqueue(new TextEncoder().encode(text.slice(0, half)));
+              setTimeout(() => {
+                controller.enqueue(new TextEncoder().encode(text.slice(half)));
+                controller.close();
+              }, 5);
+            },
+          }),
+          { status: 200 },
+        )) as unknown as typeof fetch;
+      check(await call(new LeaseClient({ ...CFG, timeoutMs: 500 }, fetchFn)));
+    },
+  );
+
+  test("L5: a 2xx body that is not JSON says so, with the parse error's text", async () => {
+    const notJson = (async () =>
+      new Response("<html>oops", { status: 200 })) as unknown as typeof fetch;
+    const err = await rejection(new LeaseClient(FAST, notJson).release(LEASE));
+    expect(err.message).toStartWith("LethALControl_ReleaseLease 2xx body is not JSON: ");
+    expect(err.message.length).toBeGreaterThan(
+      "LethALControl_ReleaseLease 2xx body is not JSON: ".length,
+    );
+    expect(err.message).not.toContain("not read within");
+  });
+
+  // L6 pins today's behaviour for R-496's refusal: its text reaches the caller, wrapped once. It
+  // does NOT pin the "unreachable" label, which is a wrong diagnosis filed as its own item.
+  test("L6: an UnfilteredExtensionsQueryError from the fetch keeps its text, wrapped once", async () => {
+    const refusal = new UnfilteredExtensionsQueryError("refused: unfiltered extensions query R433");
+    const refusing = (async () => {
+      throw refusal;
+    }) as unknown as typeof fetch;
+    const err = await rejection(new LeaseClient(FAST, refusing).acquire("o", 15, "n", "g"));
+    expect(err.message).toContain("refused: unfiltered extensions query R433");
+    expect(err.message).not.toContain("LeaseUnavailableError");
+    expect(err.message).not.toContain("gave no answer within");
+  });
+
+  // L7: a body read that fails for any reason other than our abort is not called a timeout.
+  test("L7: a body read that errors at once is not given the timeout wording", async () => {
+    const erroring = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(new Error("boom"));
+          },
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+    const err = await rejection(new LeaseClient(FAST, erroring).renew(LEASE, 15));
+    expect(err.message).toContain("boom");
+    expect(err.message).not.toContain("gave no answer within");
+    expect(err.message).not.toContain("not read within");
   });
 });

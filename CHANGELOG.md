@@ -562,6 +562,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A lease call whose answer BC starts but never finishes no longer holds the session forever**
+  (R504). The lease client's 30 s timeout now covers the response body as well as the headers, and
+  an unanswered call fails the way an unreachable one does: never a kill, and never a lease
+  reported as released. A heartbeat renew answered after the session stopped no longer reports the
+  lease as lost.
+
 - **A grouped call's progress poll that BC never answers no longer holds the call forever**
   (R503). Each poll now ends after 15 s, or at the call's hard cap if that is sooner, and counts as
   a failed poll; polling goes on. Never a kill.
