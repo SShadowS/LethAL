@@ -54,6 +54,7 @@ export {
 export type { MemberPlace, PlacedMember } from "./ast/tree-walks";
 export { evaluateArms, hasDirectiveLine, startsInInactiveArm } from "./ast/preproc-arms";
 export { countArguments, exactArguments, soleArgument } from "./ast/arguments";
+export { fieldSegments, lastFieldChild, nameSegments } from "./ast/qualified-name";
 export type { ArmEvaluation } from "./ast/preproc-arms";
 
 // Semantic
@@ -71,6 +72,7 @@ export {
   extensionScopeKey,
   objectScopeKey,
   objectScopeKeyOfNode,
+  qualifiedObjectName,
 } from "./semantic/symbol-table";
 export type { CFG, BasicBlock } from "./semantic/cfg";
 export { buildCFG } from "./semantic/cfg";

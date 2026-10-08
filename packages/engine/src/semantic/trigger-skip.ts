@@ -221,6 +221,17 @@ function procedureNamesOn(table: ObjectSymbol, symbols: SymbolTable): ReadonlySe
   return names;
 }
 
+/**
+ * R502: an extension header with an ERROR right beside its `base_object`: a qualified `extends`.
+ * Error recovery puts the ERROR on either side (measured: `base_object` was the first segment in
+ * one file and the last in another), so both neighbours are read.
+ */
+function hasQualifiedBase(extension: ALSyntaxNode): boolean {
+  const kids = extension.children;
+  const at = kids.findIndex((c) => c.fieldName === "base_object");
+  return at >= 0 && (kids[at - 1]?.rawKind === "ERROR" || kids[at + 1]?.rawKind === "ERROR");
+}
+
 /** Does the project subscribe to this table's `kind` events, or extend its `kind` triggers?
  *  `armOf` decides which member-level `#if` arms of an extension's triggers count. */
 function projectObserves(
@@ -233,6 +244,11 @@ function projectObserves(
   const { events, extensionTriggers, unindexedText } = SKIP_KINDS[kind];
   const tableName = table.name.toLowerCase();
   for (const ext of symbols.tableExtensions) {
+    // R502 (opus plan review, I2): `extends Microsoft.Sales.Customer` does not parse. The grammar
+    // keeps ONE segment as `base_object` and the rest as an ERROR, so the extension is indexed
+    // under a name that may be the wrong table's, and it could be the one this table's tag depends
+    // on. It keeps the tag, for every table.
+    if (hasQualifiedBase(ext.node)) return true;
     if (ext.baseObject.toLowerCase() !== tableName) continue;
     if (armOfNode(ctx, ext.node) === "undecided") return true;
     for (const t of extensionTriggers) {

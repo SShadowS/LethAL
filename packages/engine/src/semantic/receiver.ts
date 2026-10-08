@@ -42,6 +42,7 @@
 import { soleArgument } from "../ast/arguments";
 import { maskAlNonCode } from "../ast/mask";
 import { ALNodeKind } from "../ast/node-kinds";
+import { fieldSegments, nameSegments } from "../ast/qualified-name";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import {
   allProcedureLikes,
@@ -62,6 +63,7 @@ import {
   enclosingTrigger,
   extensionScopeKey,
   objectScopeKeyOfNode,
+  qualifiedObjectName,
   triggerLocalNames,
 } from "./symbol-table";
 
@@ -335,7 +337,7 @@ function withSubjectIsNonRecord(
   if (extensionName === null) return false;
   const scopeKey = extensionScopeKey("reportextension", extensionName);
   const declared = lookupVar(subjectName, at, scopeKey, symbols);
-  return declared !== null && classifyDeclaredType(declared).kind === "non-record";
+  return declared !== null && classifyDeclaredType(declared, symbols).kind === "non-record";
 }
 
 /**
@@ -562,7 +564,7 @@ function resolveReceiverName(
   const scopeOwner = scopeOwnerOf(objectNode, objectName);
   if (scopeOwner === null) return { kind: "unresolved" };
   const declared = lookupVar(receiverName, callNode, scopeOwner, symbols);
-  if (declared !== null) return classifyDeclaredType(declared);
+  if (declared !== null) return classifyDeclaredType(declared, symbols);
 
   // Not declared anywhere the symbol table can see. R-464: an implicit record by the name it is
   // spelled with here (`Rec`, `xRec` where it exists, an enclosing dataitem's name), from the one
@@ -649,11 +651,11 @@ export function recordScopesAt(node: ALSyntaxNode, symbols: SymbolTable): Record
       }
       case "report_dataitem": {
         const name = p.childForFieldName("name");
-        const table = p.childForFieldName("table_name");
         out.push({
           kind: "dataitem",
           receiver: name?.text ?? "",
-          table: table === null ? null : stripQuotes(table.text),
+          // R502: every segment of `System.Utilities.Integer`, not the first.
+          table: qualifiedObjectName(fieldSegments(p, "table_name"), "table", symbols),
           xRec: false,
         });
         continue;
@@ -668,7 +670,7 @@ export function recordScopesAt(node: ALSyntaxNode, symbols: SymbolTable): Record
       }
       case "requestpage_section": {
         const inExtension = p.parent?.parent?.rawKind === "reportextension_declaration";
-        const table = inExtension ? null : sourceTableOf(p);
+        const table = inExtension ? null : sourceTableOf(p, symbols);
         if (inExtension || table !== null)
           out.push({ kind: "requestpage", receiver: "Rec", table, xRec: false });
         return out;
@@ -689,7 +691,7 @@ export function recordScopesAt(node: ALSyntaxNode, symbols: SymbolTable): Record
         });
         return out;
       case ALNodeKind.page: {
-        const table = sourceTableOf(p);
+        const table = sourceTableOf(p, symbols);
         if (table !== null) out.push({ kind: "page", receiver: "Rec", table, xRec: true });
         return out;
       }
@@ -697,7 +699,7 @@ export function recordScopesAt(node: ALSyntaxNode, symbols: SymbolTable): Record
         out.push({ kind: "pageextension", receiver: "Rec", table: null, xRec: true });
         return out;
       case ALNodeKind.codeunit: {
-        const table = propertyValueOf(p, "TableNo");
+        const table = propertyValueOf(p, "TableNo", symbols);
         const trigger = enclosingTrigger(node)?.childForFieldName("name")?.text;
         if (table !== null && trigger !== undefined && equalsIgnoreCase(trigger, "OnRun"))
           out.push({ kind: "codeunit", receiver: "Rec", table, xRec: false });
@@ -1033,16 +1035,24 @@ function triggerScopeVar(
  * AL and measures as `reference: integer "50004"`. Hence `tableRef` rather than `tableName`, and
  * hence `projectDeclaresProcedureOnTable` resolving it through `resolveObject` (which matches id
  * and name alike) rather than by name comparison.
+ *
+ * R502: a qualified `Record System.Utilities.Integer` is three `reference` children; the reference
+ * is read through `qualifiedObjectName`, never by its first segment.
  */
-function classifyDeclaredType(declaration: VarSymbol): ResolvedReceiver {
+function classifyDeclaredType(
+  declaration: VarSymbol,
+  symbols: Pick<SymbolTable, "objects">,
+): ResolvedReceiver {
   // R323: a named return value's node is its `return_value` identifier; its type is the
   // `return_type` that follows it in the same parent (for a split member, in the same arm).
   const typeNode = declaration.node.childForFieldName("type") ?? returnTypeAfter(declaration.node);
   if (typeNode === null) return { kind: "unresolved" };
   const recordType = typeNode.namedChildren.find((c) => c.kind === ALNodeKind.record_type);
   if (recordType === undefined) return { kind: "non-record" };
-  const reference = recordType.childForFieldName("reference");
-  return { kind: "record", tableRef: reference === null ? null : stripQuotes(reference.text) };
+  return {
+    kind: "record",
+    tableRef: qualifiedObjectName(fieldSegments(recordType, "reference"), "table", symbols),
+  };
 }
 
 // --- project-declared procedures ------------------------------------------
@@ -1241,19 +1251,27 @@ function extendedTableOf(objectNode: ALSyntaxNode): string | null {
  * Returns `null` when the page declares no `SourceTable` — a real shape (a card page over no
  * record) and the honest answer is "no implicit record", not a default.
  */
-function sourceTableOf(objectNode: ALSyntaxNode): string | null {
-  return propertyValueOf(objectNode, "SourceTable");
+function sourceTableOf(
+  objectNode: ALSyntaxNode,
+  symbols: Pick<SymbolTable, "objects">,
+): string | null {
+  return propertyValueOf(objectNode, "SourceTable", symbols);
 }
 
 /** The value of a direct `property` member (`SourceTable`, R-464's `TableNo`), quotes stripped. */
-function propertyValueOf(objectNode: ALSyntaxNode, property: string): string | null {
+function propertyValueOf(
+  objectNode: ALSyntaxNode,
+  property: string,
+  symbols: Pick<SymbolTable, "objects">,
+): string | null {
   for (const member of declarationMembers(objectNode)) {
     if (member.kind !== ALNodeKind.property) continue;
     const name = member.childForFieldName("name");
     if (name === null || !equalsIgnoreCase(name.text, property)) continue;
     const value = member.childForFieldName("value");
     if (value === null) return null;
-    const table = stripQuotes(value.text);
+    // R502: `SourceTable = Microsoft.Sales.Customer` through the namespace check, like a data item.
+    const table = qualifiedObjectName(nameSegments(value.text), "table", symbols);
     return table === "" ? null : table;
   }
   return null;
