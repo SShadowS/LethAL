@@ -3908,6 +3908,13 @@ interface ClockOptions {
   readonly mutatedMs?: number;
   /** false: a non-authoritative backend, so `workers > 1` is allowed. */
   readonly authoritative?: boolean;
+  /**
+   * R516 (c): model al-runner one-shot. The in-run test limit is `max(1, floor(timeoutMs / 2000))`
+   * seconds (`AlRunnerBackend.sendOneShot`), the simulated time is the test BODY, and the wall
+   * clock (`durationMs`) adds this compile overhead; a pass also carries the body as
+   * `measuredDurationMs` (R272). Absent: the limit is `timeoutMs` and the wall clock is the body.
+   */
+  readonly alRunnerCompileMs?: number;
 }
 
 class ClockBackend extends CountingBackend {
@@ -3916,6 +3923,7 @@ class ClockBackend extends CountingBackend {
   active: string | null = null;
   private readonly mutatedMs: number | undefined;
   private readonly authoritative: boolean;
+  private readonly compileMs: number | undefined;
   constructor(
     /** BSlow's simulated unmutated duration on this backend (AFast is always 100 ms). */
     private readonly slowMs: number,
@@ -3925,6 +3933,7 @@ class ClockBackend extends CountingBackend {
     if (o.grouped === true) this.runMany = (opts) => this.many(opts);
     this.mutatedMs = o.mutatedMs;
     this.authoritative = o.authoritative ?? true;
+    this.compileMs = o.alRunnerCompileMs;
     // The al-runner shape: no served package to fetch, so its test app is proven from source.
     if (!this.authoritative) {
       (this as { fetchPublishedAppPackage?: unknown }).fetchPublishedAppPackage = undefined;
@@ -3954,6 +3963,15 @@ class ClockBackend extends CountingBackend {
         : this.active !== null
           ? (this.mutatedMs ?? this.slowMs)
           : this.slowMs;
+    const compile = this.compileMs;
+    if (compile !== undefined) {
+      const limit = Math.max(1, Math.floor(opts.timeoutMs / 2000)) * 1000;
+      if (ms > limit) {
+        const { attestation: _, measuredDurationMs: __, ...rest } = v;
+        return { ...rest, outcome: "timeout", durationMs: limit + compile };
+      }
+      return { ...v, durationMs: ms + compile, measuredDurationMs: ms };
+    }
     if (ms > opts.timeoutMs) {
       const { attestation: _, measuredDurationMs: __, ...rest } = v;
       return { ...rest, outcome: "timeout", durationMs: opts.timeoutMs };
@@ -4366,5 +4384,158 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(slowBudgets(today)).toEqual([Math.max(2 * YESTERDAY_MS, FLOOR_MS)]);
     expect(falseKills(report, 0).length).toBeGreaterThan(0);
     expect(slowConfirms(today)).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // R-516 / R-515 repros (uncommitted, written to fail today). Each logs what today does.
+  // ---------------------------------------------------------------------------------------------
+
+  const verdictsOf = (report: SessionReport, batch: number) =>
+    scoredOf(report, batch).map((m) => [m.mutantCode, m.verdict, m.cause ?? m.killingTest ?? null]);
+
+  test("R516 repro (a): a FRESH baseline, BSlow slows past 2x inside the run: no kill, each position-1 timeout confirmed unmutated", async () => {
+    // The ruling test's shape: the baseline measures BSlow at 1000 ms (budget 2000); later in the
+    // same run it takes 5000 ms with or without a mutant.
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const today = new ClockBackend(TODAY_MS);
+    const inner = today.run.bind(today);
+    let baselineDone = false;
+    today.run = async (ref, o) => {
+      if (today.mutantRuns === 0 && !baselineDone && ref.method === "BSlow") {
+        baselineDone = true;
+        const v = await inner(ref, { ...o, timeoutMs: Number.POSITIVE_INFINITY });
+        return { ...v, durationMs: YESTERDAY_MS };
+      }
+      return inner(ref, o);
+    };
+    const report = await runSession({ ...opts(store, dirs), backend: today });
+    console.log(
+      "R516 (a) fresh+drift",
+      JSON.stringify(verdictsOf(report, 0)),
+      "budgets",
+      JSON.stringify(slowBudgets(today)),
+      "confirms",
+      slowConfirms(today).length,
+    );
+    expect(slowBudgets(today)).toEqual([2_000]);
+    expect(falseKills(report, 0)).toEqual([]);
+    const scored = scoredOf(report, 0);
+    for (const m of scored) expect(m.verdict).toBe("error");
+    expect(slowConfirms(today).length).toBeGreaterThan(0);
+  });
+
+  test("R516 repro (b): workers = 2, the baseline measured on a fast tier sets budgets on a slower worker tier: no kill", async () => {
+    // The session backend (where the baseline runs) and worker 0 run BSlow in 1000 ms; worker 1's
+    // tier runs it in 5000 ms, mutant or not. No mutant touches BSlow's time.
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const session = new ClockBackend(YESTERDAY_MS, { authoritative: false });
+    const workers = [
+      new ClockBackend(YESTERDAY_MS, { authoritative: false }),
+      new ClockBackend(TODAY_MS, { authoritative: false }),
+    ];
+    const report = await runSession({
+      ...opts(store, dirs),
+      backend: session,
+      workers: 2,
+      backendFactory: (i: number) => {
+        const w = workers[i];
+        if (w === undefined) throw new Error(`no worker backend ${i}`);
+        return w;
+      },
+    });
+    console.log(
+      "R516 (b) workers",
+      JSON.stringify(verdictsOf(report, 0)),
+      "slow-tier budgets",
+      JSON.stringify(workers[1] !== undefined ? slowBudgets(workers[1]) : []),
+      "slow-tier mutant runs",
+      workers[1]?.mutantRuns,
+    );
+    expect(session.baselineRuns).toBeGreaterThan(0);
+    expect(workers[1]?.mutantRuns ?? 0).toBeGreaterThan(0);
+    expect(workers[1] !== undefined ? slowBudgets(workers[1]) : []).toEqual([2_000]);
+    expect(falseKills(report, 0)).toEqual([]);
+  });
+
+  test("R516 repro (c) reused: al-runner one-shot, the confirm's wall clock (compile included) passes R514's 2x rule though the test body is within 5% of the in-run limit", async () => {
+    // Yesterday: BSlow's body 8700 ms + 300 ms compile = 9000 ms wall, reused budget 18000, so the
+    // in-run limit is floor(18000 / 2000) s = 9000 ms. Today: body 8600 unmutated, 9100 under an
+    // unrelated mutant (9100 > 9000: timeout). The confirm's wall clock is 8600 + 300 = 8900, and
+    // 2 x 8900 = 17800 <= 18000, so R514 scores it a kill. Like with like, 2 x 8600 > 9000.
+    const today = new ClockBackend(8_600, { mutatedMs: 9_100, alRunnerCompileMs: 300 });
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      ...opts(store, dirs),
+      backend: new ClockBackend(8_700, { abort: { after: 2 }, alRunnerCompileMs: 300 }),
+    });
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      ...opts(store, dirs),
+      backend: today,
+      resume: "last",
+      retryStranded: true,
+      emit: [(e) => events.push(e)],
+    });
+    console.log(
+      "R516 (c) reused al-runner",
+      JSON.stringify(verdictsOf(report, 0)),
+      "budgets",
+      JSON.stringify(slowBudgets(today)),
+      "confirms",
+      JSON.stringify(slowConfirms(today).map((s) => s.timeoutMs)),
+    );
+    expect(reusedOf(events)).toHaveLength(1);
+    expect(slowBudgets(today)).toEqual([18_000]);
+    expect(slowConfirms(today).length).toBeGreaterThan(0);
+    expect(falseKills(report, 0)).toEqual([]);
+  });
+
+  test("R516 repro (c) fresh: al-runner one-shot, a test whose body is within the sub-second remainder of its wall clock times out under EVERY mutant", async () => {
+    // Fresh baseline: body 8600 + 300 compile = 8900 wall, budget 17800, in-run limit
+    // floor(17800 / 2000) s = 8000 ms < 8600. Every mutated run times out, the mutant changes
+    // nothing. Today: timeout-killed with no confirm. With (a)'s fix under R514's rule (wall clock),
+    // the confirm passes at 8900 and 2 x 8900 = 17800 <= 17800: still a kill.
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const today = new ClockBackend(8_600, { alRunnerCompileMs: 300 });
+    const report = await runSession({ ...opts(store, dirs), backend: today });
+    console.log(
+      "R516 (c) fresh al-runner",
+      JSON.stringify(verdictsOf(report, 0)),
+      "budgets",
+      JSON.stringify(slowBudgets(today)),
+      "confirms",
+      JSON.stringify(slowConfirms(today).map((s) => s.timeoutMs)),
+    );
+    expect(slowBudgets(today)).toEqual([17_800]);
+    expect(falseKills(report, 0)).toEqual([]);
+  });
+
+  test("R515 repro (d): after one reused-budget-stale, a later mutant covered by BSlow gets a budget from the confirm (2 x 5000) and a real verdict", async () => {
+    const today = new ClockBackend(TODAY_MS);
+    const { report } = await sameBatchReuse(today);
+    const budgetsInOrder = today.sent
+      .filter((s) => s.active && s.method === "BSlow")
+      .map((s) => s.timeoutMs);
+    console.log(
+      "R515 (d)",
+      JSON.stringify(verdictsOf(report, 0)),
+      "BSlow mutated budgets in order",
+      JSON.stringify(budgetsInOrder),
+      "confirms",
+      slowConfirms(today).length,
+    );
+    // Expected after R515: the first scored mutant is reused-budget-stale (one confirm, 5000 ms),
+    // every later one runs BSlow at 10000 and survives (BSlow passes at 5000 under it).
+    const scored = scoredOf(report, 0);
+    expect(scored.map((m) => m.cause ?? m.verdict)).toEqual([
+      "reused-budget-stale",
+      ...scored.slice(1).map(() => "survived"),
+    ]);
+    expect(budgetsInOrder).toEqual([2_000, ...scored.slice(1).map(() => 2 * TODAY_MS)]);
+    expect(slowConfirms(today)).toHaveLength(1);
   });
 });
