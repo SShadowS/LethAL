@@ -271,7 +271,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v13.schema.json](../schemas/explain-v13.schema.json)
+- `lethal explain`: [../schemas/explain-v14.schema.json](../schemas/explain-v14.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -317,7 +317,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 13`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 14`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -357,7 +357,8 @@ lists the block's survivors only; the four counts cover every recorded mutant of
 mutants the run recorded, not ones it never generated, and it is absent on a run narrowed with
 `--operator`, `--lines` or `--changed-since`, which can drop mutants inside a block, and on a
 quarantined run, which stops scheduling mutants mid-run. It is also absent for every gap in a file
-the source report lists as hang-refused among its excluded sites (R447): there a loop's own step was
+the source report lists as hang-refused among its excluded sites (R447): there a loop's own step, or
+a site in an open report data item's code or at a bounded item's only bound (R487, R501), was
 refused and never generated, so "every recorded mutant survived" would overstate what was measured.
 Each gap has
 exactly one of `artifactId` (the artifact to verify it against) and `artifactIdAbsent` (why there
@@ -655,7 +656,7 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
 {
-  "identityScheme": 32,
+  "identityScheme": 33,
   "marks": [
     {
       "key": "...",

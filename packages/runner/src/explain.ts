@@ -230,8 +230,11 @@ import type { MutantVerdict } from "./store";
  * field, so no bump. R273 added the optional root `suggestions`, present only under `--suggest` and
  * composed by the CLI outside `ExplainOutput` (explain-suggest.ts): an optional additive field, so
  * no bump; a value added later to its kind domain bumps (R233).
+ *
+ * 14: R514 added the cause value `reused-budget-stale` to `$.notMeasured[].cause`. A new value, so
+ * it bumps (R233); v13 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 13;
+export const EXPLAIN_SCHEMA_VERSION = 14;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
@@ -1566,7 +1569,7 @@ function blocksOf(
     withholdAll ||
     (lineNarrowed &&
       (report.lines === undefined || !spanCovered(report.lines.ranges, file, first, last)));
-  // R447: per FILE, where R196 refused a loop step: that step has no row, so "every recorded row
+  // R447: per FILE, where R196 refused a loop step (or R487/R501 a report data-item site): that site has no row, so "every recorded row
   // survived" says nothing about it. Per file, not per block: the row carries no spans.
   const hangRefusedFiles = new Set(
     (report.excludedSites?.files ?? [])

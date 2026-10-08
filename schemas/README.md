@@ -5,7 +5,8 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 
 | File | Describes | Version constant |
 |---|---|---|
-| [`explain-v13.schema.json`](explain-v13.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 13 |
+| [`explain-v14.schema.json`](explain-v14.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 14 |
+| [`explain-v13.schema.json`](explain-v13.schema.json) | the same, from builds before R514; kept so a stored v13 document stays checkable (v14 added the cause `reused-budget-stale`) | `EXPLAIN_SCHEMA_VERSION` = 13 |
 | [`explain-v12.schema.json`](explain-v12.schema.json) | the same, from builds before R-204b; kept so a stored v12 document stays checkable (v13 added the cause `stop-outcome-unconfirmed`) | `EXPLAIN_SCHEMA_VERSION` = 12 |
 | [`explain-v11.schema.json`](explain-v11.schema.json) | the same, from builds before R443; kept so a stored v11 document stays checkable (v12 added `survivors[].mark`, and a mark with `markKey` alone is now refused) | `EXPLAIN_SCHEMA_VERSION` = 11 |
 | [`explain-v10.schema.json`](explain-v10.schema.json) | the same, from builds before R307; kept so a stored v10 document stays checkable (v11 added the caveat `files-refused`) | `EXPLAIN_SCHEMA_VERSION` = 10 |
@@ -29,10 +30,10 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`report-v2.schema.json`](report-v2.schema.json) | the same, from builds before R231; frozen so an archived v2 report stays checkable (v3 writes each run-level mutant list entry as `<batchIndex>/<mutantCode>` and adds `batchIndex` to reader-mark entries, because mutant codes restart per batch) | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Of the twenty-three files, nineteen are hand-written and four were generated, and the split is about SIZE
-rather than principle.** `explain` (a few dozen leaves; v13 and the kept v12, v11, v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
-`verify` (small, like `doctor`; v8 and the kept v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v13, `doctor` and
-verify v8 are pinned against their declarations, and explain v12, explain v11, explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
+**Of the twenty-four files, twenty are hand-written and four were generated, and the split is about SIZE
+rather than principle.** `explain` (a few dozen leaves; v14 and the kept v13, v12, v11, v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
+`verify` (small, like `doctor`; v8 and the kept v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v14, `doctor` and
+verify v8 are pinned against their declarations, and explain v13, explain v12, explain v11, explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
 verify v7, verify v6, verify v5, verify v4, verify v3, verify v2 and verify v1 are frozen as they were published.
 Verify v5 bumped for two ADDED fields, which this page's rule alone would not do: their absence
 means "not decided" only from v5 on, while in a v4 document it means the document predates the
@@ -67,7 +68,7 @@ worse than no schema at all — it calls a correct document invalid, at every co
    current explain schema is ALSO pinned against a literal list (R233), so a value added without a
    version bump fails.
 3. **Real data.** The projection of a committed campaign report is validated against
-   `explain-v13.schema.json`, capped and uncapped.
+   `explain-v14.schema.json`, capped and uncapped.
 
 The validator in that test is small on purpose — type, const, enum, required, properties,
 additionalProperties, items, minItems, local `$ref`. It is not a JSON Schema implementation and must

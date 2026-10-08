@@ -1,7 +1,7 @@
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { tier1Operators } from "@lethal/builtin-tier1";
+import { openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
   ALNodeKind,
@@ -491,8 +491,8 @@ export interface MutationSetResult {
    * keeps.
    */
   readonly declarativeSites: readonly DeclarativeSiteFile[];
-  /** R447: per file, the sites R196's hang check refused (`MutationOperator.refusesHangCapable`),
-   *  after the `--operator` and `--lines` filters and outside inactive `#if` arms. */
+  /** R447: per file, the sites a hang check refused (R196's `MutationOperator.refusesHangCapable`,
+   *  or R501's dispatch-level `openItemHangRefuses`), after the `--operator` and `--lines` filters and outside inactive `#if` arms. */
   readonly hangRefused: readonly HangRefusedFile[];
   /**
    * R307: the exact identity entries of every file the trial refused (empty for a header-rule
@@ -986,11 +986,18 @@ export async function generateMutationSet(
     const hangRefusedHere = new Map<string, number>();
     visit(root, (node) => {
       for (const op of allOperators) {
-        if (!op.targets(node, ctx)) {
-          // R447: a site R196's hang check refused, counted only where this run would have
-          // mutated it: not compiled out, and admitted by `--operator` and `--lines`.
+        const targeted = op.targets(node, ctx);
+        // R501: ONE dispatch-level hang refusal for every operator in `allOperators`, no exemption:
+        // a site in open report-data-item code, or one that deletes or alters a bounded item's only
+        // bound. Only a MUTABLE site: a declarative one (a report column's source) keeps its normal
+        // path below, dropped and tallied as non-executable, so it is never counted here.
+        const r501 = targeted && isMutableSite(node) && openItemHangRefuses(node, ctx);
+        if (!targeted || r501) {
+          // R447: a site a hang check refused (R196's loop-condition write, or R501 above), counted
+          // only where this run would have mutated it: not compiled out, and admitted by
+          // `--operator` and `--lines`.
           if (
-            op.refusesHangCapable?.(node, ctx) === true &&
+            (r501 || op.refusesHangCapable?.(node, ctx) === true) &&
             !startsInInactiveArm(inactive, node.startIndex) &&
             (admittedOperators === undefined || admittedOperators.has(op.name)) &&
             (lineRanges === undefined ||
@@ -1217,14 +1224,15 @@ export async function generateMutationSet(
         uninstrumentableOnly.length > 0
           ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in ${where.join(" or in ")}, so nothing would deploy.`
           : "";
-      // R447: an operator whose sites R196 refused DID find sites; say where, as R307 does.
+      // R447: an operator whose sites a hang check refused (R196 or R501) DID find sites; say
+      // where, as R307 does.
       const hangNuance = barren
         .flatMap((n) => {
           const perFile = hangRefusedByOperator.get(n);
           if (perFile === undefined) return [];
           const where = [...perFile].map(([f, c]) => `${f} (${c})`).join(", ");
           return [
-            ` "${n}" had site(s) refused as hang-capable (R196: each writes a variable an enclosing loop's condition reads): ${where}.`,
+            ` "${n}" had site(s) refused as hang-capable (each writes a variable an enclosing loop's condition reads, R196, or is code of an unbounded report data item or a bounded item's only bound, R487/R501): ${where}.`,
           ];
         })
         .join("");
@@ -4168,8 +4176,18 @@ interface ScoreBatchInput {
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
   readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
-  /** Replaces the sequential `runMutantsOnBackend` call. runSession's worker fan-out only. */
-  readonly executeCovering?: (plan: CoveringPlan, attestation: AttestationLedger) => Promise<void>;
+  /** Replaces the sequential `runMutantsOnBackend` call. runSession's worker fan-out only.
+   *  R514: `baselineReused` is the batch's reused snapshot, forwarded to `runMutantsOnBackend`. */
+  readonly executeCovering?: (
+    plan: CoveringPlan,
+    attestation: AttestationLedger,
+    baselineReused: ReusedBaseline | undefined,
+  ) => Promise<void>;
+}
+/** R514: the run and batch whose stored baseline (R192) a batch reused. */
+interface ReusedBaseline {
+  readonly runId: number;
+  readonly batchIndex: number;
 }
 /** "unsafe": latched during the baseline (the caller stops the session).
  *  "nothing-to-run": `select` returned undefined (the caller moves to the next batch).
@@ -4756,7 +4774,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       emit({
         type: "warning",
         code: "resume-baseline-reused",
-        message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here.`,
+        message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
       });
       for (const saved of reused.baseline) {
         // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
@@ -4960,8 +4978,10 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       : unmarkedLedger();
   emit({ type: "phase-entered", phase: "mutants" });
   const mutantsStartedMs = Date.now();
+  const baselineReused: ReusedBaseline | undefined =
+    reused !== undefined ? { runId: reused.runId, batchIndex: reused.batchIndex } : undefined;
   if (input.executeCovering !== undefined) {
-    await input.executeCovering(plan, attestation);
+    await input.executeCovering(plan, attestation, baselineReused);
   } else {
     // Sequential IS the parallel path with a pool of one: this is the
     // exact same runMutantsOnBackend call the caller's `executeCovering`
@@ -4990,6 +5010,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       memberCountsByTest: memberCounts,
       groupRuns,
       sessionReuse,
+      baselineReused,
     });
   }
   emit({ type: "phase-left", phase: "mutants", elapsedMs: Date.now() - mutantsStartedMs });
@@ -6964,6 +6985,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const executeCovering = async (
         plan: CoveringPlan,
         attestation: AttestationLedger,
+        baselineReused: ReusedBaseline | undefined,
       ): Promise<void> => {
         const {
           mutants: toExecute,
@@ -7079,6 +7101,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               memberCountsByTest: memberCounts,
               groupRuns,
               sessionReuse,
+              baselineReused,
             });
           }),
         );
@@ -7974,6 +7997,8 @@ async function runProbes(
         memberCountsByTest: plan.memberCountsByTest,
         groupRuns: scope.groupRuns,
         sessionReuse: scope.sessionReuse,
+        // R514: a probe's baseline is this run's own (`runNamedMutants` never reuses a snapshot).
+        baselineReused: undefined,
       });
       if (scope.caps.authoritative && !attestation.clean) {
         for (const [i, o] of outcomes.entries()) {
@@ -8841,7 +8866,10 @@ async function closeIfSupported(backend: ExecutionBackend): Promise<void> {
  * `RunMutantMany` call (`confirmation: true`, `activate(null)` first). Confirmed iff the replay
  * answers `complete` AND ran all k AND every entry passed (stated positively: a `cap` with one
  * passing entry satisfies "every method that ran passed" and is NOT a confirmation), and for a
- * timeout additionally iff entry k completed inside its own cold-measured budget.
+ * timeout additionally iff entry k completed inside its own cold-measured budget. R514: on a
+ * reused baseline (R192) that budget is another day's, so a timeout is confirmed only iff entry k
+ * completed in at most HALF its budget (R53's 2x margin); a complete all-pass replay beyond that is
+ * `reused-budget-stale`. A fresh batch keeps the 1x rule.
  *
  * Every other ending is an error, never a kill: j < k failing → `warm-prefix-unstable`; j = k
  * failing → `unstable` (today's cause, the warm wording); k completing outside its budget or
@@ -8873,6 +8901,8 @@ async function confirmWarm(p: {
     readonly quarantineStore?: QuarantineStore | undefined;
     readonly resourceKey?: string | undefined;
     readonly nowIso: () => string;
+    /** R514: see `runMutantsOnBackend`'s field; it decides the timeout grain's margin. */
+    readonly baselineReused: ReusedBaseline | undefined;
   };
   readonly m: MutantManifestEntry;
   readonly step: CoveringStep;
@@ -9067,6 +9097,15 @@ async function confirmWarm(p: {
   if (grain === "timeout") {
     const kth = verdicts[k - 1];
     const budget = budgetOfIndex(k);
+    const reusedFrom = args.baselineReused;
+    if (kth !== undefined && reusedFrom !== undefined && 2 * kth.durationMs > budget) {
+      // R514: on a reused baseline the budget is another day's; R53's 2x margin, as the cold
+      // confirm uses. A fresh batch keeps the 1x rule below.
+      return error(
+        "reused-budget-stale",
+        `reused-budget-stale ${what}: method ${k} (${killer.method}) completed unmutated in ${kth.durationMs} ms at position ${k} of the replay, more than half the ${budget} ms budget set from run ${reusedFrom.runId}'s reused baseline (R192), so the timeout is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`,
+      );
+    }
     if (kth === undefined || kth.durationMs > budget) {
       return error(
         "warm-timeout-unconfirmed",
@@ -9357,6 +9396,11 @@ async function runMutantsOnBackend(args: {
   readonly groupRuns?: GroupRunSettings | undefined;
   /** R206 §2.1: session-scoped, shared across batches and shards: the once-only warning flag. */
   readonly sessionReuse: { warned: boolean };
+  /** R514: this batch's baseline came from a stored snapshot (R192), so its durations, and every
+   *  budget derived from them, are from another day. A position-1 `timeout` is then confirmed
+   *  unmutated before it is scored, and every timeout confirm uses R53's 2x margin. `undefined`
+   *  for a baseline measured in this run. */
+  readonly baselineReused: ReusedBaseline | undefined;
 }): Promise<void> {
   const leaseSession = args.leaseSession;
   const resyncOpSeq =
@@ -9576,13 +9620,17 @@ async function runMutantsOnBackend(args: {
           }
           break;
         }
-        verdict = "timeout-killed";
-        killingTest = ref.method;
-        killingTestRef = ref;
-        killingTestFailure = v.failureMessage;
-        killPosition = 1;
-        recordKill(args.killLedger, m, ref);
-        break;
+        // R514: on a reused baseline the budget came from another day's duration, so a position-1
+        // timeout falls through to the unmutated confirm below instead of being scored here.
+        if (args.baselineReused === undefined) {
+          verdict = "timeout-killed";
+          killingTest = ref.method;
+          killingTestRef = ref;
+          killingTestFailure = v.failureMessage;
+          killPosition = 1;
+          recordKill(args.killLedger, m, ref);
+          break;
+        }
       }
       if (v.outcome === "fail" && step.groupPosition > 1) {
         // R206 §2.2: a kill at group position k > 1 was measured WARM. Confirm it by replaying
@@ -9613,7 +9661,16 @@ async function runMutantsOnBackend(args: {
         }
         break;
       }
-      if (v.outcome === "fail") {
+      // The cold kill confirmation: a `fail` at position 1, and (R514) a position-1 `timeout` on a
+      // reused baseline, the only timeout that reaches here.
+      if (v.outcome === "fail" || v.outcome === "timeout") {
+        const timedOut = v.outcome === "timeout";
+        // R514: an unmutated run has no stop hook (bcdev wires R53's only for a pending mutant), so
+        // an overrun is an abort and a quarantine. A timeout's confirm runs at the baseline's
+        // deadline when that is longer, and judges the duration against the budget with R53's 2x
+        // margin. With the default floor (above the baseline deadline) it runs at the budget, and
+        // a test slower than that today strands, as a re-run baseline would; never a kill.
+        const confirmMs = timedOut ? Math.max(budget, args.fallbackTimeoutMs) : budget;
         await activateOnce(args.backend, args.safety, null);
         // Layer 5C-B2: `runFenced` here too — the confirm rerun earns the same single fresh
         // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
@@ -9628,7 +9685,7 @@ async function runMutantsOnBackend(args: {
           args.backend,
           args.safety,
           ref,
-          { coverage: "none", timeoutMs: budget },
+          { coverage: "none", timeoutMs: confirmMs },
           leaseSession,
           args.emit,
           resyncOpSeq,
@@ -9638,7 +9695,7 @@ async function runMutantsOnBackend(args: {
           confirmRetryAfter === "not-started" &&
           confirmOriginal !== undefined &&
           leaseSession !== undefined
-            ? await leaseSession.classifyRetryRefusal(confirmOriginal, budget)
+            ? await leaseSession.classifyRetryRefusal(confirmOriginal, confirmMs)
             : "genuine";
         testResultBuffer.push({
           mutantCode: null,
@@ -9732,8 +9789,19 @@ async function runMutantsOnBackend(args: {
           verdict = "error";
           cause = "session-reused";
           failureNote = `session-reused confirming ${ref.method}: the server reported ${confirm.testRunsBefore} test method(s) had already run in session ${confirm.sessionId ?? "?"} before the confirmation started, so the killer was not re-run cold; the kill is unconfirmed (R206)`;
+        } else if (
+          confirm.outcome === "pass" &&
+          timedOut &&
+          args.baselineReused !== undefined &&
+          2 * confirm.durationMs > budget
+        ) {
+          // R514: the test passes unmutated but takes more than half the budget today, so a
+          // baseline measured today would have budgeted it more: the timeout is not the mutant's.
+          verdict = "error";
+          cause = "reused-budget-stale";
+          failureNote = `reused-budget-stale ${ref.method}: completed unmutated in ${confirm.durationMs} ms, more than half the ${budget} ms budget set from run ${args.baselineReused.runId}'s reused baseline (R192), so the timeout at position 1 is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`;
         } else if (confirm.outcome === "pass") {
-          verdict = "killed";
+          verdict = timedOut ? "timeout-killed" : "killed";
           killingTest = ref.method;
           killingTestRef = ref;
           killPosition = 1;

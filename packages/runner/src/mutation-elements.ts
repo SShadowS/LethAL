@@ -311,7 +311,7 @@ export async function toMutationElements(
         row.reason === "compiled-out"
           ? `${row.sites} mutation site(s) in this ${row.kinds} are in #if arms this build does not compile (${row.detail ?? ""}). They are not in the program under test.`
           : row.reason === "hang-refused"
-            ? `${row.sites} mutation site(s) in this ${row.kinds} write a variable an enclosing loop's condition reads, so LethAL made no mutant there (hang-refused, R196). They are unmeasured, not tested.`
+            ? `${row.sites} mutation site(s) in this ${row.kinds} could hang the run if mutated: each writes a variable an enclosing loop's condition reads (R196), or is code of an unbounded report data item or a bounded item's only bound (R487/R501). LethAL made no mutant there (hang-refused). They are unmeasured, not tested.`
             : `${row.sites} mutation site(s) in this ${row.kinds} were not mutated (${row.reason}). LethAL refused them; they are not untested code.`,
     };
     if (entry?.mutants === undefined) {

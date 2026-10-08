@@ -589,7 +589,9 @@ export type MutantErrorCause =
   | "session-reused"
   | "warm-prefix-unstable"
   | "warm-timeout-unconfirmed"
-  | "warm-confirmation-incomplete";
+  | "warm-confirmation-incomplete"
+  // R514: a timeout on a reused baseline whose unmutated confirm took more than half the budget.
+  | "reused-budget-stale";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -796,6 +798,19 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "Not a malformed answer and not a server fault: the cap is a clean, expected ending. Not a " +
       "kill: nothing established that the prefix passes unmutated.",
     basis: "R206",
+  },
+  "reused-budget-stale": {
+    meaning:
+      "This batch reused a stored baseline (`--resume`, R192), so the test's time budget came " +
+      "from an earlier run. The test timed out under the mutant; re-run once with no mutant it " +
+      "passed, but took more than half that budget, so it is slower today than the stored " +
+      "baseline says. No verdict. Re-run without `--resume` to measure the baseline again (R514).",
+    entailedNegative:
+      "Not `timeout-killed`: a baseline measured today would have given the test a larger " +
+      "budget, so the timeout is not the mutant's. Not `unstable`: the test passed with no " +
+      "mutant; only its stored duration is out of date. Not `survived`: the mutated run never " +
+      "finished.",
+    basis: "R514",
   },
 };
 
@@ -2648,7 +2663,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     (f) => f.reason === "not-instrumentable" && f.sites > 0,
   );
   const leftOutRows = [...undecidedRows, ...notInstrumentableRows];
-  // R447: sites R196's hang check refused. Only rows WITH sites narrow, like R399's.
+  // R447: sites the hang checks refused (R196, R487/R501). Only rows WITH sites narrow, like R399's.
   const hangRows = input.excludedSites.files.filter(
     (f) => f.reason === "hang-refused" && f.sites > 0,
   );
@@ -2812,7 +2827,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     // none, and then nothing is missing from the score. Compiled-out and declarative rows are not
     // measurable sites, so they stay out of this.
     leftOutRows.length > 0 ||
-    // R447: a loop step R196 refused was never mutated either.
+    // R447: a site the hang checks refused (R196, R487/R501) was never mutated either.
     hangRows.length > 0;
   // R190: a run that measured nothing is degraded whatever its baseline said.
   const degraded = !input.baselineGreen || allErrors;
@@ -3061,7 +3076,7 @@ function summarizeRunnerContexts(
  * R206: the banner's error breakdown. `counts.unstable` keeps counting `unstable` alone; the four
  * R206 causes are listed beside it when non-zero, so a run full of them does not read
  * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
- * when its run's answer was lost.
+ * when its run's answer was lost. R514 adds `reused-budget-stale`.
  */
 function errorBreakdown(r: SessionReport): string {
   const named: MutantErrorCause[] = [
@@ -3070,6 +3085,7 @@ function errorBreakdown(r: SessionReport): string {
     "warm-timeout-unconfirmed",
     "warm-confirmation-incomplete",
     "stop-outcome-unconfirmed",
+    "reused-budget-stale",
   ];
   const parts: string[] = [];
   for (const cause of named) {
@@ -3211,7 +3227,7 @@ export function renderConsole(r: SessionReport): string {
   const hangRefused = byReason("hang-refused").filter((f) => f.sites > 0);
   if (hangRefused.length > 0) {
     lines.push(
-      `HANG-REFUSED SITES: ${hangRefused.reduce((n, f) => n + f.sites, 0)} site(s) in ${hangRefused.length} file(s) write a variable an enclosing loop's condition reads; no mutant was made there (R196). They are absent from every count above.`,
+      `HANG-REFUSED SITES: ${hangRefused.reduce((n, f) => n + f.sites, 0)} site(s) in ${hangRefused.length} file(s) could hang the run if mutated: each writes a variable an enclosing loop's condition reads (R196), or is code of an unbounded report data item or a bounded item's only bound (R487/R501). No mutant was made there. They are absent from every count above.`,
     );
   }
   // R381: the build's symbols beyond the config's (app.json's, on al-runner its predefined ones).
