@@ -35,6 +35,11 @@ interface FakeShape {
   readonly passTestName?: string;
   readonly timeoutMessage?: string;
   readonly timeoutStatus?: string;
+  /** R518: the hang run's exit. 3 is al-runner 2.12.0-main.43f76177's measured shape: the row plus a
+   *  TEST-TIMEOUT-ABORT suite error naming it. Default 1, the older shape. */
+  readonly hangExit?: 1 | 3;
+  /** R518: extra keys merged into the hang run's envelope (e.g. `compilationErrors`). */
+  readonly hangEnvelopeExtra?: Record<string, unknown>;
   /** When true, the broken-target run answers as if it were a clean pass — the false-survivor
    *  direction this fact exists to catch. */
   readonly compileScorable?: boolean;
@@ -70,8 +75,9 @@ function fakeSpawn(shape: FakeShape = {}): { spawn: SpawnFn; argvs: string[][] }
       };
     }
     if (argv.includes(HANGING)) {
+      const exitCode = shape.hangExit ?? 1;
       return {
-        exitCode: 1,
+        exitCode,
         stdout: alRunnerStdout({
           tests: [
             {
@@ -85,7 +91,20 @@ function fakeSpawn(shape: FakeShape = {}): { spawn: SpawnFn; argvs: string[][] }
           failed: 0,
           errors: 1,
           total: 1,
-          exitCode: 1,
+          exitCode,
+          ...(exitCode === 3
+            ? {
+                suiteErrors: [
+                  {
+                    file: "/probe/tests",
+                    errors: [
+                      `tests: TEST-TIMEOUT-ABORT: Lethal Contract Tests (Codeunit${TESTS_CODEUNIT}).ContractProbeHangs: watchdog timeout aborted the run — 0 further [Test] method(s) in this codeunit did not run (0 total)`,
+                    ],
+                  },
+                ],
+              }
+            : {}),
+          ...shape.hangEnvelopeExtra,
         }),
         stderr: "",
       };
@@ -141,7 +160,7 @@ function refusalNames(result: AlRunnerContractResult): ContractFactName[] {
 }
 
 describe("runAlRunnerContractProbe — today's measured contract MATCHES", () => {
-  test("all five facts match against a fake reproducing al-runner v2.0.1.0", async () => {
+  test("all six facts match against a fake reproducing al-runner v2.0.1.0", async () => {
     const { spawn } = fakeSpawn();
     const result = await runAlRunnerContractProbe("al-runner", spawn);
     // Named individually rather than as a count: a probe that silently stopped emitting one fact
@@ -151,6 +170,7 @@ describe("runAlRunnerContractProbe — today's measured contract MATCHES", () =>
     expect(verdictOf(result, "unknown-flag-rejected")).toBe("matches");
     expect(verdictOf(result, "qualified-test-name")).toBe("matches");
     expect(verdictOf(result, "timeout-classified")).toBe("matches");
+    expect(verdictOf(result, "timeout-exit-readable")).toBe("matches");
     expect(verdictOf(result, "compile-failure-not-scorable")).toBe("matches");
     expect(contractRefusals(result)).toEqual([]);
   });
@@ -184,7 +204,8 @@ describe("runAlRunnerContractProbe — each fact diverges on its own", () => {
   test("an unrecognised timeout wording diverges, and the refusal says what to do", async () => {
     const { spawn } = fakeSpawn({ timeoutMessage: "test aborted: budget elapsed (2s)" });
     const result = await runAlRunnerContractProbe("al-runner", spawn);
-    expect(refusalNames(result)).toEqual(["timeout-classified"]);
+    // R518: the exit-shape fact reads the same row, so an unknown wording diverges there too.
+    expect(refusalNames(result)).toEqual(["timeout-classified", "timeout-exit-readable"]);
     const [refusal] = contractRefusals(result);
     expect(refusal).toContain("timeout-classified");
     expect(refusal).toContain("test aborted: budget elapsed (2s)");
@@ -265,9 +286,48 @@ describe("runAlRunnerContractProbe — unmeasurable refuses, it does not pass", 
       "compile-failure-not-scorable",
       "qualified-test-name",
       "timeout-classified",
+      "timeout-exit-readable",
       "unknown-flag-rejected",
       "version",
     ]);
+  });
+});
+
+/**
+ * R518 (plan D1b). al-runner 2.12.0-main.43f76177 exits 3 on a one-shot test timeout, and
+ * OneShotTransport reads that only through `timeoutAbortTests`. This fact runs on the SAME hang run
+ * as `timeout-classified` (the CLI pre-session probe, and every session that pins its platform-app
+ * directory), so a future change in the shape refuses there.
+ */
+describe("runAlRunnerContractProbe — timeout-exit-readable (R518)", () => {
+  test("exit 1 with a timeout row matches", async () => {
+    const result = await runAlRunnerContractProbe("al-runner", fakeSpawn({ hangExit: 1 }).spawn);
+    expect(verdictOf(result, "timeout-exit-readable")).toBe("matches");
+  });
+
+  test("exit 3 in the measured shape with `Test exceeded 2s timeout.` matches", async () => {
+    const result = await runAlRunnerContractProbe("al-runner", fakeSpawn({ hangExit: 3 }).spawn);
+    expect(verdictOf(result, "timeout-exit-readable")).toBe("matches");
+    expect(contractRefusals(result)).toEqual([]);
+  });
+
+  test("exit 3 reporting a 5 s stop when 2 s was asked diverges", async () => {
+    const { spawn } = fakeSpawn({ hangExit: 3, timeoutMessage: "Test exceeded 5s timeout." });
+    const result = await runAlRunnerContractProbe("al-runner", spawn);
+    expect(refusalNames(result)).toEqual(["timeout-exit-readable"]);
+    const [refusal] = contractRefusals(result);
+    expect(refusal).toContain("exit 3");
+    expect(refusal).toContain("abort the session");
+  });
+
+  test("exit 3 with compilationErrors beside the abort diverges", async () => {
+    const { spawn } = fakeSpawn({
+      hangExit: 3,
+      hangEnvelopeExtra: { compilationErrors: [{ file: "/x", errors: ["x: COMPILE-FAIL"] }] },
+    });
+    const result = await runAlRunnerContractProbe("al-runner", spawn);
+    expect(refusalNames(result)).toEqual(["timeout-exit-readable"]);
+    expect(contractRefusals(result)[0]).toContain("TEST-TIMEOUT-ABORT");
   });
 });
 

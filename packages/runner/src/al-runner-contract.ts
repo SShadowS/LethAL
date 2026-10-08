@@ -1,8 +1,18 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AL_RUNNER_V2_VERSION, RUNNER_TIMEOUT_MESSAGE } from "./al-runner-backend";
-import { alRunnerEnv, buildAlRunnerArgv, qualifiedTestName } from "./al-runner-transport";
+import {
+  AL_RUNNER_V2_VERSION,
+  RUNNER_TIMEOUT_MESSAGE,
+  isTimeoutRow,
+  parseReportedStopMs,
+} from "./al-runner-backend";
+import {
+  alRunnerEnv,
+  buildAlRunnerArgv,
+  qualifiedTestName,
+  timeoutAbortTests,
+} from "./al-runner-transport";
 import type { SpawnFn } from "./publisher";
 import { defaultSpawn } from "./publisher";
 
@@ -31,7 +41,7 @@ import { defaultSpawn } from "./publisher";
  * `--auto-provision`, while this probe still builds its invocations with no pin. It runs from
  * `cli.ts` BEFORE `runSession`, so before any provisioning has happened and therefore before a pin
  * exists — which is why closing it means changing R123's own design rather than adding a field here.
- * See `docs/roadmap/R149.md`. Two of the five facts make it more than bookkeeping:
+ * See `docs/roadmap/R149.md`. Two of the six facts make it more than bookkeeping:
  * `compile-failure-not-scorable`, which stands between a project that failed to compile and a batch
  * of false survivors, and `unknown-flag-rejected`, whose whole test is the exit code.
  *
@@ -42,8 +52,9 @@ import { defaultSpawn } from "./publisher";
  * empty-vs-empty — this project's signature bug, in the one place built to prevent it. The canary's
  * behaviour is deliberately NOT changed.
  *
- * COST. Five facts, four al-runner invocations (the version probe, the unknown-flag probe, one real
- * test run that yields both the name shape and the banner reading, one hang, one broken project),
+ * COST. Six facts, four al-runner invocations (the version probe, the unknown-flag probe, one real
+ * test run that yields both the name shape and the banner reading, one hang that yields two facts,
+ * one broken project),
  * roughly 15-25 s in total on the machine this was measured on. Immaterial against a real mutation
  * run — the same argument the canary makes for its own ~5 s — and NOT immaterial against a
  * single-mutant smoke test, which is why it runs once per session and never per mutant.
@@ -80,6 +91,7 @@ export type ContractFactName =
   | "unknown-flag-rejected"
   | "qualified-test-name"
   | "timeout-classified"
+  | "timeout-exit-readable"
   | "compile-failure-not-scorable";
 
 /**
@@ -106,6 +118,12 @@ export const CONTRACT_FACT_CONSEQUENCES: Record<ContractFactName, string> = {
     "false KILL — it records `error` instead — but the mutant silently leaves the score's " +
     "denominator, and the run reports a different number than it should. Fix by adding the new " +
     "wording to RUNNER_TIMEOUT_MESSAGE.",
+  "timeout-exit-readable":
+    "A one-shot hang would be read as a failed run, re-run, and abort the session (spec §11's " +
+    "two-consecutive-failures rule). OneShotTransport reads a timeout's results only on exit 1, or " +
+    "on an exit 3 whose envelope `timeoutAbortTests` proves is a test-timeout abort naming the " +
+    "row (R518); a new shape is neither. Re-measure the hang's exit code and envelope, then teach " +
+    "`timeoutAbortTests` the new shape.",
   "compile-failure-not-scorable":
     "A target that does not compile must never come back looking like a clean run in which no " +
     "test failed. That would be a whole batch of false SURVIVORS — the worst outcome this tool " +
@@ -545,6 +563,49 @@ export async function runAlRunnerContractProbe(
       }
     }
 
+    // 4b. R518: the SAME hang run, read for the shape OneShotTransport accepts. al-runner exits 3 on
+    // a test timeout (measured on 2.12.0-main.43f76177), and the transport reads that only through
+    // `timeoutAbortTests`; that rule, the wording and the reported stop are imported, never spelled
+    // twice. Exit 1 is the older shape, which the transport reads as it always has.
+    const stopMs = HANG_TIMEOUT_SECONDS * 1000;
+    const exitExpected = `exit 1 with a timeout row for ${hangName}, or exit 3 whose envelope timeoutAbortTests accepts with that row reporting a ${stopMs} ms stop`;
+    if ("error" in hangRun) {
+      facts.push(fact("timeout-exit-readable", "unmeasurable", exitExpected, hangRun.error));
+    } else {
+      const isHangTimeout = (x: { name?: unknown; status?: unknown; message?: unknown }) =>
+        x.name === hangName &&
+        typeof x.status === "string" &&
+        isTimeoutRow({
+          status: x.status,
+          ...(typeof x.message === "string" ? { message: x.message } : {}),
+        });
+      const json = readEnvelope(hangRun.stdout)?.json;
+      const readable =
+        hangRun.exitCode === 1
+          ? testsOf(json).some(isHangTimeout)
+          : hangRun.exitCode === 3 &&
+            (timeoutAbortTests(hangRun.stdout) ?? []).some(
+              (x) => isHangTimeout(x) && parseReportedStopMs(x.message) === stopMs,
+            );
+      const suite =
+        typeof json === "object" && json !== null
+          ? (json as { suiteErrors?: unknown }).suiteErrors
+          : undefined;
+      const firstErrors = Array.isArray(suite)
+        ? (suite[0] as { errors?: unknown } | undefined)?.errors
+        : undefined;
+      const firstSuiteError = Array.isArray(firstErrors) ? firstErrors[0] : undefined;
+      const row = testsOf(json).find((x) => x.name === hangName);
+      facts.push(
+        fact(
+          "timeout-exit-readable",
+          readable ? "matches" : "diverged",
+          exitExpected,
+          `exit ${hangRun.exitCode}, row status ${JSON.stringify(row?.status ?? "<no test>")}, message ${JSON.stringify(row?.message ?? "<none>")}, first suite error ${JSON.stringify(firstSuiteError ?? "<none>")}`,
+        ),
+      );
+    }
+
     // 5. a target that does not compile cannot be mistaken for a clean run
     //
     // The bundle pair here is deliberate and was corrected by measurement. Sending the broken dir
@@ -603,6 +664,7 @@ export async function runAlRunnerContractProbe(
     for (const name of [
       "qualified-test-name",
       "timeout-classified",
+      "timeout-exit-readable",
       "compile-failure-not-scorable",
     ] as const) {
       if (!facts.some((f) => f.fact === name)) {

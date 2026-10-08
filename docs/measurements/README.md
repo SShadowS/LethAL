@@ -1281,6 +1281,22 @@ of false SURVIVORS is `parseAlRunnerPayload` refusing an unreadable envelope ins
 readable envelope naming the requested test" — rather than pinning either exit code, because the
 first draft pinned exit 3 and was measuring a case that never happens.
 
+### A test timeout IS exit 3 (R518)
+
+Measured 2026-10-08 on `2.12.0-main.43f76177` (`/coord/handoff/R-518/measure.md`), one-shot, with
+LethAL's own argv. A test that hits its in-run stop exits **3**: the bundle RAN, and al-runner
+counts a watchdog abort as a suite error (#2415, #2762). The envelope keeps the row
+(`status: "error"`, `Test exceeded <N>s timeout.`) and adds
+`suiteErrors: [{ file, errors: ["tests: TEST-TIMEOUT-ABORT: <Display> (<cu>).<m>: watchdog timeout aborted the run — ..."] }]`,
+with no `compilationErrors` and no `executionErrors`. A TEST-app compile error also exits 3, but
+with `compilationErrors`, `tests: []` and no `suiteErrors`; a TARGET compile error is still exit 1
+with empty stdout (above). The two exit-3 shapes are told apart on the envelope alone:
+`timeoutAbortTests` in `al-runner-transport.ts` reads an exit 3 as results only when every suite
+error's marker is exactly `TEST-TIMEOUT-ABORT` and names a row that did not pass or fail. R123's
+`timeout-exit-readable` fact checks this shape on the probe's own hang run, in the CLI's
+pre-session probe and, inside a session, wherever the session pins the platform-app directory (the
+one-shot runs).
+
 ### Passing the same bundle dir twice CRASHES the runner
 
 Also measured 2026-08-07 on 2.0.1.0, found while writing that probe. Two positional bundle dirs with
