@@ -73,6 +73,41 @@ export function deafFetch(): typeof fetch {
   return ((_url: unknown, _init?: RequestInit) => new Promise<Response>(() => {})) as typeof fetch;
 }
 
+/** R506: a 200 whose body is not JSON. */
+export function notJsonBody(): typeof fetch {
+  return (async () => new Response("<html>", { status: 200 })) as unknown as typeof fetch;
+}
+
+/** R506: a 200 with zero body bytes. */
+export function emptyBody(): typeof fetch {
+  return (async () => new Response("", { status: 200 })) as unknown as typeof fetch;
+}
+
+/** R506: a 200 whose body stream errors at once (not an abort). */
+export function erroringBody(): typeof fetch {
+  return (async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error("stream broke mid-body"));
+        },
+      }),
+      { status: 200 },
+    )) as unknown as typeof fetch;
+}
+
+/** R506: a fetch that never resolves but HONOURS its abort (a timeout before the headers). */
+export function abortableHang(): typeof fetch {
+  return ((_url: unknown, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener(
+        "abort",
+        () => reject(new DOMException("The operation was aborted.", "AbortError")),
+        { once: true },
+      );
+    })) as typeof fetch;
+}
+
 /** What one routed action answers: an inner result, a stall, or a hand-built response. */
 export type WireAnswer = Record<string, unknown> | "stall" | Response;
 

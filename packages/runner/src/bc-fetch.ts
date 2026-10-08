@@ -81,17 +81,87 @@ export class BcRedirectRefusedError extends Error {
   }
 }
 
-/** R-204b: `p`, or a rejection once `ms` has passed, for a fetch that ignores its abort signal. */
-export function bounded<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+/**
+ * R506: a BC call whose answer was not read: no complete answer within the bound ("timeout"), or
+ * a 2xx body that could not be read or parsed ("unreadable"). Extends Error directly, so a catch
+ * that reads `HarnessVerificationError` as "the control app is missing" never sees it.
+ */
+export class BcAnswerUnreadError extends Error {
+  constructor(
+    message: string,
+    readonly kind: BcReadFailure,
+  ) {
+    super(message);
+    this.name = "BcAnswerUnreadError";
+  }
+}
+
+export type BcReadFailure = "timeout" | "unreadable";
+
+/** R506: how a site turns a read failure into ITS OWN typed error. */
+export type BcFailFactory = (message: string, kind: BcReadFailure) => Error;
+
+/**
+ * R-204b: `p`, or a rejection once `ms` has passed, for a fetch that ignores its abort signal.
+ * R506: the rejection is `onTimeout(message)`, the caller's own error instance, so a timeout is
+ * told apart by identity, never by its text.
+ */
+export function bounded<T>(
+  p: Promise<T>,
+  ms: number,
+  what: string,
+  onTimeout: (message: string) => Error = (m) => new BcAnswerUnreadError(m, "timeout"),
+): Promise<T> {
   let guard: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     p,
     new Promise<never>((_resolve, reject) => {
-      guard = setTimeout(() => reject(new Error(`${what} gave no answer within ${ms} ms`)), ms);
+      guard = setTimeout(() => reject(onTimeout(`${what} gave no answer within ${ms} ms`)), ms);
     }),
   ]).finally(() => {
     if (guard !== undefined) clearTimeout(guard);
   });
+}
+
+/**
+ * R506: ONE deadline over fetch + body read + parse. The abort timer is armed BEFORE `bounded`'s
+ * guard (R-503 order) and stays armed until `call` settles, so it covers the body; the race holds
+ * the bound for a fetch or a body that ignores its abort. Errors from `call` pass through
+ * untouched: the only error made here is `bounded`'s, through `fail`.
+ */
+export async function withDeadline<T>(
+  ms: number,
+  what: string,
+  call: (signal: AbortSignal) => Promise<T>,
+  fail: BcFailFactory,
+): Promise<T> {
+  // AbortSignal.timeout() is unreliable in this Bun/Windows env: a manual controller instead.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  const p = (async () => {
+    try {
+      return await call(controller.signal);
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  return bounded(p, ms, what, (m) => fail(m, "timeout"));
+}
+
+/** R506: the 2xx body as JSON. Never an empty value: an unread body THROWS. */
+export async function readJsonBody(
+  res: Response,
+  signal: AbortSignal,
+  what: string,
+  ms: number,
+  fail: BcFailFactory,
+): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch (err) {
+    if (signal.aborted) throw fail(`${what} body not read within ${ms} ms`, "timeout");
+    throw fail(`${what} 2xx body could not be read or parsed: ${String(err)}`, "unreadable");
+  }
 }
 
 /** The `fetch` every BC-facing client defaults to. Tests inject their own and never see this. */
