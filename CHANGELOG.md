@@ -567,6 +567,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A lease lost mid-batch now discards that batch's verdicts in the results store** (R508), at the
+  moment of the loss and again at session end, not only in the report. `--resume` no longer carries
+  them, a later `--skip-known-survivors` no longer reads them through a resumed run, and the batch's
+  saved baseline is not reused. Because such a run may now hold nothing carryable, `--resume last`
+  can pick an OLDER unfinished run with the same configuration. If the store write fails, the
+  session ends with an error that names the run and says not to resume it.
+
 - **A BC answer that starts but never finishes no longer holds LethAL forever on the harness
   check, the deployment check or the permission canary** (R506, R507); a package read-back now also
   ends on a fetch that ignores its abort. Each
