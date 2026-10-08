@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**56 of 516 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**56 of 517 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -218,6 +218,7 @@ that ordering is the priority.
 - **R505** · Not measured: how al-runner maps a compiled file back to the source path it labels coverage with, when an object moves between files or its workspace cache is stale · [R505.md](docs/roadmap/R505.md) · done (63594b46)
 - **R506** · Four more BC reads clear their abort timer at the headers, so a body BC never finishes has no bound (the R191 class), and two of them turn an unread body into `{}` · [R506.md](docs/roadmap/R506.md) · done (abc6919b)
 - **R507** · On the lease path, R-496's `UnfilteredExtensionsQueryError` is wrapped in a `LeaseUnavailableError` labelled "unreachable": its type is lost and the label is a wrong diagnosis · [R507.md](docs/roadmap/R507.md) · done (abc6919b)
+- **R533** · R505's project watch trusted a stat taken within one timestamp tick of an edit, so a same-size edit could go unseen (master red on Windows) · [R533.md](docs/roadmap/R533.md) · done (9c31edf6)
 - **R508** · `--resume` can carry the verdicts of a batch that a lease loss invalidated, kills included · [R508.md](docs/roadmap/R508.md) · done (3203624b)
 - **R509** · The type table reads `Record "X" temporary` as no table, so a field of a temporary record has no type · [R509.md](docs/roadmap/R509.md) · done (b8e3e2e5)
 - **R510** · `resolveObject` parses any name as an id first, so a table named `"50000 Foo"` resolves to table 50000 · [R510.md](docs/roadmap/R510.md) · done (b8e3e2e5)
