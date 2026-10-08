@@ -617,9 +617,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   takes the full budget to stop (180 s at the default, was 90 s), and a confirm there is a full
   invocation, compile included. A baseline run's in-run limit moves from 60 s to 120 s at the
   default baseline deadline, so a test whose body takes 60 to 120 s is no longer non-green there.
-- **Once a confirm measures a test slower than its budget allows, later mutants in the same batch
-  and worker are budgeted from that measurement** (R515). A kill is still judged against the budget
-  its run was sent.
+- **On bcdev and al-runner one-shot, once a confirm measures a test slower than its budget allows,
+  later mutants in the same batch and worker are budgeted from that measurement** (R515). A kill is
+  still judged against the budget its run was sent. On al-runner `--server` (and resource with
+  `--server`) the re-budget is skipped: the daemon stops a test at its own 60 s whatever the budget,
+  so a larger budget would only let a later confirm pass the 2x rule (R516, R517).
 - **A resumed batch that reused a stored baseline (R192) no longer scores a timeout as
   `timeout-killed` without an unmutated confirm** (R514). The test is re-run once with no mutant,
   and the kill stands only if it finishes in at most half its budget (R53's margin on bcdev; on

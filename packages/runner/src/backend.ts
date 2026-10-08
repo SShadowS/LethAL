@@ -309,6 +309,17 @@ export interface BoundArtifact {
 
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
+  /**
+   * R516 I1: true when the run's own in-run stop is the budget it was sent (bcdev; al-runner
+   * one-shot, static or resource selector), so a larger budget really lets the test run longer.
+   * False on al-runner `--server` (and resource with `--server`): the daemon stops a test body at
+   * its own 60 s default whatever the budget, while every duration is the suite's wall clock, so
+   * raising the budget from a confirm (R515) moves no stop and only lets a later confirm pass the
+   * 2x rule: a false kill. Read only by R515's re-budget, which is skipped unless this is `true`;
+   * absent counts as false, the safe direction. Kept off `BackendCapabilities` so the stream
+   * schema does not change.
+   */
+  readonly inRunStopIsBudget?: boolean;
   status(): Promise<BackendStatus>;
   /**
    * Compile + publish + verify the instrumented project. Publishing backends return the

@@ -358,6 +358,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
     ) => RunMutantTransport,
   ) {}
 
+  /** R516 I1: the control app stops a run at the budget it was sent. */
+  readonly inRunStopIsBudget = true;
+
   capabilities(): BackendCapabilities {
     return {
       coverage: this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE,

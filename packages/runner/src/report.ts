@@ -822,7 +822,8 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "margin). Either the test is slower now than when its budget was set, or (workers > 1) this " +
       "worker's tier is slower, or the run is in the boundary band: a test whose budget is twice " +
       "its measured duration, or on al-runner one-shot a test whose compile plus body takes more " +
-      "than half the budget. No verdict. Raise `--mutant-timeout-ms` to re-score it (R516).",
+      "than half the budget. No verdict. Raise `--mutant-timeout-ms` to re-score it (R516). On " +
+      "al-runner `--server` see R517.",
     entailedNegative:
       "Not `timeout-killed`: the unmutated run did not finish clearly inside the budget, so the " +
       "mutant is not shown to be what ran past it; a genuine hang can land here in the boundary " +

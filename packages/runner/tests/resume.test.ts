@@ -3921,12 +3921,15 @@ interface ClockOptions {
    * wall clock is the body.
    */
   readonly alRunnerCompileMs?: number;
+  /** R516 I1: the backend's `inRunStopIsBudget` (false: the al-runner `--server` shape). Default true. */
+  readonly inRunStopIsBudget?: boolean;
 }
 
 class ClockBackend extends CountingBackend {
   readonly sent: SentBudget[] = [];
   /** The mutant active at the next run (`null`: unmutated). */
   active: string | null = null;
+  readonly inRunStopIsBudget: boolean;
   private readonly mutatedMs: number | undefined;
   private readonly authoritative: boolean;
   private readonly compileMs: number | undefined;
@@ -3937,6 +3940,7 @@ class ClockBackend extends CountingBackend {
   ) {
     super("pass", o.abort?.after, o.abort?.fromDeploy);
     if (o.grouped === true) this.runMany = (opts) => this.many(opts);
+    this.inRunStopIsBudget = o.inRunStopIsBudget ?? true;
     this.mutatedMs = o.mutatedMs;
     this.authoritative = o.authoritative ?? true;
     this.compileMs = o.alRunnerCompileMs;
@@ -4771,6 +4775,112 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect([m2?.cause, m3?.cause]).toEqual(["reused-budget-stale", "timeout-unconfirmed"]);
     expect(m2?.failureNote).toContain(`more than half the ${sentMany[0]} ms budget`);
     expect(m3?.failureNote).toContain(`more than half its ${sentMany[1]} ms budget`);
+  });
+
+  /** I1's sequence, fresh: the baseline measures BSlow at 100 s (budget 200 s); BSlow times out
+   *  under every mutant; its confirms report 105 s, then 103 s. */
+  async function stopNotBudget(inRunStopIsBudget: boolean) {
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const today = scriptBSlow(
+      new ClockBackend(100_000, { mutatedMs: Number.POSITIVE_INFINITY, inRunStopIsBudget }),
+      { baselineMs: 100_000, confirmMs: [105_000, 103_000, 103_000] },
+    );
+    const report = await runSession({ ...opts(store, dirs), backend: today });
+    return { report, today };
+  }
+
+  test("R516 M3: a floor-sourced budget's boundary-band note names the floor, not twice the measured duration", async () => {
+    // BSlow 900 at the baseline: 2 x 900 < the 2000 floor, so the budget is the floor. Hung under
+    // the mutant; its confirm takes 1100 (over half of 2000; ratio 1100/900 = 1.22 <= 1.25).
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const today = scriptBSlow(new ClockBackend(900, { mutatedMs: Number.POSITIVE_INFINITY }), {
+      baselineMs: 900,
+      confirmMs: [1_100],
+    });
+    const report = await runSession({ ...opts(store, dirs), backend: today });
+    const first = scoredOf(report, 0)[0];
+    expect([first?.verdict, first?.cause]).toEqual(["error", "timeout-unconfirmed"]);
+    const note = first?.failureNote ?? "";
+    expect(note).toContain("ratio 1100/900 = 1.22");
+    expect(note).toContain(
+      "R516's boundary band (the budget is the --mutant-timeout-ms floor and the test takes more than half of it)",
+    );
+    expect(note).not.toContain("twice its measured duration");
+  });
+
+  test("R516 I1: where the in-run stop is not the budget (al-runner --server), a confirm never re-budgets, so a later 103 s confirm is not judged against 2 x 105 s: no false kill", async () => {
+    const { report, today } = await stopNotBudget(false);
+    expect(falseKills(report, 0)).toEqual([]);
+    expect(verdictsOf(report, 0)).toEqual([
+      ["M0001", "error", "timeout-unconfirmed"],
+      ["M0002", "error", "timeout-unconfirmed"],
+      ["M0003", "error", "timeout-unconfirmed"],
+    ]);
+    expect(slowBudgetsInOrder(today)).toEqual([200_000, 200_000, 200_000]);
+  });
+
+  test("R516 I1 control: where the in-run stop IS the budget, R515 re-budgets from the 105 s confirm and the 103 s confirms are kills", async () => {
+    const { report, today } = await stopNotBudget(true);
+    expect(verdictsOf(report, 0)).toEqual([
+      ["M0001", "error", "timeout-unconfirmed"],
+      ["M0002", "timeout-killed", "BSlow"],
+      ["M0003", "timeout-killed", "BSlow"],
+    ]);
+    expect(slowBudgetsInOrder(today)).toEqual([200_000, 210_000, 210_000]);
+  });
+
+  test("R516 M1: on a reused batch, a warm replay over half a budget R515 set from a confirm is warm-timeout-unconfirmed, not reused-budget-stale naming the reused run", async () => {
+    // BSlow covers both carriers, AFast only `IsOverBudget`: `UnderLimit`'s mutants (scored first)
+    // run BSlow at position 1, `IsOverBudget`'s run AFast then BSlow (R197: fewest members first).
+    const coverOnlyLogic = (b: ClockBackend) => {
+      const inner = b.run.bind(b);
+      b.run = async (ref, o) => {
+        const v = await inner(ref, o);
+        if (ref.method !== "AFast" || v.coverage === undefined) return v;
+        return {
+          ...v,
+          coverage: {
+            granularity: "procedure" as const,
+            entries: [{ objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" }],
+          },
+        };
+      };
+      return b;
+    };
+    const dirs = await twoTestProject(true);
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      ...opts(store, dirs),
+      backend: coverOnlyLogic(new ClockBackend(YESTERDAY_MS, { abort: { after: 2 } })),
+    });
+    const run1 = lastRun(store);
+    const today = coverOnlyLogic(
+      scriptBSlow(
+        new ClockBackend(TODAY_MS, { grouped: true, mutatedMs: Number.POSITIVE_INFINITY }),
+        { confirmMs: [TODAY_MS, 5_200] },
+      ),
+    );
+    const report = await runSession({
+      ...opts(store, dirs),
+      backend: today,
+      resume: "last",
+      retryStranded: true,
+    });
+    // M0003: BSlow at position 1, confirm 5000 -> reused-budget-stale, BSlow re-budgeted to 10000
+    // from that confirm. M0004: BSlow at position 2, the replay passes at 5200, over half of 10000.
+    const [m3, m4] = scoredOf(report, 0);
+    expect([m3?.mutantCode, m3?.cause]).toEqual(["M0003", "reused-budget-stale"]);
+    expect([m4?.mutantCode, m4?.verdict, m4?.cause]).toEqual([
+      "M0004",
+      "error",
+      "warm-timeout-unconfirmed",
+    ]);
+    expect(m4?.failureNote).toContain(
+      "completed unmutated in 5200 ms at position 2 of the replay, within its 10000 ms budget but more than half of it",
+    );
+    expect(m4?.failureNote).not.toContain(`run ${run1}'s reused baseline`);
   });
 
   test("R516 T12 (M8): a fresh batch at the default floor, whose confirm overruns unmutated, is a strand that latches the session, never a kill", async () => {

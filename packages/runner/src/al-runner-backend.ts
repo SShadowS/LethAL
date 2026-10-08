@@ -355,6 +355,10 @@ export function provisionArgv(
 }
 
 export class AlRunnerBackend implements ExecutionBackend {
+  /** R516 I1: one-shot's in-run limit is the budget (`oneShotLimits`); the daemon's is its own. */
+  get inRunStopIsBudget(): boolean {
+    return this.cfg.serverMode !== true;
+  }
   // Set by deploy(); until then (or if deploy() is never called — existing
   // callers may drive activate()/run() directly against cfg.instrumentedDir)
   // activeDir() falls back to the statically configured instrumented dir.

@@ -894,6 +894,20 @@ describe("AlRunnerBackend serverMode (R220)", () => {
     return { backend, runs: fake.runs, dir };
   }
 
+  test("R516 I1: inRunStopIsBudget is false under --server (the daemon's own stop), true one-shot", async () => {
+    const { backend } = await serverBackend([]);
+    const oneShot = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: "/x",
+        testDir: "/tests",
+        selectorObjectId: 50000,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+    expect([backend.inRunStopIsBudget, oneShot.inRunStopIsBudget]).toEqual([false, true]);
+  });
+
   test("runs the suite ONCE per activation and serves every test from it", async () => {
     // This is the whole economics of the mode. The server has no per-test filter, so `runTests`
     // runs everything; caching per activation is what turns T calls into one suite run. Without

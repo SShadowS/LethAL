@@ -8914,9 +8914,15 @@ function timeoutUnconfirmedNote(
         ? `this run's baseline, ${d} ms`
         : `the --mutant-timeout-ms floor (the test's measured duration is ${d} ms)`;
   const ratio = d > 0 ? confirmMs / d : Number.POSITIVE_INFINITY;
+  const why =
+    source.kind === "floor"
+      ? "the budget is the --mutant-timeout-ms floor and the test takes more than half of it"
+      : source.kind === "confirm"
+        ? "the budget is twice that confirm's duration"
+        : "the budget is twice its measured duration, or on al-runner one-shot the compile counts against it";
   const band =
     ratio <= 1.25
-      ? "the test ran about as fast as when its budget was set, so this is R516's boundary band (the budget is twice its measured duration, or on al-runner one-shot the compile counts against it); raise --mutant-timeout-ms above twice this test's duration to re-score it"
+      ? `the test ran about as fast as when its budget was set, so this is R516's boundary band (${why}); raise --mutant-timeout-ms above twice this test's duration to re-score it`
       : "the test is slower now than when its budget was set, or this worker's tier is slower than the baseline's; raise --mutant-timeout-ms to re-score it";
   return `timeout-unconfirmed ${method}: timed out at position 1 under the mutant; unmutated it completed in ${confirmMs} ms on this backend, more than half its ${budgetMs} ms budget, which was set from ${from}; ratio ${confirmMs}/${d} = ${Number.isFinite(ratio) ? ratio.toFixed(2) : "inf"}. The timeout is not attributed to the mutant (R53's 2x margin, R516). ${band[0]?.toUpperCase() ?? ""}${band.slice(1)}.`;
 }
@@ -9164,9 +9170,14 @@ async function confirmWarm(p: {
     const kth = verdicts[k - 1];
     const budget = budgetOfIndex(k);
     const reusedFrom = args.baselineReused;
-    if (kth !== undefined && reusedFrom !== undefined && 2 * kth.durationMs > budget) {
+    if (
+      kth !== undefined &&
+      reusedFrom !== undefined &&
+      step.testBudgetSource.kind !== "confirm" &&
+      2 * kth.durationMs > budget
+    ) {
       // R514: on a reused baseline the budget is another day's; R53's 2x margin, as the cold
-      // confirm uses.
+      // confirm uses. Not when R515 re-budgeted the test from today's confirm (R516 M1).
       return error(
         "reused-budget-stale",
         `reused-budget-stale ${what}: method ${k} (${killer.method}) completed unmutated in ${kth.durationMs} ms at position ${k} of the replay, more than half the ${budget} ms budget set from run ${reusedFrom.runId}'s reused baseline (R192), so the timeout is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`,
@@ -9500,6 +9511,9 @@ async function runMutantsOnBackend(args: {
     return { ms: Math.max(2 * durationMs, args.minMutantBudgetMs), source };
   };
   const noteMeasured = (ref: TestMethodRef, ms: number, byMutant: string) => {
+    // R516 I1: only where the in-run stop IS the budget. On al-runner `--server` a larger budget
+    // moves no stop, so re-budgeting would only let a later confirm pass the 2x rule.
+    if (args.backend.inRunStopIsBudget !== true) return;
     const key = testKeyOf(ref);
     const prev = measuredToday.get(key);
     if (prev === undefined || ms > prev.ms) measuredToday.set(key, { ms, byMutant });
