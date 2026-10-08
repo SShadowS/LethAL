@@ -12412,6 +12412,84 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
       "killed",
     ]);
   });
+
+  /**
+   * R513 repro. The crash stand-in (the store breaks when teardown starts, so the `finally`'s
+   * write fails) combined with a verdict recorded AFTER the loss note (the heartbeat notes the
+   * loss inside M0002's run, which then answers). Only `onLost` wrote, and it wrote before M0002's
+   * row existed, so that row keeps its verdict. Then a resume carries it.
+   */
+  async function lateVerdictThenCrash(late: Answer, stopHungSessions: boolean) {
+    const { store, common } = await setup();
+    const broken = breakableInvalidate(store);
+    const client = new FakeLeaseClient();
+    client.renewQueue = [{ renewed: false }];
+    const timers = new FakeTimers();
+    let fired = false;
+    const backend = batchBackend(
+      (b, m) => (b === 0 ? (m === "M0001" ? "pass" : "fail") : m === "M0002" ? late : "pass"),
+      {
+        before: async (b, m) => {
+          if (b === 1 && m === "M0002" && !fired) {
+            fired = true;
+            await timers.fire();
+          }
+        },
+        close: async () => {
+          broken.fail();
+        },
+      },
+    );
+    const err = await capturingWarn(() =>
+      runSession({ ...common, backend, lease: leaseCfg(client, { timers }).lease }).catch(
+        (e: unknown) => e,
+      ),
+    );
+    expect(fired).toBe(true);
+    expect(err.out).toBeInstanceOf(LostBatchNotStoredError);
+    const run1 = lastRunId(store);
+    const r1 = rowsOf(store, run1);
+    broken.heal();
+    const events: RunEvent[] = [];
+    await runSession({
+      ...common,
+      backend: batchBackend(() => "fail"),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      resume: "last",
+      ...(stopHungSessions ? { stopHungSessions: true } : {}),
+      emit: [(e: RunEvent) => events.push(e)],
+    });
+    const run2 = lastRunId(store);
+    return { store, run1, run2, r1, r2: rowsOf(store, run2) };
+  }
+
+  test("R513 repro: a timeout-killed recorded after the loss note survives a crash and is carried by --resume --stop-hung-sessions", async () => {
+    const { r1, r2, run1, run2 } = await lateVerdictThenCrash("timeout", true);
+    console.log("R513 timeout run1", run1, JSON.stringify(r1));
+    console.log("R513 timeout run2", run2, JSON.stringify(r2));
+    // Precondition (the residue): the row recorded after the note keeps its kill, since onLost
+    // wrote before it existed and the finally's write failed. The fix is in the readers.
+    expect(r1.filter((r) => r.b === 1).map((r) => [r.code, r.verdict])).toEqual([
+      ["M0001", "error"],
+      ["M0002", "timeout-killed"],
+    ]);
+    // Fixed: the resume carries nothing of the lost batch.
+    expect(r2.filter((r) => r.b === 1 && r.carried === 1)).toEqual([]);
+    // Control: batch 0 still carries.
+    expect(r2.filter((r) => r.b === 0).every((r) => r.carried === 1)).toBe(true);
+  });
+
+  test("R513 repro: a survived recorded after the loss note survives a crash and is carried by --resume", async () => {
+    const { r1, r2, run1, run2 } = await lateVerdictThenCrash("pass", false);
+    console.log("R513 survived run1", run1, JSON.stringify(r1));
+    console.log("R513 survived run2", run2, JSON.stringify(r2));
+    expect(r1.filter((r) => r.b === 1).map((r) => [r.code, r.verdict])).toEqual([
+      ["M0001", "error"],
+      ["M0002", "survived"],
+    ]);
+    expect(r2.filter((r) => r.b === 1 && r.carried === 1)).toEqual([]);
+    expect(r2.filter((r) => r.b === 0).every((r) => r.carried === 1)).toBe(true);
+  });
 });
 
 describe("runSession — Layer 5C-B1 fix round 1: publish-fence failure paths + RecoverOp reconciliation (design §6 step 2)", () => {

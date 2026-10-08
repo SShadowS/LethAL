@@ -3257,3 +3257,123 @@ describe("R247: no verdict crosses a test-app change", () => {
     expect(historyWarnings(events)).toEqual([]);
   });
 });
+
+/**
+ * R512 repro. Run 1's batch 1 runs on a binary that is not the instrumented one: every covered run
+ * answers but observes nothing, so design §G's attestation gate invalidates the batch. Its baseline
+ * (test green) was recorded before the mutant phase, and `invalidateBatch` leaves it. The real
+ * binary (run 2) has the test red unmutated. `red` picks how: a stopped `timeout` (scored at
+ * position 1 with no unmutated confirm) or a `fail` (confirmed by an unmutated rerun).
+ */
+describe("R512: an attestation-invalidated batch's baseline snapshot, then --resume", () => {
+  /** Run 1: batch 0 is the right binary; batch 1 answers every covered run unattested. */
+  function wrongBinaryInBatch1(): CountingBackend {
+    const b = new CountingBackend("pass");
+    const run = b.run.bind(b);
+    b.run = async (ref, opts) => {
+      const v = await run(ref, opts);
+      return b.deploys >= 2 && v.attestation !== undefined
+        ? { ...v, attestation: { observedAny: false, identityMismatch: false } }
+        : v;
+    };
+    return b;
+  }
+  /** Run 2: the real binary, on which the test is red with no mutant active too. */
+  function redEverywhere(red: "timeout" | "fail"): CountingBackend {
+    const b = new CountingBackend("pass");
+    const run = b.run.bind(b);
+    b.run = async (ref, opts) => {
+      const v = await run(ref, opts);
+      return { ...v, outcome: red, measuredDurationMs: undefined };
+    };
+    return b;
+  }
+  async function scenario(red: "timeout" | "fail", dropSnapshot: boolean) {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    const events1: RunEvent[] = [];
+    const first = await runSession({
+      backend: wrongBinaryInBatch1(),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      emit: [(e) => events1.push(e)],
+    });
+    const run1 = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    // The control removes the snapshot by hand: what the resume does without it.
+    if (dropSnapshot) store.dropBaselineSnapshot(run1, 1);
+    const events: RunEvent[] = [];
+    const second = redEverywhere(red);
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+      stopHungSessions: true,
+      emit: [(e) => events.push(e)],
+    });
+    const reused = events.flatMap((e) =>
+      e.type === "warning" && e.code === "resume-baseline-reused" ? [e.message] : [],
+    );
+    return { first, events1, run1, report, second, reused, store };
+  }
+
+  test("R512 repro: the invalidated batch's snapshot is reused, and a test red on the real binary scores a timeout kill", async () => {
+    const { first, events1, run1, report, second, reused, store } = await scenario(
+      "timeout",
+      false,
+    );
+    // Precondition: the gate fired on batch 1, and its snapshot is still stored.
+    expect(
+      events1.some(
+        (e) =>
+          e.type === "batch-invalidated" &&
+          e.batchIndex === 1 &&
+          e.reason.startsWith("unattested artifact"),
+      ),
+    ).toBe(true);
+    expect(first.quarantined).toBeDefined();
+    const snaps = store.db
+      .query("SELECT batch_index AS b FROM baseline_snapshots WHERE run_id = ? ORDER BY b")
+      .all(run1);
+    console.log("R512 snapshots of run 1", JSON.stringify(snaps));
+    console.log("R512 reused", JSON.stringify(reused), "baselineRuns", second.baselineRuns);
+    const b1 = report.mutants.filter((m) => m.batchIndex === 1);
+    console.log(
+      "R512 timeout batch1",
+      JSON.stringify(b1.map((m) => [m.mutantCode, m.verdict, m.killingTest ?? null])),
+    );
+    // Fixed: the unattested batch's snapshot is not reused, its baseline re-runs, the red test is
+    // not sent as covering, and nothing is killed.
+    expect(reused.filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
+    expect(second.baselineRuns).toBeGreaterThan(0);
+    expect(b1.filter((m) => m.verdict === "timeout-killed" || m.verdict === "killed")).toEqual([]);
+  });
+
+  test("R512 control: without the snapshot, the same resume re-runs the baseline and kills nothing", async () => {
+    const { report, second, reused } = await scenario("timeout", true);
+    const b1 = report.mutants.filter((m) => m.batchIndex === 1);
+    console.log(
+      "R512 control batch1",
+      JSON.stringify(b1.map((m) => [m.mutantCode, m.verdict, m.failureNote ?? null])),
+    );
+    expect(reused).toEqual([]);
+    expect(second.baselineRuns).toBeGreaterThan(0);
+    expect(b1.filter((m) => m.verdict === "timeout-killed" || m.verdict === "killed")).toEqual([]);
+  });
+
+  test("R512 measure: a test that FAILS on the real binary is confirmed by an unmutated rerun, so it never scores a kill", async () => {
+    // Green before and after the fix: before, the reuse sends the red test and the confirm rerun
+    // turns each kill into `error` (unstable); after, the baseline re-runs and the test is not sent.
+    const { report } = await scenario("fail", false);
+    const b1 = report.mutants.filter((m) => m.batchIndex === 1);
+    console.log(
+      "R512 fail batch1",
+      JSON.stringify(b1.map((m) => [m.mutantCode, m.verdict, m.failureNote ?? null])),
+    );
+    expect(b1.filter((m) => m.verdict === "killed")).toEqual([]);
+  });
+});
