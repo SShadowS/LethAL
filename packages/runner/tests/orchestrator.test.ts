@@ -15948,6 +15948,9 @@ describe("R206: the warm confirmation and the session guard", () => {
  * `observedAny: false`. Every other answer in the session carries no attestation, so nothing else
  * can mark the snapshot or clear the mark. Two variants, one per `confirmWarm` site: the replay
  * completes (`verdicts`, the `rv` site) or answers at call level (`call`, the `verdict` site).
+ * The `call` variant's shape (a call-level `fail` carrying an attestation) is never sent in
+ * production today: every call-level result is built without one. It pins the wiring of the
+ * `verdict` site only, not a live evidence path.
  */
 describe("R512: a warm replay's unattested answer marks the snapshot in use", () => {
   const strip = (v: TestVerdict): TestVerdict => {
