@@ -568,7 +568,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 ### Fixed
 
 - **A BC answer that starts but never finishes no longer holds LethAL forever on the harness
-  check, the deployment check, the permission canary or a package read-back** (R506, R507). Each
+  check, the deployment check or the permission canary** (R506, R507); a package read-back now also
+  ends on a fetch that ignores its abort. Each
   call's timeout now covers the response body as well as the headers, and an unread or unparseable
   body is an error, never an empty answer. A harness answer that times out or cannot be read no
   longer makes an env-tool session republish the control app. On the lease path, a refused

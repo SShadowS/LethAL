@@ -2914,14 +2914,6 @@ function noteLeaseLostOrThrow(leaseSession: LeaseSession | undefined, detail: st
   leaseSession.noteLeaseLost(detail);
 }
 
-/**
- * The lease a session holds, plus everything the session does WITH it: the renew heartbeat, the
- * publish fence, op-seq reconciliation, lease-loss bookkeeping, and the op-gated release.
- *
- * Lease-loss is recorded here (not just on `SessionSafety`) because design §6 scopes verdict
- * invalidation to the batch that was in flight when the lease was lost: earlier batches stand,
- * since every `RunMutant` in them was individually phase-1/phase-3 fence-validated.
- */
 interface LeaseSessionDeps {
   readonly client: LeaseApi;
   readonly lease: Lease;
@@ -2936,6 +2928,14 @@ interface LeaseSessionDeps {
   readonly emit: RunEmitter;
 }
 
+/**
+ * The lease a session holds, plus everything the session does WITH it: the renew heartbeat, the
+ * publish fence, op-seq reconciliation, lease-loss bookkeeping, and the op-gated release.
+ *
+ * Lease-loss is recorded here (not just on `SessionSafety`) because design §6 scopes verdict
+ * invalidation to the batch that was in flight when the lease was lost: earlier batches stand,
+ * since every `RunMutant` in them was individually phase-1/phase-3 fence-validated.
+ */
 class LeaseSession {
   #handle: unknown;
   #ticking = false;
