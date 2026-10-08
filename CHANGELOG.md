@@ -567,6 +567,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A field of a temporary record now has a type** (R509). The type table read the type text
+  `Record "Sales Line" temporary` with the keyword still on, found no table of that name, and gave
+  every field of a temporary record no type, so `swap-additive` emitted nothing there. Measured:
+  CDO +1, DC +15, DO +3 and BC.History +554 `swap-additive` mutants; none removed, no tag changed.
+  A few identity keys move (a new mutant takes a twin's ordinal), so **IDENTITY_SCHEME is 32**:
+  history, `--resume` and marks recorded under an earlier scheme are not carried.
+- **A table named with a leading number binds by name** (R510). `resolveObject` read
+  `"50000 Foo"` as table id 50000. It now reads an id only from all digits. No corpus has such a
+  collision, so no verdict moves.
 - **A namespace-qualified table or codeunit reference is read as the object it names** (R502).
   `Record System.Utilities.Integer`, `dataitem(X; Microsoft.Sales.Customer)` and a qualified
   `SourceTable` were read by their FIRST segment (`System`), or by the whole dotted text, so the

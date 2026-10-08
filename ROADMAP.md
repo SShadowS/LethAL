@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**62 of 508 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**60 of 508 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -219,8 +219,8 @@ that ordering is the priority.
 - **R506** · Four more BC reads clear their abort timer at the headers, so a body BC never finishes has no bound (the R191 class), and two of them turn an unread body into `{}` · [R506.md](docs/roadmap/R506.md) · done (abc6919b)
 - **R507** · On the lease path, R-496's `UnfilteredExtensionsQueryError` is wrapped in a `LeaseUnavailableError` labelled "unreachable": its type is lost and the label is a wrong diagnosis · [R507.md](docs/roadmap/R507.md) · done (abc6919b)
 - **R508** · `--resume` can carry the verdicts of a batch that a lease loss invalidated, kills included · [R508.md](docs/roadmap/R508.md) · open, filed 2026-10-08
-- **R509** · The type table reads `Record "X" temporary` as no table, so a field of a temporary record has no type · [R509.md](docs/roadmap/R509.md) · open, filed 2026-10-08
-- **R510** · `resolveObject` parses any name as an id first, so a table named `"50000 Foo"` resolves to table 50000 · [R510.md](docs/roadmap/R510.md) · open, filed 2026-10-08
+- **R509** · The type table reads `Record "X" temporary` as no table, so a field of a temporary record has no type · [R509.md](docs/roadmap/R509.md) · done (b8e3e2e5)
+- **R510** · `resolveObject` parses any name as an id first, so a table named `"50000 Foo"` resolves to table 50000 · [R510.md](docs/roadmap/R510.md) · done (b8e3e2e5)
 - **R511** · A namespace-qualified `extends` or `implements` does not parse, so the extension is indexed under one segment of the name · [R511.md](docs/roadmap/R511.md) · open, filed 2026-10-08
 
 ## Product gaps a real project hits
