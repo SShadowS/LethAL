@@ -1,5 +1,6 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import { bcFetch } from "./bc-fetch";
+import { UnfilteredExtensionsQueryError } from "./harness";
 
 /**
  * The permissions module. Two halves, one subject:
@@ -184,6 +185,7 @@ export class PermissionCanaryClient implements PermissionCanaryProbe {
         signal: controller.signal,
       });
     } catch (err) {
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       throw new PermissionCanaryUnavailableError(
         `LethALControl_PermissionCanary unreachable: ${String(err)}`,
       );
@@ -272,6 +274,8 @@ export async function runPermissionCanary(
   try {
     json = await probe.probe();
   } catch (err) {
+    // R-496: a redirect to an unfiltered extensions list is a refused request, not "could not run".
+    if (err instanceof UnfilteredExtensionsQueryError) throw err;
     return inconclusive(
       `permission canary could not run: ${err instanceof Error ? err.message : String(err)}`,
     );

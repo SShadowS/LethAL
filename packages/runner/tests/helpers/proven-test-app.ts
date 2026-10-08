@@ -1,4 +1,10 @@
-import type { MicrosoftMode } from "../../src/digest-inputs";
+import {
+  type MicrosoftMode,
+  appInputsOfPackage,
+  dependencyFingerprint,
+  publishedPackageReader,
+  targetOf,
+} from "../../src/digest-inputs";
 import { readAppIdentity } from "../../src/published-test-app";
 import { buildFakeAppWithEntries } from "./fake-app";
 import { fakeMicrosoftMode } from "./microsoft-mode";
@@ -41,6 +47,20 @@ export function servesTestApp(pkg: Uint8Array | null = testAppPackage()): {
     fetchPublishedAppPackage: async () => pkg,
     microsoftMode: () => servedIsInstalled(() => pkg),
   };
+}
+
+/** R496: the dependency fingerprint a session against `servesTestApp(pkg)` records for the target
+ *  project in `projectDir`, for a seeded row that must match it. */
+export async function servedTestAppDeps(
+  projectDir: string,
+  pkg: Uint8Array = testAppPackage(),
+): Promise<string> {
+  return dependencyFingerprint(
+    appInputsOfPackage(pkg),
+    publishedPackageReader(async () => pkg),
+    servedIsInstalled(() => pkg),
+    await targetOf(projectDir),
+  );
 }
 
 /** A server whose one installed row of the test app is at the version of the package it serves

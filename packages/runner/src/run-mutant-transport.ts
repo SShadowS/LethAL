@@ -1,8 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFileSync } from "node:fs";
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { StopState, TestMethodRef, TestOutcome, TestVerdict } from "./backend";
 import { bcFetch } from "./bc-fetch";
 import { describeThrown } from "./describe-error";
+import { UnfilteredExtensionsQueryError } from "./harness";
 import { assertAttemptId, parseOperationStatus } from "./lease";
 import type { LeaseTuple, OperationStatus } from "./lease";
 import { runMutantLineCountMessage } from "./stale-test-app";
@@ -461,18 +463,84 @@ function parseCoverageStats(result: RunMutantResult): FencedCoverageStats | unde
   return { runMs, serializeMs, scannedRows, emittedRows };
 }
 
+/** R-496: the per-call record `refusalBoundary` reads; see there. */
+type RefusalHolder = { refusal?: UnfilteredExtensionsQueryError; closed?: boolean };
+const refusalScope = new AsyncLocalStorage<RefusalHolder>();
+
 export class RunMutantTransport {
   /** R289: `LETHAL_R289_TRACE`, read once here; an empty string counts as unset. */
   private readonly tracePath: string | undefined;
   private readonly traceWrite: (path: string, line: string) => void;
+  private readonly fetchFn: FetchFn;
+  /** R-496: a refusal recorded after its call exited; the next call's boundary throws it. */
+  private lateRefusal: UnfilteredExtensionsQueryError | undefined;
+
+  /** R-496: hand over (and clear) a refusal no call has thrown yet; the session teardown asks once. */
+  takeLateRefusal(): UnfilteredExtensionsQueryError | undefined {
+    const late = this.lateRefusal;
+    this.lateRefusal = undefined;
+    return late === undefined
+      ? undefined
+      : new UnfilteredExtensionsQueryError(
+          `a BC redirect to an unfiltered extensions query arrived after a mutant's verdict was returned, so that verdict's session may not be trustworthy: ${late.message}`,
+        );
+  }
+
+  /**
+   * R-496: run one public call; if any fetch inside it (a swallowed catch, a stop timer, the status
+   * read) was refused as an unfiltered extensions query, throw that refusal at exit, whatever the
+   * call would otherwise have returned or thrown.
+   */
+  private async refusalBoundary<T>(fn: () => Promise<T>): Promise<T> {
+    // A refusal that landed after an earlier call exited (a stop still pending past its bound) is
+    // thrown here, before anything is sent, and cleared only by being thrown.
+    const late = this.lateRefusal;
+    if (late !== undefined) {
+      this.lateRefusal = undefined;
+      throw late;
+    }
+    const holder: RefusalHolder = {};
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+    try {
+      outcome = { ok: true, value: await refusalScope.run(holder, fn) };
+    } catch (error) {
+      outcome = { ok: false, error };
+    } finally {
+      holder.closed = true;
+    }
+    if (holder.refusal !== undefined) throw holder.refusal;
+    if (!outcome.ok) throw outcome.error;
+    return outcome.value;
+  }
 
   constructor(
     private readonly cfg: ActivationConfig,
     private readonly targetAppId: string,
     private readonly artifactId: string,
-    private readonly fetchFn: FetchFn = bcFetch,
+    injectedFetch: FetchFn = bcFetch,
     opts: { readonly traceWrite?: (path: string, line: string) => void } = {},
   ) {
+    // R-496: every fetch this transport makes records an unfiltered-extensions refusal for the
+    // CURRENT public call (async-local, so concurrent calls never share a record), then rethrows.
+    const recording = async (url: string | URL | Request, init?: RequestInit) => {
+      try {
+        return await injectedFetch(url, init);
+      } catch (err) {
+        if (err instanceof UnfilteredExtensionsQueryError) {
+          const holder = refusalScope.getStore();
+          if (holder === undefined) {
+            // outside any call: nothing to attach it to, so keep it for the next one
+            this.lateRefusal ??= err;
+          } else if (holder.closed === true) {
+            this.lateRefusal ??= err;
+          } else if (holder.refusal === undefined) {
+            holder.refusal = err;
+          }
+        }
+        throw err;
+      }
+    };
+    this.fetchFn = Object.assign(recording, { preconnect: injectedFetch.preconnect });
     const p = process.env.LETHAL_R289_TRACE;
     this.tracePath = p === undefined || p === "" ? undefined : p;
     this.traceWrite = opts.traceWrite ?? appendFileSync;
@@ -740,7 +808,7 @@ export class RunMutantTransport {
   }
 
   async run(req: RunMutantRequest): Promise<TestVerdict> {
-    return (await this.execute(req, false)).verdict;
+    return this.refusalBoundary(async () => (await this.execute(req, false)).verdict);
   }
 
   /**
@@ -760,7 +828,7 @@ export class RunMutantTransport {
    */
   async runMany(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
     const trace = { failures: 0 };
-    const r = await this.runManyScored(req, trace);
+    const r = await this.refusalBoundary(() => this.runManyScored(req, trace));
     // R289: a trace that stopped writing is named once per call on stderr, never in a verdict:
     // a verdict's `failureMessage` feeds `killingTestFailure`, the store and verify.ts's
     // callstack match, so a diagnostic suffix there would change what a kill is classified as.
@@ -806,6 +874,8 @@ export class RunMutantTransport {
       // `KEPT_ANSWER_READ_MS` alone bounds this read: a group's budget is minutes.
       kept = await this.readKeptAnswerBounded(req.lease, fencedOp, KEPT_ANSWER_READ_MS);
     } catch (err) {
+      // R-496: a refused extensions query is thrown, never folded into the unknown's message.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       return keep(`answer readback failed: ${describeThrown(err)}`);
     }
     if (!kept.found) {
@@ -967,6 +1037,14 @@ export class RunMutantTransport {
           r();
         };
       });
+    // R-496: a watchdog request refused as an unfiltered extensions query stops the call: the main
+    // request is aborted and the watchdog rejects with the refusal, which every return path below
+    // reaches through its `await watchdog`.
+    const refuseOnUnfiltered = (err: unknown) => {
+      if (!(err instanceof UnfilteredExtensionsQueryError)) return;
+      controller.abort();
+      throw err;
+    };
     const watchdog = (async () => {
       while (!settled) {
         await sleep(pollMs);
@@ -980,6 +1058,7 @@ export class RunMutantTransport {
         } catch (err) {
           pollsFailed++;
           trace("poll-failed", { seq, sentAt, error: describeThrown(err) });
+          refuseOnUnfiltered(err);
           continue; // a failed poll is "nothing yet"
         }
         pollsOk++;
@@ -1052,6 +1131,7 @@ export class RunMutantTransport {
           stopAttempts[attempt] = "unknown";
           stopAnsweredAt = Date.now() - started;
           trace("stop-threw", { error: describeThrown(err) });
+          refuseOnUnfiltered(err);
           stopHookError = err;
           continue;
         }
@@ -1078,6 +1158,9 @@ export class RunMutantTransport {
         );
       }
     })();
+    // Handled here so a refusal is not reported as unhandled before the `await watchdog` below
+    // reads it; that await still rejects.
+    watchdog.catch(() => {});
     const settle = () => {
       settled = true;
       clearTimeout(hardTimer);
@@ -1478,7 +1561,7 @@ export class RunMutantTransport {
    * describe only its own execution and per-test attribution is sound.
    */
   async runWithCoverage(req: RunMutantRequest): Promise<RunMutantWithCoverageResult> {
-    return this.execute(req, true);
+    return this.refusalBoundary(() => this.execute(req, true));
   }
 
   /**
@@ -1543,6 +1626,8 @@ export class RunMutantTransport {
         Math.min(KEPT_ANSWER_READ_MS, req.timeoutMs),
       );
     } catch (err) {
+      // R-496: a refused extensions query is thrown, never folded into the unknown's message.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       return keep(`answer readback failed: ${describeThrown(err)}`);
     }
     if (!kept.found) {

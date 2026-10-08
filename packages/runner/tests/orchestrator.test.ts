@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -41,6 +41,8 @@ import {
 import { PublishFailedError } from "../src/bcdev-backend";
 import { type RunCliConfig, afterLeaseAcquiredFor, runFromCli, withEnvTeardown } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
+// R-496 review: namespace import so T7f can craft two fingerprints that share a 16-hex prefix.
+import * as digestInputsModule from "../src/digest-inputs";
 import { EnvToolClient, EnvToolError, EnvToolNotStartedError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { EnvToolPublisher } from "../src/env-tool-publisher";
@@ -153,6 +155,7 @@ import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import {
   servedIsInstalled,
+  servedTestAppDeps,
   servesTestApp,
   testAppJson,
   testAppPackage,
@@ -6329,6 +6332,8 @@ async function seedPriorSurvivor(
     // proven: the package the session's backend serves installed (`servesTestApp`).
     testAppHash: `package:${hashPackage(testAppPackage())}`,
     testAppProven: true,
+    // R496: and against the same dependency closure the session fingerprints under its lease.
+    testAppDeps: await servedTestAppDeps(dirs.projectDir),
     projectPath: dirs.projectDir,
     identityScheme: IDENTITY_SCHEME,
     buildSymbols: [],
@@ -7881,10 +7886,15 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
     expect(rawVerdicts.every((r) => r.verdict === "error")).toBe(true);
     // The original guard still holds independently: an unfinished run is invisible to
     // priorSurvivorKeys, so this does not rely on the correction alone.
+    // R496: the identity is the hash and the dependency fingerprint the run itself recorded.
+    const sourceHash = await testAppHashFor(undefined, dirs.testDir);
+    const recordedDeps = (
+      store.db.query("SELECT MAX(test_app_deps) AS d FROM runs").get() as { d: string | null }
+    ).d;
     const keys = store.priorSurvivorKeys(
       dirs.projectDir,
       backend.capabilities().coverage,
-      await testAppHashFor(undefined, dirs.testDir),
+      sourceHash === undefined ? undefined : { hash: sourceHash, deps: recordedDeps ?? "" },
       [],
       [],
     );
@@ -8549,7 +8559,13 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     };
     const BODY_A = TEST_AL;
     const BODY_B = TEST_AL.replace("begin\n", "begin\n        Error('B asserts');\n");
-    const testPkg = (o: { version: string; body: string; dep?: boolean }) =>
+    const testPkg = (o: {
+      version: string;
+      body: string;
+      dep?: boolean;
+      /** R496: false builds a package without `.al` source (its manifest still declares `dep`). */
+      source?: boolean;
+    }) =>
       new Uint8Array(
         buildFakeAppWithEntries({
           "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="${o.version}" />${
@@ -8567,7 +8583,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
               },
             ],
           }),
-          "src/SandboxTests.Codeunit.al": o.body,
+          ...(o.source === false ? {} : { "src/SandboxTests.Codeunit.al": o.body }),
         }),
       );
     const depPkg = (build: string) =>
@@ -8581,13 +8597,19 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     const P1 = testPkg({ version: "1.0.0.1", body: BODY_A });
     const P2 = testPkg({ version: "1.0.0.2", body: BODY_B });
 
-    const mode = (installed: Record<string, readonly string[]>, calls: string[]): MicrosoftMode => {
+    const mode = (
+      installed: Record<string, readonly string[]>,
+      calls: string[],
+      /** R496: app ids whose installed read throws. */
+      throwsFor: readonly string[] = [],
+    ): MicrosoftMode => {
       const base = fakeMicrosoftMode();
       if (base.kind !== "bytes") throw new Error("fakeMicrosoftMode is not bytes mode");
       return {
         ...base,
         installed: async (id: string) => {
           calls.push(id);
+          if (throwsFor.includes(id)) throw new Error(`the extensions read for ${id} failed`);
           return installed[id] ?? ["1.0.0.0"];
         },
       };
@@ -8631,6 +8653,13 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       readonly notRequested?: boolean;
       /** R495: the backend has no `microsoftMode`, so it cannot read installed versions. */
       readonly noMicrosoftMode?: boolean;
+      /** R496: the dependency the server serves once the lease is ACQUIRED (another lease holder
+       *  published it while this session waited), instead of `dep`'s. */
+      readonly depAfterAcquire?: Uint8Array;
+      /** R496: further packages the server serves, by app name (a transitive dependency). */
+      readonly served?: Readonly<Record<string, Uint8Array>>;
+      /** R496: app ids whose installed read throws. */
+      readonly installedThrows?: readonly string[];
     }
 
     async function envRun(o: EnvRun) {
@@ -8647,13 +8676,17 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       const installedCalls: string[] = [];
       let postReads = 0;
       let preReads = 0;
+      let acquired = false;
       const fetch = async (app: { readonly name: string }) => {
         if (hooked) fetchesAfterHook++;
         if (inHook) readsDuringHook++;
         if (app.name === DEP.name) {
+          if (acquired && o.depAfterAcquire !== undefined) return o.depAfterAcquire;
           if (o.dep === undefined) return null;
           return hooked ? o.dep.post : o.dep.pre;
         }
+        const extra = o.served?.[app.name];
+        if (extra !== undefined) return extra;
         if (o.notRequested === true) return undefined;
         if (!hooked && o.preSequence !== undefined) {
           const served = o.preSequence[Math.min(preReads, o.preSequence.length - 1)];
@@ -8668,6 +8701,14 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         return hooked ? o.post : o.pre === undefined ? P1 : o.pre;
       };
       const client = new FakeLeaseClient();
+      // R496: a lease client that marks the moment the lease is granted, so the server can change
+      // a dependency between this session's pre-lease walk and its walk under the lease.
+      const acquire = client.acquire.bind(client);
+      client.acquire = async (...args: Parameters<typeof acquire>) => {
+        const got = await acquire(...args);
+        acquired = true;
+        return got;
+      };
       const { lease } = leaseCfg(client);
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
@@ -8678,7 +8719,11 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
                 if (o.microsoftModeThrows === true) {
                   throw new DependencyUnreadableError("this bcdev backend has no harness verifier");
                 }
-                return mode(o.installed ?? { [APP_ID]: ["1.0.0.2"] }, installedCalls);
+                return mode(
+                  o.installed ?? { [APP_ID]: ["1.0.0.2"] },
+                  installedCalls,
+                  o.installedThrows,
+                );
               },
             }),
       });
@@ -8727,6 +8772,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         unreadableWarning: warningsOf("published-test-app-unreadable"),
         historyWarning: warningsOf("history-test-app-changed"),
         reuseWarning: warningsOf("resume-baseline-reused"),
+        depsWarning: warningsOf("test-app-dependencies-unproven"),
         knownSurvivors: (
           store.db
             .query(
@@ -9527,6 +9573,480 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       });
     });
 
+    // R496: the proven test-app identity is the hash AND the dependency fingerprint (R-371), taken
+    // under the lease with every extension in the closure proven installed. "Changed" is the same
+    // test-app bytes against a rebuilt dependency (same id and version, other bytes). Kinds: N is a
+    // non-hook bcdev session, H a hook session whose publishApps holds the dependency only.
+    describe("R496: the dependency fingerprint is part of the proven test-app identity", () => {
+      const skip: Partial<SessionConfig> = { skipKnownSurvivors: true };
+      const P2D = testPkg({ version: "1.0.0.2", body: BODY_B, dep: true });
+      /** The same test app without `.al` source: no digests, so no pre-lease `D` part. */
+      const P2DS = testPkg({ version: "1.0.0.2", body: BODY_B, dep: true, source: false });
+      const INSTALLED = { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["1.0.0.0"] };
+      const count = (s: ResultsStore, sql: string, ...args: number[]) =>
+        (s.db.query(sql).get(...args) as { n: number }).n;
+      const carriedAfter = (s: ResultsStore, runId: number) =>
+        count(s, "SELECT COUNT(*) AS n FROM mutants WHERE run_id > ? AND carried = 1", runId);
+      interface Base {
+        readonly dirs: { projectDir: string; testDir: string; instrumentedDir: string };
+        readonly store: ResultsStore;
+      }
+      type Session = (extra: Partial<SessionConfig>, base?: Base) => ReturnType<typeof envRun>;
+      /** A proven session of `kind` against dependency build `build`, served and installed. */
+      const session =
+        (kind: "N" | "H", build: string, more: Partial<EnvRun> = {}): Session =>
+        (extra, base) =>
+          envRun({
+            pre: P2D,
+            post: P2D,
+            installed: INSTALLED,
+            dep: { pre: depPkg(build), post: depPkg(build) },
+            ...(kind === "H" ? { testAppInPublishApps: false } : { noHook: true }),
+            ...(base !== undefined ? { dirs: base.dirs, store: base.store } : {}),
+            ...more,
+            extra,
+          });
+      /** Unfinished with work left, so a resume deploys the batch and consults the snapshot. */
+      const makeResumable = (r: { store: ResultsStore; runId: number }) => {
+        r.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [r.runId]);
+        const victim = r.store.db
+          .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+          .get(r.runId) as { id: number };
+        r.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+      };
+      /**
+       * What `donor`'s runs lend `later`, per consumer. Resume: a donor run made unfinished with
+       * work left. History: a finished donor run, then `--skip-known-survivors`. The R192 snapshot:
+       * A (donor) records a snapshot; B (later) is made unfinished and loses its own; C (later)
+       * resumes B, so A's snapshot is the only candidate.
+       */
+      const consumers = async (donor: Session, later: Session) => {
+        const r1 = await donor({});
+        expect(r1.outcome).not.toBeInstanceOf(Error);
+        makeResumable(r1);
+        const resumed = await later({ resume: r1.runId }, r1);
+        const resume = {
+          outcome: resumed.outcome,
+          carried: carriedAfter(resumed.store, r1.runId),
+          reused: resumed.reuseWarning.length,
+        };
+        resumed.store.close();
+        const s1 = await donor(skip);
+        const s2 = await later(skip, s1);
+        expect(s2.outcome).not.toBeInstanceOf(Error);
+        const history = { skipped: s2.knownSurvivors, warning: s2.historyWarning };
+        s2.store.close();
+        const a = await donor({});
+        const b = await later({}, a);
+        expect(b.outcome).not.toBeInstanceOf(Error);
+        a.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [b.runId]);
+        makeResumable(b);
+        const c = await later({ resume: b.runId }, a);
+        const snapshot = { outcome: c.outcome, reused: c.reuseWarning.length };
+        c.store.close();
+        return { resume, history, snapshot };
+      };
+      type Lent = Awaited<ReturnType<typeof consumers>>;
+      const lendsAll = (got: Lent) => {
+        expect(got.resume.outcome).not.toBeInstanceOf(Error);
+        expect(got.resume.carried).toBeGreaterThan(0);
+        expect(got.resume.reused).toBe(1);
+        expect(got.history.skipped).toBeGreaterThan(0);
+        expect(got.history.warning).toEqual([]);
+        expect(got.snapshot.outcome).not.toBeInstanceOf(Error);
+        expect(got.snapshot.reused).toBe(1);
+      };
+      const lendsNothing = (got: Lent) => {
+        expect(got.resume.outcome).toBeInstanceOf(Error);
+        expect(got.resume.carried).toBe(0);
+        expect(got.history.skipped).toBe(0);
+        expect(got.history.warning).toHaveLength(1);
+        expect(got.snapshot.reused).toBe(0);
+      };
+      const unproven = (r: { store: ResultsStore; runId: number }) => {
+        expect(r.store.getRun(r.runId)).toMatchObject({
+          testAppHash: null,
+          testAppProven: false,
+          testAppDeps: null,
+        });
+      };
+      const PAIRS = [
+        ["N", "N"],
+        ["N", "H"],
+        ["H", "N"],
+        ["H", "H"],
+      ] as const;
+
+      for (const [from, to] of PAIRS) {
+        // T1 (F1), T2 (F2), T3 (F3): A (dep one) records batch 0; C (dep two) resumes B (dep two).
+        test(`T1-T3 ${from}->${to}: a changed dependency lends nothing to resume, history or the snapshot`, async () => {
+          const got = await consumers(session(from, "one"), session(to, "two"));
+          expect(got.resume.outcome).toBeInstanceOf(TestAppRepublishedError);
+          expect((got.resume.outcome as Error).message).toMatch(
+            /the test app's dependencies changed \([0-9a-f]{64}, now [0-9a-f]{64}\)/,
+          );
+          expect(got.resume.carried).toBe(0);
+          expect(got.history.skipped).toBe(0);
+          expect(got.history.warning).toHaveLength(1);
+          expect(got.history.warning[0]).toMatch(
+            /with dependencies [0-9a-f]{64}, and this session's test app is .* with dependencies [0-9a-f]{64}/,
+          );
+          expect(got.snapshot.outcome).not.toBeInstanceOf(Error);
+          expect(got.snapshot.reused).toBe(0);
+        });
+        // C1, C2: R495's cross-kind controls, now with a declared dependency.
+        test(`C1 ${from}->${to}: an unchanged dependency lends to every consumer`, async () => {
+          lendsAll(await consumers(session(from, "one"), session(to, "one")));
+        });
+      }
+
+      // T4 (F4): a run recorded by an R495-only build is proven with NULL deps. It lends nothing.
+      for (const to of ["N", "H"] as const) {
+        test(`T4: a proven donor with NULL deps (an R495-era row) lends nothing to ${to}`, async () => {
+          const r495Era: Session = async (extra, base) => {
+            const r = await session("N", "one")(extra, base);
+            expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+            r.store.db.run("UPDATE runs SET test_app_deps = NULL WHERE id = ?", [r.runId]);
+            return r;
+          };
+          const got = await consumers(r495Era, session(to, "one"));
+          lendsNothing(got);
+          expect((got.resume.outcome as Error).message).toContain(
+            "it recorded no dependency fingerprint",
+          );
+        });
+      }
+
+      // T5 (F5): a partner dependency served at 1.0.0.0 while 0.9.0.0 is installed.
+      test("T5: a staged direct partner dependency leaves the run unproven, and it lends nothing", async () => {
+        const staged = session("N", "one", {
+          installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["0.9.0.0"] },
+        });
+        const r = await staged({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        unproven(r);
+        expect(r.installedCalls).toContain(DEP.id);
+        expect([...r.digestWarning, ...r.depsWarning].join("\n")).toContain(DEP.id);
+        r.store.close();
+        lendsNothing(await consumers(staged, session("N", "one")));
+      });
+
+      // T6 (F5): test app -> A -> B, B served at 1.0.0.0 while 0.9.0.0 is installed.
+      test("T6: a staged TRANSITIVE partner dependency leaves the run unproven, named", async () => {
+        const B = {
+          id: "66666666-6666-6666-6666-666666666666",
+          name: "Dep Base",
+          publisher: "Partner",
+        };
+        const bPkg = new Uint8Array(
+          buildFakeAppWithEntries({
+            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${B.id}" Name="${B.name}" Publisher="${B.publisher}" Version="1.0.0.0" /></Package>`,
+            "src/Base.al": "// base",
+          }),
+        );
+        const aPkg = new Uint8Array(
+          buildFakeAppWithEntries({
+            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP.id}" Name="${DEP.name}" Publisher="${DEP.publisher}" Version="1.0.0.0" /><Dependencies><Dependency Id="${B.id}" Name="${B.name}" Publisher="${B.publisher}" MinVersion="1.0.0.0" /></Dependencies></Package>`,
+            "src/Dep.al": "// A",
+          }),
+        );
+        const withB = (installedB: string): Session =>
+          session("N", "one", {
+            dep: { pre: aPkg, post: aPkg },
+            served: { [B.name]: bPkg },
+            installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["1.0.0.0"], [B.id]: [installedB] },
+          });
+        const r = await withB("0.9.0.0")({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        unproven(r);
+        expect(r.installedCalls).toContain(B.id);
+        // The pre-lease digests fail on B, and so does the identity's walk under the lease.
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain(B.id);
+        expect(r.depsWarning).toHaveLength(1);
+        expect(r.depsWarning[0]).toContain(B.id);
+        r.store.close();
+        lendsNothing(await consumers(withB("0.9.0.0"), withB("1.0.0.0")));
+        // Control: B installed at the served version, the same closure is proven.
+        const ok = await withB("1.0.0.0")({});
+        expect(ok.store.getRun(ok.runId)?.testAppProven).toBe(true);
+        ok.store.close();
+      });
+
+      // T6b (F5): the partner's per-id read fails, or answers two rows.
+      for (const [label, more] of [
+        ["throws", { installedThrows: [DEP.id] }],
+        [
+          "returns two rows",
+          { installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["1.0.0.0", "1.0.0.0"] } },
+        ],
+      ] as const) {
+        test(`T6b: a partner per-id installed read that ${label} leaves the run unproven, named`, async () => {
+          const bad = session("N", "one", more);
+          const r = await bad({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect([...r.digestWarning, ...r.depsWarning].join("\n")).toContain(DEP.id);
+          r.store.close();
+          lendsNothing(await consumers(bad, session("N", "one")));
+        });
+      }
+
+      // T7 (over-strict on F6): source-less, so no digests and no `D` part. The server serves
+      // dependency "one" before the lease and "two" once it is granted.
+      const race = (more: Partial<EnvRun> = {}) =>
+        session("N", "one", { depAfterAcquire: depPkg("two"), ...more });
+      test("T7: a source-less race takes its identity under the lease, so a donor proven with that value lends", async () => {
+        const sourceLess = { pre: P2DS, post: P2DS };
+        const r = await race(sourceLess)({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        const donor = await session("N", "two", sourceLess)({});
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+        expect(r.store.getRun(r.runId)?.testAppDeps).toBe(
+          donor.store.getRun(donor.runId)?.testAppDeps ?? "missing",
+        );
+        r.store.close();
+        donor.store.close();
+        lendsAll(await consumers(session("N", "two", sourceLess), race(sourceLess)));
+      });
+      // T7b (F6): the same race, the donor proven with "one" (the pre-lease value).
+      test("T7b: a source-less race borrows nothing from a donor proven with the pre-lease value", async () => {
+        const sourceLess = { pre: P2DS, post: P2DS };
+        lendsNothing(await consumers(session("N", "one", sourceLess), race(sourceLess)));
+      });
+      // T7c (F9): the race WITH digests (pre-lease `D` = "one"); the donor matches the under-lease
+      // value "two", but the run's digests no longer describe what runs: it borrows nothing.
+      test("T7c: a race with digests withdraws the proof and the digests, and borrows nothing", async () => {
+        const r = await race()({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        unproven(r);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        expect(r.store.testDigestParts(r.runId)).toBeNull();
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain(
+          "a dependency changed while this session waited for the lease",
+        );
+        r.store.close();
+        const got = await consumers(session("N", "two"), race());
+        expect(got.resume.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((got.resume.outcome as Error).message).toContain(
+          "this session's test app is not proven",
+        );
+        expect(got.resume.carried).toBe(0);
+        expect(got.history.skipped).toBe(0);
+        expect(got.snapshot.reused).toBe(0);
+      });
+      // T7f (F9, full precision, R-496 review): the pre-lease and under-lease fingerprints agree on
+      // their first 16 hex digits (all the stored parts keep) and differ after. Still a mismatch.
+      test("T7f: fingerprints equal in their first 16 hex digits but not after still invalidate", async () => {
+        const real = digestInputsModule.dependencyFingerprint;
+        const seen: string[] = [];
+        const spy = spyOn(digestInputsModule, "dependencyFingerprint").mockImplementation(
+          async (...args) => {
+            await real(...args);
+            seen.push(`${"a".repeat(16)}${(seen.length === 0 ? "b" : "c").repeat(48)}`);
+            return seen[seen.length - 1] ?? "";
+          },
+        );
+        try {
+          const r = await session("N", "one")({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          // The pre-lease digests' walk, then the identity's under the lease.
+          expect(seen).toHaveLength(2);
+          unproven(r);
+          expect(r.store.testDigests(r.runId)).toBeNull();
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain(
+            "a dependency changed while this session waited for the lease",
+          );
+          r.store.close();
+        } finally {
+          spy.mockRestore();
+        }
+      });
+      // T7d (over-strict: throw on a fresh run): the same race without a resume flag runs.
+      test("T7d: a fresh run that loses the race runs unproven and records nothing usable", async () => {
+        const r = await race()({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        // It ran: its verdicts are recorded, under no identity.
+        expect(
+          count(r.store, "SELECT COUNT(*) AS n FROM mutants WHERE run_id = ?", r.runId),
+        ).toBeGreaterThan(0);
+        unproven(r);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        r.store.close();
+      });
+      // T7e (order, F9 before the deps write): no proven write for the run, and no identity at
+      // batch 0's history filter.
+      test("T7e: on an F9 mismatch the proof is never written and history sees no identity", async () => {
+        const store = new ResultsStore(":memory:");
+        const setHash = spyOn(store, "setRunTestAppHash");
+        const history = spyOn(store, "priorSurvivorKeys");
+        const r = await race()(skip, { dirs: await makeProject(BODY_B), store });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(setHash.mock.calls.filter((c) => c[0] === r.runId && c[2] === true)).toEqual([]);
+        expect(history.mock.calls.length).toBeGreaterThan(0);
+        expect(history.mock.calls[0]?.[2]).toBeUndefined();
+        store.close();
+      });
+
+      // T8: a hook session's fingerprint is taken after the hook it awaited.
+      test("T8: a hook that republishes the dependency records the post-hook fingerprint", async () => {
+        const r = await envRun({
+          pre: P2D,
+          post: P2D,
+          installed: INSTALLED,
+          dep: { pre: depPkg("one"), post: depPkg("two") },
+          testAppInPublishApps: false,
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        const walk = async (dep: Uint8Array) =>
+          dependencyFingerprint(
+            appInputsOfPackage(P2D),
+            publishedPackageReader(async (app: { readonly name: string }) =>
+              app.name === DEP.name ? dep : P2D,
+            ),
+            fakeMicrosoftMode(),
+            await targetOf(r.dirs.projectDir),
+          );
+        const row = r.store.getRun(r.runId);
+        expect(row?.testAppProven).toBe(true);
+        expect(row?.testAppDeps).toBe(await walk(depPkg("two")));
+        expect(row?.testAppDeps).not.toBe(await walk(depPkg("one")));
+        r.store.close();
+      });
+
+      // T9 (F7): the dependency is not served at all.
+      test("T9: a fingerprint that cannot be taken leaves the run unproven, and it lends nothing", async () => {
+        const noDep: Session = (extra, base) =>
+          envRun({
+            noHook: true,
+            pre: P2D,
+            post: P2D,
+            installed: INSTALLED,
+            ...(base !== undefined ? { dirs: base.dirs, store: base.store } : {}),
+            extra,
+          });
+        const r = await noDep({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        unproven(r);
+        r.store.close();
+        lendsNothing(await consumers(noDep, session("N", "one")));
+      });
+
+      // T10 (F8): a test app without `.al` source fingerprints from its manifest.
+      test("T10: a source-less test app with an unchanged dependency is proven and lends", async () => {
+        const sourceLess = { pre: P2DS, post: P2DS };
+        const r = await session("N", "one", sourceLess)({});
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+        expect(r.store.getRun(r.runId)?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        r.store.close();
+        lendsAll(await consumers(session("N", "one", sourceLess), session("N", "one", sourceLess)));
+      });
+      // T10b (F1 only): the same, changed: refused for the DEPENDENCY, both rows proven.
+      test("T10b: a source-less test app with a changed dependency is refused for its dependencies", async () => {
+        const sourceLess = { pre: P2DS, post: P2DS };
+        const r1 = await session("N", "one", sourceLess)({});
+        makeResumable(r1);
+        const r2 = await session("N", "two", sourceLess)({ resume: r1.runId }, r1);
+        expect(r2.outcome).toBeInstanceOf(TestAppRepublishedError);
+        expect((r2.outcome as Error).message).toMatch(
+          /the test app's dependencies changed \([0-9a-f]{64}, now [0-9a-f]{64}\)/,
+        );
+        expect(carriedAfter(r2.store, r1.runId)).toBe(0);
+        for (const id of [r1.runId, r2.runId]) {
+          expect(r2.store.getRun(id)?.testAppProven).toBe(true);
+          expect(r2.store.getRun(id)?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+        }
+        r2.store.close();
+      });
+    });
+
+    // R496 T11: al-runner fingerprints its test project's app.json and the `.app` files in its
+    // package folders, before its run row (no lease, no server).
+    describe("R496 T11: al-runner's identity includes its package folders", () => {
+      const alRun = async (o: {
+        dirs: { projectDir: string; testDir: string; instrumentedDir: string };
+        pkgDir: string;
+        store: ResultsStore;
+        extra?: Partial<SessionConfig>;
+      }) => {
+        const backend = Object.assign(
+          new StubBackend(
+            { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+            (mutant) => (mutant === null ? "pass" : "fail"),
+          ),
+          { dependencyPackageDirs: () => [o.pkgDir] },
+        );
+        return runSession({
+          backend,
+          store: o.store,
+          ...o.dirs,
+          selectorIds,
+          ...o.extra,
+        }).catch((e: unknown) => e);
+      };
+      const world = async () => {
+        const dirs = await makeProject(BODY_B);
+        await Bun.write(
+          join(dirs.testDir, "app.json"),
+          JSON.stringify({
+            name: "Tests",
+            publisher: "P",
+            version: "1.0.0.0",
+            dependencies: [
+              { id: DEP.id, name: DEP.name, publisher: DEP.publisher, version: "1.0.0.0" },
+            ],
+          }),
+        );
+        const pkgDir = join(dirs.testDir, "..", "packages");
+        mkdirSync(pkgDir, { recursive: true });
+        writeFileSync(join(pkgDir, "Dep.app"), depPkg("one"));
+        return { dirs, pkgDir, store: new ResultsStore(":memory:") };
+      };
+      const firstRun = async (w: Awaited<ReturnType<typeof world>>) => {
+        const first = await alRun(w);
+        expect(first).not.toBeInstanceOf(Error);
+        const runId = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number })
+          .id;
+        expect(w.store.getRun(runId)?.testAppProven).toBe(true);
+        expect(w.store.getRun(runId)?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+        w.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [runId]);
+        const victim = w.store.db
+          .query("SELECT MIN(id) AS id FROM mutants WHERE run_id = ?")
+          .get(runId) as { id: number };
+        w.store.db.run("DELETE FROM mutants WHERE id = ?", [victim.id]);
+        return runId;
+      };
+      test("a changed .app in its package folder is refused on resume", async () => {
+        const w = await world();
+        const runId = await firstRun(w);
+        writeFileSync(join(w.pkgDir, "Dep.app"), depPkg("two"));
+        const out = await alRun({ ...w, extra: { resume: runId } });
+        expect(out).toBeInstanceOf(TestAppRepublishedError);
+        expect((out as Error).message).toContain("the test app's dependencies changed");
+        w.store.close();
+      });
+      test("an unchanged .app, rewritten later with the same bytes, carries", async () => {
+        const w = await world();
+        const runId = await firstRun(w);
+        const path = join(w.pkgDir, "Dep.app");
+        writeFileSync(path, depPkg("one"));
+        utimesSync(path, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+        const out = await alRun({ ...w, extra: { resume: runId } });
+        expect(out).not.toBeInstanceOf(Error);
+        expect(
+          (
+            w.store.db
+              .query("SELECT COUNT(*) AS n FROM mutants WHERE run_id > ? AND carried = 1")
+              .get(runId) as { n: number }
+          ).n,
+        ).toBeGreaterThan(0);
+        w.store.close();
+      });
+    });
+
     // R486 (review M2): the history filter runs per batch, after the hook, so it compares the
     // READ-BACK. A finished run measured under P1 is no evidence once the hook published P2.
     describe("R486: --skip-known-survivors compares the read-back, not the pre-lease test app", () => {
@@ -9617,7 +10137,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       r.store.close();
     });
 
-    test("a plain bcdev run (no hook) never reads back, rewrites test_app_hash or defers digests", async () => {
+    test("a plain bcdev run (no hook) never reads back or defers digests, and records its identity once, under the lease", async () => {
       const dirs = await makeProject(BODY_B);
       await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
       const store = new ResultsStore(":memory:");
@@ -9637,12 +10157,18 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         lease: leaseCfg(new FakeLeaseClient()).lease,
       }).catch((e: unknown) => e);
       expect(outcome).not.toBeInstanceOf(Error);
-      expect(setHash).not.toHaveBeenCalled();
       expect(setDigests).not.toHaveBeenCalled();
       const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
-      // Recorded at createRun from the one pre-lease read, as before R373.
+      // R496: the identity (hash, flag and dependency fingerprint) is written ONCE, under the lease,
+      // after the fingerprint is taken there; the pre-lease read's hash with it.
+      const row = store.getRun(runId);
+      expect(row?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+      expect(setHash.mock.calls).toEqual([
+        [runId, `package:${hashPackage(P2)}`, true, row?.testAppDeps ?? "missing"],
+      ]);
+      // The digests are recorded at createRun from the one pre-lease read, as before R373.
       expect(store.testDigests(runId)).not.toBeNull();
-      expect(store.getRun(runId)?.testAppHash).toBe(`package:${hashPackage(P2)}`);
+      expect(row?.testAppHash).toBe(`package:${hashPackage(P2)}`);
       store.close();
     });
 
@@ -9742,7 +10268,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(store.testDigests(runId)).toEqual({ a: "1" });
     expect(store.testDigestParts(runId)).toEqual({ p: 1 });
     expect(() => store.setRunTestDigests(runId + 1, { a: "1" }, {})).toThrow("does not exist");
-    expect(() => store.setRunTestAppHash(runId + 1, null, false)).toThrow("no run");
+    expect(() => store.setRunTestAppHash(runId + 1, null, false, null)).toThrow("no run");
     store.close();
   });
 

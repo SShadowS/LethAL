@@ -891,8 +891,9 @@ describe("R442: a site hidden from numbering in one run poisons no key in the ne
     // A run row written before generation, then verdict rows, and no list: what a run that died
     // between `createRun` and the setter would look like if a row had slipped in.
     w.store.db.run(
-      // R495: with its proven flag, which `createRun` writes with the hash.
-      "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven) SELECT project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven FROM runs WHERE id = ?",
+      // R495: with its proven flag, which `createRun` writes with the hash. R496: and its
+      // dependency fingerprint, which the flag requires.
+      "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps) SELECT project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps FROM runs WHERE id = ?",
       [first.runId],
     );
     const seeded = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;

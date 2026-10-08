@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
+import { UnfilteredExtensionsQueryError } from "../src/harness";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import type { RunMutantManyRequest, RunMutantManyResult } from "../src/run-mutant-transport";
 import { scratchDirs } from "./helpers/scratch";
@@ -1072,6 +1073,50 @@ describe("RunMutantTransport.runMany: a lost reply is read back (R236b)", () => 
     expect(f.calls).toEqual(["RunMutantMany", "GetOpAnswer"]);
   });
 
+  test("R-496: a readback refused as an unfiltered extensions query rejects runMany", async () => {
+    const f = fakes({
+      many: truncated(),
+      kept: () => new UnfilteredExtensionsQueryError("refused readback"),
+    });
+    const err = await transport(f.fetchFn)
+      .runMany(TWO)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.calls).toEqual(["RunMutantMany", "GetOpAnswer"]);
+  });
+
+  test("R-496 T-a: a refused main request rejects runMany even though a kept answer is on file", async () => {
+    const f = fakes({ many: truncated(), kept: found(RAN_TWO) });
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_RunMutantMany")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused main"))
+        : f.fetchFn(url as string, init)) as typeof fetch;
+    const err = await transport(fetchFn)
+      .runMany(TWO)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.calls).toEqual(["GetOpAnswer"]);
+  });
+
+  test("R-496 T-b: a status read refused after a confirmed stop and an AL-stop 408 rejects runMany", async () => {
+    let after408 = false;
+    const f = fakes({
+      many: "hold",
+      status: () => (after408 ? new UnfilteredExtensionsQueryError("refused status") : statusOf()),
+      stopAt: () => {
+        setTimeout(() => {
+          after408 = true;
+          f.release(new Response(AL_STOP_BODY, { status: 408 }));
+        }, 5);
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const err = await transport(f.fetchFn)
+      .runMany(req({ stopHungSessions: true }))
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
   test("2. a kept answer carrying runError is not accepted", async () => {
     const f = fakes({ many: truncated(), kept: found(answer({ runError: "boom" })) });
     const msg = keptUnknown(await transport(f.fetchFn).runMany(TWO));
@@ -1315,5 +1360,39 @@ describe("runMany, a connection failure keeps the watchdog's story (R289)", () =
     expect(warnings[0]).toContain("trace write failed 1 times");
     // Bounded: `dispatch`, then the first `poll-sent` that threw, and nothing after it.
     expect(writes.length).toBe(2);
+  });
+});
+
+describe("R-496 review round 3: a refused extensions query stops the watchdog and the call", () => {
+  test("a progress poll refused as an unfiltered extensions query rejects runMany, polling stops", async () => {
+    const f = fakes({
+      many: "hold",
+      status: () => new UnfilteredExtensionsQueryError("refused poll"),
+    });
+    const err = await within(
+      transport(f.fetchFn)
+        .runMany(req())
+        .catch((e: unknown) => e),
+      3_000,
+      "runMany",
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.polls()).toBe(1);
+  });
+
+  test("a StopHungRunAt refused as an unfiltered extensions query rejects runMany", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => new UnfilteredExtensionsQueryError("refused stop"),
+    });
+    const err = await within(
+      transport(f.fetchFn)
+        .runMany(req({ stopHungSessions: true }))
+        .catch((e: unknown) => e),
+      3_000,
+      "runMany",
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.stops.length).toBe(1);
   });
 });

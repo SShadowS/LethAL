@@ -1,5 +1,6 @@
-import { bcFetch } from "./bc-fetch";
+import { BcRedirectRefusedError, bcFetch } from "./bc-fetch";
 import { ActivationFailure } from "./failure-classes";
+import { UnfilteredExtensionsQueryError } from "./harness";
 
 export type FetchFn = typeof fetch;
 
@@ -61,6 +62,14 @@ export async function postOData(
       signal: controller.signal,
     });
   } catch (err) {
+    // R-496: a refused redirect means BC ANSWERED, so the POST was dispatched and may have taken
+    // effect. Never pre-dispatch, never retry-safe.
+    if (err instanceof BcRedirectRefusedError || err instanceof UnfilteredExtensionsQueryError) {
+      throw new ActivationFailure(
+        `MutationControl_${action} answered with a redirect that was not followed: ${String(err)}`,
+        "completed-effect-unknown",
+      );
+    }
     // No HTTP response ever arrived. If our own timeout aborted it, the request may have reached
     // the server → ambiguous. A pre-response network throw (DNS/connect refused) never dispatched.
     const aborted = controller.signal.aborted;
