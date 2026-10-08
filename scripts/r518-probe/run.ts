@@ -44,6 +44,7 @@ const HANGS: ReadonlyArray<{ line: number; operator: string }> = [
   { line: 145, operator: "lethal.void-method-call" },
 ];
 
+console.log("R518 probe r3");
 const scratch = await mkdtemp(join(tmpdir(), "r518-"));
 const instrumentedDir = join(scratch, "instrumented");
 const activeDir = join(instrumentedDir, "active");
@@ -150,9 +151,13 @@ try {
     const prev = spawns[i - 1];
     return s.active === "" && prev !== undefined && prev.active !== "" && prev.test === s.test;
   }).length;
-  console.log(`unmutated spawns right after a mutated spawn of the same test: ${confirms}`);
+  console.log(
+    `session-wide cold confirms (unmutated spawns right after a mutated spawn of the same test): ${confirms}`,
+  );
 
   console.log("\npre-committed: the five structural hangs");
+  /** Cold confirms directly after one of the five hang mutants' mutated spawn. */
+  let hangConfirms = 0;
   for (const h of HANGS) {
     const m = report.mutants.find((x) => x.line === h.line && x.operatorName === h.operator);
     const label = `line ${h.line} ${h.operator}`;
@@ -184,8 +189,10 @@ try {
     const confirmsOf = spawns.filter(
       (s, i) => i > (at ?? spawns.length) && s.active === "" && s.test === test,
     ).length;
+    const confirmed = next?.active === "" && next.test === test;
+    if (confirmed) hangConfirms++;
     check(
-      next?.active === "" && next.test === test,
+      confirmed,
       `${label}: the next spawn is one unmutated confirm of ${test} (unmutated spawns of it after: ${confirmsOf})`,
     );
   }
@@ -198,7 +205,16 @@ try {
   check(tk === 5, `timeout-killed ${tk}`);
   const tu = report.mutants.filter((m) => m.cause === "timeout-unconfirmed").length;
   check(tu === 0, `timeout-unconfirmed ${tu}`);
-  check(confirms === 5, `cold confirms ${confirms}`);
+  // r3: the orchestrator cold-confirms EVERY position-1 kill, not only timeouts, and one-shot has
+  // no runMany, so every kill is at position 1. Two separate counts, both pre-committed.
+  check(
+    hangConfirms === 5,
+    `(a) cold confirms directly after the 5 hang mutants' mutated spawns: ${hangConfirms} (expected 5, one each)`,
+  );
+  check(
+    confirms === 29,
+    `(b) session-wide cold confirms (every unmutated spawn directly after a mutated spawn of the same test): ${confirms} (expected 29 = 24 ordinary position-1 kills + 5 hangs)`,
+  );
   const errors = report.mutants.filter((m) => m.verdict === "error");
   console.log(`\nerror verdicts (observations, named): ${errors.length}`);
   for (const m of errors) {

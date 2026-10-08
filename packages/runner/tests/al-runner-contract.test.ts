@@ -296,7 +296,8 @@ describe("runAlRunnerContractProbe — unmeasurable refuses, it does not pass", 
 /**
  * R518 (plan D1b). al-runner 2.12.0-main.43f76177 exits 3 on a one-shot test timeout, and
  * OneShotTransport reads that only through `timeoutAbortTests`. This fact runs on the SAME hang run
- * as `timeout-classified`, every session, so a future change in the shape refuses there.
+ * as `timeout-classified` (the CLI pre-session probe, and every session that pins its platform-app
+ * directory), so a future change in the shape refuses there.
  */
 describe("runAlRunnerContractProbe — timeout-exit-readable (R518)", () => {
   test("exit 1 with a timeout row matches", async () => {

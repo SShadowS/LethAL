@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   AL_RUNNER_V2_VERSION,
   RUNNER_TIMEOUT_MESSAGE,
+  isTimeoutRow,
   parseReportedStopMs,
 } from "./al-runner-backend";
 import {
@@ -40,7 +41,7 @@ import { defaultSpawn } from "./publisher";
  * `--auto-provision`, while this probe still builds its invocations with no pin. It runs from
  * `cli.ts` BEFORE `runSession`, so before any provisioning has happened and therefore before a pin
  * exists — which is why closing it means changing R123's own design rather than adding a field here.
- * See `docs/roadmap/R149.md`. Two of the five facts make it more than bookkeeping:
+ * See `docs/roadmap/R149.md`. Two of the six facts make it more than bookkeeping:
  * `compile-failure-not-scorable`, which stands between a project that failed to compile and a batch
  * of false survivors, and `unknown-flag-rejected`, whose whole test is the exit code.
  *
@@ -571,19 +572,20 @@ export async function runAlRunnerContractProbe(
     if ("error" in hangRun) {
       facts.push(fact("timeout-exit-readable", "unmeasurable", exitExpected, hangRun.error));
     } else {
-      const isTimeoutRow = (x: { name?: unknown; status?: unknown; message?: unknown }) =>
+      const isHangTimeout = (x: { name?: unknown; status?: unknown; message?: unknown }) =>
         x.name === hangName &&
-        x.status !== "pass" &&
-        x.status !== "fail" &&
-        typeof x.message === "string" &&
-        RUNNER_TIMEOUT_MESSAGE.test(x.message);
+        typeof x.status === "string" &&
+        isTimeoutRow({
+          status: x.status,
+          ...(typeof x.message === "string" ? { message: x.message } : {}),
+        });
       const json = readEnvelope(hangRun.stdout)?.json;
       const readable =
         hangRun.exitCode === 1
-          ? testsOf(json).some(isTimeoutRow)
+          ? testsOf(json).some(isHangTimeout)
           : hangRun.exitCode === 3 &&
             (timeoutAbortTests(hangRun.stdout) ?? []).some(
-              (x) => isTimeoutRow(x) && parseReportedStopMs(x.message) === stopMs,
+              (x) => isHangTimeout(x) && parseReportedStopMs(x.message) === stopMs,
             );
       const suite =
         typeof json === "object" && json !== null

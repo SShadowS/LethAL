@@ -1293,7 +1293,9 @@ with `compilationErrors`, `tests: []` and no `suiteErrors`; a TARGET compile err
 with empty stdout (above). The two exit-3 shapes are told apart on the envelope alone:
 `timeoutAbortTests` in `al-runner-transport.ts` reads an exit 3 as results only when every suite
 error's marker is exactly `TEST-TIMEOUT-ABORT` and names a row that did not pass or fail. R123's
-`timeout-exit-readable` fact checks this shape on the probe's own hang run in every session.
+`timeout-exit-readable` fact checks this shape on the probe's own hang run, in the CLI's
+pre-session probe and, inside a session, wherever the session pins the platform-app directory (the
+one-shot runs).
 
 ### Passing the same bundle dir twice CRASHES the runner
 

@@ -44,6 +44,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AlRunnerBackend, defaultServerSpawn } from "../src/al-runner-backend";
+import { runAlRunnerContractProbe } from "../src/al-runner-contract";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import type { ExecutionBackend } from "../src/backend";
 import { buildBackend, withAlRunnerCoverageGuard } from "../src/cli";
@@ -280,6 +281,9 @@ async function runOnce(
     // does not match already makes runSession THROW; this also prints the line and asserts the new
     // `timeout-exit-readable` fact was measured and matched, so its absence cannot pass.
     const contractLines: string[] = [];
+    // M2: the summary line says only `=matches`, and the fact matches on exit 1 too, so keep the
+    // fact's own measured text (it begins `exit N`) to show whether the probe's hang exited 3.
+    const exitFacts: string[] = [];
     const report = await runSession({
       backend,
       store,
@@ -298,6 +302,12 @@ async function runOnce(
             contractLines.push(e.message);
         },
       ],
+      alRunnerContractProbe: async (...args) => {
+        const result = await runAlRunnerContractProbe(...args);
+        const f = result.facts.find((x) => x.fact === "timeout-exit-readable");
+        exitFacts.push(f === undefined ? "<fact missing>" : `${f.verdict}: ${f.measured}`);
+        return result;
+      },
     });
     if (report.validity.executionContexts.some((c) => c.platformAppsDir !== undefined)) {
       const [line] = contractLines;
@@ -306,6 +316,7 @@ async function runOnce(
         `R518: a pinned one-shot leg must emit the R123 contract line with timeout-exit-readable=matches; got ${JSON.stringify(contractLines)}`,
       );
       console.log(`  ${line}`);
+      console.log(`  R518 timeout-exit-readable (pinned probe): ${exitFacts.join(" | ")}`);
     }
     return report;
   } finally {

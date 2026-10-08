@@ -406,4 +406,17 @@ describe("OneShotTransport exit 3: read only a proven test-timeout abort (R518)"
     expect(timeoutAbortTests("{ not json")).toBeUndefined();
     expect(timeoutAbortTests("[1,2]")).toBeUndefined();
   });
+
+  test("an exit-3 envelope with no `tests` key is refused, not thrown", async () => {
+    const { tests: _tests, ...noTests } = envelope();
+    expect(() => timeoutAbortTests(alRunnerStdout(noTests))).not.toThrow();
+    expect(timeoutAbortTests(alRunnerStdout(noTests))).toBeUndefined();
+    expect((await sendExit3(alRunnerStdout(noTests))).kind).toBe("error");
+  });
+
+  test("a suite-error entry with no `errors` array is refused, not thrown", () => {
+    const env = envelope({ suiteErrors: [{ file: "/t" }] });
+    expect(() => timeoutAbortTests(alRunnerStdout(env))).not.toThrow();
+    expect(timeoutAbortTests(alRunnerStdout(env))).toBeUndefined();
+  });
 });
