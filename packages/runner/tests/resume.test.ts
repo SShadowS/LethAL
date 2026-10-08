@@ -17,7 +17,8 @@ import type {
 } from "../src/backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
-import { runSession } from "../src/orchestrator";
+import { feedAttestation, runSession } from "../src/orchestrator";
+import type { AttestationLedger } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import {
   CARRYABLE_VERDICTS,
@@ -3261,5 +3262,606 @@ describe("R247: no verdict crosses a test-app change", () => {
       r.first.counts.survived,
     );
     expect(historyWarnings(events)).toEqual([]);
+  });
+});
+
+/** R512: which kind of run a `shaped` backend is answering. A `confirm` is an unmutated run after
+ *  a covered run of the same deploy (the kill-confirmation rerun); a `baseline` one before it. */
+type RunPhase = "baseline" | "covered" | "confirm";
+/**
+ * R512: a `CountingBackend` whose answers `shape` rewrites. `n` counts this phase's runs in the
+ * session from 1; `deploys` is the backend's deploy count at the run.
+ */
+function shaped(
+  shape: (at: { phase: RunPhase; n: number; deploys: number }, v: TestVerdict) => TestVerdict,
+  abortFromDeploy?: number,
+): CountingBackend {
+  const b = new CountingBackend("pass", undefined, abortFromDeploy);
+  const run = b.run.bind(b);
+  const counts: Record<RunPhase, number> = { baseline: 0, covered: 0, confirm: 0 };
+  let coveredInDeploy = -1;
+  b.run = async (ref, opts) => {
+    const before = b.mutantRuns;
+    const v = await run(ref, opts);
+    const phase: RunPhase =
+      b.mutantRuns > before ? "covered" : coveredInDeploy === b.deploys ? "confirm" : "baseline";
+    if (phase === "covered") coveredInDeploy = b.deploys;
+    counts[phase] += 1;
+    return shape({ phase, n: counts[phase], deploys: b.deploys }, v);
+  };
+  return b;
+}
+/** The wrong-binary answer: it ran, but observed no guard. */
+const unattested = (v: TestVerdict): TestVerdict => ({
+  ...v,
+  attestation: { observedAny: false, identityMismatch: false },
+});
+/** No answer about the binary at all (a real timeout never carries one). */
+const noAttestation = (v: TestVerdict): TestVerdict => {
+  const { attestation: _, ...rest } = v;
+  return rest;
+};
+/** A real-shape timeout: no attestation, no measured duration. */
+const realTimeout = (v: TestVerdict): TestVerdict => {
+  const { attestation: _, measuredDurationMs: __, ...rest } = v;
+  return { ...rest, outcome: "timeout" };
+};
+/** The rows of `suspect_snapshots`. */
+const suspectRows = (store: ResultsStore) =>
+  store.db
+    .query(
+      "SELECT run_id AS run, batch_index AS b, marked_by_run AS by FROM suspect_snapshots ORDER BY run, b",
+    )
+    .all() as Array<{ run: number; b: number; by: number }>;
+const lastRun = (store: ResultsStore) =>
+  (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+const reusedOf = (events: readonly RunEvent[]) =>
+  events.flatMap((e) =>
+    e.type === "warning" && e.code === "resume-baseline-reused" ? [e.message] : [],
+  );
+
+/**
+ * R512. Run 1's batch 1 runs on a binary that is not the instrumented one: every covered run
+ * answers but observes nothing, so design §G's attestation gate invalidates the batch. Its baseline
+ * (test green) was recorded before the mutant phase. The real binary (run 2) has the test red
+ * unmutated. `red` picks how: a stopped `timeout` (scored at position 1 with no unmutated confirm)
+ * or a `fail` (confirmed by an unmutated rerun). The fix: the snapshot in use is marked suspect at
+ * the first unattested answer, and `findBaselineSnapshot` never lends a marked one.
+ */
+describe("R512: an attestation-invalidated batch's baseline snapshot, then --resume", () => {
+  /**
+   * Run 2's real shape (review I2): every baseline run and batch 1's FIRST covered run time out
+   * with no attestation; every later covered run passes, attested clean.
+   */
+  function realShape(): CountingBackend {
+    return shaped(({ phase, n }, v) =>
+      phase === "baseline" || (phase === "covered" && n === 1) ? realTimeout(v) : v,
+    );
+  }
+  /** Run 1: batch 0 is the right binary; batch 1 answers every covered run unattested. */
+  function wrongBinaryInBatch1(): CountingBackend {
+    const b = new CountingBackend("pass");
+    const run = b.run.bind(b);
+    b.run = async (ref, opts) => {
+      const v = await run(ref, opts);
+      return b.deploys >= 2 && v.attestation !== undefined
+        ? { ...v, attestation: { observedAny: false, identityMismatch: false } }
+        : v;
+    };
+    return b;
+  }
+  /** Run 2: the real binary, on which the test is red with no mutant active too. */
+  function redEverywhere(red: "timeout" | "fail"): CountingBackend {
+    const b = new CountingBackend("pass");
+    const run = b.run.bind(b);
+    b.run = async (ref, opts) => {
+      const { measuredDurationMs: _, ...v } = await run(ref, opts);
+      return { ...v, outcome: red };
+    };
+    return b;
+  }
+  async function scenario(red: "timeout" | "fail" | CountingBackend, dropSnapshot: boolean) {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    const events1: RunEvent[] = [];
+    const first = await runSession({
+      backend: wrongBinaryInBatch1(),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      emit: [(e) => events1.push(e)],
+    });
+    const run1 = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    // The control removes the snapshot by hand: what the resume does without it.
+    if (dropSnapshot) store.dropBaselineSnapshot(run1, 1);
+    const events: RunEvent[] = [];
+    const second = typeof red === "string" ? redEverywhere(red) : red;
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+      stopHungSessions: true,
+      emit: [(e) => events.push(e)],
+    });
+    const reused = events.flatMap((e) =>
+      e.type === "warning" && e.code === "resume-baseline-reused" ? [e.message] : [],
+    );
+    return { first, events1, run1, report, second, reused, store };
+  }
+
+  test("R512 repro: the invalidated batch's snapshot is not reused, so a test red on the real binary scores no kill", async () => {
+    const { first, events1, run1, report, second, reused, store } = await scenario(
+      realShape(),
+      false,
+    );
+    // Precondition: the gate fired on batch 1, and its snapshot is still stored.
+    expect(
+      events1.some(
+        (e) =>
+          e.type === "batch-invalidated" &&
+          e.batchIndex === 1 &&
+          e.reason.startsWith("unattested artifact"),
+      ),
+    ).toBe(true);
+    expect(first.quarantined).toBeDefined();
+    const snaps = store.db
+      .query("SELECT batch_index AS b FROM baseline_snapshots WHERE run_id = ? ORDER BY b")
+      .all(run1);
+    expect(snaps).toEqual([{ b: 0 }, { b: 1 }]);
+    // The snapshot in use was marked at run 1's first unattested answer, by run 1.
+    expect(suspectRows(store)).toEqual([{ run: run1, b: 1, by: run1 }]);
+    // Fixed: the unattested batch's snapshot is not reused, its baseline re-runs, the red test is
+    // not sent as covering, and nothing is killed (before: M0001 timeout-killed by
+    // OverBudgetDetected, with 0 baseline runs).
+    const b1 = report.mutants.filter((m) => m.batchIndex === 1);
+    expect(reused.filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
+    expect(second.baselineRuns).toBeGreaterThan(0);
+    expect(b1.filter((m) => m.verdict === "timeout-killed" || m.verdict === "killed")).toEqual([]);
+    expect(b1.find((m) => m.mutantCode === "M0001")?.verdict).not.toBe("timeout-killed");
+  });
+
+  test("R512 control: without the snapshot, the same resume re-runs the baseline and kills nothing", async () => {
+    const { report, second, reused } = await scenario("timeout", true);
+    const b1 = report.mutants.filter((m) => m.batchIndex === 1);
+    console.log(
+      "R512 control batch1",
+      JSON.stringify(b1.map((m) => [m.mutantCode, m.verdict, m.failureNote ?? null])),
+    );
+    expect(reused).toEqual([]);
+    expect(second.baselineRuns).toBeGreaterThan(0);
+    expect(b1.filter((m) => m.verdict === "timeout-killed" || m.verdict === "killed")).toEqual([]);
+  });
+
+  test("R512 measure: a test that FAILS on the real binary is confirmed by an unmutated rerun, so it never scores a kill", async () => {
+    // Green before and after the fix: before, the reuse sends the red test and the confirm rerun
+    // turns each kill into `error` (unstable); after, the baseline re-runs and the test is not sent.
+    const { report } = await scenario("fail", false);
+    const b1 = report.mutants.filter((m) => m.batchIndex === 1);
+    console.log(
+      "R512 fail batch1",
+      JSON.stringify(b1.map((m) => [m.mutantCode, m.verdict, m.failureNote ?? null])),
+    );
+    expect(b1.filter((m) => m.verdict === "killed")).toEqual([]);
+  });
+
+  test("R512 C1: a lent snapshot is marked by the run that reused it, so a third run does not reuse it", async () => {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    const base = { store, ...dirs, selectorIds, maxGuardsPerBatch: 1 };
+    // Run A records S_A for batch 1 and hangs on its first mutant: no answer, no mark.
+    await runSession({ ...base, backend: new CountingBackend("pass", undefined, 2) });
+    const runA = lastRun(store);
+    expect(suspectRows(store)).toEqual([]);
+    // Run B reuses S_A and every covered run answers unattested: B marks S_A, not a key of its own.
+    const eventsB: RunEvent[] = [];
+    await runSession({
+      ...base,
+      backend: shaped(({ phase }, v) => (phase === "covered" ? unattested(v) : v)),
+      resume: "last",
+      emit: [(e) => eventsB.push(e)],
+    });
+    const runB = lastRun(store);
+    expect(reusedOf(eventsB).filter((m) => m.includes(`run ${runA}'s batch 1`))).toHaveLength(1);
+    expect(
+      eventsB.some(
+        (e) =>
+          e.type === "batch-invalidated" &&
+          e.batchIndex === 1 &&
+          e.reason.startsWith("unattested artifact"),
+      ),
+    ).toBe(true);
+    expect(suspectRows(store)).toEqual([{ run: runA, b: 1, by: runB }]);
+    // Run C, the real binary: S_A is not lent, the baseline re-runs, and nothing is killed.
+    const eventsC: RunEvent[] = [];
+    const c = realShape();
+    const reportC = await runSession({
+      ...base,
+      backend: c,
+      resume: "last",
+      stopHungSessions: true,
+      emit: [(e) => eventsC.push(e)],
+    });
+    expect(reusedOf(eventsC).filter((m) => m.includes(`run ${runA}'s batch 1`))).toEqual([]);
+    expect(c.baselineRuns).toBeGreaterThan(0);
+    const b1 = reportC.mutants.filter((m) => m.batchIndex === 1);
+    expect(b1.filter((m) => m.verdict === "timeout-killed" || m.verdict === "killed")).toEqual([]);
+  });
+
+  test("R512 (I3): the kill-confirmation rerun's unattested answer marks the snapshot", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    let confirms = 0;
+    await runSession({
+      store,
+      ...dirs,
+      selectorIds,
+      // The covering run fails with no attestation; the unmutated confirm passes, unattested.
+      backend: shaped(({ phase }, v) => {
+        if (phase === "covered") return noAttestation({ ...v, outcome: "fail" });
+        if (phase === "confirm") {
+          confirms += 1;
+          return unattested(v);
+        }
+        return v;
+      }),
+    });
+    const run = lastRun(store);
+    expect(confirms).toBeGreaterThan(0);
+    expect(suspectRows(store)).toEqual([{ run, b: 0, by: run }]);
+  });
+
+  /** One batch: covered runs answer by `answer(n, v)`; the third covered run hangs, so run 1 is
+   *  left unfinished with work in its batch 0, and a resume (with --retry-stranded) deploys it. */
+  async function thenResume(
+    answer: (n: number, v: TestVerdict) => TestVerdict,
+    store: ResultsStore,
+  ) {
+    const dirs = await makeProject();
+    await runSession({
+      store,
+      ...dirs,
+      selectorIds,
+      backend: shaped(({ phase, n }, v) => {
+        if (phase !== "covered") return v;
+        if (n === 3) {
+          return {
+            ref: v.ref,
+            outcome: "error",
+            durationMs: 5,
+            operation: "in-flight-unknown",
+            failureMessage: "RunMutant timed out: AbortError",
+          };
+        }
+        return answer(n, v);
+      }),
+    });
+    const run1 = lastRun(store);
+    const marksAfterRun1 = suspectRows(store);
+    const events: RunEvent[] = [];
+    await runSession({
+      store,
+      ...dirs,
+      selectorIds,
+      backend: new CountingBackend("pass"),
+      resume: "last",
+      retryStranded: true,
+      emit: [(e) => events.push(e)],
+    });
+    return { run1, marksAfterRun1, reused: reusedOf(events) };
+  }
+
+  test("R512 clear: an unattested answer then a clean one leaves no mark, and the snapshot is still reused", async () => {
+    const store = new ResultsStore(":memory:");
+    const seen: Array<ReturnType<typeof suspectRows>> = [];
+    const { run1, marksAfterRun1, reused } = await thenResume((n, v) => {
+      if (n === 1) return unattested(v);
+      // Precondition: the first answer DID mark run 1's snapshot.
+      if (n === 2) seen.push(suspectRows(store));
+      return v;
+    }, store);
+    expect(seen).toEqual([[{ run: run1, b: 0, by: run1 }]]);
+    expect(marksAfterRun1).toEqual([]);
+    expect(reused.filter((m) => m.includes(`run ${run1}'s batch 0`))).toHaveLength(1);
+  });
+
+  test("R512: no mark after a clean attestation", async () => {
+    const store = new ResultsStore(":memory:");
+    const { marksAfterRun1 } = await thenResume((n, v) => (n === 2 ? unattested(v) : v), store);
+    expect(marksAfterRun1).toEqual([]);
+  });
+
+  test("R512: a clean batch is never marked, and its snapshot is reused", async () => {
+    const store = new ResultsStore(":memory:");
+    const { run1, marksAfterRun1, reused } = await thenResume((_n, v) => v, store);
+    expect(marksAfterRun1).toEqual([]);
+    expect(reused.filter((m) => m.includes(`run ${run1}'s batch 0`))).toHaveLength(1);
+  });
+
+  test("R512 control: a hang at batch start fires the gate but marks nothing, and keeps both snapshots", async () => {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      backend: new CountingBackend("pass", undefined, 2),
+      emit: [(e) => events.push(e)],
+    });
+    const run1 = lastRun(store);
+    expect(
+      events.some(
+        (e) =>
+          e.type === "batch-invalidated" &&
+          e.batchIndex === 1 &&
+          e.reason.startsWith("unattested artifact"),
+      ),
+    ).toBe(true);
+    expect(
+      store.db
+        .query("SELECT batch_index AS b FROM baseline_snapshots WHERE run_id = ? ORDER BY b")
+        .all(run1),
+    ).toEqual([{ b: 0 }, { b: 1 }]);
+    expect(suspectRows(store)).toEqual([]);
+  });
+});
+
+describe("R512/R513: the store's negative records", () => {
+  const CARRY = [...CARRYABLE_VERDICTS];
+  function newRun(
+    store: ResultsStore,
+    over: Partial<Parameters<ResultsStore["createRun"]>[0]> = {},
+  ): number {
+    return store.createRun({
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+      configFingerprint: "fp",
+      ...over,
+    });
+  }
+  function seed(
+    store: ResultsStore,
+    runId: number,
+    batchIndex: number,
+    over: Partial<Parameters<ResultsStore["recordMutant"]>[1]>,
+  ) {
+    store.recordMutant(runId, {
+      mutantCode: "M0001",
+      astHash: "h",
+      codeunitName: "Sandbox Logic",
+      procedureName: "Post",
+      operatorName: "lethal.negate-conditional",
+      operatorMajor: 1,
+      file: "src/SandboxLogic.Codeunit.al",
+      line: 1,
+      verdict: "survived",
+      durationMs: 1,
+      batchIndex,
+      ...over,
+    });
+  }
+  const LOST = "lease-lost: R513 test note";
+
+  test("R513: mutantVerdicts reads a lost batch's kills and survivors as error with the loss note; batch 0, a known-survivor and a stranded error are unchanged", () => {
+    const store = new ResultsStore(":memory:");
+    const id = newRun(store);
+    seed(store, id, 0, { astHash: "a", verdict: "killed", killingTest: "T", killPosition: 1 });
+    seed(store, id, 1, {
+      astHash: "b",
+      verdict: "killed",
+      killingTest: "T",
+      killingTestFailure: "boom",
+      killPosition: 1,
+    });
+    seed(store, id, 1, { astHash: "c", verdict: "survived" });
+    seed(store, id, 1, { astHash: "d", verdict: "timeout-killed", killingTest: "T" });
+    seed(store, id, 1, { astHash: "e", verdict: "known-survivor" });
+    const stranded = `${STRANDED_NOTE_PREFIX}in-flight-unknown R513`;
+    seed(store, id, 1, { astHash: "f", verdict: "error", failureNote: stranded });
+    store.markBatchLost(id, 1, LOST);
+    const byHash = new Map(store.mutantVerdicts(id).map((r) => [r.astHash, r]));
+    expect(byHash.get("a")).toMatchObject({ verdict: "killed", killingTest: "T", killPosition: 1 });
+    for (const h of ["b", "c", "d"]) {
+      const r = byHash.get(h);
+      expect(r?.verdict).toBe("error");
+      expect(r?.failureNote).toBe(LOST);
+      expect(r?.killingTest).toBeUndefined();
+      expect(r?.killingTestFailure).toBeUndefined();
+      expect(r?.killPosition).toBeUndefined();
+    }
+    expect(byHash.get("e")?.verdict).toBe("known-survivor");
+    expect(byHash.get("f")).toMatchObject({ verdict: "error", failureNote: stranded });
+    // The stranded row still reaches R53's skip.
+    const index = buildResumeIndex(store.mutantVerdicts(id));
+    expect(index.strandedKeys.size).toBe(1);
+    expect(wasStranded(index, manifestEntry("f"))).toBe(true);
+    // The stored rows are untouched: this is a read-time rewrite.
+    expect(
+      store.db
+        .query("SELECT verdict FROM mutants WHERE run_id = ? AND batch_index = 1 ORDER BY id")
+        .all(id),
+    ).toEqual([
+      { verdict: "killed" },
+      { verdict: "survived" },
+      { verdict: "timeout-killed" },
+      { verdict: "known-survivor" },
+      { verdict: "error" },
+    ]);
+  });
+
+  test("R513: findResumableRun skips a run whose only carryable rows are in a lost batch, and finds the older one", () => {
+    const store = new ResultsStore(":memory:");
+    const older = newRun(store);
+    seed(store, older, 0, { verdict: "survived" });
+    const newer = newRun(store);
+    seed(store, newer, 1, { verdict: "killed", killingTest: "T" });
+    const q = {
+      projectPath: "/p",
+      backend: "bcdev",
+      configFingerprint: "fp",
+      carryableVerdicts: CARRY,
+    };
+    expect(store.findResumableRun(q)).toBe(newer);
+    store.markBatchLost(newer, 1, LOST);
+    expect(store.findResumableRun(q)).toBe(older);
+  });
+
+  test("R513: unfinishedRunUnderOtherScheme ignores a run whose only carryable rows are lost", () => {
+    const store = new ResultsStore(":memory:");
+    const id = newRun(store, { identityScheme: IDENTITY_SCHEME - 1 });
+    seed(store, id, 1, { verdict: "survived" });
+    const q = { projectPath: "/p", backend: "bcdev", carryableVerdicts: CARRY };
+    expect(store.unfinishedRunUnderOtherScheme(q)?.runId).toBe(id);
+    store.markBatchLost(id, 1, LOST);
+    expect(store.unfinishedRunUnderOtherScheme(q)).toBeNull();
+  });
+
+  test("R513: unfinishedRunUnderOtherSymbols ignores a run whose only carryable rows are lost", () => {
+    const store = new ResultsStore(":memory:");
+    const id = newRun(store, { buildSymbols: ["OTHER"] });
+    seed(store, id, 1, { verdict: "survived" });
+    const q = { projectPath: "/p", backend: "bcdev", buildSymbols: [], carryableVerdicts: CARRY };
+    expect(store.unfinishedRunUnderOtherSymbols(q)?.runId).toBe(id);
+    store.markBatchLost(id, 1, LOST);
+    expect(store.unfinishedRunUnderOtherSymbols(q)).toBeNull();
+  });
+
+  test("R513: unfinishedRunUnderOtherCoverageMode ignores a run whose only carryable rows are lost", () => {
+    const store = new ResultsStore(":memory:");
+    const id = newRun(store, { coverageMode: "none" });
+    seed(store, id, 1, { verdict: "survived" });
+    const q = {
+      projectPath: "/p",
+      backend: "bcdev",
+      coverageMode: "procedure" as const,
+      carryableVerdicts: CARRY,
+    };
+    expect(store.unfinishedRunUnderOtherCoverageMode(q)?.runId).toBe(id);
+    store.markBatchLost(id, 1, LOST);
+    expect(store.unfinishedRunUnderOtherCoverageMode(q)).toBeNull();
+  });
+
+  function twoSnapshots(): { store: ResultsStore; id: number } {
+    const store = new ResultsStore(":memory:");
+    const id = newRun(store, { testAppHash: "package:t", testAppProven: true, testAppDeps: "D" });
+    const ref = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
+    for (const batchIndex of [0, 1]) {
+      store.recordBaselineSnapshot({
+        runId: id,
+        batchIndex,
+        batchHash: `b${batchIndex}`,
+        testAppHash: "package:t",
+        baseline: [{ ref, verdict: { ref, outcome: "pass", durationMs: 1 } }],
+      });
+    }
+    return { store, id };
+  }
+  const find = (store: ResultsStore, batchHash: string) =>
+    store.findBaselineSnapshot(batchHash, "package:t", "D", "procedure")?.batchIndex ?? null;
+
+  test("R513: findBaselineSnapshot skips a lost batch's snapshot and still finds batch 0's", () => {
+    const { store, id } = twoSnapshots();
+    expect(find(store, "b1")).toBe(1);
+    store.markBatchLost(id, 1, LOST);
+    expect(find(store, "b1")).toBeNull();
+    expect(find(store, "b0")).toBe(0);
+  });
+
+  test("R512: findBaselineSnapshot skips a suspect snapshot and still finds batch 0's", () => {
+    const { store, id } = twoSnapshots();
+    expect(find(store, "b1")).toBe(1);
+    store.markSnapshotSuspect({ runId: id, batchIndex: 1 }, id);
+    expect(find(store, "b1")).toBeNull();
+    expect(find(store, "b0")).toBe(0);
+  });
+
+  test("markBatchLost keeps the first note; markSnapshotSuspect twice is a no-op; clearSnapshotSuspect removes one key", () => {
+    const store = new ResultsStore(":memory:");
+    const id = newRun(store);
+    store.markBatchLost(id, 1, "first");
+    store.markBatchLost(id, 1, "second");
+    expect(store.db.query("SELECT note FROM lost_batches").all()).toEqual([{ note: "first" }]);
+    expect(store.markSnapshotSuspect({ runId: id, batchIndex: 0 }, id)).toBe(true);
+    expect(store.markSnapshotSuspect({ runId: id, batchIndex: 0 }, id)).toBe(false);
+    expect(store.markSnapshotSuspect({ runId: id, batchIndex: 1 }, id)).toBe(true);
+    expect(suspectRows(store)).toEqual([
+      { run: id, b: 0, by: id },
+      { run: id, b: 1, by: id },
+    ]);
+    store.clearSnapshotSuspect({ runId: id, batchIndex: 1 }, id);
+    expect(suspectRows(store)).toEqual([{ run: id, b: 0, by: id }]);
+  });
+
+  test("R512 (r3): the mark is owner-scoped: only the run whose insert created it clears it", () => {
+    const { store, id: a } = twoSnapshots();
+    const x = newRun(store);
+    const y = newRun(store);
+    const sA = { runId: a, batchIndex: 1 };
+    expect(store.markSnapshotSuspect(sA, x)).toBe(true);
+    expect(store.markSnapshotSuspect(sA, y)).toBe(false);
+    expect(suspectRows(store)).toEqual([{ run: a, b: 1, by: x }]);
+    store.clearSnapshotSuspect(sA, y);
+    expect(suspectRows(store)).toEqual([{ run: a, b: 1, by: x }]);
+    expect(find(store, "b1")).toBeNull();
+    store.clearSnapshotSuspect(sA, x);
+    expect(suspectRows(store)).toEqual([]);
+    expect(find(store, "b1")).toBe(1);
+  });
+
+  test("R512 (r3): feedAttestation clears only a mark this run's insert created", () => {
+    let clears = 0;
+    const ledger = (inserted: boolean): AttestationLedger => ({
+      clean: false,
+      markTried: false,
+      suspect: false,
+      markSuspect: () => inserted,
+      clearSuspect: () => {
+        clears += 1;
+      },
+    });
+    const wrong = { observedAny: false, identityMismatch: false };
+    const right = { observedAny: true, identityMismatch: false };
+    // Another run's mark was already there: the insert did not create it, so no clear.
+    const theirs = ledger(false);
+    feedAttestation(theirs, wrong);
+    feedAttestation(theirs, right);
+    expect(theirs.clean).toBe(true);
+    expect(clears).toBe(0);
+    // Control: this run's own mark is cleared, once.
+    const mine = ledger(true);
+    feedAttestation(mine, wrong);
+    feedAttestation(mine, right);
+    feedAttestation(mine, right);
+    expect(clears).toBe(1);
+  });
+
+  test("an old store gains both tables on open and reads its rows unchanged", async () => {
+    const path = join(tmpdirSync(), "old.sqlite");
+    const first = new ResultsStore(path);
+    const id = newRun(first);
+    seed(first, id, 0, { astHash: "a", verdict: "survived" });
+    seed(first, id, 1, { astHash: "b", verdict: "killed", killingTest: "T" });
+    const before = first.mutantVerdicts(id);
+    first.db.run("DROP TABLE lost_batches");
+    first.db.run("DROP TABLE suspect_snapshots");
+    first.close();
+    const reopened = new ResultsStore(path);
+    const tables = reopened.db
+      .query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('lost_batches', 'suspect_snapshots') ORDER BY name",
+      )
+      .all();
+    expect(tables).toEqual([{ name: "lost_batches" }, { name: "suspect_snapshots" }]);
+    expect(reopened.mutantVerdicts(id)).toEqual(before);
+    reopened.close();
   });
 });
