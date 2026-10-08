@@ -115,7 +115,10 @@ to another file, or a file is renamed, its coverage would be credited to the wro
 dropped. So `lethal run` checks the project's `.al` files, `app.json` and resources before and
 after every al-runner call that produces coverage. On any change it stops with
 `ProjectChangedDuringRunError`, naming the first files that changed. Undo the change, or wait for
-the run to end, then continue with `lethal run --resume`. **Limit:** an edit that is undone
+the run to end, then continue with `lethal run --resume` (it carries the verdicts recorded so far;
+a run stopped before its first verdict has none, so run it again). A log written into the project
+(`*.log`, `nohup.out`) and an office lock file (`~$...`) never count, but any other file written
+there during the run does: keep outputs outside the project. **Limit:** an edit that is undone
 between two checks, so it starts and ends inside one al-runner call, is not seen. A `git checkout`
 of another branch and back during a run is exactly that, so do not do it. Upstream fixed the
 labelling after this build (#5249); once the pinned al-runner moves past it, the check only refuses.

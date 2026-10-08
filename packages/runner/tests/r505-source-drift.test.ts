@@ -113,6 +113,18 @@ describe("R505: the project's build inputs must not change during the run", () =
     expect(await changesOf(watch)).toBeNull();
   });
 
+  // Opus build review: a redirected log or an office lock file written into the project during
+  // the run is no build input. Revert: drop `NEVER_AN_INPUT`.
+  test("a log or an office lock file written into the project never counts", async () => {
+    const dir = await project();
+    await writeFile(join(dir, "run.log"), "1", "utf8");
+    const watch = await started(dir);
+    await writeFile(join(dir, "run.log"), "12", "utf8");
+    await writeFile(join(dir, "nohup.out"), "x", "utf8");
+    await writeFile(join(dir, "addin", "~$Layout.docx"), "x", "utf8");
+    expect(await changesOf(watch)).toBeNull();
+  });
+
   test("the error names what changed, at most five, and says --resume continues", async () => {
     const dir = await project();
     const watch = await started(dir);

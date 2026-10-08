@@ -31,11 +31,18 @@ export class ProjectChangedDuringRunError extends Error {
     const shown = changes.slice(0, 5).join("; ");
     const more = changes.length > 5 ? `; and ${changes.length - 5} more` : "";
     super(
-      `the project ${projectDir} changed on disk during the run (${shown}${more}). al-runner labels coverage with the project's CURRENT files, so its coverage could be credited to the wrong object or dropped (R505); the session stops rather than read it. Undo the change, or let the run finish before editing; \`lethal run --resume\` continues this run.`,
+      `the project ${projectDir} changed on disk during the run (${shown}${more}). al-runner labels coverage with the project's CURRENT files, so its coverage could be credited to the wrong object or dropped (R505); the session stops rather than read it. Undo the change, or let the run finish before editing; \`lethal run --resume\` continues this run from its last recorded verdict (a run stopped before its first verdict has nothing to carry: run it again). A changed file that is not a build input (something written into the project while the run was going) counts too: write it outside the project.`,
     );
     this.name = "ProjectChangedDuringRunError";
   }
 }
+
+/**
+ * File names no AL build reads, which a run writes into the project as a matter of routine
+ * (opus build review): a redirected log (`run.log`, `nohup.out`) and an office lock file (`~$...`,
+ * while a report layout is open). They would stop the run for a reason that is not R505's.
+ */
+const NEVER_AN_INPUT = /\.log$|^nohup\.out$|^~\$/i;
 
 interface Seen {
   readonly size: number;
@@ -73,6 +80,7 @@ export function watchProjectInputs(
       const isAl = rel.toLowerCase().endsWith(".al");
       const isManifest = rel === "app.json";
       if (!isAl && !isManifest && !isProjectResource(rel)) continue;
+      if (!isAl && !isManifest && NEVER_AN_INPUT.test(e.name)) continue;
       if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
       out.push(rel);
     }
@@ -99,7 +107,17 @@ export function watchProjectInputs(
           continue;
         }
         const path = join(projectDir, rel);
-        const s = await stat(path);
+        // A file can go between the listing and this read (an editor's atomic save, a delete):
+        // that is a removal, named as one, never a raw ENOENT without R505's diagnosis.
+        const s = await stat(path).catch((err: NodeJS.ErrnoException) => {
+          if (err.code === "ENOENT") return undefined;
+          throw err;
+        });
+        if (s === undefined) {
+          changes.push(`removed ${rel}`);
+          present.delete(rel);
+          continue;
+        }
         const now: Seen = { size: s.size, mtimeMs: s.mtimeMs, ctimeMs: s.ctimeMs };
         const last = seen.get(rel);
         if (
@@ -109,10 +127,19 @@ export function watchProjectInputs(
           last.ctimeMs === now.ctimeMs
         )
           continue;
-        if (now.size === want.length && (await readFile(path)).equals(want)) seen.set(rel, now);
+        const bytes = await readFile(path).catch((err: NodeJS.ErrnoException) => {
+          if (err.code === "ENOENT") return undefined;
+          throw err;
+        });
+        if (bytes === undefined) {
+          changes.push(`removed ${rel}`);
+          present.delete(rel);
+        } else if (now.size === want.length && bytes.equals(want)) seen.set(rel, now);
         else changes.push(`changed ${rel}`);
       }
-      for (const rel of expected.keys()) if (!present.has(rel)) changes.push(`removed ${rel}`);
+      for (const rel of expected.keys())
+        if (!present.has(rel) && !changes.includes(`removed ${rel}`))
+          changes.push(`removed ${rel}`);
       if (changes.length > 0) throw new ProjectChangedDuringRunError(projectDir, changes.sort());
     },
   };

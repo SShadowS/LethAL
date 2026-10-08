@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -415,11 +416,23 @@ describe("R387: buildBackend's al-runner defaults", () => {
  * call, on both transports, and a change stops the session (it never becomes a verdict).
  */
 describe("R505: buildBackend watches the project while coverage is read", () => {
-  async function backendFor(serverMode: boolean, withSnapshot: boolean) {
+  const ORIGINAL = "codeunit 79100 Logic\n{\n}\n";
+  const EDITED = "codeunit 79100 Logic\n{\n// x\n}\n";
+  /** `during` runs INSIDE the al-runner call, between the pre-check and the post-check. */
+  async function backendFor(
+    serverMode: boolean,
+    withSnapshot: boolean,
+    during?: (proj: string) => void,
+  ) {
     const proj = await project();
-    await writeFile(join(proj, "Logic.Codeunit.al"), "codeunit 79100 Logic\n{\n}\n", "utf8");
+    await writeFile(join(proj, "Logic.Codeunit.al"), ORIGINAL, "utf8");
     const snapshot = await readTargetSource(proj);
-    const server = fakeAlRunnerServer([TEST]);
+    const inCall = () => during?.(proj);
+    const server = fakeAlRunnerServer([TEST], { onRunTests: inCall });
+    const spawnInCall: SpawnFn = async (...a) => {
+      inCall();
+      return oneShot(...a);
+    };
     const backend = (await buildBackend(
       runConfig(proj),
       {
@@ -432,7 +445,7 @@ describe("R505: buildBackend watches the project while coverage is read", () => 
       },
       scratch("lethal-r505-"),
       undefined,
-      { alRunnerSpawn: oneShot, alRunnerServerSpawn: server.spawn },
+      { alRunnerSpawn: spawnInCall, alRunnerServerSpawn: server.spawn },
       IDS,
       ...(withSnapshot ? [snapshot] : []),
     )) as AlRunnerBackend;
@@ -452,6 +465,31 @@ describe("R505: buildBackend watches the project while coverage is read", () => 
       try {
         await writeFile(join(proj, "Logic.Codeunit.al"), "codeunit 79100 Logic\n{\n// x\n}\n");
         await expect(go(backend)).rejects.toThrow(/changed Logic\.Codeunit\.al.*--resume/);
+      } finally {
+        await backend.close();
+      }
+    });
+    // Opus build review: each half of the bracket on its own. An edit made DURING the call is seen
+    // only by the post-check (revert: drop the check after the call).
+    test(`${transport}: an edit made during the call is caught after it`, async () => {
+      const { backend } = await backendFor(serverMode, true, (proj) =>
+        writeFileSync(join(proj, "Logic.Codeunit.al"), EDITED),
+      );
+      try {
+        await expect(go(backend)).rejects.toThrow(/changed Logic\.Codeunit\.al/);
+      } finally {
+        await backend.close();
+      }
+    });
+    // An edit made before the call and undone inside it is seen only by the pre-check (revert:
+    // drop the check before the call).
+    test(`${transport}: an edit undone during the call is caught before it`, async () => {
+      const { backend, proj } = await backendFor(serverMode, true, (p) =>
+        writeFileSync(join(p, "Logic.Codeunit.al"), ORIGINAL),
+      );
+      try {
+        await writeFile(join(proj, "Logic.Codeunit.al"), EDITED);
+        await expect(go(backend)).rejects.toThrow(/changed Logic\.Codeunit\.al/);
       } finally {
         await backend.close();
       }
