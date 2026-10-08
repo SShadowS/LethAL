@@ -256,6 +256,17 @@ const CODEUNITS = `codeunit 50220 "Gen. Jnl.-Post Line"
     local procedure Helper()
     begin
         H1 := H1 + 1;
+        OnStepDone(H1);
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnStepDone(var Count: Integer)
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnUnreachedDone(var Count: Integer)
+    begin
     end;
 
     local procedure Helper2()
@@ -272,6 +283,7 @@ const CODEUNITS = `codeunit 50220 "Gen. Jnl.-Post Line"
     procedure Unreached()
     begin
         U := U + 1;
+        OnUnreachedDone(U);
     end;
 
     var
@@ -392,6 +404,18 @@ const SUBS = `codeunit 50230 "Walk Subs"
     begin
         IsDone := true;
     end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Gen. Jnl.-Post Line", OnStepDone, '', false, false)]
+    local procedure CalleeEvent(var Count: Integer)
+    begin
+        Count := 0;
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Gen. Jnl.-Post Line", OnUnreachedDone, '', false, false)]
+    local procedure UnreachedEvent(var Count: Integer)
+    begin
+        Count := 0;
+    end;
 }
 `;
 
@@ -405,13 +429,13 @@ describe("R500 shape 2: one-hop callees of open-item code", () => {
       "Subs.al": SUBS,
     });
 
-  it("a dotted codeunit callee is refused", () => {
-    expect(p().proc("Codeunits.al", "Step")).toBe(true);
+  it("dotted codeunit callees (`Gen. Jnl.-Post Line`, `Mfg. Calculate BOM Tree`) are refused", () => {
+    const x = p();
+    expect(x.proc("Codeunits.al", "Step")).toBe(true);
+    expect(x.at("Codeunits.al", "assignment_statement", "M := M + 1")).toBe(true);
   });
   it("an undotted look-alike codeunit (`Calculate BOM Tree` against `Mfg. Calculate BOM Tree`) emits", () => {
-    const x = p();
-    expect(x.proc("Codeunits.al", "Calc")).toBe(true); // the Mfg one, first in the file
-    expect(x.at("Codeunits.al", "assignment_statement", "C := C + 1")).toBe(false);
+    expect(p().at("Codeunits.al", "assignment_statement", "C := C + 1")).toBe(false);
   });
   it("the callee's same-object closure (`P()`, `this.P()`, a bare `IsOk` in an expression) is refused", () => {
     const x = p();
@@ -473,6 +497,12 @@ describe("R500 shape 2: one-hop callees of open-item code", () => {
   });
   it("a namespace-qualified subscriber of another report emits", () => {
     expect(p().proc("Subs.al", "ByNamespaceOther")).toBe(false);
+  });
+  it("a subscriber of an event a refused callee raises (PEPPOL Management's OnFindNext*) is refused", () => {
+    expect(p().proc("Subs.al", "CalleeEvent")).toBe(true);
+  });
+  it("a subscriber of an event raised only from an unreached procedure of the callee object emits", () => {
+    expect(p().proc("Subs.al", "UnreachedEvent")).toBe(false);
   });
 });
 
@@ -1001,10 +1031,11 @@ describe("R500 shape 5: an XMLport tableelement over Integer is a loop item", ()
   it("a SourceTableView bound holds", () => {
     expect(p().at("Xp.al", "assignment_statement", "Viewed2 := Viewed2 + 1")).toBe(false);
   });
-  it("an OnPreXmlItem SetRange certificate holds, and its SetRange is the only bound: refused", () => {
-    const x = p();
-    expect(x.at("Xp.al", "assignment_statement", "Rng := Rng + 1")).toBe(false);
-    expect(x.at("Xp.al", "call_expression", "Ranged.SetRange(Number, 1, 3)")).toBe(true);
+  it("an OnPreXmlItem SetRange certificate holds", () => {
+    expect(p().at("Xp.al", "assignment_statement", "Rng := Rng + 1")).toBe(false);
+  });
+  it("that SetRange is the element's only bound: refused", () => {
+    expect(p().at("Xp.al", "call_expression", "Ranged.SetRange(Number, 1, 3)")).toBe(true);
   });
   it("an element named like its source table (`tableelement(Integer; Integer)`): the source is not a mention", () => {
     expect(p().at("Xp.al", "assignment_statement", "Named := Named + 1")).toBe(false);

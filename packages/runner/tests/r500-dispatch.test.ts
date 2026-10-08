@@ -50,6 +50,7 @@ ${bound}                trigger OnAfterGetRecord()
     var
         Found: Boolean;
     begin
+        Calls := Calls + 1;
         OnFindNextRec(Position, Found);
         exit(Found);
     end;
@@ -70,6 +71,9 @@ ${bound}                trigger OnAfterGetRecord()
     local procedure OnOtherEvent(var Found: Boolean)
     begin
     end;
+
+    var
+        Calls: Integer;
 }
 `;
 
