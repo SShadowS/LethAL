@@ -398,8 +398,8 @@ from current source before compiling. al-runner compiles both from source and ne
 numbers (R-300b), each with an unwrapped twin whose text sits on the same lines. `itest:alrunner`
 runs it one-shot, `--server` and resource, with `WRAPDEF` as the config symbol (`--define`) while
 the target's `app.json` defines `WRAPAPP`. Each wrapped file must score exactly as its twin per
-mutant; the twins also carry a `swap-additive` mutant the wrapped files lack, because typed
-operators see nothing inside a wrapped object (R343).
+mutant, in both directions: since R343 indexes a wrapped object in a compiled arm, the
+`swap-additive` mutant on `Grow` that only the twins carried before is in the wrapped files too.
 
 As in `sandbox-layout`, `Twice`'s header comment is load-bearing: `Twice`'s lines in the original
 text lie inside the instrumented `Grow`, so a frame misread moves `Twice`'s mutants to `no-coverage`.
@@ -408,7 +408,8 @@ Pair` files are decided by both symbols: whether al-runner's `--define` adds to 
 or replaces them is unmeasured, and under "replaces" al-runner compiles `WrappedPairB`, which LethAL
 reads as compiled out, so `WrappedPairA`'s mutants read `no-coverage`, never another file's
 coverage. The per-mutant table under both readings is pre-committed in
-`docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md`.
+`docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md`, and its 36-row R343 update
+in `docs/superpowers/specs/2026-10-08-r343-wrapped-leg-precommitment.md`.
 
 `.alpackages` is gitignored. The target compiles under `symbol-sets.json` (`[["WRAPDEF"]]`); `alc`
 it with `/define:WRAPDEF` into `sandbox-wrapped-tests/.alpackages` from current source before

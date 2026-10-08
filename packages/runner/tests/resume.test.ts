@@ -522,8 +522,10 @@ describe("sessionFingerprint (R47)", () => {
   // open `Integer` data item's code is hang-refused); it was 51406729...1b37 under scheme 29. It
   // moved again for R509 (scheme 32, a temporary record's fields are typed); it was 5b1d3f6c...8f56
   // under scheme 30. It moved again for R501 (scheme 33, that scope refused for every operator,
-  // and a bounded item's only bound); it was b6299a65...ed32 under scheme 32.
-  const PINNED = "9db5cc98af955b66f0f88331ccf07d6d3a4dc4ecf0e4c1bb24dbd2bcda26d7a1";
+  // and a bounded item's only bound); it was b6299a65...ed32 under scheme 32. It moved again for
+  // R343 (scheme 34, a wrapped object the build compiles is indexed); it was 9db5cc98...d7a1 under
+  // scheme 33.
+  const PINNED = "1660705947a2fc2972bcbe23d5ed57c9188c26e1989c0cf3393e1d9e8fc01e76";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2166,8 +2168,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // unused); 14 was R454 (more refused loop-exit sites); 13 was R455 (field-designator swaps,
     // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
-    // sites move twins).
-    expect(IDENTITY_SCHEME).toBe(33);
+    // sites move twins). 34 is R343 (a wrapped object the build compiles is indexed).
+    expect(IDENTITY_SCHEME).toBe(34);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

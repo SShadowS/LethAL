@@ -118,6 +118,12 @@ and are counted instead (`p12-refused`: `preproc-undecided 3` in both sets).
 | p13 `[P13SYM]` | R287-C7 (2) | ElseTail L11, L12 `remove-assignment` |
 | p13 `[P13SYM]` | R304 (2) | SplitBlock L8 `remove-assignment`, L9 `void-method-call` |
 
+**Amendment, 2026-10-08 (R343):** R343 indexes a clean object in a live `#if` arm, so the `p13 []`
+R343 row above is no longer excluded: `expected/p13-exclusions.0.txt` gains exactly that row (Wrapped
+L6 `swap-additive`) and nothing else, and its header becomes `raw 12 deployed 12 skippedFiles 0`
+(sha256 `3dd48d55c65ee70fa1626d2fe0f14029a3d9153520169ddda5c88fc7fe1fae4c`). The totals table above
+records the file as it was before R343.
+
 ## Presence (the rules, after rulings T1-a, T1-f, T1-g and the orchestrator's ruling)
 
 `$Q/presence.ts` joins each decided directive file's expected rows and full-twin rows on

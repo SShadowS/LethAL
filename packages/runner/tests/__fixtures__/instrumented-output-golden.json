@@ -337,16 +337,16 @@
       "mutants": 3
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedPre.Codeunit.al": {
-      "sha256": "0574431bb81ca500d2465614fbbf7c3824d8742cdd8e778e11ac4d95fc4489e9",
-      "mutants": 6
+      "sha256": "51a9e3a8c749af47429839023ed9c662cb5a8db649df69ebfd0dfbd112724188",
+      "mutants": 7
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedPreTwin.Codeunit.al": {
       "sha256": "e456a604d359f88a0f97ed3eda68976e490beabbde9e214e3b8a349a9b3eb445",
       "mutants": 7
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTop.Codeunit.al": {
-      "sha256": "2314c174021f4d4b895a124b120bce67cefb5896d69f1bcbd3eace23a12f00a8",
-      "mutants": 7
+      "sha256": "32b103960c86d39cda86043ae533f3e5d2d83fb15e277a8f3e2a21bce0bb503d",
+      "mutants": 8
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTopTwin.Codeunit.al": {
       "sha256": "457f08db1d8aedd8e638dff84e45e770a48b7c56d46bbbf287da3787ea4c4495",
