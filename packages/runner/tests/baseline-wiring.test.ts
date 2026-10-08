@@ -321,6 +321,7 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
     WRAPPED_BASELINE_PATH: "al-runner.wrapped.baseline.json",
   },
   "bcdev.itest.ts": { BASELINE_PATH: "bcdev.baseline.json" },
+  "bcdev-wrapped.itest.ts": { BASELINE_PATH: "bcdev.wrapped.baseline.json" },
   "envtool.itest.ts": { BASELINE_PATH: "envtool.baseline.json" },
   "harden.itest.ts": { BASELINE_PATH: "harden.baseline.json" },
   "hang.itest.ts": { SINGLE_BASELINE_PATH: "hang.single.baseline.json" },

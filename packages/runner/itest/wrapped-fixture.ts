@@ -124,6 +124,21 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0036", TOP_TWIN, 36, "return-value", "Twice", "killed", "TwiceTopTwin"),
 ];
 
+/**
+ * R497: the bcdev table (`itest:bcdev-wrapped`), pre-committed in
+ * docs/superpowers/specs/2026-10-08-r497-bcdev-wrapped-precommitment.md. The BC paths admit the
+ * two-arm shape, so `WrappedArms` is SCORED there: its three rows replace al-runner's refusals.
+ * Every other row is the al-runner table's ("adds": alc compiles the union of the symbols).
+ */
+export const EXPECTED_WRAPPED_BC: readonly WrappedRow[] = EXPECTED_WRAPPED.map(
+  (r) =>
+    [
+      row("M0001", ARMS, 7, "empty-block", "Pick", "killed", "ArmsPick"),
+      row("M0002", ARMS, 8, "conditional-boundary", "Pick", "survived", "ArmsPick"),
+      row("M0003", ARMS, 9, "return-value", "Pick", "killed", "ArmsPick"),
+    ].find((a) => a.code === r.code) ?? r,
+);
+
 /** The C1 pair's three rows under the "replaces" reading: al-runner compiled `WrappedPairB`. */
 export const PAIR_REPLACES: readonly WrappedRow[] = [
   row("M0004", PAIR_A, 10, "empty-block", "Pick", "no-coverage"),
@@ -294,6 +309,36 @@ export function twinDifferences(report: WrappedReport): string[] {
   }
   return out;
 }
+
+/**
+ * R497: one bcdev leg (fenced or hub). One batch, a green baseline, the bcdev table per mutant,
+ * strict twin parity, and no coverage refusal naming any of the fixture's objects (codeunits
+ * 78900-78949): an admitted file must not be refused, and `WrappedPairB`'s compiled-out key must
+ * not refuse `WrappedPairA` (plan r2 A1).
+ */
+export function assertBcWrappedRun(
+  report: WrappedReport,
+  leg: string,
+  warnings: readonly string[],
+): void {
+  const problems: string[] = [];
+  if (report.batches !== 1) problems.push(`the run planned ${report.batches} batches, not 1`);
+  if (!report.baselineGreen) problems.push("the baseline must be green");
+  problems.push(...diffRows(EXPECTED_WRAPPED_BC, wrappedRows(report)));
+  problems.push(...twinDifferences(report));
+  for (const w of warnings)
+    if (/coverage refused for Codeunit:789\d\d/.test(w)) problems.push(`refusal: ${w}`);
+  for (const m of report.mutants)
+    if (m.failureNote?.includes("coverage refused"))
+      problems.push(`${m.mutantCode} carries a refusal: ${m.failureNote}`);
+  if (problems.length > 0) {
+    throw new Error(
+      `R497 bcdev wrapped ${leg}: rows differ from the pre-committed table (${BC_SPEC}):\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+    );
+  }
+}
+
+const BC_SPEC = "docs/superpowers/specs/2026-10-08-r497-bcdev-wrapped-precommitment.md";
 
 /** Per code, every field: `other` must equal the one-shot leg. */
 export function assertWrappedLegsEqual(

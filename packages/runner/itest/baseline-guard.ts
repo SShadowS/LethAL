@@ -263,6 +263,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "itest:alrunner",
   ),
   "bcdev.baseline.json": gateHow("LETHAL_ITEST_BCDEV=1", "bcdev.baseline.json", "itest:bcdev"),
+  "bcdev.wrapped.baseline.json": gateHow(
+    "LETHAL_ITEST_BCDEV=1",
+    "bcdev.wrapped.baseline.json",
+    "itest:bcdev-wrapped",
+  ),
   "envtool.baseline.json": gateHow(
     "LETHAL_ITEST_ENVTOOL=1",
     "envtool.baseline.json",
@@ -291,7 +296,7 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * v2.12.0-main.c39ad5de (record exit 3, confirm PASS; `--define` measured to ADD to app.json's
  * symbols), per docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = [];
+export const PENDING_FIRST_RECORD: readonly string[] = ["bcdev.wrapped.baseline.json"];
 
 /** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
 export const SYMBOL_BASELINES: readonly string[] = [
