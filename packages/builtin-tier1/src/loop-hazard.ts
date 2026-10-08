@@ -11,6 +11,7 @@ import {
   normalizeAlName,
   objectDeclarationsOf,
   procedureLikeArmNames,
+  resolveReceiverTable,
   resolveVarRef,
 } from "@lethal/engine";
 
@@ -46,17 +47,30 @@ import {
  * R487 (the blanket rule): inside an OPEN item, EVERY site the four operators mutate is refused,
  * whatever it writes or reads (`inOpenItemCode`): the item's triggers, its child items' triggers
  * and columns, a reportextension dataset block anchored on it, and every same-object procedure
- * that code reaches by name. Known exclusions, none shown safe: code that runs before the item
- * (`OnPreReport`, an earlier sibling), procedures in other objects, items over ordinary tables and
- * `Date`, XMLport `Integer` elements, reportextensions outside the project, a `while`/`repeat`
- * inside a bounded item's code (R196/R446/R480's loop rules only), all filed as R500.
+ * that code reaches by name.
+ *
+ * R500 (closed) took R487's exclusions shape by shape, at the dispatch check only:
+ * - a `Date` item is open unless `MaxIteration` bounds it (shape 4), and an XMLport `tableelement`
+ *   over `Integer` is a loop item like a report data item (shape 5; dormant while xmlport cannot
+ *   carry the selector var, but it seeds shape 2);
+ * - procedures in OTHER objects that open-item code calls, one hop (`inOneHopCallee`, shape 2);
+ * - a filter call on an open item's record from outside its code (`altersOpenItemFilter`, 5b);
+ * - an unparsed reportextension extends every report (shape 7); `CurrReport.P()` and a bare
+ *   procedure name in an expression are calls (`hiddenCallee`, shape 9);
+ * - two stated LIMITS, with their blind spots in their own comments: a write, before the item, of a
+ *   global the item's exit reads (`writesPresetExitName`, shape 1), and the OnPreDataItem filter of
+ *   an item that inserts into its own table (`altersSelfInsertFilter`, shape 3).
+ * Two RULINGS: a reportextension outside the project cannot reach this project's open items (its
+ * code is not in the run), and a `while`/`repeat` inside a BOUNDED item's code keeps
+ * R196/R446/R480's loop rules only (shape 8; the loop that ends only by consuming its set is a
+ * product-wide question, filed on its own).
  *
  * R501 (closed): the same scope now refuses EVERY operator, not only the four, through ONE check
  * the orchestrator asks at dispatch (`openItemHangRefuses`, no operator list, no exemption): the
  * condition-side mutants, the exit's own removal, and `loop-skip`/`loop-truncate` of an inner loop
  * the item's progress lives in. It also refuses the BOUND CLASS: any site that deletes or alters
  * (contains, or sits inside) the SetRange call that is a certified item's only bound
- * (`altersBoundCall`). R500's exclusions above are unchanged and still apply to every operator.
+ * (`altersBoundCall`). R500's additions above are asked through the same check, for every operator.
  *
  * WHAT IT DELIBERATELY DOES NOT SEE, all UNCLASSIFIED rather than proven safe (spec 3.2): a target
  * read in the loop BODY rather than its condition (beyond R446's body-exit guards); preheader
@@ -274,7 +288,7 @@ function insideOpenItem(t: ALSyntaxNode, ctx: SemanticContext): boolean {
         const ext = objectOf(p);
         return ext?.rawKind === "reportextension_declaration" && modifiedItemOpen(ext, p, ctx);
       }
-      if (p.rawKind === "report_dataitem" && itemOpen(p, ctx)) return true;
+      if (isLoopItem(p) && itemOpen(p, ctx)) return true;
     }
     return false;
   });
@@ -324,6 +338,11 @@ function reportExtended(item: ALSyntaxNode, ctx: SemanticContext): boolean {
         names.add(extendedBaseName(o) ?? ANY_REPORT);
       }
     }
+    // R500 shape 7: a reportextension the grammar could not parse (inside an ERROR node, or with a
+    // `#if`-split header) names no readable base: it counts as extending every report.
+    for (const u of [...ctx.symbols.unparsedObjects, ...ctx.symbols.splitObjects]) {
+      if (/\breportextension\b/i.test(u.text)) names.add(ANY_REPORT);
+    }
     extendedReports.set(ctx, names);
   }
   const own = normalizeAlName(report.childForFieldName("object_name")?.text ?? "");
@@ -366,9 +385,30 @@ function modifiedItemOpen(ext: ALSyntaxNode, mod: ALSyntaxNode, ctx: SemanticCon
   return false;
 }
 
-/** A qualified `System.Utilities.Integer` has one `table_name` child per segment; the table is the LAST. */
+/** R500: a loop BC drives over a table: a report data item, or an XMLport `tableelement`. */
+function isLoopItem(n: ALSyntaxNode): boolean {
+  if (n.rawKind === "report_dataitem") return true;
+  return (
+    n.rawKind === "xmlport_element" &&
+    /^tableelement/i.test(n.childForFieldName("element_type")?.text ?? "")
+  );
+}
+
+/** The item's table, by its LAST name segment (a qualified `System.Utilities.Integer` has one child
+ *  per segment): `table_name` on a report data item, `source` on an XMLport element. */
+function itemTable(item: ALSyntaxNode): string {
+  const field = item.rawKind === "report_dataitem" ? "table_name" : "source";
+  return normalizeAlName(lastFieldChild(item, field)?.text ?? "");
+}
+
 function isIntegerItem(item: ALSyntaxNode): boolean {
-  return normalizeAlName(lastFieldChild(item, "table_name")?.text ?? "") === "integer";
+  return itemTable(item) === "integer";
+}
+
+/** R500 shape 4: a report `Date` item. BC drives it like `Integer`, over every date of every period
+ *  type; no `Number` certificate applies, so only `MaxIteration` bounds it. */
+function isDateItem(item: ALSyntaxNode): boolean {
+  return item.rawKind === "report_dataitem" && itemTable(item) === "date";
 }
 
 /** The engine cap: a literal `MaxIteration` from 1 to `ITERATION_CAP` the build surely has. */
@@ -385,12 +425,38 @@ function maxIterationBounded(item: ALSyntaxNode, ctx: SemanticContext): boolean 
   });
 }
 
+/**
+ * R500 shape 9: a same-object call `bareCallee` does not see. `CurrReport.P()` / `CurrXMLport.P()`
+ * naming a procedure of this object, and a bare name in an expression (`if IsOk then`, `X := GetVal;`)
+ * that names one and does not resolve to a variable. A name that is not really a call only adds a
+ * name to the reach set: an extra refusal, the safe direction.
+ */
+function hiddenCallee(
+  n: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  ctx: SemanticContext,
+): string | null {
+  if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
+    const f = n.childForFieldName("function");
+    if (f === null || f.rawKind !== "member_expression") return null;
+    const o = normalizeAlName(f.childForFieldName("object")?.text ?? "");
+    const m = normalizeAlName(f.childForFieldName("member")?.text ?? "");
+    return (o === "currreport" || o === "currxmlport") && names.has(m) ? m : null;
+  }
+  if (!isIdentifierLike(n) || !names.has(normalizeAlName(n.text))) return null;
+  if (n.fieldName === "function" || n.fieldName === "name" || n.fieldName === "member") return null;
+  if (n.parent === null || n.parent.rawKind === "member_expression") return null;
+  if (codeScope(n) === null || resolveVarRef(n, ctx) !== null) return null;
+  return normalizeAlName(n.text);
+}
+
 /** Same-object procedures reachable (by name, transitively) from open-item code. */
 function openReachable(obj: ALSyntaxNode, ctx: SemanticContext): Set<string> {
   return cached(ctx, obj, "reach", () => {
     const calls: { readonly callee: string; readonly scope: ALSyntaxNode | null }[] = [];
+    const names = procedureNamesOf(obj, ctx);
     visitAll(obj, (n) => {
-      const callee = bareCallee(n);
+      const callee = bareCallee(n) ?? hiddenCallee(n, names, ctx);
       if (callee !== null) calls.push({ callee, scope: codeScope(n) });
     });
     const out = new Set<string>();
@@ -464,6 +530,7 @@ function dataItemOpen(item: ALSyntaxNode, ctx: SemanticContext): boolean {
 }
 
 function dataItemOpenOnce(item: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (isDateItem(item)) return !maxIterationBounded(item, ctx);
   if (!isIntegerItem(item)) return false;
   const name = normalizeAlName(item.childForFieldName("name")?.text ?? "");
   const body = item.childForFieldName("body");
@@ -480,7 +547,8 @@ function dataItemOpenOnce(item: ALSyntaxNode, ctx: SemanticContext): boolean {
       const max = Number(v.text);
       if (max > 0 && max <= ITERATION_CAP) return false;
     }
-    if (p === "dataitemtableview" && viewBoundsNumber(m)) viewBounded = true;
+    if ((p === "dataitemtableview" || p === "sourcetableview") && viewBoundsNumber(m))
+      viewBounded = true;
   }
   const triggers = members.filter((m) => m.kind === ALNodeKind.trigger);
   const scan = mentionScan(item, name, triggers);
@@ -573,12 +641,26 @@ function mentionScan(item: ALSyntaxNode, name: string, triggers: ALSyntaxNode[])
   let scope: ALSyntaxNode = item;
   for (let p = item.parent; p !== null; p = p.parent) {
     scope = p;
-    if (p.kind === ALNodeKind.report || p.rawKind === "reportextension_declaration") break;
+    if (
+      p.kind === ALNodeKind.report ||
+      p.rawKind === "reportextension_declaration" ||
+      p.rawKind === "xmlport_declaration"
+    ) {
+      break;
+    }
   }
   const mentions: ALSyntaxNode[] = [];
   visitAll(scope, (n) => {
     if (!isIdentifierLike(n) || normalizeAlName(n.text) !== name) return;
-    if (n.fieldName === "name" || n.fieldName === "table_name" || n.fieldName === "member") return;
+    if (
+      n.fieldName === "name" ||
+      n.fieldName === "table_name" ||
+      // R500: an XMLport element's source table, not a mention (only under `xmlport_element`)
+      (n.fieldName === "source" && n.parent?.rawKind === "xmlport_element") ||
+      n.fieldName === "member"
+    ) {
+      return;
+    }
     mentions.push(n);
   });
   const calls: { readonly call: ALSyntaxNode; readonly trigger: ALSyntaxNode }[] = [];
@@ -645,7 +727,7 @@ function certifiedCall(
   }
   if (call === null || trigger === null || call.rawKind !== "call_expression") return null;
   return rangeCallOf(call, name)?.literal === true &&
-    triggerName(trigger) === "onpredataitem" &&
+    (triggerName(trigger) === "onpredataitem" || triggerName(trigger) === "onprexmlitem") &&
     armOfNode(ctx, call) === "active" &&
     unconditional(call, trigger)
     ? call
@@ -656,8 +738,7 @@ function certifiedCall(
  * R501: the SetRange call that is an `Integer` item's ONLY bound (the single-mention certificate, no
  * `MaxIteration`), or null. A view-bounded item has zero mentions, so it has no such call. Reads the
  * symbol table (through `itemOpen`'s `modifiedItemOpen`) and `ctx.files` (through `reportExtended`).
- * A context without `files` answers "extended", so the item is open and this returns null; the site
- * is then refused by `inOpenItemCode` instead, the safe direction.
+ * `openItemHangRefuses` throws on a context without `files` (R500) before this is asked.
  */
 function onlyBoundCall(item: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode | null {
   return cached(ctx, item, "boundcall", () => {
@@ -678,7 +759,7 @@ function onlyBoundCall(item: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode |
 function altersBoundCall(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   let item: ALSyntaxNode | null = null;
   for (let p = node.parent; p !== null && item === null; p = p.parent) {
-    if (p.rawKind === "report_dataitem") item = p;
+    if (isLoopItem(p)) item = p;
   }
   if (item === null) return false;
   const call = onlyBoundCall(item, ctx);
@@ -694,10 +775,757 @@ function altersBoundCall(node: ALSyntaxNode, ctx: SemanticContext): boolean {
  * open-item code (`inOpenItemCode`, R487's scope), or deletes or alters a bounded item's only bound
  * (`altersBoundCall`). `loop-truncate` and `loop-skip` are refused too: they shorten the INNER loop,
  * and in an open item the item's own progress often lives in that inner loop (a skipped `while`
- * never sets the flag the item's Break reads).
+ * never sets the flag the item's Break reads). R500 adds the one-hop callees, the outside filter
+ * calls and the two LIMITS (header). It needs `ctx.files` and throws without it.
  */
 export function openItemHangRefuses(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-  return inOpenItemCode(node, ctx) || altersBoundCall(node, ctx);
+  projectObjects(ctx); // R500: throws on a context without `files`, whatever the site
+  return (
+    inOpenItemCode(node, ctx) ||
+    altersBoundCall(node, ctx) ||
+    inOneHopCallee(node, ctx) ||
+    altersSelfInsertFilter(node, ctx) ||
+    altersOpenItemFilter(node, ctx) ||
+    writesPresetExitName(node, ctx)
+  );
+}
+
+/**
+ * R500 shape 1 (a stated LIMIT, not a full rule). A GLOBAL that an open item's exit guard (Break,
+ * Quit, Error) or SetRange/SetFilter argument reads, in any open-item scope (the open items' triggers,
+ * Date items included, and the same-object procedures they reach), and that open-item code never
+ * writes (never an assignment target, a `var` argument, a call receiver or a loop variable), is fixed
+ * for the whole walk: its value comes only from code that runs before the item. `Finance Charge Memo
+ * - Test`'s DimensionLoop breaks on `not Continue`, which only an earlier sibling sets; a mutant there
+ * that leaves it true walks forever. Refused, outside open-item code: a site that contains or sits in
+ * a write of such a name; the condition of an if/while/repeat/case whose body holds such a write; and
+ * an early exit (`exit`, Break/Quit/Skip, `Error`, or a guard holding one) that comes before such a
+ * write in its scope. Not seen: a write in another object, and a value that reaches the name through
+ * another variable.
+ */
+function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const obj = objectOf(node);
+  if (obj === null || obj.rawKind !== "report_declaration") return false;
+  const names = presetExitNames(obj, ctx);
+  if (names.size === 0 || inOpenItemCode(node, ctx)) return false;
+  const writes = (n: ALSyntaxNode): boolean => {
+    if (n.rawKind === "assignment_statement") {
+      const l = n.childForFieldName("left");
+      return l !== null && names.has(rootName(l));
+    }
+    if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
+      const args = n.childForFieldName("arguments")?.namedChildren ?? [];
+      // an unresolved callee counts as writing (the safe direction on this side)
+      return args.some(
+        (a, i) =>
+          isIdentifierLike(a) && names.has(normalizeAlName(a.text)) && argWritten(n, i, ctx, true),
+      );
+    }
+    return false;
+  };
+  const containsWrite = (n: ALSyntaxNode, after = -1): boolean => {
+    let found = false;
+    visitAll(n, (x) => {
+      if (!found && x.startIndex >= after && writes(x)) found = true;
+    });
+    return found;
+  };
+  const scope = codeScope(node);
+  for (
+    let a: ALSyntaxNode | null = node;
+    a !== null && (scope === null || !samePos(a, scope));
+    a = a.parent
+  ) {
+    if (writes(a)) return true;
+    // the condition of an if/while/repeat/case whose body holds such a write (a mutant there decides
+    // whether, or how often, the write runs: ReminderTest's backward line scan)
+    const p = a.parent;
+    const field = p === null ? undefined : GUARDED.get(p.rawKind);
+    if (
+      p !== null &&
+      field !== undefined &&
+      samePos(p.childForFieldName(field) ?? p, a) &&
+      containsWrite(p)
+    ) {
+      return true;
+    }
+    // an early exit before such a write in this scope (`if Hide then CurrReport.Break(); ...
+    // Continue := ...`): a mutant there decides whether the write runs at all
+    if (scope !== null && isEarlyExit(a, scope) && containsWrite(scope, a.endIndex)) return true;
+  }
+  return containsWrite(node);
+}
+
+/** An exit that can stop the rest of `scope`: `exit`, `CurrReport.Break/Quit/Skip` (and the XMLport
+ *  twins), an `Error` outside `asserterror`, or a guard statement whose branches hold one. */
+function isEarlyExit(n: ALSyntaxNode, scope: ALSyntaxNode): boolean {
+  const exits = (x: ALSyntaxNode): boolean =>
+    x.rawKind === "exit_statement" ||
+    isRaisedError(x, scope) ||
+    (x.rawKind === "member_expression" &&
+      REPORT_INSTANCES.has(normalizeAlName(x.childForFieldName("object")?.text ?? "")) &&
+      EARLY_EXITS.has(normalizeAlName(x.childForFieldName("member")?.text ?? "")));
+  const fn =
+    n.rawKind === "call_expression" || n.rawKind === "call_statement"
+      ? n.childForFieldName("function")
+      : null;
+  if (exits(n) || (fn !== null && exits(fn))) return true;
+  const field = GUARDED.get(n.rawKind);
+  if (field === undefined) return false;
+  const cond = n.childForFieldName(field);
+  let found = false;
+  visitAll(n, (x) => {
+    if (cond !== null && x.startIndex >= cond.startIndex && x.endIndex <= cond.endIndex) return;
+    if (exits(x)) found = true;
+  });
+  return found;
+}
+
+const EARLY_EXITS: ReadonlySet<string> = new Set(["quit", "break", "skip"]);
+
+/** Built-in functions that write their first argument. */
+const WRITING_BUILTINS: ReadonlySet<string> = new Set(["clear", "evaluate"]);
+
+/**
+ * Does call `c` write its argument at position `i`? Yes for a `var` parameter of a project
+ * procedure it resolves to (same object, or through `callTargets`), or for a writing built-in; no for
+ * a by-value parameter, another built-in, or a record method. `unknown` answers for a project-style
+ * call whose target cannot be found.
+ */
+function argWritten(c: ALSyntaxNode, i: number, ctx: SemanticContext, unknown: boolean): boolean {
+  const f = c.childForFieldName("function");
+  if (f === null) return unknown;
+  const procs: ALSyntaxNode[] = [];
+  const own = bareCallee(c);
+  const obj = objectOf(c);
+  const collect = (o: ALSyntaxNode, name: string): void => {
+    visitAll(o, (p) => {
+      if ((isProcedureLike(p) || p.rawKind === "procedure") && procNames(p).includes(name))
+        procs.push(p);
+    });
+  };
+  if (own !== null && obj !== null && procedureNamesOf(obj, ctx).has(own)) collect(obj, own);
+  else if (isIdentifierLike(f)) return WRITING_BUILTINS.has(normalizeAlName(f.text)) && i === 0;
+  else {
+    const t = callTargets(c, ctx);
+    if (t === null) {
+      // a record method on a record receiver writes no argument; anything else is unknown
+      const recv = f.childForFieldName("object");
+      const dt = recv === null || !isIdentifierLike(recv) ? null : declaredType(recv, ctx);
+      return dt?.kind === "table" ? false : unknown;
+    }
+    for (const o of t.objs) collect(o, t.member);
+    if (procs.length === 0) return t.kind === "record" ? false : unknown;
+  }
+  if (procs.length === 0) return unknown;
+  return procs.some((p) => {
+    const params = (p.childForFieldName("parameters")?.namedChildren ?? []).filter(
+      (x) => x.rawKind === "parameter",
+    );
+    const param = params[i];
+    return param !== undefined && param.childForFieldName("modifier")?.rawKind === "var_keyword";
+  });
+}
+
+/** The variable an assignment target writes: its LEFTMOST identifier node (`X`, `X.F`, `X[i]`,
+ *  `"No. of Lines".F`), read from the tree, never by splitting text. */
+function rootName(n: ALSyntaxNode): string {
+  let c: ALSyntaxNode | undefined = n;
+  while (c !== undefined && !isIdentifierLike(c)) c = c.namedChildren[0];
+  return c === undefined ? "" : normalizeAlName(c.text);
+}
+
+function presetExitNames(obj: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+  return cached(ctx, obj, "presetexit", () => {
+    const globals = new Set<string>();
+    for (const c of obj.childForFieldName("body")?.namedChildren ?? []) {
+      if (c.rawKind !== "var_section") continue;
+      visitAll(c, (v) => {
+        if (v.rawKind === "variable_declaration")
+          globals.add(normalizeAlName(v.childForFieldName("name")?.text ?? ""));
+      });
+    }
+    const reads = new Set<string>();
+    const written = new Set<string>();
+    const readAll = (n: ALSyntaxNode): void =>
+      visitAll(n, (x) => {
+        if (isIdentifierLike(x) && x.fieldName !== "member") reads.add(normalizeAlName(x.text));
+      });
+    // exit guards and bounds in EVERY open-item scope: the open items' triggers (Date items
+    // included) and the same-object procedures they reach
+    visitAll(obj, (s) => {
+      if (s.rawKind !== "trigger_declaration" && !isProcedureLike(s) && s.rawKind !== "procedure")
+        return;
+      const body = s.childForFieldName("body");
+      if (body === null || !inOpenItemCode(body, ctx)) return;
+      visitAll(s, (g) => {
+        const field = GUARDED.get(g.rawKind);
+        if (field !== undefined && guardHoldsExit(g, s)) {
+          const cond = g.childForFieldName(field);
+          if (cond !== null) readAll(cond);
+        }
+        if (g.rawKind !== "call_expression" && g.rawKind !== "call_statement") return;
+        const f = g.childForFieldName("function");
+        const m = normalizeAlName(f?.childForFieldName("member")?.text ?? f?.text ?? "");
+        if (m !== "setrange" && m !== "setfilter") return;
+        for (const a of (g.childForFieldName("arguments")?.namedChildren ?? []).slice(1))
+          readAll(a);
+      });
+    });
+    visitAll(obj, (n) => {
+      if (n.rawKind === "assignment_statement" && inOpenItemCode(n, ctx)) {
+        const l = n.childForFieldName("left");
+        if (l !== null) written.add(rootName(l));
+      }
+      if (
+        (n.rawKind === "call_expression" || n.rawKind === "call_statement") &&
+        inOpenItemCode(n, ctx)
+      ) {
+        // an argument is a write only for a var parameter or a writing built-in (unknown: no, which
+        // keeps the name preset: the safe direction on this side)
+        (n.childForFieldName("arguments")?.namedChildren ?? []).forEach((a, i) => {
+          if (isIdentifierLike(a) && argWritten(n, i, ctx, false))
+            written.add(normalizeAlName(a.text));
+        });
+        const f = n.childForFieldName("function");
+        const o = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
+        if (o !== null && o !== undefined && isIdentifierLike(o))
+          written.add(normalizeAlName(o.text));
+      }
+      if (
+        (n.rawKind === "for_statement" || n.rawKind === "foreach_statement") &&
+        inOpenItemCode(n, ctx)
+      ) {
+        const v = n.childForFieldName("variable") ?? n.namedChildren[0];
+        if (v !== undefined && v !== null) written.add(normalizeAlName(v.text));
+      }
+    });
+    return new Set([...reads].filter((r) => globals.has(r) && !written.has(r)));
+  });
+}
+
+/**
+ * R500 shape 5b: a filter call on an OPEN loop item's own record made from OUTSIDE the item's code
+ * (`Loop.SetRange(Number, 1, N)` in OnPreReport or a parent item). The item is open (any outside
+ * mention voids its certificates), and that call may be its real bound: a site that contains it or
+ * sits inside it is refused.
+ */
+function altersOpenItemFilter(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const obj = objectOf(node);
+  if (obj === null) return false;
+  const calls = cached(ctx, obj, "outsidefilters", () => {
+    const open = new Set<string>();
+    visitAll(obj, (n) => {
+      if (isLoopItem(n) && itemOpen(n, ctx))
+        open.add(normalizeAlName(n.childForFieldName("name")?.text ?? ""));
+    });
+    const out: ALSyntaxNode[] = [];
+    if (open.size === 0) return out;
+    visitAll(obj, (c) => {
+      if (c.rawKind !== "call_expression" && c.rawKind !== "call_statement") return;
+      const f = c.childForFieldName("function");
+      if (f === null || f.rawKind !== "member_expression") return;
+      const o = normalizeAlName(f.childForFieldName("object")?.text ?? "");
+      const m = normalizeAlName(f.childForFieldName("member")?.text ?? "");
+      if (open.has(o) && ITEM_FILTERS.has(m) && !inOpenItemCode(c, ctx)) out.push(c);
+    });
+    return out;
+  });
+  return calls.some(
+    (c) =>
+      (node.startIndex <= c.startIndex && c.endIndex <= node.endIndex) ||
+      (c.startIndex <= node.startIndex && node.endIndex <= c.endIndex),
+  );
+}
+
+const ITEM_FILTERS: ReadonlySet<string> = new Set([
+  "setrange",
+  "setfilter",
+  "setview",
+  "reset",
+  "copyfilter",
+  "copyfilters",
+]);
+
+/**
+ * R500 shape 3 (a stated LIMIT). A data item over an ordinary table ends when its records end,
+ * unless its own code inserts into the table it walks (Date Compress: new entries land after the
+ * cursor, and only a `SetRange("Entry No.", 0, LastEntryNo)` keeps the walk off them). In such an
+ * item, a site that deletes or alters (contains, or sits inside) a filter call on the item's own
+ * record in its OnPreDataItem is refused. "Inserts into its own table": an unqualified `Insert` in
+ * the item's triggers, or `X.Insert` where `X` is declared `Record <the item's table>` and NOT
+ * temporary, in the item's triggers or a same-object procedure they reach. Not seen: an insert made
+ * in another object, a bound set elsewhere (a callee, OnPreReport), and the item's other mutants (a
+ * guard before the insert, a key value).
+ */
+function altersSelfInsertFilter(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const s = codeScope(node);
+  if (s === null || s.rawKind !== "trigger_declaration" || triggerName(s) !== "onpredataitem")
+    return false;
+  let item: ALSyntaxNode | null = null;
+  for (let p = s.parent; p !== null && item === null; p = p.parent) {
+    if (p.rawKind === "report_dataitem") item = p;
+  }
+  if (item === null) return false;
+  const table = itemTable(item);
+  if (table === "integer" || table === "date") return false;
+  const name = normalizeAlName(item.childForFieldName("name")?.text ?? "");
+  let hit = false;
+  visitAll(s, (c) => {
+    if (hit || (c.rawKind !== "call_expression" && c.rawKind !== "call_statement")) return;
+    const f = c.childForFieldName("function");
+    if (f === null) return;
+    const own =
+      (isIdentifierLike(f) && ITEM_FILTERS.has(normalizeAlName(f.text))) ||
+      (f.rawKind === "member_expression" &&
+        normalizeAlName(f.childForFieldName("object")?.text ?? "") === name &&
+        ITEM_FILTERS.has(normalizeAlName(f.childForFieldName("member")?.text ?? "")));
+    if (!own) return;
+    const contains = node.startIndex <= c.startIndex && c.endIndex <= node.endIndex;
+    const inside = c.startIndex <= node.startIndex && node.endIndex <= c.endIndex;
+    if (contains || inside) hit = true;
+  });
+  return hit && selfInserts(item, ctx);
+}
+
+function selfInserts(item: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return cached(ctx, item, "selfins", () => {
+    const table = itemTable(item);
+    const obj = objectOf(item);
+    const body = item.childForFieldName("body");
+    if (obj === null || body === null) return false;
+    const triggers = itemMembers(body, ctx).filter((m) => m.kind === ALNodeKind.trigger);
+    // the item's triggers, then same-object procedures they reach, transitively
+    const scopes: ALSyntaxNode[] = [...triggers];
+    const seen = new Set<string>();
+    for (let i = 0; i < scopes.length; i++) {
+      const sc = scopes[i];
+      if (sc === undefined) continue;
+      visitAll(sc, (c) => {
+        const callee = bareCallee(c);
+        if (callee === null || seen.has(callee)) return;
+        seen.add(callee);
+        visitAll(obj, (p) => {
+          if ((isProcedureLike(p) || p.rawKind === "procedure") && procNames(p).includes(callee))
+            scopes.push(p);
+        });
+      });
+    }
+    return scopes.some((sc, i) => {
+      let found = false;
+      visitAll(sc, (c) => {
+        if (found || (c.rawKind !== "call_expression" && c.rawKind !== "call_statement")) return;
+        const f = c.childForFieldName("function");
+        if (f === null) return;
+        if (i < triggers.length && isIdentifierLike(f) && normalizeAlName(f.text) === "insert")
+          found = true;
+        if (f.rawKind !== "member_expression") return;
+        if (normalizeAlName(f.childForFieldName("member")?.text ?? "") !== "insert") return;
+        const recv = f.childForFieldName("object");
+        const t = recv === null || !isIdentifierLike(recv) ? null : declaredType(recv, ctx);
+        if (t !== null && t.kind === "table" && !t.temporary && t.name === table) found = true;
+      });
+      return found;
+    });
+  });
+}
+
+/**
+ * R500 shape 2 (option A, one hop). A procedure in ANOTHER object of the project that open-item
+ * code calls is refused, with the same-object procedures it reaches. The calls followed: every call
+ * of open-item code, plus every call anywhere in the object on a receiver variable that open-item
+ * code also calls (an iterator initialized in OnPreReport). A callee is found through the receiver's
+ * declared type (`Codeunit X`; `Record X` with X's project tableextensions; `Interface X`, meaning
+ * every project codeunit that implements X), or through a record the engine binds (`resolveReceiverTable`:
+ * a data item's name, an implicit record). Event subscribers count too: of an event open-item code
+ * raises, and of an event a refused callee raises. ONE object hop, a stated cap: a callee's own calls
+ * into a third object are not followed. Not seen: a receiver this cannot type (a RecordRef, a
+ * parameter of another procedure, an object in a `#if` wrapper), table triggers, events raised deeper,
+ * cross-app objects, `interface B extends A`, `Codeunit.Run`/`Report.Run` targets and
+ * tableextension-published events.
+ */
+function inOneHopCallee(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const s = codeScope(node);
+  if (s === null || !isProcedureLike(s)) return false;
+  const obj = objectOf(s);
+  if (obj === null) return false;
+  const reach = oneHopReach(ctx).get(objectKey(obj));
+  return reach !== undefined && procNames(s).some((k) => reach.has(k));
+}
+
+const objectKey = (o: ALSyntaxNode): string => `${o.rawKind}|${objectNameOf(o)}`;
+
+const oneHopReaches = new WeakMap<object, Map<string, Set<string>>>();
+/** object key -> procedure names reached in it, one hop from open-item code. */
+function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
+  const hit = oneHopReaches.get(ctx);
+  if (hit !== undefined) return hit;
+  const objects = projectObjects(ctx);
+  const out = new Map<string, Set<string>>();
+  oneHopReaches.set(ctx, out);
+  const add = (o: ALSyntaxNode, name: string): void => {
+    const k = objectKey(o);
+    const set = out.get(k) ?? new Set<string>();
+    if (set.has(name)) return;
+    set.add(name);
+    out.set(k, set);
+    // same-object closure inside the callee's object, through every call shape `openReachable`
+    // follows (`P()`, `this.P()`, `CurrReport.P()`, a bare `P` in an expression)
+    const names = procedureNamesOf(o, ctx);
+    visitAll(o, (n) => {
+      if (!isProcedureLike(n) && n.rawKind !== "procedure") return;
+      if (!procNames(n).includes(name)) return;
+      visitAll(n, (c) => {
+        const callee = bareCallee(c) ?? hiddenCallee(c, names, ctx);
+        if (callee !== null) add(o, callee);
+      });
+    });
+  };
+  // Event subscribers in the project, by "<object kind>|<object name>|<event name>" (`subscriberKey`).
+  const subscribers = new Map<string, { obj: ALSyntaxNode; proc: string }[]>();
+  for (const o of objects) {
+    visitAll(o, (p) => {
+      if (!isProcedureLike(p) && p.rawKind !== "procedure") return;
+      for (const a of attributesOf(p)) {
+        const k = subscriberKey(a, objects);
+        if (k === null) continue;
+        const list = subscribers.get(k) ?? [];
+        for (const nm of procNames(p)) list.push({ obj: o, proc: nm });
+        subscribers.set(k, list);
+      }
+    });
+  }
+  /** The subscribers of the event call `c` (inside object `o`) raises, or an empty list. */
+  const raised = (c: ALSyntaxNode, o: ALSyntaxNode): { obj: ALSyntaxNode; proc: string }[] => {
+    let pubObjs: ALSyntaxNode[];
+    let name = bareCallee(c);
+    if (name !== null) pubObjs = [o];
+    else {
+      const t = callTargets(c, ctx);
+      if (t === null) return [];
+      pubObjs = t.objs;
+      name = t.member;
+    }
+    const found: { obj: ALSyntaxNode; proc: string }[] = [];
+    for (const po of pubObjs) {
+      visitAll(po, (p) => {
+        if (
+          (!isProcedureLike(p) && p.rawKind !== "procedure") ||
+          !procNames(p).includes(name ?? "")
+        )
+          return;
+        if (!attributeNamesOf(p).some((a) => PUBLISHERS.has(a))) return;
+        const kind = po.rawKind.replace("_declaration", "");
+        found.push(...(subscribers.get(`${kind}|${objectNameOf(po)}|${name}`) ?? []));
+      });
+    }
+    return found;
+  };
+  const calls = (s: ALSyntaxNode): ALSyntaxNode[] => {
+    const r: ALSyntaxNode[] = [];
+    visitAll(s, (c) => {
+      if (c.rawKind === "call_expression" || c.rawKind === "call_statement") r.push(c);
+    });
+    return r;
+  };
+  const receiverOf = (c: ALSyntaxNode): string | null => {
+    const f = c.childForFieldName("function");
+    const r = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
+    return r !== null && r !== undefined && isIdentifierLike(r) ? normalizeAlName(r.text) : null;
+  };
+  for (const o of objects) {
+    if (!LOOP_OBJECTS.has(o.rawKind)) continue;
+    const all = calls(o);
+    const openCalls = all.filter((c) => inOpenItemCode(c, ctx));
+    if (openCalls.length === 0) continue;
+    const openRecvs = new Set(openCalls.map(receiverOf).filter((r): r is string => r !== null));
+    const openSet = new Set(openCalls);
+    const seeds = [
+      ...openCalls,
+      ...all.filter((c) => {
+        const r = receiverOf(c);
+        return !openSet.has(c) && r !== null && openRecvs.has(r);
+      }),
+    ];
+    for (const c of seeds) {
+      const t = callTargets(c, ctx);
+      if (t !== null) for (const obj of t.objs) add(obj, t.member);
+    }
+    for (const c of openCalls) for (const s of raised(c, o)) add(s.obj, s.proc);
+  }
+  // events raised from the refused callee procedures themselves (PEPPOL Management's OnFindNext*)
+  for (const [k, procs] of [...out]) {
+    const obj = objects.find((x) => objectKey(x) === k);
+    if (obj === undefined) continue;
+    visitAll(obj, (p) => {
+      if (
+        (!isProcedureLike(p) && p.rawKind !== "procedure") ||
+        !procNames(p).some((n) => procs.has(n))
+      )
+        return;
+      for (const c of calls(p)) for (const s of raised(c, obj)) add(s.obj, s.proc);
+    });
+  }
+  return out;
+}
+
+const LOOP_OBJECTS: ReadonlySet<string> = new Set([
+  "report_declaration",
+  "reportextension_declaration",
+  "xmlport_declaration",
+]);
+
+const PUBLISHERS: ReadonlySet<string> = new Set([
+  "integrationevent",
+  "businessevent",
+  "internalevent",
+]);
+
+/** The attribute items written directly before a procedure. */
+function attributesOf(p: ALSyntaxNode): ALSyntaxNode[] {
+  const par = p.parent;
+  if (par === null) return [];
+  const sibs = par.namedChildren;
+  const i = sibs.findIndex((s) => samePos(s, p));
+  const out: ALSyntaxNode[] = [];
+  for (let j = i - 1; j >= 0; j--) {
+    const s = sibs[j];
+    if (s === undefined || s.rawKind !== "attribute_item") break;
+    out.push(s);
+  }
+  return out;
+}
+
+interface DeclaredType {
+  /** `table` for a Record, else the object keyword: `codeunit`, `interface`, `report`, ... */
+  readonly kind: string;
+  /** The full object name, normalized (`normalizeAlName`): `"Cust. Ledger Entry"` stays one name. */
+  readonly name: string;
+  readonly temporary: boolean;
+}
+
+/** An object's own name, normalized the same way as `DeclaredType.name`. */
+const objectNameOf = (o: ALSyntaxNode): string =>
+  normalizeAlName(lastFieldChild(o, "object_name")?.text ?? "");
+
+/**
+ * The declared type of a receiver, read from the declaration's type NODE (`record_type` or
+ * `object_reference_type`, its last `reference` segment through `lastFieldChild`, as the engine's
+ * `classifyDeclaredType` does), never by splitting text: a quoted name with dots is one name. The
+ * declaration is the symbol table's (`resolveVarRef`), else (an XMLport, which the symbol table does
+ * not index) the nearest `var` declaration of that name in the enclosing trigger/procedure, then in
+ * the object. Null when not found: the call is not followed.
+ */
+function declaredType(recv: ALSyntaxNode, ctx: SemanticContext): DeclaredType | null {
+  let decl: ALSyntaxNode | null = resolveVarRef(recv, ctx)?.node ?? null;
+  if (decl === null) {
+    const name = normalizeAlName(recv.text);
+    const find = (holder: ALSyntaxNode): ALSyntaxNode | null => {
+      let t: ALSyntaxNode | null = null;
+      const walk = (n: ALSyntaxNode): void => {
+        for (const c of n.namedChildren) {
+          if (t !== null) return;
+          if (c.rawKind === "variable_declaration") {
+            if (normalizeAlName(c.childForFieldName("name")?.text ?? "") === name) t = c;
+          } else if (c.rawKind === "var_section" || c.rawKind === "var_body") {
+            walk(c);
+          }
+        }
+      };
+      walk(holder);
+      return t;
+    };
+    const scope = codeScope(recv);
+    decl = scope === null ? null : find(scope);
+    const body = objectOf(recv)?.childForFieldName("body") ?? null;
+    if (decl === null && body !== null) decl = find(body);
+  }
+  const typeNode = decl?.childForFieldName("type") ?? null;
+  if (typeNode === null) return null;
+  for (const c of typeNode.namedChildren) {
+    const ref = normalizeAlName(lastFieldChild(c, "reference")?.text ?? "");
+    if (c.rawKind === "record_type") {
+      return {
+        kind: "table",
+        name: ref,
+        temporary: c.namedChildren.some((x) => x.rawKind === "temporary_keyword"),
+      };
+    }
+    if (c.rawKind === "object_reference_type") {
+      return {
+        kind: normalizeAlName(c.childForFieldName("object_type")?.text ?? ""),
+        name: ref,
+        temporary: false,
+      };
+    }
+  }
+  return null;
+}
+
+/** Every object declaration of the project, per context (`ctx.files` required). */
+const projectObjectsMemo = new WeakMap<object, ALSyntaxNode[]>();
+function projectObjects(ctx: SemanticContext): ALSyntaxNode[] {
+  const hit = projectObjectsMemo.get(ctx);
+  if (hit !== undefined) return hit;
+  const files = ctx.files;
+  if (files === undefined) {
+    throw new Error(
+      "R500: the open-item hang refusal needs a SemanticContext with `files` (buildSemanticContext sets it)",
+    );
+  }
+  const objs = files.flatMap((f) => objectDeclarationsOf(f.root));
+  projectObjectsMemo.set(ctx, objs);
+  return objs;
+}
+
+/** The project objects a declared type names: a codeunit; a table plus its tableextensions; or every
+ *  codeunit that implements an interface. Names compared normalized, in full. */
+function objectsOfType(t: DeclaredType, ctx: SemanticContext): ALSyntaxNode[] {
+  const objects = projectObjects(ctx);
+  if (t.kind === "codeunit") {
+    return objects.filter(
+      (o) => o.rawKind === "codeunit_declaration" && objectNameOf(o) === t.name,
+    );
+  }
+  if (t.kind === "interface") {
+    return objects.filter(
+      (o) =>
+        o.rawKind === "codeunit_declaration" &&
+        o.namedChildren.some(
+          (c) =>
+            c.rawKind === "implements_clause" &&
+            c.namedChildren.some(
+              (i) => i.fieldName === "interface" && normalizeAlName(i.text) === t.name,
+            ),
+        ),
+    );
+  }
+  if (t.kind === "table") {
+    return objects.filter(
+      (o) =>
+        (o.rawKind === "table_declaration" && objectNameOf(o) === t.name) ||
+        (o.rawKind === "tableextension_declaration" &&
+          normalizeAlName(lastFieldChild(o, "base_object")?.text ?? "") === t.name),
+    );
+  }
+  return [];
+}
+
+/** Every procedure name an object declares (all arm names). */
+function procedureNamesOf(o: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+  return cached(ctx, o, "procnames", () => {
+    const names = new Set<string>();
+    visitAll(o, (n) => {
+      if (isProcedureLike(n) || n.rawKind === "procedure")
+        for (const k of procNames(n)) names.add(k);
+    });
+    return names;
+  });
+}
+
+/**
+ * The project objects and procedure name a call names in ANOTHER object: a member call through a
+ * typed receiver (`declaredType`), else through a record the engine can bind (`resolveReceiverTable`:
+ * a data item's name, `Rec`); or an unqualified call in a report or reportextension that names no
+ * procedure of its own object, on the enclosing data item's implicit record.
+ */
+function callTargets(
+  c: ALSyntaxNode,
+  ctx: SemanticContext,
+): { readonly objs: ALSyntaxNode[]; readonly member: string; readonly kind: string } | null {
+  const f = c.childForFieldName("function");
+  if (f === null) return null;
+  const onTable = (table: string | null, member: string) =>
+    table === null
+      ? null
+      : {
+          objs: objectsOfType(
+            { kind: "table", name: normalizeAlName(table), temporary: false },
+            ctx,
+          ),
+          member,
+          kind: "record",
+        };
+  if (f.rawKind === "member_expression") {
+    const recv = f.childForFieldName("object");
+    const member = normalizeAlName(f.childForFieldName("member")?.text ?? "");
+    if (recv === null || !isIdentifierLike(recv)) return null;
+    const t = declaredType(recv, ctx);
+    if (t !== null) {
+      return { objs: objectsOfType(t, ctx), member, kind: t.kind === "table" ? "record" : t.kind };
+    }
+    return onTable(resolveReceiverTable(c, ctx), member);
+  }
+  if (!isIdentifierLike(f)) return null;
+  const obj = objectOf(c);
+  const member = normalizeAlName(f.text);
+  if (obj === null || procedureNamesOf(obj, ctx).has(member)) return null;
+  if (obj.rawKind !== "report_declaration" && obj.rawKind !== "reportextension_declaration")
+    return null;
+  return onTable(resolveReceiverTable(c, ctx), member);
+}
+
+/** The attribute names written directly before a procedure (`EventSubscriber`, `IntegrationEvent`). */
+function attributeNamesOf(p: ALSyntaxNode): string[] {
+  return attributesOf(p).map((a) =>
+    normalizeAlName(a.childForFieldName("attribute")?.childForFieldName("name")?.text ?? ""),
+  );
+}
+
+/**
+ * An `[EventSubscriber(ObjectType::K, K::"Name", Event, ...)]` read from the attribute's argument
+ * NODES. The object: a `database_reference`'s last `table_name` segment; a namespace-qualified
+ * reference (`Codeunit::Microsoft.Sales."Sales-Post"`, a `member_expression`) by its last `member`;
+ * an integer object id (`ObjectType::Codeunit, 80`) through the project object of that kind and
+ * `object_id` (none: not followed). The event: a quoted string or a bare identifier. Key
+ * "<kind>|<object name>|<event>", normalized.
+ */
+function subscriberKey(a: ALSyntaxNode, objects: readonly ALSyntaxNode[]): string | null {
+  const content = a.childForFieldName("attribute");
+  if (normalizeAlName(content?.childForFieldName("name")?.text ?? "") !== "eventsubscriber")
+    return null;
+  const list = content?.childForFieldName("arguments")?.namedChildren[0];
+  const [kindArg, ref, event] = list?.namedChildren ?? [];
+  if (kindArg === undefined || ref === undefined || event === undefined) return null;
+  const k = normalizeAlName(kindArg.childForFieldName("value")?.text ?? "");
+  const kind = k === "database" ? "table" : k;
+  let obj: string;
+  if (ref.rawKind === "integer") {
+    const byId = objects.find(
+      (o) =>
+        o.rawKind === `${kind}_declaration` && o.childForFieldName("object_id")?.text === ref.text,
+    );
+    if (byId === undefined) return null;
+    obj = objectNameOf(byId);
+  } else if (ref.rawKind === "member_expression") {
+    obj = normalizeAlName(ref.childForFieldName("member")?.text ?? "");
+  } else {
+    obj = normalizeAlName(lastFieldChild(ref, "table_name")?.text ?? "");
+  }
+  const ev =
+    event.rawKind === "string_literal"
+      ? normalizeAlName(event.text.replace(/^'|'$/g, ""))
+      : normalizeAlName(event.text);
+  return `${kind}|${obj}|${ev}`;
+}
+
+const GUARDED: ReadonlyMap<string, string> = new Map([
+  ["if_statement", "condition"],
+  ["while_statement", "condition"],
+  ["repeat_statement", "condition"],
+  ["case_statement", "expression"],
+]);
+
+/** Does guard statement `g` hold a Break/Quit or a raised `Error` outside its own condition? */
+function guardHoldsExit(g: ALSyntaxNode, scope: ALSyntaxNode): boolean {
+  let found = false;
+  const cond = g.childForFieldName(GUARDED.get(g.rawKind) ?? "");
+  visitAll(g, (n) => {
+    if (cond !== null && n.startIndex >= cond.startIndex && n.endIndex <= cond.endIndex) return;
+    if (n.rawKind === "member_expression" && isReportExit(n)) found = true;
+    if (isRaisedError(n, scope)) found = true;
+  });
+  return found;
 }
 
 /** An integer literal, or a minus applied to one. */
@@ -1385,7 +2213,12 @@ export function hangCapableForMutatedNode(
   // (its triggers, its child items' triggers and columns, a reportextension dataset block anchored
   // on it) or in a same-object procedure reachable from that code is refused, whatever it writes
   // or reads.
-  if (inOpenItemCode(node, ctx)) return "loop-condition-target";
+  // R500: an XMLport element is open-item code only for the DISPATCH check, which the orchestrator
+  // skips in a file that cannot carry the selector var; here it would move those sites out of the
+  // `skipped` row, so this in-operator path keeps R487's report-only scope.
+  if (inOpenItemCode(node, ctx) && objectOf(node)?.rawKind !== "xmlport_declaration") {
+    return "loop-condition-target";
+  }
   if (node.kind === ALNodeKind.assignment_statement) return classifyHangCapable(node, ctx);
 
   let cur: ALSyntaxNode | null = node.parent;
