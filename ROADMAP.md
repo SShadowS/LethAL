@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**60 of 504 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**61 of 505 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -218,6 +218,7 @@ that ordering is the priority.
 - **R505** · Not measured: how al-runner maps a compiled file back to the source path it labels coverage with, when an object moves between files or its workspace cache is stale · [R505.md](docs/roadmap/R505.md) · open, filed 2026-10-08
 - **R506** · Four more BC reads clear their abort timer at the headers, so a body BC never finishes has no bound (the R191 class), and two of them turn an unread body into `{}` · [R506.md](docs/roadmap/R506.md) · open, filed 2026-10-08
 - **R507** · On the lease path, R-496's `UnfilteredExtensionsQueryError` is wrapped in a `LeaseUnavailableError` labelled "unreachable": its type is lost and the label is a wrong diagnosis · [R507.md](docs/roadmap/R507.md) · open, filed 2026-10-08
+- **R508** · `--resume` can carry the verdicts of a batch that a lease loss invalidated, kills included · [R508.md](docs/roadmap/R508.md) · open, filed 2026-10-08
 
 ## Product gaps a real project hits
 
