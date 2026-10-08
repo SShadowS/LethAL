@@ -15,12 +15,11 @@ import { runMutantLineCountMessage } from "./stale-test-app";
  * request, classifies dispatch/effect state the 5B way, validates the echoed identity tuple, and
  * maps the terminal result to a `TestVerdict`.
  *
- * Request-shaping (Basic auth, `company`/`tenant` query params, manual AbortController timeout)
- * mirrors `postOData` in activation.ts — deliberately NOT reused: `postOData` classifies a
- * non-2xx as `completed-effect-unknown`, but a `RunMutant` that answered non-2xx may have
- * activated a mutant and never confirmed its run-scoped clear, so the container could be left
- * mutated. That is an `in-flight-unknown` (quarantine), not a benign effect-unknown — the mapping
- * below is RunMutant-specific and must not drift back onto `postOData`'s.
+ * Request-shaping (Basic auth, `company`/`tenant` query params, a manual AbortController timeout,
+ * as every BC client here uses). A `RunMutant` that answered non-2xx may have activated a mutant
+ * and never confirmed its run-scoped clear, so the container could be left mutated: that is an
+ * `in-flight-unknown` (quarantine), not a benign effect-unknown — the mapping below is
+ * RunMutant-specific.
  */
 export interface RunMutantRequest {
   readonly ref: TestMethodRef;
