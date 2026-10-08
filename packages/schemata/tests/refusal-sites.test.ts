@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 
 /**
  * R-307 O2, source scan part 1. Every `FileRefusedError` is built at one of thirteen named sites

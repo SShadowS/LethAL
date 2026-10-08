@@ -17,7 +17,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 import { CAMPAIGN_COMPARE_SCHEMA_VERSION } from "../packages/runner/src/campaign-subcommands";
 import { STREAM_SCHEMA_VERSION } from "../packages/runner/src/events";
 import { REPORT_SCHEMA_VERSION } from "../packages/runner/src/report";

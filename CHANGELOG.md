@@ -125,6 +125,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **TypeScript 7.0, the native compiler** (R437). `bun run typecheck` takes about 1 s (was 12 s),
+  with the same strictness, measured flag by flag. 7.0 no longer ships the JavaScript compiler API,
+  so the schema generator and four tests that parse TypeScript import it from Microsoft's
+  `@typescript/typescript6` package instead. No product code changed.
+
 - **A genuine hang on al-runner `--server` now takes the stop (180 s by default, was 60 s) plus a
   daemon restart** (R517).
 - **`lethal explain` schema v15: the cause value `timeout-unconfirmed`** (R516). v14 is kept so a
