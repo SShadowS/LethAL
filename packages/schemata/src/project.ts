@@ -220,8 +220,8 @@ export function coarseIdentityTupleOf(
  * 35: R500, the dispatch check also refuses `Date` items, one-hop callees of open-item code in other
  * objects (codeunits, records, interface implementers, event subscribers), outside filter calls on
  * an open item, and two stated limits (a preset exit name's writes, a self-inserting item's own
- * filter), so a later same-tuple twin of a refused mutant takes its ordinal (BC.History: 23,848
- * deployed mutants removed, 167 keys; CDO and DO 2 removed, 0 keys; fixtures and DC: none).
+ * filter), so a later same-tuple twin of a refused mutant takes its ordinal (BC.History: 23,944
+ * deployed mutants removed, 165 keys; CDO and DO 2 removed, 0 keys; fixtures and DC: none).
  */
 export const IDENTITY_SCHEME = 35;
 
