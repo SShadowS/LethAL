@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { oneShotLimits } from "../src/al-runner-backend";
 import {
   OneShotTransport,
   buildAlRunnerArgv,
@@ -183,11 +184,11 @@ describe("OneShotTransport", () => {
   // runner-confirmed `outcome: "timeout"` path would be unreachable in real execution — every
   // genuine hang would be misclassified as infrastructure noise instead of a real timeout.
   // Pinned directly from the spawned env (no real-timer race) against several representative
-  // budgets — the same margin formula AlRunnerBackend uses (`Math.max(1,
-  // Math.floor(deadlineMs / 2000))`).
+  // budgets, through the same `oneShotLimits` AlRunnerBackend uses (R516: in-run limit = the
+  // budget rounded up to whole seconds, client deadline = twice the budget).
   test("the runner's own per-test budget always leaves real margin below the client deadline", async () => {
-    for (const deadlineMs of [2000, 5000, 14000, 120000]) {
-      const testTimeoutSeconds = Math.max(1, Math.floor(deadlineMs / 2000));
+    for (const budgetMs of [2000, 5000, 14000, 120000]) {
+      const { testTimeoutSeconds, deadlineMs } = oneShotLimits(budgetMs);
       const { envs, spawn } = recording({ tests: [] });
       await new OneShotTransport("al-runner", spawn).send({
         ...req,
@@ -195,10 +196,6 @@ describe("OneShotTransport", () => {
         deadlineMs,
       });
       const seconds = Number(envs[0]?.AL_RUNNER_TEST_TIMEOUT_SEC);
-      // Sub-second edge case: budgets under ~2000ms clamp to the 1s floor, at which
-      // point the client may still win the race. Acceptable and honest — not
-      // something to engineer around — so this isn't asserted for every budget below
-      // the threshold, only for the representative set above where real margin exists.
       expect(seconds * 1000).toBeLessThan(deadlineMs);
     }
   });

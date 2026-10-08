@@ -125,6 +125,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal explain` schema v15: the cause value `timeout-unconfirmed`** (R516). v14 is kept so a
+  stored v14 document stays checkable.
 - **`lethal explain` schema v14: the cause value `reused-budget-stale`** (R514). v13 is kept so a
   stored v13 document stays checkable.
 - **Every operator is refused in open report data-item code, and at a bounded item's only bound;
@@ -598,6 +600,28 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **On bcdev and al-runner one-shot, a timeout at group position 1 is now confirmed by one
+  unmutated run on every batch, not only a reused one, and on the worker that saw it** (R516). The
+  kill stands only if that run takes at most half the budget (R53's margin); otherwise the mutant is
+  an `error` with the new cause `timeout-unconfirmed`. A warm replay uses the same half-budget rule.
+  With the default `--mutant-timeout-ms`, a test that overruns its budget even unmutated is
+  abandoned at the deadline on bcdev (an unmutated run has no stop), recorded `in-flight-unknown`,
+  and the tier is quarantined; never a kill. Known lost-kill bands, never a false kill: a genuine
+  hang can be reported `timeout-unconfirmed` where a test's budget is twice its measured duration
+  (above the floor), and on al-runner one-shot wherever compile plus the test's body takes more than
+  half the budget (R516). The cost is one unmutated run per position-1 timeout: on bcdev one
+  `RunMutant` call (the test's own duration), on al-runner one-shot one full invocation, compile
+  included. al-runner `--server` is not covered (R517).
+- **al-runner one-shot now gives a test its whole budget in-run (it had half) and the process twice
+  the budget, so a slow test no longer times out under every mutant** (R516). A genuine hang now
+  takes the full budget to stop (180 s at the default, was 90 s), and a confirm there is a full
+  invocation, compile included. A baseline run's in-run limit moves from 60 s to 120 s at the
+  default baseline deadline, so a test whose body takes 60 to 120 s is no longer non-green there.
+- **On bcdev and al-runner one-shot, once a confirm measures a test slower than its budget allows,
+  later mutants in the same batch and worker are budgeted from that measurement** (R515). A kill is
+  still judged against the budget its run was sent. On al-runner `--server` (and resource with
+  `--server`) the re-budget is skipped: the daemon stops a test at its own 60 s whatever the budget,
+  so a larger budget would only let a later confirm pass the 2x rule (R516, R517).
 - **An al-runner run with coverage stops if the project changes under it** (R505). The pinned
   al-runner (`v2.12.0-main.c39ad5de`) labels coverage with the project's files as they are on disk,
   not the files LethAL compiled, so an object moved or renamed during a run had its coverage

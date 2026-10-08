@@ -704,25 +704,37 @@ describe("AlRunnerBackend.run", () => {
     expect(calls.length).toBe(1);
   });
 
-  // Regression guard for the timeout-margin bug: the backend's own derivation of the runner's
-  // per-test budget (from opts.timeoutMs) must leave al-runner's internal timeout comfortably
-  // BELOW our client deadline, never >= it. Otherwise our AbortController always wins the
-  // Promise.race and the runner-confirmed `outcome: "timeout"` path exercised above becomes
-  // unreachable in real execution — every genuine mutant-induced hang would be misclassified as
-  // deadline-exceeded (infrastructure noise). This drives the real backend.run() path (not a
+  // Regression guard for the timeout-margin bug, both directions (R516 T7). The in-run limit
+  // (AL_RUNNER_TEST_TIMEOUT_SEC, timed on the test body) must be AT LEAST the budget the
+  // orchestrator judges the run by: half of it timed a test out under every mutant on a budget of
+  // twice its wall clock (R516). And it must stay BELOW the client deadline actually sent, or our
+  // AbortController always wins the race and every genuine hang reads deadline-exceeded instead of
+  // the runner-confirmed `timeout`. This drives the real backend.run() path (not a
   // re-implementation of the formula) so a regression in the derivation itself fails this test.
-  // v2 delivers the budget as AL_RUNNER_TEST_TIMEOUT_SEC rather than a `--test-timeout` flag;
-  // the value and its reason are unchanged.
-  test("the per-test budget env var leaves real margin below the client deadline", async () => {
-    for (const timeoutMs of [5000, 14000, 120000]) {
+  test("the in-run limit is at least the budget and below the client deadline sent", async () => {
+    for (const timeoutMs of [1500, 5000, 14000, 120000]) {
       const { envs, spawn } = okSpawn({
         tests: [{ name: QUALIFIED, status: "pass" }],
       });
       const { backend } = await makeBackend(spawn);
+      // Record the deadline the backend hands its transport, delegating unchanged.
+      const t = (
+        backend as unknown as {
+          transport: { send: (r: { deadlineMs: number }) => Promise<unknown> };
+        }
+      ).transport;
+      const send = t.send.bind(t);
+      const deadlines: number[] = [];
+      t.send = async (r) => {
+        deadlines.push(r.deadlineMs);
+        return send(r);
+      };
       await backend.run(ref, { coverage: "none", timeoutMs });
       const raw = envs[0]?.AL_RUNNER_TEST_TIMEOUT_SEC;
       expect(raw).toBeDefined();
-      expect(Number(raw) * 1000).toBeLessThan(timeoutMs);
+      expect(deadlines).toHaveLength(1);
+      expect(Number(raw) * 1000).toBeGreaterThanOrEqual(timeoutMs);
+      expect(Number(raw) * 1000).toBeLessThan(deadlines[0] ?? 0);
     }
   });
 
@@ -881,6 +893,20 @@ describe("AlRunnerBackend serverMode (R220)", () => {
     );
     return { backend, runs: fake.runs, dir };
   }
+
+  test("R516 I1: inRunStopIsBudget is false under --server (the daemon's own stop), true one-shot", async () => {
+    const { backend } = await serverBackend([]);
+    const oneShot = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: "/x",
+        testDir: "/tests",
+        selectorObjectId: 50000,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+    expect([backend.inRunStopIsBudget, oneShot.inRunStopIsBudget]).toEqual([false, true]);
+  });
 
   test("runs the suite ONCE per activation and serves every test from it", async () => {
     // This is the whole economics of the mode. The server has no per-test filter, so `runTests`
