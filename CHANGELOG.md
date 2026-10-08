@@ -127,6 +127,34 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 - **`lethal explain` schema v14: the cause value `reused-budget-stale`** (R514). v13 is kept so a
   stored v13 document stays checkable.
+- **Every operator is refused in open report data-item code, and at a bounded item's only bound;
+  identity scheme 33** (R501). One check at dispatch now covers EVERY operator, with no exemption:
+  a site in an open `Integer` data item's code (R487's scope) is not mutated, and neither is a site
+  that deletes or alters the `SetRange` call that is a bounded item's only bound. That includes the
+  condition of a `CurrReport.Break` guard, the `Break` itself, `empty-block`, Tier 2's
+  `remove-setrange`, `loop-skip` and `loop-truncate`. Such sites are counted as `hang-refused` (R447),
+  and the hang-refused wording now names both causes (R196, R487/R501). A report column's source
+  is not counted. Measured with production code on BC.History: 13,435 generated mutants (12,612
+  deployed, after dedup) move to hang-refused, 0 appear, 0 change, and 378 keys move. CDO, DC, DO,
+  the fixtures and the examples are unchanged. By operator:
+
+  | operator | refused | operator | refused |
+  |---|---:|---|---:|
+  | void-method-call | 4,635 | return-value | 144 |
+  | empty-block | 2,552 | flip-filter-literal | 72 |
+  | negate-conditional | 2,233 | swap-call-arguments | 64 |
+  | remove-not | 823 | loop-skip | 50 |
+  | remove-setrange | 764 | swap-find-direction | 46 |
+  | toggle-blank-string | 726 | validate-to-assign | 34 |
+  | negate-guard | 593 | remove-calcfields | 33 |
+  | conditional-boundary | 374 | toggle-blank-temporal | 29 |
+  | loop-truncate | 192 | swap-modify-flag | 29 |
+  | remove-testfield | 24 | swap-enum-member | 16 |
+  | remove-commit | 2 | | |
+
+  History, `--resume` and marks recorded under 32 are not carried: marks files need
+  `"identityScheme": 33` after you re-check each mark (R325). Scheme 31 is unused. Known exclusions
+  are unchanged and filed as R500.
 
 - **`lethal verify` refuses a run whose test-app dependencies include a staged partner app**
   (R496). On bcdev, every app the dependency fingerprint hashes, partner and transitive ones too,

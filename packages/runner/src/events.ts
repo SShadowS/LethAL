@@ -176,7 +176,8 @@ export type RunEventInput =
       /** R307: files the instrumentation trial refused whole. Present only when non-empty, so a
        *  stream from before R307 stays valid and folds to the same report bytes. */
       readonly refusedFiles?: readonly RefusedExcludedFile[];
-      /** R447: files where R196's hang check refused sites. Present only when non-empty, so a
+      /** R447: files where a hang check refused sites (R196's loop-condition write, or R501's open
+       *  report data item or only bound). Present only when non-empty, so a
        *  stream from before R447 stays valid and folds to the same report bytes. */
       readonly hangRefusedFiles?: readonly HangRefusedFile[];
       /** R274: `hashSourceSnapshot` over the snapshot generation parsed. Optional on the wire so

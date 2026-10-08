@@ -1,7 +1,7 @@
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { tier1Operators } from "@lethal/builtin-tier1";
+import { openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
   ALNodeKind,
@@ -491,8 +491,8 @@ export interface MutationSetResult {
    * keeps.
    */
   readonly declarativeSites: readonly DeclarativeSiteFile[];
-  /** R447: per file, the sites R196's hang check refused (`MutationOperator.refusesHangCapable`),
-   *  after the `--operator` and `--lines` filters and outside inactive `#if` arms. */
+  /** R447: per file, the sites a hang check refused (R196's `MutationOperator.refusesHangCapable`,
+   *  or R501's dispatch-level `openItemHangRefuses`), after the `--operator` and `--lines` filters and outside inactive `#if` arms. */
   readonly hangRefused: readonly HangRefusedFile[];
   /**
    * R307: the exact identity entries of every file the trial refused (empty for a header-rule
@@ -986,11 +986,18 @@ export async function generateMutationSet(
     const hangRefusedHere = new Map<string, number>();
     visit(root, (node) => {
       for (const op of allOperators) {
-        if (!op.targets(node, ctx)) {
-          // R447: a site R196's hang check refused, counted only where this run would have
-          // mutated it: not compiled out, and admitted by `--operator` and `--lines`.
+        const targeted = op.targets(node, ctx);
+        // R501: ONE dispatch-level hang refusal for every operator in `allOperators`, no exemption:
+        // a site in open report-data-item code, or one that deletes or alters a bounded item's only
+        // bound. Only a MUTABLE site: a declarative one (a report column's source) keeps its normal
+        // path below, dropped and tallied as non-executable, so it is never counted here.
+        const r501 = targeted && isMutableSite(node) && openItemHangRefuses(node, ctx);
+        if (!targeted || r501) {
+          // R447: a site a hang check refused (R196's loop-condition write, or R501 above), counted
+          // only where this run would have mutated it: not compiled out, and admitted by
+          // `--operator` and `--lines`.
           if (
-            op.refusesHangCapable?.(node, ctx) === true &&
+            (r501 || op.refusesHangCapable?.(node, ctx) === true) &&
             !startsInInactiveArm(inactive, node.startIndex) &&
             (admittedOperators === undefined || admittedOperators.has(op.name)) &&
             (lineRanges === undefined ||
@@ -1217,14 +1224,15 @@ export async function generateMutationSet(
         uninstrumentableOnly.length > 0
           ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in ${where.join(" or in ")}, so nothing would deploy.`
           : "";
-      // R447: an operator whose sites R196 refused DID find sites; say where, as R307 does.
+      // R447: an operator whose sites a hang check refused (R196 or R501) DID find sites; say
+      // where, as R307 does.
       const hangNuance = barren
         .flatMap((n) => {
           const perFile = hangRefusedByOperator.get(n);
           if (perFile === undefined) return [];
           const where = [...perFile].map(([f, c]) => `${f} (${c})`).join(", ");
           return [
-            ` "${n}" had site(s) refused as hang-capable (R196: each writes a variable an enclosing loop's condition reads): ${where}.`,
+            ` "${n}" had site(s) refused as hang-capable (each writes a variable an enclosing loop's condition reads, R196, or is code of an unbounded report data item or a bounded item's only bound, R487/R501): ${where}.`,
           ];
         })
         .join("");
