@@ -419,7 +419,8 @@ function dirKey(dir: string): string {
 /**
  * R219 run 003. Refuses two files whose keys collide once lower-cased (sol run 002:
  * `Sales/Helper.al` and `sales/Helper.al` on a case-sensitive file system, where one alias would
- * silently replace the other), then returns the exact maps when any last segment is contested.
+ * silently replace the other), then returns the exact maps when the batch renamed a file and any
+ * last segment is contested.
  */
 function exactResolutionOf(
   rels: readonly string[],
@@ -448,7 +449,10 @@ function exactResolutionOf(
   const contested = new Set(
     [...ownersOfSegment].filter(([, owners]) => owners.size > 1).map(([segment]) => segment),
   );
-  if (contested.size === 0) return undefined;
+  // Only a batch that renamed a file has two namespaces to confuse. LethAL writes every batch flat,
+  // so a batch without renames has unique names; a hand-built nested one keeps R298's longest
+  // ending, which stops at a skipped file's own path.
+  if (contested.size === 0 || rels.every((rel) => display(rel) === rel)) return undefined;
   return {
     batchDir: dirKey(batchDir),
     ...(projectDir !== undefined ? { projectDir: dirKey(projectDir) } : {}),
