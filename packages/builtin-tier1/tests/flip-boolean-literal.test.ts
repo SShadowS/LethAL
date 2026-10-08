@@ -411,10 +411,15 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     expect(calls.length).toBe(7);
     for (const c of calls) expect(claimedRunTriggerSkip(c, ctx)).toBeNull();
     const repExt = `reportextension 50314 "RX" extends "Customer - List" { dataset { modify(Customer) { trigger OnAfterAfterGetRecord() begin Modify(true); Insert(false); end; } } }`;
-    expect(tagged({ "O.al": repExt })).toEqual([
+    // R487 blanket rule: the base report is in the project and its `Customer` item walks a real
+    // table (bounded), so the modify block keeps the R-452 tags. With the base ABSENT the block
+    // counts as open and both flips are refused (the open twin).
+    const base = `report 50315 "Customer - List" { dataset { dataitem(Customer; Customer) { } } }`;
+    expect(tagged({ "O.al": repExt, "B.al": base })).toEqual([
       "true->false run-trigger-skipped-modify",
       "false->true run-trigger-forced",
     ]);
+    expect(tagged({ "O.al": repExt })).toEqual([]);
   });
 
   // F14 (R479). Controls: a bare call whose binding IS known keeps today's behaviour.
@@ -448,18 +453,26 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     const rx = (body: string, vars = "") =>
       `reportextension 50315 "RX2" extends "Customer - List" { dataset { add(Customer) { dataitem(ParItem; "Par") { trigger OnAfterGetRecord() ${vars} begin ${body} end; } } } }`;
     const both = "Modify(true); Modify(false);";
-    expect(tagged({ "P.al": par(""), "O.al": rx(both) })).toEqual([
+    // R487 r6: an `add(Customer)` block runs inside base item Customer. The base report is in the
+    // project and walks a real table (bounded), so the R-452 metadata below is unchanged. With the
+    // base ABSENT the added item counts as open and every flip is refused (the open twin, last).
+    const B = `report 50316 "Customer - List" { dataset { dataitem(Customer; Customer) { } } }`;
+    expect(tagged({ "P.al": par(""), "B.al": B, "O.al": rx(both) })).toEqual([
       "true->false run-trigger-skipped-modify",
       "false->true run-trigger-forced",
     ]);
     const own = par("    procedure Modify(Run: Boolean) begin end;\n");
-    expect(tagged({ "P.al": own, "O.al": rx(both) })).toEqual(["true->false -", "false->true -"]);
-    const mgt = `codeunit 50303 "Mgt" { procedure Modify(Run: Boolean) begin end; }`;
-    const withCu = rx(`with Mgt do begin ${both} end;`, `var Mgt: Codeunit "Mgt";`);
-    expect(tagged({ "P.al": par(""), "M.al": mgt, "O.al": withCu })).toEqual([
+    expect(tagged({ "P.al": own, "B.al": B, "O.al": rx(both) })).toEqual([
       "true->false -",
       "false->true -",
     ]);
+    const mgt = `codeunit 50303 "Mgt" { procedure Modify(Run: Boolean) begin end; }`;
+    const withCu = rx(`with Mgt do begin ${both} end;`, `var Mgt: Codeunit "Mgt";`);
+    expect(tagged({ "P.al": par(""), "B.al": B, "M.al": mgt, "O.al": withCu })).toEqual([
+      "true->false -",
+      "false->true -",
+    ]);
+    expect(tagged({ "P.al": par(""), "O.al": rx(both) })).toEqual([]);
   });
 
   // F8. Revert: drop `claimsRecordMethod` (tag by method name alone).

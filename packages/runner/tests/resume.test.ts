@@ -510,8 +510,9 @@ describe("sessionFingerprint (R47)", () => {
   // control variables); it was cbbd9d28...3a65 under scheme 26. It moved again for R484 (scheme
   // 28, open `Integer` report data items are loops); it was 4ea3654a...49ab under scheme 27. It
   // moved again for R-300b (scheme 29, al-runner scores a `#if`-wrapped object alone in its file);
-  // it was 1ce22835...7dd7 under scheme 28.
-  const PINNED = "514067297e1726ad30f85570a44c426791a02595c2fcca315b6fb661a4301b37";
+  // it was 1ce22835...7dd7 under scheme 28. It moved again for R487 (scheme 30, every site in an
+  // open `Integer` data item's code is hang-refused); it was 51406729...1b37 under scheme 29.
+  const PINNED = "5b1d3f6cd60d43ba8a257548023c4170a3900003f4a1569c34436217df838f56";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2090,7 +2091,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 29 since R-300b (al-runner scores a `#if`-wrapped
+    // Pinned by value so a bump is deliberate: 30 since R487 (every site the four hang-capable
+    // operators mutate in an open `Integer` data item's code is hang-refused); 29 was R-300b
+    // (al-runner scores a `#if`-wrapped
     // object alone in its file, so a refused key's verdict can now be scored; no key moves); 28 was
     // R484 (an open `Integer` report data item is
     // a loop; writes its exit guards or range bounds read are hang-refused); 27 was R480 (body-exit
@@ -2108,7 +2111,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
     // sites move twins).
-    expect(IDENTITY_SCHEME).toBe(29);
+    expect(IDENTITY_SCHEME).toBe(30);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

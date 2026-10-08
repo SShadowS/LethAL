@@ -5,8 +5,11 @@ import {
   type SemanticContext,
   armOfNode,
   declarationMembers,
+  isObjectContainer,
   isProcedureLike,
   normalizeAlName,
+  objectDeclarationsOf,
+  procedureLikeArmNames,
   resolveVarRef,
 } from "@lethal/engine";
 
@@ -38,10 +41,15 @@ import {
  * only exit; `CurrReport.Skip`.
  *
  * R484: a report data item over the virtual `Integer` table is a loop too (BC calls its
- * `OnAfterGetRecord` once per record), unless a narrow certificate bounds it (`dataItemExitParts`).
- * A write in any trigger of an open item, or of an item nested in it, is refused when its exit
- * guards or its own range bounds read the target (`enclosingExitParts`). Known exclusions (R487):
- * exits behind calls, indirect feeds, other tables, and bounds set through another record.
+ * `OnAfterGetRecord` once per record), unless a narrow certificate bounds it (`dataItemOpen`).
+ * R487 (the blanket rule): inside an OPEN item, EVERY site the four operators mutate is refused,
+ * whatever it writes or reads (`inOpenItemCode`): the item's triggers, its child items' triggers
+ * and columns, a reportextension dataset block anchored on it, and every same-object procedure
+ * that code reaches by name. Known exclusions, none shown safe: code that runs before the item
+ * (`OnPreReport`, an earlier sibling), procedures in other objects, items over ordinary tables and
+ * `Date`, XMLport `Integer` elements, reportextensions outside the project, a `while`/`repeat`
+ * inside a bounded item's code (R196/R446/R480's loop rules only), all filed as R500, and
+ * condition-side mutants and the exit's own removal, filed as R501.
  *
  * WHAT IT DELIBERATELY DOES NOT SEE, all UNCLASSIFIED rather than proven safe (spec 3.2): a target
  * read in the loop BODY rather than its condition (beyond R446's body-exit guards); preheader
@@ -173,10 +181,9 @@ function conditionIdentifiers(parts: ALSyntaxNode[], ctx: SemanticContext): ALSy
 }
 
 /**
- * R484: the exit parts of every loop enclosing `node`, innermost first: each `while`/`repeat` up to
- * the procedure or trigger boundary (`loopExitParts`), then, when that boundary is a trigger of a
- * report data item, every open data item from there outwards (`dataItemExitParts`). A nested data
- * item runs once per record of its parent, so its triggers sit inside the parent's loop too.
+ * The exit parts of every `while`/`repeat` enclosing `node`, innermost first, up to the procedure or
+ * trigger boundary (`loopExitParts`). An open report data item is no longer read here: R487 refuses
+ * every site in its code before this is asked (`hangCapableForMutatedNode`).
  */
 function enclosingExitParts(node: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[][] {
   const out: ALSyntaxNode[][] = [];
@@ -185,13 +192,228 @@ function enclosingExitParts(node: ALSyntaxNode, ctx: SemanticContext): ALSyntaxN
     if (LOOP_KINDS.has(cur.kind)) out.push(loopExitParts(cur, ctx));
     cur = cur.parent;
   }
-  if (cur === null || cur.kind !== ALNodeKind.trigger) return out;
-  for (let p: ALSyntaxNode | null = cur.parent; p !== null; p = p.parent) {
-    if (p.rawKind !== "report_dataitem") continue;
-    const parts = dataItemExitParts(p, ctx);
-    if (parts !== null) out.push(parts);
-  }
   return out;
+}
+
+/** Per-context, per-file memo. The file root is a stable object (the arm map is keyed by it). */
+const memo = new WeakMap<object, WeakMap<ALSyntaxNode, Map<string, unknown>>>();
+function cached<T>(ctx: SemanticContext, n: ALSyntaxNode, tag: string, f: () => T): T {
+  let byRoot = memo.get(ctx);
+  if (byRoot === undefined) {
+    byRoot = new WeakMap();
+    memo.set(ctx, byRoot);
+  }
+  const root = rootOf(n);
+  let m = byRoot.get(root);
+  if (m === undefined) {
+    m = new Map();
+    byRoot.set(root, m);
+  }
+  const k = `${tag}|${n.startIndex}|${n.endIndex}`;
+  if (m.has(k)) return m.get(k) as T;
+  const v = f();
+  m.set(k, v);
+  return v;
+}
+
+/** The object declaration holding `n`: the ancestor whose parent is an object container (the file
+ *  root, or an R298 `preproc_conditional_object` wrapper). */
+function objectOf(n: ALSyntaxNode): ALSyntaxNode | null {
+  let cur: ALSyntaxNode = n;
+  while (cur.parent !== null && !isObjectContainer(cur.parent)) cur = cur.parent;
+  return cur.parent === null ? null : cur;
+}
+
+/** Every arm name of a procedure-like node (a split-header procedure has one per arm, possibly
+ *  renamed): all count, the safe direction. */
+const procNames = (p: ALSyntaxNode): string[] => procedureLikeArmNames(p).map(normalizeAlName);
+
+/** The callee name of a same-object call shape (`P()`, `P;`, `this.P()`), or null. */
+function bareCallee(n: ALSyntaxNode): string | null {
+  if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return null;
+  const f = n.childForFieldName("function");
+  if (f === null) return null;
+  if (isIdentifierLike(f)) return normalizeAlName(f.text);
+  if (f.rawKind !== "member_expression") return null;
+  const o = f.childForFieldName("object");
+  const m = f.childForFieldName("member");
+  return o !== null && m !== null && normalizeAlName(o.text) === "this"
+    ? normalizeAlName(m.text)
+    : null;
+}
+
+/** Where code runs: its trigger or procedure, or the report column whose source holds it. */
+function codeScope(n: ALSyntaxNode): ALSyntaxNode | null {
+  for (let s = n.parent; s !== null; s = s.parent) {
+    if (s.rawKind === "report_column" || isScope(s)) return s;
+  }
+  return null;
+}
+
+/** A reportextension dataset block anchored on a base item: `modify(D)`, `add(D)`, `addfirst(D)`,
+ *  `addlast(D)` and any other `*_dataset_modification`. */
+const isExtensionBlock = (n: ALSyntaxNode): boolean =>
+  n.rawKind === "modify_modification" || n.rawKind.endsWith("_dataset_modification");
+
+/**
+ * Is trigger or column `t` inside an open data item (itself or any ancestor item), or in a
+ * reportextension block whose base anchor is open (`modifiedItemOpen`)? An item added by an
+ * extension is checked itself first, then its block's anchor.
+ */
+function insideOpenItem(t: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return cached(ctx, t, "open", () => {
+    for (let p = t.parent; p !== null; p = p.parent) {
+      if (isExtensionBlock(p)) {
+        const ext = objectOf(p);
+        return ext?.rawKind === "reportextension_declaration" && modifiedItemOpen(ext, p, ctx);
+      }
+      if (p.rawKind === "report_dataitem" && itemOpen(p, ctx)) return true;
+    }
+    return false;
+  });
+}
+
+/**
+ * Is report data item `item` open? R484's certificates decide (`dataItemOpen`), EXCEPT that a view
+ * or SetRange certificate does not hold for an `Integer` item of a report that any reportextension
+ * in the project extends: extension code can change the item's filters. `MaxIteration` (an engine
+ * cap) still holds. This applies to the BASE report's own code too, not only the extension's.
+ */
+function itemOpen(item: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (dataItemOpen(item, ctx)) return true;
+  if (!isIntegerItem(item) || maxIterationBounded(item, ctx)) return false;
+  return reportExtended(item, ctx);
+}
+
+/**
+ * The base report an extension names, by its LAST name segment, so `N.P`, `"N"."P"` and `P` all
+ * match report `P`. Measured on the vendored grammar: a namespace qualifier parses as an ERROR
+ * sibling and the `base_object` field already holds only the last segment, so no splitting is
+ * needed; `loop-exit-refusal.test.ts` pins that on the AST, and goes red if a grammar change puts
+ * the full qualified name there. Matching the last segment alone can over-match a same-named report
+ * in another namespace: an extra refusal, the safe direction. No base name at all (a MISSING node):
+ * null, read as "extends every report".
+ */
+function extendedBaseName(ext: ALSyntaxNode): string | null {
+  const name = normalizeAlName(ext.childForFieldName("base_object")?.text ?? "");
+  return name === "" ? null : name;
+}
+
+const ANY_REPORT = "\u0000any";
+const extendedReports = new WeakMap<object, Set<string>>();
+/** Does any reportextension in the project extend the report holding `item`? Unknown (no file
+ *  list on the context): yes, the safe direction. An item an extension adds is not extended. */
+function reportExtended(item: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const report = objectOf(item);
+  if (report === null || report.rawKind !== "report_declaration") return false;
+  const files = ctx.files;
+  if (files === undefined) return true;
+  let names = extendedReports.get(ctx);
+  if (names === undefined) {
+    names = new Set();
+    for (const f of files) {
+      for (const o of objectDeclarationsOf(f.root)) {
+        if (o.rawKind !== "reportextension_declaration") continue;
+        names.add(extendedBaseName(o) ?? ANY_REPORT);
+      }
+    }
+    extendedReports.set(ctx, names);
+  }
+  const own = normalizeAlName(report.childForFieldName("object_name")?.text ?? "");
+  return names.has(ANY_REPORT) || names.has(own);
+}
+
+/**
+ * A reportextension dataset block anchored on `D` runs inside base item `D` AND every base item
+ * enclosing it. It counts as open unless the base report is in this project, `D` is found there,
+ * and neither `D` nor any enclosing base item is open (`itemOpen`), and every enclosing `Integer`
+ * item has a `MaxIteration` bound: an extension can change a base item's filters, so a base-only
+ * view or `SetRange` certificate does not count. Not found, ambiguous or unnamed: open (the safe
+ * direction).
+ */
+function modifiedItemOpen(ext: ALSyntaxNode, mod: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const base = extendedBaseName(ext);
+  if (base === null) return true;
+  const target = normalizeAlName(mod.childForFieldName("target")?.text ?? "");
+  const reports = ctx.symbols.objects.filter(
+    (o) => o.kind === "report" && normalizeAlName(o.name) === base,
+  );
+  const [report] = reports;
+  if (reports.length !== 1 || report === undefined) return true;
+  const items: ALSyntaxNode[] = [];
+  visitAll(report.node, (n) => {
+    if (
+      n.rawKind === "report_dataitem" &&
+      normalizeAlName(n.childForFieldName("name")?.text ?? "") === target
+    ) {
+      items.push(n);
+    }
+  });
+  const [item] = items;
+  if (items.length !== 1 || item === undefined) return true;
+  for (let p: ALSyntaxNode | null = item; p !== null; p = p.parent) {
+    if (p.rawKind !== "report_dataitem") continue;
+    if (itemOpen(p, ctx)) return true;
+    if (isIntegerItem(p) && !maxIterationBounded(p, ctx)) return true;
+  }
+  return false;
+}
+
+/** A qualified `System.Utilities.Integer` has one `table_name` child per segment; the table is the LAST. */
+function isIntegerItem(item: ALSyntaxNode): boolean {
+  const table = item.namedChildren.filter((c) => c.fieldName === "table_name").at(-1);
+  return normalizeAlName(table?.text ?? "") === "integer";
+}
+
+/** The engine cap: a literal `MaxIteration` from 1 to `ITERATION_CAP` the build surely has. */
+function maxIterationBounded(item: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const body = item.childForFieldName("body");
+  if (body === null) return false;
+  return itemMembers(body, ctx, true).some((m) => {
+    if (m.kind !== ALNodeKind.property) return false;
+    const v = m.childForFieldName("value");
+    if (normalizeAlName(m.childForFieldName("name")?.text ?? "") !== "maxiteration") return false;
+    if (v === null || v.rawKind !== "integer") return false;
+    const max = Number(v.text);
+    return max > 0 && max <= ITERATION_CAP;
+  });
+}
+
+/** Same-object procedures reachable (by name, transitively) from open-item code. */
+function openReachable(obj: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+  return cached(ctx, obj, "reach", () => {
+    const calls: { readonly callee: string; readonly scope: ALSyntaxNode | null }[] = [];
+    visitAll(obj, (n) => {
+      const callee = bareCallee(n);
+      if (callee !== null) calls.push({ callee, scope: codeScope(n) });
+    });
+    const out = new Set<string>();
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const c of calls) {
+        if (out.has(c.callee) || c.scope === null) continue;
+        const from = isProcedureLike(c.scope)
+          ? procNames(c.scope).some((k) => out.has(k))
+          : insideOpenItem(c.scope, ctx);
+        if (from) {
+          out.add(c.callee);
+          changed = true;
+        }
+      }
+    }
+    return out;
+  });
+}
+
+/** R487: is `node` in open-item code, or in a same-object procedure open-item code reaches? */
+function inOpenItemCode(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const s = codeScope(node);
+  if (s === null) return false;
+  if (!isProcedureLike(s)) return insideOpenItem(s, ctx);
+  const obj = objectOf(s);
+  if (obj === null) return false;
+  const reach = openReachable(obj, ctx);
+  return procNames(s).some((k) => reach.has(k));
 }
 
 /**
@@ -228,22 +450,18 @@ const triggerName = (t: ALSyntaxNode): string =>
  * - `DataItemTableView` filtering `Number` by `const(...)` or a closed `filter(...)` (`closedFilter`),
  *   AND zero mentions of the item's record (`mentionScan`), since any mention may replace it;
  * - the SINGLE-MENTION certificate (`certified`): one literal, small `SetRange(Number, ...)`.
- * Otherwise its exit parts, read with R446's ANY-guard walk (`exitGuards`):
- * - the guards of `CurrReport.Break`/`Quit` and `Error` (outside `asserterror`) in its own
- *   `OnPreDataItem` (they decide whether it iterates at all) and `OnAfterGetRecord`;
- * - the guards of `CurrReport.Quit` and `Error` in every trigger of every nested data item (they end
- *   the report); a nested `Break` ends only the nested item;
- * - the arguments of every `SetRange`/`SetFilter` on its record in its triggers: a variable bound
- *   can be mutated to 2147483647, so the writes it reads are refused too.
- * Not exits: `exit` and an AL `break` (they end the trigger call), `CurrReport.Skip` (next record),
- * and guards in its own `OnPostDataItem` (after the loop).
+ * Otherwise it is OPEN, and R487 refuses every site in its code (`inOpenItemCode`). R484's exit
+ * guards and range arguments are no longer collected: the blanket rule covers every site they named.
  */
-function dataItemExitParts(item: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] | null {
-  const table = item.childForFieldName("table_name");
-  if (table === null || normalizeAlName(table.text) !== "integer") return null;
+function dataItemOpen(item: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return cached(ctx, item, "item", () => dataItemOpenOnce(item, ctx));
+}
+
+function dataItemOpenOnce(item: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (!isIntegerItem(item)) return false;
   const name = normalizeAlName(item.childForFieldName("name")?.text ?? "");
   const body = item.childForFieldName("body");
-  if (body === null) return null;
+  if (body === null) return false;
   const members = itemMembers(body, ctx);
   let viewBounded = false;
   // A bound property counts only where the build surely has it: a direct member, or one inside a
@@ -254,42 +472,14 @@ function dataItemExitParts(item: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNo
     const v = m.childForFieldName("value");
     if (p === "maxiteration" && v !== null && v.rawKind === "integer") {
       const max = Number(v.text);
-      if (max > 0 && max <= ITERATION_CAP) return null;
+      if (max > 0 && max <= ITERATION_CAP) return false;
     }
     if (p === "dataitemtableview" && viewBoundsNumber(m)) viewBounded = true;
   }
   const triggers = members.filter((m) => m.kind === ALNodeKind.trigger);
   const scan = mentionScan(item, name, triggers);
-  if (viewBounded && scan.mentions.length + scan.calls.length === 0) return null;
-  if (certified(scan, name, triggers, ctx)) return null;
-  const parts: ALSyntaxNode[] = [];
-  for (const t of triggers) {
-    visitAll(t, (n) => {
-      const r = rangeCallOf(n, name);
-      if (r !== null) parts.push(...r.args);
-    });
-  }
-  for (const t of triggers) {
-    const tn = triggerName(t);
-    if (tn !== "onpredataitem" && tn !== "onaftergetrecord") continue;
-    const tb = t.childForFieldName("body");
-    if (tb !== null) parts.push(...exitGuards(tb, t, (n) => endsDataItem(n, t)));
-  }
-  const nested = (ms: ALSyntaxNode[]): void => {
-    for (const m of ms) {
-      if (m.rawKind !== "report_dataitem") continue;
-      const b = m.childForFieldName("body");
-      if (b === null) continue;
-      const inner = itemMembers(b, ctx);
-      for (const t of inner) {
-        const tb = t.kind === ALNodeKind.trigger ? t.childForFieldName("body") : null;
-        if (tb !== null) parts.push(...exitGuards(tb, t, (n) => endsReport(n, t)));
-      }
-      nested(inner);
-    }
-  };
-  nested(members);
-  return parts;
+  if (viewBounded && scan.mentions.length + scan.calls.length === 0) return false;
+  return !certified(scan, name, triggers, ctx);
 }
 
 /** Is `call` a statement of `trigger`'s own block (through nested `begin`/`end` and `#if` only),
@@ -314,21 +504,6 @@ function unconditional(call: ALSyntaxNode, trigger: ALSyntaxNode): boolean {
 function visitAll(n: ALSyntaxNode, f: (n: ALSyntaxNode) => void): void {
   f(n);
   for (const c of n.namedChildren) visitAll(c, f);
-}
-
-/** `CurrReport.Break`/`Quit`, or an `Error(...)` outside `asserterror`, below `stop`. */
-function endsDataItem(n: ALSyntaxNode, stop: ALSyntaxNode): boolean {
-  if (n.rawKind === "member_expression") return isReportExit(n);
-  return isRaisedError(n, stop);
-}
-
-/** `CurrReport.Quit` (or the XMLport twin), or an `Error(...)` outside `asserterror`: ends the
- *  report, so every enclosing data item. */
-function endsReport(n: ALSyntaxNode, stop: ALSyntaxNode): boolean {
-  if (n.rawKind === "member_expression") {
-    return isReportExit(n) && normalizeAlName(n.childForFieldName("member")?.text ?? "") === "quit";
-  }
-  return isRaisedError(n, stop);
 }
 
 /**
@@ -403,6 +578,13 @@ function mentionScan(item: ALSyntaxNode, name: string, triggers: ALSyntaxNode[])
   const calls: { readonly call: ALSyntaxNode; readonly trigger: ALSyntaxNode }[] = [];
   for (const t of triggers) {
     visitAll(t, (n) => {
+      // R487 item 7: an unqualified `Number := X` moves the item's cursor: a mention.
+      if (n.kind === ALNodeKind.assignment_statement) {
+        const l = n.childForFieldName("left");
+        if (l !== null && isIdentifierLike(l) && normalizeAlName(l.text) === "number") {
+          mentions.push(l);
+        }
+      }
       if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return;
       const fn = n.childForFieldName("function");
       if (fn !== null && isIdentifierLike(fn)) calls.push({ call: n, trigger: t });
@@ -466,14 +648,11 @@ function intValue(a: ALSyntaxNode): number | null {
 }
 
 /**
- * A `SetRange`/`SetFilter` call on the item's own record (unqualified, or qualified by its name),
- * with its arguments after the field. `literal`: `SetRange(<f>, v)` or `SetRange(<f>, lo, hi)` with
- * integer literals, lo <= hi and at most `ITERATION_CAP` records (a reversed range is no bound).
+ * A `SetRange`/`SetFilter` call on the item's own record (unqualified, or qualified by its name).
+ * `literal`: `SetRange(<f>, v)` or `SetRange(<f>, lo, hi)` with integer literals, lo <= hi and at
+ * most `ITERATION_CAP` records (a reversed range is no bound).
  */
-function rangeCallOf(
-  n: ALSyntaxNode,
-  item: string,
-): { readonly literal: boolean; readonly args: ALSyntaxNode[] } | null {
+function rangeCallOf(n: ALSyntaxNode, item: string): { readonly literal: boolean } | null {
   if (n.rawKind !== "call_expression") return null;
   const f = n.childForFieldName("function");
   if (f === null) return null;
@@ -496,7 +675,7 @@ function rangeCallOf(
     lo !== undefined &&
     hi !== null &&
     (hi === undefined || (lo <= hi && hi - lo + 1 <= ITERATION_CAP));
-  return { literal, args: literal ? [] : [...rest] };
+  return { literal };
 }
 
 /**
@@ -669,8 +848,7 @@ function isRaisedError(n: ALSyntaxNode, stop: ALSyntaxNode): boolean {
   return true;
 }
 
-/** The guards of every node under `body` that `isExit` names, climbing to `loop` (R446; R484
- *  passes a data item's trigger as `loop`). */
+/** The guards of every node under `body` that `isExit` names, climbing to `loop` (R446). */
 function exitGuards(
   body: ALSyntaxNode,
   loop: ALSyntaxNode,
@@ -1138,6 +1316,11 @@ export function hangCapableForMutatedNode(
   node: ALSyntaxNode,
   ctx: SemanticContext,
 ): HangCapableReason | null {
+  // R487 blanket rule: every site the hang-capable operators mutate inside an OPEN data item's code
+  // (its triggers, its child items' triggers and columns, a reportextension dataset block anchored
+  // on it) or in a same-object procedure reachable from that code is refused, whatever it writes
+  // or reads.
+  if (inOpenItemCode(node, ctx)) return "loop-condition-target";
   if (node.kind === ALNodeKind.assignment_statement) return classifyHangCapable(node, ctx);
 
   let cur: ALSyntaxNode | null = node.parent;

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**58 of 496 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**59 of 499 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -200,16 +200,19 @@ that ordering is the priority.
 - **R484** · The hang refusal does not see report data-item loops: an open-ended `Integer` data item ended only by a `Continue` flag can be mutated to repeat forever · [R484.md](docs/roadmap/R484.md) · done (8cfa6094)
 - **R485** · 301 BaseApp `run-trigger-forced` tags come only from `forceCanRaise`'s text check on unindexed objects: a possible over-tag (safe direction), measure first · [R485.md](docs/roadmap/R485.md) · done (cfaf0f6e)
 - **R486** · An env-tool --resume can carry kills measured under the OUTGOING test app: R247's test-app hash is read before the session publishes the new one (a false-kill path) · [R486.md](docs/roadmap/R486.md) · done (5c4d96cf)
-- **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · open, filed 2026-10-06
+- **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · done (538c38c8)
 - **R488** · al-runner one-shot runs every test whose name CONTAINS the requested one, and LethAL credits the merged coverage to the requested test · [R488.md](docs/roadmap/R488.md) · done (0cbc8cf6); upstream exact-match ask filed 2026-10-07 as StefanMaron/BusinessCentral.AL.Runner#5439
 - **R490** · al-runner one-shot: a look-alike test that discovery did not see and that hangs scores the requested test's mutant timeout-killed · [R490.md](docs/roadmap/R490.md) · closed 2026-10-07 — ruling: no false kill is possible; the shape is absent in every corpus, and a test-only…
 - **R494** · a top-level (or `#if`-wrapped) split-header object declaration is invisible to `projectObserves`: a possible under-tag · [R494.md](docs/roadmap/R494.md) · open, filed 2026-10-06
 - **R491** · R488 follow-ups: a duplicate row for the requested test is credited, and three R488 tests would pass with the guarantee broken · [R491.md](docs/roadmap/R491.md) · done (276698c4)
 - **R492** · Env-tool runs record the served package hash before the installed version is proven, so a later --resume can carry another test app's verdicts · [R492.md](docs/roadmap/R492.md) · done (cd64dad4)
-- **R493** · R484 follow-ups: three report data-item shapes still emit hang-capable mutants, and an OnPostDataItem write is over-refused · [R493.md](docs/roadmap/R493.md) · open, filed 2026-10-06
+- **R493** · R484 follow-ups: three report data-item shapes still emit hang-capable mutants, and an OnPostDataItem write is over-refused · [R493.md](docs/roadmap/R493.md) · done (538c38c8)
 - **R495** · A session without an env-tool hook records the pre-lease served test-app hash without proving it is the installed one · [R495.md](docs/roadmap/R495.md) · done (98748740)
 - **R496** · `test_app_hash` hashes only the test app's bytes: two proven runs whose hook-published dependency changed still match · [R496.md](docs/roadmap/R496.md) · done (47179723)
 - **R499** · Outstanding stop requests are not drained before a score is published · [R499.md](docs/roadmap/R499.md) · open, filed 2026-10-07
+- **R500** · Report-loop hang shapes R487's blanket rule does not cover: code before the item, other-object callees, table and Date items, XMLport Integer elements, outside reportextensions · [R500.md](docs/roadmap/R500.md) · open, filed 2026-10-07
+- **R501** · Condition-side mutants of a report data item's exit guard, and removing the exit itself, can hang an open Integer item · [R501.md](docs/roadmap/R501.md) · open, filed 2026-10-07
+- **R502** · The receiver resolver reads a namespace-qualified data item table (`System.Utilities.Integer`) as its first segment · [R502.md](docs/roadmap/R502.md) · open, filed 2026-10-08
 
 ## Product gaps a real project hits
 

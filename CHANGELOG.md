@@ -146,6 +146,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   swallowed, so a refusal can no longer end as a recovered or timed-out verdict; `runWithCoverage`
   does the same, and a refusal that arrives after its call has returned (a stop still pending past
   its bound) is thrown by the next call before it sends anything.
+- **An open `Integer` report data item refuses every hang-capable site in its code; identity
+  scheme 30** (R487, R493). In an open item (R484's bounds decide, see below), `remove-assignment`,
+  `shift-integer`, `flip-boolean-literal` and `swap-additive` now refuse EVERY site, whatever it
+  writes or reads. The rule covers the item's triggers, its child items' triggers and columns, a
+  reportextension dataset block (`modify`, `add`, `addfirst`, `addlast`) whose base item is open or
+  not in the project, and every same-object procedure that code reaches by name. A child of an open
+  item counts as open. Two bound changes: an unqualified `Number := X` voids the certificates, and
+  for an `Integer` item of a report that any project reportextension extends, only `MaxIteration`
+  counts as a bound. A namespace-qualified `System.Utilities.Integer` item counts as an `Integer`
+  item. Measured offline: BC.History 5,149 sites move from emitted to refused (0 released, 0
+  changed), 203 keys move; CDO, DC, DO, the fixtures and the examples are unchanged.
+  History, `--resume` and marks recorded under 29 are not carried: marks files need
+  `"identityScheme": 30` after you re-check each mark (R325). Known exclusions, filed: code that
+  runs before the item, other-object callees, items over ordinary tables or `Date`, XMLport
+  `Integer` elements, reportextensions outside the project, and condition-side mutants.
 
 - **al-runner scores a `#if`-wrapped object that is alone in its file; identity scheme 29**
   (R-300b, R300). al-runner (one-shot, `--server` and resource modes) now scores such an object,

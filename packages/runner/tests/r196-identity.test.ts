@@ -68,8 +68,8 @@ beforeAll(async () => {
 });
 
 describe("R196: refusing an earlier identity twin moves a later twin's key", () => {
-  test("the identity scheme is 29 (10 for this key move, 11 R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20 and 23 unused, 21 R459, 22 R-464, 24 R475, 25 R446, 26 R477, 27 R480, 28 R484, 29 R-300b)", () => {
-    expect(IDENTITY_SCHEME).toBe(29);
+  test("the identity scheme is 30 (10 for this key move, 11 R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20 and 23 unused, 21 R459, 22 R-464, 24 R475, 25 R446, 26 R477, 27 R480, 28 R484, 29 R-300b, 30 R487)", () => {
+    expect(IDENTITY_SCHEME).toBe(30);
   });
 
   test("the in-loop flip is refused and the last flip takes ordinal 1, the refused one's old key", () => {

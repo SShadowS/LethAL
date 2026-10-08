@@ -1009,7 +1009,9 @@ const onPreReport = (...lines: string[]) => [
 const texts = (sites: string[]) => sites.map((s) => s.split("|")[1]);
 const removed = (src: string, symbols?: string[] | "undecided") =>
   texts(claimedSites(removeAssignment, src, symbols));
-const REFUSED = ["Other := Other + 1"];
+/** R487 blanket rule: in an OPEN item every site is refused, so nothing is claimed. The claimed
+ *  control of each certificate test is its BOUNDED twin in the same describe (`CLAIMED`). */
+const REFUSED: string[] = [];
 const CLAIMED = ["Continue := false", "Other := Other + 1"];
 const integer = (props: string[], triggers: string[], inner?: string[]) =>
   report('"Integer"', props, triggers, inner);
@@ -1025,122 +1027,67 @@ const childSetRange = [
   "}",
 ];
 
-describe("R484: an open `Integer` data item is a loop; its exit guards' writes are refused", () => {
-  it("an open `filter(1 ..)` view: the Continue write is refused, the sibling claimed (revert to red: `enclosingExitParts` stops at the trigger)", () => {
-    const src = integer(["DataItemTableView = where(Number = filter(1 ..));"], dimLoop);
+// R487 blanket rule: the R484 tests of WHICH guards are exits (OnPreDataItem Break/Quit, Skip,
+// OnPostDataItem, any-guard, a child's Quit/Error/Break) are deleted with the guard collection they
+// tested: in an open item every site is refused whatever the guards say, so that code is gone.
+describe("R484/R487: an open `Integer` data item refuses every site; a bounded twin claims them", () => {
+  it("an open `filter(1 ..)` view refuses every write and literal; with `MaxIteration = 10` both are claimed (revert to red: drop the blanket check, or treat `filter(1 ..)` as closed)", () => {
+    const view = "DataItemTableView = where(Number = filter(1 ..));";
+    const src = integer([view], dimLoop);
     expect(removed(src)).toEqual(REFUSED);
     expect(texts(claimedSites(flipBooleanLiteral, src))).toEqual([]);
+    const twin = integer([view, "MaxIteration = 10;"], dimLoop);
+    expect(removed(twin)).toEqual(CLAIMED);
+    expect(texts(claimedSites(flipBooleanLiteral, twin))).toEqual(["false"]);
+  });
+
+  it("a namespace-qualified `System.Utilities.Integer` item is an Integer item: open refuses, a `MaxIteration` twin claims (revert to red: read the FIRST `table_name` child)", () => {
+    const view = "DataItemTableView = where(Number = filter(1 ..));";
+    expect(removed(report("System.Utilities.Integer", [view], dimLoop))).toEqual(REFUSED);
+    expect(
+      removed(report("System.Utilities.Integer", [view, "MaxIteration = 10;"], dimLoop)),
+    ).toEqual(CLAIMED);
   });
 
   it("a real table is bounded (revert to red: drop the `Integer` check)", () => {
     expect(removed(report('"Sales Header"', [], dimLoop))).toEqual(CLAIMED);
   });
 
-  it("swap-additive: a literal-operand write a Break guard reads is refused, an unrelated one emitted (revert to red: `enclosingExitParts` stops at the trigger)", () => {
-    const src = integer(
-      [],
-      [
-        "trigger OnAfterGetRecord()",
-        "begin",
-        "    Other := 2 - 1;",
-        "    NoOfLoops := 2 + 1;",
-        "    if Other = 1 then",
-        "        CurrReport.Break();",
-        "end;",
-      ],
-    );
-    expect(texts(claimedSites(swapAdditive, src))).toEqual(["2 + 1"]);
+  it("swap-additive: an open item refuses every literal operand; a bounded twin claims both (revert to red: drop the blanket check)", () => {
+    const trig = [
+      "trigger OnAfterGetRecord()",
+      "begin",
+      "    Other := 2 - 1;",
+      "    NoOfLoops := 2 + 1;",
+      "    if Other = 1 then",
+      "        CurrReport.Break();",
+      "end;",
+    ];
+    expect(texts(claimedSites(swapAdditive, integer([], trig)))).toEqual([]);
+    expect(texts(claimedSites(swapAdditive, integer(["MaxIteration = 10;"], trig)))).toEqual([
+      "2 - 1",
+      "2 + 1",
+    ]);
   });
 
-  it("a variable bound is no bound, and its variable's write is refused (revert to red: drop the range arguments from the exit parts)", () => {
-    const src = integer(
-      [],
-      [
-        "trigger OnAfterGetRecord()",
-        "begin",
-        "    Other := Other + 1;",
-        "end;",
-        ...pre("NoOfLoops := 3;", "SetRange(Number, 1, NoOfLoops);"),
-      ],
-    );
-    expect(removed(src)).toEqual(["Other := Other + 1"]);
-    expect(texts(claimedSites(shiftInteger, src))).toEqual([]);
-  });
-
-  it("a Break in OnPreDataItem is an exit (revert to red: read only OnAfterGetRecord)", () => {
-    const src = integer(
-      [],
-      [...pre("Stop := true;", "if Stop then", "    CurrReport.Break();"), ...dimLoop],
-    );
-    expect(removed(src)).toEqual(REFUSED);
-  });
-
-  it("a Quit in OnPreDataItem is an exit (revert to red: drop `quit` from `REPORT_EXITS`)", () => {
-    const src = integer(
-      [],
-      [
-        ...pre("Stop := true;", "if Stop then", "    CurrReport.Quit();"),
-        "trigger OnAfterGetRecord()",
-        "begin",
-        "    Other := Other + 1;",
-        "end;",
-      ],
-    );
-    expect(removed(src)).toEqual(["Other := Other + 1"]);
-  });
-
-  it("`CurrReport.Skip()` alone is no exit (revert to red: count `skip`)", () => {
-    const src = integer(
-      [],
-      [
-        "trigger OnAfterGetRecord()",
-        "begin",
-        "    if Skipping then",
-        "        CurrReport.Skip();",
-        "    Skipping := false;",
-        "    if not Continue then",
-        "        CurrReport.Break();",
-        "    Continue := false;",
-        "end;",
-      ],
-    );
-    expect(removed(src)).toEqual(["Skipping := false"]);
-  });
-
-  it("a Break in the item's own OnPostDataItem is no exit (revert to red: read OnPostDataItem guards)", () => {
-    const src = integer(
-      [],
-      [
-        "trigger OnAfterGetRecord()",
-        "begin",
-        "    Continue := false;",
-        "end;",
-        "trigger OnPostDataItem()",
-        "begin",
-        "    if not Continue then",
-        "        CurrReport.Break();",
-        "end;",
-      ],
-    );
-    expect(removed(src)).toEqual(["Continue := false"]);
-  });
-
-  it("ANY guard: both guards above the Break are read (revert to red: read only the innermost guard)", () => {
-    const src = integer(
-      [],
-      [
-        "trigger OnAfterGetRecord()",
-        "begin",
-        "    if Other > 3 then",
-        "        if not Continue then",
-        "            CurrReport.Break();",
-        "    Other := Other + 1;",
-        "    Continue := false;",
-        "    NoOfLoops := 1;",
-        "end;",
-      ],
-    );
-    expect(removed(src)).toEqual(["NoOfLoops := 1"]);
+  it("a variable SetRange bound is no bound: every write and shift refused; a literal twin is bounded and claims them (revert to red: accept a variable bound in the certificate)", () => {
+    const at = (setRange: string) =>
+      integer(
+        [],
+        [
+          "trigger OnAfterGetRecord()",
+          "begin",
+          "    Other := Other + 1;",
+          "end;",
+          ...pre("NoOfLoops := 3;", setRange),
+        ],
+      );
+    expect(removed(at("SetRange(Number, 1, NoOfLoops);"))).toEqual(REFUSED);
+    expect(texts(claimedSites(shiftInteger, at("SetRange(Number, 1, NoOfLoops);")))).toEqual([]);
+    expect(removed(at("SetRange(Number, 1, 3);"))).toEqual([
+      "Other := Other + 1",
+      "NoOfLoops := 3",
+    ]);
   });
 });
 
@@ -1313,7 +1260,7 @@ describe("R484: the single-mention SetRange certificate", () => {
     expect(removed(bounded("SetRange(Number, 1, 3); D.Reset;"))).toEqual(REFUSED);
   });
 
-  it("a CopyFilter whose DESTINATION is the item voids it (revert to red: count only method receivers)", () => {
+  it("a CopyFilter whose DESTINATION is the item voids it (revert to red: count only the receiver of a called method, so `D.Number` as an argument is not a mention)", () => {
     const src = bounded(
       "SetRange(Number, 1, 3);",
       onPreReport("Src.CopyFilter(Number, D.Number);"),
@@ -1359,20 +1306,8 @@ describe("R484: nested data items", () => {
     "}",
   ];
 
-  it("a child's Quit ends the report: the parent's Continue write is refused (revert to red: drop the nested collection)", () => {
-    expect(removed(integer([], parentWrites, child("CurrReport.Quit();")))).toEqual(REFUSED);
-  });
-
-  it("a child's Error ends the report (revert to red: `endsReport` drops `Error`)", () => {
-    expect(removed(integer([], parentWrites, child("Error('x');")))).toEqual(REFUSED);
-  });
-
-  it("a child's Break ends only the child: claimed (revert to red: `endsReport` counts Break)", () => {
-    expect(removed(integer([], parentWrites, child("CurrReport.Break();")))).toEqual(CLAIMED);
-  });
-
-  it("a write in a child's trigger is inside the parent's loop (revert to red: stop at the nearest data item)", () => {
-    const src = integer([], dimLoop, [
+  it("a write in a child's trigger is inside the open parent's loop: refused; under a bounded parent: claimed (revert to red: drop the blanket check)", () => {
+    const inner = [
       'dataitem(Child; "Sales Line")',
       "{",
       "    trigger OnAfterGetRecord()",
@@ -1380,7 +1315,573 @@ describe("R484: nested data items", () => {
       "        Continue := true;",
       "    end;",
       "}",
+    ];
+    expect(removed(integer([], dimLoop, inner))).toEqual(REFUSED);
+    expect(removed(integer(["MaxIteration = 10;"], dimLoop, inner))).toEqual([
+      ...CLAIMED,
+      "Continue := true",
     ]);
-    expect(removed(src)).toEqual(REFUSED);
+  });
+
+  it("an unread write in a BOUNDED Integer child of an open parent: refused; under a bounded parent: claimed (revert to red: `insideOpenItem` stops at the nearest item)", () => {
+    const inner = [
+      'dataitem(Child; "Integer")',
+      "{",
+      "    MaxIteration = 1;",
+      "    trigger OnAfterGetRecord()",
+      "    begin",
+      "        NoOfLoops := 1;",
+      "    end;",
+      "}",
+    ];
+    expect(removed(integer([], dimLoop, inner))).toEqual(REFUSED);
+    expect(removed(integer(["MaxIteration = 10;"], dimLoop, inner))).toEqual([
+      ...CLAIMED,
+      "NoOfLoops := 1",
+    ]);
+  });
+
+  it("an open parent's writes are refused even when only a child's Break (which ends just the child) reads them; bounded parent: claimed (revert to red: drop the blanket check)", () => {
+    expect(removed(integer([], parentWrites, child("CurrReport.Break();")))).toEqual(REFUSED);
+    expect(
+      removed(integer(["MaxIteration = 10;"], parentWrites, child("CurrReport.Break();"))),
+    ).toEqual(CLAIMED);
+  });
+});
+
+// ---- R487 blanket rule ----
+/** An `OnAfterGetRecord` trigger with these statements. */
+const agr = (...lines: string[]) => [
+  "trigger OnAfterGetRecord()",
+  "begin",
+  ...lines.map((l) => `    ${l}`),
+  "end;",
+];
+const proc = (header: string, ...lines: string[]) => [
+  `local procedure ${header}`,
+  "begin",
+  ...lines.map((l) => `    ${l}`),
+  "end;",
+];
+const withTop = (props: string[], triggers: string[], top: string[]) =>
+  report('"Integer"', props, triggers, [], top);
+const flips = (src: string) => texts(claimedSites(flipBooleanLiteral, src));
+const shifts = (src: string) => texts(claimedSites(shiftInteger, src));
+
+describe("R487 blanket rule: sol-r3's four scenarios are refused", () => {
+  it("#1 input parameter: `Other += 1; Step(Other)` with `if N > 3 then Break` in Step: refused (revert to red: drop the blanket check)", () => {
+    const src = withTop(
+      [],
+      agr("Other += 1;", "Step(Other);"),
+      proc("Step(N: Integer)", "if N > 3 then", "    CurrReport.Break();"),
+    );
+    expect(removed(src)).toEqual([]);
+    expect(shifts(src)).toEqual([]);
+  });
+  it("#1 literal argument: `Step(true)` with `if B then Break` in Step: the flip is refused (revert to red: drop the blanket check)", () => {
+    const src = withTop(
+      [],
+      agr("Step(true);"),
+      proc("Step(B: Boolean)", "if B then", "    CurrReport.Break();"),
+    );
+    expect(flips(src)).toEqual([]);
+  });
+  it("#2 control across a call: `if Other > 3 then MarkDone()`, MarkDone sets Stop: both writes refused (revert to red: drop procedure reachability)", () => {
+    const src = withTop(
+      [],
+      agr(
+        "Other += 1;",
+        "if Other > 3 then",
+        "    MarkDone();",
+        "if Stop then",
+        "    CurrReport.Break();",
+      ),
+      proc("MarkDone()", "Stop := true;"),
+    );
+    expect(removed(src)).toEqual([]);
+  });
+  it("#2 early return: `if Other <= 3 then exit; Stop := true`: refused (revert to red: drop the blanket check)", () => {
+    const src = withTop(
+      [],
+      agr(
+        "Other += 1;",
+        "if Other <= 3 then",
+        "    exit;",
+        "Stop := true;",
+        "if Stop then",
+        "    CurrReport.Break();",
+      ),
+      [],
+    );
+    expect(removed(src)).toEqual([]);
+  });
+  it("#3 record alias: `NoOfLoops := 3; SetBound(D, NoOfLoops)` with `R.SetRange(Number, 1, Upper)`: refused (revert to red: drop the blanket check)", () => {
+    const src = withTop(
+      [],
+      [
+        "trigger OnPreDataItem()",
+        "begin",
+        "    NoOfLoops := 3;",
+        "    SetBound(D, NoOfLoops);",
+        "end;",
+      ],
+      proc("SetBound(var R: Record Integer; Upper: Integer)", "R.SetRange(Number, 1, Upper);"),
+    );
+    expect(removed(src)).toEqual([]);
+  });
+  it("transitive: a write two calls deep from an open item: refused (revert to red: reachability stops at direct callees)", () => {
+    const src = withTop([], agr("Outer();"), [
+      ...proc("Outer()", "Inner();"),
+      ...proc("Inner()", "Other := 0;"),
+    ]);
+    expect(removed(src)).toEqual([]);
+  });
+  it("a column source's callee in an open item: refused (revert to red: drop `report_column` from `codeScope`)", () => {
+    const src = withTop(
+      ["column(Col; Calc())", "{", "}"],
+      agr("CurrReport.Break();"),
+      proc("Calc(): Integer", "Other := 0;"),
+    );
+    expect(removed(src)).toEqual([]);
+  });
+});
+
+describe("R487 blanket rule: controls stay claimed", () => {
+  it("a BOUNDED item (`MaxIteration = 10`): its writes and its callee's writes claimed (revert to red: drop the open check)", () => {
+    const src = withTop(
+      ["MaxIteration = 10;"],
+      agr("Other += 1;", "Step();"),
+      proc("Step()", "Stop := true;"),
+    );
+    expect(removed(src)).toEqual(["Other += 1", "Stop := true"]);
+  });
+  it("a procedure called only from OnPreReport: claimed (revert to red: reachability ignores the callee name)", () => {
+    const src = report(
+      '"Integer"',
+      [],
+      agr("Other2();"),
+      [],
+      [
+        "trigger OnPreReport()",
+        "begin",
+        "    Init();",
+        "end;",
+        ...proc("Init()", "Other := 0;"),
+        ...proc("Other2()"),
+      ],
+    );
+    expect(removed(src)).toEqual(["Other := 0"]);
+  });
+  it("a pageextension `modify` block is not a data item: claimed (revert to red: count every `modify_modification`)", () => {
+    const src = [
+      'pageextension 50001 E extends "Customer Card"',
+      "{",
+      "    layout",
+      "    {",
+      "        modify(Name)",
+      "        {",
+      "            trigger OnAfterValidate()",
+      "            begin",
+      "                Other := 0;",
+      "            end;",
+      "        }",
+      "    }",
+      "    var",
+      "        Other: Integer;",
+      "}",
+    ].join("\n");
+    expect(removed(src)).toEqual(["Other := 0"]);
+  });
+  const ext = [
+    'reportextension 50001 E extends "P"',
+    "{",
+    "    dataset",
+    "    {",
+    "        modify(D)",
+    "        {",
+    "            trigger OnAfterAfterGetRecord()",
+    "            begin",
+    "                Total := 0;",
+    "            end;",
+    "        }",
+    "    }",
+    "    var",
+    "        Total: Integer;",
+    "}",
+  ].join("\n");
+  const extClaims = (base: string | null) => {
+    const files: { path: string; root: ALSyntaxNode }[] = [
+      { path: "e.al", root: wrapRoot(parseAL(ext)) },
+    ];
+    if (base !== null) files.push({ path: "b.al", root: wrapRoot(parseAL(base)) });
+    const ctx = buildSemanticContext(files);
+    const out: string[] = [];
+    visit(files[0]?.root as ALSyntaxNode, (n: ALSyntaxNode) => {
+      if (removeAssignment.targets(n, ctx)) out.push(n.text);
+    });
+    return out;
+  };
+  it("reportextension `modify(D)` over a base report NOT in the project: refused (revert to red: drop the modify branch)", () => {
+    expect(extClaims(null)).toEqual([]);
+  });
+  it("reportextension `modify(D)` whose base item in the project is bounded: claimed (revert to red: `modifiedItemOpen` answers true)", () => {
+    expect(extClaims(report('"Integer"', ["MaxIteration = 10;"], []))).toEqual(["Total := 0"]);
+  });
+});
+
+// ---- r5 (sol-r4): scope-boundary regressions, each with a BOUNDED twin that stays claimed ----
+const BOUND = "MaxIteration = 1;";
+/** A report whose top item `D` (over Integer) carries `props`, `body` lines (triggers, columns,
+ *  child items) and report-level `top` lines. */
+const rep5 = (props: string[], body: string[], top: string[] = []) =>
+  [
+    "report 50000 P",
+    "{",
+    "    dataset",
+    "    {",
+    '        dataitem(D; "Integer")',
+    "        {",
+    ...[...props, ...body].map((l) => `            ${l}`),
+    "        }",
+    "    }",
+    ...top.map((l) => `    ${l}`),
+    "    var",
+    "        Continue: Boolean; Other: Integer; Stop: Boolean;",
+    "}",
+  ].join("\n");
+/** Open (no props) -> every site refused; bounded twin (`BOUND`) -> exactly `claimed`. */
+const openAndTwin = (
+  body: string[],
+  top: string[],
+  claimed: { removed: string[]; flips: string[] },
+  symbols?: string[],
+) => {
+  const at = (props: string[]) => rep5(props, body, top);
+  expect(removed(at([]), symbols)).toEqual([]);
+  expect(texts(claimedSites(flipBooleanLiteral, at([]), symbols))).toEqual([]);
+  expect(removed(at([BOUND]), symbols)).toEqual(claimed.removed);
+  expect(texts(claimedSites(flipBooleanLiteral, at([BOUND]), symbols))).toEqual(claimed.flips);
+};
+const STEP_BODY = [
+  "begin",
+  "    if true then",
+  "        CurrReport.Break();",
+  "    Other := 0;",
+  "    Inner();",
+  "end;",
+];
+const INNER = proc("Inner()", "Stop := true;");
+const BOTH_CLAIMED = { removed: ["Other := 0", "Stop := true"], flips: ["true", "true"] };
+
+describe("R487 r5 sol-r4 #1: split-header procedures are procedures", () => {
+  const split = (arm2: string) => [
+    "#if CLEAN27",
+    "local procedure Step()",
+    "#else",
+    `local procedure ${arm2}()`,
+    "#endif",
+    ...STEP_BODY,
+    ...INNER,
+  ];
+  const preamble = (arm2: string) => [
+    "#if CLEAN27",
+    "local procedure Step()",
+    "var",
+    "    X: Integer;",
+    "#else",
+    `local procedure ${arm2}()`,
+    "var",
+    "    X: Integer;",
+    "#endif",
+    ...STEP_BODY,
+    ...INNER,
+  ];
+  for (const [kind, shape] of [
+    ["preproc_split_procedure", split],
+    ["preproc_split_procedure_preamble", preamble],
+  ] as const) {
+    it(`${kind}: its body and its transitive callee are refused in an open item, claimed in a bounded twin (revert to red: \`kind === procedure\` in \`inOpenItemCode\`/\`openReachable\`)`, () => {
+      openAndTwin(agr("Step();"), shape("Step"), BOTH_CLAIMED, ["CLEAN27"]);
+    });
+    it(`${kind} with a RENAMED arm, called by the other arm's name: refused (revert to red: read only the first arm's name)`, () => {
+      openAndTwin(agr("Step2();"), shape("Step2"), BOTH_CLAIMED, ["CLEAN27"]);
+    });
+  }
+  it("the split shapes really parse as split procedures (guards the two tests above)", () => {
+    for (const shape of [split("Step2"), preamble("Step2")]) {
+      const root = wrapRoot(parseAL(rep5([], agr("Step();"), shape)));
+      const kinds: string[] = [];
+      visit(root, (n: ALSyntaxNode) => {
+        if (n.rawKind.startsWith("preproc_split_procedure")) kinds.push(n.rawKind);
+      });
+      expect(kinds.length).toBe(1);
+    }
+  });
+});
+
+describe("R487 r5: every call shape, and nested columns, with bounded twins", () => {
+  const body = proc("Step()", "if true then", "    CurrReport.Break();", "Other := 0;", "Inner();");
+  for (const call of ["Step();", "Step;", "this.Step();"]) {
+    it(`\`${call}\` from an open item: callee and its callee refused; bounded twin claims (revert to red: \`bareCallee\` drops this shape)`, () => {
+      openAndTwin(agr(call), [...body, ...INNER], BOTH_CLAIMED);
+    });
+  }
+  it("a column of a CHILD item calling a procedure: refused under an open parent, claimed under a bounded one (revert to red: drop `report_column` from `codeScope`)", () => {
+    const child = [
+      'dataitem(C; "Sales Line")',
+      "{",
+      "    column(Col; Calc())",
+      "    {",
+      "    }",
+      "}",
+    ];
+    openAndTwin(
+      child,
+      [...proc("Calc(): Integer", "Other := 0;", "Inner();", "exit(1);"), ...INNER],
+      { removed: ["Other := 0", "Stop := true"], flips: ["true"] },
+    );
+  });
+});
+
+/** A one-file project: the base report (if any) and the extension, `symbols` evaluated. */
+const extSites = (op: typeof removeAssignment, files: string[], symbols: string[]) => {
+  const src = files.join("\n");
+  return texts(claimedSites(op, src, symbols));
+};
+const EXT_TRIGGER = [
+  "trigger OnAfterAfterGetRecord()",
+  "begin",
+  "    Stop := true;",
+  "    if Stop then",
+  "        CurrReport.Break();",
+  "end;",
+];
+const ext5 = (target: string, wrapped: boolean) =>
+  [
+    ...(wrapped ? ["#if CLEAN27"] : []),
+    'reportextension 50001 E extends "P"',
+    "{",
+    "    dataset",
+    "    {",
+    `        modify(${target})`,
+    "        {",
+    ...EXT_TRIGGER.map((l) => `            ${l}`),
+    "        }",
+    "    }",
+    "}",
+    ...(wrapped ? ["#endif"] : []),
+  ].join("\n");
+
+describe("R487 r5 sol-r4 #2: an `#if`-wrapped reportextension", () => {
+  it("active arm, base absent: its modify trigger is refused; the same base in-project and bounded: claimed (revert to red: `objectOf` returns the file-root child)", () => {
+    expect(extSites(removeAssignment, [ext5("D", true)], ["CLEAN27"])).toEqual([]);
+    expect(extSites(flipBooleanLiteral, [ext5("D", true)], ["CLEAN27"])).toEqual([]);
+    const bounded = rep5([BOUND], agr("Other := 0;"));
+    expect(extSites(removeAssignment, [bounded, ext5("D", true)], ["CLEAN27"])).toEqual([
+      "Other := 0",
+      "Stop := true",
+    ]);
+  });
+});
+
+describe("R487 r5 sol-r4 #3: a modify(D) block runs inside every enclosing base item", () => {
+  const child = (parentProps: string[], childProps: string[]) =>
+    rep5(parentProps, [
+      ...agr("if not Continue then", "    CurrReport.Break();"),
+      'dataitem(C; "Integer")',
+      "{",
+      ...childProps.map((p) => `    ${p}`),
+      "}",
+    ]);
+  it("a BOUNDED child inside an OPEN base parent: the extension's write is refused; parent bounded too: claimed (revert to red: check only the target item)", () => {
+    expect(extSites(removeAssignment, [child([], [BOUND]), ext5("C", false)], [])).toEqual([]);
+    expect(extSites(removeAssignment, [child([BOUND], [BOUND]), ext5("C", false)], [])).toEqual([
+      "Stop := true",
+    ]);
+  });
+  it("an ordinary-table child inside an open parent: refused (revert to red: check only the target item)", () => {
+    const src = rep5(
+      [],
+      [
+        ...agr("if not Continue then", "    CurrReport.Break();"),
+        'dataitem(C; "Sales Line")',
+        "{",
+        "}",
+      ],
+    );
+    expect(extSites(removeAssignment, [src, ext5("C", false)], [])).toEqual([]);
+  });
+  it("a base item bounded only by a view certificate counts as open once extended; a MaxIteration bound still holds (revert to red: trust the view certificate)", () => {
+    expect(extSites(removeAssignment, [rep5([CONST_VIEW], []), ext5("D", false)], [])).toEqual([]);
+    expect(extSites(removeAssignment, [rep5([BOUND], []), ext5("D", false)], [])).toEqual([
+      "Stop := true",
+    ]);
+  });
+});
+
+// ---- r6 (sol-r5): extensions reach the BASE report's code, and add/addlast blocks ----
+/** A reportextension of "P" (or `base`) with dataset `blocks`, report-level `top` lines. */
+const extOf = (blocks: string[], top: string[] = [], base = "P") =>
+  [
+    `reportextension 50001 E extends "${base}"`,
+    "{",
+    "    dataset",
+    "    {",
+    ...blocks.map((l) => `        ${l}`),
+    "    }",
+    ...top.map((l) => `    ${l}`),
+    "}",
+  ].join("\n");
+const WIDEN = extOf([
+  "modify(D)",
+  "{",
+  "    trigger OnAfterPreDataItem()",
+  "    begin",
+  "        D.SetRange(Number, 1, 2147483647);",
+  "    end;",
+  "}",
+]);
+
+describe("R487 r6 sol-r5 #1: a project reportextension voids the BASE item's view certificate for the base code too", () => {
+  it("base `const(1)` item, extended in the project: its own guard writes are refused; not extended: claimed; extended but `MaxIteration`-bounded: claimed (revert to red: `itemOpen` ignores `reportExtended`)", () => {
+    expect(extSites(removeAssignment, [rep5([CONST_VIEW], dimLoop), WIDEN], [])).toEqual([]);
+    expect(extSites(flipBooleanLiteral, [rep5([CONST_VIEW], dimLoop), WIDEN], [])).toEqual([]);
+    expect(extSites(removeAssignment, [rep5([CONST_VIEW], dimLoop)], [])).toEqual(CLAIMED);
+    expect(extSites(removeAssignment, [rep5([BOUND], dimLoop), WIDEN], [])).toEqual(CLAIMED);
+  });
+  it("a namespace-qualified `System.Utilities.Integer` base item: extended, refused; not extended, claimed (revert to red: `isIntegerItem` reads the FIRST `table_name` child)", () => {
+    const q = rep5([CONST_VIEW], dimLoop).replace(
+      'dataitem(D; "Integer")',
+      "dataitem(D; System.Utilities.Integer)",
+    );
+    expect(extSites(removeAssignment, [q, WIDEN], [])).toEqual([]);
+    expect(extSites(removeAssignment, [q], [])).toEqual(CLAIMED);
+  });
+  it("an extension of ANOTHER report leaves the certificate standing (revert to red: `reportExtended` answers true)", () => {
+    const other = extOf(["modify(D)", "{", "}"], [], "Q");
+    expect(extSites(removeAssignment, [rep5([CONST_VIEW], dimLoop), other], [])).toEqual(CLAIMED);
+  });
+  it("the base item's callee is refused too (revert to red: `itemOpen` ignores `reportExtended`)", () => {
+    // `this.Step()`, not `Step()`: an unqualified call is itself a mention that voids the view.
+    const base = rep5([CONST_VIEW], agr("this.Step();"), proc("Step()", "Other := 0;"));
+    expect(extSites(removeAssignment, [base, WIDEN], [])).toEqual([]);
+    expect(extSites(removeAssignment, [base], [])).toEqual(["Other := 0"]);
+  });
+});
+
+describe("R487 r6 sol-r5 #2: add/addfirst/addlast blocks run under their base anchor", () => {
+  const CALC = proc("Calc(): Integer", "Stop := false;", "exit(1);");
+  const addCol = (kind: string) =>
+    extOf([`${kind}(D)`, "{", "    column(Col; Calc())", "    {", "    }", "}"], CALC);
+  for (const kind of ["add", "addfirst", "addlast"]) {
+    it(`\`${kind}(D)\` column calling the extension's Calc(): refused under an open base D, claimed under a bounded one (revert to red: \`isExtensionBlock\` reads only \`modify\`)`, () => {
+      expect(extSites(removeAssignment, [rep5([], []), addCol(kind)], [])).toEqual([]);
+      expect(extSites(removeAssignment, [rep5([BOUND], []), addCol(kind)], [])).toEqual([
+        "Stop := false",
+      ]);
+    });
+  }
+  it("a BOUNDED child item added under an open base D: its write is refused; under a bounded D: claimed (revert to red: stop at the added item)", () => {
+    const addItem = extOf([
+      "addlast(D)",
+      "{",
+      '    dataitem(X; "Integer")',
+      "    {",
+      "        MaxIteration = 1;",
+      "        trigger OnAfterGetRecord()",
+      "        begin",
+      "            Stop := true;",
+      "        end;",
+      "    }",
+      "}",
+    ]);
+    expect(extSites(removeAssignment, [rep5([], []), addItem], [])).toEqual([]);
+    expect(extSites(removeAssignment, [rep5([BOUND], []), addItem], [])).toEqual(["Stop := true"]);
+  });
+  it("an add block whose base report is absent: refused (revert to red: an unresolved anchor counts as bounded)", () => {
+    expect(extSites(removeAssignment, [addCol("add")], [])).toEqual([]);
+  });
+});
+
+// ---- r7 (sol-r6): the extended-report list, across SEPARATE files ----
+/** Sites `op` claims in the FIRST file of a multi-file project (arms evaluated with `symbols`);
+ *  `noFiles`: the context without its file list, as a hand-built context has. */
+const baseSites = (
+  op: typeof removeAssignment,
+  files: string[],
+  symbols: string[] = [],
+  noFiles = false,
+) => {
+  const parsed = files.map((text, i) => ({
+    path: `f${i}.al`,
+    text,
+    root: wrapRoot(parseAL(text)),
+  }));
+  const built = buildSemanticContext(
+    parsed.map(({ path, root }) => ({ path, root })),
+    new Map(parsed.map((p) => [p.root, evaluateArms(p.root, p.text, symbols)])),
+  );
+  const { files: _dropped, ...withoutFiles } = built;
+  const ctx = noFiles ? withoutFiles : built;
+  const out: string[] = [];
+  const [first] = parsed;
+  if (first === undefined) return out;
+  visit(first.root, (n: ALSyntaxNode) => {
+    if (op.targets(n, ctx)) out.push(n.text);
+  });
+  return out;
+};
+const BASE7 = rep5([CONST_VIEW], dimLoop);
+const extNamed = (head: string) =>
+  [
+    "namespace Ext.Space;",
+    "",
+    `reportextension 50001 E extends ${head}`,
+    "{",
+    "    dataset",
+    "    {",
+    "        modify(D)",
+    "        {",
+    "            trigger OnAfterPreDataItem()",
+    "            begin",
+    "                D.SetRange(Number, 1, 2147483647);",
+    "            end;",
+    "        }",
+    "    }",
+    "}",
+  ].join("\n");
+
+describe("R487 r7 sol-r6 #1: a namespace-qualified extension in another file voids the BASE certificate", () => {
+  it("the pinned grammar puts only the LAST name segment in `base_object` (sol-r7 #2: fails if a grammar change puts the qualifier there)", () => {
+    const baseObjectOf = (head: string): string | null => {
+      let found: string | null = null;
+      visit(wrapRoot(parseAL(extNamed(head))), (n: ALSyntaxNode) => {
+        if (n.rawKind === "reportextension_declaration") {
+          found = n.childForFieldName("base_object")?.text ?? null;
+        }
+      });
+      return found;
+    };
+    expect(baseObjectOf("My.Reports.P")).toBe("P");
+    expect(baseObjectOf('"My"."Reports"."P"')).toBe('"P"');
+    expect(baseObjectOf('"P"')).toBe('"P"');
+  });
+  it('`extends My.Reports.P` and `"My"."Reports"."P"`: the base file\'s assignment is refused; `My.Reports.Q`: claimed (revert to red: match the whole `extends` clause text, qualifier included)', () => {
+    expect(baseSites(removeAssignment, [BASE7, extNamed("My.Reports.P")])).toEqual([]);
+    expect(baseSites(removeAssignment, [BASE7, extNamed('"My"."Reports"."P"')])).toEqual([]);
+    expect(baseSites(flipBooleanLiteral, [BASE7, extNamed("My.Reports.P")])).toEqual([]);
+    expect(baseSites(removeAssignment, [BASE7, extNamed("My.Reports.Q")])).toEqual(CLAIMED);
+  });
+  it("an extension with no base name at all counts as extending every report (revert to red: drop `ANY_REPORT`)", () => {
+    expect(baseSites(removeAssignment, [BASE7, extNamed("")])).toEqual([]);
+  });
+  it("a context WITHOUT its file list answers `extended`; with it and no extension, the certificate holds (revert to red: no file list answers `not extended`)", () => {
+    expect(baseSites(removeAssignment, [BASE7], [], true)).toEqual([]);
+    expect(baseSites(removeAssignment, [BASE7])).toEqual(CLAIMED);
+  });
+  it("an `#if`-wrapped extension in another file, active arm: the base certificate is voided; inactive arm counts too (revert to red: read only the file root's direct children)", () => {
+    const wrapped = ["#if CLEAN27", extNamed("P"), "#endif"].join("\n");
+    expect(baseSites(removeAssignment, [BASE7, wrapped], ["CLEAN27"])).toEqual([]);
+    expect(baseSites(removeAssignment, [BASE7, wrapped], [])).toEqual([]);
   });
 });
