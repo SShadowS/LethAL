@@ -3923,6 +3923,27 @@ interface ClockOptions {
   readonly alRunnerCompileMs?: number;
   /** R516 I1: the backend's `inRunStopIsBudget` (false: the al-runner `--server` shape). Default true. */
   readonly inRunStopIsBudget?: boolean;
+  /**
+   * R517: model the al-runner `--server` daemon. One stop for its life, timed on the test BODY:
+   * `ceil(max(f, b) / 1000) * 1000` once `useMutantBudgetFloor(f, b)` was called, else 60 000 ms
+   * (al-runner's own default, which is what today's daemon gets). A run times out when BSlow's body
+   * exceeds the stop, whatever `timeoutMs` says, and its verdict carries `reportedStopMs`. A
+   * verdict's `durationMs` is the suite's wall clock (body plus `restMs`); a pass carries the body
+   * as `measuredDurationMs`. `inRunStopIsBudget` is false.
+   */
+  readonly server?: {
+    readonly restMs: number;
+    /** The stop the daemon really enforces, whatever it was configured with (a build that ignores
+     *  the flag, or a test that needs a known stop with no floor call). */
+    readonly enforcedStopMs?: number;
+    /** What the timeout row reports; `null`: a row whose message does not parse. Default: the stop. */
+    readonly reportedStopMs?: number | null;
+  };
+}
+
+/** R517: a timeout verdict's `reportedStopMs`, absent for `null` (a row that does not parse). */
+function reportedStop(ms: number | null): { reportedStopMs?: number } {
+  return ms === null ? {} : { reportedStopMs: ms };
 }
 
 class ClockBackend extends CountingBackend {
@@ -3933,6 +3954,19 @@ class ClockBackend extends CountingBackend {
   private readonly mutatedMs: number | undefined;
   private readonly authoritative: boolean;
   private readonly compileMs: number | undefined;
+  private readonly server: ClockOptions["server"];
+  /** R517: every `useMutantBudgetFloor` call, with how many runs this backend had made before it. */
+  readonly floorCalls: Array<{ floorMs: number; baselineTimeoutMs: number; runsBefore: number }> =
+    [];
+  private configuredStopMs: number | undefined;
+  useMutantBudgetFloor(floorMs: number, baselineTimeoutMs: number): void {
+    this.floorCalls.push({ floorMs, baselineTimeoutMs, runsBefore: this.sent.length });
+    this.configuredStopMs = Math.ceil(Math.max(floorMs, baselineTimeoutMs) / 1000) * 1000;
+  }
+  /** R517: the stop LethAL configured, under the `server` shape only. */
+  get inRunStopMs(): number | undefined {
+    return this.server !== undefined ? this.configuredStopMs : undefined;
+  }
   constructor(
     /** BSlow's simulated unmutated duration on this backend (AFast is always 100 ms). */
     private readonly slowMs: number,
@@ -3940,10 +3974,11 @@ class ClockBackend extends CountingBackend {
   ) {
     super("pass", o.abort?.after, o.abort?.fromDeploy);
     if (o.grouped === true) this.runMany = (opts) => this.many(opts);
-    this.inRunStopIsBudget = o.inRunStopIsBudget ?? true;
+    this.inRunStopIsBudget = o.server !== undefined ? false : (o.inRunStopIsBudget ?? true);
     this.mutatedMs = o.mutatedMs;
     this.authoritative = o.authoritative ?? true;
     this.compileMs = o.alRunnerCompileMs;
+    this.server = o.server;
     // The al-runner shape: no served package to fetch, so its test app is proven from source.
     if (!this.authoritative) {
       (this as { fetchPublishedAppPackage?: unknown }).fetchPublishedAppPackage = undefined;
@@ -3973,12 +4008,28 @@ class ClockBackend extends CountingBackend {
         : this.active !== null
           ? (this.mutatedMs ?? this.slowMs)
           : this.slowMs;
+    const server = this.server;
+    if (server !== undefined) {
+      const stop = server.enforcedStopMs ?? this.configuredStopMs ?? 60_000;
+      if (ms > stop) {
+        const { attestation: _, measuredDurationMs: __, ...rest } = v;
+        const reported = server.reportedStopMs === undefined ? stop : server.reportedStopMs;
+        return {
+          ...rest,
+          outcome: "timeout",
+          durationMs: stop + server.restMs,
+          ...reportedStop(reported),
+        };
+      }
+      return { ...v, durationMs: ms + server.restMs, measuredDurationMs: ms };
+    }
     const compile = this.compileMs;
     if (compile !== undefined) {
       const limit = oneShotLimits(opts.timeoutMs).testTimeoutSeconds * 1000;
       if (ms > limit) {
         const { attestation: _, measuredDurationMs: __, ...rest } = v;
-        return { ...rest, outcome: "timeout", durationMs: limit + compile };
+        // R517: al-runner's row says which stop fired (`Test exceeded {N}s timeout.`).
+        return { ...rest, outcome: "timeout", durationMs: limit + compile, ...reportedStop(limit) };
       }
       return { ...v, durationMs: ms + compile, measuredDurationMs: ms };
     }
@@ -4910,5 +4961,41 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     const stranded = scoredOf(report, 0).filter((m) => m.cause === "stranded");
     expect(stranded.map((m) => m.verdict)).toEqual(["error"]);
     expect(report.quarantined).toBeDefined();
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // R517: al-runner `--server`, the daemon's own stop.
+  // ---------------------------------------------------------------------------------------------
+
+  /** A fresh run on the `--server` shape at the default 180 000 ms floor: BSlow's body is `bodyMs`
+   *  unmutated and `mutatedMs` under every mutant. */
+  async function serverRun(
+    bodyMs: number,
+    server: NonNullable<ClockOptions["server"]>,
+    mutatedMs: number,
+  ) {
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const today = new ClockBackend(bodyMs, { server, mutatedMs });
+    const report = await runSession({
+      ...opts(store, dirs),
+      mutantTimeoutMs: 180_000,
+      backend: today,
+    });
+    return { report, today };
+  }
+
+  test("R517 S1: --server, BSlow body 58 s plus 30 s rest (budget 180 s), 61 s under an unrelated mutant: survived, never stopped at al-runner's own 60 s default", async () => {
+    // Before R517 the daemon had no --test-timeout, so it stopped the body at 60 s; the confirm's
+    // suite wall clock (88 s) passed 2 x 88 <= 180 and the mutant was a false timeout-killed.
+    const { report, today } = await serverRun(58_000, { restMs: 30_000 }, 61_000);
+    expect(slowBudgets(today)).toEqual([180_000]);
+    expect(falseKills(report, 0)).toEqual([]);
+    expect(verdictsOf(report, 0)).toEqual([
+      ["M0001", "survived", null],
+      ["M0002", "survived", null],
+      ["M0003", "survived", null],
+    ]);
+    expect(slowConfirms(today)).toEqual([]);
   });
 });

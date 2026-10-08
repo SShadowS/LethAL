@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
 import { AL_RUNNER_UNCLASSIFIED_ERROR, AlRunnerBackend } from "../src/al-runner-backend";
 import type { ServerSpawnFn } from "../src/al-runner-server";
+import type { TestVerdict } from "../src/backend";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import { runOnce } from "../src/orchestrator";
@@ -1486,5 +1487,202 @@ describe("AlRunnerBackend one-shot: a result naming any other test is never cred
     expect((await backend.run(ref, opts)).outcome).toBe("fail");
     expect(calls.length).toBe(1);
     expect(calls[0]).not.toContain("--exclude-test");
+  });
+});
+
+describe("AlRunnerBackend --server: a daemon that overran or timed out is never reused (R517)", () => {
+  type Row = Record<string, unknown>;
+  /**
+   * One fake daemon per spawn. `answer(daemon, request, emit)` writes the lines for runTests
+   * `request` on daemon `daemon` (both 1-based), or returns a function that writes them later
+   * (`releaseHeld`), which is how a test holds an answer past the client's deadline.
+   */
+  function daemons(
+    answer: (daemon: number, request: number, emit: (row: Row) => void) => (() => void) | undefined,
+  ) {
+    const argvs: string[][] = [];
+    const held: Array<() => void> = [];
+    const spawn: ServerSpawnFn = (argv) => {
+      argvs.push([...argv]);
+      const daemon = argvs.length;
+      let requests = 0;
+      const queue: Array<Uint8Array | null> = [];
+      let waiter: (() => void) | undefined;
+      const push = (chunk: Uint8Array | null): void => {
+        queue.push(chunk);
+        waiter?.();
+        waiter = undefined;
+      };
+      const emitLine = (line: string): void => push(new TextEncoder().encode(`${line}\n`));
+      queueMicrotask(() => emitLine('{"ready":true}'));
+      return {
+        write: (line: string) => {
+          const req = JSON.parse(line) as { command?: string };
+          if (req.command === "runTests") {
+            requests += 1;
+            const later = answer(daemon, requests, (row) => emitLine(JSON.stringify(row)));
+            if (later !== undefined) held.push(later);
+          }
+          if (req.command === "shutdown") emitLine('{"status":"shutting down"}');
+        },
+        stdout: {
+          async *[Symbol.asyncIterator]() {
+            for (;;) {
+              if (queue.length === 0) {
+                await new Promise<void>((r) => {
+                  waiter = r;
+                });
+                continue;
+              }
+              const next = queue.shift();
+              if (next === null || next === undefined) return;
+              yield next;
+            }
+          },
+        },
+        stderr: {
+          async *[Symbol.asyncIterator]() {},
+        },
+        kill: () => push(null),
+      };
+    };
+    return {
+      spawn,
+      argvs,
+      releaseHeld: () => {
+        for (const r of held.splice(0)) r();
+      },
+    };
+  }
+
+  function serverOn(spawn: ServerSpawnFn): AlRunnerBackend {
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: scratch("lethal-alrunner-r517-"),
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        serverMode: true,
+      },
+      okSpawn({ tests: [] }).spawn,
+      spawn,
+    );
+    // R517 D1: the session hands every backend its floor before the first run.
+    (
+      backend as { useMutantBudgetFloor?: (f: number, b: number) => void }
+    ).useMutantBudgetFloor?.(180_000, 120_000);
+    return backend;
+  }
+
+  const t = (method: string) => ({ codeunitId: 79100, codeunitName: "Sandbox Tests", method });
+  const run = { coverage: "none" as const, timeoutMs: 1000 };
+  const summary = (total: number): Row => ({ type: "summary", exitCode: 1, total });
+
+  test("C1: a runTests that throws (here: no summary before the deadline) ends the daemon, so its late answer is never read as the retry's", async () => {
+    // Every row is a `fail` whose message names the daemon and request it came from.
+    const fake = daemons((daemon, request, emit) => {
+      const rows = (): void => {
+        emit({
+          type: "test",
+          name: "Codeunit79100.A",
+          status: "fail",
+          message: `daemon ${daemon} request ${request}`,
+        });
+        emit(summary(1));
+      };
+      if (daemon === 1 && request === 1) return rows; // answered only after the deadline
+      rows();
+      return undefined;
+    });
+    const backend = serverOn(fake.spawn);
+    let first: TestVerdict | undefined;
+    jest.useFakeTimers();
+    try {
+      void backend.run(t("A"), run).then((v) => {
+        first = v;
+      });
+      for (let i = 0; i < 200 && first === undefined; i++) {
+        jest.advanceTimersByTime(60_000);
+        for (let k = 0; k < 50; k++) await Promise.resolve();
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+    expect(first?.outcome).toBe("error");
+    expect(first?.failureMessage).toContain("no summary line within");
+    // Daemon 1's late answer arrives now; runOnce's retry runs the same activation again.
+    fake.releaseHeld();
+    const retry = await backend.run(t("A"), run);
+    expect([retry.outcome, retry.failureMessage]).toEqual(["fail", "daemon 2 request 1"]);
+    expect(fake.argvs.length).toBe(2);
+    // And the next activation is answered by daemon 2's next request, never daemon 1's.
+    await backend.activate("M0002");
+    const next = await backend.run(t("A"), run);
+    expect([next.outcome, next.failureMessage]).toEqual(["fail", "daemon 2 request 2"]);
+    expect(fake.argvs.length).toBe(2);
+    await backend.close();
+  });
+
+  /** Daemon 1's first suite: A passes, BSlow times out, Later (after it) has no row. Every other
+   *  suite: all three pass. */
+  function hungOnce(timeoutRow: boolean) {
+    return daemons((daemon, request, emit) => {
+      const first = daemon === 1 && request === 1;
+      emit({ type: "test", name: "Codeunit79100.A", status: "pass", durationMs: 5 });
+      if (first && timeoutRow) {
+        emit({
+          type: "test",
+          name: "Codeunit79100.BSlow",
+          status: "error",
+          message: "Test exceeded 180s timeout.",
+          durationMs: 180_004,
+        });
+        emit(summary(2));
+        return undefined;
+      }
+      emit({ type: "test", name: "Codeunit79100.BSlow", status: "pass", durationMs: 7 });
+      emit({ type: "test", name: "Codeunit79100.Later", status: "pass", durationMs: 3 });
+      emit(summary(3));
+      return undefined;
+    });
+  }
+
+  test("I2: a suite with a timeout row ends the daemon, and the unmutated confirm runs on a fresh one with the same stop", async () => {
+    const fake = hungOnce(true);
+    const backend = serverOn(fake.spawn);
+    await backend.activate("M0001");
+    expect((await backend.run(t("BSlow"), run)).outcome).toBe("timeout");
+    await backend.activate(null);
+    const confirm = await backend.run(t("BSlow"), run);
+    expect(fake.argvs.length).toBe(2);
+    expect(confirm.outcome).toBe("pass");
+    const [one, two] = fake.argvs;
+    expect(two).toEqual(one);
+    expect(one).toContain("--test-timeout");
+    await backend.close();
+  });
+
+  test("I2 control: a suite with no timeout row keeps its daemon across activations", async () => {
+    const fake = hungOnce(false);
+    const backend = serverOn(fake.spawn);
+    await backend.activate("M0001");
+    expect((await backend.run(t("BSlow"), run)).outcome).toBe("pass");
+    await backend.activate(null);
+    expect((await backend.run(t("BSlow"), run)).outcome).toBe("pass");
+    expect(fake.argvs.length).toBe(1);
+    await backend.close();
+  });
+
+  test("M3: a covering test with no row in a suite that has a timeout row is an error naming the hung test", async () => {
+    const fake = hungOnce(true);
+    const backend = serverOn(fake.spawn);
+    await backend.activate("M0001");
+    await backend.run(t("BSlow"), run);
+    const later = await backend.run(t("Later"), run);
+    expect(later.outcome).toBe("error");
+    expect(later.failureMessage).toContain(
+      'al-runner --server stopped the run at "Codeunit79100.BSlow" (timeout); tests after it have no row',
+    );
+    await backend.close();
   });
 });
