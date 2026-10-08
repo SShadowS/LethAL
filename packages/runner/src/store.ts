@@ -1608,6 +1608,20 @@ export class ResultsStore {
   }
 
   /**
+   * R508: delete one batch's baseline snapshot, so a later `--resume` re-runs that batch's
+   * baseline instead of reusing one measured under a lease this session could no longer prove it
+   * held. Called only on the lease-lost path; `invalidateBatch` (the attestation gate's path too)
+   * leaves snapshots alone. Returns the number of rows deleted.
+   */
+  dropBaselineSnapshot(runId: number, batchIndex: number): number {
+    this.db
+      .query("DELETE FROM baseline_snapshots WHERE run_id = ? AND batch_index = ?")
+      .run(runId, batchIndex);
+    const r = this.db.query("SELECT changes() AS n").get() as { n: number };
+    return r.n;
+  }
+
+  /**
    * R192 (second half): the most recent snapshot for these hashes from any run of the CURRENT
    * identity scheme, or null. R318: a scheme bump can leave the emitted AL byte-identical while
    * changing how coverage is attributed, so an older scheme's snapshot matches both hashes but

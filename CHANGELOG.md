@@ -576,6 +576,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **A table named with a leading number binds by name** (R510). `resolveObject` read
   `"50000 Foo"` as table id 50000. It now reads an id only from all digits. No corpus has such a
   collision, so no verdict moves.
+- **A lease lost mid-batch now discards that batch's verdicts in the results store** (R508), at the
+  moment of the loss and again at session end, not only in the report. `--resume` no longer carries
+  them, a later `--skip-known-survivors` no longer reads them through a resumed run, and the batch's
+  saved baseline is not reused. Because such a run may now hold nothing carryable, `--resume last`
+  can pick an OLDER unfinished run with the same configuration. If the store write fails, the
+  session ends with an error that names the run and says not to resume it.
 - **A namespace-qualified table or codeunit reference is read as the object it names** (R502).
   `Record System.Utilities.Integer`, `dataitem(X; Microsoft.Sales.Customer)` and a qualified
   `SourceTable` were read by their FIRST segment (`System`), or by the whole dotted text, so the
@@ -583,6 +589,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   the only one and its file declares that namespace. Otherwise the reference stays unresolved and
   every trigger-skip tag is kept, as before. Measured: 0 changes on fixtures and the three customer
   corpora; 2 added specs in BC.History's BaseApp; no tag and no identity key moved.
+
 - **A BC answer that starts but never finishes no longer holds LethAL forever on the harness
   check, the deployment check or the permission canary** (R506, R507); a package read-back now also
   ends on a fetch that ignores its abort. Each
