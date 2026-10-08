@@ -47,6 +47,22 @@ next free id right before writing).
   restarts happen, so push; but CI runs on every branch and every red run emails the owner. Push
   WITHOUT `[skip ci]` only when you want a real CI result (before submitting, or to reproduce a
   Windows-only failure); the submitted head must have a CI run.
+- **Measure a corpus once per master commit, and reuse it (owner, 2026-10-08).** A full
+  BC.History dump of master costs hours, and plan rounds repeated it. Keep master's dump in
+  `/coord/cache/dumps/<master sha>/<set>/` (sets: `bch`, `cdo`, `dc`, `do`, `fixtures`), with a
+  `DONE` file written last. Before dumping master, look there; another lane or an earlier round may
+  have it. A build's dump re-reads only the projects its change can touch (the R-487 keydiff
+  approach) and compares against the cached master. Re-dump master only when master moved and the
+  move touches mutant generation. Say in your report which cache entry you used. A cache entry is
+  never edited, only replaced whole.
+- **A lane commits its own pre-commitment to `master` (owner, 2026-10-08).** Once a pre-commitment
+  is written (and plan-reviewed), commit it yourself, specs-only, as
+  `docs/superpowers/specs/<date>-<id>-...-precommitment.md` with `[skip ci]`, BEFORE any live run.
+  Commit it from a scratch worktree of `origin/master` (never from your task branch, never from the
+  main checkout), then `git push origin HEAD:master`; on a rejected push, fetch, rebase and push
+  again. Touch nothing else in that commit. Send the orchestrator its sha
+  with your next message. The rule is unchanged: the file lands on master before the run, and a
+  differing result is a block, never a re-record. The orchestrator still commits the adopted plan.
 
 ## coord
 
