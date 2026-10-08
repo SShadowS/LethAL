@@ -413,10 +413,13 @@ function measure(store: ResultsStore, run1: number, run2: number): void {
         .map((r) => r.duration_ms),
     );
   const first = covered[0];
+  let m1Measured = false;
+  let m2Measured = 0;
   if (first === undefined) {
     check("M1", false, "run 2 recorded no mutant-covered test_results row");
   } else {
     const med = steady(testKey(first), first.id);
+    m1Measured = med !== undefined;
     firstCallVerdict(
       "M1",
       `${testKey(first)} (${first.mutant_code}, ${first.outcome}, ${first.duration_ms} ms, median ${med ?? "?"} ms)`,
@@ -435,6 +438,7 @@ function measure(store: ResultsStore, run1: number, run2: number): void {
       );
       continue;
     }
+    m2Measured++;
     firstCallVerdict(
       "M2",
       `${key} (${r.mutant_code}, ${r.outcome}, ${r.duration_ms} ms, median ${med} ms)`,
@@ -445,6 +449,13 @@ function measure(store: ResultsStore, run1: number, run2: number): void {
   if (uncovered.length > 0) {
     console.log(`  M2 SKIPPED (no mutant-covered row in run 2): ${uncovered.join(", ")}`);
   }
+  // r3 ruling: I1 must be answered. M1 measured and at least 3 of the 5 tests with a measured M2;
+  // fewer is a BLOCK on I1.
+  check(
+    "I1",
+    m1Measured && m2Measured >= 3,
+    `M1 ${m1Measured ? "measured" : "NOT measured"}, ${m2Measured} of 5 tests with a measured M2 (need M1 and at least 3)`,
+  );
   const base1 = rowsOf(store, run1).find((r) => r.mutant_row_id === null);
   if (base1 !== undefined) {
     const med = steady(testKey(base1), -1);
