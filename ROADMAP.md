@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**60 of 511 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**59 of 511 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -203,7 +203,7 @@ that ordering is the priority.
 - **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · done (538c38c8)
 - **R488** · al-runner one-shot runs every test whose name CONTAINS the requested one, and LethAL credits the merged coverage to the requested test · [R488.md](docs/roadmap/R488.md) · done (0cbc8cf6); upstream exact-match ask filed 2026-10-07 as StefanMaron/BusinessCentral.AL.Runner#5439
 - **R490** · al-runner one-shot: a look-alike test that discovery did not see and that hangs scores the requested test's mutant timeout-killed · [R490.md](docs/roadmap/R490.md) · closed 2026-10-07 — ruling: no false kill is possible; the shape is absent in every corpus, and a test-only…
-- **R494** · a top-level (or `#if`-wrapped) split-header object declaration is invisible to `projectObserves`: a possible under-tag · [R494.md](docs/roadmap/R494.md) · open, filed 2026-10-06
+- **R494** · a top-level (or `#if`-wrapped) split-header object declaration is invisible to `projectObserves`: a possible under-tag · [R494.md](docs/roadmap/R494.md) · done (85212a5a)
 - **R491** · R488 follow-ups: a duplicate row for the requested test is credited, and three R488 tests would pass with the guarantee broken · [R491.md](docs/roadmap/R491.md) · done (276698c4)
 - **R492** · Env-tool runs record the served package hash before the installed version is proven, so a later --resume can carry another test app's verdicts · [R492.md](docs/roadmap/R492.md) · done (cd64dad4)
 - **R493** · R484 follow-ups: three report data-item shapes still emit hang-capable mutants, and an OnPostDataItem write is over-refused · [R493.md](docs/roadmap/R493.md) · done (538c38c8)

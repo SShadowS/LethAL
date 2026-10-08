@@ -876,7 +876,8 @@ function mayHaveMember(symbols: SymbolTable, table: ObjectSymbol, member: string
     const base = o.childForFieldName("base_object")?.text ?? "";
     if (o.kind === ALNodeKind.tableextension && extendsIt(base) && holds(o.text)) return true;
   }
-  return symbols.unparsedObjects.some(
+  // R494: a split-header tableextension is in no index above, so it is read like unparsed source.
+  return [...symbols.unparsedObjects, ...symbols.splitObjects].some(
     (o) => identifierTokens(o.text).has("tableextension") && holds(o.text),
   );
 }
@@ -1153,7 +1154,10 @@ function projectDeclaresProcedureOnTable(
   // parse (R336), and a claim there let `validate-to-assign` assign a field that does not exist
   // (AL0132). Over-refusal costs one site; a wrong claim costs the build.
   const wanted = procName.toLowerCase();
-  return symbols.unparsedObjects.some((o) => {
+  // R494 (opus build review): a split-header object (`#if` around its header) is in no index above
+  // either, so a split-header tableextension's procedure escaped this guard and its call was claimed
+  // as the built-in. It joins the same conservative fallback.
+  return [...symbols.unparsedObjects, ...symbols.splitObjects].some((o) => {
     const tokens = identifierTokens(o.text);
     const tableLike =
       tokens.has("table") ||
