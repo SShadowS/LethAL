@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**61 of 510 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**62 of 511 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -222,8 +222,9 @@ that ordering is the priority.
 - **R509** · The type table reads `Record "X" temporary` as no table, so a field of a temporary record has no type · [R509.md](docs/roadmap/R509.md) · done (b8e3e2e5)
 - **R510** · `resolveObject` parses any name as an id first, so a table named `"50000 Foo"` resolves to table 50000 · [R510.md](docs/roadmap/R510.md) · done (b8e3e2e5)
 - **R511** · A namespace-qualified `extends` or `implements` does not parse, so the extension is indexed under one segment of the name · [R511.md](docs/roadmap/R511.md) · open, filed 2026-10-08
-- **R512** · The attestation gate invalidates a batch's verdicts but its R192 baseline snapshot is still reused · [R512.md](docs/roadmap/R512.md) · open, filed 2026-10-08
-- **R513** · A verdict recorded after a lease-loss note and before a crash is still carried by --resume · [R513.md](docs/roadmap/R513.md) · open, filed 2026-10-08
+- **R512** · The attestation gate invalidates a batch's verdicts but its R192 baseline snapshot is still reused · [R512.md](docs/roadmap/R512.md) · fixed in 7d4c56fc, live gate pending
+- **R513** · A verdict recorded after a lease-loss note and before a crash is still carried by --resume · [R513.md](docs/roadmap/R513.md) · fixed in 7d4c56fc, live gate pending
+- **R514** · A reused baseline lets a position-1 timeout score a kill with no unmutated confirm · [R514.md](docs/roadmap/R514.md) · open, filed 2026-10-08
 
 ## Product gaps a real project hits
 
