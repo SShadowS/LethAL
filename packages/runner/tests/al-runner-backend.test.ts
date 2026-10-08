@@ -2,7 +2,13 @@ import { describe, expect, jest, test } from "bun:test";
 import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
-import { AL_RUNNER_UNCLASSIFIED_ERROR, AlRunnerBackend } from "../src/al-runner-backend";
+import {
+  AL_RUNNER_UNCLASSIFIED_ERROR,
+  AlRunnerBackend,
+  AlRunnerServerStopUnsetError,
+  parseReportedStopMs,
+  verdictFromRunnerTest,
+} from "../src/al-runner-backend";
 import type { ServerSpawnFn } from "../src/al-runner-server";
 import type { TestVerdict } from "../src/backend";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
@@ -892,6 +898,8 @@ describe("AlRunnerBackend serverMode (R220)", () => {
       okSpawn({ tests: [] }).spawn,
       fake.spawn,
     );
+    // R517: the session gives every backend its floor before the first run.
+    backend.useMutantBudgetFloor(180_000, 120_000);
     return { backend, runs: fake.runs, dir };
   }
 
@@ -1047,6 +1055,7 @@ describe("AlRunnerBackend serverMode (R220)", () => {
         okSpawn({ tests: [] }).spawn,
         spy,
       );
+      server.useMutantBudgetFloor(180_000, 120_000);
       const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" };
       await server.run(ref, { coverage: "none", timeoutMs: 1000 });
       await server.close();
@@ -1092,12 +1101,132 @@ describe("AlRunnerBackend serverMode (R220)", () => {
       okSpawn({ tests: [] }).spawn,
       spy,
     );
+    backend.useMutantBudgetFloor(180_000, 120_000);
     await backend.run(
       { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" },
       { coverage: "none", timeoutMs: 1000 },
     );
     await backend.close();
-    expect(serverArgv).toEqual([["al-runner", "--server"]]);
+    expect(serverArgv).toEqual([["al-runner", "--server", "--test-timeout", "180"]]);
+  });
+
+  /** A server-mode backend whose daemon argv is recorded; `floor` is handed over when given. */
+  function argvRecording(floor?: readonly [number, number]) {
+    const fake = fakeServerSpawn([{ name: "Codeunit79100.A", status: "pass" }]);
+    const argvs: string[][] = [];
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: scratch("lethal-alrunner-r517-argv-"),
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        serverMode: true,
+      },
+      okSpawn({ tests: [] }).spawn,
+      (argv) => {
+        argvs.push([...argv]);
+        return fake.spawn(argv);
+      },
+    );
+    if (floor !== undefined) backend.useMutantBudgetFloor(floor[0], floor[1]);
+    return { backend, argvs };
+  }
+  const A = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" };
+  /** Every value that follows `--test-timeout` in one argv. */
+  const stopsOf = (argv: readonly string[] | undefined): string[] =>
+    (argv ?? []).flatMap((a, i) => (a === "--test-timeout" ? [argv?.[i + 1] ?? "<none>"] : []));
+
+  for (const [floor, baseline, sent] of [
+    [180_000, 120_000, "180"],
+    [180_500, 120_000, "181"],
+    // M2: a floor below the baseline timeout must not stop the baseline's tests early.
+    [30_000, 120_000, "120"],
+  ] as const) {
+    test(`R517 D1: useMutantBudgetFloor(${floor}, ${baseline}) starts the daemon with --test-timeout ${sent}, exactly once`, async () => {
+      const { backend, argvs } = argvRecording([floor, baseline]);
+      await backend.run(A, { coverage: "none", timeoutMs: 1000 });
+      await backend.close();
+      expect(argvs.length).toBe(1);
+      expect(stopsOf(argvs[0])).toEqual([sent]);
+    });
+  }
+
+  test("R517 D1: with no floor, run() throws AlRunnerServerStopUnsetError (never an error verdict) and spawns nothing", async () => {
+    const { backend, argvs } = argvRecording();
+    await expect(backend.run(A, { coverage: "none", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      AlRunnerServerStopUnsetError,
+    );
+    expect(argvs).toEqual([]);
+    await backend.close();
+  });
+
+  test("R517 D1: a second useMutantBudgetFloor with other values throws, the same values do not", async () => {
+    const { backend } = argvRecording([180_000, 120_000]);
+    await backend.run(A, { coverage: "none", timeoutMs: 1000 });
+    expect(() => backend.useMutantBudgetFloor(180_000, 120_000)).not.toThrow();
+    expect(() => backend.useMutantBudgetFloor(200_000, 120_000)).toThrow(/one stop for its life/);
+    expect(() => backend.useMutantBudgetFloor(180_000, 130_000)).toThrow(/one stop for its life/);
+    await backend.close();
+  });
+
+  test("R517 D1: inRunStopMs is the daemon's stop under serverMode once set, and undefined one-shot or before", async () => {
+    const { backend } = argvRecording();
+    expect(backend.inRunStopMs).toBeUndefined();
+    backend.useMutantBudgetFloor(180_000, 120_000);
+    expect(backend.inRunStopMs).toBe(180_000);
+    const oneShot = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: "/x",
+        testDir: "/tests",
+        selectorObjectId: 50000,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+    oneShot.useMutantBudgetFloor(180_000, 120_000);
+    expect(oneShot.inRunStopMs).toBeUndefined();
+  });
+
+  test("R517 D1: one-shot argv and env are unchanged by the floor (oneShotLimits per call)", async () => {
+    const s = okSpawn({ tests: [{ name: "Codeunit79100.A", status: "pass" }] });
+    const { backend } = await makeBackend(s.spawn);
+    await backend.run(A, { coverage: "none", timeoutMs: 4000 });
+    backend.useMutantBudgetFloor(180_000, 120_000);
+    await backend.run(A, { coverage: "none", timeoutMs: 4000 });
+    const [bare, floored] = s.calls;
+    expect(floored).toEqual(bare ?? []);
+    expect(floored).not.toContain("--test-timeout");
+    expect(s.envs[1]).toEqual(s.envs[0]);
+    expect(s.envs[1]?.AL_RUNNER_TEST_TIMEOUT_SEC).toBe("4");
+  });
+});
+
+describe("parseReportedStopMs (R517)", () => {
+  test("reads N from al-runner's whole timeout message, and nothing else", () => {
+    expect(parseReportedStopMs("Test exceeded 180s timeout.")).toBe(180_000);
+    expect(parseReportedStopMs("Test exceeded 1s timeout.")).toBe(1_000);
+    expect(parseReportedStopMs("Test exceeded 0s timeout.")).toBeUndefined();
+    expect(parseReportedStopMs("TIMEOUT after 5s")).toBeUndefined();
+    expect(parseReportedStopMs("Test exceeded 180s timeout. (and more)")).toBeUndefined();
+    expect(parseReportedStopMs("Error: Test exceeded 180s timeout.")).toBeUndefined();
+    expect(parseReportedStopMs("Assert failed")).toBeUndefined();
+    expect(parseReportedStopMs(undefined)).toBeUndefined();
+  });
+
+  test("a timeout verdict carries it; a timeout in another wording, a fail and an error do not", () => {
+    const r = { codeunitId: 1, codeunitName: "T", method: "M" };
+    const v = (status: string, message: string) =>
+      verdictFromRunnerTest(r, "Codeunit1.M", { status, message }, 10, undefined);
+    expect([
+      v("error", "Test exceeded 60s timeout.").outcome,
+      v("error", "Test exceeded 60s timeout.").reportedStopMs,
+    ]).toEqual(["timeout", 60_000]);
+    expect([
+      v("error", "TIMEOUT after 5s").outcome,
+      v("error", "TIMEOUT after 5s").reportedStopMs,
+    ]).toEqual(["timeout", undefined]);
+    expect(v("fail", "Test exceeded 60s timeout.").reportedStopMs).toBeUndefined();
+    expect(v("error", "SMTP is out of scope").reportedStopMs).toBeUndefined();
   });
 });
 
@@ -1568,9 +1697,7 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       spawn,
     );
     // R517 D1: the session hands every backend its floor before the first run.
-    (
-      backend as { useMutantBudgetFloor?: (f: number, b: number) => void }
-    ).useMutantBudgetFloor?.(180_000, 120_000);
+    backend.useMutantBudgetFloor(180_000, 120_000);
     return backend;
   }
 

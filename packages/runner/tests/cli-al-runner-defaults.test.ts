@@ -111,6 +111,8 @@ async function drive(alRunner: NonNullable<LethalConfigFile["alRunner"]>): Promi
     IDS,
   )) as AlRunnerBackend;
   const ev = watchResourceSelector(backend, join(scratchDir, "al-runner-active", "active"));
+  // R517: as `runSession` does before the first run, at its defaults (no leg sets either).
+  backend.useMutantBudgetFloor(180_000, 120_000);
   await backend.deploy(await batch());
   for (const id of ["M0001", "M0002", null]) {
     await backend.activate(id);
@@ -140,10 +142,27 @@ describe("R387: buildBackend's al-runner defaults", () => {
   test("no transport key: one --server daemon, no one-shot test spawn, resource selector, coverage off", async () => {
     const { backend, record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
     expect(cliDefaultMechanismFailures(record, ev, ALLOWED)).toEqual([]);
-    expect(record.serverArgv).toEqual([["al-runner.exe", "--server"]]);
+    expect(record.serverArgv).toEqual([["al-runner.exe", "--server", "--test-timeout", "180"]]);
     expect(ev.activations).toBe(3);
     expect(ev.alHashes.size).toBe(1);
     expect(backend.capabilities().coverage).toBe("none");
+  });
+
+  test("R517: a daemon argv without --test-timeout 180 exactly once fails the server check", async () => {
+    const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
+    const withArgv = (argv: string[]): SpawnRecord => ({ ...record, serverArgv: [argv] });
+    expect(cliDefaultMechanismFailures(record, ev, ALLOWED)).toEqual([]);
+    for (const argv of [
+      ["al-runner.exe", "--server"],
+      ["al-runner.exe", "--server", "--test-timeout", "60"],
+      ["al-runner.exe", "--server", "--test-timeout", "180", "--test-timeout", "180"],
+    ]) {
+      expect(cliDefaultMechanismFailures(withArgv(argv), ev, ALLOWED)).toEqual([
+        `server: expected --test-timeout 180 exactly once on the daemon argv, saw ${JSON.stringify(
+          argv.flatMap((a, i) => (a === "--test-timeout" ? [argv[i + 1]] : [])),
+        )}`,
+      ]);
+    }
   });
 
   test("the provisioning call (sentinel --test) is not a test spawn; a second one, or a real --test, fails", async () => {
@@ -399,6 +418,7 @@ describe("R387: buildBackend's al-runner defaults", () => {
       IDS,
     )) as AlRunnerBackend;
     backend.useBuildSymbols([]);
+    backend.useMutantBudgetFloor(180_000, 120_000);
     await backend.deploy(dir);
     try {
       await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(
@@ -450,6 +470,7 @@ describe("R505: buildBackend watches the project while coverage is read", () => 
       ...(withSnapshot ? [snapshot] : []),
     )) as AlRunnerBackend;
     backend.useBuildSymbols([]);
+    backend.useMutantBudgetFloor(180_000, 120_000);
     await backend.deploy(await batch());
     return { backend, proj };
   }
@@ -569,6 +590,7 @@ describe("R387: a hung suite under the default --server path", () => {
         { alRunnerSpawn: oneShot, alRunnerServerSpawn: fake.spawn },
         IDS,
       )) as AlRunnerBackend;
+      backend.useMutantBudgetFloor(180_000, 120_000);
       await backend.deploy(await batch());
       await backend.activate("M0001");
       const v = await backend.run(ref, { coverage: "none", timeoutMs: 1000 });

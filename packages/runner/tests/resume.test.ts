@@ -4998,4 +4998,158 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     ]);
     expect(slowConfirms(today)).toEqual([]);
   });
+
+  test("R517 S2: --server, the stop (180 s) below the budget (260 s): an unrelated mutant stopped at 180 s whose confirm body is 100 s is timeout-unconfirmed, the note naming the stop", async () => {
+    // Baseline: body 100 s + 30 s rest = 130 s, budget 260 s. Under the mutant the body is 181 s.
+    // The old rule judged the confirm's 130 s suite wall clock against the budget: 260 <= 260, a
+    // false kill. Now: 2 x 100 > min(260, 180).
+    const { report } = await serverRun(
+      100_000,
+      { restMs: 30_000, enforcedStopMs: 180_000 },
+      181_000,
+    );
+    expect(falseKills(report, 0)).toEqual([]);
+    const scored = scoredOf(report, 0);
+    expect(scored.map((m) => [m.verdict, m.cause])).toEqual(
+      scored.map(() => ["error", "timeout-unconfirmed"]),
+    );
+    expect(scored[0]?.failureNote).toContain(
+      "unmutated it completed in 100000 ms by its own figure (130000 ms wall clock) on this backend, more than half the 180000 ms in-run stop al-runner reported (below its 260000 ms budget, which was set from this run's baseline, 130000 ms)",
+    );
+  });
+
+  test("R517 S3: --server, a genuine hang is still timeout-killed after exactly one unmutated confirm, judged on the body (1 s), not the suite (95 s)", async () => {
+    // Baseline: body 1 s + 94 s rest = 95 s, budget 190 s, stop 180 s. Judged on the suite's wall
+    // clock the confirm would be 2 x 95 > 180: a lost kill.
+    const { report, today } = await serverRun(1_000, { restMs: 94_000 }, Number.POSITIVE_INFINITY);
+    const scored = scoredOf(report, 0);
+    expect(scored.length).toBeGreaterThan(0);
+    for (const m of scored) {
+      expect([m.verdict, m.killingTest, m.killPosition]).toEqual(["timeout-killed", "BSlow", 1]);
+    }
+    expect(slowConfirms(today)).toHaveLength(scored.length);
+  });
+
+  test("R517 S5 (a): the ENFORCED stop: a daemon configured at 180 s that reports 'Test exceeded 60s timeout.' is judged against 60 s: timeout-unconfirmed", async () => {
+    // A build that takes --test-timeout but does not apply it. BSlow body 58 s + 30 s rest, budget
+    // 180 s, 61 s under an unrelated mutant, stopped at 60 s. 2 x 58 > min(180, 60, 180).
+    const { report, today } = await serverRun(
+      58_000,
+      { restMs: 30_000, enforcedStopMs: 60_000 },
+      61_000,
+    );
+    expect(today.inRunStopMs).toBe(180_000);
+    expect(falseKills(report, 0)).toEqual([]);
+    const scored = scoredOf(report, 0);
+    expect(scored.map((m) => [m.verdict, m.cause])).toEqual(
+      scored.map(() => ["error", "timeout-unconfirmed"]),
+    );
+    expect(scored[0]?.failureNote).toContain("more than half the 60000 ms in-run stop");
+  });
+
+  test("R517 S5 (b): a timeout row whose stop does not parse, on a backend that declares inRunStopMs: a genuine hang stays timeout-unconfirmed", async () => {
+    const { report } = await serverRun(
+      1_000,
+      { restMs: 1_000, reportedStopMs: null },
+      Number.POSITIVE_INFINITY,
+    );
+    const scored = scoredOf(report, 0);
+    expect(scored.length).toBeGreaterThan(0);
+    expect(scored.map((m) => [m.verdict, m.cause])).toEqual(
+      scored.map(() => ["error", "timeout-unconfirmed"]),
+    );
+    expect(scored[0]?.failureNote).toContain("al-runner did not say which stop it enforced");
+  });
+
+  test("R517 one-shot: a genuine hang whose confirm's COMPILE takes 65 s is timeout-killed, judged on its 1 s body (R516's lost-kill band)", async () => {
+    // Baseline: body 1 s + 55 s compile = 56 s, budget the 120 s floor. Under the mutant BSlow
+    // hangs and is stopped at 120 s. The confirm compiles in 65 s: wall 66 s, body 1 s. Judged on
+    // the wall clock, 2 x 66 > 120 lost the kill.
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const today = scriptBSlow(
+      new ClockBackend(1_000, {
+        alRunnerCompileMs: 55_000,
+        mutatedMs: Number.POSITIVE_INFINITY,
+      }),
+      { confirmMs: [66_000, 66_000, 66_000] },
+    );
+    const report = await runSession({
+      ...opts(store, dirs),
+      mutantTimeoutMs: 120_000,
+      backend: today,
+    });
+    // R515 then re-budgets from the confirm's wall clock (2 x 66 s), the safe direction.
+    expect(slowBudgetsInOrder(today)).toEqual([120_000, 132_000, 132_000]);
+    const scored = scoredOf(report, 0);
+    expect(scored.length).toBeGreaterThan(0);
+    for (const m of scored) {
+      expect([m.verdict, m.killingTest, m.killPosition]).toEqual(["timeout-killed", "BSlow", 1]);
+    }
+  });
+
+  test("R517 one-shot drift: a body that slowed from 1000 to 1500 ms unmutated (3500 mutated) is still timeout-unconfirmed when judged on the body, never a kill", async () => {
+    // R516 T1b's shape on one-shot: baseline wall 1300 (body 1000 + compile 300), budget 2600,
+    // in-run limit 3 s. The mutated body 3500 times out; the confirm's body is 1500: 2 x 1500 > 2600.
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const today = scriptBSlow(
+      new ClockBackend(1_500, { alRunnerCompileMs: 300, mutatedMs: 3_500 }),
+      { baselineMs: 1_300 },
+    );
+    const report = await runSession({ ...opts(store, dirs), backend: today });
+    expect(falseKills(report, 0)).toEqual([]);
+    const [first] = scoredOf(report, 0);
+    expect([first?.verdict, first?.cause]).toEqual(["error", "timeout-unconfirmed"]);
+    expect(first?.failureNote).toContain(
+      "unmutated it completed in 1500 ms by its own figure (1800 ms wall clock) on this backend, more than half its 2600 ms budget",
+    );
+  });
+
+  test("R517 wiring: useMutantBudgetFloor gets the floor and the baseline timeout before the first run, once per backend", async () => {
+    const dirs = await twoTestProject(false);
+    const byDefault = new ClockBackend(100, { server: { restMs: 0 } });
+    await runSession({
+      ...opts(new ResultsStore(":memory:"), dirs),
+      mutantTimeoutMs: 180_000,
+      backend: byDefault,
+    });
+    expect(byDefault.floorCalls).toEqual([
+      { floorMs: 180_000, baselineTimeoutMs: 120_000, runsBefore: 0 },
+    ]);
+    const overridden = new ClockBackend(100, { server: { restMs: 0 } });
+    await runSession({
+      ...opts(new ResultsStore(":memory:"), dirs),
+      baselineTimeoutMs: 5_000,
+      backend: overridden,
+    });
+    expect(overridden.floorCalls).toEqual([
+      { floorMs: FLOOR_MS, baselineTimeoutMs: 5_000, runsBefore: 0 },
+    ]);
+  });
+
+  test("R517 wiring: under workers = 2 every worker backend gets the same pair, before its first run", async () => {
+    const dirs = await twoTestProject(true);
+    const session = new ClockBackend(100, { authoritative: false, server: { restMs: 0 } });
+    const workers = [
+      new ClockBackend(100, { authoritative: false, server: { restMs: 0 } }),
+      new ClockBackend(100, { authoritative: false, server: { restMs: 0 } }),
+    ];
+    await runSession({
+      ...opts(new ResultsStore(":memory:"), dirs),
+      backend: session,
+      workers: 2,
+      backendFactory: (i: number) => {
+        const w = workers[i];
+        if (w === undefined) throw new Error(`no worker backend ${i}`);
+        return w;
+      },
+    });
+    const pair = { floorMs: FLOOR_MS, baselineTimeoutMs: 120_000, runsBefore: 0 };
+    expect(session.floorCalls).toEqual([pair]);
+    for (const w of workers) {
+      expect(w.sent.length).toBeGreaterThan(0);
+      expect(w.floorCalls).toEqual([pair]);
+    }
+  });
 });

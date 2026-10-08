@@ -74,6 +74,41 @@ import type { SpawnFn } from "./publisher";
 export const RUNNER_TIMEOUT_MESSAGE = /TIMEOUT after \d+s|Test exceeded \d+s timeout/;
 
 /**
+ * R517: the stop al-runner says it ENFORCED, from a timeout row's whole message
+ * (`Test exceeded {N}s timeout.`, built in `TestExecutor.RunOne` from the timeout it used), in ms.
+ * Anchored and N > 0, so a wording that moved gives `undefined`, never a guessed figure: on
+ * `--server` that leaves the timeout unconfirmed (a lost kill, never a false one).
+ */
+export function parseReportedStopMs(message: string | undefined): number | undefined {
+  const m = message === undefined ? null : /^Test exceeded (\d+)s timeout\.$/.exec(message);
+  const n = m?.[1] === undefined ? 0 : Number(m[1]);
+  return n > 0 ? n * 1000 : undefined;
+}
+
+/** A row al-runner reported as a timeout: the `timeout` case of `verdictFromRunnerTest`. */
+function isTimeoutRow(t: { readonly status: string; readonly message?: string }): boolean {
+  return (
+    t.status !== "pass" &&
+    t.status !== "fail" &&
+    t.message !== undefined &&
+    RUNNER_TIMEOUT_MESSAGE.test(t.message)
+  );
+}
+
+/**
+ * R517: `--server` was asked to start its daemon before `useMutantBudgetFloor` gave it a stop.
+ * Started bare, the daemon stops every test at al-runner's own 60 s, which LethAL never set and
+ * the confirm cannot see. Rethrown out of `run()` so it stops the session.
+ */
+export class AlRunnerServerStopUnsetError extends Error {
+  constructor() {
+    super(
+      "AlRunnerBackend: al-runner --server needs the session's --mutant-timeout-ms floor and baseline timeout (useMutantBudgetFloor) before its daemon starts, so it can send --test-timeout; refusing to start it with al-runner's own 60 s stop (R517).",
+    );
+  }
+}
+
+/**
  * Prefix on the `failureMessage` of an al-runner `status: "error"` this build could not classify.
  *
  * Exported so a test can pin the behaviour by NAME rather than by quoting the sentence, and so a
@@ -229,6 +264,8 @@ interface ServerSuiteResults {
   readonly coverageByName: ReadonlyMap<string, CoverageMap>;
   /** Wall time of the suite call, reported as every test's duration. See `runViaServer`. */
   readonly wallMs: number;
+  /** R517 (M3): the test whose timeout row ended the run; tests after it have no row. */
+  readonly hungTest?: string;
 }
 
 /**
@@ -363,9 +400,45 @@ export function provisionArgv(
 }
 
 export class AlRunnerBackend implements ExecutionBackend {
-  /** R516 I1: one-shot's in-run limit is the budget (`oneShotLimits`); the daemon's is its own. */
+  /** R516 I1: one-shot's in-run limit is the budget (`oneShotLimits`); the daemon's is the one stop
+   *  it was started with (R517: `inRunStopMs`), never the budget. */
   get inRunStopIsBudget(): boolean {
     return this.cfg.serverMode !== true;
+  }
+  /** R517: see `useMutantBudgetFloor`. */
+  private budgetFloor: { readonly floorMs: number; readonly baselineTimeoutMs: number } | undefined;
+
+  /**
+   * R517: the session's floor and baseline timeout. Under `serverMode` the daemon is started with
+   * `--test-timeout S`, `S = max(1, ceil(max(floor, baseline) / 1000))`: the larger of the two, so
+   * the baseline's slow tests are not stopped before the baseline timeout they were sent. One-shot
+   * keeps `oneShotLimits` per call and ignores it. A second call with other values throws.
+   */
+  useMutantBudgetFloor(floorMs: number, baselineTimeoutMs: number): void {
+    const prev = this.budgetFloor;
+    if (
+      prev !== undefined &&
+      (prev.floorMs !== floorMs || prev.baselineTimeoutMs !== baselineTimeoutMs)
+    ) {
+      throw new Error(
+        `AlRunnerBackend.useMutantBudgetFloor: already set to (${prev.floorMs}, ${prev.baselineTimeoutMs}), now (${floorMs}, ${baselineTimeoutMs}); the daemon has one stop for its life (R517)`,
+      );
+    }
+    this.budgetFloor = { floorMs, baselineTimeoutMs };
+  }
+
+  /** R517: the daemon's `--test-timeout`, in seconds; `undefined` before `useMutantBudgetFloor`. */
+  private serverStopSeconds(): number | undefined {
+    const f = this.budgetFloor;
+    return f === undefined
+      ? undefined
+      : Math.max(1, Math.ceil(Math.max(f.floorMs, f.baselineTimeoutMs) / 1000));
+  }
+
+  /** R517: the stop the daemon is started with, under `serverMode` only. */
+  get inRunStopMs(): number | undefined {
+    const s = this.serverStopSeconds();
+    return this.server !== undefined && s !== undefined ? s * 1000 : undefined;
   }
   // Set by deploy(); until then (or if deploy() is never called — existing
   // callers may drive activate()/run() directly against cfg.instrumentedDir)
@@ -1270,6 +1343,7 @@ export class AlRunnerBackend implements ExecutionBackend {
       // R-219c (M2): a coverage-index refusal is about the bundle, not this test. It stops the
       // session, as it does on the one-shot path, instead of reading as one `error` per test.
       if (e instanceof ServerCoverageRefusal) throw e.cause;
+      if (e instanceof AlRunnerServerStopUnsetError) throw e;
       return {
         ref,
         outcome: "error",
@@ -1281,6 +1355,11 @@ export class AlRunnerBackend implements ExecutionBackend {
     }
     const t = suite.byName.get(wanted);
     if (t === undefined) {
+      // R517 (M3): a timeout ends al-runner's run, so a test after the hung one has no row.
+      const hung =
+        suite.hungTest !== undefined
+          ? `al-runner --server stopped the run at "${suite.hungTest}" (timeout); tests after it have no row, so `
+          : "";
       return {
         ref,
         outcome: "error",
@@ -1288,7 +1367,7 @@ export class AlRunnerBackend implements ExecutionBackend {
         // Naming both sides, as the one-shot path does: a mismatch means the runner ran something
         // other than what was asked for, and "missing the requested test" alone leaves nobody able
         // to see which.
-        failureMessage: `al-runner --server ran the suite but reported no test named "${wanted}" (it returned: ${
+        failureMessage: `${hung}al-runner --server ran the suite but reported no test named "${wanted}" (it returned: ${
           [...suite.byName.keys()].join(", ") || "<no tests>"
         })`,
         operation: "pre-dispatch-rejected",
@@ -1300,6 +1379,8 @@ export class AlRunnerBackend implements ExecutionBackend {
     // test. The orchestrator derives each mutant's timeout budget from this figure, and of the two
     // ways to be wrong, over-reporting buys a budget that is too generous while under-reporting
     // manufactures spurious timeouts. Only one of those invents a verdict.
+    // R517: a position-1 timeout confirm is judged on the row's own figure (`measuredDurationMs`)
+    // against the stop al-runner reports it enforced (`reportedStopMs`), never on this one.
     return verdictFromRunnerTest(ref, wanted, t, suite.wallMs, coverage);
   }
 
@@ -1308,9 +1389,13 @@ export class AlRunnerBackend implements ExecutionBackend {
     if (cached !== undefined) return cached;
     const server = this.server;
     if (server === undefined) throw new Error("serverMode is not enabled on this backend");
+    const stopSeconds = this.serverStopSeconds();
+    if (stopSeconds === undefined) throw new AlRunnerServerStopUnsetError();
+    // Every (re)start, including after the two closes below, gets the same stop.
     await server.start(
       SERVER_READY_DEADLINE_MS,
       this.cfg.packagesDir !== undefined ? [this.cfg.packagesDir] : [],
+      stopSeconds,
     );
     const wantCoverage = (this.cfg.coverage ?? "none") !== "none";
     // R505: the daemon re-reads the live project at every `runTests` (measured), so the suite run
@@ -1325,20 +1410,34 @@ export class AlRunnerBackend implements ExecutionBackend {
     };
     await watch();
     const t0 = Date.now();
-    const res = await server.runTests(
-      {
-        sourcePaths: [this.activeDir(), this.cfg.testDir],
-        ...(this.cfg.packagesDir !== undefined ? { packagePaths: [this.cfg.packagesDir] } : {}),
-        // Matching the one-shot path's `--isolation test` exactly. The server's own default is
-        // `codeunit`, the weaker isolation R96 records the v1 argv as having bought silently, and
-        // `capabilities().isolation` claims `full-reset` on the strength of the stronger one.
-        testIsolation: "test",
-        ...(wantCoverage ? { coverage: true, perTestCoverage: true } : {}),
-      },
-      // One suite run replaces every per-test invocation, so it is budgeted as such rather than
-      // against one test's timeout.
-      Math.max(opts.timeoutMs, SERVER_SUITE_MIN_DEADLINE_MS),
-    );
+    let res: Awaited<ReturnType<AlRunnerServer["runTests"]>>;
+    try {
+      res = await server.runTests(
+        {
+          sourcePaths: [this.activeDir(), this.cfg.testDir],
+          ...(this.cfg.packagesDir !== undefined ? { packagePaths: [this.cfg.packagesDir] } : {}),
+          // Matching the one-shot path's `--isolation test` exactly. The server's own default is
+          // `codeunit`, the weaker isolation R96 records the v1 argv as having bought silently, and
+          // `capabilities().isolation` claims `full-reset` on the strength of the stronger one.
+          testIsolation: "test",
+          ...(wantCoverage ? { coverage: true, perTestCoverage: true } : {}),
+        },
+        // One suite run replaces every per-test invocation, so it is budgeted as such rather than
+        // against one test's timeout.
+        Math.max(opts.timeoutMs, SERVER_SUITE_MIN_DEADLINE_MS),
+      );
+    } catch (e) {
+      // R517 (C1): the daemon may still answer this request later, and the next request would
+      // read that late answer as its own: a mutant scored on the previous activation's results.
+      // End it; the retry starts a fresh one. `serverSuite` stays unset.
+      await server.close();
+      throw e;
+    }
+    // R517 (I2): a timed-out test's thread is abandoned, not stopped, and keeps writing to the
+    // daemon's row store into later requests, the unmutated confirm included. This suite's results
+    // stand; the daemon does not serve another one.
+    const hungTest = res.tests.find(isTimeoutRow)?.name;
+    if (hungTest !== undefined) await server.close();
     await watch();
     const byName = new Map<string, ServerTestLine>();
     for (const t of res.tests) byName.set(t.name, t);
@@ -1353,7 +1452,14 @@ export class AlRunnerBackend implements ExecutionBackend {
         throw new ServerCoverageRefusal(e);
       }
     }
-    const suite: ServerSuiteResults = { byName, coverageByName, wallMs: Date.now() - t0 };
+    const suite: ServerSuiteResults = {
+      byName,
+      coverageByName,
+      // Measured where it always was; on a suite with a timeout row it also holds the close above,
+      // which only over-states (the safe direction, see `runViaServer`).
+      wallMs: Date.now() - t0,
+      ...(hungTest !== undefined ? { hungTest } : {}),
+    };
     this.serverSuite = suite;
     return suite;
   }
@@ -1400,8 +1506,9 @@ export function verdictFromRunnerTest(
   coverage: CoverageMap | undefined,
 ): TestVerdict {
   if (t.status === "pass") {
-    // R272: the runner's OWN per-test figure, for the report only. `durationMs` stays wall clock
-    // for the timeout budget; under `--server` it is the whole suite's, never a per-test time.
+    // R272: the runner's OWN per-test figure, for the report and (R517) the figure a position-1
+    // timeout confirm is judged on, being timed on the same clock as the in-run stop. `durationMs`
+    // stays wall clock for the timeout budget; under `--server` it is the whole suite's.
     const own = t.durationMs;
     return {
       ref,
@@ -1419,12 +1526,15 @@ export function verdictFromRunnerTest(
       : t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message)
         ? "timeout"
         : "error";
+  // R517: the stop al-runner says it enforced, on a timeout. Absent when the wording does not parse.
+  const reportedStopMs = outcome === "timeout" ? parseReportedStopMs(t.message) : undefined;
   return {
     ref,
     outcome,
     // Wall-clock, NOT the runner's in-VM figure: the orchestrator derives each mutant's timeout
     // budget from this and must include round-trip cost.
     durationMs,
+    ...(reportedStopMs !== undefined ? { reportedStopMs } : {}),
     ...(outcome === "error"
       ? {
           failureMessage: `${AL_RUNNER_UNCLASSIFIED_ERROR}: al-runner reported status ${JSON.stringify(

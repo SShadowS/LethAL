@@ -1,0 +1,12 @@
+{
+  "id": "5b2e0c1a-7d44-4e8a-9c31-517000000002",
+  "name": "R517 Probe Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "dependencies": [
+    { "id": "5b2e0c1a-7d44-4e8a-9c31-517000000001", "name": "R517 Probe", "publisher": "LethAL", "version": "1.0.0.0" }
+  ],
+  "idRanges": [{ "from": 79620, "to": 79639 }],
+  "runtime": "13.0",
+  "features": []
+}

@@ -240,14 +240,24 @@ export class AlRunnerServer {
    * once for a clean Cecil load; the child inherits the same stdio, so the readiness line still
    * arrives on the same pipe — just later". Measured at 2.4 s on a warm machine, but a first run
    * that provisions artifacts is minutes.
+   *
+   * R517: `testTimeoutSeconds` is sent as `--test-timeout N`, the daemon's one in-run stop for its
+   * life (a `runTests` request cannot carry one; the flag beats an inherited
+   * `AL_RUNNER_TEST_TIMEOUT_SEC`, measured on 43f76177). Absent: al-runner's own 60 s default.
+   * `AlRunnerBackend` never starts one without it.
    */
-  async start(readinessDeadlineMs: number, packagePaths: readonly string[] = []): Promise<void> {
+  async start(
+    readinessDeadlineMs: number,
+    packagePaths: readonly string[] = [],
+    testTimeoutSeconds?: number,
+  ): Promise<void> {
     if (this.proc !== undefined) return;
     const argv = [
       this.alRunnerPath,
       "--server",
       ...packagePaths.flatMap((p) => ["--package-cache", p]),
       ...this.preprocessorSymbols.flatMap((sym) => ["--define", sym]),
+      ...(testTimeoutSeconds !== undefined ? ["--test-timeout", String(testTimeoutSeconds)] : []),
     ];
     const proc = this.spawn(argv);
     this.proc = proc;

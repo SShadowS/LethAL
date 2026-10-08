@@ -90,12 +90,23 @@ export interface TestVerdict {
   readonly outcome: TestOutcome;
   readonly durationMs: number;
   /**
-   * R272: this test's own duration, for the report only (never the timeout budget, which reads
-   * `durationMs`), on a `pass`. al-runner sets the runner's own per-test figure, since its
+   * R272: this test's own duration, on a `pass`. The timeout BUDGET still reads `durationMs`; this
+   * figure is in the report and, since R517, it is what a position-1 timeout confirm is judged on
+   * (`confirm.measuredDurationMs ?? confirm.durationMs`), because it is timed on the same clock as
+   * al-runner's in-run stop. al-runner sets the runner's own per-test figure, since its
    * `durationMs` includes a compile per call (one-shot) or is the whole suite's (`--server`).
-   * bcdev sets its per-test call's wall clock (`BcDevBackend.run`). Absent: not measured per test.
+   * bcdev sets its per-test call's wall clock (`BcDevBackend.run`), equal to its `durationMs`.
+   * Absent: not measured per test.
    */
   readonly measuredDurationMs?: number;
+  /**
+   * R517: on a `timeout`, the stop the runner says it ENFORCED, parsed from al-runner's row
+   * (`Test exceeded {N}s timeout.`, N x 1000). The position-1 confirm is judged against
+   * `min(budget, reportedStopMs, backend.inRunStopMs)`. Absent: the runner did not say (bcdev,
+   * or a row whose wording did not parse); on a backend that declares `inRunStopMs` that leaves
+   * the timeout unconfirmed.
+   */
+  readonly reportedStopMs?: number;
   readonly failureMessage?: string;
   readonly coverage?: CoverageMap;
   /**
@@ -313,13 +324,20 @@ export interface ExecutionBackend {
    * R516 I1: true when the run's own in-run stop is the budget it was sent (bcdev; al-runner
    * one-shot, static or resource selector), so a larger budget really lets the test run longer.
    * False on al-runner `--server` (and resource with `--server`): the daemon stops a test body at
-   * its own 60 s default whatever the budget, while every duration is the suite's wall clock, so
-   * raising the budget from a confirm (R515) moves no stop and only lets a later confirm pass the
-   * 2x rule: a false kill. Read only by R515's re-budget, which is skipped unless this is `true`;
-   * absent counts as false, the safe direction. Kept off `BackendCapabilities` so the stream
-   * schema does not change.
+   * the one stop it was started with (`inRunStopMs`, R517) whatever the budget, while every
+   * duration is the suite's wall clock, so raising the budget from a confirm (R515) moves no stop.
+   * Read only by R515's re-budget, which is skipped unless this is `true`; absent counts as false,
+   * the safe direction. Kept off `BackendCapabilities` so the stream schema does not change.
    */
   readonly inRunStopIsBudget?: boolean;
+  /**
+   * R517, OPTIONAL: the in-run stop LethAL configured for the whole session, timed on the test's
+   * own body, enforced whatever budget a run is sent. al-runner `--server` answers it once
+   * `useMutantBudgetFloor` was called; absent elsewhere (the stop is the budget). An upper bound
+   * on the position-1 confirm's threshold only: the stop a run ENFORCED is its verdict's
+   * `reportedStopMs`, which such a backend must give or the timeout stays unconfirmed.
+   */
+  readonly inRunStopMs?: number | undefined;
   status(): Promise<BackendStatus>;
   /**
    * Compile + publish + verify the instrumented project. Publishing backends return the
@@ -405,4 +423,12 @@ export interface ExecutionBackend {
    * excludes the look-alikes up front with it.
    */
   useDiscoveredTests?(tests: readonly TestMethodRef[]): void;
+
+  /**
+   * R517, OPTIONAL: the session's `--mutant-timeout-ms` floor and baseline timeout, given once
+   * both are known, before the first run, and to every worker. al-runner `--server` starts its
+   * daemon with `--test-timeout ceil(max(floor, baseline) / 1000)` and refuses to start one
+   * without it.
+   */
+  useMutantBudgetFloor?(floorMs: number, baselineTimeoutMs: number): void;
 }
