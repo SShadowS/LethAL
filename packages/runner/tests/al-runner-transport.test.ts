@@ -334,7 +334,9 @@ describe("OneShotTransport exit 3: read only a proven test-timeout abort (R518)"
   test("(a) a second suite-error line that is not a timeout abort refuses", async () => {
     // The EXEC-FAIL line names the row too, so only the marker check can refuse it.
     const errors = [ABORT_LINE, ABORT_LINE.replace("TEST-TIMEOUT-ABORT", "EXEC-FAIL")];
-    const res = await sendExit3(alRunnerStdout(envelope({ suiteErrors: [{ file: "/t", errors }] })));
+    const res = await sendExit3(
+      alRunnerStdout(envelope({ suiteErrors: [{ file: "/t", errors }] })),
+    );
     expect(res.kind).toBe("error");
   });
 

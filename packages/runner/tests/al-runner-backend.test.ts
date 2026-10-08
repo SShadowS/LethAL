@@ -1879,7 +1879,14 @@ describe("AlRunnerBackend one-shot: a test timeout exits 3 (R518)", () => {
   test("an OnRun-trigger exit 3 is accepted as rows but scored a fail-closed error, never timeout", async () => {
     const onRun = {
       ...timeoutExit3,
-      tests: [{ name: QUALIFIED, status: "error", durationMs: 40_072, message: "OnRun trigger did not complete" }],
+      tests: [
+        {
+          name: QUALIFIED,
+          status: "error",
+          durationMs: 40_072,
+          message: "OnRun trigger did not complete",
+        },
+      ],
     };
     const { calls, spawn } = okSpawn(onRun, 3);
     const { backend } = await makeBackend(spawn);
@@ -1906,7 +1913,14 @@ describe("AlRunnerBackend one-shot: a test timeout exits 3 (R518)", () => {
       }
       const hung = {
         ...timeoutExit3,
-        tests: [{ name: TWIN, status: "error", durationMs: 40_072, message: "Test exceeded 40s timeout." }],
+        tests: [
+          {
+            name: TWIN,
+            status: "error",
+            durationMs: 40_072,
+            message: "Test exceeded 40s timeout.",
+          },
+        ],
         suiteErrors: [
           {
             file: "/tests",

@@ -602,6 +602,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **al-runner one-shot: a test that hits its in-run stop is scored `timeout` again and goes
+  through the unmutated confirm, so a genuine hang is `timeout-killed`** (R518). al-runner now
+  exits 3 on a test timeout; LethAL read that as a failed run, re-ran the hang, and then ABORTED
+  THE WHOLE SESSION (spec §11's two-consecutive-failures rule). Exit 3 is read as results only
+  when every suite error is a test-timeout abort naming a test in the output. The contract probe
+  now checks this shape in every session (R518).
 - **al-runner `--server` (and resource with `--server`) now stops a test at the larger of the
   `--mutant-timeout-ms` floor and the baseline timeout (180 s by default), sent as
   `--test-timeout` on the daemon's start line** (R517). It used al-runner's own 60 s default, which
