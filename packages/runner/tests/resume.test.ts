@@ -1095,6 +1095,48 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
   });
 });
 
+describe("ResultsStore.dropBaselineSnapshot (R508)", () => {
+  function twoSnapshots(): { store: ResultsStore; id: number } {
+    const store = new ResultsStore(":memory:");
+    const id = store.createRun({
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+      testAppHash: "package:t",
+      testAppProven: true,
+      testAppDeps: "D",
+    });
+    const ref = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
+    for (const batchIndex of [0, 1]) {
+      store.recordBaselineSnapshot({
+        runId: id,
+        batchIndex,
+        batchHash: `b${batchIndex}`,
+        testAppHash: "package:t",
+        baseline: [{ ref, verdict: { ref, outcome: "pass", durationMs: 1 } }],
+      });
+    }
+    return { store, id };
+  }
+
+  test("drops only the named batch's snapshot", () => {
+    const { store, id } = twoSnapshots();
+    expect(store.dropBaselineSnapshot(id, 0)).toBe(1);
+    expect(store.findBaselineSnapshot("b0", "package:t", "D", "procedure")).toBeNull();
+    expect(store.findBaselineSnapshot("b1", "package:t", "D", "procedure")?.batchIndex).toBe(1);
+  });
+
+  test("invalidateBatch leaves snapshots alone (the attestation path is unchanged)", () => {
+    const { store, id } = twoSnapshots();
+    store.invalidateBatch(id, 0, "unattested");
+    expect(store.findBaselineSnapshot("b0", "package:t", "D", "procedure")?.batchIndex).toBe(0);
+    expect(store.findBaselineSnapshot("b1", "package:t", "D", "procedure")?.batchIndex).toBe(1);
+  });
+});
+
 describe("runSession --resume (R47)", () => {
   test("review M-3: a quarantined run whose bundle is gone still returns its quarantined report", async () => {
     class DroppingStore extends ResultsStore {

@@ -92,6 +92,7 @@ import { discoverTests } from "../src/discovery";
 // to drive more than one batch while `planArtifacts` still collapses everything into one artifact.
 import * as orchestratorModule from "../src/orchestrator";
 import {
+  LostBatchNotStoredError,
   MIN_MUTANT_BUDGET_MS,
   NO_GREEN_BASELINE,
   activateOnce,
@@ -11417,6 +11418,17 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
 // R507: R-496's refusal on the lease path, through a REAL `LeaseClient` on a router fetch. Every
 // lease caller that swallows a lease error still does its fail-closed thing, AND the session ends
 // with the refusal itself (or warns it, when another error is already ending the session).
+/** Captures `console.warn` lines for the duration of `body`. */
+async function capturingWarn<T>(body: () => Promise<T>): Promise<{ out: T; warned: string[] }> {
+  const spy = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const out = await body();
+    return { out, warned: spy.mock.calls.map((c) => String(c[0])) };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 describe("R507: a refused unfiltered extensions query on the lease path ends the session as itself", () => {
   const TIER = "http://cronus281|BC";
   const WIRE_CFG = {
@@ -11451,16 +11463,6 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
       ? { attestation: { observedAny: true, identityMismatch: false } }
       : {}),
   });
-  /** Captures `console.warn` lines for the duration of `body`. */
-  async function capturingWarn<T>(body: () => Promise<T>): Promise<{ out: T; warned: string[] }> {
-    const spy = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const out = await body();
-      return { out, warned: spy.mock.calls.map((c) => String(c[0])) };
-    } finally {
-      spy.mockRestore();
-    }
-  }
   /** A backend whose `run` fires one heartbeat tick, awaited, on its second call. */
   function tickingBackend(timers: FakeTimers): {
     backend: ReturnType<typeof leaseBackend>;
@@ -11679,6 +11681,49 @@ describe("R507: a refused unfiltered extensions query on the lease path ends the
     const latched = warned.filter((w) => w.includes("the session was latched:"));
     expect(latched).toHaveLength(1);
     expect(latched[0]).not.toContain("refused unfiltered extensions query on the lease path");
+  });
+
+  test("R508: a lease lost mid-batch, then a teardown that throws a lease-path refusal, still invalidates the batch in the store and the events", async () => {
+    // The first renew is refused (recorded, latched), its one retry answers renewed:false (the
+    // loss). Teardown then hands the refusal back and `surfaceLateRefusal` throws it.
+    const { client } = wired({
+      RenewLease: (n) => (n === 1 ? refuse() : { renewed: false }),
+    });
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    let active: string | null = null;
+    let fired = false;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        active = id;
+      },
+      run: async (ref, opts) => {
+        if (active === "M0002" && !fired) {
+          fired = true;
+          await timers.fire();
+        }
+        return pass(ref, opts);
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const { out: err } = await capturingWarn(() =>
+      runSessionForTest(backend, {
+        quarantineDir: freshTmpDir(),
+        lease,
+        store,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(fired).toBe(true);
+    expect(events.some((e) => e.type === "batch-invalidated" && e.batchIndex === 0)).toBe(true);
+    const rows = store.db
+      .query("SELECT mutant_code AS code, verdict FROM mutants ORDER BY mutant_code")
+      .all() as Array<{ code: string; verdict: string }>;
+    // Non-vacuous: M0001 was scored before the loss.
+    expect(rows.map((r) => r.code)).toContain("M0001");
+    expect(rows.filter((r) => r.verdict !== "error")).toEqual([]);
   });
 });
 
@@ -11954,6 +11999,412 @@ describe("runSession — Layer 5C-B1 fix round 1: no lease is a caller-contract 
     await expect(runSessionForTest(backend, { quarantineDir: freshTmpDir() })).rejects.toThrow(
       /holds no lease/,
     );
+  });
+});
+
+/**
+ * R508 repro. A lease lost mid-batch latches the session, so the run is never finished and stays
+ * resumable. The lost batch is corrected only in the folded report (the `batch-invalidated`
+ * event); its stored rows keep the verdicts recorded before the loss. Two batches, one file each:
+ * batch 0 (SandboxExtra) completes, batch 1 (SandboxLogic) records a kill (M0001) and a survivor
+ * (M0002), then M0003's run answers lease-lost.
+ */
+describe("R508: a lease lost mid-batch, then --resume", () => {
+  const SECOND = `codeunit 79002 "Sandbox Extra"
+{
+    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
+    end;
+}
+`;
+  async function twoBatchDirs() {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxExtra.Codeunit.al"), SECOND);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    return dirs;
+  }
+  type Answer = "pass" | "fail" | "timeout" | "lease-lost" | "transport-error";
+  /**
+   * `verdictOf(batch, mutantId)` answers a mutated run; the baseline always passes. `before` runs
+   * inside a mutated run before it answers; `close` becomes the backend's `close()`.
+   */
+  function batchBackend(
+    verdictOf: (batch: number, mutant: string) => Answer,
+    hooks: {
+      before?: (batch: number, mutant: string) => Promise<void>;
+      close?: () => Promise<void>;
+    } = {},
+  ) {
+    let deploys = 0;
+    let active: string | null = null;
+    return Object.assign(
+      leaseBackend({
+        deploy: async () => {
+          deploys++;
+          return null;
+        },
+        activate: async (id) => {
+          active = id;
+        },
+        run: async (ref) => {
+          if (active !== null) await hooks.before?.(deploys - 1, active);
+          const v = active === null ? "pass" : verdictOf(deploys - 1, active);
+          if (v === "lease-lost") {
+            return {
+              ref,
+              outcome: "error" as const,
+              durationMs: 1,
+              operation: "lease-lost" as const,
+              leaseInvalidReason: "lease-invalid" as const,
+            };
+          }
+          if (v === "transport-error") {
+            return { ref, outcome: "error" as const, durationMs: 1, failureMessage: "wire down" };
+          }
+          return {
+            ref,
+            outcome: v,
+            durationMs: 1,
+            attestation: { observedAny: true, identityMismatch: false },
+          };
+        },
+      }),
+      servesTestApp(),
+      hooks.close !== undefined ? { close: hooks.close } : {},
+    );
+  }
+  /** Batch 0 completes (M0001 survives); batch 1 kills M0001, M0002 survives, M0003 loses the lease. */
+  const LOSE = (batch: number, m: string): Answer =>
+    batch === 0
+      ? m === "M0001"
+        ? "pass"
+        : "fail"
+      : m === "M0001"
+        ? "fail"
+        : m === "M0002"
+          ? "pass"
+          : "lease-lost";
+  const rowsOf = (store: ResultsStore, runId: number) =>
+    store.db
+      .query(
+        "SELECT batch_index AS b, mutant_code AS code, verdict, carried, failure_note AS note FROM mutants WHERE run_id = ? ORDER BY batch_index, mutant_code",
+      )
+      .all(runId) as Array<{
+      b: number;
+      code: string;
+      verdict: string;
+      carried: number | null;
+      note: string | null;
+    }>;
+  const snapsOf = (store: ResultsStore, runId: number) =>
+    store.db
+      .query("SELECT batch_index AS b FROM baseline_snapshots WHERE run_id = ? ORDER BY b")
+      .all(runId) as Array<{ b: number }>;
+  const lastRunId = (store: ResultsStore) =>
+    (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+  const reusedWarnings = (events: readonly RunEvent[]) =>
+    events.flatMap((e) =>
+      e.type === "warning" && e.code === "resume-baseline-reused" ? [e.message] : [],
+    );
+  const FIXED = new Error("disk full R508");
+  /** `store.invalidateBatch` throws FIXED from its `from`-th call on (1-based) until `heal()`. */
+  function breakInvalidate(store: ResultsStore, from: number): { heal: () => void } {
+    const real = store.invalidateBatch.bind(store);
+    let calls = 0;
+    let broken = true;
+    store.invalidateBatch = (runId, batchIndex, note) => {
+      calls++;
+      if (broken && calls >= from) throw FIXED;
+      return real(runId, batchIndex, note);
+    };
+    return {
+      heal: () => {
+        broken = false;
+      },
+    };
+  }
+
+  async function setup() {
+    const dirs = await twoBatchDirs();
+    const store = new ResultsStore(":memory:");
+    const common = {
+      store,
+      ...dirs,
+      selectorIds,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+      quarantineDir: freshTmpDir(),
+      maxGuardsPerBatch: 1,
+    };
+    return { dirs, store, common };
+  }
+  type Common = Awaited<ReturnType<typeof setup>>["common"];
+  async function resume(common: Common) {
+    const events: RunEvent[] = [];
+    const second = await runSession({
+      ...common,
+      // Kills everything it runs, so a re-measured batch-1 mutant can never read as a survivor.
+      backend: batchBackend(() => "fail"),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+      resume: "last",
+      emit: [
+        (e: RunEvent) => {
+          events.push(e);
+        },
+      ],
+    });
+    return { second, events, run2: lastRunId(common.store) };
+  }
+
+  async function loseThenResume() {
+    const { dirs, store, common } = await setup();
+    const first = await runSession({
+      ...common,
+      backend: batchBackend(LOSE),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+    });
+    const run1 = lastRunId(store);
+    const { second, events, run2 } = await resume(common);
+    return { dirs, store, first, second, run1, run2, events };
+  }
+
+  test("the lost batch's stored rows are not carried; the completed batch's are", async () => {
+    const { store, first, second, run1, run2 } = await loseThenResume();
+    expect(first.batches).toBe(2);
+    expect(first.quarantined?.reason).toContain("lease-lost");
+    // The folded report already discards batch 1 (the in-memory half).
+    expect(first.mutants.filter((m) => m.batchIndex === 1).map((m) => m.verdict)).not.toContain(
+      "killed",
+    );
+    const r1 = rowsOf(store, run1);
+    const r2 = rowsOf(store, run2);
+    expect(second.quarantined).toBeUndefined();
+    // Control: batch 0 completed under a held lease, so every one of its rows carries, with run
+    // 1's verdict, mutant by mutant.
+    const b0 = r2.filter((r) => r.b === 0);
+    expect(b0.length).toBe(3);
+    expect(b0.every((r) => r.carried === 1)).toBe(true);
+    expect(b0.map((r) => [r.code, r.verdict])).toEqual(
+      r1.filter((r) => r.b === 0).map((r) => [r.code, r.verdict]),
+    );
+    // Lost: batch 1's kill and survivor, measured under the lost lease, are `error` in the store,
+    // carried by nothing, and re-measured (the resume's backend kills everything).
+    const b1 = r1.filter((r) => r.b === 1);
+    expect(b1.length).toBe(3);
+    expect(b1.filter((r) => r.verdict !== "error")).toEqual([]);
+    expect(r2.filter((r) => r.b === 1 && r.carried === 1)).toEqual([]);
+    expect(
+      r2
+        .filter((r) => r.b === 1 && ["M0001", "M0002"].includes(r.code))
+        .map((r) => [r.code, r.verdict, r.carried]),
+    ).toEqual([
+      ["M0001", "killed", 0],
+      ["M0002", "killed", 0],
+    ]);
+    store.close();
+  });
+
+  test("--skip-known-survivors on a later run does not read the lost batch's survivor", async () => {
+    const { dirs, store, run2 } = await loseThenResume();
+    const row = store.getRun(run2);
+    expect(row?.finished).toBe(true);
+    const keys = store.priorSurvivorKeys(
+      dirs.projectDir,
+      "none",
+      row?.testAppHash === null || row?.testAppHash === undefined
+        ? undefined
+        : { hash: row.testAppHash, deps: row.testAppDeps ?? "" },
+      [],
+      row?.carryHidden?.files ?? [],
+    );
+    // Exactly batch 0's survivor (M0001, carried into the finished run 2), and not batch 1's
+    // survivor (`IsOverBudget`'s return-value), measured under the lost lease.
+    expect([...keys.keys].map((k) => k.split("|").slice(-4).join("|"))).toEqual([
+      "Sandbox Extra|UnderLimit|lethal.empty-block|1",
+    ]);
+    store.close();
+  });
+
+  test("the lost batch's baseline snapshot is not reused by the resume", async () => {
+    const { store, run1, events } = await loseThenResume();
+    expect(snapsOf(store, run1)).toEqual([{ b: 0 }]);
+    expect(reusedWarnings(events).filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
+    store.close();
+  });
+
+  test("control: a resume whose batch 0 has work left reuses run 1's batch 0 snapshot", async () => {
+    const { store, common } = await setup();
+    // Run 1 aborts on a transport error in batch 0 (spec §11): no latch, no lease loss.
+    const err = await runSession({
+      ...common,
+      backend: batchBackend((b, m) => (b === 0 && m === "M0002" ? "transport-error" : "pass")),
+      lease: leaseCfg(new FakeLeaseClient()).lease,
+    }).catch((e: unknown) => e);
+    expect(String(err)).toContain("backend transport error");
+    const run1 = lastRunId(store);
+    expect(
+      rowsOf(store, run1)
+        .filter((r) => r.code === "M0002")
+        .map((r) => [r.b, r.verdict]),
+    ).toEqual([[0, "error"]]);
+    const { events } = await resume(common);
+    expect(reusedWarnings(events).filter((m) => m.includes(`run ${run1}'s batch 0`))).toHaveLength(
+      1,
+    );
+    store.close();
+  });
+
+  test("a failed store write throws LostBatchNotStoredError after the event, and warns", async () => {
+    const { store, common } = await setup();
+    breakInvalidate(store, 1);
+    const events: RunEvent[] = [];
+    const { out: err, warned } = await capturingWarn(() =>
+      runSession({
+        ...common,
+        backend: batchBackend(LOSE),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e),
+    );
+    const run1 = lastRunId(store);
+    expect(err).toBeInstanceOf(LostBatchNotStoredError);
+    expect(String(err)).toContain(`run ${run1} batch 1:`);
+    expect(String(err)).toContain(`do not --resume run ${run1}`);
+    expect((err as Error).cause).toBe(FIXED);
+    expect(events.some((e) => e.type === "batch-invalidated" && e.batchIndex === 1)).toBe(true);
+    expect(
+      warned.some((w) => w.includes(`could not correct run ${run1} batch 1 at the lease loss`)),
+    ).toBe(true);
+  });
+
+  test("a failed store write after a late refusal warns the refusal, then throws LostBatchNotStoredError", async () => {
+    const { store, common } = await setup();
+    breakInvalidate(store, 1);
+    const backend = batchBackend(LOSE);
+    const late = new UnfilteredExtensionsQueryError("backend late refusal R508");
+    Object.assign(backend, { takeLateRefusal: () => late });
+    const { out: err, warned } = await capturingWarn(() =>
+      runSession({
+        ...common,
+        backend,
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(LostBatchNotStoredError);
+    expect(warned.some((w) => w.includes("backend late refusal R508"))).toBe(true);
+  });
+
+  test("a failed store write while the session is already failing warns that error, then throws LostBatchNotStoredError", async () => {
+    const { store, common } = await setup();
+    breakInvalidate(store, 1);
+    // The lease-lost mutant's own row is recorded after the loss note: that write fails.
+    const realRecord = store.recordMutant.bind(store);
+    store.recordMutant = (runId, row) => {
+      if (row.batchIndex === 1 && row.verdict === "error") throw new Error("record boom R508");
+      return realRecord(runId, row);
+    };
+    const { out: err, warned } = await capturingWarn(() =>
+      runSession({
+        ...common,
+        backend: batchBackend(LOSE),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(LostBatchNotStoredError);
+    expect(warned.some((w) => w.includes("record boom R508"))).toBe(true);
+  });
+
+  test("crash stand-in: only onLost's write lands, and the resume still carries nothing of the lost batch", async () => {
+    const { store, common } = await setup();
+    // onLost's write (the first) succeeds; the finally's (every later one) fails, standing in for
+    // a process that dies before its `finally` could correct anything.
+    const broken = breakInvalidate(store, 2);
+    const err = await capturingWarn(() =>
+      runSession({
+        ...common,
+        backend: batchBackend(LOSE),
+        lease: leaseCfg(new FakeLeaseClient()).lease,
+      }).catch((e: unknown) => e),
+    );
+    // Conservative on purpose: the message says "NOT corrected" although onLost wrote, because
+    // the failing write cannot prove that it did.
+    expect(err.out).toBeInstanceOf(LostBatchNotStoredError);
+    expect(String(err.out)).toContain("NOT corrected");
+    const run1 = lastRunId(store);
+    broken.heal();
+    const { events, run2 } = await resume(common);
+    const r2 = rowsOf(store, run2);
+    expect(r2.filter((r) => r.b === 1 && r.carried === 1)).toEqual([]);
+    expect(reusedWarnings(events).filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
+    // Control: batch 0 still carries.
+    const b0 = r2.filter((r) => r.b === 0);
+    expect(b0.length).toBe(3);
+    expect(b0.every((r) => r.carried === 1)).toBe(true);
+  });
+
+  test("onLost corrects the store before teardown: rows and snapshot already fixed when close() runs", async () => {
+    const { store, common } = await setup();
+    const seen: Array<{ rows: ReturnType<typeof rowsOf>; snaps: ReturnType<typeof snapsOf> }> = [];
+    const backend = batchBackend(LOSE, {
+      // After the loss the session is unsafe, so teardown calls only `close()`, before the
+      // `finally`'s own write.
+      close: async () => {
+        const id = lastRunId(store);
+        seen.push({ rows: rowsOf(store, id), snaps: snapsOf(store, id) });
+      },
+    });
+    await runSession({ ...common, backend, lease: leaseCfg(new FakeLeaseClient()).lease });
+    const atClose = seen.at(-1);
+    expect(atClose).toBeDefined();
+    const b1 = atClose?.rows.filter((r) => r.b === 1) ?? [];
+    expect(b1.map((r) => r.code)).toEqual(["M0001", "M0002", "M0003"]);
+    expect(b1.filter((r) => r.verdict !== "error")).toEqual([]);
+    // Rewritten by onLost AFTER the latch: the note names the latch reason, never "(unknown)".
+    // (M0003, the lease-lost run itself, is recorded after the note with its own.)
+    const rewritten = b1.filter((r) => r.code !== "M0003");
+    expect(rewritten.filter((r) => !(r.note ?? "").includes("held (lease-lost: "))).toEqual([]);
+    expect(atClose?.snaps).toEqual([{ b: 0 }]);
+  });
+
+  test("a verdict recorded after the loss note is corrected by the session's finally", async () => {
+    const { store, common } = await setup();
+    const client = new FakeLeaseClient();
+    client.renewQueue = [{ renewed: false }];
+    const timers = new FakeTimers();
+    let fired = false;
+    const backend = batchBackend(
+      (b, m) => (b === 0 ? (m === "M0001" ? "pass" : "fail") : m === "M0002" ? "timeout" : "pass"),
+      {
+        // The heartbeat notes the loss (and onLost writes) INSIDE M0002's run, which then
+        // answers a `timeout`, recorded after the note as `timeout-killed`. Not a `fail`: a fail
+        // earns a confirm rerun, which the latch refuses, so it is never recorded at all.
+        before: async (b, m) => {
+          if (b === 1 && m === "M0002" && !fired) {
+            fired = true;
+            await timers.fire();
+          }
+        },
+      },
+    );
+    const report = await runSession({
+      ...common,
+      backend,
+      lease: leaseCfg(client, { timers }).lease,
+    });
+    expect(fired).toBe(true);
+    expect(report.quarantined?.reason).toContain("lease-lost");
+    const rows = rowsOf(store, lastRunId(store));
+    expect(rows.filter((r) => r.b === 1 && r.code === "M0002").map((r) => r.verdict)).toEqual([
+      "error",
+    ]);
+    // Control: batch 0 stands.
+    expect(rows.filter((r) => r.b === 0).map((r) => r.verdict)).toEqual([
+      "survived",
+      "killed",
+      "killed",
+    ]);
   });
 });
 
@@ -17344,6 +17795,51 @@ describe("R259: runNamedMutants' probes", () => {
     expect(
       res.probes?.map((p) => [p.outcome.verdict, p.outcome.failureNote?.slice(0, 11)]),
     ).toEqual([["error", "lease-lost:"]]);
+  });
+
+  test("R508 repro: a lease lost during the reruns leaves no kill in the store", async () => {
+    const fx = await installedFixture({
+      session: freshSessions(),
+      unmutated: ({ ref, nth }) =>
+        ref.codeunitId === OVER2.codeunitId && nth === 2
+          ? { ref, outcome: "error", durationMs: 1, operation: "lease-lost" }
+          : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+    });
+    expect(res.quarantined).toMatch(/lease/);
+    // The returned outcomes are corrected in memory.
+    expect(res.outcomes.map((o) => o.verdict)).not.toContain("killed");
+    const stored = fx.store.db
+      .query(
+        "SELECT mutant_code AS code, verdict, failure_note AS note FROM mutants WHERE run_id = ? ORDER BY code",
+      )
+      .all(fx.cfg.runId) as Array<{ code: string; verdict: string; note: string | null }>;
+    expect(stored.map((r) => r.code)).toEqual(["M0001", "M0002"]);
+    expect(stored.filter((r) => r.verdict !== "error")).toEqual([]);
+    expect(stored.filter((r) => !(r.note ?? "").startsWith("lease-lost:"))).toEqual([]);
+  });
+
+  test("R508 control: with no lease loss during the reruns, the store keeps M0001's kill", async () => {
+    const fx = await installedFixture({ session: freshSessions() });
+    await runNamedMutants({
+      ...fx.cfg,
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+    });
+    const stored = fx.store.db
+      .query("SELECT verdict FROM mutants WHERE run_id = ? AND mutant_code = 'M0001'")
+      .all(fx.cfg.runId) as Array<{ verdict: string }>;
+    expect(stored).toEqual([{ verdict: "killed" }]);
   });
 });
 

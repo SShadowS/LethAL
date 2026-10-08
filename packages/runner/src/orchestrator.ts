@@ -2926,6 +2926,12 @@ interface LeaseSessionDeps {
   readonly nowIso: () => string;
   readonly runId: number;
   readonly emit: RunEmitter;
+  /**
+   * R508: called once, on the FIRST loss, after the latch is set. Writes the lost batch's
+   * correction to the store at once, so a process killed before its `finally` (there is no
+   * SIGINT/SIGTERM handler) does not leave that batch carryable. Must not throw.
+   */
+  readonly onLost: (batchIndex: number) => void;
 }
 
 /**
@@ -3065,13 +3071,17 @@ class LeaseSession {
 
   /**
    * design §6: latch `SessionSafety` (reason `lease-lost`), stop renewing, and remember WHICH
-   * batch was in flight so `runSession` can invalidate exactly that batch's verdicts at session
-   * end. Idempotent — the FIRST loss wins, like the latch itself.
+   * batch was in flight. R508: on the first loss, `onLost` then invalidates that batch's stored
+   * verdicts at once, and the session's `finally` does it again for any verdict recorded after
+   * this note. Idempotent — the FIRST loss wins, like the latch itself.
    */
   noteLeaseLost(detail: string): void {
-    if (this.#lostBatchIndex === undefined) this.#lostBatchIndex = this.currentBatchIndex;
+    const first = this.#lostBatchIndex === undefined;
+    if (first) this.#lostBatchIndex = this.currentBatchIndex;
     this.stop(); // no renew after a loss, and no dangling timer
+    // Latch BEFORE `onLost`: no new work may start while its store write runs.
     this.d.safety.latchUnsafe(`lease-lost: ${detail}`);
+    if (first) this.d.onLost(this.currentBatchIndex);
   }
 
   /** The server accepts only `lastCompletedOpSeq + 1` (design §5), and this client's publish ops
@@ -4213,6 +4223,7 @@ async function openLeaseScope(a: {
   lease: LeaseSessionConfig | undefined;
   backend: ExecutionBackend;
   safety: SessionSafety;
+  store: ResultsStore;
   runId: number;
   quarantineStore: QuarantineStore | undefined;
   resourceKey: string | undefined;
@@ -4253,6 +4264,19 @@ async function openLeaseScope(a: {
       nowIso: a.nowIso,
       runId: a.runId,
       emit: a.emit,
+      // R508 first chance: synchronous (bun:sqlite), so done before `noteLeaseLost` returns.
+      // Never throws: the heartbeat and the dispatch paths call `noteLeaseLost` and must keep
+      // failing closed. The session's `finally` (`invalidateLostBatch`) writes again.
+      onLost: (batchIndex) => {
+        try {
+          a.store.invalidateBatch(a.runId, batchIndex, lostBatchNote(a.safety));
+          a.store.dropBaselineSnapshot(a.runId, batchIndex);
+        } catch (err) {
+          console.warn(
+            `[lethal] could not correct run ${a.runId} batch ${batchIndex} at the lease loss (${messageOf(err)}); the session's teardown tries again`,
+          );
+        }
+      },
     });
     leaseSession = session;
     resyncSessionOpSeq = () => session.resyncOpSeq(a.backend);
@@ -4349,16 +4373,58 @@ function surfaceLateRefusal(
   );
 }
 
-/** C02-04: design section 6's invalidation of the batch a lost lease was measured under. */
-function emitLeaseLostInvalidation(
+/** The note a lease-lost batch's verdicts carry, in the report and in the store. */
+function lostBatchNote(safety: SessionSafety): string {
+  return `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
+}
+
+/**
+ * R508: the lease was lost, and writing the lost batch's correction to the store failed, so its
+ * stored verdicts may still be carried by `--resume`. Conservative: `onLost` may already have
+ * written, but this write cannot prove it.
+ */
+export class LostBatchNotStoredError extends Error {
+  constructor(
+    readonly runId: number,
+    readonly batchIndex: number,
+    cause: unknown,
+  ) {
+    super(
+      `run ${runId} batch ${batchIndex}: the lease was lost, and the stored verdicts were NOT corrected (${messageOf(cause)}); do not --resume run ${runId}`,
+      { cause },
+    );
+    this.name = "LostBatchNotStoredError";
+  }
+}
+
+/**
+ * C02-04 + R508: design section 6's invalidation of the batch a lost lease was measured under —
+ * the event for the report, then the durable store write (the second chance after `onLost`, for a
+ * verdict recorded after the loss note). The event goes first so a failing write cannot hide it.
+ * A failed write throws `LostBatchNotStoredError`; the errors it would replace (`late`, the
+ * teardown's late refusal, and `earlier`, the error the session was already failing with) are
+ * warned first so neither is lost.
+ */
+function invalidateLostBatch(
+  store: ResultsStore,
+  runId: number,
   leaseSession: LeaseSession | undefined,
   safety: SessionSafety,
   emit: RunEmitter,
+  late: Error | undefined,
+  earlier: { readonly error: unknown } | undefined,
 ): void {
-  const lostBatchIndex = leaseSession?.lostBatchIndex;
-  if (lostBatchIndex !== undefined) {
-    const lostBatchNote = `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
-    emit({ type: "batch-invalidated", batchIndex: lostBatchIndex, reason: lostBatchNote });
+  const lost = leaseSession?.lostBatchIndex;
+  if (lost === undefined) return;
+  const note = lostBatchNote(safety);
+  emit({ type: "batch-invalidated", batchIndex: lost, reason: note });
+  try {
+    store.invalidateBatch(runId, lost, note);
+    store.dropBaselineSnapshot(runId, lost);
+  } catch (err) {
+    if (earlier !== undefined) console.warn(`[lethal] ${messageOf(earlier.error)}`);
+    if (late !== undefined) console.warn(`[lethal] ${late.message}`);
+    throw new LostBatchNotStoredError(runId, lost, err);
   }
 }
 
@@ -5719,6 +5785,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     lease: cfg.lease,
     backend: cfg.backend,
     safety,
+    store: cfg.store,
     runId,
     quarantineStore,
     resourceKey,
@@ -5731,6 +5798,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // repeated after the score, not that it flashes past once in stderr.
   let permissionCanary: PermissionCanaryResult | undefined;
   let failing = false; // R-496: an error is already unwinding through the teardown
+  let failure: { readonly error: unknown } | undefined; // R508: that error, warned if lost
 
   try {
     if (cfg.lease !== undefined) {
@@ -6010,7 +6078,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     let appJsonPathsWarned = false;
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
-      // verdicts at session end — earlier batches stand, every RunMutant in them having been
+      // verdicts (at the loss and again at session end, R508) — earlier batches stand, every RunMutant in them having been
       // individually fence-validated. The heartbeat runs on a timer and can observe the loss at
       // any moment, so it needs the current batch index, not the one the mutant loop last saw.
       if (leaseSession !== undefined) leaseSession.currentBatchIndex = batchIdx;
@@ -7011,31 +7079,37 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // away. Every other error still propagates untouched.
     if (!(err instanceof SessionUnsafeError)) {
       failing = true;
+      failure = { error: err };
       throw err;
     }
   } finally {
-    surfaceLateRefusal(
-      await closeLeaseScope({
+    let late: Error | undefined;
+    try {
+      late = await closeLeaseScope({
         backend: cfg.backend,
         workerBackends,
         safety,
         leaseSession,
         emit,
-      }),
-      failing,
-      safety,
-    );
+      });
+    } finally {
+      // Layer 5C-B1 (design §6, verbatim): "at session end — after the batch loop breaks, before
+      // buildReport — invalidate the CURRENT batch's verdicts". The artifact those verdicts came
+      // from was deployed under a lease this session can no longer prove it held, so nothing
+      // measured against it is trustworthy. EARLIER batches stand: every RunMutant in them was
+      // individually phase-1/phase-3 fence-validated, so invalidating them would be
+      // over-invalidation.
+      //
+      // Deliberately NOT delegated to design §G's attestation gate — that gate skips a batch that
+      // already earned a clean attestation, which a batch can do moments before the lease is lost.
+      //
+      // R508: in the store too, and in a `finally` so it runs even when the session is failing or
+      // the teardown throws. After `closeLeaseScope` so the teardown and the lease release always
+      // run, even if this write throws.
+      invalidateLostBatch(cfg.store, runId, leaseSession, safety, emit, late, failure);
+    }
+    surfaceLateRefusal(late, failing, safety);
   }
-
-  // Layer 5C-B1 (design §6, verbatim): "at session end — after the batch loop breaks, before
-  // buildReport — invalidate the CURRENT batch's verdicts". The artifact those verdicts came from
-  // was deployed under a lease this session can no longer prove it held, so nothing measured
-  // against it is trustworthy. EARLIER batches stand: every RunMutant in them was individually
-  // phase-1/phase-3 fence-validated, so invalidating them would be over-invalidation.
-  //
-  // Deliberately NOT delegated to design §G's attestation gate — that gate skips a batch that
-  // already earned a clean attestation, which a batch can do moments before the lease is lost.
-  emitLeaseLostInvalidation(leaseSession, safety, emit);
 
   // R391: one warning for every recorded verdict a key matched but `carryRecord` refused.
   if (carryCurrent.refused.size > 0) {
@@ -7051,8 +7125,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // treats its "survived"/"known-survivor" mutant rows as a future session's skip-list
   // (skipKnownSurvivors). The fold's own in-memory `batch-invalidated` handling (report-fold.ts)
   // corrects only the folded report, not the store — the `mutants` rows this session already wrote
-  // to `store` keep whatever verdict they had at `record()` time (no store-row-update API exists;
-  // `store.invalidateBatch`, called just above, is the SEPARATE durable correction for that).
+  // to `store` keep whatever verdict they had at `record()` time. `store.invalidateBatch` is the
+  // SEPARATE durable correction for that: the attestation gate calls it in `scoreBatch`, and a
+  // lease loss calls it in `onLost` and again in `invalidateLostBatch` (R508).
   // Leaving `finished_at` NULL for a quarantined
   // run excludes it from `priorSurvivorKeys` entirely, so those uncorrected on-disk rows (which
   // may include a false "survived" from an unproven binary) can never seed a future skip-list.
@@ -7477,6 +7552,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     lease: cfg.lease,
     backend,
     safety,
+    store,
     runId,
     quarantineStore,
     resourceKey,
@@ -7487,6 +7563,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   const strict = cfg.requireEveryMethodGreen === true;
   const baselineTests = baselineTestsOf(named);
   let failing = false; // R-496: an error is already unwinding through the teardown
+  let failure: { readonly error: unknown } | undefined; // R508: that error, warned if lost
   const rerunRefs = cfg.rerunOnUnmutated ?? [];
   const baselineRan = new Map<string, TestVerdict>();
   const rerunRan = new Map<string, UnmutatedRun>();
@@ -7593,16 +7670,19 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   } catch (err) {
     if (!(err instanceof SessionUnsafeError)) {
       failing = true;
+      failure = { error: err };
       throw err;
     }
   } finally {
-    surfaceLateRefusal(
-      await closeLeaseScope({ backend, workerBackends: [], safety, leaseSession, emit }),
-      failing,
-      safety,
-    );
+    let late: Error | undefined;
+    try {
+      late = await closeLeaseScope({ backend, workerBackends: [], safety, leaseSession, emit });
+    } finally {
+      // R508: the lost batch's event and store correction, as in `runSession`'s `finally`.
+      invalidateLostBatch(store, runId, leaseSession, safety, emit, late, failure);
+    }
+    surfaceLateRefusal(late, failing, safety);
   }
-  emitLeaseLostInvalidation(leaseSession, safety, emit);
   applyBatchInvalidations(outcomes, invalidations);
 
   const notRunOf = (mutant: MutantManifestEntry): SessionOutcome => {
@@ -9011,9 +9091,9 @@ async function classifyNonVerdictStep(
       });
       return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
     }
-    // Genuine loss: latch `lease-lost`, stop scheduling. The current batch's verdicts are
-    // invalidated at session end (design §6) — NOT here, because earlier mutants of this same
-    // batch were already recorded and only `runSession` can rewrite them. No durable tier
+    // Genuine loss: latch `lease-lost`, stop scheduling. The current batch's stored verdicts are
+    // invalidated by `noteLeaseLost`'s `onLost`, and again in the session's `finally` (design §6,
+    // R508) — not by this function, which sees one mutant only. No durable tier
     // quarantine: a clean lease loss means the container itself is fine.
     const detail = `${ref.method} (mutant ${ctx.m.mutantId}): ${v.failureMessage ?? "RunMutant lease-invalid"}`;
     noteLeaseLostOrThrow(ctx.leaseSession, detail);
