@@ -87,8 +87,15 @@ async function runLeg(
 
   const outputDir = join(scratchRoot, "publish");
   await mkdir(outputDir, { recursive: true });
+  // alc must compile under the SAME config symbols generation enumerated under (`/define`), or it
+  // compiles the other arm: R-307's manifest check refused exactly that on the first run.
   const compiler = new ArtifactCompiler(
-    { alcPath: toolPaths.alcPath, packageCachePath: bcdev.packageCachePath, outputDir },
+    {
+      alcPath: toolPaths.alcPath,
+      packageCachePath: bcdev.packageCachePath,
+      outputDir,
+      preprocessorSymbols: WRAPPED_SYMBOLS,
+    },
     defaultArtifactIo,
   );
   const deployer = new ContainerDeployer(

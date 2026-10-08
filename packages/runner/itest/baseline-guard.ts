@@ -295,8 +295,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * R-300b's wrapped leg (`al-runner.wrapped.baseline.json`) was recorded 2026-10-06 on al-runner
  * v2.12.0-main.c39ad5de (record exit 3, confirm PASS; `--define` measured to ADD to app.json's
  * symbols), per docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md.
+ * R497's bcdev wrapped leg (`bcdev.wrapped.baseline.json`) was recorded 2026-10-08 on Cronus28
+ * (record exit 3, confirm PASS, fenced and hub per mutant equal), per
+ * docs/superpowers/specs/2026-10-08-r497-bcdev-wrapped-precommitment.md.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = ["bcdev.wrapped.baseline.json"];
+export const PENDING_FIRST_RECORD: readonly string[] = [];
 
 /** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
 export const SYMBOL_BASELINES: readonly string[] = [
