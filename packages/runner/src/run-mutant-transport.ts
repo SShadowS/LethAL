@@ -463,53 +463,169 @@ function parseCoverageStats(result: RunMutantResult): FencedCoverageStats | unde
   return { runMs, serializeMs, scannedRows, emittedRows };
 }
 
-/** R-496: the per-call record `refusalBoundary` reads; see there. */
-type RefusalHolder = { refusal?: UnfilteredExtensionsQueryError; closed?: boolean };
+/**
+ * R-496: the per-call record `refusalBoundary` reads; see there. R499: `pending` holds this call's
+ * fetches still in flight (the recording wrapper's own promise, mapped to its action name).
+ */
+type RefusalHolder = {
+  refusal?: UnfilteredExtensionsQueryError;
+  closed?: boolean;
+  readonly pending: Map<Promise<Response>, string>;
+};
 const refusalScope = new AsyncLocalStorage<RefusalHolder>();
+
+/**
+ * R499: the control-request state every transport of one backend shares, so a fetch left in flight
+ * by one transport is drained by the next scored call on ANY of them, and once more at teardown.
+ * `orphans`: fetches still in flight whose call already returned (or that had no call). `lateRefusal`:
+ * a refusal recorded after its call exited; the next call's boundary (or the teardown) throws it.
+ */
+export type ControlState = {
+  readonly orphans: Map<Promise<Response>, string>;
+  lateRefusal?: UnfilteredExtensionsQueryError | undefined;
+};
+
+/** R499: a fresh, empty `ControlState`. */
+export function newControlState(): ControlState {
+  return { orphans: new Map() };
+}
+
+/** R499: how long a scored call (and the teardown) waits for in-flight control requests. */
+export const CONTROL_DRAIN_MS = 5_000;
+
+/**
+ * R499: a scored call's control requests were still in flight when `CONTROL_DRAIN_MS` ran out. The
+ * call publishes nothing and the session ends: a fetch that ignored its own abort this long means a
+ * broken runtime, and a refusal could still land on it.
+ */
+export class ControlDrainTimeoutError extends Error {
+  constructor(actions: readonly string[], boundMs: number) {
+    super(
+      `R499: ${actions.join(", ")} still outstanding after ${boundMs} ms; this call is not scored and the session ends`,
+    );
+    this.name = "ControlDrainTimeoutError";
+  }
+}
+
+/** R-496: the error the teardown throws for a refusal no call has thrown yet. */
+function lateRefusalError(late: UnfilteredExtensionsQueryError): UnfilteredExtensionsQueryError {
+  return new UnfilteredExtensionsQueryError(
+    `a BC redirect to an unfiltered extensions query arrived after the last scored call (from a control request left by a non-scored call), so this session is refused: ${late.message}`,
+  );
+}
+
+/** R-496/R499: hand over (and clear) the refusal `state` holds that no call has thrown yet. */
+export function takeLateRefusal(state: ControlState): UnfilteredExtensionsQueryError | undefined {
+  const late = state.lateRefusal;
+  state.lateRefusal = undefined;
+  return late === undefined ? undefined : lateRefusalError(late);
+}
+
+/** R499: a single-path verdict that is a score (and so waits for in-flight control requests). */
+function isScoredVerdict(v: TestVerdict): boolean {
+  return (
+    v.operation === undefined &&
+    (v.outcome === "pass" || v.outcome === "fail" || v.outcome === "timeout")
+  );
+}
+
+/** R499: the action name in a `.../LethALControl_<action>?...` URL, for messages. */
+function actionOf(url: string | URL | Request): string {
+  const s = url instanceof Request ? url.url : String(url);
+  return /LethALControl_(\w+)/.exec(s)?.[1] ?? s;
+}
+
+/**
+ * R499: wait until every promise in `maps` has settled (re-reading the maps, as a settling fetch
+ * removes itself), or until `ms` runs out. Never throws.
+ */
+export async function drainPending(
+  maps: readonly Map<Promise<Response>, string>[],
+  ms: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let expired = false;
+  const expiry = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      expired = true;
+      resolve();
+    }, ms);
+  });
+  // `seen`: promises already awaited to settlement, so an entry that is never removed cannot spin
+  // this loop on microtasks forever (the expiry timer would never get to run).
+  const seen = new Set<Promise<Response>>();
+  try {
+    for (;;) {
+      const open = maps.flatMap((m) => [...m.keys()]).filter((p) => !seen.has(p));
+      if (open.length === 0 || expired) return;
+      await Promise.race([Promise.allSettled(open), expiry]);
+      if (!expired) for (const p of open) seen.add(p);
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 export class RunMutantTransport {
   /** R289: `LETHAL_R289_TRACE`, read once here; an empty string counts as unset. */
   private readonly tracePath: string | undefined;
   private readonly traceWrite: (path: string, line: string) => void;
   private readonly fetchFn: FetchFn;
-  /** R-496: a refusal recorded after its call exited; the next call's boundary throws it. */
-  private lateRefusal: UnfilteredExtensionsQueryError | undefined;
+  private readonly state: ControlState;
+  private readonly drainMs: number;
+
+  /** R499: the shared control state; `BcDevMcpBackend.bindTransport` checks it is the backend's own. */
+  get controlState(): ControlState {
+    return this.state;
+  }
 
   /** R-496: hand over (and clear) a refusal no call has thrown yet; the session teardown asks once. */
   takeLateRefusal(): UnfilteredExtensionsQueryError | undefined {
-    const late = this.lateRefusal;
-    this.lateRefusal = undefined;
-    return late === undefined
-      ? undefined
-      : new UnfilteredExtensionsQueryError(
-          `a BC redirect to an unfiltered extensions query arrived after a mutant's verdict was returned, so that verdict's session may not be trustworthy: ${late.message}`,
-        );
+    return takeLateRefusal(this.state);
   }
 
   /**
    * R-496: run one public call; if any fetch inside it (a swallowed catch, a stop timer, the status
    * read) was refused as an unfiltered extensions query, throw that refusal at exit, whatever the
    * call would otherwise have returned or thrown.
+   *
+   * R499: before a SCORED result (`isScored`) is returned, wait up to `drainMs` for every fetch
+   * still in flight, this call's and the orphans of earlier calls, so a refusal that lands
+   * meanwhile is thrown here rather than after a verdict was published. A fetch still in flight
+   * after the bound throws `ControlDrainTimeoutError`. A non-scored exit does not wait: its fetches
+   * become orphans for the next scored call (or the teardown) to drain.
    */
-  private async refusalBoundary<T>(fn: () => Promise<T>): Promise<T> {
+  private async refusalBoundary<T>(fn: () => Promise<T>, isScored: (v: T) => boolean): Promise<T> {
     // A refusal that landed after an earlier call exited (a stop still pending past its bound) is
     // thrown here, before anything is sent, and cleared only by being thrown.
-    const late = this.lateRefusal;
+    const late = this.state.lateRefusal;
     if (late !== undefined) {
-      this.lateRefusal = undefined;
+      this.state.lateRefusal = undefined;
       throw late;
     }
-    const holder: RefusalHolder = {};
+    const holder: RefusalHolder = { pending: new Map() };
     let outcome: { ok: true; value: T } | { ok: false; error: unknown };
     try {
       outcome = { ok: true, value: await refusalScope.run(holder, fn) };
     } catch (error) {
       outcome = { ok: false, error };
-    } finally {
-      holder.closed = true;
     }
+    const scored = outcome.ok && isScored(outcome.value);
+    if (scored) await drainPending([holder.pending, this.state.orphans], this.drainMs);
+    holder.closed = true;
+    const outstanding = [...holder.pending, ...this.state.orphans].map(([, action]) => action);
+    for (const [p, action] of holder.pending) this.state.orphans.set(p, action);
+    holder.pending.clear();
     if (holder.refusal !== undefined) throw holder.refusal;
     if (!outcome.ok) throw outcome.error;
+    if (scored) {
+      const lateNow = this.state.lateRefusal;
+      if (lateNow !== undefined) {
+        this.state.lateRefusal = undefined;
+        throw lateNow;
+      }
+      if (outstanding.length > 0) throw new ControlDrainTimeoutError(outstanding, this.drainMs);
+    }
     return outcome.value;
   }
 
@@ -518,32 +634,67 @@ export class RunMutantTransport {
     private readonly targetAppId: string,
     private readonly artifactId: string,
     injectedFetch: FetchFn = bcFetch,
-    opts: { readonly traceWrite?: (path: string, line: string) => void } = {},
+    opts: {
+      readonly traceWrite?: (path: string, line: string) => void;
+      /** R499: the backend's shared state; a fresh one when absent (tests, probes). */
+      readonly controlState?: ControlState;
+      /** R499 test seam: the drain bound, `CONTROL_DRAIN_MS` when absent. */
+      readonly drainMs?: number;
+    } = {},
   ) {
+    this.state = opts.controlState ?? newControlState();
+    this.drainMs = opts.drainMs ?? CONTROL_DRAIN_MS;
     // R-496: every fetch this transport makes records an unfiltered-extensions refusal for the
     // CURRENT public call (async-local, so concurrent calls never share a record), then rethrows.
-    const recording = async (url: string | URL | Request, init?: RequestInit) => {
-      try {
-        return await injectedFetch(url, init);
-      } catch (err) {
-        if (err instanceof UnfilteredExtensionsQueryError) {
-          const holder = refusalScope.getStore();
-          if (holder === undefined) {
-            // outside any call: nothing to attach it to, so keep it for the next one
-            this.lateRefusal ??= err;
-          } else if (holder.closed === true) {
-            this.lateRefusal ??= err;
-          } else if (holder.refusal === undefined) {
-            holder.refusal = err;
+    // R499: the wrapper's OWN promise is registered as in flight and removed in its `finally`, so a
+    // refusal is recorded before the entry leaves the map and a drain never sees it settled first.
+    const recording = (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const holder = refusalScope.getStore();
+      const map =
+        holder !== undefined && holder.closed !== true ? holder.pending : this.state.orphans;
+      // `self.p` rather than `p` in the `finally`: a fetch that throws synchronously reaches it
+      // before `p` is assigned, and is then never registered.
+      const self: { p?: Promise<Response>; settled?: boolean } = {};
+      const p: Promise<Response> = (async () => {
+        try {
+          return await injectedFetch(url, init);
+        } catch (err) {
+          if (err instanceof UnfilteredExtensionsQueryError) {
+            if (holder === undefined || holder.closed === true) {
+              // outside any call, or after it exited: keep it for the next call (or the teardown)
+              this.recordLate(err);
+            } else if (holder.refusal === undefined) {
+              holder.refusal = err;
+            }
+          }
+          throw err;
+        } finally {
+          self.settled = true;
+          if (self.p !== undefined) {
+            holder?.pending.delete(self.p);
+            this.state.orphans.delete(self.p);
           }
         }
-        throw err;
-      }
+      })();
+      self.p = p;
+      if (self.settled !== true) map.set(p, actionOf(url));
+      return p;
     };
     this.fetchFn = Object.assign(recording, { preconnect: injectedFetch.preconnect });
     const p = process.env.LETHAL_R289_TRACE;
     this.tracePath = p === undefined || p === "" ? undefined : p;
     this.traceWrite = opts.traceWrite ?? appendFileSync;
+  }
+
+  /** R499: keep the first late refusal; a later one is warned, never dropped silently. */
+  private recordLate(err: UnfilteredExtensionsQueryError): void {
+    if (this.state.lateRefusal === undefined) {
+      this.state.lateRefusal = err;
+      return;
+    }
+    console.warn(
+      `[lethal] a further refused unfiltered extensions query: ${lateRefusalError(err).message}`,
+    );
   }
 
   /** One fenced mutant/baseline execution, no coverage collected — the unchanged Layer 5C-A path. */
@@ -808,7 +959,10 @@ export class RunMutantTransport {
   }
 
   async run(req: RunMutantRequest): Promise<TestVerdict> {
-    return this.refusalBoundary(async () => (await this.execute(req, false)).verdict);
+    return this.refusalBoundary(
+      async () => (await this.execute(req, false)).verdict,
+      isScoredVerdict,
+    );
   }
 
   /**
@@ -828,7 +982,14 @@ export class RunMutantTransport {
    */
   async runMany(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
     const trace = { failures: 0 };
-    const r = await this.refusalBoundary(() => this.runManyScored(req, trace));
+    const r = await this.refusalBoundary(
+      () => this.runManyScored(req, trace),
+      (m) =>
+        m.kind === "verdicts" ||
+        (m.verdict.outcome === "timeout" &&
+          m.verdict.operation === undefined &&
+          m.cause === undefined),
+    );
     // R289: a trace that stopped writing is named once per call on stderr, never in a verdict:
     // a verdict's `failureMessage` feeds `killingTestFailure`, the store and verify.ts's
     // callstack match, so a diagnostic suffix there would change what a kill is classified as.
@@ -1561,7 +1722,10 @@ export class RunMutantTransport {
    * describe only its own execution and per-test attribution is sound.
    */
   async runWithCoverage(req: RunMutantRequest): Promise<RunMutantWithCoverageResult> {
-    return this.refusalBoundary(() => this.execute(req, true));
+    return this.refusalBoundary(
+      () => this.execute(req, true),
+      (r) => isScoredVerdict(r.verdict),
+    );
   }
 
   /**

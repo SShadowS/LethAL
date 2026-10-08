@@ -146,7 +146,8 @@ async function runLeg(
       verifier: new DeploymentVerifier(odataCfg),
       harnessVerifier,
     },
-    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
 
   const store = new ResultsStore(join(scratchRoot, `harden-${leg}.sqlite`));

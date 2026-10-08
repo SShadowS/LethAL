@@ -562,6 +562,20 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A verdict is no longer published while a control request is still in flight** (R499). A stop or
+  answer readback that outlived its own bound could be refused (a redirect to an unfiltered
+  extensions query) after the call had already returned a score, or after the session had ended.
+  Before `run`, `runWithCoverage` or `runMany` returns a scored result, it now waits, up to 5 s
+  (`CONTROL_DRAIN_MS`), for every control request still in flight: its own and those an earlier
+  unscored call left behind, on any transport of the session (one shared state per backend). A
+  refusal that arrives meanwhile ends the session; a request still in flight after 5 s ends the
+  session with `ControlDrainTimeoutError`. Neither is ever a kill, and no verdict is recorded for
+  that call. Teardown waits once more (5 s at most, and only when a request is in flight) before
+  taking the late refusal. A second late refusal is now logged rather than dropped. Recorded
+  durations do not change. A transport factory must pass the new `controlState` argument to the
+  transport; one that ignores it is refused at deploy or attach. The watchdog's status poll still
+  has no timeout of its own (R503).
+
 - **A run lends its verdicts only to a session whose test app runs against the same dependencies**
   (R496). Two proven runs with the same test-app bytes matched even when a dependency of the test
   app had been rebuilt between them (republished out of band, or by an env-tool hook that publishes

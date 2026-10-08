@@ -3113,7 +3113,8 @@ export async function buildBackend(
     bcDevBackendConfig(c, parsed.projectDir, parsed.stopHungSessions),
     undefined,
     { compiler, deployer, verifier, harnessVerifier },
-    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
 }
 

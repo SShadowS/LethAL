@@ -15,6 +15,13 @@ import type { RunEvent } from "../src/events";
 import { UnfilteredExtensionsQueryError } from "../src/harness";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { renderConsole } from "../src/report";
+import {
+  ControlDrainTimeoutError,
+  RunMutantTransport,
+  drainPending,
+  newControlState,
+  takeLateRefusal,
+} from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 
 /**
@@ -259,5 +266,169 @@ describe("R-496: a refusal still pending at session teardown", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+/**
+ * R499: a real `RunMutantTransport` against a scripted server. RunMutant answers a valid pass,
+ * except while `mode.run` is "truncated": then its body is cut short, the call reads the answer
+ * back, and that readback (GetOpAnswer) is DEAF until `refuse` is called. Such a call ends
+ * `in-flight-unknown` (not scored) and leaves the readback in flight: an orphan.
+ */
+function orphanServer() {
+  const mode = { run: "truncated" as "truncated" | "pass" };
+  let refuseReadback: ((m: string) => void) | undefined;
+  const wrap = (inner: Record<string, unknown>) => JSON.stringify({ value: JSON.stringify(inner) });
+  const fetchFn = (async (url: unknown, init?: RequestInit) => {
+    if (String(url).includes("_GetOpAnswer")) {
+      return new Promise<Response>((_resolve, reject) => {
+        refuseReadback = (m) => reject(new UnfilteredExtensionsQueryError(m));
+      });
+    }
+    const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const body = wrap({
+      status: "ran",
+      testRunsBefore: 0,
+      sessionId: 2037,
+      targetAppId: b.targetAppId,
+      artifactId: b.artifactId,
+      attemptId: b.attemptId,
+      mutantId: b.mutantId,
+      codeunitId: b.testCodeunitId,
+      method: b.testMethod,
+      codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+      observedActive: true,
+    });
+    if (mode.run === "pass") return new Response(body, { status: 200 });
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(body.slice(0, -1)));
+        c.error(new Error("The socket connection was closed unexpectedly."));
+      },
+    });
+    return new Response(stream, { status: 200 });
+  }) as typeof fetch;
+  return {
+    mode,
+    fetchFn,
+    refuse: (m: string) => {
+      if (refuseReadback === undefined) throw new Error("no readback in flight");
+      refuseReadback(m);
+    },
+  };
+}
+
+const TX_CFG = { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" };
+const TX_REQ = {
+  ref: { codeunitId: 79400, codeunitName: "Good Tests", method: "ComputeWorks" },
+  mutantId: "",
+  attemptId: "a1",
+  timeoutMs: 30,
+  lease: { epoch: 1, token: "t", serverGeneration: "g", opSeq: 1 },
+} as const;
+
+/**
+ * Its FIRST run leaves an orphan on a real transport sharing this backend's control state (a
+ * non-scored call). With `scoreMutants`, every MUTANT run also sends a scored pass through that
+ * transport first. Every run returns `SurviveBackend`'s verdict. Records teardown order in `calls`.
+ */
+class OrphanBackend extends SurviveBackend {
+  calls: string[] = [];
+  mutantRuns = 0;
+  readonly state = newControlState();
+  readonly server = orphanServer();
+  readonly tx: RunMutantTransport;
+  private orphaned = false;
+  private current: string | null = null;
+  constructor(
+    drainMs: number,
+    private readonly scoreMutants = false,
+  ) {
+    super();
+    this.tx = new RunMutantTransport(TX_CFG, "app", "art", this.server.fetchFn, {
+      controlState: this.state,
+      drainMs,
+    });
+  }
+  override async activate(id: string | null): Promise<void> {
+    if (id === null) this.calls.push("deactivate");
+    this.current = id;
+    await super.activate(id);
+  }
+  override async run(ref: TestMethodRef): Promise<TestVerdict> {
+    if (!this.orphaned) {
+      this.orphaned = true;
+      const v = await this.tx.run(TX_REQ);
+      if (v.operation !== "in-flight-unknown") throw new Error("the orphaning call was scored");
+    } else if (this.scoreMutants && this.current !== null) {
+      this.mutantRuns += 1;
+      this.server.mode.run = "pass";
+      await this.tx.run({ ...TX_REQ, mutantId: this.current });
+    }
+    return super.run(ref);
+  }
+  /** Set to shorten the teardown's `CONTROL_DRAIN_MS` wait in a test whose orphan never settles. */
+  teardownDrainMs: number | undefined;
+  async drainControlRequests(ms: number): Promise<void> {
+    this.calls.push("drain");
+    await drainPending([this.state.orphans], this.teardownDrainMs ?? ms);
+  }
+  takeLateRefusal(): UnfilteredExtensionsQueryError | undefined {
+    this.calls.push("take");
+    return takeLateRefusal(this.state);
+  }
+}
+
+describe("R499: control requests still in flight at the end of a session", () => {
+  test("T1: an orphan refused during the teardown drain ends the session with UnfilteredExtensionsQueryError, after cleanup", async () => {
+    const dirs = await project({ [GOOD]: GOOD_AL });
+    const backend = new OrphanBackend(60_000);
+    // The orphan refuses only once the teardown drain is waiting on it.
+    const drain = backend.drainControlRequests.bind(backend);
+    backend.drainControlRequests = async (ms) => {
+      setTimeout(() => backend.server.refuse("refused during the teardown drain"), 20);
+      await drain(ms);
+    };
+    const err = await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+      emit: [
+        (e) => {
+          if (e.type === "phase-left" && e.phase === "teardown") backend.calls.push("phase-left");
+        },
+      ],
+    }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect((err as Error).message).toContain("refused during the teardown drain");
+    expect(backend.calls.slice(-4)).toEqual(["deactivate", "drain", "phase-left", "take"]);
+  });
+
+  test("a scored call that hits the drain bound ends the session with ControlDrainTimeoutError and records NO verdict for its mutant", async () => {
+    const dirs = await project({ [GOOD]: GOOD_AL });
+    // The baseline run leaves the orphan; the first MUTANT run goes through the transport as a
+    // scored pass and finds that orphan still in flight when its 30 ms bound runs out.
+    const backend = new OrphanBackend(30, true);
+    backend.teardownDrainMs = 30;
+    const store = new ResultsStore(":memory:");
+    const err = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+    }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ControlDrainTimeoutError);
+    expect((err as Error).message).toContain("GetOpAnswer");
+    expect(backend.mutantRuns).toBe(1);
+    const count = (sql: string) => (store.db.query(sql).get() as { n: number }).n;
+    expect(count("SELECT COUNT(*) AS n FROM mutants")).toBe(0);
+    expect(count("SELECT COUNT(*) AS n FROM test_results WHERE mutant_code IS NOT NULL")).toBe(0);
   });
 });

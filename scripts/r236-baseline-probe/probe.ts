@@ -942,8 +942,8 @@ async function main(): Promise<void> {
         verifier: new DeploymentVerifier(odataCfg),
         harnessVerifier,
       },
-      (targetAppId, artifactId) =>
-        new RunMutantTransport(odataCfg, targetAppId, artifactId, fetchFn),
+      (targetAppId, artifactId, controlState) =>
+        new RunMutantTransport(odataCfg, targetAppId, artifactId, fetchFn, { controlState }),
     );
     const store = new ResultsStore(join(scratchDir, "lethal.sqlite"));
     const startedAt = new Date().toISOString();
