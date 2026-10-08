@@ -172,6 +172,17 @@ describe("R219: two same-basename files in different directories", () => {
   // knows for this app id, either the project SOURCE path (`proj/Sales/Helper.Codeunit.al`) or a
   // batch's own flat path (`batch/Helper.Codeunit.8de4e0ea.al`); lines and scopes are the compiled
   // file's. Both shapes must credit the right file, with complete entries, at emitted lines.
+  // Run 003: exact resolution engages for every batch LethAL writes with a rename. A rename exists
+  // only because two files share a basename, so both project paths end in it and it is contested.
+  // The other direction, a hand-built nested batch with no rename keeping the longest ending, is
+  // pinned by R298's tests in al-runner-coverage.test.ts. Revert: return undefined from
+  // `exactResolutionOf` whenever any file is renamed.
+  test("the coverage index of a batch LethAL wrote with a rename resolves shared names exactly", async () => {
+    const index = await buildAlRunnerCoverageIndex(run.batch, { sourceProjectDir: run.projectDir });
+    expect(index.exact?.contested.has("helper.codeunit.al")).toBe(true);
+    expect(index.exact?.batchDir).toBe(run.batch.split("\\").join("/").toLowerCase());
+  });
+
   describe("al-runner coverage of a renamed file, in each measured path shape and transport", () => {
     /**
      * The 1-based line of the emitted `file` holding `needle` in the ORIGINAL arm, the dispatch's
