@@ -163,8 +163,12 @@ export interface AlRunnerCoverageIndex {
    * by hand in tests).
    */
   readonly exact?: ExactResolution;
-  /** R219: how to quote a reported path to a user (a renamed flat name becomes its project path). */
-  readonly displayOf?: (path: string) => string;
+  /**
+   * R219: `byFile` key -> how to quote that file to a user (its project path). Keyed by the
+   * RESOLVED key, so a warning names the file the coverage was credited to (R-219c M1), never a
+   * guess from the reported label's basename. Absent: quote the label (indexes built by hand).
+   */
+  readonly shownByKey?: ReadonlyMap<string, string>;
 }
 
 /** R219 run 003: see `AlRunnerCoverageIndex.exact`. Paths are resolved, `/`-separated, lower-cased. */
@@ -298,6 +302,7 @@ export async function buildAlRunnerCoverageIndex(
   const exact = exactResolutionOf(rels, keysOf, display, instrumentedDir, options.sourceProjectDir);
 
   const byFile = new Map<string, readonly LineMapEntry[]>();
+  const shownByKey = new Map<string, string>();
   const multiObjectFiles: string[] = [];
   const refusedFiles: string[] = [];
   const skippedFiles: string[] = [];
@@ -390,7 +395,10 @@ export async function buildAlRunnerCoverageIndex(
       }
       continue;
     }
-    for (const k of c.keys) byFile.set(k, kept);
+    for (const k of c.keys) {
+      byFile.set(k, kept);
+      shownByKey.set(k, c.file);
+    }
     for (const e of kept) declared.add(keyOfEntry(e));
     entries.push(...kept);
   }
@@ -407,7 +415,7 @@ export async function buildAlRunnerCoverageIndex(
     refusals,
     skippedFiles,
     ...(exact !== undefined ? { exact } : {}),
-    displayOf: (path) => normalizeSlashes(display(path)),
+    shownByKey,
   };
 }
 
@@ -644,8 +652,8 @@ export function alRunnerCoverageFromServer(
     const found = indexedFile(file.file, index, skipped);
     if (found === undefined) continue;
     const objects = found.entries;
-    // R219: a renamed batch file is quoted by its project path.
-    const shownFile = index.displayOf?.(file.file) ?? file.file;
+    // R219: quoted by the project path of the file it RESOLVED to (R-219c M1).
+    const shownFile = index.shownByKey?.get(found.key) ?? file.file;
     // R-300b (I3): in an admitted wrapped file a disagreement drops the line instead.
     const strict = index.admittedWrappedFiles.has(found.key);
     for (const st of file.statements ?? []) {
