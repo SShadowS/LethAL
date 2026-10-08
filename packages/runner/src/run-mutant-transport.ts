@@ -510,7 +510,7 @@ export class ControlDrainTimeoutError extends Error {
 /** R-496: the error the teardown throws for a refusal no call has thrown yet. */
 function lateRefusalError(late: UnfilteredExtensionsQueryError): UnfilteredExtensionsQueryError {
   return new UnfilteredExtensionsQueryError(
-    `a BC redirect to an unfiltered extensions query arrived after a mutant's verdict was returned, so that verdict's session may not be trustworthy: ${late.message}`,
+    `a BC redirect to an unfiltered extensions query arrived after the last scored call (from a control request left by a non-scored call), so this session is refused: ${late.message}`,
   );
 }
 
