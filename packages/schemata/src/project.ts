@@ -221,8 +221,9 @@ export function coarseIdentityTupleOf(
  * operators gain its sites and Tier 1 cedes the ones Tier 2 claims, and a new or ceded mutant
  * earlier in a procedure moves a same-tuple twin's ordinal (BC.History: 4 keys; fixtures, CDO, DC
  * and DO: none).
+ * 35: held by R-500 (unused here). 36: R497, the BC paths score #if-wrapped objects of the measured shapes; no key moves, but a key whose verdict was a refusal's no-coverage on bcdev can now be scored, so history, --resume and marks recorded under 34 are not carried (the R-300b precedent, scheme 29).
  */
-export const IDENTITY_SCHEME = 34;
+export const IDENTITY_SCHEME = 36;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
