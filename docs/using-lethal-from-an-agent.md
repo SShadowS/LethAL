@@ -342,7 +342,8 @@ lists the block's survivors only; the four counts cover every recorded mutant of
 mutants the run recorded, not ones it never generated, and it is absent on a run narrowed with
 `--operator`, `--lines` or `--changed-since`, which can drop mutants inside a block, and on a
 quarantined run, which stops scheduling mutants mid-run. It is also absent for every gap in a file
-the source report lists as hang-refused among its excluded sites (R447): there a loop's own step was
+the source report lists as hang-refused among its excluded sites (R447): there a loop's own step, or
+a site in an open report data item's code or at a bounded item's only bound (R487, R501), was
 refused and never generated, so "every recorded mutant survived" would overstate what was measured.
 Each gap has
 exactly one of `artifactId` (the artifact to verify it against) and `artifactIdAbsent` (why there
@@ -640,7 +641,7 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
 {
-  "identityScheme": 32,
+  "identityScheme": 33,
   "marks": [
     {
       "key": "...",
