@@ -1829,3 +1829,46 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
     await backend.close();
   });
 });
+
+describe("AlRunnerBackend one-shot: a test timeout exits 3 (R518)", () => {
+  const opts = { coverage: "none", timeoutMs: 40_000 } as const;
+
+  // The envelope al-runner 2.12.0-main.43f76177 printed for a one-shot run whose test hit its
+  // in-run stop (/coord/handoff/R-518/measure.md run 1), names changed to this file's `ref`.
+  const timeoutExit3 = {
+    tests: [
+      {
+        name: QUALIFIED,
+        status: "error",
+        durationMs: 40_072,
+        message: "Test exceeded 40s timeout.",
+        stackTrace: '"Sandbox Logic"(CodeUnit 79000).SpinFor line 8',
+      },
+    ],
+    passed: 0,
+    failed: 0,
+    errors: 1,
+    skipped: 0,
+    total: 1,
+    exitCode: 3,
+    seed: 598161538,
+    suiteErrors: [
+      {
+        file: "/tests",
+        errors: [
+          "tests: TEST-TIMEOUT-ABORT: Sandbox Tests (Codeunit79100).PostingUpdatesTotal: watchdog timeout aborted the run — 0 further [Test] method(s) in this codeunit did not run (0 total)",
+        ],
+      },
+    ],
+    wallSeconds: 41.8,
+  };
+
+  test("REPRO: a timeout-only exit 3 is a `timeout` with its reported stop, sent once, never an error retried as pre-dispatch-rejected", async () => {
+    const { calls, spawn } = okSpawn(timeoutExit3, 3);
+    const { backend } = await makeBackend(spawn);
+    const v = await runOnce(backend, new SessionSafety(), ref, opts);
+    expect(v.outcome).toBe("timeout");
+    expect(v.reportedStopMs).toBe(40_000);
+    expect(calls.length).toBe(1);
+  });
+});
