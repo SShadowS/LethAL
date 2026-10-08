@@ -129,7 +129,16 @@ const odata = (inner: Record<string, unknown>, status = 200) =>
  */
 function fakes(opts: {
   many: Response | "hold";
-  status?: () => Record<string, unknown> | Error;
+  /**
+   * R503: `"hang"` never answers but rejects on its abort signal; `"deaf"` never answers and
+   * ignores the signal; a promise answers when it resolves (a slow poll).
+   */
+  status?: () =>
+    | Record<string, unknown>
+    | Error
+    | "hang"
+    | "deaf"
+    | Promise<Record<string, unknown>>;
   /** R-204b: an `Error` rejects the stop (its reply lost); `"hang"` never answers it. */
   stopAt?: (body: Record<string, unknown>) => Record<string, unknown> | Error | "hang";
   /** R236b: answers `GetOpAnswer`; absent, that action is rejected like any unexpected one. */
@@ -163,6 +172,17 @@ function fakes(opts: {
       polls += 1;
       const s = opts.status === undefined ? statusOf() : opts.status();
       if (s instanceof Error) return Promise.reject(s);
+      if (s === "deaf") return new Promise<Response>(() => {});
+      if (s === "hang") {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("The operation was aborted.")),
+            { once: true },
+          );
+        });
+      }
+      if (s instanceof Promise) return s.then((body) => odata(body));
       return Promise.resolve(odata(s));
     }
     if (u.includes("_StopHungRunAt")) {
@@ -1510,5 +1530,144 @@ describe("R499: a scored runMany waits for control requests still in flight", ()
     expect(r.verdict.stopState).toBe("confirmed");
     expect(t.controlState.orphans.size).toBe(0);
     expect(t.controlState.lateRefusal).toBeUndefined();
+  });
+});
+
+/**
+ * R503: every watchdog poll ends within `pollBoundMs` (clamped to what is left of the hard cap)
+ * and a poll that does not answer is a failed poll; polling goes on. A wrong wait goes red by
+ * `within`'s own timer, never by a wall-clock assert.
+ */
+describe("runMany — R503: the watchdog's GetOperationStatus poll is bounded", () => {
+  const WAIT = 3_000;
+  const tx = (fetchFn: typeof fetch, pollBoundMs: number, drainMs?: number) =>
+    new RunMutantTransport(CFG, TA, AR, fetchFn, {
+      pollBoundMs,
+      ...(drainMs !== undefined ? { drainMs } : {}),
+    });
+  /** The first poll gets `first`; every later poll gets `rest()`. */
+  const firstThen =
+    (
+      first: "hang" | "deaf" | Record<string, unknown>,
+      rest: () => Record<string, unknown> | Promise<Record<string, unknown>>,
+    ) =>
+    () => {
+      let n = 0;
+      return () => (++n === 1 ? first : rest());
+    };
+
+  test("P1: the first poll hangs; the call still scores BC's answer and leaves nothing in flight", async () => {
+    const f = fakes({
+      many: "hold",
+      status: firstThen("hang", () => statusOf({ opProgress: undefined }))(),
+    });
+    const t = tx(f.fetchFn, 20, 50);
+    const p = t.runMany(req());
+    // Poll 2 is sent only after poll 1 ended as a failed poll and the loop went on.
+    await until(() => f.polls() >= 2, WAIT, "a second poll");
+    f.release(odata(answer()));
+    const r = await within(p, WAIT, "runMany");
+    expect(r.kind).toBe("verdicts");
+    expect(t.controlState.orphans.size).toBe(0);
+  });
+
+  test("P2: every poll hangs and the main request is held: the hard cap decides, never a timeout", async () => {
+    const f = fakes({
+      many: "hold",
+      status: () => "hang",
+      kept: () => odata({ found: false, keptAttemptId: "a0", keptOpSeq: 6 }),
+    });
+    const r = await within(
+      tx(f.fetchFn, 20).runMany(
+        req({ stopHungSessions: true, requestCeilingMs: 60, stopGraceMs: 20 }),
+      ),
+      WAIT,
+      "runMany",
+    );
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("deadline-exceeded");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+    expect(r.verdict.failureMessage).toMatch(/polls failed [1-9]/);
+    expect(r.verdict.failureMessage).toContain(
+      "answer readback: the server holds no committed answer for a1/7",
+    );
+    expect(f.calls).toContain("GetOpAnswer");
+    expect(f.calls).not.toContain("StopHungRunAt");
+    expect(f.stops.length).toBe(0);
+  });
+
+  test("P3: polling goes on after a hung poll; the next poll's answer still drives the stop", async () => {
+    const f = fakes({
+      many: "hold",
+      status: firstThen("hang", () => statusOf())(),
+      stopAt: () => {
+        setTimeout(() => f.release(new Response(AL_STOP_BODY, { status: 408 })), 5);
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const r = await within(
+      tx(f.fetchFn, 20).runMany(
+        req({ stopHungSessions: true, requestCeilingMs: 400, stopGraceMs: 100 }),
+      ),
+      WAIT,
+      "runMany",
+    );
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.stopState).toBe("confirmed");
+    expect(f.polls()).toBeGreaterThanOrEqual(2);
+    expect(f.stops.length).toBe(1);
+  });
+
+  test("P4: a poll bound far above the hard cap is clamped to it; the call ends at the cap", async () => {
+    const f = fakes({ many: "hold", status: () => "hang" });
+    const r = await within(
+      tx(f.fetchFn, 60_000).runMany(req({ requestCeilingMs: 60, stopGraceMs: 20 })),
+      WAIT,
+      "runMany",
+    );
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("deadline-exceeded");
+  });
+
+  test("P5: a poll that ignores its abort still ends at the bound; at a scored exit the drain names it", async () => {
+    const f = fakes({ many: "hold", status: () => "deaf" });
+    const p = tx(f.fetchFn, 20, 50)
+      .runMany(req())
+      .then(
+        (v) => v,
+        (e: unknown) => e,
+      );
+    await until(() => f.polls() >= 1, WAIT, "the first poll");
+    f.release(odata(answer()));
+    const got = await within(p, WAIT, "runMany");
+    expect(got).toBeInstanceOf(ControlDrainTimeoutError);
+    expect((got as Error).message).toContain("GetOperationStatus");
+    expect((got as Error).message).toContain("R499");
+  });
+
+  test("P6: a slow poll that answers inside the bound is used (the bound is not the poll interval)", async () => {
+    const f = fakes({
+      many: "hold",
+      status: firstThen(
+        statusOf({ opProgress: undefined }),
+        () => new Promise((r) => setTimeout(() => r(statusOf()), 40)),
+      )(),
+      stopAt: () => {
+        setTimeout(() => f.release(new Response(AL_STOP_BODY, { status: 408 })), 5);
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const r = await within(
+      tx(f.fetchFn, 200).runMany(
+        req({ stopHungSessions: true, watchdogPollMs: 5, requestCeilingMs: 400, stopGraceMs: 100 }),
+      ),
+      WAIT,
+      "runMany",
+    );
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.stopState).toBe("confirmed");
+    expect(f.stops.length).toBe(1);
   });
 });

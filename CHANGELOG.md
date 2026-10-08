@@ -562,6 +562,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A grouped call's progress poll that BC never answers no longer holds the call forever**
+  (R503). Each poll now ends after 15 s, or at the call's hard cap if that is sooner, and counts as
+  a failed poll; polling goes on. Never a kill.
+
 - **A verdict is no longer published while a control request is still in flight** (R499). A stop or
   answer readback that outlived its own bound could be refused (a redirect to an unfiltered
   extensions query) after the call had already returned a score, or after the session had ended.
