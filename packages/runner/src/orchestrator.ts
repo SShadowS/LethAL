@@ -127,6 +127,7 @@ import {
 } from "./events";
 import type { HangRefusedFile, PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
+import { UnfilteredExtensionsQueryError } from "./harness";
 import { homeDir } from "./home";
 import {
   type BeginPublishRefusal,
@@ -2921,6 +2922,20 @@ function noteLeaseLostOrThrow(leaseSession: LeaseSession | undefined, detail: st
  * invalidation to the batch that was in flight when the lease was lost: earlier batches stand,
  * since every `RunMutant` in them was individually phase-1/phase-3 fence-validated.
  */
+interface LeaseSessionDeps {
+  readonly client: LeaseApi;
+  readonly lease: Lease;
+  readonly safety: SessionSafety;
+  readonly ttlSeconds: number;
+  readonly timers: LeaseTimers;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly quarantineStore: QuarantineStore | undefined;
+  readonly resourceKey: string | undefined;
+  readonly nowIso: () => string;
+  readonly runId: number;
+  readonly emit: RunEmitter;
+}
+
 class LeaseSession {
   #handle: unknown;
   #ticking = false;
@@ -2936,22 +2951,59 @@ class LeaseSession {
   #lastPublishOpSeq: number | undefined;
   /** Updated by `runSession` at the top of every batch — the scope of a lease-lost invalidation. */
   currentBatchIndex = 0;
+  /** R507: the first R-496 refusal any lease call met, for teardown to surface. */
+  #refusal: UnfilteredExtensionsQueryError | undefined;
+  /** R507: set once `takeRefusal()` has run; a later refusal is warned, never stored. */
+  #refusalTaken = false;
+  private readonly d: LeaseSessionDeps;
 
-  constructor(
-    private readonly d: {
-      readonly client: LeaseApi;
-      readonly lease: Lease;
-      readonly safety: SessionSafety;
-      readonly ttlSeconds: number;
-      readonly timers: LeaseTimers;
-      readonly sleep: (ms: number) => Promise<void>;
-      readonly quarantineStore: QuarantineStore | undefined;
-      readonly resourceKey: string | undefined;
-      readonly nowIso: () => string;
-      readonly runId: number;
-      readonly emit: RunEmitter;
-    },
-  ) {}
+  constructor(d: LeaseSessionDeps) {
+    // R507: ONE wrapper instead of edits to every `catch` below. Each lease call's error is
+    // noted and rethrown, so every existing catch still does its fail-closed thing, and a
+    // refusal those catches swallow (renew, reconcile, finish) still ends the session as itself.
+    const inner = d.client;
+    const note = (err: unknown): never => {
+      this.noteRefusal(err);
+      throw err;
+    };
+    const client: LeaseApi = {
+      acquire: (...a) => inner.acquire(...a).catch(note),
+      renew: (...a) => inner.renew(...a).catch(note),
+      release: (...a) => inner.release(...a).catch(note),
+      beginPublish: (...a) => inner.beginPublish(...a).catch(note),
+      endPublish: (...a) => inner.endPublish(...a).catch(note),
+      getOperationStatus: (...a) => inner.getOperationStatus(...a).catch(note),
+      recoverOp: (...a) => inner.recoverOp(...a).catch(note),
+    };
+    this.d = { ...d, client };
+  }
+
+  /**
+   * R507: a refused unfiltered extensions query on the lease path. The first is kept for teardown
+   * and latches the session (not lease loss: no `lostBatchIndex`), so no new work starts; a later
+   * one, or any after `takeRefusal()`, is warned, never dropped.
+   */
+  private noteRefusal(err: unknown): void {
+    if (!(err instanceof UnfilteredExtensionsQueryError)) return;
+    if (this.#refusalTaken || this.#refusal !== undefined) {
+      console.warn(
+        `[lethal] another refused unfiltered extensions query on the lease path: ${err.message}`,
+      );
+      return;
+    }
+    this.#refusal = err;
+    this.d.safety.latchUnsafe(
+      `refused unfiltered extensions query on the lease path: ${err.message}`,
+    );
+  }
+
+  /** R507: hands the recorded refusal to teardown, once. Later refusals are warned. */
+  takeRefusal(): UnfilteredExtensionsQueryError | undefined {
+    const r = this.#refusal;
+    this.#refusal = undefined;
+    this.#refusalTaken = true;
+    return r;
+  }
 
   /** The batch that was in flight when the lease was lost — `undefined` while the lease is held. */
   get lostBatchIndex(): number | undefined {
@@ -3076,7 +3128,7 @@ class LeaseSession {
       );
       throw new LeaseUnavailableError(
         `BeginPublish refused for opSeq ${opSeq} — the lease or the operation marker is no longer ours (design §4)`,
-        refusal,
+        { beginPublishRefusal: refusal },
       );
     }
     let result: T;
@@ -4257,23 +4309,43 @@ async function closeLeaseScope(a: {
   }
   a.emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
   // R-496: a redirect to an unfiltered extensions query that arrived after the last call returned
-  // has no next call to throw it. Handed back AFTER the cleanup above, for the caller to throw.
+  // has no next call to throw it. R507: so has one a lease call met (taken after `finish()`, so a
+  // refusal on its own calls is included). Handed back AFTER the cleanup above, for the caller to
+  // throw: the FIRST, with every other one warned, never dropped.
+  const refusals: Error[] = [];
+  const leaseRefusal = a.leaseSession?.takeRefusal();
+  if (leaseRefusal !== undefined) refusals.push(leaseRefusal);
   for (const backend of [a.backend, ...a.workerBackends]) {
     const late = (backend as { takeLateRefusal?: () => Error | undefined }).takeLateRefusal?.();
-    if (late !== undefined) return late;
+    if (late !== undefined) refusals.push(late);
   }
-  return undefined;
+  const [first, ...rest] = refusals;
+  for (const other of rest) {
+    console.warn(`[lethal] another refused unfiltered extensions query: ${other.message}`);
+  }
+  return first;
 }
 
 /**
  * R-496: throw the refusal `closeLeaseScope` handed back, unless the session is already failing:
  * then the earlier error stays and the refusal is logged (a warning line), never dropped silently.
+ * R507: when the session was latched, the latch reason is logged first, so a reason that is NOT
+ * the refusal (a quarantine, a lease loss) is never hidden behind it.
  */
-function surfaceLateRefusal(late: Error | undefined, alreadyFailing: boolean): void {
+function surfaceLateRefusal(
+  late: Error | undefined,
+  alreadyFailing: boolean,
+  safety: SessionSafety,
+): void {
   if (late === undefined) return;
-  if (!alreadyFailing) throw late;
+  if (!alreadyFailing) {
+    if (safety.isUnsafe) {
+      console.warn(`[lethal] the session was latched: ${safety.reason ?? "unknown"}`);
+    }
+    throw late;
+  }
   console.warn(
-    `[lethal] a refused unfiltered extensions query arrived after the session's last call, while it was already failing: ${late.message}`,
+    `[lethal] a refused unfiltered extensions query (on the lease path, or after the session's last call) while the session was already failing: ${late.message}`,
   );
 }
 
@@ -6951,6 +7023,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         emit,
       }),
       failing,
+      safety,
     );
   }
 
@@ -7526,6 +7599,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     surfaceLateRefusal(
       await closeLeaseScope({ backend, workerBackends: [], safety, leaseSession, emit }),
       failing,
+      safety,
     );
   }
   emitLeaseLostInvalidation(leaseSession, safety, emit);

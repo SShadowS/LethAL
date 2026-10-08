@@ -52,6 +52,7 @@ import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
 import { MalformedReportError, assertExplainableReport, explain } from "../src/explain";
 import { ActivationFailure } from "../src/failure-classes";
+import { UnfilteredExtensionsQueryError } from "../src/harness";
 import { InstalledBundleError, openInstalledBundle } from "../src/installed-bundle";
 import { LeaseClient, LeaseUnavailableError } from "../src/lease";
 import type {
@@ -11410,6 +11411,274 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
     expect(report.quarantined).toBeDefined();
     expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("container-needs-recycle");
     expect(calls.RecoverOp ?? 0).toBe(0);
+  });
+});
+
+// R507: R-496's refusal on the lease path, through a REAL `LeaseClient` on a router fetch. Every
+// lease caller that swallows a lease error still does its fail-closed thing, AND the session ends
+// with the refusal itself (or warns it, when another error is already ending the session).
+describe("R507: a refused unfiltered extensions query on the lease path ends the session as itself", () => {
+  const TIER = "http://cronus281|BC";
+  const WIRE_CFG = {
+    baseUrl: "http://bc:7048/BC",
+    company: "CRONUS Danmark A/S",
+    username: "u",
+    password: "p",
+  } as const;
+  const REFUSAL_TEXT = "refused: unfiltered extensions query R433";
+
+  function wired(
+    answers: Parameters<typeof leaseRouter>[0],
+    timeoutMs = 2000,
+  ): { calls: Record<string, number>; client: LeaseClient } {
+    const router = leaseRouter(answers);
+    return {
+      calls: router.calls,
+      client: new LeaseClient({ ...WIRE_CFG, timeoutMs }, router.fetchFn),
+    };
+  }
+  const refuse = (): never => {
+    throw new UnfilteredExtensionsQueryError(REFUSAL_TEXT);
+  };
+  function warnings(events: readonly RunEvent[], code: string): string[] {
+    return events.flatMap((e) => (e.type === "warning" && e.code === code ? [e.message] : []));
+  }
+  const pass = (ref: TestMethodRef, opts: { coverage?: string }) => ({
+    ref,
+    outcome: "pass" as const,
+    durationMs: 1,
+    ...(opts.coverage === "none"
+      ? { attestation: { observedAny: true, identityMismatch: false } }
+      : {}),
+  });
+  /** Captures `console.warn` lines for the duration of `body`. */
+  async function capturingWarn<T>(body: () => Promise<T>): Promise<{ out: T; warned: string[] }> {
+    const spy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const out = await body();
+      return { out, warned: spy.mock.calls.map((c) => String(c[0])) };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+  /** A backend whose `run` fires one heartbeat tick, awaited, on its second call. */
+  function tickingBackend(timers: FakeTimers): {
+    backend: ReturnType<typeof leaseBackend>;
+    runs: () => number;
+  } {
+    let runs = 0;
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        runs++;
+        if (runs === 2) await timers.fire();
+        return pass(ref, opts);
+      },
+    });
+    return { backend, runs: () => runs };
+  }
+
+  test("R3: a refusal on the heartbeat renew is never swallowed: latched, finish ran, the session ends with it", async () => {
+    const { calls, client } = wired({ RenewLease: refuse });
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const { backend, runs } = tickingBackend(timers);
+    const { out: err } = await capturingWarn(() =>
+      runSessionForTest(backend, {
+        quarantineDir: freshTmpDir(),
+        lease,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(String(err)).toContain(REFUSAL_TEXT);
+    // Latched: THREE_PROC_AL has 9 mutants; scheduling stopped right after the tick.
+    expect(runs()).toBeLessThan(9);
+    // Not lease loss: no lost batch is invalidated.
+    expect(events.some((e) => e.type === "batch-invalidated")).toBe(false);
+    // finish ran op-gated: a marker read at teardown, then the release over an idle marker.
+    expect(calls.GetOperationStatus ?? 0).toBeGreaterThanOrEqual(2);
+    expect(calls.ReleaseLease).toBe(1);
+  });
+
+  test("R4: a refusal on the marker read in finish is never a release, and ends the session", async () => {
+    const { calls, client } = wired({
+      GetOperationStatus: (n) => (n >= 2 ? refuse() : IDLE_STATUS),
+    });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    const { out: err } = await capturingWarn(() =>
+      runSessionForTest(leaseBackend(), {
+        quarantineDir: freshTmpDir(),
+        lease,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(warnings(events, "lease-marker-read-failed")).toHaveLength(1);
+    expect(calls.ReleaseLease ?? 0).toBe(0);
+  });
+
+  test("R5: a refusal on the reconciling status read leaves a lost ack unresolved, never recovered or killed", async () => {
+    const { calls, client } = wired({
+      GetOperationStatus: (_n, body) => (body.attemptId === "a10" ? refuse() : IDLE_STATUS),
+    });
+    const events: RunEvent[] = [];
+    let active: string | null = null;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        active = id;
+      },
+      run: async (ref, opts) =>
+        active === "M0002"
+          ? {
+              ref,
+              outcome: "error" as const,
+              durationMs: 1,
+              failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
+              operation: "in-flight-unknown" as const,
+              fencedOp: { attemptId: "a10", opSeq: 304 },
+            }
+          : pass(ref, opts),
+    });
+    const { lease } = leaseCfg(client);
+    const { out: err } = await capturingWarn(() =>
+      runSessionForTest(backend, {
+        quarantineDir: freshTmpDir(),
+        lease,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(warnings(events, "lease-reconcile-failed").length).toBeGreaterThan(0);
+    expect(calls.RecoverOp ?? 0).toBe(0);
+    // Non-vacuous: mutants WERE scored, and none of them as killed.
+    expect(events.some((e) => e.type === "mutant-scored")).toBe(true);
+    const killed = events.filter((e) => e.type === "mutant-scored" && e.verdict === "killed");
+    expect(killed).toHaveLength(0);
+  });
+
+  test("R6: a refusal on AcquireLease rejects with the refusal and records nothing", async () => {
+    const dir = freshTmpDir();
+    const { calls, client } = wired({ AcquireLease: refuse });
+    const { lease } = leaseCfg(client);
+    const err = await runSessionForTest(leaseBackend(), { quarantineDir: dir, lease }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(err).not.toBeInstanceOf(LeaseUnavailableError);
+    expect(calls.AcquireLease).toBe(1);
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+  });
+
+  test("R7: a refusal on the hook BeginPublish is uncertain, never a refusal, latches, and rejects with it", async () => {
+    const { client } = wired({ BeginPublish: refuse });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    const { out: err } = await capturingWarn(() =>
+      runSessionForTest(leaseBackend(), {
+        quarantineDir: freshTmpDir(),
+        lease,
+        emit: [(e) => events.push(e)],
+        afterLeaseAcquired: async () => {},
+      }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(warnings(events, "after-lease-acquired-uncertain")).toHaveLength(1);
+    expect(warnings(events, "after-lease-acquired-refused")).toHaveLength(0);
+  });
+
+  test("R9: an earlier error stays; a lease-path refusal recorded by the heartbeat is warned", async () => {
+    const { client } = wired({ RenewLease: refuse });
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const backend = leaseBackend({
+      deploy: async () => {
+        await timers.fire();
+        throw new Error("deploy boom");
+      },
+    });
+    const { out: err, warned } = await capturingWarn(() =>
+      runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease }).catch((e: unknown) => e),
+    );
+    expect(err).not.toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(String(err)).toContain("deploy boom");
+    expect(
+      warned.some(
+        (w) => w.includes("while the session was already failing") && w.includes(REFUSAL_TEXT),
+      ),
+    ).toBe(true);
+  });
+
+  test("R10: a refusal noted after teardown took the refusals is warned, never dropped", async () => {
+    let openGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    let tick: Promise<unknown> | undefined;
+    const { client } = wired({
+      RenewLease: async () => {
+        await gate;
+        return refuse();
+      },
+    });
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        if (tick === undefined) tick = Promise.resolve(timers.fn?.());
+        return pass(ref, opts);
+      },
+    });
+    const { warned } = await capturingWarn(async () => {
+      // The renew is still open, so the session ends normally and teardown takes nothing.
+      await runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease });
+      openGate(); // the renew is answered with the refusal only now, after takeRefusal()
+      await tick;
+    });
+    expect(warned.some((w) => w.includes(REFUSAL_TEXT))).toBe(true);
+  });
+
+  test("R11: a lease refusal and a backend late refusal: the lease one is thrown, the other warned", async () => {
+    const { client } = wired({ RenewLease: refuse });
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const { backend } = tickingBackend(timers);
+    const late = new UnfilteredExtensionsQueryError("backend late refusal R499");
+    Object.assign(backend, { takeLateRefusal: () => late });
+    const { out: err, warned } = await capturingWarn(() =>
+      runSessionForTest(backend, { quarantineDir: freshTmpDir(), lease }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(String(err)).toContain(REFUSAL_TEXT);
+    expect(warned.some((w) => w.includes("backend late refusal R499"))).toBe(true);
+  });
+
+  test("R12: a session latched for another reason that then meets a refusal throws it, after warning the latch reason", async () => {
+    const dir = freshTmpDir();
+    let endPublishSent = false;
+    const { client } = wired(
+      {
+        EndPublish: () => {
+          endPublishSent = true;
+          return "stall";
+        },
+        GetOperationStatus: (_n, body) => {
+          if (body.attemptId !== "") return "stall";
+          return endPublishSent ? refuse() : IDLE_STATUS;
+        },
+      },
+      20,
+    );
+    const { lease } = leaseCfg(client);
+    const { out: err, warned } = await capturingWarn(() =>
+      runSessionForTest(leaseBackend(), { quarantineDir: dir, lease }).catch((e: unknown) => e),
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("container-needs-recycle");
+    const latched = warned.filter((w) => w.includes("the session was latched:"));
+    expect(latched).toHaveLength(1);
+    expect(latched[0]).not.toContain("refused unfiltered extensions query on the lease path");
   });
 });
 

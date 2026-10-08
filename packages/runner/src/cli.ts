@@ -78,9 +78,9 @@ import type { EventSubscriber } from "./events";
 import { type ExplainOutput, assertExplainableReport, explain } from "./explain";
 import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
-import { HarnessVerifier } from "./harness";
+import { HarnessVerifier, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
-import { LeaseClient, LeaseUnavailableError } from "./lease";
+import { type ForceResetOutcome, LeaseClient, LeaseUnavailableError } from "./lease";
 import { changedLinesSince, parseLineArg } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { toMutationElements } from "./mutation-elements";
@@ -5539,8 +5539,21 @@ export async function performForceResetLease(
   cfg: ActivationConfig,
   fetchFn: FetchFn = bcFetch,
 ): Promise<ForceResetLeaseResult> {
+  // A refusal from this read passes through untouched: nothing was sent to reset yet.
   const { serverGeneration } = await new HarnessVerifier(cfg, fetchFn).verify();
-  const resetOutcome = await new LeaseClient(cfg, fetchFn).forceResetLease(serverGeneration);
+  let resetOutcome: ForceResetOutcome;
+  try {
+    resetOutcome = await new LeaseClient(cfg, fetchFn).forceResetLease(serverGeneration);
+  } catch (err) {
+    // R507: ForceResetLease WAS sent, and BC answered with a refused redirect: the reset may
+    // have landed. Still the refusal itself, so the run-ending class is kept.
+    if (err instanceof UnfilteredExtensionsQueryError) {
+      throw new UnfilteredExtensionsQueryError(
+        `ForceResetLease was sent and BC answered with a refused redirect, so the reset may have been applied; re-run \`lethal force-reset-lease\` (safe). ${err.message}`,
+      );
+    }
+    throw err;
+  }
   if (resetOutcome.reset) {
     return {
       outcome: "reset",
@@ -5643,9 +5656,12 @@ export async function forceResetLeaseFromCli(
   try {
     result = await performForceResetLease(odataCfg, deps.fetchFn ?? bcFetch);
   } catch (err) {
+    // R507: R-496's refusal is never wrapped in a plain Error.
+    if (err instanceof UnfilteredExtensionsQueryError) throw err;
     // R504: only the ForceResetLease call throws this class here (HarnessVerifier has its own).
-    // It was sent; only its answer is missing, so the reset may have landed.
-    if (err instanceof LeaseUnavailableError) {
+    // It was sent. R506 (R-504 minor 3): only an error status (`rejectedStatus`) proves it was
+    // not applied; every other failure means the reset may have landed.
+    if (err instanceof LeaseUnavailableError && err.rejectedStatus === undefined) {
       throw new Error(
         `force-reset-lease: the ForceResetLease call gave no usable answer, so ForceResetLease may have been applied; re-run \`lethal force-reset-lease\` to read the current generation and reset again (a re-run is safe). Underlying error: ${err.message}`,
       );

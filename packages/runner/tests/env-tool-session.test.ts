@@ -1,14 +1,17 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
+import { BcAnswerUnreadError } from "../src/bc-fetch";
 import { EnvToolClient, EnvToolError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { startEnvToolSession } from "../src/env-tool-session";
 import {
   HarnessAuthError,
   HarnessVerificationError,
+  HarnessVerifier,
   MultiTenantContainerError,
 } from "../src/harness";
+import { emptyBody, stalledBody } from "./helpers/lease-wire";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -222,6 +225,37 @@ describe("startEnvToolSession", () => {
       }),
     ).rejects.toBeInstanceOf(HarnessAuthError);
   });
+
+  // R506 H4: a HarnessInfo that times out, or whose 2xx body cannot be read, is not evidence the
+  // control app is missing (a 2xx proves it answered), so it must never trigger a republish.
+  for (const [name, make] of [
+    ["a stalled body", () => stalledBody().fetchFn],
+    ["an empty 2xx body", emptyBody],
+  ] as const) {
+    it(`does NOT republish the control app when HarnessInfo gives ${name} (R506)`, async () => {
+      const h = harness();
+      let publishFileCalls = 0;
+      const err = await startEnvToolSession({
+        cfg: h.cfg,
+        bcdevRaw: BCDEV_RAW,
+        projectDir: "C:/proj",
+        testDir: "C:/tests",
+        runId: "r1",
+        client: h.client,
+        makePublisher: () => ({
+          publishFile: async () => {
+            publishFileCalls += 1;
+          },
+        }),
+        verifyHarness: async (cfg) => {
+          await new HarnessVerifier({ ...cfg, timeoutMs: 20 }, make()).verify();
+        },
+        stateDir: scratch("lethal-envstate-"),
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BcAnswerUnreadError);
+      expect(publishFileCalls).toBe(0);
+    });
+  }
 
   // R19: provisioning no longer publishes the TEST apps at all. They are deferred to
   // `publishTestApps`, which the caller runs while HOLDING THE LEASE — pre-lease, a concurrent

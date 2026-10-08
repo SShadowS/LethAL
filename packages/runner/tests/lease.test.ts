@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ActivationConfig } from "../src/activation";
+import { BcRedirectRefusedError } from "../src/bc-fetch";
 import { UnfilteredExtensionsQueryError } from "../src/harness";
 import {
   type Lease,
@@ -743,27 +744,67 @@ describe("R504: every lease action is bounded through its response body", () => 
     const notJson = (async () =>
       new Response("<html>oops", { status: 200 })) as unknown as typeof fetch;
     const err = await rejection(new LeaseClient(FAST, notJson).release(LEASE));
-    expect(err.message).toStartWith("LethALControl_ReleaseLease 2xx body is not JSON: ");
-    expect(err.message.length).toBeGreaterThan(
-      "LethALControl_ReleaseLease 2xx body is not JSON: ".length,
-    );
+    const prefix = "LethALControl_ReleaseLease 2xx body could not be read or parsed: ";
+    expect(err.message).toStartWith(prefix);
+    expect(err.message.length).toBeGreaterThan(prefix.length);
     expect(err.message).not.toContain("not read within");
   });
 
-  // L6 pins today's behaviour for R-496's refusal: its text reaches the caller, wrapped once. It
-  // does NOT pin the "unreachable" label, which is a wrong diagnosis filed as its own item.
-  test("L6: an UnfilteredExtensionsQueryError from the fetch keeps its text, wrapped once", async () => {
-    const refusal = new UnfilteredExtensionsQueryError("refused: unfiltered extensions query R433");
+  // R507 R1 (replaces R504's L6): R-496's refusal leaves the lease client as ITSELF, naming the
+  // request, with the original text kept.
+  test.each(ACTIONS)(
+    "R1 %s: an UnfilteredExtensionsQueryError from the fetch rejects as itself, naming the request",
+    async (action, call) => {
+      const refusal = new UnfilteredExtensionsQueryError(
+        "refused: unfiltered extensions query R433",
+      );
+      const refusing = (async () => {
+        throw refusal;
+      }) as unknown as typeof fetch;
+      const err = await call(new LeaseClient(FAST, refusing)).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect(err).not.toBeInstanceOf(LeaseUnavailableError);
+      const message = (err as Error).message;
+      expect(message).toStartWith(
+        `LethALControl_${action} answered with a redirect that was not followed:`,
+      );
+      expect(message).toContain("refused: unfiltered extensions query R433");
+    },
+  );
+
+  // R507 R2: any other refused redirect stays a LeaseUnavailableError, but is never "unreachable"
+  // and never carries `rejectedStatus` (it may have been applied).
+  test("R2: a BcRedirectRefusedError is a LeaseUnavailableError that names the redirect, not 'unreachable'", async () => {
     const refusing = (async () => {
-      throw refusal;
+      throw new BcRedirectRefusedError("BC answered with HTTP 302 redirect to elsewhere");
     }) as unknown as typeof fetch;
-    const err = await rejection(new LeaseClient(FAST, refusing).acquire("o", 15, "n", "g"));
-    expect(err.message).toContain("refused: unfiltered extensions query R433");
-    expect(err.message).not.toContain("LeaseUnavailableError");
-    expect(err.message).not.toContain("gave no answer within");
+    const err = await rejection(new LeaseClient(FAST, refusing).release(LEASE));
+    expect(err.message).toContain(
+      "LethALControl_ReleaseLease answered with a redirect that was not followed",
+    );
+    expect(err.message).not.toContain("unreachable");
+    expect(err.rejectedStatus).toBeUndefined();
   });
 
-  // L7: a body read that fails for any reason other than our abort is not called a timeout.
+  test("an HTTP error status sets rejectedStatus; a connect error does not", async () => {
+    const five00 = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+    expect((await rejection(new LeaseClient(FAST, five00).release(LEASE))).rejectedStatus).toBe(
+      500,
+    );
+    const refused = (async () => {
+      throw new TypeError("connect ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    expect(
+      (await rejection(new LeaseClient(FAST, refused).release(LEASE))).rejectedStatus,
+    ).toBeUndefined();
+  });
+
+  // L7: a body read that errors for a reason other than our abort keeps its own text and gets the
+  // 'could not be read or parsed' wording, never a timeout wording. It pins `readJsonBody`'s
+  // non-abort branch, not the deadline.
   test("L7: a body read that errors at once is not given the timeout wording", async () => {
     const erroring = (async () =>
       new Response(
@@ -776,6 +817,7 @@ describe("R504: every lease action is bounded through its response body", () => 
       )) as unknown as typeof fetch;
     const err = await rejection(new LeaseClient(FAST, erroring).renew(LEASE, 15));
     expect(err.message).toContain("boom");
+    expect(err.message).toContain("could not be read or parsed");
     expect(err.message).not.toContain("gave no answer within");
     expect(err.message).not.toContain("not read within");
   });
