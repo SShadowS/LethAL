@@ -1244,6 +1244,9 @@ export class AlRunnerBackend implements ExecutionBackend {
     try {
       suite = await this.ensureServerSuite(opts);
     } catch (e) {
+      // R-219c (M2): a coverage-index refusal is about the bundle, not this test. It stops the
+      // session, as it does on the one-shot path, instead of reading as one `error` per test.
+      if (e instanceof ServerCoverageRefusal) throw e.cause;
       return {
         ref,
         outcome: "error",
@@ -1306,14 +1309,25 @@ export class AlRunnerBackend implements ExecutionBackend {
     for (const t of res.tests) byName.set(t.name, t);
     const coverageByName = new Map<string, CoverageMap>();
     if (wantCoverage && res.perTestCoverage.length > 0) {
-      this.coverageIndex ??= await this.coverageIndexOf(this.activeDir());
-      for (const entry of res.perTestCoverage) {
-        coverageByName.set(entry.test, alRunnerCoverageFromServer(entry, this.coverageIndex));
+      try {
+        this.coverageIndex ??= await this.coverageIndexOf(this.activeDir());
+        for (const entry of res.perTestCoverage) {
+          coverageByName.set(entry.test, alRunnerCoverageFromServer(entry, this.coverageIndex));
+        }
+      } catch (e) {
+        throw new ServerCoverageRefusal(e);
       }
     }
     const suite: ServerSuiteResults = { byName, coverageByName, wallMs: Date.now() - t0 };
     this.serverSuite = suite;
     return suite;
+  }
+}
+
+/** R-219c (M2): carries a coverage-index error out of `ensureServerSuite` past `runViaServer`. */
+class ServerCoverageRefusal extends Error {
+  constructor(override readonly cause: unknown) {
+    super("al-runner --server: the coverage index refused");
   }
 }
 

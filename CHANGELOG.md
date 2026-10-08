@@ -586,6 +586,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   Every message that quotes a batch file still names the project file: coverage and line-map
   refusals, and alc's compile errors, which gain a note naming each renamed file. A project without
   duplicate names builds byte-identical batches, so no verdict, digest or gate figure moves.
+- **On al-runner `--server`, a coverage refusal stops the run** (R-219c). Before, it read as an
+  `error` verdict on every test; the one-shot transport already stopped. Its scope warnings also now
+  name the file the coverage was credited to.
 - **A run lends its verdicts only to a session whose test app runs against the same dependencies**
   (R496). Two proven runs with the same test-app bytes matched even when a dependency of the test
   app had been rebuilt between them (republished out of band, or by an env-tool hook that publishes
