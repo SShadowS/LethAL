@@ -522,8 +522,10 @@ describe("sessionFingerprint (R47)", () => {
   // open `Integer` data item's code is hang-refused); it was 51406729...1b37 under scheme 29. It
   // moved again for R509 (scheme 32, a temporary record's fields are typed); it was 5b1d3f6c...8f56
   // under scheme 30. It moved again for R501 (scheme 33, that scope refused for every operator,
-  // and a bounded item's only bound); it was b6299a65...ed32 under scheme 32.
-  const PINNED = "9db5cc98af955b66f0f88331ccf07d6d3a4dc4ecf0e4c1bb24dbd2bcda26d7a1";
+  // and a bounded item's only bound); it was b6299a65...ed32 under scheme 32. It moved again for
+  // R500 (scheme 35, Date items, one-hop callees and the stated limits); it was 9db5cc98...d7a1
+  // under scheme 33.
+  const PINNED = "400af96fde3169359be03170b08b24b005d519e040f1860db9a4d03a7aa28760";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2144,7 +2146,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 33 since R501 (that scope is hang-refused for every
+    // Pinned by value so a bump is deliberate: 35 since R500 (Date items, one-hop callees,
+    // subscribers and the two stated limits are hang-refused at dispatch; 34 is held for R-343);
+    // 33 was R501 (that scope is hang-refused for every
     // operator at dispatch, and so is a bounded item's only SetRange bound); 32 was R509 (a
     // temporary record's fields are typed); 31 was held for R-501 and is unused; 30 was R487 (every
     // site the four hang-capable operators mutate in an open `Integer` data item's code is
@@ -2167,7 +2171,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
     // sites move twins).
-    expect(IDENTITY_SCHEME).toBe(33);
+    expect(IDENTITY_SCHEME).toBe(35);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
