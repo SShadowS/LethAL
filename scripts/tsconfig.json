@@ -95,6 +95,7 @@
     "r236c-testpage-census.ts",
     "r289-probe/sidecar.ts",
     "r289-probe/sidecar.test.ts",
+    "r514-probe/probe.ts",
     "roadmap-index.ts",
     "roadmap-index.test.ts",
     "roadmap-next-id.ts",
