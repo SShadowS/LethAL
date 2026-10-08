@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**60 of 514 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**55 of 514 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -212,10 +212,10 @@ that ordering is the priority.
 - **R499** · Outstanding stop requests are not drained before a score is published · [R499.md](docs/roadmap/R499.md) · done (193257c8)
 - **R500** · Report-loop hang shapes R487's blanket rule does not cover: code before the item, other-object callees, table and Date items, XMLport Integer elements, outside reportextensions · [R500.md](docs/roadmap/R500.md) · open, filed 2026-10-07
 - **R501** · Condition-side mutants of a report data item's exit guard, and removing the exit itself, can hang an open Integer item · [R501.md](docs/roadmap/R501.md) · done (85b94713)
-- **R502** · The receiver resolver reads a namespace-qualified data item table (`System.Utilities.Integer`) as its first segment · [R502.md](docs/roadmap/R502.md) · open, filed 2026-10-08
+- **R502** · The receiver resolver reads a namespace-qualified data item table (`System.Utilities.Integer`) as its first segment · [R502.md](docs/roadmap/R502.md) · done (4a82d91a)
 - **R503** · The runMany watchdog's GetOperationStatus poll has no timeout, so a poll BC never answers holds the call forever · [R503.md](docs/roadmap/R503.md) · done (c637f2dd)
 - **R504** · The lease client's `postLeaseAction` clears its abort timer once the headers arrive, so a lease response body BC never finishes has no bound (the R191 class) · [R504.md](docs/roadmap/R504.md) · done (f45d3196)
-- **R505** · Not measured: how al-runner maps a compiled file back to the source path it labels coverage with, when an object moves between files or its workspace cache is stale · [R505.md](docs/roadmap/R505.md) · open, filed 2026-10-08
+- **R505** · Not measured: how al-runner maps a compiled file back to the source path it labels coverage with, when an object moves between files or its workspace cache is stale · [R505.md](docs/roadmap/R505.md) · done (63594b46)
 - **R506** · Four more BC reads clear their abort timer at the headers, so a body BC never finishes has no bound (the R191 class), and two of them turn an unread body into `{}` · [R506.md](docs/roadmap/R506.md) · done (abc6919b)
 - **R507** · On the lease path, R-496's `UnfilteredExtensionsQueryError` is wrapped in a `LeaseUnavailableError` labelled "unreachable": its type is lost and the label is a wrong diagnosis · [R507.md](docs/roadmap/R507.md) · done (abc6919b)
 - **R508** · `--resume` can carry the verdicts of a batch that a lease loss invalidated, kills included · [R508.md](docs/roadmap/R508.md) · done (3203624b)
@@ -225,8 +225,8 @@ that ordering is the priority.
 - **R512** · The attestation gate invalidates a batch's verdicts but its R192 baseline snapshot is still reused · [R512.md](docs/roadmap/R512.md) · done (7d4c56fc)
 - **R513** · A verdict recorded after a lease-loss note and before a crash is still carried by --resume · [R513.md](docs/roadmap/R513.md) · done (7d4c56fc)
 - **R514** · A reused baseline lets a position-1 timeout score a kill with no unmutated confirm · [R514.md](docs/roadmap/R514.md) · done (e461bc90)
-- **R515** · A confirm that finds a reused duration stale does not correct later budgets · [R515.md](docs/roadmap/R515.md) · fixed in a29e3187, live gate pending
-- **R516** · A fresh baseline's position-1 timeout is scored with no unmutated confirm · [R516.md](docs/roadmap/R516.md) · fixed in a29e3187, live gate pending
+- **R515** · A confirm that finds a reused duration stale does not correct later budgets · [R515.md](docs/roadmap/R515.md) · done (a29e3187)
+- **R516** · A fresh baseline's position-1 timeout is scored with no unmutated confirm · [R516.md](docs/roadmap/R516.md) · done (a29e3187)
 - **R517** · al-runner `--server`: a timeout is judged on the suite's wall clock against a 60 s in-run limit LethAL never set · [R517.md](docs/roadmap/R517.md) · open, filed 2026-10-08
 
 ## Product gaps a real project hits
@@ -548,7 +548,7 @@ that ordering is the priority.
 - **R414** · R393's 'CI unset' control fails on every GitHub runner: Bun also reads GITHUB_ACTIONS as CI, and the control removed only CI · [R414.md](docs/roadmap/R414.md) · done (443e2ec6)
 - **R415** · kraken-secrets' CLI test splits a tar listing on \n only; Windows' bsdtar ends lines with \r\n · [R415.md](docs/roadmap/R415.md) · done (5a8b8f3c)
 - **R416** · kraken-setup.sh's unit test cannot put its fakes first on PATH under a Windows bash started from PowerShell; the script only runs in the Linux image · [R416.md](docs/roadmap/R416.md) · done (27d17c7b)
-- **R436** · Biome is pinned at 1.9.4; 2.5.15 is out and out of the declared range (migration) · [R436.md](docs/roadmap/R436.md) · open
+- **R436** · Biome is pinned at 1.9.4; 2.5.15 is out and out of the declared range (migration) · [R436.md](docs/roadmap/R436.md) · closed 2026-10-08 — not now: 2.x forces import-sort churn on about 330 files and buys nothing functional…
 - **R437** · TypeScript is at 5.9; 7.0 (the native compiler) is out and LethAL has not migrated · [R437.md](docs/roadmap/R437.md) · open
 - **R423** · The biome auto-format hook runs on a .ts file that still holds merge-conflict markers and damages the code around them · [R423.md](docs/roadmap/R423.md) · open
 - **R428** · r214-history.test.ts times out a hook at the 5 s default under machine load and then leaks its `lethal-r214-hist-*` temp folders, failing R358's leak check too · [R428.md](docs/roadmap/R428.md) · done (772632ef)

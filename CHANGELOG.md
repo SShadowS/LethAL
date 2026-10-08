@@ -622,6 +622,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   still judged against the budget its run was sent. On al-runner `--server` (and resource with
   `--server`) the re-budget is skipped: the daemon stops a test at its own 60 s whatever the budget,
   so a larger budget would only let a later confirm pass the 2x rule (R516, R517).
+- **An al-runner run with coverage stops if the project changes under it** (R505). The pinned
+  al-runner (`v2.12.0-main.c39ad5de`) labels coverage with the project's files as they are on disk,
+  not the files LethAL compiled, so an object moved or renamed during a run had its coverage
+  credited to the wrong object or dropped. `lethal run` now checks the project's `.al` files,
+  `app.json` and resources before and after every al-runner call that produces coverage, and stops
+  with `ProjectChangedDuringRunError` naming what changed. `--resume` continues the run from its
+  last recorded verdict. A log or office lock file written into the project does not count. An
+  edit undone within one al-runner call is not seen. Upstream fixed the labelling after the pinned
+  build (#5249).
 - **A resumed batch that reused a stored baseline (R192) no longer scores a timeout as
   `timeout-killed` without an unmutated confirm** (R514). The test is re-run once with no mutant,
   and the kill stands only if it finishes in at most half its budget (R53's margin on bcdev; on

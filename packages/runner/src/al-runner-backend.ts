@@ -270,6 +270,14 @@ export interface AlRunnerConfig {
    * name two files share against this directory exactly.
    */
   readonly sourceProjectDir?: string;
+  /**
+   * R505: checked before and after every coverage-producing al-runner call. al-runner c39ad5de
+   * labels coverage with the LIVE project's files, so coverage is read only while the project's
+   * build inputs still equal the run's snapshot; a change throws and stops the session, never a
+   * verdict (`watchProjectInputs`, source-drift.ts). Absent: no check (the itests, whose fixtures
+   * do not change).
+   */
+  readonly projectWatch?: { check(): Promise<void> };
   readonly packagesDir?: string; // --package-cache symbol resolution
   readonly selectorObjectId: number; // id used when rewriting MutationSelector.Codeunit.al
   /**
@@ -1173,6 +1181,8 @@ export class AlRunnerBackend implements ExecutionBackend {
     const coverageOut = await this.coverageOutPath();
     const siblings = this.siblingsOf(wanted);
     const excludeTests = siblings.length > 0 ? siblings : undefined;
+    // R505: bracket the call that will label coverage from the live project.
+    if (coverageOut !== undefined) await this.cfg.projectWatch?.check();
     const res = await this.transport.send({
       sourceDir: this.activeDir(),
       testDir: this.cfg.testDir,
@@ -1189,6 +1199,7 @@ export class AlRunnerBackend implements ExecutionBackend {
       ...(coverageOut !== undefined ? { coverageOut } : {}),
       ...(excludeTests !== undefined ? { excludeTests } : {}),
     });
+    if (coverageOut !== undefined) await this.cfg.projectWatch?.check();
     return { res, coverageOut };
   }
 
@@ -1302,6 +1313,17 @@ export class AlRunnerBackend implements ExecutionBackend {
       this.cfg.packagesDir !== undefined ? [this.cfg.packagesDir] : [],
     );
     const wantCoverage = (this.cfg.coverage ?? "none") !== "none";
+    // R505: the daemon re-reads the live project at every `runTests` (measured), so the suite run
+    // is bracketed too. A change stops the session, like a coverage-index refusal (R-219c M2).
+    const watch = async (): Promise<void> => {
+      if (!wantCoverage) return;
+      try {
+        await this.cfg.projectWatch?.check();
+      } catch (e) {
+        throw new ServerCoverageRefusal(e);
+      }
+    };
+    await watch();
     const t0 = Date.now();
     const res = await server.runTests(
       {
@@ -1317,6 +1339,7 @@ export class AlRunnerBackend implements ExecutionBackend {
       // against one test's timeout.
       Math.max(opts.timeoutMs, SERVER_SUITE_MIN_DEADLINE_MS),
     );
+    await watch();
     const byName = new Map<string, ServerTestLine>();
     for (const t of res.tests) byName.set(t.name, t);
     const coverageByName = new Map<string, CoverageMap>();

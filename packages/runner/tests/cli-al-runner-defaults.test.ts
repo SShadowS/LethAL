@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -403,6 +404,114 @@ describe("R387: buildBackend's al-runner defaults", () => {
       await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(
         /neither inside the project .* nor directly in the batch/,
       );
+    } finally {
+      await backend.close();
+    }
+  });
+});
+
+/**
+ * R505: al-runner c39ad5de labels coverage from the LIVE project, so with coverage on a backend
+ * built from a session snapshot checks the project before and after every coverage-producing
+ * call, on both transports, and a change stops the session (it never becomes a verdict).
+ */
+describe("R505: buildBackend watches the project while coverage is read", () => {
+  const ORIGINAL = "codeunit 79100 Logic\n{\n}\n";
+  const EDITED = "codeunit 79100 Logic\n{\n// x\n}\n";
+  /** `during` runs INSIDE the al-runner call, between the pre-check and the post-check. */
+  async function backendFor(
+    serverMode: boolean,
+    withSnapshot: boolean,
+    during?: (proj: string) => void,
+  ) {
+    const proj = await project();
+    await writeFile(join(proj, "Logic.Codeunit.al"), ORIGINAL, "utf8");
+    const snapshot = await readTargetSource(proj);
+    const inCall = () => during?.(proj);
+    const server = fakeAlRunnerServer([TEST], { onRunTests: inCall });
+    const spawnInCall: SpawnFn = async (...a) => {
+      inCall();
+      return oneShot(...a);
+    };
+    const backend = (await buildBackend(
+      runConfig(proj),
+      {
+        alRunner: {
+          alRunnerPath: "al-runner.exe",
+          coverage: "al-runner",
+          serverMode,
+          selectorMode: "static",
+        },
+      },
+      scratch("lethal-r505-"),
+      undefined,
+      { alRunnerSpawn: spawnInCall, alRunnerServerSpawn: server.spawn },
+      IDS,
+      ...(withSnapshot ? [snapshot] : []),
+    )) as AlRunnerBackend;
+    backend.useBuildSymbols([]);
+    await backend.deploy(await batch());
+    return { backend, proj };
+  }
+  const go = (backend: AlRunnerBackend) => backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+
+  for (const [transport, serverMode] of [
+    ["one-shot", false],
+    ["--server", true],
+  ] as const) {
+    // Revert: drop the `projectWatch` checks from `sendOneShot` / `ensureServerSuite`.
+    test(`${transport}: an edited project stops the run, naming the file`, async () => {
+      const { backend, proj } = await backendFor(serverMode, true);
+      try {
+        await writeFile(join(proj, "Logic.Codeunit.al"), "codeunit 79100 Logic\n{\n// x\n}\n");
+        await expect(go(backend)).rejects.toThrow(/changed Logic\.Codeunit\.al.*--resume/);
+      } finally {
+        await backend.close();
+      }
+    });
+    // Opus build review: each half of the bracket on its own. An edit made DURING the call is seen
+    // only by the post-check (revert: drop the check after the call).
+    test(`${transport}: an edit made during the call is caught after it`, async () => {
+      const { backend } = await backendFor(serverMode, true, (proj) =>
+        writeFileSync(join(proj, "Logic.Codeunit.al"), EDITED),
+      );
+      try {
+        await expect(go(backend)).rejects.toThrow(/changed Logic\.Codeunit\.al/);
+      } finally {
+        await backend.close();
+      }
+    });
+    // An edit made before the call and undone inside it is seen only by the pre-check (revert:
+    // drop the check before the call).
+    test(`${transport}: an edit undone during the call is caught before it`, async () => {
+      const { backend, proj } = await backendFor(serverMode, true, (p) =>
+        writeFileSync(join(p, "Logic.Codeunit.al"), ORIGINAL),
+      );
+      try {
+        await writeFile(join(proj, "Logic.Codeunit.al"), EDITED);
+        await expect(go(backend)).rejects.toThrow(/changed Logic\.Codeunit\.al/);
+      } finally {
+        await backend.close();
+      }
+    });
+    // The control: an unchanged project runs.
+    test(`${transport}: an unchanged project runs`, async () => {
+      const { backend } = await backendFor(serverMode, true);
+      try {
+        expect((await go(backend)).outcome).toBe("pass");
+      } finally {
+        await backend.close();
+      }
+    });
+  }
+
+  // Revert: build the watch without a snapshot. The itests build no snapshot and must not be
+  // watched (their fixtures do not change).
+  test("without a session snapshot nothing is watched", async () => {
+    const { backend, proj } = await backendFor(false, false);
+    try {
+      await writeFile(join(proj, "Logic.Codeunit.al"), "codeunit 79100 Logic\n{\n// x\n}\n");
+      expect((await go(backend)).outcome).toBe("pass");
     } finally {
       await backend.close();
     }
