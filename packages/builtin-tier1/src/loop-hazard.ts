@@ -49,8 +49,14 @@ import {
  * that code reaches by name. Known exclusions, none shown safe: code that runs before the item
  * (`OnPreReport`, an earlier sibling), procedures in other objects, items over ordinary tables and
  * `Date`, XMLport `Integer` elements, reportextensions outside the project, a `while`/`repeat`
- * inside a bounded item's code (R196/R446/R480's loop rules only), all filed as R500, and
- * condition-side mutants and the exit's own removal, filed as R501.
+ * inside a bounded item's code (R196/R446/R480's loop rules only), all filed as R500.
+ *
+ * R501 (closed): the same scope now refuses EVERY operator, not only the four, through ONE check
+ * the orchestrator asks at dispatch (`openItemHangRefuses`, no operator list, no exemption): the
+ * condition-side mutants, the exit's own removal, and `loop-skip`/`loop-truncate` of an inner loop
+ * the item's progress lives in. It also refuses the BOUND CLASS: any site that deletes or alters
+ * (contains, or sits inside) the SetRange call that is a certified item's only bound
+ * (`altersBoundCall`). R500's exclusions above are unchanged and still apply to every operator.
  *
  * WHAT IT DELIBERATELY DOES NOT SEE, all UNCLASSIFIED rather than proven safe (spec 3.2): a target
  * read in the loop BODY rather than its condition (beyond R446's body-exit guards); preheader
@@ -604,8 +610,19 @@ function certified(
   triggers: ALSyntaxNode[],
   ctx: SemanticContext,
 ): boolean {
+  return certifiedCall(scan, name, triggers, ctx) !== null;
+}
+
+/** The call `certified` accepts, or null. R501: the one bound such an item has, so a mutant that
+ *  deletes or alters it unbounds the item (`altersBoundCall`). */
+function certifiedCall(
+  scan: MentionScan,
+  name: string,
+  triggers: ALSyntaxNode[],
+  ctx: SemanticContext,
+): ALSyntaxNode | null {
   const { mentions, calls } = scan;
-  if (mentions.length + calls.length !== 1) return false;
+  if (mentions.length + calls.length !== 1) return null;
   // The one mention: an unqualified call, or the receiver of a qualified call.
   let call: ALSyntaxNode | null = null;
   let trigger: ALSyntaxNode | null = null;
@@ -617,22 +634,70 @@ function certified(
   } else if (m !== undefined) {
     const member = m.parent;
     const outer = member?.parent ?? null;
-    if (member === null || outer === null || member.rawKind !== "member_expression") return false;
+    if (member === null || outer === null || member.rawKind !== "member_expression") return null;
     const obj = member.childForFieldName("object");
     const fn = outer.childForFieldName("function");
-    if (obj === null || !samePos(obj, m) || fn === null || !samePos(fn, member)) return false;
+    if (obj === null || !samePos(obj, m) || fn === null || !samePos(fn, member)) return null;
     call = outer;
     trigger =
       triggers.find((t) => t.startIndex <= outer.startIndex && outer.endIndex <= t.endIndex) ??
       null;
   }
-  if (call === null || trigger === null || call.rawKind !== "call_expression") return false;
-  return (
-    rangeCallOf(call, name)?.literal === true &&
+  if (call === null || trigger === null || call.rawKind !== "call_expression") return null;
+  return rangeCallOf(call, name)?.literal === true &&
     triggerName(trigger) === "onpredataitem" &&
     armOfNode(ctx, call) === "active" &&
     unconditional(call, trigger)
-  );
+    ? call
+    : null;
+}
+
+/**
+ * R501: the SetRange call that is an `Integer` item's ONLY bound (the single-mention certificate, no
+ * `MaxIteration`), or null. A view-bounded item has zero mentions, so it has no such call. Reads the
+ * symbol table (through `itemOpen`'s `modifiedItemOpen`) and `ctx.files` (through `reportExtended`).
+ * A context without `files` answers "extended", so the item is open and this returns null; the site
+ * is then refused by `inOpenItemCode` instead, the safe direction.
+ */
+function onlyBoundCall(item: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode | null {
+  return cached(ctx, item, "boundcall", () => {
+    if (!isIntegerItem(item) || maxIterationBounded(item, ctx) || itemOpen(item, ctx)) return null;
+    const body = item.childForFieldName("body");
+    if (body === null) return null;
+    const name = normalizeAlName(item.childForFieldName("name")?.text ?? "");
+    const triggers = itemMembers(body, ctx).filter((m) => m.kind === ALNodeKind.trigger);
+    return certifiedCall(mentionScan(item, name, triggers), name, triggers, ctx);
+  });
+}
+
+/**
+ * R501: does the site at `node` delete or alter the only bound of its nearest enclosing data item?
+ * It CONTAINS the call (`void-method-call` or `remove-setrange` on it, `empty-block` of a block
+ * holding it) or lies INSIDE it (an operator on one of its arguments).
+ */
+function altersBoundCall(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  let item: ALSyntaxNode | null = null;
+  for (let p = node.parent; p !== null && item === null; p = p.parent) {
+    if (p.rawKind === "report_dataitem") item = p;
+  }
+  if (item === null) return false;
+  const call = onlyBoundCall(item, ctx);
+  if (call === null) return false;
+  const contains = node.startIndex <= call.startIndex && call.endIndex <= node.endIndex;
+  const inside = call.startIndex <= node.startIndex && node.endIndex <= call.endIndex;
+  return contains || inside;
+}
+
+/**
+ * R501: the ONE dispatch-level hang refusal. The orchestrator asks it for EVERY operator that
+ * targets a site, with no exemption list and no environment read. It holds when the site is in
+ * open-item code (`inOpenItemCode`, R487's scope), or deletes or alters a bounded item's only bound
+ * (`altersBoundCall`). `loop-truncate` and `loop-skip` are refused too: they shorten the INNER loop,
+ * and in an open item the item's own progress often lives in that inner loop (a skipped `while`
+ * never sets the flag the item's Break reads).
+ */
+export function openItemHangRefuses(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return inOpenItemCode(node, ctx) || altersBoundCall(node, ctx);
 }
 
 /** An integer literal, or a minus applied to one. */
