@@ -118,7 +118,7 @@ describe("R505: the project's build inputs must not change during the run", () =
     expect(await changesOf(watch)).toEqual([`changed ${join("addin", "x.js")}`]);
   });
 
-  test("a SETTLED unchanged stat is trusted: the stat gate skips the read (R505's stated limit)", async () => {
+  test("a SETTLED unchanged stat is trusted: the stat gate skips the read (a stated limit)", async () => {
     const dir = await project();
     const watch = watchProjectInputs(dir, await readTargetSource(dir), [], fixedStat(0));
     await watch.check();

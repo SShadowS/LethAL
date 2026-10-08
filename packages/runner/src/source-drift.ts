@@ -16,11 +16,14 @@
  * when its size, mtime or ctime moved, and a stat is trusted only once it is no longer "racily
  * clean" (git's rule): its mtime and ctime lie more than `RACY_MS` before the check that saw the
  * bytes equal. A file written within a timestamp's resolution of that check (a same-size edit
- * inside one mtime tick, or a Windows timestamp updated late) would otherwise keep a stat equal to
- * the cached one and never be re-read; such a file is re-read at every check until it ages.
+ * inside one mtime tick) would otherwise keep a stat equal to the cached one and never be re-read;
+ * such a file is re-read at every check until it ages (R533).
  *
- * LIMIT, stated (R505): an edit undone between two checks is not seen. The checks bracket every
- * coverage-producing al-runner call, so such an edit must start and end inside one call.
+ * LIMITS, stated (R505, R533): an edit undone between two checks is not seen. The checks bracket
+ * every coverage-producing al-runner call, so such an edit must start and end inside one call. A
+ * same-size edit that leaves size, mtime and ctime all equal on a file settled more than `RACY_MS`
+ * ago is not seen (git's racy-clean assumption), and "settled" assumes the filesystem's timestamps
+ * follow this machine's clock (a share whose clock runs behind can settle a file too early).
  */
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -54,7 +57,7 @@ export interface Seen {
   readonly ctimeMs: number;
 }
 
-/** Wider than any filesystem's timestamp granularity (FAT: 2 s) plus a late Windows update. */
+/** Wider than any filesystem's timestamp granularity (FAT: 2 s; NTFS: about 15.6 ms in practice). */
 const RACY_MS = 3000;
 
 /** `undefined` when the file is gone. */
