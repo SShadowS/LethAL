@@ -2,7 +2,15 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initParser, parseAL, wrapRoot } from "@lethal/engine";
+import { openItemHangRefuses } from "@lethal/builtin-tier1";
+import {
+  type ALSyntaxNode,
+  buildSemanticContext,
+  initParser,
+  parseAL,
+  visit,
+  wrapRoot,
+} from "@lethal/engine";
 import { IDENTITY_SCHEME, canCarryMutationSelectorVar, identitySiteKey } from "@lethal/schemata";
 import {
   type MutationSetResult,
@@ -39,7 +47,7 @@ const xmlport = (id: number, name: string, bound: string) => `xmlport ${id} "${n
             {
 ${bound}                trigger OnAfterGetRecord()
                 begin
-                    if not FindNextRec(InvLoop.Number) then
+                    if not this.FindNextRec(Calls) then
                         currXMLport.Break();
                 end;
             }
@@ -193,9 +201,38 @@ describe("R500 step 7: an XMLport is not a carrier, so its own refusal is dorman
     expect(canCarryMutationSelectorVar(wrapRoot(parseAL(FILES[XP] ?? "")))).toBe(false);
   });
 
-  test("the open XMLport's specs all go to `skipped`, as many as its bounded twin's; none is hang-refused", () => {
+  test("the open XMLport's specs: none is hang-refused", () => {
     expect(refused(XP)).toBe(0);
     expect(skippedSites(XP)).toBeGreaterThan(0);
+  });
+
+  test("the twin really is bounded: asked directly, the open element's code is refused and the twin's is not", () => {
+    const files = [XP, XP_BOUNDED].map((path) => ({
+      path,
+      root: wrapRoot(parseAL(FILES[path] ?? "")),
+    }));
+    const ctx = buildSemanticContext(files);
+    const callsWrite = (path: string): ALSyntaxNode => {
+      let hit: ALSyntaxNode | null = null;
+      const root = files.find((f) => f.path === path)?.root;
+      if (root !== undefined) {
+        visit(root, (n: ALSyntaxNode) => {
+          if (
+            hit === null &&
+            n.rawKind === "assignment_statement" &&
+            n.text === "Calls := Calls + 1"
+          )
+            hit = n;
+        });
+      }
+      if (hit === null) throw new Error(`no Calls write in ${path}`);
+      return hit;
+    };
+    expect(openItemHangRefuses(callsWrite(XP), ctx)).toBe(true);
+    expect(openItemHangRefuses(callsWrite(XP_BOUNDED), ctx)).toBe(false);
+  });
+
+  test("so the open XMLport's `skipped` sites equal its bounded twin's: nothing moved out of `skipped`", () => {
     expect(skippedSites(XP)).toBe(skippedSites(XP_BOUNDED));
   });
 });

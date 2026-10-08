@@ -1054,7 +1054,8 @@ const ITEM_FILTERS: ReadonlySet<string> = new Set([
  * item, a site that deletes or alters (contains, or sits inside) a filter call on the item's own
  * record in its OnPreDataItem is refused. "Inserts into its own table": an unqualified `Insert` in
  * the item's triggers, or `X.Insert` where `X` is declared `Record <the item's table>` and NOT
- * temporary, in the item's triggers or a same-object procedure they reach. Not seen: an insert made
+ * temporary, or is a record the engine binds to that table (`resolveReceiverTable`: a data item's
+ * name), in the item's triggers or a same-object procedure they reach. Not seen: an insert made
  * in another object, a bound set elsewhere (a callee, OnPreReport), and the item's other mutants (a
  * guard before the insert, a key value).
  */
@@ -1124,6 +1125,10 @@ function selfInserts(item: ALSyntaxNode, ctx: SemanticContext): boolean {
         const recv = f.childForFieldName("object");
         const t = recv === null || !isIdentifierLike(recv) ? null : declaredType(recv, ctx);
         if (t !== null && t.kind === "table" && !t.temporary && t.name === table) found = true;
+        // a data item's own name (`Entry.Insert()`), which `declaredType` cannot type: the record
+        // the engine binds, as `callTargets` reads it
+        if (t === null && normalizeAlName(resolveReceiverTable(c, ctx) ?? "") === table)
+          found = true;
       });
       return found;
     });

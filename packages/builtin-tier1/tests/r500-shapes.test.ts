@@ -702,6 +702,33 @@ const COMPRESS = `report 50400 "Date Compress Ledger"
                 NewEntry.Insert();
             end;
         }
+        dataitem(Own; "Cust. Ledger Entry")
+        {
+            trigger OnPreDataItem()
+            begin
+                Own.SetRange("Entry No.", 0, LastOwn);
+            end;
+
+            trigger OnAfterGetRecord()
+            begin
+                Own.Insert();
+            end;
+        }
+        dataitem(Parent; "Ledger Entry")
+        {
+            dataitem(Cross; "Cust. Ledger Entry")
+            {
+                trigger OnPreDataItem()
+                begin
+                    Cross.SetRange("Entry No.", 0, LastCross);
+                end;
+
+                trigger OnAfterGetRecord()
+                begin
+                    Parent.Insert();
+                end;
+            }
+        }
     }
 
     var
@@ -710,6 +737,8 @@ const COMPRESS = `report 50400 "Date Compress Ledger"
         LastEntryNo: Integer;
         LastTemp: Integer;
         LastLook: Integer;
+        LastOwn: Integer;
+        LastCross: Integer;
 }
 
 table 50401 "Cust. Ledger Entry"
@@ -744,6 +773,16 @@ describe("R500 shape 3 (LIMIT): a self-inserting item's own filter", () => {
     expect(x.at("Compress.al", "call_expression", 'Look.SetRange("Entry No.", 0, LastLook)')).toBe(
       false,
     );
+  });
+  it("`Own.Insert()` on the data item's own record counts as a self-insert (resolveReceiverTable): refused", () => {
+    expect(p().at("Compress.al", "call_expression", 'Own.SetRange("Entry No.", 0, LastOwn)')).toBe(
+      true,
+    );
+  });
+  it("an Insert on the PARENT data item's record, over another table, does not: emits", () => {
+    expect(
+      p().at("Compress.al", "call_expression", 'Cross.SetRange("Entry No.", 0, LastCross)'),
+    ).toBe(false);
   });
 });
 
