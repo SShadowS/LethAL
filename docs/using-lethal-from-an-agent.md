@@ -121,7 +121,8 @@ a run stopped before its first verdict has none, so run it again). A log written
 there during the run does: keep outputs outside the project. **Limit:** an edit that is undone
 between two checks, so it starts and ends inside one al-runner call, is not seen. A `git checkout`
 of another branch and back during a run is exactly that, so do not do it. Upstream fixed the
-labelling after this build (#5249); once the pinned al-runner moves past it, the check only refuses.
+labelling after this build (#5249). The container's al-runner (`43f76177`) is past it, and is measured to label
+the compiled batch, so there the check can only refuse. The host still pins `c39ad5de`.
 
 **al-runner settings (R387).** The `alRunner` section accepts `alRunnerPath`, `packagesDir`,
 `serverMode`, `selectorMode` and `coverage`, and refuses any other key by name. With none of the last
