@@ -154,7 +154,7 @@ describe("R502: a qualified reference resolves like its unqualified twin, or not
   ] as const) {
     it(`${what}: another namespace's Customer stays unresolved and keeps the tag`, () => {
       expect(deleteSite(caller("Microsoft.Sales.Customer"))).toEqual({
-        table: "Microsoft.Sales.Customer",
+        table: '"Microsoft"."Sales"."Customer"',
         keepsTag: true,
       });
     });
@@ -162,9 +162,47 @@ describe("R502: a qualified reference resolves like its unqualified twin, or not
       const site = deleteSite(caller("Contoso.Sales.Customer"), {
         "Other.al": OTHER_CUSTOMER,
       });
-      expect(site).toEqual({ table: "Contoso.Sales.Customer", keepsTag: true });
+      expect(site).toEqual({ table: '"Contoso"."Sales"."Customer"', keepsTag: true });
+    });
+    // A quoted unqualified name reads as before R502, and the qualifier compares without case.
+    it(`${what}: a quoted unqualified name, and a qualifier in another case`, () => {
+      const quoted = deleteSite(caller('"Customer"'));
+      expect(quoted).toEqual({ table: "Customer", keepsTag: false });
+      expect(deleteSite(caller("contoso.SALES.Customer"))).toEqual(quoted);
     });
   }
+
+  // Site E's other property, `TableNo` (a codeunit's `OnRun` record), with its twin.
+  it("TableNo = Contoso.Sales.Customer is Customer", () => {
+    const caller = (table: string) => `codeunit 50203 C
+{
+    TableNo = ${table};
+
+    trigger OnRun()
+    begin
+        Rec.Delete(true);
+    end;
+}
+`;
+    const plain = deleteSite(caller("Customer"));
+    expect(plain).toEqual({ table: "Customer", keepsTag: false });
+    expect(deleteSite(caller("Contoso.Sales.Customer"))).toEqual(plain);
+    expect(deleteSite(caller("Microsoft.Sales.Customer")).keepsTag).toBe(true);
+  });
+
+  // Opus build review, minor 1: the unresolved form must not name a project table whose own name
+  // has a dot in it. `Record Sales.Setup` is `Setup` in namespace `Sales`, never the project's
+  // `"Sales.Setup"`, which has an OnDelete-free body. Revert: join the unresolved segments unquoted.
+  it('a qualified Sales.Setup is not the project table named "Sales.Setup"', () => {
+    const dotted =
+      'table 50102 "Sales.Setup"\n{\n    fields\n    {\n        field(1; K; Code[10]) { }\n    }\n}\n';
+    const plain = deleteSite(varCaller('"Sales.Setup"'), { "Dotted.al": dotted });
+    expect(plain).toEqual({ table: "Sales.Setup", keepsTag: false });
+    expect(deleteSite(varCaller("Sales.Setup"), { "Dotted.al": dotted })).toEqual({
+      table: '"Sales"."Setup"',
+      keepsTag: true,
+    });
+  });
 
   // Opus plan review I2: `extends Microsoft.Sales.Customer` does not parse, so the extension is
   // indexed as `Microsoft` and could be the one that observes this table. Revert: drop

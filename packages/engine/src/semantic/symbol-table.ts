@@ -281,8 +281,9 @@ export function objectScopeKey(kind: ObjectSymbol["kind"], objectName: string): 
  * (`fieldSegments`/`nameSegments`). One segment is returned as it is, so an unqualified reference
  * reads exactly as before. A qualified one (`Microsoft.Sales.Customer`) is returned as its last
  * segment only when the project declares EXACTLY ONE object of that kind and name and that object's
- * file declares exactly the qualifier as its namespace. Otherwise it stays the dotted text, which
- * names no project object, so the reference stays UNRESOLVED as before R502.
+ * file declares exactly the qualifier as its namespace. Otherwise it is the dotted text with every
+ * segment quoted (`"Microsoft"."Sales"."Customer"`), which names no project object, so the
+ * reference stays UNRESOLVED as before R502.
  *
  * Why so strict (opus, R-502 plan review, C1): a qualified name is the spelling AL needs precisely
  * when a name collides. Binding `Microsoft.Sales.Customer` to the project's own `Contoso.Sales`
@@ -307,7 +308,9 @@ export function qualifiedObjectName(
   if (same.length === 1 && only !== undefined && only.namespace?.toLowerCase() === qualifier) {
     return only.name;
   }
-  return segments.join(".");
+  // Every segment quoted: no object name can contain `"`, so this can never resolve, not even to a
+  // project table literally named `"Sales.Setup"` (opus, R-502 build review, minor 1).
+  return segments.map((s) => `"${s}"`).join(".");
 }
 
 /**
