@@ -359,8 +359,10 @@ function modifiedItemOpen(ext: ALSyntaxNode, mod: ALSyntaxNode, ctx: SemanticCon
   return false;
 }
 
+/** A qualified `System.Utilities.Integer` has one `table_name` child per segment; the table is the LAST. */
 function isIntegerItem(item: ALSyntaxNode): boolean {
-  return normalizeAlName(item.childForFieldName("table_name")?.text ?? "") === "integer";
+  const table = item.namedChildren.filter((c) => c.fieldName === "table_name").at(-1);
+  return normalizeAlName(table?.text ?? "") === "integer";
 }
 
 /** The engine cap: a literal `MaxIteration` from 1 to `ITERATION_CAP` the build surely has. */
@@ -456,8 +458,7 @@ function dataItemOpen(item: ALSyntaxNode, ctx: SemanticContext): boolean {
 }
 
 function dataItemOpenOnce(item: ALSyntaxNode, ctx: SemanticContext): boolean {
-  const table = item.childForFieldName("table_name");
-  if (table === null || normalizeAlName(table.text) !== "integer") return false;
+  if (!isIntegerItem(item)) return false;
   const name = normalizeAlName(item.childForFieldName("name")?.text ?? "");
   const body = item.childForFieldName("body");
   if (body === null) return false;

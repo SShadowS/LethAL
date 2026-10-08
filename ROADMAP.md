@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**57 of 496 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**58 of 497 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -211,6 +211,7 @@ that ordering is the priority.
 - **R496** · `test_app_hash` hashes only the test app's bytes: two proven runs whose hook-published dependency changed still match · [R496.md](docs/roadmap/R496.md) · open, filed 2026-10-07
 - **R500** · Report-loop hang shapes R487's blanket rule does not cover: code before the item, other-object callees, table and Date items, XMLport Integer elements, outside reportextensions · [R500.md](docs/roadmap/R500.md) · open, filed 2026-10-07
 - **R501** · Condition-side mutants of a report data item's exit guard, and removing the exit itself, can hang an open Integer item · [R501.md](docs/roadmap/R501.md) · open, filed 2026-10-07
+- **R502** · The receiver resolver reads a namespace-qualified data item table (`System.Utilities.Integer`) as its first segment · [R502.md](docs/roadmap/R502.md) · open, filed 2026-10-08
 
 ## Product gaps a real project hits
 

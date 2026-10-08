@@ -1041,6 +1041,14 @@ describe("R484/R487: an open `Integer` data item refuses every site; a bounded t
     expect(texts(claimedSites(flipBooleanLiteral, twin))).toEqual(["false"]);
   });
 
+  it("a namespace-qualified `System.Utilities.Integer` item is an Integer item: open refuses, a `MaxIteration` twin claims (revert to red: read the FIRST `table_name` child)", () => {
+    const view = "DataItemTableView = where(Number = filter(1 ..));";
+    expect(removed(report("System.Utilities.Integer", [view], dimLoop))).toEqual(REFUSED);
+    expect(
+      removed(report("System.Utilities.Integer", [view, "MaxIteration = 10;"], dimLoop)),
+    ).toEqual(CLAIMED);
+  });
+
   it("a real table is bounded (revert to red: drop the `Integer` check)", () => {
     expect(removed(report('"Sales Header"', [], dimLoop))).toEqual(CLAIMED);
   });
@@ -1740,6 +1748,14 @@ describe("R487 r6 sol-r5 #1: a project reportextension voids the BASE item's vie
     expect(extSites(flipBooleanLiteral, [rep5([CONST_VIEW], dimLoop), WIDEN], [])).toEqual([]);
     expect(extSites(removeAssignment, [rep5([CONST_VIEW], dimLoop)], [])).toEqual(CLAIMED);
     expect(extSites(removeAssignment, [rep5([BOUND], dimLoop), WIDEN], [])).toEqual(CLAIMED);
+  });
+  it("a namespace-qualified `System.Utilities.Integer` base item: extended, refused; not extended, claimed (revert to red: `isIntegerItem` reads the FIRST `table_name` child)", () => {
+    const q = rep5([CONST_VIEW], dimLoop).replace(
+      'dataitem(D; "Integer")',
+      "dataitem(D; System.Utilities.Integer)",
+    );
+    expect(extSites(removeAssignment, [q, WIDEN], [])).toEqual([]);
+    expect(extSites(removeAssignment, [q], [])).toEqual(CLAIMED);
   });
   it("an extension of ANOTHER report leaves the certificate standing (revert to red: `reportExtended` answers true)", () => {
     const other = extOf(["modify(D)", "{", "}"], [], "Q");
