@@ -197,6 +197,7 @@ import {
   withoutRefusedTests,
 } from "./resume";
 import type { ResumeIndex } from "./resume";
+import { CONTROL_DRAIN_MS } from "./run-mutant-transport";
 import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
 import {
   buildCoverageIndex,
@@ -4235,6 +4236,14 @@ async function closeLeaseScope(a: {
   // handed to the next session. Last in the teardown so the backend's own deactivating
   // ClearActive (above) still runs under the lease it was taken with.
   if (a.leaseSession !== undefined) await a.leaseSession.finish();
+  // R499: one bounded wait for control requests still in flight (a stop or readback a non-scored
+  // last call left behind), so a refusal landing on one is taken below rather than lost. Never
+  // throws, so it never skips the release above; after the release, the server's lease fence decides.
+  for (const backend of [a.backend, ...a.workerBackends]) {
+    await (
+      backend as { drainControlRequests?: (ms: number) => Promise<void> }
+    ).drainControlRequests?.(CONTROL_DRAIN_MS);
+  }
   a.emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
   // R-496: a redirect to an unfiltered extensions query that arrived after the last call returned
   // has no next call to throw it. Handed back AFTER the cleanup above, for the caller to throw.

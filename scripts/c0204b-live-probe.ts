@@ -131,7 +131,8 @@ async function main(): Promise<void> {
     },
     undefined,
     { compiler, deployer, verifier: new DeploymentVerifier(odataCfg), harnessVerifier },
-    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
   const lease = {
     client: new LeaseClient(odataCfg),

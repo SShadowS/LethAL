@@ -234,7 +234,8 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     },
     undefined,
     { compiler, deployer, verifier, harnessVerifier },
-    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
 
   // Persistent, NOT `:memory:` — historical run data (priorSurvivorKeys) is a supported

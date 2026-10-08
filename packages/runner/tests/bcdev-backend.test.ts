@@ -34,7 +34,7 @@ import { requiresUnsafeLatch } from "../src/operation-outcome";
 import type { LeaseFence } from "../src/orchestrator";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
-import { RunMutantTransport } from "../src/run-mutant-transport";
+import { type ControlState, RunMutantTransport } from "../src/run-mutant-transport";
 import { buildCoverageIndex, coverageFilter } from "../src/selection";
 import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
 import { scratchDirs } from "./helpers/scratch";
@@ -370,7 +370,11 @@ async function makeBackendWithDeploy(
   runHandler: (args: unknown) => unknown,
   symbolReference: unknown,
   instrumentedDir?: string,
-  runMutantTransportFactory?: (targetAppId: string, artifactId: string) => RunMutantTransport,
+  runMutantTransportFactory?: (
+    targetAppId: string,
+    artifactId: string,
+    controlState: ControlState,
+  ) => RunMutantTransport,
 ): Promise<{
   backend: BcDevMcpBackend;
   artifact: CompiledArtifact;
@@ -482,9 +486,9 @@ describe("BcDevMcpBackend.attach", () => {
       },
       () => clientTransport,
       deployment,
-      (appId, artifactId) => {
+      (appId, artifactId, controlState) => {
         factoryCalls.push([appId, artifactId]);
-        return {} as RunMutantTransport;
+        return { controlState } as unknown as RunMutantTransport;
       },
     );
     const bound = {
@@ -2055,7 +2059,7 @@ function capturingRunMutantFactory(
     };
     return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
   }) as typeof fetch;
-  return (targetAppId: string, artifactId: string) =>
+  return (targetAppId: string, artifactId: string, controlState: ControlState) =>
     new RunMutantTransport(
       {
         baseUrl: "http://bc:7048/BC",
@@ -2067,6 +2071,7 @@ function capturingRunMutantFactory(
       targetAppId,
       artifactId,
       captureFetch,
+      { controlState },
     );
 }
 
@@ -2199,7 +2204,7 @@ function leaseInvalidRunMutantFactory(reason?: string) {
     };
     return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
   }) as typeof fetch;
-  return (targetAppId: string, artifactId: string) =>
+  return (targetAppId: string, artifactId: string, controlState: ControlState) =>
     new RunMutantTransport(
       {
         baseUrl: "http://bc:7048/BC",
@@ -2211,6 +2216,7 @@ function leaseInvalidRunMutantFactory(reason?: string) {
       targetAppId,
       artifactId,
       fetchFn,
+      { controlState },
     );
 }
 
@@ -2410,12 +2416,13 @@ describe('coverageMode "fenced" (R58)', () => {
       };
       return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -2528,12 +2535,13 @@ describe('coverageMode "fenced" (R58)', () => {
         };
         return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
       }) as typeof fetch;
-      return (targetAppId: string, artifactId: string) =>
+      return (targetAppId: string, artifactId: string, controlState: ControlState) =>
         new HookSpyTransport(
           { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
           targetAppId,
           artifactId,
           okFetch,
+          { controlState },
         );
     }
 
@@ -2789,12 +2797,13 @@ describe("fenced coverage — the server-side object-id filter", () => {
       };
       return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -2946,12 +2955,13 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
       };
       return new Response(JSON.stringify({ value: JSON.stringify(payload) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -3122,12 +3132,13 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
       };
       return new Response(JSON.stringify({ value: JSON.stringify(payload) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -3588,21 +3599,78 @@ table 50110 "Wrapped T"
   });
 });
 
-describe("R-496: BcDevMcpBackend.takeLateRefusal over replaced transports", () => {
-  test("a refusal landing on a RETIRED transport after the re-deploy is surfaced at teardown", async () => {
-    const pending: Array<UnfilteredExtensionsQueryError | undefined> = [];
-    let made = 0;
-    const factory = () => {
-      const slot = pending.length;
-      pending.push(undefined);
-      made++;
-      return {
-        takeLateRefusal: () => {
-          const r = pending[slot];
-          pending[slot] = undefined;
-          return r;
-        },
-      } as unknown as RunMutantTransport;
+/**
+ * R499: real transports, one per deploy, driven directly. "orphan": RunMutant's body is cut short,
+ * so the call reads the answer back, and that readback never answers until the test refuses it:
+ * the call ends `in-flight-unknown` (not scored) and leaves the readback in flight. "pass": a valid
+ * pass, echoed from the request.
+ */
+function scriptedTransportFetch(run: "orphan" | "pass"): {
+  fetchFn: typeof fetch;
+  refuse: (message: string) => void;
+} {
+  let refuseReadback: ((message: string) => void) | undefined;
+  const fetchFn = (async (url: unknown, init?: RequestInit) => {
+    if (String(url).includes("_GetOpAnswer")) {
+      return new Promise<Response>((_resolve, reject) => {
+        refuseReadback = (m) => reject(new UnfilteredExtensionsQueryError(m));
+      });
+    }
+    const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const inner = {
+      status: "ran",
+      testRunsBefore: 0,
+      sessionId: 2037,
+      targetAppId: b.targetAppId,
+      artifactId: b.artifactId,
+      attemptId: b.attemptId,
+      mutantId: b.mutantId,
+      codeunitId: b.testCodeunitId,
+      method: b.testMethod,
+      codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+      observedActive: true,
+    };
+    const body = JSON.stringify({ value: JSON.stringify(inner) });
+    if (run === "pass") return new Response(body, { status: 200 });
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(body.slice(0, -1)));
+        c.error(new Error("The socket connection was closed unexpectedly."));
+      },
+    });
+    return new Response(stream, { status: 200 });
+  }) as typeof fetch;
+  return {
+    fetchFn,
+    refuse: (m) => {
+      if (refuseReadback === undefined) throw new Error("no readback in flight to refuse");
+      refuseReadback(m);
+    },
+  };
+}
+
+describe("R499: every transport a backend binds shares its one control state", () => {
+  const TX_CFG = { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" };
+  const TX_REQ = {
+    ref: { codeunitId: 79100, codeunitName: "Ours Tests", method: "Alpha" },
+    mutantId: "M0001",
+    attemptId: "a1",
+    timeoutMs: 30,
+    lease: { epoch: 2, token: "tok-xyz", serverGeneration: "gen-abc", opSeq: 1 },
+  } as const;
+
+  /** One deploy per script; transport i uses script i. `drainMs` far above the test timeout. */
+  async function deployedTwice(scripts: readonly { fetchFn: typeof fetch }[]) {
+    const made: RunMutantTransport[] = [];
+    const factory = (appId: string, artifactId: string, controlState: ControlState) => {
+      const script = scripts[made.length];
+      if (script === undefined) throw new Error("more deploys than scripts");
+      const t = new RunMutantTransport(TX_CFG, appId, artifactId, script.fetchFn, {
+        controlState,
+        drainMs: 60_000,
+      });
+      made.push(t);
+      return t;
     };
     const { backend, deployDir, cleanup } = await makeBackendWithDeploy(
       () => ({ results: [], coverage: [] }),
@@ -3610,17 +3678,89 @@ describe("R-496: BcDevMcpBackend.takeLateRefusal over replaced transports", () =
       undefined,
       factory,
     );
+    return { backend, deployDir, cleanup, made };
+  }
+
+  const at = (made: readonly RunMutantTransport[], i: number): RunMutantTransport => {
+    const t = made[i];
+    if (t === undefined) throw new Error(`no transport ${i}`);
+    return t;
+  };
+
+  test("B1: an orphan of transport A refused during B's scored exit after a re-deploy rejects B's call", async () => {
+    const a = scriptedTransportFetch("orphan");
+    const b = scriptedTransportFetch("pass");
+    const { deployDir, backend, cleanup, made } = await deployedTwice([a, b]);
+    try {
+      const first = await at(made, 0).run(TX_REQ);
+      expect(first.operation).toBe("in-flight-unknown");
+      await backend.deploy(deployDir); // binds B
+      expect(made).toHaveLength(2);
+      const call = at(made, 1)
+        .run(TX_REQ)
+        .then(
+          (v) => v,
+          (e: unknown) => e,
+        );
+      setTimeout(() => a.refuse("late on A"), 50);
+      const got = await call;
+      expect(got).toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect((got as Error).message).toContain("late on A");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("B2: a factory that ignores controlState makes deploy throw and binds nothing", async () => {
+    const a = scriptedTransportFetch("pass");
+    const b = scriptedTransportFetch("pass");
+    let calls = 0;
+    const factory = (appId: string, artifactId: string, controlState: ControlState) => {
+      calls += 1;
+      return calls === 1
+        ? new RunMutantTransport(TX_CFG, appId, artifactId, a.fetchFn, { controlState })
+        : new RunMutantTransport(TX_CFG, appId, artifactId, b.fetchFn); // its own private state
+    };
+    const { backend, deployDir, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [], coverage: [] }),
+      { Codeunits: [] },
+      undefined,
+      factory,
+    );
+    try {
+      const err = await backend.deploy(deployDir).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain("ignored the controlState argument");
+      backend.setLease(FAKE_LEASE);
+      await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(
+        /transport not configured/,
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // R-496's retired-transport case, now against real transports that share the backend's state.
+  test("B3: a refusal landing on a RETIRED transport after the re-deploy is surfaced at teardown; a second one is warned", async () => {
+    const a = scriptedTransportFetch("orphan");
+    const b = scriptedTransportFetch("orphan");
+    const { deployDir, backend, cleanup, made } = await deployedTwice([a, b]);
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      await backend.deploy(deployDir); // binds transport B; A is retired
-      expect(made).toBe(2);
-      // Only NOW does A record a refusal: after the redeploy, before teardown.
-      pending[0] = new UnfilteredExtensionsQueryError("late on A");
-      pending[1] = new UnfilteredExtensionsQueryError("late on B");
+      expect((await at(made, 0).run(TX_REQ)).operation).toBe("in-flight-unknown");
+      await backend.deploy(deployDir); // binds transport B; A is replaced
+      expect((await at(made, 1).run(TX_REQ)).operation).toBe("in-flight-unknown");
+      // Only NOW does A record a refusal: after the redeploy, before teardown. Then B.
+      a.refuse("late on A");
+      b.refuse("late on B");
+      await backend.drainControlRequests(1000);
       const late = backend.takeLateRefusal();
       expect(late).toBeInstanceOf(UnfilteredExtensionsQueryError);
       expect(late?.message).toContain("late on A");
-      // The second refusal was drained and logged, not left behind.
+      // The second refusal was logged, not dropped.
       expect(warn.mock.calls.flat().join("\n")).toContain("late on B");
       expect(backend.takeLateRefusal()).toBeUndefined();
     } finally {

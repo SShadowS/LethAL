@@ -47,7 +47,9 @@ import {
 import type { LeaseFence } from "./orchestrator";
 import type { AppPublisher } from "./publisher";
 import { quarantineResourceKey } from "./resource-key";
+import { drainPending, newControlState, takeLateRefusal } from "./run-mutant-transport";
 import type {
+  ControlState,
   FencedCoverageRow,
   FencedCoverageStats,
   RunMutantTransport,
@@ -329,8 +331,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // server-side. The transport is built at deploy() once the target's identity is known.
   private pendingMutantId: string | null = null;
   private runMutantTransport: RunMutantTransport | undefined;
-  // R-496: transports a re-deploy/attach replaced; a refusal can still land on one until teardown.
-  private retiredTransports: RunMutantTransport[] = [];
+  // R499: the one control state every transport this backend binds shares (in-flight orphans and a
+  // late refusal), so a re-deploy/attach never strands a refusal on a replaced transport.
+  private readonly controlState: ControlState = newControlState();
   // Monotonic per-backend attempt id, echoed by RunMutant and validated by the transport (§I5).
   private attemptSeq = 0;
   // Layer 5C-B1: the machine-global lease this session holds, bound by the orchestrator (Task 8)
@@ -351,6 +354,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     private readonly runMutantTransportFactory?: (
       targetAppId: string,
       artifactId: string,
+      controlState: ControlState,
     ) => RunMutantTransport,
   ) {}
 
@@ -796,32 +800,37 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // The deployment is confirmed — bind a RunMutant transport to THIS artifact's identity so
     // run() (coverage: "none") executes each mutant against the exact target/artifact just
     // published. The transport echoes and validates this identity tuple on every call (§I5).
-    this.bindTransport(this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId));
+    this.bindTransport(
+      this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId, this.controlState),
+    );
     return artifact;
   }
 
-  /** Swap the bound transport; the old one is kept, as a refusal can still land on it (R-496). */
+  /**
+   * Swap the bound transport. R499: it must share this backend's control state: a factory that
+   * ignored the `controlState` argument would build a transport whose refusals no teardown sees.
+   */
   private bindTransport(next: RunMutantTransport | undefined): void {
-    if (this.runMutantTransport !== undefined) this.retiredTransports.push(this.runMutantTransport);
+    if (next !== undefined && next.controlState !== this.controlState) {
+      this.runMutantTransport = undefined; // bind nothing, not the previous artifact's transport
+      throw new Error(
+        "BcDevMcpBackend: the RunMutant transport factory ignored the controlState argument; pass it to the transport (R499), or a refusal on that transport would be lost",
+      );
+    }
     this.runMutantTransport = next;
   }
 
   /**
-   * R-496: a refusal no call has thrown yet, for the session teardown to surface. Checks every
-   * retired transport and the current one; returns the first found. Every transport is drained,
-   * and any further refusal is logged (a warning line), not thrown: one error reaches the caller.
+   * R-496: a refusal no call has thrown yet, for the session teardown to surface. R499: every
+   * transport shares one state, which keeps the first refusal and warns about each later one.
    */
   takeLateRefusal(): UnfilteredExtensionsQueryError | undefined {
-    let first: UnfilteredExtensionsQueryError | undefined;
-    for (const t of [...this.retiredTransports, this.runMutantTransport]) {
-      // `?.()`: test doubles bind transport stubs without the method
-      const late = t?.takeLateRefusal?.();
-      if (late === undefined) continue;
-      if (first === undefined) first = late;
-      else console.warn(`[lethal] a further refused unfiltered extensions query: ${late.message}`);
-    }
-    this.retiredTransports = [];
-    return first;
+    return takeLateRefusal(this.controlState);
+  }
+
+  /** R499: wait up to `ms` for control requests still in flight; never throws (a refusal is kept). */
+  async drainControlRequests(ms: number): Promise<void> {
+    await drainPending([this.controlState.orphans], ms);
   }
 
   /**
@@ -863,7 +872,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
         `indexing ${artifact.appPath}: ${describeThrown(err)}`,
       );
     }
-    this.bindTransport(this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId));
+    this.bindTransport(
+      this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId, this.controlState),
+    );
   }
 
   /**

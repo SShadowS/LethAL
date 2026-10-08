@@ -256,7 +256,8 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
     },
     undefined,
     { compiler, deployer, verifier, harnessVerifier },
-    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
 
   // A SCRATCH store, not the fixture's own lethal.sqlite: this gate runs a NARROWED slice twice

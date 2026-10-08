@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import { UnfilteredExtensionsQueryError } from "../src/harness";
-import { RunMutantTransport } from "../src/run-mutant-transport";
+import { ControlDrainTimeoutError, RunMutantTransport } from "../src/run-mutant-transport";
 import type { RunMutantManyRequest, RunMutantManyResult } from "../src/run-mutant-transport";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -1394,5 +1394,121 @@ describe("R-496 review round 3: a refused extensions query stops the watchdog an
     );
     expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
     expect(f.stops.length).toBe(1);
+  });
+});
+
+describe("R499: a scored runMany waits for control requests still in flight", () => {
+  /** Far above the test timeout: a wait that should not happen times the test out. */
+  const LONG_DRAIN_MS = 60_000;
+  const BAD = () => new Response("Cannot establish a connection", { status: 400 });
+
+  /**
+   * `RunMutantMany` is held until `release`; the poll reads `statusOf()` (10 s elapsed against a
+   * 1 s budget); `StopHungRunAt` is DEAF: it ignores its abort and settles only on `refuseStop`.
+   */
+  function deafStop() {
+    let release: ((r: Response) => void) | undefined;
+    let refuse: ((e: unknown) => void) | undefined;
+    let manyCalls = 0;
+    const fetchFn = ((url: unknown, init?: RequestInit) => {
+      const action = /LethALControl_(\w+)/.exec(String(url))?.[1] ?? String(url);
+      if (action === "RunMutantMany") {
+        manyCalls += 1;
+        return new Promise<Response>((resolve, reject) => {
+          release = resolve;
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      }
+      if (action === "GetOperationStatus") return Promise.resolve(odata(statusOf()));
+      if (action === "StopHungRunAt") {
+        return new Promise<Response>((_resolve, reject) => {
+          refuse = reject;
+        });
+      }
+      return Promise.reject(new Error(`unexpected action ${action}`));
+    }) as typeof fetch;
+    return {
+      fetchFn,
+      manyCalls: () => manyCalls,
+      stopSent: () => refuse !== undefined,
+      release: (r: Response) => {
+        if (release === undefined) throw new Error("RunMutantMany was never called");
+        release(r);
+      },
+      refuseStop: (message: string) => {
+        if (refuse === undefined) throw new Error("StopHungRunAt was never called");
+        refuse(new UnfilteredExtensionsQueryError(message));
+      },
+    };
+  }
+  const settle = <T>(p: Promise<T>): Promise<T | unknown> =>
+    p.then(
+      (v) => v,
+      (e: unknown) => e,
+    );
+
+  test("G1 (a): a StopHungRunAt outliving its bound and refused inside the drain rejects runMany", async () => {
+    const f = deafStop();
+    const t = new RunMutantTransport(CFG, TA, AR, f.fetchFn, { drainMs: LONG_DRAIN_MS });
+    const call = settle(t.runMany(req({ stopHungSessions: true, stopGraceMs: 50 })));
+    await until(f.stopSent, 2_000, "the stop");
+    f.release(odata(answer())); // a valid verdict set, while the stop is still in flight
+    await new Promise((r) => setTimeout(r, 150)); // past the stop's bound
+    f.refuseStop("refused stop");
+    expect(await call).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("G2 (b): an earlier call's orphan refused during the next call rejects that call", async () => {
+    const f = deafStop();
+    const t = new RunMutantTransport(CFG, TA, AR, f.fetchFn, { drainMs: LONG_DRAIN_MS });
+    const first = settle(t.runMany(req({ stopHungSessions: true, stopGraceMs: 50 })));
+    await until(f.stopSent, 2_000, "the stop");
+    f.release(BAD());
+    const r1 = (await first) as RunMutantManyResult;
+    if (r1.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r1.verdict.operation).toBe("in-flight-unknown"); // not scored; the stop is an orphan
+    expect([...t.controlState.orphans.values()]).toEqual(["StopHungRunAt"]);
+    // The warm replay: budgets nothing exceeds, so its watchdog neither stops nor aborts.
+    const second = settle(
+      t.runMany(req({ methods: M.map((r) => ({ ref: r, budgetMs: 60_000 })) })),
+    );
+    await until(() => f.manyCalls() === 2, 2_000, "the second call");
+    f.refuseStop("late refused stop");
+    await new Promise((r) => setTimeout(r, 5));
+    f.release(odata(answer()));
+    expect(await second).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("G3: a StopHungRunAt still in flight at the drain bound rejects with ControlDrainTimeoutError, never `verdicts`", async () => {
+    const f = deafStop();
+    const t = new RunMutantTransport(CFG, TA, AR, f.fetchFn, { drainMs: 50 });
+    const call = settle(t.runMany(req({ stopHungSessions: true, stopGraceMs: 50 })));
+    await until(f.stopSent, 2_000, "the stop");
+    f.release(odata(answer()));
+    const got = await call;
+    expect(got).toBeInstanceOf(ControlDrainTimeoutError);
+    expect((got as Error).message).toContain("StopHungRunAt");
+    expect((got as Error).message).toContain("R499");
+  });
+
+  test("G4 control: a stop confirmed in time and a 408 stay `timeout`, with nothing left in flight", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        setTimeout(() => f.release(new Response(AL_STOP_BODY, { status: 408 })), 5);
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const t = new RunMutantTransport(CFG, TA, AR, f.fetchFn, { drainMs: LONG_DRAIN_MS });
+    const r = await t.runMany(req({ stopHungSessions: true }));
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.operation).toBeUndefined();
+    expect(r.cause).toBeUndefined();
+    expect(r.verdict.stopState).toBe("confirmed");
+    expect(t.controlState.orphans.size).toBe(0);
+    expect(t.controlState.lateRefusal).toBeUndefined();
   });
 });

@@ -314,7 +314,8 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
       verifier: new DeploymentVerifier(odataCfg),
       harnessVerifier,
     },
-    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
 
   // A SCRATCH quarantine dir: the OFF leg quarantines BY DESIGN, and one landing in the real
