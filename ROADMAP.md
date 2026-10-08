@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**67 of 527 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**68 of 529 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -227,9 +227,10 @@ that ordering is the priority.
 - **R514** · A reused baseline lets a position-1 timeout score a kill with no unmutated confirm · [R514.md](docs/roadmap/R514.md) · done (e461bc90)
 - **R515** · A confirm that finds a reused duration stale does not correct later budgets · [R515.md](docs/roadmap/R515.md) · done (a29e3187)
 - **R516** · A fresh baseline's position-1 timeout is scored with no unmutated confirm · [R516.md](docs/roadmap/R516.md) · done (a29e3187)
-- **R517** · al-runner `--server`: a timeout is judged on the suite's wall clock against a 60 s in-run limit LethAL never set · [R517.md](docs/roadmap/R517.md) · open, filed 2026-10-08
+- **R517** · al-runner `--server`: a timeout is judged on the suite's wall clock against a 60 s in-run limit LethAL never set · [R517.md](docs/roadmap/R517.md) · done (b89f2f34)
+- **R518** · al-runner one-shot: a test timeout exits 3 and is scored `error` and retried, so every genuine hang is a lost kill with the wrong diagnosis · [R518.md](docs/roadmap/R518.md) · open, filed 2026-10-08
 - **R520** · Report-loop hang refusal follows other-object callees one hop only: a callee's own calls into a third object are not refused · [R520.md](docs/roadmap/R520.md) · open, filed 2026-10-08
-- **R521** · Report-loop hang refusal cannot type a RecordRef, Variant or parameter receiver, so their callees are not refused · [R521.md](docs/roadmap/R521.md) · open, filed 2026-10-08
+- **R521** · Report-loop hang refusal cannot type RecordRef, Variant, parameter, array-element, Report/Page or namespaced-interface receivers, so their callees are not refused · [R521.md](docs/roadmap/R521.md) · open, filed 2026-10-08
 - **R522** · Report-loop hang refusal does not see callee objects wrapped in `#if` (they are not object declarations to it) · [R522.md](docs/roadmap/R522.md) · open, filed 2026-10-08
 - **R523** · Report-loop hang refusal does not follow table triggers that open-item code fires (`Insert(true)`, `Modify(true)`, `Validate`, `Rename`) · [R523.md](docs/roadmap/R523.md) · open, filed 2026-10-08
 - **R524** · Report-loop hang refusal follows events raised by open-item code and by one-hop callees only, not events raised deeper · [R524.md](docs/roadmap/R524.md) · open, filed 2026-10-08
@@ -572,6 +573,7 @@ that ordering is the priority.
 - **R453** · al-runner loses a reportextension after a test calls Code Coverage Mgt. (found by the R-254 probe) · [R453.md](docs/roadmap/R453.md) · open, filed 2026-10-05
 - **R471** · al-runner compiles a project that BC's alc rejects with AL0155 (a report and its reportextension declaring the same global), so LethAL's al-runner path can look green where bcdev errors · [R471.md](docs/roadmap/R471.md) · open
 - **R482** · `r214-history.test.ts` "R214 I4 ... marks: an old-scheme mark on the old key is stale" failed once in a full `verify` run and passed alone and on re-run (flaky) · [R482.md](docs/roadmap/R482.md) · closed 2026-10-05 — not reproduced in 20 repeats under load; the one failure was a starvation timeout during…
+- **R519** · al-runner `--server`: per-request `test` / `excludeTests` would run only a mutant's covering tests and confine a hang to one test · [R519.md](docs/roadmap/R519.md) · open, filed 2026-10-08
 
 ---
 

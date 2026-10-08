@@ -125,6 +125,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A genuine hang on al-runner `--server` now takes the stop (180 s by default, was 60 s) plus a
+  daemon restart** (R517).
 - **`lethal explain` schema v15: the cause value `timeout-unconfirmed`** (R516). v14 is kept so a
   stored v14 document stays checkable.
 - **`lethal explain` schema v14: the cause value `reused-budget-stale`** (R514). v13 is kept so a
@@ -642,6 +644,22 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **al-runner `--server` (and resource with `--server`) now stops a test at the larger of the
+  `--mutant-timeout-ms` floor and the baseline timeout (180 s by default), sent as
+  `--test-timeout` on the daemon's start line** (R517). It used al-runner's own 60 s default, which
+  LethAL never set, so a test slower than 60 s under an unrelated mutant could be scored
+  `timeout-killed`.
+- **A timeout at position 1 is now confirmed on the test's own duration (al-runner's per-test
+  figure, never the suite's or the process's wall clock), against the stop al-runner reports it
+  enforced, when that is below the budget** (R517). On bcdev nothing changes. On al-runner one-shot
+  a genuine hang is no longer lost to the compile time, once one-shot reports timeouts again
+  (R518; that one-shot timeouts exit 3 was measured on al-runner 43f76177 only). A reported stop
+  other than the configured one warns once per session (`alrunner-stop-mismatch`).
+- **al-runner `--server`: a suite that overruns its deadline, or that contains a timed-out test
+  (any row neither `pass` nor `fail`, whatever its wording), now ends that daemon; the next run
+  starts a fresh one** (R517). Before, a late answer could be
+  read as the next mutant's results, and a timed-out test's abandoned thread kept running into
+  later runs, including the unmutated confirm.
 - **On bcdev and al-runner one-shot, a timeout at group position 1 is now confirmed by one
   unmutated run on every batch, not only a reused one, and on the worker that saw it** (R516). The
   kill stands only if that run takes at most half the budget (R53's margin); otherwise the mutant is
