@@ -2709,7 +2709,11 @@ interface CoveringStep {
   readonly retried: boolean;
   readonly retryAfter?: LostAckOutcome;
   readonly original?: { readonly attemptId: string; readonly opSeq: number };
+  /** R516 (M2): the budget the run was SENT (`timeoutMs` on the single path, the method's
+   *  `budgetMs` on the grouped path), never recomputed: a timeout confirm is judged against it. */
   readonly testBudgetMs: number;
+  /** R516 (I3 c): where `testBudgetMs` came from; it picks the cause of an unconfirmed timeout. */
+  readonly testBudgetSource: BudgetSource;
   readonly groupBudgetMs: number;
   readonly opKind: "single" | "many";
   readonly cause?: RunManyCause;
@@ -2724,6 +2728,22 @@ interface CoveringStep {
   readonly chunkPrefix: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[];
   /** The ceiling and grace the call ran under; the replay runs under the same. */
   readonly callSettings: { readonly requestCeilingMs: number; readonly stopGraceMs: number };
+}
+
+/**
+ * R516 (I3 c): which figure set a covering test's budget, `max(2 x duration, floor)`. `durationMs`
+ * is the duration the budget was derived from (the larger of the baseline's and, R515, a passing
+ * timeout confirm's this shard), also on `floor`, where it is what the floor outranked.
+ */
+type BudgetSource =
+  | { readonly kind: "floor"; readonly durationMs: number }
+  | { readonly kind: "baseline"; readonly durationMs: number }
+  | { readonly kind: "confirm"; readonly confirmOf: string; readonly durationMs: number };
+
+/** R516: a covering test's budget and its source, as `runMutantsOnBackend`'s `budgetOf` gives it. */
+interface TestBudget {
+  readonly ms: number;
+  readonly source: BudgetSource;
 }
 
 /** R198: the group-run settings the covering loop dispatches under, or `undefined` for sequential. */
@@ -2750,7 +2770,7 @@ async function* coveringRuns(args: {
   readonly backend: ExecutionBackend;
   readonly safety: SessionSafety;
   readonly ordered: readonly TestMethodRef[];
-  readonly budgetOf: (ref: TestMethodRef) => number;
+  readonly budgetOf: (ref: TestMethodRef) => TestBudget;
   readonly leaseSession: LeaseSession | undefined;
   readonly emit: RunEmitter;
   readonly resyncOpSeq: (() => Promise<void>) | undefined;
@@ -2758,7 +2778,7 @@ async function* coveringRuns(args: {
   readonly mutantId: string;
 }): AsyncGenerator<CoveringStep, void, undefined> {
   const single = async (ref: TestMethodRef): Promise<CoveringStep> => {
-    const budget = args.budgetOf(ref);
+    const { ms: budget, source } = args.budgetOf(ref);
     const out = await runFenced(
       args.backend,
       args.safety,
@@ -2782,6 +2802,7 @@ async function* coveringRuns(args: {
           ? { cause: out.verdict.stopRefusal }
           : {}),
       testBudgetMs: budget,
+      testBudgetSource: source,
       groupBudgetMs: budget,
       opKind: "single",
       groupPosition: 1,
@@ -2795,7 +2816,7 @@ async function* coveringRuns(args: {
     return;
   }
   const fits = (ref: TestMethodRef) =>
-    args.budgetOf(ref) + group.stopGraceMs <= group.requestCeilingMs;
+    args.budgetOf(ref).ms + group.stopGraceMs <= group.requestCeilingMs;
   let cursor = 0;
   while (cursor < args.ordered.length) {
     const head = args.ordered[cursor];
@@ -2806,11 +2827,26 @@ async function* coveringRuns(args: {
       continue;
     }
     const methods: { ref: TestMethodRef; budgetMs: number }[] = [];
+    // R516 (M2): each method's budget SOURCE beside the `budgetMs` it is sent, index for index.
+    const sources: BudgetSource[] = [];
     for (let i = cursor; i < args.ordered.length && methods.length < group.maxMethodsPerCall; i++) {
       const ref = args.ordered[i];
       if (ref === undefined || !fits(ref)) break;
-      methods.push({ ref, budgetMs: args.budgetOf(ref) });
+      const b = args.budgetOf(ref);
+      methods.push({ ref, budgetMs: b.ms });
+      sources.push(b.source);
     }
+    // R516 (M2): the budget method `position` (1-based) was SENT, read from the call itself.
+    const sentAt = (position: number) => {
+      const m = methods[position - 1];
+      const source = sources[position - 1];
+      if (m === undefined || source === undefined) {
+        throw new Error(
+          `coveringRuns: mutant ${args.mutantId}'s call has ${methods.length} method(s), so it has no position ${position} — caller-contract violation`,
+        );
+      }
+      return { testBudgetMs: m.budgetMs, testBudgetSource: source };
+    };
     // R206 §3: two equal (codeunitId, method) pairs in one call is a caller-contract violation,
     // refused HERE, before dispatch, where the message can name the mutant. The server's own
     // collision check (`suite-unresolved`) is the second line, not the first.
@@ -2856,7 +2892,7 @@ async function* coveringRuns(args: {
         ...provenance,
         ref: verdict.ref,
         verdict,
-        testBudgetMs: args.budgetOf(verdict.ref),
+        ...sentAt(position),
         groupBudgetMs,
         opKind: "many",
         ...(cause !== undefined ? { cause } : {}),
@@ -2872,7 +2908,7 @@ async function* coveringRuns(args: {
         ...provenance,
         ref: verdict.ref,
         verdict,
-        testBudgetMs: args.budgetOf(verdict.ref),
+        ...sentAt(i + 1),
         groupBudgetMs,
         opKind: "many",
         groupPosition: i + 1,
@@ -8860,16 +8896,43 @@ async function closeIfSupported(backend: ExecutionBackend): Promise<void> {
 }
 
 /**
+ * R516 (I3 b): the note of a position-1 timeout whose unmutated confirm passed in more than half the
+ * budget the run was sent. It prints both durations and their ratio; the 1.25 threshold picks the
+ * wording only, never a verdict.
+ */
+function timeoutUnconfirmedNote(
+  method: string,
+  confirmMs: number,
+  budgetMs: number,
+  source: BudgetSource,
+): string {
+  const d = source.durationMs;
+  const from =
+    source.kind === "confirm"
+      ? `the confirm of mutant ${source.confirmOf}, ${d} ms (R515)`
+      : source.kind === "baseline"
+        ? `this run's baseline, ${d} ms`
+        : `the --mutant-timeout-ms floor (the test's measured duration is ${d} ms)`;
+  const ratio = d > 0 ? confirmMs / d : Number.POSITIVE_INFINITY;
+  const band =
+    ratio <= 1.25
+      ? "the test ran about as fast as when its budget was set, so this is R516's boundary band (the budget is twice its measured duration, or on al-runner one-shot the compile counts against it); raise --mutant-timeout-ms above twice this test's duration to re-score it"
+      : "the test is slower now than when its budget was set, or this worker's tier is slower than the baseline's; raise --mutant-timeout-ms to re-score it";
+  return `timeout-unconfirmed ${method}: timed out at position 1 under the mutant; unmutated it completed in ${confirmMs} ms on this backend, more than half its ${budgetMs} ms budget, which was set from ${from}; ratio ${confirmMs}/${d} = ${Number.isFinite(ratio) ? ratio.toFixed(2) : "inf"}. The timeout is not attributed to the mutant (R53's 2x margin, R516). ${band[0]?.toUpperCase() ?? ""}${band.slice(1)}.`;
+}
+
+/**
  * R206 §2.2: the warm confirmation. A kill (a `fail` or a `timeout`) at group position k > 1 was
  * measured in a session that had already run methods 1..k-1 of the same call, so it is confirmed
  * by replaying EXACTLY that prefix unmutated, in another fresh session, through one ordinary
  * `RunMutantMany` call (`confirmation: true`, `activate(null)` first). Confirmed iff the replay
  * answers `complete` AND ran all k AND every entry passed (stated positively: a `cap` with one
  * passing entry satisfies "every method that ran passed" and is NOT a confirmation), and for a
- * timeout additionally iff entry k completed inside its own cold-measured budget. R514: on a
- * reused baseline (R192) that budget is another day's, so a timeout is confirmed only iff entry k
- * completed in at most HALF its budget (R53's 2x margin); a complete all-pass replay beyond that is
- * `reused-budget-stale`. A fresh batch keeps the 1x rule.
+ * timeout additionally iff entry k completed in at most HALF its own budget (R53's 2x margin).
+ * R514: on a reused baseline (R192) that budget is another day's, so a complete all-pass replay
+ * beyond half of it is `reused-budget-stale`. R516: a fresh batch uses the same half-budget rule;
+ * beyond it the replay is `warm-timeout-unconfirmed`, whose note tells "outside the budget" from
+ * "within it but over half of it".
  *
  * Every other ending is an error, never a kill: j < k failing → `warm-prefix-unstable`; j = k
  * failing → `unstable` (today's cause, the warm wording); k completing outside its budget or
@@ -8901,7 +8964,8 @@ async function confirmWarm(p: {
     readonly quarantineStore?: QuarantineStore | undefined;
     readonly resourceKey?: string | undefined;
     readonly nowIso: () => string;
-    /** R514: see `runMutantsOnBackend`'s field; it decides the timeout grain's margin. */
+    /** R514: see `runMutantsOnBackend`'s field; it decides the over-half timeout grain's CAUSE
+     *  (`reused-budget-stale` on a reused batch), not the margin, which is 2x on every batch (R516). */
     readonly baselineReused: ReusedBaseline | undefined;
   };
   readonly m: MutantManifestEntry;
@@ -8995,6 +9059,8 @@ async function confirmWarm(p: {
       ref: verdict.ref,
       verdict,
       testBudgetMs: budgetOfIndex(j),
+      // Not read by `classifyNonVerdictStep`, the only consumer of this step.
+      testBudgetSource: step.testBudgetSource,
       groupBudgetMs,
       opKind: "many",
       ...(cause !== undefined ? { cause } : {}),
@@ -9100,7 +9166,7 @@ async function confirmWarm(p: {
     const reusedFrom = args.baselineReused;
     if (kth !== undefined && reusedFrom !== undefined && 2 * kth.durationMs > budget) {
       // R514: on a reused baseline the budget is another day's; R53's 2x margin, as the cold
-      // confirm uses. A fresh batch keeps the 1x rule below.
+      // confirm uses.
       return error(
         "reused-budget-stale",
         `reused-budget-stale ${what}: method ${k} (${killer.method}) completed unmutated in ${kth.durationMs} ms at position ${k} of the replay, more than half the ${budget} ms budget set from run ${reusedFrom.runId}'s reused baseline (R192), so the timeout is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`,
@@ -9110,6 +9176,14 @@ async function confirmWarm(p: {
       return error(
         "warm-timeout-unconfirmed",
         `warm-timeout-unconfirmed ${what}: method ${k} (${killer.method}) completed unmutated in ${kth?.durationMs ?? "?"} ms, outside the ${budget} ms budget measured for it cold; the warm session, not the mutant, makes it slow (R206)`,
+      );
+    }
+    if (2 * kth.durationMs > budget) {
+      // R516: a fresh batch uses the same 2x margin (R53's): a replay inside the budget but over
+      // half of it does not separate the mutant from drift, so it is not a kill either.
+      return error(
+        "warm-timeout-unconfirmed",
+        `warm-timeout-unconfirmed ${what}: method ${k} (${killer.method}) completed unmutated in ${kth.durationMs} ms at position ${k} of the replay, within its ${budget} ms budget but more than half of it (R53's 2x margin, R516); the timeout is not attributed to the mutant`,
       );
     }
   }
@@ -9397,14 +9471,39 @@ async function runMutantsOnBackend(args: {
   /** R206 §2.1: session-scoped, shared across batches and shards: the once-only warning flag. */
   readonly sessionReuse: { warned: boolean };
   /** R514: this batch's baseline came from a stored snapshot (R192), so its durations, and every
-   *  budget derived from them, are from another day. A position-1 `timeout` is then confirmed
-   *  unmutated before it is scored, and every timeout confirm uses R53's 2x margin. `undefined`
-   *  for a baseline measured in this run. */
+   *  budget derived from them, are from another day. Since R516 every position-1 `timeout` is
+   *  confirmed unmutated with R53's 2x margin on every batch; this field only names the cause of
+   *  an unconfirmed one: `reused-budget-stale` when the budget came from the snapshot, otherwise
+   *  `timeout-unconfirmed`. `undefined` for a baseline measured in this run. */
   readonly baselineReused: ReusedBaseline | undefined;
 }): Promise<void> {
   const leaseSession = args.leaseSession;
   const resyncOpSeq =
     leaseSession !== undefined ? () => leaseSession.resyncOpSeq(args.backend) : undefined;
+  // R515: per covering test, the largest duration a PASSING timeout confirm measured in this call,
+  // and the mutant whose confirm measured it. Local to the call: each call is one shard on one
+  // worker's backend, so a measurement stays with the tier it was taken on and a slow tier never
+  // raises a fast tier's budgets. It only ever raises a budget (`budgetOf` takes the max with the
+  // baseline's duration); every kill is still judged against the budget its run was SENT.
+  const measuredToday = new Map<string, { readonly ms: number; readonly byMutant: string }>();
+  const budgetOf = (ref: TestMethodRef): TestBudget => {
+    const key = testKeyOf(ref);
+    const baseline = args.baselineDuration.get(key) ?? args.fallbackTimeoutMs;
+    const today = measuredToday.get(key);
+    const durationMs = today !== undefined && today.ms > baseline ? today.ms : baseline;
+    const source: BudgetSource =
+      args.minMutantBudgetMs > 2 * durationMs
+        ? { kind: "floor", durationMs }
+        : today !== undefined && today.ms > baseline
+          ? { kind: "confirm", confirmOf: today.byMutant, durationMs }
+          : { kind: "baseline", durationMs };
+    return { ms: Math.max(2 * durationMs, args.minMutantBudgetMs), source };
+  };
+  const noteMeasured = (ref: TestMethodRef, ms: number, byMutant: string) => {
+    const key = testKeyOf(ref);
+    const prev = measuredToday.get(key);
+    if (prev === undefined || ms > prev.ms) measuredToday.set(key, { ms, byMutant });
+  };
   for (const m of args.mutants) {
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
@@ -9490,11 +9589,6 @@ async function runMutantsOnBackend(args: {
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
     const ordered = orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
-    const budgetOf = (ref: TestMethodRef) =>
-      Math.max(
-        2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs),
-        args.minMutantBudgetMs,
-      );
     // R198: every method a call REPORTED as run with a mapped pass/fail result. A survivor stands
     // only if this equals the covering set (checked after the loop): a chunking bug that skipped a
     // test must not manufacture a survivor. On the sequential path it is trivially complete.
@@ -9620,17 +9714,8 @@ async function runMutantsOnBackend(args: {
           }
           break;
         }
-        // R514: on a reused baseline the budget came from another day's duration, so a position-1
-        // timeout falls through to the unmutated confirm below instead of being scored here.
-        if (args.baselineReused === undefined) {
-          verdict = "timeout-killed";
-          killingTest = ref.method;
-          killingTestRef = ref;
-          killingTestFailure = v.failureMessage;
-          killPosition = 1;
-          recordKill(args.killLedger, m, ref);
-          break;
-        }
+        // R516: every position-1 timeout, fresh batch or reused (R514), falls through to the
+        // unmutated confirm below, on this worker's own backend, instead of being scored here.
       }
       if (v.outcome === "fail" && step.groupPosition > 1) {
         // R206 §2.2: a kill at group position k > 1 was measured WARM. Confirm it by replaying
@@ -9661,15 +9746,16 @@ async function runMutantsOnBackend(args: {
         }
         break;
       }
-      // The cold kill confirmation: a `fail` at position 1, and (R514) a position-1 `timeout` on a
-      // reused baseline, the only timeout that reaches here.
+      // The cold kill confirmation: a `fail` at position 1, and (R514, R516) every position-1
+      // `timeout`, the only timeout that reaches here.
       if (v.outcome === "fail" || v.outcome === "timeout") {
         const timedOut = v.outcome === "timeout";
         // R514: an unmutated run has no stop hook (bcdev wires R53's only for a pending mutant), so
         // an overrun is an abort and a quarantine. A timeout's confirm runs at the baseline's
-        // deadline when that is longer, and judges the duration against the budget with R53's 2x
-        // margin. With the default floor (above the baseline deadline) it runs at the budget, and
-        // a test slower than that today strands, as a re-run baseline would; never a kill.
+        // deadline when that is longer, and judges the duration against the budget the timed-out
+        // run was SENT (`budget`, R516 M2) with R53's 2x margin. With the default floor (above the
+        // baseline deadline) it runs at the budget, and a test slower than that today is abandoned
+        // at that deadline: `in-flight-unknown`, a strand, the tier quarantined; never a kill.
         const confirmMs = timedOut ? Math.max(budget, args.fallbackTimeoutMs) : budget;
         await activateOnce(args.backend, args.safety, null);
         // Layer 5C-B2: `runFenced` here too — the confirm rerun earns the same single fresh
@@ -9789,18 +9875,27 @@ async function runMutantsOnBackend(args: {
           verdict = "error";
           cause = "session-reused";
           failureNote = `session-reused confirming ${ref.method}: the server reported ${confirm.testRunsBefore} test method(s) had already run in session ${confirm.sessionId ?? "?"} before the confirmation started, so the killer was not re-run cold; the kill is unconfirmed (R206)`;
-        } else if (
-          confirm.outcome === "pass" &&
-          timedOut &&
-          args.baselineReused !== undefined &&
-          2 * confirm.durationMs > budget
-        ) {
-          // R514: the test passes unmutated but takes more than half the budget today, so a
-          // baseline measured today would have budgeted it more: the timeout is not the mutant's.
-          verdict = "error";
-          cause = "reused-budget-stale";
-          failureNote = `reused-budget-stale ${ref.method}: completed unmutated in ${confirm.durationMs} ms, more than half the ${budget} ms budget set from run ${args.baselineReused.runId}'s reused baseline (R192), so the timeout at position 1 is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`;
         } else if (confirm.outcome === "pass") {
+          // R515: a passing timeout confirm measured the test on this worker's backend today;
+          // later mutants of this call are budgeted from it. Recorded BEFORE the judgement below,
+          // which must therefore read the budget the timed-out run was SENT (`budget`), never a
+          // recomputed one (R516 M2): recomputed now, it would already include this measurement.
+          if (timedOut) noteMeasured(ref, confirm.durationMs, m.mutantId);
+          if (timedOut && 2 * confirm.durationMs > budget) {
+            // R514, R516: the test passes unmutated but takes more than half the budget it was
+            // sent, so a budget measured now would be larger: the timeout is not the mutant's. The
+            // cause follows where that budget came from (I3 c).
+            verdict = "error";
+            const source = step.testBudgetSource;
+            if (args.baselineReused !== undefined && source.kind !== "confirm") {
+              cause = "reused-budget-stale";
+              failureNote = `reused-budget-stale ${ref.method}: completed unmutated in ${confirm.durationMs} ms, more than half the ${budget} ms budget set from run ${args.baselineReused.runId}'s reused baseline (R192), so the timeout at position 1 is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`;
+            } else {
+              cause = "timeout-unconfirmed";
+              failureNote = timeoutUnconfirmedNote(ref.method, confirm.durationMs, budget, source);
+            }
+            break;
+          }
           verdict = timedOut ? "timeout-killed" : "killed";
           killingTest = ref.method;
           killingTestRef = ref;

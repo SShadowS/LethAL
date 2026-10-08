@@ -233,8 +233,11 @@ import type { MutantVerdict } from "./store";
  *
  * 14: R514 added the cause value `reused-budget-stale` to `$.notMeasured[].cause`. A new value, so
  * it bumps (R233); v13 is frozen.
+ *
+ * 15: R516 added the cause value `timeout-unconfirmed` to `$.notMeasured[].cause`. A new value, so
+ * it bumps (R233); v14 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 14;
+export const EXPLAIN_SCHEMA_VERSION = 15;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

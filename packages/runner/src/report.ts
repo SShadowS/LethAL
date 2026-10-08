@@ -591,7 +591,10 @@ export type MutantErrorCause =
   | "warm-timeout-unconfirmed"
   | "warm-confirmation-incomplete"
   // R514: a timeout on a reused baseline whose unmutated confirm took more than half the budget.
-  | "reused-budget-stale";
+  | "reused-budget-stale"
+  // R516: a position-1 timeout whose unmutated confirm took more than half the budget it was
+  // sent, where that budget was not a reused snapshot's (this run's baseline, or R515's confirm).
+  | "timeout-unconfirmed";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -777,9 +780,9 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
     meaning:
       "This mutant's killer exceeded its budget at position k > 1 of its group call and was " +
       "stopped; the confirmation replayed methods 1..k unmutated, and method k either completed " +
-      "OUTSIDE the budget that was measured for it cold, or was stopped again. The warm session, " +
-      "not the mutant, made it slow, so the timeout is not attributed. No verdict. Raise " +
-      "`--mutant-timeout-ms`, or re-run with `--no-group-runs` (R206).",
+      "in more than half the budget that was measured for it cold (R53's 2x margin, R516), or " +
+      "was stopped again. The warm session, not the mutant, made it slow, so the timeout is not " +
+      "attributed. No verdict. Raise `--mutant-timeout-ms`, or re-run with `--no-group-runs` (R206).",
     entailedNegative:
       "Not `timeout-killed`: that verdict rests on the mutant being what exceeded the budget, and " +
       "the replay showed the unmutated method exceeds it in the same position too. Also a " +
@@ -811,6 +814,21 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "mutant; only its stored duration is out of date. Not `survived`: the mutated run never " +
       "finished.",
     basis: "R514",
+  },
+  "timeout-unconfirmed": {
+    meaning:
+      "On bcdev and al-runner one-shot: the test timed out at position 1 under the mutant, then " +
+      "passed unmutated in more than half its budget, so the timeout is not attributed (R53's 2x " +
+      "margin). Either the test is slower now than when its budget was set, or (workers > 1) this " +
+      "worker's tier is slower, or the run is in the boundary band: a test whose budget is twice " +
+      "its measured duration, or on al-runner one-shot a test whose compile plus body takes more " +
+      "than half the budget. No verdict. Raise `--mutant-timeout-ms` to re-score it (R516).",
+    entailedNegative:
+      "Not `timeout-killed`: the unmutated run did not finish clearly inside the budget, so the " +
+      "mutant is not shown to be what ran past it; a genuine hang can land here in the boundary " +
+      "band (a lost kill, never a false one). Not `unstable`: the test passed with no mutant. Not " +
+      "`survived`: the mutated run never finished.",
+    basis: "R516",
   },
 };
 
@@ -3076,7 +3094,7 @@ function summarizeRunnerContexts(
  * R206: the banner's error breakdown. `counts.unstable` keeps counting `unstable` alone; the four
  * R206 causes are listed beside it when non-zero, so a run full of them does not read
  * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
- * when its run's answer was lost. R514 adds `reused-budget-stale`.
+ * when its run's answer was lost. R514 adds `reused-budget-stale`, R516 `timeout-unconfirmed`.
  */
 function errorBreakdown(r: SessionReport): string {
   const named: MutantErrorCause[] = [
@@ -3086,6 +3104,7 @@ function errorBreakdown(r: SessionReport): string {
     "warm-confirmation-incomplete",
     "stop-outcome-unconfirmed",
     "reused-budget-stale",
+    "timeout-unconfirmed",
   ];
   const parts: string[] = [];
   for (const cause of named) {

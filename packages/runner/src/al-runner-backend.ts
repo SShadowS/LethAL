@@ -120,6 +120,24 @@ const PROVISION_TEST_TIMEOUT_SECONDS = 600;
  */
 const PROVISION_DEADLINE_MS = 30 * 60 * 1000;
 
+/**
+ * R516: the two limits a ONE-SHOT covering or confirm run is sent, from the budget the orchestrator
+ * judges it by. The in-run limit (`AL_RUNNER_TEST_TIMEOUT_SEC`, timed on the test BODY inside
+ * al-runner) IS the budget, as bcdev's stop fires at the budget; it used to be half of it, rounded
+ * down, which on a budget of `2 x wall` left a test about its own wall clock and timed it out under
+ * every mutant. The client deadline (the whole invocation, compile included) is twice the budget, so
+ * it stays well above the in-run limit and al-runner's own `timeout` fires first: were the two equal,
+ * our AbortController would win the race and a genuine hang would read `deadline-exceeded`. Used by
+ * `sendOneShot` only; the canary, the contract and symbol probes and provisioning keep their own
+ * fixed timeouts.
+ */
+export function oneShotLimits(budgetMs: number): {
+  readonly testTimeoutSeconds: number;
+  readonly deadlineMs: number;
+} {
+  return { testTimeoutSeconds: Math.max(1, Math.ceil(budgetMs / 1000)), deadlineMs: 2 * budgetMs };
+}
+
 /** What `AlRunnerBackend.provisionOnce` observed. Best-effort throughout — see that method. */
 export interface AlRunnerProvisionResult {
   readonly elapsedMs: number;
@@ -1162,18 +1180,8 @@ export class AlRunnerBackend implements ExecutionBackend {
       // R147 — present only after `usePlatformAppsDir`, and its presence is what suppresses
       // `--auto-provision` (see `buildAlRunnerArgv`). Before the pin this is exactly today's argv.
       ...(this.platformAppsDir !== undefined ? { platformAppsDir: this.platformAppsDir } : {}),
-      // Deliberately well below `deadlineMs`, never equal. The runner's own per-test budget
-      // (v2: the AL_RUNNER_TEST_TIMEOUT_SEC env var the transport sets; v1: a `--test-timeout`
-      // flag) bounds only the test body inside al-runner, while `deadlineMs` bounds the WHOLE
-      // invocation (al-runner recompiles the project from scratch every call, which alone can
-      // take several seconds). If the two were equal or close, our client AbortController
-      // would always win the race, the runner-confirmed `outcome: "timeout"` path would be
-      // unreachable, and every genuine hang would be misclassified as infrastructure noise
-      // (`deadline-exceeded`) instead of a real mutant-induced timeout. Halving the budget
-      // (min 1s) gives the runner's own timer real margin to fire first. The v2 move from a
-      // flag to an env var changed how this value is delivered, not why it is halved.
-      testTimeoutSeconds: Math.max(1, Math.floor(opts.timeoutMs / 2000)),
-      deadlineMs: opts.timeoutMs,
+      // R516: see `oneShotLimits` for the two limits and why they differ.
+      ...oneShotLimits(opts.timeoutMs),
       ...(coverageOut !== undefined ? { coverageOut } : {}),
       ...(excludeTests !== undefined ? { excludeTests } : {}),
     });

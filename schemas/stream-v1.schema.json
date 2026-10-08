@@ -1111,7 +1111,8 @@
             "warm-prefix-unstable",
             "warm-timeout-unconfirmed",
             "warm-confirmation-incomplete",
-            "reused-budget-stale"
+            "reused-budget-stale",
+            "timeout-unconfirmed"
           ]
         },
         "killingTestFailure": {

@@ -1813,7 +1813,9 @@ ${TRIGGER_TABLE_AL}#endif
     }
   });
 
-  test("timeout under mutant = timeout-killed, no confirmation re-run", async () => {
+  // R516: since then a position-1 timeout earns one unmutated confirmation re-run on every batch;
+  // here it passes in well under half the budget, so the kill stands.
+  test("timeout under mutant = timeout-killed, after its unmutated confirmation re-run passes", async () => {
     const dirs = await makeProject();
     const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
       "IsOverBudget",
@@ -1872,8 +1874,9 @@ ${TRIGGER_TABLE_AL}#endif
   });
 
   /**
-   * R86, the timeout arm. `timeout-killed` sets `killingTest` at its own call site and never runs a
-   * confirmation, so it needs its own wiring and its own pin — and it is exactly the verdict most
+   * R86, the timeout arm. `timeout-killed` once set `killingTest` at its own call site with no
+   * confirmation (since R516 a position-1 timeout is confirmed unmutated, and that confirm PASSES,
+   * so its text must still not be the source), so it needs its own pin — and it is exactly the verdict most
    * likely to be a kill the assertions did not earn (R94 files the same shape for al-runner v2).
    * The runner's own timeout detail is what the reader needs in order to see that. Both real
    * producers of `outcome: "timeout"` do attach text — `RunMutantTransport`'s server-side-stop 408
@@ -12029,28 +12032,35 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
   type Answer = "pass" | "fail" | "timeout" | "lease-lost" | "transport-error" | "unattested";
   /**
    * `verdictOf(batch, mutantId)` answers a mutated run; the baseline always passes. `before` runs
-   * inside a mutated run before it answers; `close` becomes the backend's `close()`.
+   * inside a mutated run before it answers; `beforeUnmutated` inside an unmutated run of the batch
+   * AFTER a mutant was active (a confirm), given that last mutant (R516 M6); `close` becomes the
+   * backend's `close()`.
    */
   function batchBackend(
     verdictOf: (batch: number, mutant: string) => Answer,
     hooks: {
       before?: (batch: number, mutant: string) => Promise<void>;
+      beforeUnmutated?: (batch: number, lastMutant: string) => Promise<void>;
       close?: () => Promise<void>;
     } = {},
   ) {
     let deploys = 0;
     let active: string | null = null;
+    let lastMutant: string | null = null;
     return Object.assign(
       leaseBackend({
         deploy: async () => {
           deploys++;
+          lastMutant = null;
           return null;
         },
         activate: async (id) => {
           active = id;
+          if (id !== null) lastMutant = id;
         },
         run: async (ref) => {
           if (active !== null) await hooks.before?.(deploys - 1, active);
+          else if (lastMutant !== null) await hooks.beforeUnmutated?.(deploys - 1, lastMutant);
           const v = active === null ? "pass" : verdictOf(deploys - 1, active);
           if (v === "lease-lost") {
             return {
@@ -12083,6 +12093,41 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
       servesTestApp(),
       hooks.close !== undefined ? { close: hooks.close } : {},
     );
+  }
+  /**
+   * R516 (M6): fire the lease heartbeat INSIDE batch 1's unmutated confirm of M0002's timeout, the
+   * only place a position-1 timeout is scored since R516, so the kill row lands after the loss
+   * note. `confirms` counts the confirms of M0002 that ran (proof the confirm was dispatched).
+   */
+  function heartbeatInConfirm(timers: FakeTimers) {
+    const state = { fired: false, confirms: 0 };
+    const hooks = {
+      beforeUnmutated: async (b: number, lastMutant: string) => {
+        if (b !== 1 || lastMutant !== "M0002") return;
+        state.confirms += 1;
+        if (!state.fired) {
+          state.fired = true;
+          await timers.fire();
+        }
+      },
+    };
+    return { hooks, state };
+  }
+  /** The pre-R516 shape: the heartbeat fires inside M0002's MUTATED run, before its confirm. */
+  function heartbeatInMutatedRun(timers: FakeTimers) {
+    const state = { fired: false, confirms: 0 };
+    const hooks = {
+      before: async (b: number, m: string) => {
+        if (b === 1 && m === "M0002" && !state.fired) {
+          state.fired = true;
+          await timers.fire();
+        }
+      },
+      beforeUnmutated: async (b: number, lastMutant: string) => {
+        if (b === 1 && lastMutant === "M0002") state.confirms += 1;
+      },
+    };
+    return { hooks, state };
   }
   /** Batch 0 completes (M0001 survives); batch 1 kills M0001, M0002 survives, M0003 loses the lease. */
   const LOSE = (batch: number, m: string): Answer =>
@@ -12483,27 +12528,22 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
     const client = new FakeLeaseClient();
     client.renewQueue = [{ renewed: false }];
     const timers = new FakeTimers();
-    let fired = false;
+    // R516 (M6): M0002's run answers a `timeout`, which since R516 is confirmed by one unmutated
+    // run before it is scored. The heartbeat notes the loss (and onLost writes) INSIDE that
+    // confirm, which then passes, so the `timeout-killed` is recorded after the note.
+    const { hooks, state } = heartbeatInConfirm(timers);
     const backend = batchBackend(
       (b, m) => (b === 0 ? (m === "M0001" ? "pass" : "fail") : m === "M0002" ? "timeout" : "pass"),
-      {
-        // The heartbeat notes the loss (and onLost writes) INSIDE M0002's run, which then
-        // answers a `timeout`, recorded after the note as `timeout-killed`. Not a `fail`: a fail
-        // earns a confirm rerun, which the latch refuses, so it is never recorded at all.
-        before: async (b, m) => {
-          if (b === 1 && m === "M0002" && !fired) {
-            fired = true;
-            await timers.fire();
-          }
-        },
-      },
+      hooks,
     );
     const report = await runSession({
       ...common,
       backend,
       lease: leaseCfg(client, { timers }).lease,
     });
-    expect(fired).toBe(true);
+    expect(state.fired).toBe(true);
+    // The confirm was dispatched (the heartbeat fired inside it), once.
+    expect(state.confirms).toBe(1);
     expect(report.quarantined?.reason).toContain("lease-lost");
     const rows = rowsOf(store, lastRunId(store));
     expect(rows.filter((r) => r.b === 1 && r.code === "M0002").map((r) => r.verdict)).toEqual([
@@ -12555,22 +12595,24 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
    * existed, so that row keeps its stored verdict. `onLost`'s `lost_batches` row makes every resume
    * reader read it as `error`, so the resume carries nothing of the batch.
    */
-  async function lateVerdictThenCrash(late: Answer, stopHungSessions: boolean) {
+  async function lateVerdictThenCrash(
+    late: Answer,
+    stopHungSessions: boolean,
+    // R516 (M6): where the heartbeat fires. A `timeout` is scored only after its unmutated
+    // confirm, so its late row needs the heartbeat inside that confirm; a `pass` has no confirm.
+    fireIn: "mutated-run" | "confirm",
+  ) {
     const { store, common } = await setup();
     const broken = breakableStore(store);
     const client = new FakeLeaseClient();
     client.renewQueue = [{ renewed: false }];
     const timers = new FakeTimers();
-    let fired = false;
+    const { hooks, state } =
+      fireIn === "confirm" ? heartbeatInConfirm(timers) : heartbeatInMutatedRun(timers);
     const backend = batchBackend(
       (b, m) => (b === 0 ? (m === "M0001" ? "pass" : "fail") : m === "M0002" ? late : "pass"),
       {
-        before: async (b, m) => {
-          if (b === 1 && m === "M0002" && !fired) {
-            fired = true;
-            await timers.fire();
-          }
-        },
+        ...hooks,
         close: async () => {
           broken.fail();
         },
@@ -12581,7 +12623,7 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
         (e: unknown) => e,
       ),
     );
-    expect(fired).toBe(true);
+    expect(state.fired).toBe(true);
     expect(err.out).toBeInstanceOf(LostBatchNotStoredError);
     const run1 = lastRunId(store);
     const r1 = rowsOf(store, run1);
@@ -12596,7 +12638,7 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
       emit: [(e: RunEvent) => events.push(e)],
     });
     const run2 = lastRunId(store);
-    return { store, run1, run2, r1, r2: rowsOf(store, run2) };
+    return { store, run1, run2, r1, r2: rowsOf(store, run2), confirms: state.confirms };
   }
 
   /** Control (plan item 14): every batch-0 row is carried, with run 1's verdict. */
@@ -12610,7 +12652,9 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
   };
 
   test("R513: a timeout-killed recorded after the loss note is not carried by --resume --stop-hung-sessions after a crash", async () => {
-    const { r1, r2 } = await lateVerdictThenCrash("timeout", true);
+    const { r1, r2, confirms } = await lateVerdictThenCrash("timeout", true, "confirm");
+    // R516 (M6): the late row exists because M0002's confirm was dispatched and answered.
+    expect(confirms).toBe(1);
     // Precondition (the residue): the row recorded after the note keeps its kill, since onLost
     // wrote before it existed and the finally's write failed. The fix is in the readers.
     expect(r1.filter((r) => r.b === 1).map((r) => [r.code, r.verdict])).toEqual([
@@ -12622,8 +12666,16 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
     batch0Carried(r1, r2);
   });
 
+  test("R516 (M6) pin: with the heartbeat in M0002's mutated run, before its confirm, no kill row is recorded", async () => {
+    // The pre-R516 fixture shape. Since R516 the timeout's confirm meets the lost lease, so this
+    // shape no longer produces a late kill row, which is why the two tests above fire inside the
+    // confirm: this pin fails if the fixture's old shape ever starts exercising the late row again.
+    const { r1 } = await lateVerdictThenCrash("timeout", true, "mutated-run");
+    expect(r1.filter((r) => r.b === 1 && r.verdict === "timeout-killed")).toEqual([]);
+  });
+
   test("R513: a survived recorded after the loss note is not carried by --resume after a crash", async () => {
-    const { r1, r2 } = await lateVerdictThenCrash("pass", false);
+    const { r1, r2 } = await lateVerdictThenCrash("pass", false, "mutated-run");
     expect(r1.filter((r) => r.b === 1).map((r) => [r.code, r.verdict])).toEqual([
       ["M0001", "error"],
       ["M0002", "survived"],
