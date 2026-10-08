@@ -85,19 +85,26 @@ function recordTableName(typeText: string | null, symbols: SymbolTable): string 
   return unquoted.length === 0 ? null : unquoted;
 }
 
-/** A name, possibly dotted. Not one: `"Sales Line" temporary` (R502 keeps that path unchanged). */
+/** A name, possibly dotted (`System.Utilities.Integer`, `"Sales Line"`). */
 const NAME_PATH = /^(?:"[^"]*"|[^\s".]+)(?:\.(?:"[^"]*"|[^\s".]+))*$/;
+
+/**
+ * R509: the keyword a `Record` type may end in. It is part of the type TEXT, never of the name, and
+ * leaving it on made every temporary record's name unreadable, so its fields had no type.
+ */
+const TEMPORARY_SUFFIX = /\s+temporary$/i;
 
 /**
  * R502: the object name a type's reference text means. A clean dotted path
  * (`System.Utilities.Integer`) goes through `qualifiedObjectName`, as the receiver's AST reads do;
- * anything else is unquoted as before.
+ * anything else is unquoted as before. R509: a trailing `temporary` is dropped first.
  */
 function objectNameIn(
-  raw: string,
+  typeRef: string,
   kind: "table" | "codeunit",
   symbols: Pick<SymbolTable, "objects">,
 ): string {
+  const raw = typeRef.replace(TEMPORARY_SUFFIX, "");
   if (NAME_PATH.test(raw)) return qualifiedObjectName(nameSegments(raw), kind, symbols) ?? "";
   return raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
 }
