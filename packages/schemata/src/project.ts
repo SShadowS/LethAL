@@ -209,12 +209,16 @@ export function coarseIdentityTupleOf(
  * triggers, its child items, a reportextension dataset block anchored on it, and the same-object
  * procedures that code reaches) is hang-refused, so a later same-tuple twin of a refused mutant
  * takes its ordinal (BC.History: 5,010 sites refused, 203 keys; fixtures, CDO, DC and DO: none).
- * 31: R501, the same scope is hang-refused for EVERY operator at dispatch (`openItemHangRefuses`,
+ * 32: R509, the type table reads a `Record "X" temporary` as table X, so `swap-additive` gains
+ * mutants on a temporary record's fields, and a new mutant earlier in a procedure with an existing
+ * one's tuple takes its ordinal (keys moved: CDO 1, DO 2, BC.History 3; fixtures and DC: none). 31
+ * was held for R-501 and is unused: R509 landed first, so R-501 takes the next number above it.
+ * 33: R501, the same scope is hang-refused for EVERY operator at dispatch (`openItemHangRefuses`,
  * no exemption), and so is a site that deletes or alters a bounded item's only `SetRange` bound,
  * so a later same-tuple twin of a refused mutant takes its ordinal (BC.History: 13,435 mutants
  * refused, 378 keys; fixtures, CDO, DC and DO: none).
  */
-export const IDENTITY_SCHEME = 31;
+export const IDENTITY_SCHEME = 33;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

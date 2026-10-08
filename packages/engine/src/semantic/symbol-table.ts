@@ -598,7 +598,9 @@ export function buildSymbolTable(
 
   return {
     resolveObject({ kind, idOrName }) {
-      const id = Number.parseInt(idOrName, 10);
+      // R510: an id only when the reference is all digits. `parseInt` read `50000 Foo` as 50000, so
+      // a table named so bound to table 50000 and its triggers decided the tag.
+      const id = /^\d+$/.test(idOrName.trim()) ? Number(idOrName) : Number.NaN;
       for (const o of objects) {
         if (o.kind !== kind) continue;
         if (!Number.isNaN(id) && o.id === id) return o;
