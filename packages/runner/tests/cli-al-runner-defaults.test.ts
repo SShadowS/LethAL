@@ -409,6 +409,77 @@ describe("R387: buildBackend's al-runner defaults", () => {
   });
 });
 
+/**
+ * R505: al-runner c39ad5de labels coverage from the LIVE project, so with coverage on a backend
+ * built from a session snapshot checks the project before and after every coverage-producing
+ * call, on both transports, and a change stops the session (it never becomes a verdict).
+ */
+describe("R505: buildBackend watches the project while coverage is read", () => {
+  async function backendFor(serverMode: boolean, withSnapshot: boolean) {
+    const proj = await project();
+    await writeFile(join(proj, "Logic.Codeunit.al"), "codeunit 79100 Logic\n{\n}\n", "utf8");
+    const snapshot = await readTargetSource(proj);
+    const server = fakeAlRunnerServer([TEST]);
+    const backend = (await buildBackend(
+      runConfig(proj),
+      {
+        alRunner: {
+          alRunnerPath: "al-runner.exe",
+          coverage: "al-runner",
+          serverMode,
+          selectorMode: "static",
+        },
+      },
+      scratch("lethal-r505-"),
+      undefined,
+      { alRunnerSpawn: oneShot, alRunnerServerSpawn: server.spawn },
+      IDS,
+      ...(withSnapshot ? [snapshot] : []),
+    )) as AlRunnerBackend;
+    backend.useBuildSymbols([]);
+    await backend.deploy(await batch());
+    return { backend, proj };
+  }
+  const go = (backend: AlRunnerBackend) => backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+
+  for (const [transport, serverMode] of [
+    ["one-shot", false],
+    ["--server", true],
+  ] as const) {
+    // Revert: drop the `projectWatch` checks from `sendOneShot` / `ensureServerSuite`.
+    test(`${transport}: an edited project stops the run, naming the file`, async () => {
+      const { backend, proj } = await backendFor(serverMode, true);
+      try {
+        await writeFile(join(proj, "Logic.Codeunit.al"), "codeunit 79100 Logic\n{\n// x\n}\n");
+        await expect(go(backend)).rejects.toThrow(/changed Logic\.Codeunit\.al.*--resume/);
+      } finally {
+        await backend.close();
+      }
+    });
+    // The control: an unchanged project runs.
+    test(`${transport}: an unchanged project runs`, async () => {
+      const { backend } = await backendFor(serverMode, true);
+      try {
+        expect((await go(backend)).outcome).toBe("pass");
+      } finally {
+        await backend.close();
+      }
+    });
+  }
+
+  // Revert: build the watch without a snapshot. The itests build no snapshot and must not be
+  // watched (their fixtures do not change).
+  test("without a session snapshot nothing is watched", async () => {
+    const { backend, proj } = await backendFor(false, false);
+    try {
+      await writeFile(join(proj, "Logic.Codeunit.al"), "codeunit 79100 Logic\n{\n// x\n}\n");
+      expect((await go(backend)).outcome).toBe("pass");
+    } finally {
+      await backend.close();
+    }
+  });
+});
+
 describe("R387: platformAppsAgreement reports the daemon's directory against leg A's", () => {
   const legA = "C:\\x\\28.1.1.1\\platform-apps";
   const said = (dir: string) => `[provision] platform apps already complete at ${dir}.\n`;

@@ -71,6 +71,7 @@ import {
 } from "./env-tool-session";
 import type { EnvToolSession } from "./env-tool-session";
 import { loadEquivalenceMarks } from "./equivalence-marks";
+import { watchProjectInputs } from "./source-drift";
 
 // Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
 export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
@@ -2955,7 +2956,9 @@ export async function resolveEnvToolSession(
 export type BackendInputs = Pick<
   RunCliConfig,
   "backendKind" | "projectDir" | "testDir" | "stopHungSessions"
->;
+> &
+  // R505: the run's own output files, which the source-drift watch must not count.
+  Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
 export async function buildBackend(
   parsed: BackendInputs,
@@ -3003,6 +3006,13 @@ export async function buildBackend(
         instrumentedDir: join(scratchDir, "al-runner-active"),
         testDir: parsed.testDir,
         sourceProjectDir: parsed.projectDir,
+        // R505: with coverage on, al-runner labels it from the LIVE project; read it only while
+        // the project still equals the session snapshot.
+        ...(t.coverage !== "none" && source !== undefined
+          ? {
+              projectWatch: watchProjectInputs(parsed.projectDir, source, runOutputPaths(parsed)),
+            }
+          : {}),
         ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
         selectorObjectId: selectorIds.selectorId,
         serverMode: t.serverMode,
@@ -3757,12 +3767,13 @@ async function removeScratchQuietly(dir: string): Promise<void> {
  * copies them into a batch dir: the results database and its SQLite sidecars, `--out`, and
  * `--progress-out`.
  */
-export function runOutputPaths(parsed: RunCliConfig): readonly string[] {
+export function runOutputPaths(
+  parsed: Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>,
+): readonly string[] {
   return [
-    parsed.dbPath,
-    `${parsed.dbPath}-wal`,
-    `${parsed.dbPath}-shm`,
-    `${parsed.dbPath}-journal`,
+    ...(parsed.dbPath !== undefined
+      ? [parsed.dbPath, `${parsed.dbPath}-wal`, `${parsed.dbPath}-shm`, `${parsed.dbPath}-journal`]
+      : []),
     ...(parsed.outPath !== undefined ? [parsed.outPath] : []),
     ...(parsed.progressOutPath !== undefined ? [parsed.progressOutPath] : []),
   ];

@@ -10002,6 +10002,19 @@ function isToolResourcePath(rel: string): boolean {
 }
 
 /**
+ * A project file the batch copies as a RESOURCE: not `.al`, not an already-built `.app`, not an
+ * `app.json`, not under a tool directory (`isToolResourcePath`). The run's own output files are
+ * the caller's to exclude, by exact path. R505: the source-drift watch reads the same set, so the
+ * guard and the batch agree on which files are build inputs.
+ */
+export function isProjectResource(rel: string): boolean {
+  const lower = rel.toLowerCase();
+  if (lower.endsWith(".al") || lower.endsWith(".app")) return false;
+  if (basename(lower) === "app.json") return false;
+  return !isToolResourcePath(rel);
+}
+
+/**
  * R219: THE flat-name map of a batch, over the project's `.al` files as the batch copies them.
  * Every writer of one batch takes this one instance: `writeInstrumentedProject`'s `flatNames` and
  * `prepareBatchProject`'s last argument. Two maps over different file lists would name a duplicate
@@ -10125,9 +10138,7 @@ export async function prepareBatchProject(
     if (!entry.isFile()) continue;
     const rel = relative(projectDir, join(entry.parentPath, entry.name));
     const lower = rel.toLowerCase();
-    if (lower.endsWith(".al") || lower.endsWith(".app")) continue;
-    if (basename(lower) === "app.json") continue;
-    if (isToolResourcePath(rel)) continue;
+    if (!isProjectResource(rel)) continue;
     if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
     if (lower.replaceAll("\\", "/") === reserved) refuseReserved(rel);
     const dest = join(batchDir, rel);
@@ -10172,7 +10183,7 @@ export async function prepareBatchProject(
 }
 
 /** R363: one comparable form of a path. Windows paths compare case-insensitively. */
-function outputPathKey(p: string): string {
+export function outputPathKey(p: string): string {
   const r = resolve(p);
   return process.platform === "win32" ? r.toLowerCase() : r;
 }
