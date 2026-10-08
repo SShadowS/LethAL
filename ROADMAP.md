@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**59 of 500 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**60 of 501 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -214,6 +214,7 @@ that ordering is the priority.
 - **R501** · Condition-side mutants of a report data item's exit guard, and removing the exit itself, can hang an open Integer item · [R501.md](docs/roadmap/R501.md) · open, filed 2026-10-07
 - **R502** · The receiver resolver reads a namespace-qualified data item table (`System.Utilities.Integer`) as its first segment · [R502.md](docs/roadmap/R502.md) · open, filed 2026-10-08
 - **R503** · The runMany watchdog's GetOperationStatus poll has no timeout, so a poll BC never answers holds the call forever · [R503.md](docs/roadmap/R503.md) · open, filed 2026-10-08
+- **R504** · The lease client's `postLeaseAction` clears its abort timer once the headers arrive, so a lease response body BC never finishes has no bound (the R191 class) · [R504.md](docs/roadmap/R504.md) · open, filed 2026-10-08
 
 ## Product gaps a real project hits
 

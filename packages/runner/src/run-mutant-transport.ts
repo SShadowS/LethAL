@@ -573,6 +573,7 @@ export class RunMutantTransport {
   private readonly fetchFn: FetchFn;
   private readonly state: ControlState;
   private readonly drainMs: number;
+  private readonly pollBoundMs: number;
 
   /** R499: the shared control state; `BcDevMcpBackend.bindTransport` checks it is the backend's own. */
   get controlState(): ControlState {
@@ -640,10 +641,13 @@ export class RunMutantTransport {
       readonly controlState?: ControlState;
       /** R499 test seam: the drain bound, `CONTROL_DRAIN_MS` when absent. */
       readonly drainMs?: number;
+      /** R503 test seam: the watchdog's per-poll bound, `KEPT_ANSWER_READ_MS` when absent. */
+      readonly pollBoundMs?: number;
     } = {},
   ) {
     this.state = opts.controlState ?? newControlState();
     this.drainMs = opts.drainMs ?? CONTROL_DRAIN_MS;
+    this.pollBoundMs = opts.pollBoundMs ?? KEPT_ANSWER_READ_MS;
     // R-496: every fetch this transport makes records an unfiltered-extensions refusal for the
     // CURRENT public call (async-local, so concurrent calls never share a record), then rethrows.
     // R499: the wrapper's OWN promise is registered as in flight and removed in its `finally`, so a
@@ -753,12 +757,15 @@ export class RunMutantTransport {
   /**
    * R198: the watchdog's status read, on this transport's own connection rather than through
    * `LeaseClient`, so `runMany` is testable with one fake fetch. Same wire shape, same parser.
+   * R503: `timeoutMs` is required, so no caller can make an unbounded status read; it arms the
+   * fetch's abort, and both callers here (the watchdog, `completedBeforeStop`) also race the read
+   * with `bounded` at the same number, for a fetch that ignores its abort.
    */
   async getOperationStatus(
     lease: LeaseTuple,
     attemptId: string,
     opSeq: number,
-    timeoutMs?: number,
+    timeoutMs: number,
   ): Promise<OperationStatus> {
     const json = await this.postAction(
       "GetOperationStatus",
@@ -1214,8 +1221,18 @@ export class RunMutantTransport {
         const seq = ++pollSeq;
         const sentAt = Date.now();
         trace("poll-sent", { seq });
+        // R503: bounded like `completedBeforeStop`, clamped to the hard cap like `stopBound`; a
+        // poll that does not answer in time is a failed poll and the loop goes on.
+        const pollBound = Math.max(
+          0,
+          Math.min(this.pollBoundMs, hardCapMs - (Date.now() - started)),
+        );
         try {
-          status = await this.getOperationStatus(lease, attemptId, lease.opSeq);
+          status = await bounded(
+            this.getOperationStatus(lease, attemptId, lease.opSeq, pollBound),
+            pollBound,
+            "GetOperationStatus",
+          );
         } catch (err) {
           pollsFailed++;
           trace("poll-failed", { seq, sentAt, error: describeThrown(err) });

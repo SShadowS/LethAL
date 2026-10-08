@@ -43,7 +43,10 @@ import { bcFetch } from "../../packages/runner/src/bc-fetch";
 import type { LethalConfigFile } from "../../packages/runner/src/cli";
 import { odataBaseUrl, validateBcDevConfig } from "../../packages/runner/src/cli";
 import { HarnessVerifier } from "../../packages/runner/src/harness";
-import { RunMutantTransport } from "../../packages/runner/src/run-mutant-transport";
+import {
+  KEPT_ANSWER_READ_MS,
+  RunMutantTransport,
+} from "../../packages/runner/src/run-mutant-transport";
 import { type CallTrace, traceFetch } from "./fetch-trace";
 
 /** Pure per §A2's "Reading, first match wins" (task-2-brief step 1). */
@@ -570,7 +573,7 @@ async function main(): Promise<void> {
     if (arm === "T") tBreaks++;
     else sBreaks++;
     const status = await tx
-      .getOperationStatus(leaseTuple(), attemptId, r.opSeq)
+      .getOperationStatus(leaseTuple(), attemptId, r.opSeq, KEPT_ANSWER_READ_MS)
       .catch((err: unknown) => ({ error: String(err) }) as const);
     writeRecord(out, { kind: "status-read", arm, pair, status });
     try {
