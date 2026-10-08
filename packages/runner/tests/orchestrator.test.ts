@@ -12109,17 +12109,18 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
       e.type === "warning" && e.code === "resume-baseline-reused" ? [e.message] : [],
     );
   const FIXED = new Error("disk full R508");
-  /** `store.invalidateBatch` throws FIXED from its `from`-th call on (1-based) until `heal()`. */
-  function breakInvalidate(store: ResultsStore, from: number): { heal: () => void } {
+  /** `store.invalidateBatch` throws FIXED between `fail()` and `heal()`. */
+  function breakableInvalidate(store: ResultsStore): { fail: () => void; heal: () => void } {
     const real = store.invalidateBatch.bind(store);
-    let calls = 0;
-    let broken = true;
+    let broken = false;
     store.invalidateBatch = (runId, batchIndex, note) => {
-      calls++;
-      if (broken && calls >= from) throw FIXED;
+      if (broken) throw FIXED;
       return real(runId, batchIndex, note);
     };
     return {
+      fail: () => {
+        broken = true;
+      },
       heal: () => {
         broken = false;
       },
@@ -12258,7 +12259,7 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
 
   test("a failed store write throws LostBatchNotStoredError after the event, and warns", async () => {
     const { store, common } = await setup();
-    breakInvalidate(store, 1);
+    breakableInvalidate(store).fail();
     const events: RunEvent[] = [];
     const { out: err, warned } = await capturingWarn(() =>
       runSession({
@@ -12281,7 +12282,7 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
 
   test("a failed store write after a late refusal warns the refusal, then throws LostBatchNotStoredError", async () => {
     const { store, common } = await setup();
-    breakInvalidate(store, 1);
+    breakableInvalidate(store).fail();
     const backend = batchBackend(LOSE);
     const late = new UnfilteredExtensionsQueryError("backend late refusal R508");
     Object.assign(backend, { takeLateRefusal: () => late });
@@ -12298,7 +12299,7 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
 
   test("a failed store write while the session is already failing warns that error, then throws LostBatchNotStoredError", async () => {
     const { store, common } = await setup();
-    breakInvalidate(store, 1);
+    breakableInvalidate(store).fail();
     // The lease-lost mutant's own row is recorded after the loss note: that write fails.
     const realRecord = store.recordMutant.bind(store);
     store.recordMutant = (runId, row) => {
@@ -12318,13 +12319,18 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
 
   test("crash stand-in: only onLost's write lands, and the resume still carries nothing of the lost batch", async () => {
     const { store, common } = await setup();
-    // onLost's write (the first) succeeds; the finally's (every later one) fails, standing in for
-    // a process that dies before its `finally` could correct anything.
-    const broken = breakInvalidate(store, 2);
+    // onLost's write (at the loss) succeeds; the store breaks when teardown reaches `close()`, so
+    // the finally's write fails. That stands in for a process that dies before its `finally`
+    // could correct anything.
+    const broken = breakableInvalidate(store);
     const err = await capturingWarn(() =>
       runSession({
         ...common,
-        backend: batchBackend(LOSE),
+        backend: batchBackend(LOSE, {
+          close: async () => {
+            broken.fail();
+          },
+        }),
         lease: leaseCfg(new FakeLeaseClient()).lease,
       }).catch((e: unknown) => e),
     );
