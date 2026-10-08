@@ -332,7 +332,8 @@ describe("OneShotTransport exit 3: read only a proven test-timeout abort (R518)"
   });
 
   test("(a) a second suite-error line that is not a timeout abort refuses", async () => {
-    const errors = [ABORT_LINE, "tests: EXEC-FAIL: app group threw"];
+    // The EXEC-FAIL line names the row too, so only the marker check can refuse it.
+    const errors = [ABORT_LINE, ABORT_LINE.replace("TEST-TIMEOUT-ABORT", "EXEC-FAIL")];
     const res = await sendExit3(alRunnerStdout(envelope({ suiteErrors: [{ file: "/t", errors }] })));
     expect(res.kind).toBe("error");
   });
@@ -375,6 +376,8 @@ describe("OneShotTransport exit 3: read only a proven test-timeout abort (R518)"
   test("(f) a non-string suite-error entry refuses", async () => {
     const env = envelope({ suiteErrors: [{ file: "/t", errors: [ABORT_LINE, 42] }] });
     expect((await sendExit3(alRunnerStdout(env))).kind).toBe("error");
+    // Refused, not thrown: `send` would turn a throw into an error too, hiding a missing guard.
+    expect(timeoutAbortTests(alRunnerStdout(env))).toBeUndefined();
   });
 
   test("(f) an envelope exitCode other than 3 on a process exit 3 refuses; null is absent", async () => {

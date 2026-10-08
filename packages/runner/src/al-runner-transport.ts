@@ -543,8 +543,8 @@ function absentOrEmpty(v: unknown): boolean {
  * 1. the envelope parses and has a `tests` array;
  * 2. `compilationErrors` and `executionErrors` are absent, `null` or empty, and the envelope's own
  *    `exitCode`, when present, is 3;
- * 3. `suiteErrors` is a non-empty array, each entry has an `errors` array of strings, and the
- *    flattened list is non-empty (an empty list must not pass `every`);
+ * 3. `suiteErrors` is an array, each entry has an `errors` array of strings, and the flattened
+ *    list is non-empty (an empty list must not pass `every`);
  * 4. every line's marker is exactly `TEST-TIMEOUT-ABORT`;
  * 5. every line names a row whose status is neither `pass` nor `fail`, matched from the row side
  *    as al-runner's `AbortReasonNamesTest` does.
@@ -565,7 +565,7 @@ export function timeoutAbortTests(stdout: string): readonly AlRunnerRawTest[] | 
   if (!absentOrEmpty(e.compilationErrors) || !absentOrEmpty(e.executionErrors)) return undefined;
   if (e.exitCode !== undefined && e.exitCode !== null && e.exitCode !== 3) return undefined;
   const suiteErrors = e.suiteErrors;
-  if (!Array.isArray(suiteErrors) || suiteErrors.length === 0) return undefined;
+  if (!Array.isArray(suiteErrors)) return undefined;
   const lines: string[] = [];
   for (const entry of suiteErrors) {
     const errors =
@@ -578,6 +578,7 @@ export function timeoutAbortTests(stdout: string): readonly AlRunnerRawTest[] | 
       lines.push(line);
     }
   }
+  // Covers `suiteErrors: []` too. Without it `[].every(...)` passes: empty-vs-empty.
   if (lines.length === 0) return undefined;
   if (!lines.every((l) => alRunnerMarkerOf(l) === "TEST-TIMEOUT-ABORT")) return undefined;
   const needles: string[] = [];
