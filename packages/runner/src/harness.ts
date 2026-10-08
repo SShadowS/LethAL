@@ -1,6 +1,6 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import { compareAppVersions } from "./app-version";
-import { bcFetch } from "./bc-fetch";
+import { BcAnswerUnreadError, bcFetch, readJsonBody, withDeadline } from "./bc-fetch";
 
 /**
  * The `LethAL Control` extension's own app id and the protocol version this client speaks. A
@@ -522,11 +522,28 @@ export class HarnessVerifier {
   }
 
   /** One GET against a BC API list endpoint, returning its `value` rows. The company parameter is
-   *  never sent: these endpoints address the company in the path, or list across companies. */
-  private async fetchApiRows(
+   *  never sent: these endpoints address the company in the path, or list across companies.
+   *  R506: the bound spans the headers AND the body; an unread body throws, never an empty value. */
+  private fetchApiRows(
     path: string,
     what: string,
     extra: Readonly<Record<string, string>> = {},
+  ): Promise<readonly unknown[]> {
+    const ms = this.cfg.timeoutMs ?? 30_000;
+    return withDeadline(
+      ms,
+      what,
+      (signal) => this.readApiRows(path, what, extra, signal, ms),
+      (m, kind) => new BcAnswerUnreadError(m, kind),
+    );
+  }
+
+  private async readApiRows(
+    path: string,
+    what: string,
+    extra: Readonly<Record<string, string>>,
+    signal: AbortSignal,
+    ms: number,
   ): Promise<readonly unknown[]> {
     // R433: before the URL is built, so a refused query never reaches the network.
     // `extra` comes from a caller, so no tenant is allowed in it: the configured one is added below.
@@ -538,8 +555,6 @@ export class HarnessVerifier {
     const sent = new URL(`${this.cfg.baseUrl}/${path}${query}`);
     refuseUnfilteredExtensionsQuery(sent.pathname, [...sent.searchParams], this.cfg.tenant);
     const url = sent.href;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -550,13 +565,18 @@ export class HarnessVerifier {
         },
         // R-496 review: a followed redirect would send a request the guard above never saw.
         redirect: "manual",
-        signal: controller.signal,
+        signal,
       });
     } catch (err) {
       if (err instanceof UnfilteredExtensionsQueryError) throw err;
+      // R506: our own abort is a timeout, never "unreachable".
+      if (signal.aborted) {
+        throw new BcAnswerUnreadError(
+          `${what} gave no answer within ${ms} ms: ${String(err)}`,
+          "timeout",
+        );
+      }
       throw new HarnessVerificationError(`${what} unreachable: ${String(err)}`);
-    } finally {
-      clearTimeout(timer);
     }
     if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
       // Never followed. A destination the guard refuses throws the guard's own error, so it
@@ -586,12 +606,9 @@ export class HarnessVerifier {
         `${what} failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
       );
     }
-    let value: unknown;
-    try {
-      value = ((await res.json()) as { value?: unknown }).value;
-    } catch {
-      value = undefined;
-    }
+    const value = odataValue(
+      await readJsonBody(res, signal, what, ms, (m, kind) => new BcAnswerUnreadError(m, kind)),
+    );
     if (!Array.isArray(value)) {
       throw new HarnessVerificationError(`${what} returned no \`value\` array`);
     }
@@ -738,13 +755,24 @@ export class HarnessVerifier {
     return "enforced";
   }
 
-  private async fetchHarnessInfo(): Promise<HarnessInfo> {
+  /** R506: the bound spans the headers AND the body; an unread body throws, never an empty
+   *  value. A timeout or an unreadable 2xx is `BcAnswerUnreadError`, never
+   *  `HarnessVerificationError`, so it is never read as "the control app is missing". */
+  private fetchHarnessInfo(): Promise<HarnessInfo> {
+    const ms = this.cfg.timeoutMs ?? 30_000;
+    return withDeadline(
+      ms,
+      "HarnessInfo",
+      (signal) => this.readHarnessInfo(signal, ms),
+      (m, kind) => new BcAnswerUnreadError(m, kind),
+    );
+  }
+
+  private async readHarnessInfo(signal: AbortSignal, ms: number): Promise<HarnessInfo> {
     const params = new URLSearchParams({ company: this.cfg.company });
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_HarnessInfo?${params.toString()}`;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -757,14 +785,19 @@ export class HarnessVerifier {
         // refused by the OData layer before HarnessInfo's own check ever runs — that asymmetry
         // is what makes v1↔v2 incompatible by construction, so this key must always be sent.
         body: JSON.stringify({ clientProtocol: CLIENT_PROTOCOL_VERSION }),
-        signal: controller.signal,
+        signal,
       });
     } catch (err) {
       // R-496: a redirect to an unfiltered extensions list, refused by `bcFetch`, stays itself.
       if (err instanceof UnfilteredExtensionsQueryError) throw err;
+      // R506: our own abort is a timeout, never "unreachable" (which would republish).
+      if (signal.aborted) {
+        throw new BcAnswerUnreadError(
+          `HarnessInfo gave no answer within ${ms} ms: ${String(err)}`,
+          "timeout",
+        );
+      }
       throw new HarnessVerificationError(`HarnessInfo unreachable: ${String(err)}`);
-    } finally {
-      clearTimeout(timer);
     }
     if (!res.ok) {
       // R25: read the body BEFORE throwing — BC's own rejection text is the only evidence that
@@ -794,12 +827,15 @@ This is an AUTHENTICATION failure, not a missing or stale control app: the reque
         `HarnessInfo failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
       );
     }
-    let value: unknown;
-    try {
-      value = ((await res.json()) as { value?: unknown }).value;
-    } catch {
-      value = undefined;
-    }
+    const value = odataValue(
+      await readJsonBody(
+        res,
+        signal,
+        "HarnessInfo",
+        ms,
+        (m, kind) => new BcAnswerUnreadError(m, kind),
+      ),
+    );
     if (typeof value !== "string") {
       throw new HarnessVerificationError("HarnessInfo returned no string `value`");
     }
@@ -809,6 +845,13 @@ This is an AUTHENTICATION failure, not a missing or stale control app: the reque
       throw new HarnessVerificationError(`HarnessInfo value is not JSON: ${value}`);
     }
   }
+}
+
+/** A parsed body's OData `value`, or `undefined` when the body is not an object. */
+function odataValue(body: unknown): unknown {
+  return typeof body === "object" && body !== null
+    ? (body as { value?: unknown }).value
+    : undefined;
 }
 
 function asStringArray(v: unknown): string[] {

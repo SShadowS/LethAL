@@ -1,5 +1,5 @@
 import type { ActivationConfig, FetchFn } from "./activation";
-import { bcFetch } from "./bc-fetch";
+import { bcFetch, readJsonBody, withDeadline } from "./bc-fetch";
 import { UnfilteredExtensionsQueryError } from "./harness";
 
 /**
@@ -154,25 +154,32 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 /**
  * POSTs `LethALControl_PermissionCanary`. Request-shaping (Basic auth, `company`/`tenant` query
- * params, manual `AbortController` timeout — `AbortSignal.timeout()` is unreliable in this
- * Bun/Windows environment, see activation.ts) mirrors `postLeaseAction` in lease.ts and
- * `RunMutantTransport`; it is not shared with `postOData` for the same reason those aren't — that
- * helper's non-2xx classification belongs to `MutationControl`, and mapping a 404 here to anything
- * other than "the action is not published" would be wrong.
+ * params, a manual `AbortController` timeout, as every BC client here uses) mirrors
+ * `postLeaseAction` in lease.ts and `RunMutantTransport`; mapping a 404 here to anything other
+ * than "the action is not published" would be wrong.
+ * R506: the bound spans the headers AND the body; an unread body throws, never an empty value.
  */
 export class PermissionCanaryClient implements PermissionCanaryProbe {
   constructor(
     private readonly cfg: ActivationConfig,
     private readonly fetchFn: FetchFn = bcFetch,
+    private readonly timeoutMs: number = PERMISSION_CANARY_TIMEOUT_MS,
   ) {}
 
-  async probe(): Promise<Record<string, unknown>> {
+  probe(): Promise<Record<string, unknown>> {
+    return withDeadline(
+      this.timeoutMs,
+      "LethALControl_PermissionCanary",
+      (signal) => this.readAnswer(signal),
+      (m) => new PermissionCanaryUnavailableError(m),
+    );
+  }
+
+  private async readAnswer(signal: AbortSignal): Promise<Record<string, unknown>> {
     const params = new URLSearchParams({ company: this.cfg.company });
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_PermissionCanary?${params.toString()}`;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PERMISSION_CANARY_TIMEOUT_MS);
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -182,15 +189,13 @@ export class PermissionCanaryClient implements PermissionCanaryProbe {
           "content-type": "application/json",
         },
         body: "{}",
-        signal: controller.signal,
+        signal,
       });
     } catch (err) {
       if (err instanceof UnfilteredExtensionsQueryError) throw err;
       throw new PermissionCanaryUnavailableError(
         `LethALControl_PermissionCanary unreachable: ${String(err)}`,
       );
-    } finally {
-      clearTimeout(timer);
     }
     if (!res.ok) {
       // A 404 here is the expected shape of "an older LethAL Control is published" — named
@@ -204,14 +209,13 @@ export class PermissionCanaryClient implements PermissionCanaryProbe {
         `LethALControl_PermissionCanary failed: HTTP ${res.status}${hint}`,
       );
     }
-    let envelope: unknown;
-    try {
-      envelope = await res.json();
-    } catch {
-      throw new PermissionCanaryUnavailableError(
-        "LethALControl_PermissionCanary 2xx body is not JSON",
-      );
-    }
+    const envelope = await readJsonBody(
+      res,
+      signal,
+      "LethALControl_PermissionCanary",
+      this.timeoutMs,
+      (m) => new PermissionCanaryUnavailableError(m),
+    );
     const value = isRecord(envelope) ? envelope.value : undefined;
     if (typeof value !== "string") {
       throw new PermissionCanaryUnavailableError(

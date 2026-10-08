@@ -1,6 +1,12 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { CompiledArtifact } from "./artifact";
-import { bcFetch } from "./bc-fetch";
+import {
+  BcAnswerUnreadError,
+  type BcReadFailure,
+  bcFetch,
+  readJsonBody,
+  withDeadline,
+} from "./bc-fetch";
 import { UnfilteredExtensionsQueryError } from "./harness";
 
 /**
@@ -124,44 +130,50 @@ export class DeploymentVerifier {
   }
 
   /**
-   * Shapes and sends the `LethALControl_RegisteredArtifact` POST directly — its OWN request
-   * method, deliberately NOT `postOData` (activation.ts), which hardcodes the dead
-   * `MutationControl_` action prefix. Mirrors `HarnessVerifier.fetchHarnessInfo` (harness.ts).
+   * Shapes and sends the `LethALControl_RegisteredArtifact` POST directly, with a manual
+   * AbortController as every BC client here uses. Mirrors `HarnessVerifier.fetchHarnessInfo`.
+   * R506: the bound spans the headers AND the body; an unread body throws, never an empty value.
    * Returns the raw registry value: `null` when the response is missing/non-2xx/malformed or the
    * OData `value` isn't a string; otherwise the bare string exactly as reported (including "",
    * for "no row registered", and any malformed-but-string value) — `verify()` above is
    * responsible for classifying that value, not this method.
    */
-  private async readRegisteredArtifact(targetAppId: string): Promise<string | null> {
-    const params = new URLSearchParams({ company: this.cfg.company });
-    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
-    const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_RegisteredArtifact?${params.toString()}`;
-
-    // AbortSignal.timeout() is unreliable in this Bun/Windows env (see activation.ts) — manual
-    // AbortController + setTimeout instead.
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
-    let res: Response;
-    try {
-      res = await this.fetchFn(url, {
-        method: "POST",
-        headers: {
-          authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ targetAppId }),
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) {
-      // Surfaced as a thrown error (rather than a quiet `null`) so `verify()`'s catch above can
-      // carry the HTTP status into `detail` — collapsing this to `null` would make an HTTP 500
-      // indistinguishable from "server answered 200 with no `value`".
-      throw new Error(`LethALControl_RegisteredArtifact failed: HTTP ${res.status}`);
-    }
-    const value = ((await res.json().catch(() => ({}))) as { value?: unknown }).value;
-    return typeof value === "string" ? value : null;
+  private readRegisteredArtifact(targetAppId: string): Promise<string | null> {
+    const ms = this.cfg.timeoutMs ?? 30_000;
+    const what = "LethALControl_RegisteredArtifact";
+    const fail = (m: string, kind: BcReadFailure) => new BcAnswerUnreadError(m, kind);
+    return withDeadline(
+      ms,
+      what,
+      async (signal) => {
+        const params = new URLSearchParams({ company: this.cfg.company });
+        if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
+        const url = `${this.cfg.baseUrl}/ODataV4/${what}?${params.toString()}`;
+        const res = await this.fetchFn(url, {
+          method: "POST",
+          headers: {
+            authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ targetAppId }),
+          signal,
+        });
+        if (!res.ok) {
+          // Surfaced as a thrown error (rather than a quiet `null`) so `verify()`'s catch above
+          // can carry the HTTP status into `detail` — collapsing this to `null` would make an
+          // HTTP 500 indistinguishable from "server answered 200 with no `value`".
+          throw new Error(`${what} failed: HTTP ${res.status}`);
+        }
+        // R506: no `{}` default. An unread body throws, so "did not report" can only come from
+        // a PARSED body without a string `value`.
+        const envelope = await readJsonBody(res, signal, what, ms, fail);
+        const value =
+          typeof envelope === "object" && envelope !== null
+            ? (envelope as { value?: unknown }).value
+            : undefined;
+        return typeof value === "string" ? value : null;
+      },
+      fail,
+    );
   }
 }

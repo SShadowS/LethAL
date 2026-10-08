@@ -1573,7 +1573,7 @@ rather than being its own field, with port **7048** injected regardless of what 
 `server` carries (`odataBaseUrl()`, `packages/runner/src/cli.ts`) — verified against a real BC
 server 2026-07-18: `server`/`serverInstance` are also used unqualified for bc-dev-mcp's own
 dev-service protocol (port 7049 by default), but the OData/web-service endpoint
-`MutationControlClient` talks to lives on 7048, not 7049 or 80. `tenant`, when present, is also
+the LethAL Control clients talk to lives on 7048, not 7049 or 80. `tenant`, when present, is also
 forwarded to every OData call as `?tenant=...` — without it, Basic auth fails outright (401)
 even with a correct username/password, on this container's single "default" tenant included.
 

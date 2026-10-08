@@ -25,7 +25,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { bcFetch } from "./bc-fetch";
+import { BcAnswerUnreadError, bcFetch, withDeadline } from "./bc-fetch";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
@@ -386,6 +386,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
   async fetchPublishedAppPackage(
     app: { readonly publisher: string; readonly name: string },
     fetchFn: FetchLike = bcFetch,
+    timeoutMs: number = PUBLISHED_PACKAGE_TIMEOUT_MS,
   ): Promise<Uint8Array | null | undefined> {
     // `undefined`, not `null`: this configuration cannot form the request at all (no dev server or
     // no dev-endpoint credentials configured), so there is nothing for the caller to report. An
@@ -398,16 +399,23 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const password = this.cfg.env?.BC_DEV_PASSWORD;
     if (username === undefined || password === undefined) return undefined;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PUBLISHED_PACKAGE_TIMEOUT_MS);
     try {
-      const res = await fetchFn(url, {
-        method: "GET",
-        headers: { authorization: `Basic ${btoa(`${username}:${password}`)}` },
-        signal: controller.signal,
-      });
-      if (!res.ok) return null;
-      return new Uint8Array(await res.arrayBuffer());
+      // R506: one deadline over the headers AND the body, held even for a body that ignores
+      // its abort. A timeout is still a `null` below.
+      return await withDeadline(
+        timeoutMs,
+        "dev/packages",
+        async (signal) => {
+          const res = await fetchFn(url, {
+            method: "GET",
+            headers: { authorization: `Basic ${btoa(`${username}:${password}`)}` },
+            signal,
+          });
+          if (!res.ok) return null;
+          return new Uint8Array(await res.arrayBuffer());
+        },
+        (m, k) => new BcAnswerUnreadError(m, k),
+      );
     } catch (err) {
       // R-496: the one exception. A redirect to an unfiltered extensions list is a refused
       // request (R433), not an unreadable package, and must stop the run.
@@ -416,8 +424,6 @@ export class BcDevMcpBackend implements ExecutionBackend {
       // connection, a DNS failure and an abort as three unrelated error shapes, and every one of
       // them means the same thing here — this check has nothing to say.
       return null;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
