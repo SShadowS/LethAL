@@ -108,6 +108,18 @@ wrong frame, R383. `#if`: R298, pending R300.) Without coverage an unreached mut
 fail to fail a test in 2026-07; that was fixed upstream in v2 and the startup canary re-measures
 it every session.)
 
+**Do not edit the project during an al-runner run with coverage on (R505).** al-runner
+v2.12.0-main.c39ad5de labels coverage with the files of the project it finds beside the test app,
+as they are on disk at that moment, while LethAL compiled the run's snapshot. If an object moves
+to another file, or a file is renamed, its coverage would be credited to the wrong object or
+dropped. So `lethal run` checks the project's `.al` files, `app.json` and resources before and
+after every al-runner call that produces coverage. On any change it stops with
+`ProjectChangedDuringRunError`, naming the first files that changed. Undo the change, or wait for
+the run to end, then continue with `lethal run --resume`. **Limit:** an edit that is undone
+between two checks, so it starts and ends inside one al-runner call, is not seen. A `git checkout`
+of another branch and back during a run is exactly that, so do not do it. Upstream fixed the
+labelling after this build (#5249); once the pinned al-runner moves past it, the check only refuses.
+
 **al-runner settings (R387).** The `alRunner` section accepts `alRunnerPath`, `packagesDir`,
 `serverMode`, `selectorMode` and `coverage`, and refuses any other key by name. With none of the last
 three set, `lethal run` uses `--server` (one daemon per worker) and the resource selector (one compile

@@ -567,6 +567,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **An al-runner run with coverage stops if the project changes under it** (R505). The pinned
+  al-runner (`v2.12.0-main.c39ad5de`) labels coverage with the project's files as they are on disk,
+  not the files LethAL compiled, so an object moved or renamed during a run had its coverage
+  credited to the wrong object or dropped. `lethal run` now checks the project's `.al` files,
+  `app.json` and resources before and after every al-runner call that produces coverage, and stops
+  with `ProjectChangedDuringRunError` naming what changed. `--resume` continues the run. An edit
+  undone within one al-runner call is not seen. Upstream fixed the labelling after the pinned
+  build (#5249).
 - **A tableextension or subscriber codeunit whose header is split by `#if` now keeps a table's
   trigger tags** (R494). Such an object was in no index the trigger-skip rule reads, so a
   `run-trigger-skipped-*` or `run-trigger-forced` tag it should have kept was dropped. It is now
