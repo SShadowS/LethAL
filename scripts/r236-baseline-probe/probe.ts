@@ -719,7 +719,12 @@ function sessionHooks(
         try {
           return {
             atMs: at - brokeAt,
-            status: await status.getOperationStatus(lease, attemptId, opSeq),
+            status: await status.getOperationStatus(
+              lease,
+              attemptId,
+              opSeq,
+              MARKER_READ_TIMEOUT_MS,
+            ),
           };
         } catch (err) {
           return { atMs: at - brokeAt, error: String(err) };
