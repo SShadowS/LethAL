@@ -222,6 +222,90 @@ const EXPECTED_ON: ReadonlyArray<{
 /** R206: the warm kills of the ON leg, all in the new arm: three warm fails and one warm timeout. */
 const EXPECTED_WARM_KILLS = 4;
 
+/**
+ * R516: the cold confirms of the position-1 timeouts, pinned as NUMBERS, never read back from the
+ * report (`docs/superpowers/specs/2026-10-08-r516-hang-confirm-every-timeout-precommitment.md`).
+ * ON: lines 37, 43, 44 and 73 (line 145 is at position 2 and is confirmed by its replay instead).
+ * SINGLE: the same four plus line 145, every call holding one method.
+ */
+const EXPECTED_COLD_CONFIRMS_ON = 4;
+const EXPECTED_COLD_CONFIRMS_SINGLE = 5;
+
+/**
+ * R516: every position-1 timeout is confirmed by ONE unmutated `RunMutant` call before it is
+ * scored. A cold confirm row is exactly `mutant_code IS NULL AND op_kind IS NULL` (a replay row is
+ * op_kind `many`; never "op_kind not many", which SQL would compare as unknown for NULL). For each
+ * `timeout-killed` mutant at position 1, keyed by the `mutant_row_id` of its own timeout row: exactly
+ * one such row, for the killing test, outcome `pass`, inside half the budget (R53's margin). On the
+ * ON leg the position-2 timeout (line 145) has none.
+ */
+function assertColdConfirms(label: string, leg: LegResult, expected: number): void {
+  const { report, testRows } = leg;
+  const coldConfirmsOf = (m: SessionReport["mutants"][number]) => {
+    const stopped = testRows.find((r) => r.mutant_code === m.mutantCode && r.outcome === "timeout");
+    assert.ok(stopped !== undefined, `[${label}] R516: ${m.mutantCode} has no timeout row`);
+    assert.ok(
+      stopped.mutant_row_id !== null,
+      `[${label}] R516: ${m.mutantCode}'s timeout row has no mutant_row_id`,
+    );
+    return testRows.filter(
+      (r) =>
+        r.mutant_row_id === stopped.mutant_row_id && r.mutant_code === null && r.op_kind === null,
+    );
+  };
+  const timeoutKilled = report.mutants.filter((m) => m.verdict === "timeout-killed");
+  let total = 0;
+  for (const m of timeoutKilled) {
+    const rows = coldConfirmsOf(m);
+    if (m.killPosition !== 1) {
+      assert.equal(
+        rows.length,
+        0,
+        `[${label}] R516: ${m.mutantCode} (line ${m.line}) is a position-${m.killPosition} timeout, confirmed by its replay; it must have no cold confirm row, got ${rows.length}`,
+      );
+      continue;
+    }
+    assert.equal(
+      rows.length,
+      1,
+      `[${label}] R516: ${m.mutantCode} (line ${m.line}) must have exactly one cold confirm row, got ${rows.length}`,
+    );
+    const [row] = rows;
+    assert.ok(row !== undefined);
+    assert.equal(
+      row.method,
+      m.killingTest,
+      `[${label}] R516: ${m.mutantCode}'s confirm ran ${row.method}`,
+    );
+    assert.equal(
+      row.outcome,
+      "pass",
+      `[${label}] R516: ${m.mutantCode}'s confirm answered ${row.outcome}`,
+    );
+    assert.ok(
+      2 * row.duration_ms <= BUDGET_MS,
+      `[${label}] R516: ${m.mutantCode}'s confirm took ${row.duration_ms} ms, more than half the ${BUDGET_MS} ms budget`,
+    );
+    total += 1;
+  }
+  assert.equal(
+    total,
+    expected,
+    `[${label}] R516: expected ${expected} cold confirms of position-1 timeouts, got ${total}`,
+  );
+  if (label === "ON") {
+    const line145 = timeoutKilled.find(
+      (m) => m.line === 145 && m.operatorName === "lethal.void-method-call",
+    );
+    assert.ok(line145 !== undefined, "[ON] R516: line 145's timeout-killed mutant is missing");
+    assert.equal(
+      coldConfirmsOf(line145).length,
+      0,
+      "[ON] R516: line 145 must have no cold confirm row",
+    );
+  }
+}
+
 async function readJson<T>(path: string, what: string): Promise<T> {
   let text: string;
   try {
@@ -239,7 +323,11 @@ interface LegResult {
   /** `test_results` rows for this run, so the gate can assert BC's own words, not just a verdict. */
   readonly testRows: ReadonlyArray<{
     readonly op_kind: string | null;
-    mutant_code: string;
+    /** NULL on a confirm row (R514/R516's cold confirm, R206's replay). */
+    mutant_code: string | null;
+    /** R516: the mutant row a test row belongs to, a confirm row included. */
+    mutant_row_id: number | null;
+    method: string;
     outcome: string;
     duration_ms: number;
     failure_message: string | null;
@@ -350,7 +438,7 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
     });
     const testRows = store.db
       .query(
-        "SELECT mutant_code, outcome, duration_ms, failure_message, op_kind FROM test_results ORDER BY id",
+        "SELECT mutant_code, mutant_row_id, method, outcome, duration_ms, failure_message, op_kind FROM test_results ORDER BY id",
       )
       .all() as LegResult["testRows"];
     const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
@@ -613,6 +701,7 @@ function assertOnLeg(leg: LegResult): void {
       `${m.mutantCode}'s timeout row must come from a grouped call (op_kind many), got ${stopped?.op_kind}`,
     );
   }
+  assertColdConfirms("ON", leg, EXPECTED_COLD_CONFIRMS_ON);
 }
 
 /**
@@ -686,6 +775,7 @@ function assertSingleLeg(leg: LegResult): void {
     `[SINGLE] the report must carry the stop-hung-sessions caveat; got ${JSON.stringify(report.validity.caveats)}`,
   );
   assert.equal(report.quarantined, undefined, "[SINGLE] the leg must leave the tier unquarantined");
+  assertColdConfirms("SINGLE", leg, EXPECTED_COLD_CONFIRMS_SINGLE);
 }
 
 function assertOffLeg(leg: LegResult): void {
