@@ -2990,6 +2990,8 @@ class LeaseSession {
       try {
         outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
       } catch (first) {
+        // R504: after `stop()` (finish may have released) a renew answer is evidence of nothing.
+        if (this.#stopped) return;
         try {
           outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
         } catch (second) {
@@ -3001,7 +3003,7 @@ class LeaseSession {
           return;
         }
       }
-      if (!outcome.renewed) {
+      if (!outcome.renewed && !this.#stopped) {
         this.noteLeaseLost("RenewLease answered renewed:false — the lease is no longer ours");
       }
     } finally {

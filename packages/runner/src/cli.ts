@@ -80,7 +80,7 @@ import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
 import { HarnessVerifier } from "./harness";
 import type { LeaseSnapshot } from "./harness";
-import { LeaseClient } from "./lease";
+import { LeaseClient, LeaseUnavailableError } from "./lease";
 import { changedLinesSince, parseLineArg } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { toMutationElements } from "./mutation-elements";
@@ -5643,6 +5643,13 @@ export async function forceResetLeaseFromCli(
   try {
     result = await performForceResetLease(odataCfg, deps.fetchFn ?? bcFetch);
   } catch (err) {
+    // R504: only the ForceResetLease call throws this class here (HarnessVerifier has its own).
+    // It was sent; only its answer is missing, so the reset may have landed.
+    if (err instanceof LeaseUnavailableError) {
+      throw new Error(
+        `force-reset-lease: the ForceResetLease call gave no usable answer, so ForceResetLease may have been applied; re-run \`lethal force-reset-lease\` to read the current generation and reset again (a re-run is safe). Underlying error: ${err.message}`,
+      );
+    }
     throw new Error(
       `force-reset-lease: could not complete the reset — the HarnessInfo/ForceResetLease call failed. Is the "LethAL Control" extension deployed and the NST at ${parsed.server}/${parsed.serverInstance} reachable? If you have not already, restart the NST/container first (design §8 step 1), then retry. Underlying error: ${err instanceof Error ? err.message : String(err)}`,
     );

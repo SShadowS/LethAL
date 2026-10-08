@@ -81,5 +81,18 @@ export class BcRedirectRefusedError extends Error {
   }
 }
 
+/** R-204b: `p`, or a rejection once `ms` has passed, for a fetch that ignores its abort signal. */
+export function bounded<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let guard: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    p,
+    new Promise<never>((_resolve, reject) => {
+      guard = setTimeout(() => reject(new Error(`${what} gave no answer within ${ms} ms`)), ms);
+    }),
+  ]).finally(() => {
+    if (guard !== undefined) clearTimeout(guard);
+  });
+}
+
 /** The `fetch` every BC-facing client defaults to. Tests inject their own and never see this. */
 export const bcFetch: FetchFn = withFreshConnectionOnHttps(refuseRedirects(fetch));

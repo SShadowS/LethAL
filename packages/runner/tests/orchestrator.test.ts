@@ -53,7 +53,7 @@ import type { RunEvent } from "../src/events";
 import { MalformedReportError, assertExplainableReport, explain } from "../src/explain";
 import { ActivationFailure } from "../src/failure-classes";
 import { InstalledBundleError, openInstalledBundle } from "../src/installed-bundle";
-import { LeaseUnavailableError } from "../src/lease";
+import { LeaseClient, LeaseUnavailableError } from "../src/lease";
 import type {
   AcquireOutcome,
   BeginPublishOutcome,
@@ -71,6 +71,8 @@ import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
 import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { bundleFor, tinyBundle } from "./helpers/bundle";
+import { IDLE_STATUS, leaseRouter } from "./helpers/lease-wire";
+import type { WireAnswer } from "./helpers/lease-wire";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -11095,6 +11097,319 @@ describe("runSession — Layer 5C-B1 Task 8: renew heartbeat (design §6 step 3)
     await timers.fire(); // a tick after the loss must not renew again
     expect(client.renewArgs).toHaveLength(1);
     expect(timers.cleared).toBeGreaterThan(0);
+  });
+});
+
+// R504: every caller of a lease action, through a REAL `LeaseClient` on a router fetch that
+// stalls one action's body. A missing bound goes red by the test timing out, never by a clock.
+describe("R504: a lease answer whose body never finishes, through a real LeaseClient", () => {
+  const TIER = "http://cronus281|BC";
+  const MARKER = {
+    opKind: "run",
+    opAttemptId: "a9",
+    opSeq: 9,
+    lastCompletedOpSeq: 8,
+    completed: false,
+  } as const;
+  const WIRE_CFG = {
+    baseUrl: "http://bc:7048/BC",
+    company: "CRONUS Danmark A/S",
+    username: "u",
+    password: "p",
+  } as const;
+
+  function wired(
+    answers: Parameters<typeof leaseRouter>[0],
+    timeoutMs = 20,
+  ): { calls: Record<string, number>; client: LeaseClient } {
+    const router = leaseRouter(answers);
+    return {
+      calls: router.calls,
+      client: new LeaseClient({ ...WIRE_CFG, timeoutMs }, router.fetchFn),
+    };
+  }
+  function warnings(events: readonly RunEvent[], code: string): string[] {
+    return events.flatMap((e) => (e.type === "warning" && e.code === code ? [e.message] : []));
+  }
+  const TIMED_OUT = /(body not read|gave no answer) within 20 ms/;
+  const pass = (ref: TestMethodRef, opts: { coverage?: string }) => ({
+    ref,
+    outcome: "pass" as const,
+    durationMs: 1,
+    ...(opts.coverage === "none"
+      ? { attestation: { observedAny: true, identityMismatch: false } }
+      : {}),
+  });
+
+  test("C1: a stalled ReleaseLease at finish warns lease-release-failed and is never a release", async () => {
+    const { calls, client } = wired({ ReleaseLease: () => "stall" });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    expect(calls.ReleaseLease).toBe(1);
+    const failed = warnings(events, "lease-release-failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatch(TIMED_OUT);
+    expect(warnings(events, "lease-release-refused")).toHaveLength(0);
+  });
+
+  test("C2: a stalled marker read at finish warns lease-marker-read-failed and never releases", async () => {
+    const { calls, client } = wired({
+      GetOperationStatus: (n) => (n >= 2 ? "stall" : IDLE_STATUS),
+    });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    expect(calls.GetOperationStatus).toBe(2);
+    const failed = warnings(events, "lease-marker-read-failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatch(TIMED_OUT);
+    expect(calls.ReleaseLease ?? 0).toBe(0);
+  });
+
+  test("C3: a stalled ownership renew under a set marker records the recycle and never releases", async () => {
+    const dir = freshTmpDir();
+    const { calls, client } = wired({
+      GetOperationStatus: (n) => (n >= 2 ? MARKER : IDLE_STATUS),
+      RenewLease: () => "stall",
+    });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    await runSessionForTest(leaseBackend(), {
+      quarantineDir: dir,
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const unconfirmed = warnings(events, "lease-ownership-unconfirmed");
+    expect(unconfirmed).toHaveLength(1);
+    expect(unconfirmed[0]).toMatch(TIMED_OUT);
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("container-needs-recycle");
+    expect(calls.ReleaseLease ?? 0).toBe(0);
+    expect(warnings(events, "lease-marker-foreign")).toHaveLength(0);
+  });
+
+  test("C4: R249 keep-lease, then every later action stalls: the lease is kept, never released", async () => {
+    const { calls, client } = wired({
+      BeginPublish: () => ({ begun: false }),
+      RenewLease: (n) =>
+        n === 1 ? { renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" } : "stall",
+      GetOperationStatus: (n) => (n === 1 ? IDLE_STATUS : n === 2 ? MARKER : "stall"),
+    });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    const err = await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(warnings(events, "lease-kept-under-marker")).toHaveLength(1);
+    expect(calls.ReleaseLease ?? 0).toBe(0);
+  });
+
+  test("C5: a stalled heartbeat renew warns, never latches, and the next tick renews again", async () => {
+    const { calls, client } = wired({ RenewLease: () => "stall" });
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    let fired = false;
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        if (!fired) {
+          fired = true;
+          await timers.fire();
+          await timers.fire(); // the NEXT tick: a stalled renew must not hold `#ticking` forever
+        }
+        return pass(ref, opts);
+      },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const unanswered = warnings(events, "lease-renew-unanswered");
+    expect(unanswered).toHaveLength(2);
+    expect(unanswered[0]).toMatch(TIMED_OUT);
+    expect(calls.RenewLease).toBe(4); // two ticks, each one renew and one retry
+    expect(report.quarantined).toBeUndefined();
+    expect(events.some((e) => e.type === "batch-invalidated")).toBe(false);
+  });
+
+  /**
+   * C5b: a heartbeat renew is still open when `finish()` stops the session and releases. The first
+   * renew's response is held by the test and settled from inside ReleaseLease, so the order is
+   * fixed by the fake, not by a clock: `finish()` has already called `stop()` when it settles.
+   */
+  async function renewOpenAcrossFinish(
+    settleFirst: (c: ReadableStreamDefaultController<Uint8Array>) => void,
+  ) {
+    let first: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let tick: Promise<unknown> | undefined;
+    const { calls, client } = wired(
+      {
+        RenewLease: (n): WireAnswer =>
+          n === 1
+            ? new Response(
+                new ReadableStream<Uint8Array>({
+                  start(c) {
+                    first = c;
+                    c.enqueue(new TextEncoder().encode('{"value":'));
+                  },
+                }),
+                { status: 200 },
+              )
+            : { renewed: false },
+        ReleaseLease: async () => {
+          if (first === undefined) throw new Error("C5b: the heartbeat renew was never opened");
+          settleFirst(first);
+          await tick; // the pulse finishes before finish() returns
+          return { released: true };
+        },
+      },
+      4000,
+    );
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const backend = leaseBackend({
+      run: async (ref, opts) => {
+        if (tick === undefined) tick = Promise.resolve(timers.fn?.());
+        return pass(ref, opts);
+      },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    return { calls, events, report };
+  }
+
+  function expectNoLatch(r: Awaited<ReturnType<typeof renewOpenAcrossFinish>>): void {
+    expect(r.report.quarantined).toBeUndefined();
+    expect(r.events.some((e) => e.type === "batch-invalidated")).toBe(false);
+    expect(JSON.stringify(r.events)).not.toContain("lease-lost");
+    expect(r.calls.ReleaseLease).toBe(1);
+  }
+
+  test("C5b guard 1: a renew that fails after finish() stopped the session is not retried", async () => {
+    const r = await renewOpenAcrossFinish((c) => c.error(new Error("connection reset")));
+    expect(r.calls.RenewLease).toBe(1);
+    expectNoLatch(r);
+  });
+
+  test("C5b guard 2: a renewed:false answered after finish() stopped the session is not a loss", async () => {
+    const r = await renewOpenAcrossFinish((c) => {
+      c.enqueue(new TextEncoder().encode(`${JSON.stringify(JSON.stringify({ renewed: false }))}}`));
+      c.close();
+    });
+    expect(r.calls.RenewLease).toBe(1);
+    expectNoLatch(r);
+  });
+
+  test("C6: a stalled AcquireLease rejects once and records nothing", async () => {
+    const dir = freshTmpDir();
+    const { calls, client } = wired({ AcquireLease: () => "stall" });
+    const { lease } = leaseCfg(client);
+    const err = await runSessionForTest(leaseBackend(), { quarantineDir: dir, lease }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(String(err)).toMatch(TIMED_OUT);
+    expect(calls.AcquireLease).toBe(1);
+    expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
+  });
+
+  test("C7: a stalled hook BeginPublish is uncertain, never a refusal, and latches", async () => {
+    const { calls, client } = wired({ BeginPublish: () => "stall" });
+    const events: RunEvent[] = [];
+    const { lease } = leaseCfg(client);
+    const err = await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+      afterLeaseAcquired: async () => {},
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(err instanceof LeaseUnavailableError ? err.beginPublishRefusal : "x").toBeUndefined();
+    expect(warnings(events, "after-lease-acquired-uncertain")).toHaveLength(1);
+    expect(warnings(events, "after-lease-acquired-refused")).toHaveLength(0);
+    expect(calls.BeginPublish).toBe(1);
+    expect(calls.ReleaseLease).toBe(1); // the later marker read is idle
+  });
+
+  test("C7b: a stalled batch BeginPublish fails the session with no R90 row and no retry", async () => {
+    const { calls, client } = wired({ BeginPublish: () => "stall" });
+    const store = new ResultsStore(":memory:");
+    const { lease } = leaseCfg(client);
+    const err = await runSessionForTest(leaseBackend(), {
+      quarantineDir: freshTmpDir(),
+      lease,
+      store,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(String(err)).toMatch(TIMED_OUT);
+    expect(store.publishOutcomes(TIER)).toEqual([]);
+    expect(calls.BeginPublish).toBe(1);
+    expect(calls.ReleaseLease).toBe(1);
+  });
+
+  test("C8: a stalled reconciling status read leaves a lost ack unresolved, never recovered or killed", async () => {
+    const { calls, client } = wired({
+      GetOperationStatus: (_n, body) => (body.attemptId === "a10" ? "stall" : IDLE_STATUS),
+    });
+    const events: RunEvent[] = [];
+    let active: string | null = null;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        active = id;
+      },
+      run: async (ref, opts) =>
+        active === "M0002"
+          ? {
+              ref,
+              outcome: "error" as const,
+              durationMs: 1,
+              failureMessage: 'RunMutant returned no string `value` (HTTP 200), body: ""',
+              operation: "in-flight-unknown" as const,
+              fencedOp: { attemptId: "a10", opSeq: 304 },
+            }
+          : pass(ref, opts),
+    });
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const failed = warnings(events, "lease-reconcile-failed");
+    expect(failed.length).toBeGreaterThan(0);
+    expect(failed[0]).toMatch(TIMED_OUT);
+    expect(calls.RecoverOp ?? 0).toBe(0);
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("error");
+    expect(report.mutants.some((m) => m.verdict === "killed")).toBe(false);
+  });
+
+  test("C9: a stalled EndPublish whose reconciling read also stalls latches and records the recycle", async () => {
+    const dir = freshTmpDir();
+    const { calls, client } = wired({
+      EndPublish: () => "stall",
+      GetOperationStatus: (_n, body) => (body.attemptId !== "" ? "stall" : IDLE_STATUS),
+    });
+    const { lease } = leaseCfg(client);
+    const report = await runSessionForTest(leaseBackend(), { quarantineDir: dir, lease });
+    expect(report.quarantined).toBeDefined();
+    expect((await new QuarantineStore(dir).read(TIER))?.opKind).toBe("container-needs-recycle");
+    expect(calls.RecoverOp ?? 0).toBe(0);
   });
 });
 
