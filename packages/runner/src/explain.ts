@@ -1566,7 +1566,7 @@ function blocksOf(
     withholdAll ||
     (lineNarrowed &&
       (report.lines === undefined || !spanCovered(report.lines.ranges, file, first, last)));
-  // R447: per FILE, where R196 refused a loop step: that step has no row, so "every recorded row
+  // R447: per FILE, where R196 refused a loop step (or R487/R501 a report data-item site): that site has no row, so "every recorded row
   // survived" says nothing about it. Per file, not per block: the row carries no spans.
   const hangRefusedFiles = new Set(
     (report.excludedSites?.files ?? [])

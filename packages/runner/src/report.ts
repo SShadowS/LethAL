@@ -2648,7 +2648,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     (f) => f.reason === "not-instrumentable" && f.sites > 0,
   );
   const leftOutRows = [...undecidedRows, ...notInstrumentableRows];
-  // R447: sites R196's hang check refused. Only rows WITH sites narrow, like R399's.
+  // R447: sites the hang checks refused (R196, R487/R501). Only rows WITH sites narrow, like R399's.
   const hangRows = input.excludedSites.files.filter(
     (f) => f.reason === "hang-refused" && f.sites > 0,
   );
@@ -2812,7 +2812,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     // none, and then nothing is missing from the score. Compiled-out and declarative rows are not
     // measurable sites, so they stay out of this.
     leftOutRows.length > 0 ||
-    // R447: a loop step R196 refused was never mutated either.
+    // R447: a site the hang checks refused (R196, R487/R501) was never mutated either.
     hangRows.length > 0;
   // R190: a run that measured nothing is degraded whatever its baseline said.
   const degraded = !input.baselineGreen || allErrors;
