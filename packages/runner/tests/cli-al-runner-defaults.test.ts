@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../itest/cli-default-leg";
 import { AL_RUNNER_PROVISION_SENTINEL, type AlRunnerBackend } from "../src/al-runner-backend";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
+import type { AlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import { isPredefinedProbeArgv, predefinedProbeArgv } from "../src/al-runner-predefined-probe";
 import { readTargetSource } from "../src/baseline-snapshot";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
@@ -25,6 +26,7 @@ import {
   validateAlRunnerConfig,
   withAlRunnerCoverageGuard,
 } from "../src/cli";
+import { prepareBatchProject } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
 import { fakeAlRunnerServer } from "./helpers/fake-al-runner-server";
@@ -322,6 +324,45 @@ describe("R387: buildBackend's al-runner defaults", () => {
       IDS,
     )) as AlRunnerBackend;
     expect(backend.capabilities().coverage).toBe("al-runner");
+  });
+
+  // R219 run 003: the coverage index resolves a shared file name against the project al-runner
+  // labels coverage under. Revert: drop `sourceProjectDir` from `buildBackend`'s al-runner config.
+  test("the coverage index of a renamed batch knows the project directory", async () => {
+    const proj = await project();
+    const unit = (id: number) => `codeunit ${id} "H${id}"\n{\n}\n`;
+    await writeFile(join(proj, "Helper.Codeunit.al"), unit(79100), "utf8");
+    await mkdir(join(proj, "Sub"));
+    await writeFile(join(proj, "Sub", "Helper.Codeunit.al"), unit(79101), "utf8");
+    const dir = scratch("lethal-r219-batch-");
+    await prepareBatchProject(proj, dir, { id: "x" }, "1.0.0.0");
+    await writeFile(
+      join(dir, "mutant-manifest.json"),
+      JSON.stringify({ artifactId: "b".repeat(32), mutants: [] }),
+      "utf8",
+    );
+    const backend = (await buildBackend(
+      runConfig(proj),
+      {
+        alRunner: {
+          alRunnerPath: "al-runner.exe",
+          coverage: "al-runner",
+          serverMode: false,
+          selectorMode: "static",
+        },
+      },
+      scratch("lethal-r219-cov-"),
+      undefined,
+      {},
+      IDS,
+    )) as AlRunnerBackend;
+    backend.useBuildSymbols([]);
+    await backend.deploy(dir);
+    await backend.coverageRefusals();
+    const { coverageIndex } = backend as unknown as { coverageIndex?: AlRunnerCoverageIndex };
+    expect(coverageIndex?.exact?.projectDir).toBe(
+      proj.split("\\").join("/").toLowerCase(),
+    );
   });
 });
 

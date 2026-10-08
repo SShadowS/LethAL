@@ -43,7 +43,7 @@
  * only tests use it today.
  */
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { evaluateArms, initParser, parseAL } from "@lethal/engine";
 import { wrapRoot } from "@lethal/engine";
 import type { ServerPerTestCoverage } from "./al-runner-server";
@@ -53,6 +53,7 @@ import {
   type LineMapEntry,
   activeEntries,
   alRunnerAdmitsWrappedFile,
+  batchDisplayPaths,
   duplicateObjectRefusals,
   fileHoldsWrappedObject,
   fileLineMapEntries,
@@ -153,6 +154,29 @@ export interface AlRunnerCoverageIndex {
    * multi-object file is in `byFile`, so it is never here.
    */
   readonly skippedFiles: readonly string[];
+  /**
+   * R219 run 003: how a reported path whose LAST SEGMENT two or more files own is resolved. Such a
+   * path is never matched by suffix (sol run 002: `Sales/Helper.al` against `X/Sales/Helper.al`, or
+   * a project path against another file's flat name). It is resolved exactly, in two namespaces:
+   * under `projectDir` it is a project-relative path; directly in `batchDir` it is a flat name.
+   * Neither, or both to different files, is refused. Absent: no contested segment (indexes built
+   * by hand in tests).
+   */
+  readonly exact?: ExactResolution;
+  /** R219: how to quote a reported path to a user (a renamed flat name becomes its project path). */
+  readonly displayOf?: (path: string) => string;
+}
+
+/** R219 run 003: see `AlRunnerCoverageIndex.exact`. Paths are resolved, `/`-separated, lower-cased. */
+export interface ExactResolution {
+  readonly batchDir: string;
+  readonly projectDir?: string;
+  /** Last segments (lower-cased) that the keys of two or more files end in. */
+  readonly contested: ReadonlySet<string>;
+  /** Lower-cased flat name -> the file's flat `byFile` key. */
+  readonly byFlatName: ReadonlyMap<string, string>;
+  /** Lower-cased project-relative path -> the file's flat `byFile` key. */
+  readonly byProjectPath: ReadonlyMap<string, string>;
 }
 
 /**
@@ -242,6 +266,12 @@ export async function buildAlRunnerCoverageIndex(
   options: {
     readonly admitMultiObjectFiles?: boolean;
     readonly symbols?: readonly string[];
+    /**
+     * R219 run 003: the project al-runner may label coverage under (it discovers the source
+     * project beside the test app, measured on c39ad5de). Without it, a source-path label for a
+     * contested file name is refused.
+     */
+    readonly sourceProjectDir?: string;
   } = {},
 ): Promise<AlRunnerCoverageIndex> {
   await initParser();
@@ -254,6 +284,18 @@ export async function buildAlRunnerCoverageIndex(
     .map((e) => e.toString())
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .sort();
+  // R219: a file the batch renamed is QUOTED by its project path. And it is KEYED by both names:
+  // al-runner labels coverage with whichever path it knows for this app id, measured on c39ad5de
+  // on both transports as the project SOURCE path (`proj/Sales/Helper.Codeunit.al`) or a batch's
+  // own flat path (`batch/Helper.Codeunit.8de4e0ea.al`), never a bare duplicate basename.
+  const display = await batchDisplayPaths(instrumentedDir);
+  const shown = (rel: string): string => normalizeSlashes(display(rel));
+  const keysOf = (rel: string): string[] => {
+    const flat = normalizeFileKey(rel);
+    const project = normalizeFileKey(display(rel));
+    return project === flat ? [flat] : [flat, project];
+  };
+  const exact = exactResolutionOf(rels, keysOf, display, instrumentedDir, options.sourceProjectDir);
 
   const byFile = new Map<string, readonly LineMapEntry[]>();
   const multiObjectFiles: string[] = [];
@@ -265,16 +307,16 @@ export async function buildAlRunnerCoverageIndex(
   const refusals = new Map<string, string>();
   const admittedWrappedFiles = new Set<string>();
   /** Files that pass every per-file rule, before the duplicate-key pass. */
-  const candidates: { file: string; key: string; entries: LineMapEntry[] }[] = [];
+  const candidates: { file: string; keys: string[]; entries: LineMapEntry[] }[] = [];
 
   for (const rel of rels) {
     const source = await readFile(join(instrumentedDir, rel), "utf8");
     const root = wrapRoot(parseAL(source));
     const admitted = alRunnerAdmitsWrappedFile(root);
     if (fileHoldsWrappedObject(root) && !admitted) {
-      const file = normalizeSlashes(rel);
+      const file = shown(rel);
       refusedFiles.push(file);
-      skippedFiles.push(normalizeFileKey(rel));
+      skippedFiles.push(...keysOf(rel));
       for (const [key, reason] of refusedObjectsOfFile(root, file, "al-runner")) {
         exempt.add(key);
         refusals.set(key, reason);
@@ -289,9 +331,9 @@ export async function buildAlRunnerCoverageIndex(
       // undecided (R303's emitted ERROR nodes do).
       const arms = evaluateArms(root, source, symbols);
       if (arms.kind === "undecided") {
-        const file = normalizeSlashes(rel);
+        const file = shown(rel);
         refusedFiles.push(file);
-        skippedFiles.push(normalizeFileKey(rel));
+        skippedFiles.push(...keysOf(rel));
         for (const e of fileEntries) {
           const key = `${e.objectType.toLowerCase()}:${e.objectId}`;
           const reason = undecidedArmsReason(e.objectType, e.objectId, file, arms.reason);
@@ -308,20 +350,20 @@ export async function buildAlRunnerCoverageIndex(
     if (refusedAsMultiObject(root)) {
       // Forward slashes so the warning reads the same on every platform: `readdir` hands back
       // `src\X.al` on Windows, and this string is quoted to a user who has to find the file.
-      multiObjectFiles.push(normalizeSlashes(rel));
+      multiObjectFiles.push(shown(rel));
       for (const e of fileEntries) exempt.add(`${e.objectType.toLowerCase()}:${e.objectId}`);
       // Not indexed, so nothing can resolve against a file al-runner reports in the wrong frame.
       if (options.admitMultiObjectFiles !== true) {
-        skippedFiles.push(normalizeFileKey(rel));
+        skippedFiles.push(...keysOf(rel));
         continue;
       }
     }
     candidates.push({
-      file: normalizeSlashes(rel),
-      key: normalizeFileKey(rel),
+      file: shown(rel),
+      keys: keysOf(rel),
       entries: fileEntries,
     });
-    if (admitted) admittedWrappedFiles.add(normalizeFileKey(rel));
+    if (admitted) for (const k of keysOf(rel)) admittedWrappedFiles.add(k);
   }
 
   // LOWER-CASED to match `line-map.ts`'s own `keyOf`. Getting this wrong does not throw: the
@@ -342,11 +384,13 @@ export async function buildAlRunnerCoverageIndex(
   for (const c of candidates) {
     const kept = c.entries.filter((e) => !duplicates.has(keyOfEntry(e)));
     if (kept.length === 0) {
-      skippedFiles.push(c.key);
-      admittedWrappedFiles.delete(c.key);
+      for (const k of c.keys) {
+        skippedFiles.push(k);
+        admittedWrappedFiles.delete(k);
+      }
       continue;
     }
-    byFile.set(c.key, kept);
+    for (const k of c.keys) byFile.set(k, kept);
     for (const e of kept) declared.add(keyOfEntry(e));
     entries.push(...kept);
   }
@@ -362,7 +406,92 @@ export async function buildAlRunnerCoverageIndex(
     exempt,
     refusals,
     skippedFiles,
+    ...(exact !== undefined ? { exact } : {}),
+    displayOf: (path) => normalizeSlashes(display(path)),
   };
+}
+
+/** A directory as `ExactResolution` compares it: absolute, `/`-separated, lower-cased, no trailing `/`. */
+function dirKey(dir: string): string {
+  return normalizeFileKey(resolve(dir)).replace(/\/+$/, "");
+}
+
+/**
+ * R219 run 003. Refuses two files whose keys collide once lower-cased (sol run 002:
+ * `Sales/Helper.al` and `sales/Helper.al` on a case-sensitive file system, where one alias would
+ * silently replace the other), then returns the exact maps when the batch renamed a file and any
+ * last segment is contested.
+ */
+function exactResolutionOf(
+  rels: readonly string[],
+  keysOf: (rel: string) => string[],
+  display: (rel: string) => string,
+  batchDir: string,
+  projectDir: string | undefined,
+): ExactResolution | undefined {
+  const owner = new Map<string, string>();
+  const ownersOfSegment = new Map<string, Set<string>>();
+  for (const rel of rels) {
+    for (const key of keysOf(rel)) {
+      const other = owner.get(key);
+      if (other !== undefined && other !== rel) {
+        throw new Error(
+          `cannot index al-runner coverage: "${normalizeSlashes(display(other))}" and "${normalizeSlashes(display(rel))}" both answer to "${key}" once case is ignored, so a coverage path naming one could be credited to the other (R219). Rename one of the files.`,
+        );
+      }
+      owner.set(key, rel);
+      const segment = key.split("/").pop() ?? key;
+      const owners = ownersOfSegment.get(segment) ?? new Set<string>();
+      owners.add(rel);
+      ownersOfSegment.set(segment, owners);
+    }
+  }
+  const contested = new Set(
+    [...ownersOfSegment].filter(([, owners]) => owners.size > 1).map(([segment]) => segment),
+  );
+  // Only a batch that renamed a file has two namespaces to confuse. LethAL writes every batch flat,
+  // so a batch without renames has unique names; a hand-built nested one keeps R298's longest
+  // ending, which stops at a skipped file's own path.
+  if (contested.size === 0 || rels.every((rel) => display(rel) === rel)) return undefined;
+  return {
+    batchDir: dirKey(batchDir),
+    ...(projectDir !== undefined ? { projectDir: dirKey(projectDir) } : {}),
+    contested,
+    byFlatName: new Map(rels.map((rel) => [normalizeFileKey(rel), normalizeFileKey(rel)])),
+    byProjectPath: new Map(
+      rels.map((rel) => [normalizeFileKey(display(rel)), normalizeFileKey(rel)]),
+    ),
+  };
+}
+
+/**
+ * R219 run 003: a reported path whose last segment is contested, resolved exactly (see
+ * `AlRunnerCoverageIndex.exact`). Returns the file's flat key; throws when the path names no
+ * file, or two different ones.
+ */
+function resolveContested(file: string, exact: ExactResolution): string {
+  // The one-shot transport reports paths relative to al-runner's cwd, which is LethAL's own
+  // (measured on c39ad5de: `../../tmp/.../batch/X.al`); `--server` reports them absolute.
+  const abs = dirKey(file);
+  const { projectDir } = exact;
+  const inProject =
+    projectDir !== undefined && abs.startsWith(`${projectDir}/`)
+      ? exact.byProjectPath.get(abs.slice(projectDir.length + 1))
+      : undefined;
+  const inBatch =
+    dirname(abs) === exact.batchDir ? exact.byFlatName.get(abs.split("/").pop() ?? "") : undefined;
+  if (inProject !== undefined && inBatch !== undefined && inProject !== inBatch) {
+    throw new Error(
+      `al-runner reported coverage for "${file}", which names one file as a project path and another as a batch file name (R219). Refusing rather than crediting either. Rename one of the files, or run with "alRunner.coverage": "none".`,
+    );
+  }
+  const hit = inProject ?? inBatch;
+  if (hit === undefined) {
+    throw new Error(
+      `al-runner reported coverage for "${file}", but two or more files of this batch end in that name (renamed by their folder, R219), and the path is neither inside the project (${projectDir ?? "not known"}) nor directly in the batch (${exact.batchDir}). Refusing rather than dropping that coverage or crediting it to the wrong file. Rename one of the files, or run with "alRunner.coverage": "none".`,
+    );
+  }
+  return hit;
 }
 
 /**
@@ -411,7 +540,16 @@ function indexedFile(
   index: AlRunnerCoverageIndex,
   skipped: ReadonlySet<string>,
 ): { readonly key: string; readonly entries: readonly LineMapEntry[] } | undefined {
-  for (const cand of fileKeyCandidates(file)) {
+  const cands = fileKeyCandidates(file);
+  // R219 run 003: a contested last segment is resolved exactly, never by the longest suffix.
+  const { exact } = index;
+  if (exact?.contested.has(cands.at(-1) ?? "") === true) {
+    const key = resolveContested(file, exact);
+    if (skipped.has(key)) return undefined;
+    const hit = index.byFile.get(key);
+    return hit !== undefined ? { key, entries: hit } : undefined;
+  }
+  for (const cand of cands) {
     if (skipped.has(cand)) return undefined;
     const hit = index.byFile.get(cand);
     if (hit !== undefined) return { key: cand, entries: hit };
@@ -506,6 +644,8 @@ export function alRunnerCoverageFromServer(
     const found = indexedFile(file.file, index, skipped);
     if (found === undefined) continue;
     const objects = found.entries;
+    // R219: a renamed batch file is quoted by its project path.
+    const shownFile = index.displayOf?.(file.file) ?? file.file;
     // R-300b (I3): in an admitted wrapped file a disagreement drops the line instead.
     const strict = index.admittedWrappedFiles.has(found.key);
     for (const st of file.statements ?? []) {
@@ -530,13 +670,13 @@ export function alRunnerCoverageFromServer(
           if (byPosition !== undefined) {
             if (strict && st.scope?.toLowerCase() !== byPosition.toLowerCase()) {
               console.warn(
-                `[lethal] al-runner --server named the covered statement at ${file.file}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}", in a #if-wrapped file; the line is dropped (R300).`,
+                `[lethal] al-runner --server named the covered statement at ${shownFile}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}", in a #if-wrapped file; the line is dropped (R300).`,
               );
               continue;
             }
             if (st.scope?.toLowerCase() !== byPosition.toLowerCase()) {
               console.warn(
-                `[lethal] al-runner --server named the covered statement at ${file.file}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}"; the position wins (R383).`,
+                `[lethal] al-runner --server named the covered statement at ${shownFile}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}"; the position wins (R383).`,
               );
             }
             procedure = byPosition;

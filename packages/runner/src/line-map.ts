@@ -14,6 +14,7 @@ import {
   startsInInactiveArm,
   wrapRoot,
 } from "@lethal/engine";
+import { FLAT_NAMES_FILENAME, displayPathsOf } from "@lethal/schemata";
 import type { BuildBackend } from "./preprocessor-symbols";
 
 /**
@@ -1139,11 +1140,29 @@ export async function readAlSources(projectDir: string): Promise<AlSource[]> {
     .map((e) => e.toString())
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .sort();
+  // R219: a batch file given a disambiguated flat name is named by its project path, since the
+  // path is only ever quoted (refusals), never read again.
+  const display = await batchDisplayPaths(projectDir);
   const out: AlSource[] = [];
   for (const path of files) {
-    out.push({ path, text: await readFile(join(projectDir, path), "utf8") });
+    out.push({ path: display(path), text: await readFile(join(projectDir, path), "utf8") });
   }
   return out;
+}
+
+/**
+ * R219: how to quote a file of batch directory `dir` to a user: its project path when the batch
+ * wrote it under a disambiguated flat name (`FLAT_NAMES_FILENAME`), else unchanged. A directory
+ * without the record (every batch with unique basenames, any non-batch directory) changes nothing.
+ */
+export async function batchDisplayPaths(dir: string): Promise<(path: string) => string> {
+  let sidecar: string | undefined;
+  try {
+    sidecar = await readFile(join(dir, FLAT_NAMES_FILENAME), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  return displayPathsOf(sidecar);
 }
 
 /** `buildLineMap` over sources already read (C02-04b: the preflight's in-memory copy). */

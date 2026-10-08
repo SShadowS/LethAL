@@ -575,7 +575,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   durations do not change. A transport factory must pass the new `controlState` argument to the
   transport; one that ignores it is refused at deploy or attach. The watchdog's status poll still
   has no timeout of its own (R503).
-
+- **A project with two `.al` files of the same name in different folders can be instrumented**
+  (R219). Batches are written flat, so such a project used to be refused ("two source files share
+  the basename"). That is how Continia Document Capture failed, with its two `ScannerUI.al`. Now
+  each duplicate is written as `<stem>.<8 hex of its folder>.al`, and nothing replaces anything.
+  Every message that quotes a batch file still names the project file: coverage and line-map
+  refusals, and alc's compile errors, which gain a note naming each renamed file. A project without
+  duplicate names builds byte-identical batches, so no verdict, digest or gate figure moves.
 - **A run lends its verdicts only to a session whose test app runs against the same dependencies**
   (R496). Two proven runs with the same test-app bytes matched even when a dependency of the test
   app had been rebuilt between them (republished out of band, or by an env-tool hook that publishes
