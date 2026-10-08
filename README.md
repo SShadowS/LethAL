@@ -3,7 +3,7 @@
 Mutation testing for Microsoft Dynamics 365 Business Central AL code. It tells you which of your AL tests actually catch bugs.
 
 [![Release](https://img.shields.io/badge/release-0.1.0--alpha.3-orange)](CHANGELOG.md)
-[![TypeScript](https://img.shields.io/badge/typescript-5.0-blue)](https://typescriptlang.org)
+[![TypeScript](https://img.shields.io/badge/typescript-7.0-blue)](https://typescriptlang.org)
 [![Bun](https://img.shields.io/badge/runtime-bun-black)](https://bun.sh)
 [![AL](https://img.shields.io/badge/target-Business%20Central-orange)](https://learn.microsoft.com/dynamics365/business-central/dev-itpro/developer/devenv-dev-overview)
 
