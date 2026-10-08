@@ -164,6 +164,6 @@ describe("R295: a #if between two names of one declaration", () => {
   });
 });
 
-test("R295/R294: the identity scheme is 30 (11 for R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20 and 23 unused, 21 R459, 22 R-464, 24 R475, 25 R446, 26 R477, 27 R480, 28 R484, 29 R-300b, 30 R487)", () => {
-  expect(IDENTITY_SCHEME).toBe(30);
+test("R295/R294: the identity scheme is 31 (11 for R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20 and 23 unused, 21 R459, 22 R-464, 24 R475, 25 R446, 26 R477, 27 R480, 28 R484, 29 R-300b, 30 R487, 31 R501)", () => {
+  expect(IDENTITY_SCHEME).toBe(31);
 });

@@ -511,8 +511,10 @@ describe("sessionFingerprint (R47)", () => {
   // 28, open `Integer` report data items are loops); it was 4ea3654a...49ab under scheme 27. It
   // moved again for R-300b (scheme 29, al-runner scores a `#if`-wrapped object alone in its file);
   // it was 1ce22835...7dd7 under scheme 28. It moved again for R487 (scheme 30, every site in an
-  // open `Integer` data item's code is hang-refused); it was 51406729...1b37 under scheme 29.
-  const PINNED = "5b1d3f6cd60d43ba8a257548023c4170a3900003f4a1569c34436217df838f56";
+  // open `Integer` data item's code is hang-refused); it was 51406729...1b37 under scheme 29. It
+  // moved again for R501 (scheme 31, that scope refused for every operator, and a bounded item's
+  // only bound); it was 5b1d3f6c...8f56 under scheme 30.
+  const PINNED = "51274378b92c1465a525e6762342e6b27e8995ee5830c5400b8922ceb751f684";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2133,8 +2135,10 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 30 since R487 (every site the four hang-capable
-    // operators mutate in an open `Integer` data item's code is hang-refused); 29 was R-300b
+    // Pinned by value so a bump is deliberate: 31 since R501 (that scope is hang-refused for every
+    // operator at dispatch, and so is a bounded item's only SetRange bound); 30 was R487 (every
+    // site the four hang-capable operators mutate in an open `Integer` data item's code is
+    // hang-refused); 29 was R-300b
     // (al-runner scores a `#if`-wrapped
     // object alone in its file, so a refused key's verdict can now be scored; no key moves); 28 was
     // R484 (an open `Integer` report data item is
@@ -2153,7 +2157,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
     // sites move twins).
-    expect(IDENTITY_SCHEME).toBe(30);
+    expect(IDENTITY_SCHEME).toBe(31);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
