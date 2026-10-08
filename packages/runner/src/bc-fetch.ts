@@ -20,6 +20,8 @@
  * be a change no gate can distinguish from noise.
  */
 import type { FetchFn } from "./activation";
+// A cycle (harness imports `bcFetch`), safe because each side uses the other only at call time.
+import { refuseUnfilteredExtensionsQuery } from "./harness";
 
 function urlOf(input: Parameters<FetchFn>[0]): string {
   if (typeof input === "string") return input;
@@ -40,5 +42,44 @@ export function withFreshConnectionOnHttps(inner: FetchFn): FetchFn {
   return Object.assign(request, { preconnect: inner.preconnect });
 }
 
+/**
+ * R-496: wraps a fetch so that it NEVER follows a redirect. Every request is sent with
+ * `redirect: "manual"`, and a 3xx answer throws instead of being returned: a followed redirect
+ * sends a request no caller's guard ever saw, and a 302/303 to BC's unfiltered `extensions` list
+ * is the request that hung BC 28.4 (R433). When the Location (resolved against the request URL)
+ * is one R433's guard refuses, the guard's own `UnfilteredExtensionsQueryError` is thrown; any
+ * other redirect throws `BcRedirectRefusedError` naming the status and the Location. Both mean
+ * the request was dispatched and answered. LethAL expects no
+ * redirect from BC, so neither is followed.
+ */
+export function refuseRedirects(inner: FetchFn): FetchFn {
+  const request = async (input: Parameters<FetchFn>[0], init?: Parameters<FetchFn>[1]) => {
+    const res = await inner(input, { ...init, redirect: "manual" });
+    if (res.type !== "opaqueredirect" && (res.status < 300 || res.status >= 400)) return res;
+    const url = urlOf(input);
+    const location = res.headers.get("location");
+    if (location !== null) {
+      const dest = new URL(location, url);
+      const tenant = new URL(url).searchParams.get("tenant") ?? undefined;
+      refuseUnfilteredExtensionsQuery(dest.pathname, [...dest.searchParams], tenant);
+    }
+    throw new BcRedirectRefusedError(
+      `BC answered ${url} with HTTP ${res.status} redirect to ${JSON.stringify(location)}; LethAL never follows a redirect from BC (R-496)`,
+    );
+  };
+  return Object.assign(request, { preconnect: inner.preconnect });
+}
+
+/**
+ * R-496: BC answered with a redirect, and `refuseRedirects` did not follow it. The request WAS
+ * dispatched and answered, so this is never a pre-dispatch failure and never retry-safe.
+ */
+export class BcRedirectRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BcRedirectRefusedError";
+  }
+}
+
 /** The `fetch` every BC-facing client defaults to. Tests inject their own and never see this. */
-export const bcFetch: FetchFn = withFreshConnectionOnHttps(fetch);
+export const bcFetch: FetchFn = withFreshConnectionOnHttps(refuseRedirects(fetch));

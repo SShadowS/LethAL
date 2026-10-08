@@ -22,7 +22,11 @@ import { hashPackage } from "../src/baseline-snapshot";
 import { BcDevMcpBackend, PublishFailedError } from "../src/bcdev-backend";
 import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
-import { CONTROL_APP_ID, HarnessVerificationError } from "../src/harness";
+import {
+  CONTROL_APP_ID,
+  HarnessVerificationError,
+  UnfilteredExtensionsQueryError,
+} from "../src/harness";
 import type { HarnessVerifier } from "../src/harness";
 import type { Lease } from "../src/lease";
 import { type LineMap, type RenamedMemberNames, coverageRefusedObjects } from "../src/line-map";
@@ -3577,6 +3581,48 @@ table 50110 "Wrapped T"
       await backend.run(hubRef, { coverage: "procedure", timeoutMs: 5000 });
       const said = warn.mock.calls.map((c) => String(c[0]));
       expect(said.filter((s) => s.includes("coverage refused"))).toEqual([REFUSED]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+});
+
+describe("R-496: BcDevMcpBackend.takeLateRefusal over replaced transports", () => {
+  test("a refusal landing on a RETIRED transport after the re-deploy is surfaced at teardown", async () => {
+    const pending: Array<UnfilteredExtensionsQueryError | undefined> = [];
+    let made = 0;
+    const factory = () => {
+      const slot = pending.length;
+      pending.push(undefined);
+      made++;
+      return {
+        takeLateRefusal: () => {
+          const r = pending[slot];
+          pending[slot] = undefined;
+          return r;
+        },
+      } as unknown as RunMutantTransport;
+    };
+    const { backend, deployDir, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [], coverage: [] }),
+      { Codeunits: [] },
+      undefined,
+      factory,
+    );
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await backend.deploy(deployDir); // binds transport B; A is retired
+      expect(made).toBe(2);
+      // Only NOW does A record a refusal: after the redeploy, before teardown.
+      pending[0] = new UnfilteredExtensionsQueryError("late on A");
+      pending[1] = new UnfilteredExtensionsQueryError("late on B");
+      const late = backend.takeLateRefusal();
+      expect(late).toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect(late?.message).toContain("late on A");
+      // The second refusal was drained and logged, not left behind.
+      expect(warn.mock.calls.flat().join("\n")).toContain("late on B");
+      expect(backend.takeLateRefusal()).toBeUndefined();
     } finally {
       warn.mockRestore();
       await cleanup();

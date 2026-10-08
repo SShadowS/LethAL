@@ -24,8 +24,8 @@
  * Stated limits (bytes mode). In each, verify reports the affected tests as OLD (not re-run, no
  * cause) with no warning; only the docs say it can happen.
  * - L0: an INSTALLED app outside the closure (any publisher) that changes a test, for example
- *   through a global event subscriber, is not read; nor is a non-Microsoft dependency checked to be
- *   the installed version (R434).
+ *   through a global event subscriber, is not read. (R496: every app IN the closure, any
+ *   publisher, is checked to be the installed version; before R496 only Microsoft's were, R434.)
  * - L1: a symbols-only package (no `.al` entries, only `SymbolReference.json`) keeps its bytes when
  *   only procedure bodies change. Measured on Cronus28 and Cronus284: `Application` (0 `.al`; that
  *   is expected, it is a wrapper app whose dependencies carry the source) and the `LethAL Control`
@@ -42,7 +42,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { readPackageEntry } from "./app-package";
-import { CONTROL_APP_ID } from "./harness";
+import { CONTROL_APP_ID, UnfilteredExtensionsQueryError } from "./harness";
 import { readAppIdentity } from "./published-test-app";
 
 export interface AppDependency {
@@ -238,8 +238,9 @@ export const APPLICATION_APP_ID = "c1335042-3002-4257-bf8a-75c898ccb1b8";
  * caller gets either behaviour by leaving it out.
  *
  * - `bytes`: a Microsoft app is hashed by the bytes of the package the SERVER holds, like any
- *   other dependency, and must have exactly one INSTALLED row at the hashed manifest's version.
- *   `System` is always hashed (`readSystem`), and so are the dependencies of the `LethAL Control`
+ *   other dependency, and must have exactly one INSTALLED row at the hashed manifest's version
+ *   (R496: so must every other dependency the walk hashes, through the same `installed`, which is
+ *   the per-app `$filter=id eq <GUID>` read). `System` is always hashed (`readSystem`), and so are the dependencies of the `LethAL Control`
  *   app the server runs (`readControl`, which must report `controlVersion()`): today only Test
  *   Runner, which runs every test.
  * - `declared`: a Microsoft app by id and DECLARED version only (`M <id> <version>`), plus a
@@ -369,11 +370,11 @@ export async function dependencyFingerprint(
           `the package read for dependency "${dep.name}" (${dep.id}) is app ${identity.id} ("${identity.name}"), not that dependency`,
         );
       }
-      if (
-        bytesMode !== undefined &&
-        (isMicrosoft(dep.publisher) || isMicrosoft(identity.publisher))
-      )
-        await checkInstalled(bytesMode, dep, identity.version);
+      // R496 (F5): EVERY extension the walk hashes, partner ones and transitive ones included, must
+      // be the installed one: a partner dependency served at v2 while v1 is installed would
+      // otherwise fingerprint v2 for a run that measured v1. Each check is the per-app
+      // `$filter=id eq <GUID>` read (`fetchExtensionRows`), never a list.
+      if (bytesMode !== undefined) await checkInstalled(bytesMode, dep, identity.version);
       lines.add(`X ${dep.id} ${sha256(bytes)}`);
       enqueue(appInputsOfManifest(manifest));
     }
@@ -382,10 +383,13 @@ export async function dependencyFingerprint(
 }
 
 /**
- * R-385 D2: a Microsoft package the server serves must be the one INSTALLED: exactly one installed
- * row, at the hashed manifest's version. `dev/packages` returns "a version you have", which during
- * a staged upgrade may be published but not installed; hashing that would call it resident.
- * R373: the env-tool deferred digest step applies it to every app its hook published.
+ * R-385 D2 (R496: any publisher's): a package the server serves must be the one INSTALLED: exactly
+ * one installed row, at the hashed manifest's version. `dev/packages` returns "a version you have",
+ * which during a staged upgrade may be published but not installed; hashing that would call it
+ * resident. R373: the env-tool deferred digest step applies it to every app its hook published.
+ * R496: an `UnfilteredExtensionsQueryError` (a read not filtered by one app id, refused before it
+ * was sent) is a caller-contract violation inside LethAL, so it propagates: it is never read as
+ * "not installed", which would only make the run unproven.
  */
 export async function checkInstalled(
   mode: Extract<MicrosoftMode, { kind: "bytes" }>,
@@ -396,6 +400,7 @@ export async function checkInstalled(
   try {
     installed = await mode.installed(dep.id);
   } catch (err) {
+    if (err instanceof UnfilteredExtensionsQueryError) throw err;
     throw new DependencyUnreadableError(
       `the installed version of "${dep.name}" (${dep.id}) could not be read: ${message(err)}`,
     );

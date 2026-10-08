@@ -3556,7 +3556,8 @@ describe("C02-09: gap ids", () => {
         w.store.priorSurvivorKeys(
           run.project_path,
           info.coverageMode,
-          info.testAppHash,
+          // R496: the next run's identity is the hash and its own dependency fingerprint.
+          { hash: info.testAppHash, deps: info.testAppDeps ?? "the next run's" },
           info.buildSymbols ?? [],
           info.carryHidden.files,
         ).keys.size,
