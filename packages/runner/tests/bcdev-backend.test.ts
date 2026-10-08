@@ -375,6 +375,7 @@ async function makeBackendWithDeploy(
     artifactId: string,
     controlState: ControlState,
   ) => RunMutantTransport,
+  buildSymbols?: readonly string[],
 ): Promise<{
   backend: BcDevMcpBackend;
   artifact: CompiledArtifact;
@@ -405,6 +406,7 @@ async function makeBackendWithDeploy(
     makeDeployment(outputDir, symbolReference),
     runMutantTransportFactory,
   );
+  if (buildSymbols !== undefined) backend.useBuildSymbols(buildSymbols);
   const artifact = await backend.deploy(deployDir);
   return {
     backend,
@@ -3147,6 +3149,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
     extraFiles: Record<string, string> = {},
     tables: readonly { Id: number; Name: string }[] = [],
     codeunits: readonly { Id: number; Name: string }[] = [],
+    symbols?: readonly string[],
   ): Promise<{
     backend: BcDevMcpBackend;
     cleanup: () => Promise<void>;
@@ -3181,6 +3184,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
       }),
       factory(coverage),
     );
+    if (symbols !== undefined) backend.useBuildSymbols(symbols);
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
     await backend.activate(null);
@@ -3194,6 +3198,42 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
   }
 
   const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
+
+  // R497: the SAME two-arm file (`#if CLEAN27` / `#else`, the E1 shape) with the build's symbols
+  // handed over: `#else` is compiled, so its rows name `AElse`, at H1a's base (1), and nothing is
+  // refused. Revert direction: without the handover (the test above) the rows yield nothing.
+  test("R497: with the build's symbols the measured two-arm shape is scored, compiled arm only", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const row = (lineNo: number) => ({ objectType: 5, objectId: 50103, lineNo, hits: 1 });
+    // The `#else` arm's `AElse` spans file lines 15-21 of TWO_ARM; base 1, so line 19 is `L := 1`.
+    const { backend, cleanup } = await deployed([row(19)], {}, [], [], []);
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50103, procedure: "AElse" },
+      ]);
+      expect(await backend.coverageRefusals()).toEqual(new Map());
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  // R497 A2: whatever the line map refuses reaches selection through `coverageRefusals()`.
+  test("R497 A2: coverageRefusals() is the line map's whole refused set", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed([]);
+    try {
+      expect([...(await backend.coverageRefusals()).entries()]).toEqual([
+        ["codeunit:50103", REFUSED.replace("[lethal] ", "")],
+      ]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
 
   test("rows for the wrapped object yield NO entry of any grain; the plain object's are named", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
@@ -3544,7 +3584,7 @@ table 50110 "Wrapped T"
   };
   const hubRef = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
 
-  async function hub(covered: unknown[]) {
+  async function hub(covered: unknown[], buildSymbols?: readonly string[]) {
     const dir = scratch("lethal-r298-hub-");
     await Bun.write(join(dir, "W.Table.al"), WRAPPED);
     await Bun.write(join(dir, "Other.Codeunit.al"), PLAIN);
@@ -3555,6 +3595,8 @@ table 50110 "Wrapped T"
       }),
       symbols,
       dir,
+      undefined,
+      buildSymbols,
     );
     return {
       ...made,
@@ -3579,6 +3621,32 @@ table 50110 "Wrapped T"
       ]);
       const said = warn.mock.calls.map((c) => String(c[0]));
       expect(said.filter((s) => s.includes("coverage refused"))).toEqual([REFUSED]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  // R497 (HUB-A, measured): with the build's symbols the one-arm wrapped table (W1's shape) is
+  // attributed by method id like any object. Revert direction: the two tests around this one.
+  test("R497: with the build's symbols the one-arm wrapped table is attributed, nothing refused", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await hub(
+      [
+        { objectType: 1, objectId: 50110, methodId: 777 },
+        { objectType: 5, objectId: 50107, methodId: 888 },
+      ],
+      [],
+    );
+    try {
+      const v = await backend.run(hubRef, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Table", objectId: 50110, procedure: "Touch" },
+        { objectType: "Codeunit", objectId: 50107, procedure: "R" },
+      ]);
+      expect(await backend.coverageRefusals()).toEqual(new Map());
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toEqual([]);
     } finally {
       warn.mockRestore();
       await cleanup();

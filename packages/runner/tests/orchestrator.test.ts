@@ -1124,8 +1124,10 @@ interface "I Probe"
         expect(report.untargetedTriggerCount).toBe(0);
         for (const m of tableMutants) {
           expect(m.verdict).toBe("no-coverage");
+          // R497: on bcdev the BC shape rule names why: the wrapped interface has no coverage
+          // identity, an unmeasured shape, so the whole file's compiled objects stay refused.
           expect(m.failureNote).toContain(
-            "coverage refused for Table:79001 (SandboxTable.Table.al): its file also holds",
+            "coverage refused for Table:79001 (SandboxTable.Table.al): its file holds a #if object wrapper of a shape not measured on BC (an object with no coverage identity",
           );
         }
       } finally {
@@ -1154,12 +1156,13 @@ interface "I Probe"
         }
       }
 
-      test("bcdev: every mutant reads no-coverage, refused by name", async () => {
+      // R497: one arm, alone in its file, is the W1 shape BC was measured on: scored on bcdev too.
+      test("bcdev (R497): the mutants are covered and run (survived), with no refusal", async () => {
         const report = await wrappedRun(CAPS_NST);
         expect(report.mutants.length).toBeGreaterThan(0);
         for (const m of report.mutants) {
-          expect(m.verdict).toBe("no-coverage");
-          expect(m.failureNote).toContain("coverage refused for Codeunit:79000");
+          expect(m.verdict).toBe("survived");
+          expect(m.failureNote ?? "").not.toContain("coverage refused");
         }
       });
 
@@ -1410,12 +1413,16 @@ ${otherProc}}
       });
     });
 
+    // R497: a NESTED wrapper, a shape BC was not measured on (a one-arm wrapper is now scored on
+    // bcdev, so it no longer exercises the refusal this test pins).
     test("a #if-wrapped table's trigger mutants read no-coverage, named, not all-green (R298)", async () => {
       const dirs = await makeProject();
       await Bun.write(
         join(dirs.projectDir, "SandboxTable.Table.al"),
         `#if not CLEAN27
+#if not CLEAN28
 ${TRIGGER_TABLE_AL}#endif
+#endif
 `,
       );
       const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
