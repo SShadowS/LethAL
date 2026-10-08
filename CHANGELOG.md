@@ -140,7 +140,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   extending every report; and `CurrReport.P()` and bare procedure names in expressions as calls. Two
   stated limits: the writes, before the item, of a global the item's exit reads (with their guards and
   any earlier exit), and the OnPreDataItem filter of an item that inserts into its own table. An
-  XMLport `Integer` element is a loop too, but dormant while xmlport files are skipped. Measured with
+  XMLport `Integer` element is a loop too, but dormant while xmlport files are skipped. Record callees
+  are refused like codeunit callees although no measured hang is of that kind: a table procedure
+  called from open-item code can hold its own `FindNext` loop, and they cost 0.16% of BC.History's
+  mutants. BaseApp's `Finance Charge Memo - Test` and `Reminder - Test` already loop forever, unmutated,
+  on a document whose lines are all blank (DimensionLoop's `Continue` is never reset); LethAL refuses
+  the mutants that could reach that state, but the hazard is BaseApp's own. Measured with
   production code on BC.History: 23,944 deployed mutants removed (1.06%), 0 added, 165 keys move,
   `skipped` unchanged on every project; CDO and DO lose 2 each; DC, the fixtures and the examples are
   unchanged. By shape:
