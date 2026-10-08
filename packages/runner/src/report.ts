@@ -589,7 +589,9 @@ export type MutantErrorCause =
   | "session-reused"
   | "warm-prefix-unstable"
   | "warm-timeout-unconfirmed"
-  | "warm-confirmation-incomplete";
+  | "warm-confirmation-incomplete"
+  // R514: a timeout on a reused baseline whose unmutated confirm took more than half the budget.
+  | "reused-budget-stale";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -796,6 +798,19 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "Not a malformed answer and not a server fault: the cap is a clean, expected ending. Not a " +
       "kill: nothing established that the prefix passes unmutated.",
     basis: "R206",
+  },
+  "reused-budget-stale": {
+    meaning:
+      "This batch reused a stored baseline (`--resume`, R192), so the test's time budget came " +
+      "from an earlier run. The test timed out under the mutant; re-run once with no mutant it " +
+      "passed, but took more than half that budget, so it is slower today than the stored " +
+      "baseline says. No verdict. Re-run without `--resume` to measure the baseline again (R514).",
+    entailedNegative:
+      "Not `timeout-killed`: a baseline measured today would have given the test a larger " +
+      "budget, so the timeout is not the mutant's. Not `unstable`: the test passed with no " +
+      "mutant; only its stored duration is out of date. Not `survived`: the mutated run never " +
+      "finished.",
+    basis: "R514",
   },
 };
 
@@ -3061,7 +3076,7 @@ function summarizeRunnerContexts(
  * R206: the banner's error breakdown. `counts.unstable` keeps counting `unstable` alone; the four
  * R206 causes are listed beside it when non-zero, so a run full of them does not read
  * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
- * when its run's answer was lost.
+ * when its run's answer was lost. R514 adds `reused-budget-stale`.
  */
 function errorBreakdown(r: SessionReport): string {
   const named: MutantErrorCause[] = [
@@ -3070,6 +3085,7 @@ function errorBreakdown(r: SessionReport): string {
     "warm-timeout-unconfirmed",
     "warm-confirmation-incomplete",
     "stop-outcome-unconfirmed",
+    "reused-budget-stale",
   ];
   const parts: string[] = [];
   for (const cause of named) {

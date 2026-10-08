@@ -19,8 +19,10 @@ import type {
 } from "../src/backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
+import { explain } from "../src/explain";
 import { feedAttestation, runSession } from "../src/orchestrator";
 import type { AttestationLedger } from "../src/orchestrator";
+import { ERROR_CAUSE_INTERPRETATIONS, renderConsole } from "../src/report";
 import type { SessionReport } from "../src/report";
 import {
   CARRYABLE_VERDICTS,
@@ -34,9 +36,11 @@ import {
   wasStranded,
 } from "../src/resume";
 import type { ResumeIndex, SessionFingerprintInput } from "../src/resume";
+import { RUNNER_DISAGREEMENT_NOTE } from "../src/runner-disagreement";
 import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
+import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import {
@@ -3896,23 +3900,44 @@ interface SentBudget {
   readonly timeoutMs: number;
 }
 
+interface ClockOptions {
+  readonly abort?: { after?: number; fromDeploy?: number };
+  /** Serve `runMany` (the grouped path). */
+  readonly grouped?: boolean;
+  /** BSlow's simulated duration while a mutant is active; `Infinity` is a hang. Absent: `slowMs`. */
+  readonly mutatedMs?: number;
+  /** false: a non-authoritative backend, so `workers > 1` is allowed. */
+  readonly authoritative?: boolean;
+}
+
 class ClockBackend extends CountingBackend {
   readonly sent: SentBudget[] = [];
-  private lastActive: string | null = null;
+  /** The mutant active at the next run (`null`: unmutated). */
+  active: string | null = null;
+  private readonly mutatedMs: number | undefined;
+  private readonly authoritative: boolean;
   constructor(
-    /** BSlow's simulated duration on this backend (AFast is always 100 ms). */
+    /** BSlow's simulated unmutated duration on this backend (AFast is always 100 ms). */
     private readonly slowMs: number,
-    abort: { after?: number; fromDeploy?: number } = {},
-    grouped = false,
-    /** A genuine hang: BSlow never ends while a mutant is active. */
-    private readonly hangsUnderMutant = false,
+    o: ClockOptions = {},
   ) {
-    super("pass", abort.after, abort.fromDeploy);
-    if (grouped) this.runMany = (o) => this.many(o);
+    super("pass", o.abort?.after, o.abort?.fromDeploy);
+    if (o.grouped === true) this.runMany = (opts) => this.many(opts);
+    this.mutatedMs = o.mutatedMs;
+    this.authoritative = o.authoritative ?? true;
+    // The al-runner shape: no served package to fetch, so its test app is proven from source.
+    if (!this.authoritative) {
+      (this as { fetchPublishedAppPackage?: unknown }).fetchPublishedAppPackage = undefined;
+    }
   }
   runMany?: (opts: RunManyOpts) => Promise<RunManyResult>;
+  /** R392: read only when non-authoritative (the al-runner shape `workers > 1` needs). */
+  readonly measurePredefinedSymbols = measuredV2_12;
+  override capabilities(): BackendCapabilities {
+    return { ...super.capabilities(), authoritative: this.authoritative };
+  }
   override async activate(id: string | null): Promise<void> {
-    this.lastActive = id;
+    this.active = id;
     await super.activate(id);
   }
   override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
@@ -3920,14 +3945,14 @@ class ClockBackend extends CountingBackend {
     if (v.operation === "in-flight-unknown") return v; // run 1's hang
     this.sent.push({
       method: ref.method,
-      active: this.lastActive !== null,
+      active: this.active !== null,
       timeoutMs: opts.timeoutMs,
     });
     const ms =
       ref.method !== "BSlow"
         ? 100
-        : this.hangsUnderMutant && this.lastActive !== null
-          ? Number.POSITIVE_INFINITY
+        : this.active !== null
+          ? (this.mutatedMs ?? this.slowMs)
           : this.slowMs;
     if (ms > opts.timeoutMs) {
       const { attestation: _, measuredDurationMs: __, ...rest } = v;
@@ -3974,10 +3999,6 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     stopHungSessions: true,
     mutantTimeoutMs: FLOOR_MS,
   });
-  const verdicts = (report: SessionReport, batch: number) =>
-    report.mutants
-      .filter((m) => m.batchIndex === batch && m.carried !== true)
-      .map((m) => [m.mutantCode, m.verdict, m.killingTest ?? null]);
   const falseKills = (report: SessionReport, batch: number) =>
     report.mutants.filter(
       (m) =>
@@ -3986,66 +4007,162 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
         (m.verdict === "timeout-killed" || m.verdict === "killed"),
     );
   /** BSlow's budgets under a mutant, as sent. */
-  const slowBudgets = (b: ClockBackend) =>
-    [...new Set(b.sent.filter((s) => s.active && s.method === "BSlow").map((s) => s.timeoutMs))];
+  const slowBudgets = (b: ClockBackend) => [
+    ...new Set(b.sent.filter((s) => s.active && s.method === "BSlow").map((s) => s.timeoutMs)),
+  ];
+  /** Every unmutated BSlow run sent AFTER the first mutated run (so never a baseline run): the
+   *  confirms. */
+  const slowConfirms = (b: ClockBackend) => {
+    const first = b.sent.findIndex((s) => s.active);
+    return first < 0 ? [] : b.sent.slice(first).filter((s) => !s.active && s.method === "BSlow");
+  };
+  /** The scored (not carried) mutants of a batch. */
+  const scoredOf = (report: SessionReport, batch: number) =>
+    report.mutants.filter((m) => m.batchIndex === batch && m.carried !== true);
+  /** Every scored mutant is `error` / `reused-budget-stale`, its note naming the reused run. */
+  const expectStale = (report: SessionReport, batch: number, reusedRun: number) => {
+    const scored = scoredOf(report, batch);
+    expect(scored.length).toBeGreaterThan(0);
+    for (const m of scored) {
+      expect([m.mutantCode, m.verdict, m.cause]).toEqual([
+        m.mutantCode,
+        "error",
+        "reused-budget-stale",
+      ]);
+      expect(m.failureNote).toContain(`run ${reusedRun}'s reused baseline`);
+    }
+    return scored;
+  };
+  /** One unmutated BSlow confirm per position-1 timeout, each at the baseline's deadline. */
+  const expectConfirmsAtBaselineDeadline = (b: ClockBackend, timeouts: number) => {
+    expect(slowConfirms(b).map((s) => s.timeoutMs)).toEqual(
+      Array.from({ length: timeouts }, () => 120_000),
+    );
+  };
 
   /** (a) Run 1, yesterday: one batch, finishes the first mutant (both tests answer, attested
    *  clean), then hangs. Run 2, today, resumes with --retry-stranded and reuses run 1's snapshot. */
-  async function sameBatchReuse(grouped: boolean, maxMethodsPerCall?: number) {
+  async function sameBatchReuse(
+    today: ClockBackend,
+    extra: { maxMethodsPerCall?: number; workers?: ClockBackend[] } = {},
+  ) {
     const dirs = await twoTestProject(false);
     const store = new ResultsStore(":memory:");
-    await runSession({ ...opts(store, dirs), backend: new ClockBackend(YESTERDAY_MS, { after: 2 }) });
+    const authoritative = extra.workers === undefined;
+    await runSession({
+      ...opts(store, dirs),
+      backend: new ClockBackend(YESTERDAY_MS, { abort: { after: 2 }, authoritative }),
+    });
     const run1 = lastRun(store);
-    const today = new ClockBackend(TODAY_MS, {}, grouped);
     const events: RunEvent[] = [];
+    const workers = extra.workers;
     const report = await runSession({
       ...opts(store, dirs),
       backend: today,
       resume: "last",
       retryStranded: true,
       emit: [(e) => events.push(e)],
-      ...(maxMethodsPerCall !== undefined ? { groupRuns: { maxMethodsPerCall } } : {}),
+      ...(extra.maxMethodsPerCall !== undefined
+        ? { groupRuns: { maxMethodsPerCall: extra.maxMethodsPerCall } }
+        : {}),
+      ...(workers !== undefined
+        ? {
+            workers: workers.length,
+            backendFactory: (i: number) => {
+              const w = workers[i];
+              if (w === undefined) throw new Error(`no worker backend ${i}`);
+              return w;
+            },
+          }
+        : {}),
     });
     return { run1, today, report, reused: reusedOf(events), events };
   }
 
-  test("R514 repro (a), single path: a reused fast duration gives BSlow a 2000 ms budget, and a mutant that does not touch its speed is timeout-killed", async () => {
-    const { run1, today, report, reused } = await sameBatchReuse(false);
-    console.log("R514 (a) single", JSON.stringify(verdicts(report, 0)), slowBudgets(today));
+  test("R514 fixed (a), single path: a reused fast duration gives BSlow a 2000 ms budget; the timeout is confirmed unmutated and is reused-budget-stale, not a kill", async () => {
+    const today = new ClockBackend(TODAY_MS);
+    const { run1, report, reused } = await sameBatchReuse(today);
     expect(reused.filter((m) => m.includes(`run ${run1}'s batch 0`))).toHaveLength(1);
     expect(slowBudgets(today)).toEqual([Math.max(2 * YESTERDAY_MS, FLOOR_MS)]);
-    // The bug: BSlow is merely slower today, unmutated too, yet the mutants score kills.
     expect(falseKills(report, 0)).toEqual([]);
+    const scored = expectStale(report, 0, run1);
+    expectConfirmsAtBaselineDeadline(today, scored.length);
+  });
+
+  test("R514 fixed (a), single path, workers = 2: executeCovering forwards the reuse to every worker", async () => {
+    const today = new ClockBackend(TODAY_MS, { authoritative: false });
+    const workers = [
+      new ClockBackend(TODAY_MS, { authoritative: false }),
+      new ClockBackend(TODAY_MS, { authoritative: false }),
+    ];
+    const { run1, report, reused } = await sameBatchReuse(today, { workers });
+    expect(reused.filter((m) => m.includes(`run ${run1}'s batch 0`))).toHaveLength(1);
+    expect(falseKills(report, 0)).toEqual([]);
+    const scored = expectStale(report, 0, run1);
+    expect(workers.flatMap((w) => slowConfirms(w)).map((s) => s.timeoutMs)).toEqual(
+      scored.map(() => 120_000),
+    );
+  });
+
+  test("R514 fixed (a), the (budget/2, budget] band: an unmutated confirm inside the budget but over half of it is reused-budget-stale (R53's 2x margin)", async () => {
+    // Budget 2000 (from yesterday's 1000). Today: 1500 unmutated, 2500 under the mutant. The 1x
+    // rule would score the confirm at 1500 <= 2000 a kill.
+    const today = new ClockBackend(1_500, { mutatedMs: 2_500 });
+    const { run1, report } = await sameBatchReuse(today);
+    expect(slowBudgets(today)).toEqual([2_000]);
+    expect(falseKills(report, 0)).toEqual([]);
+    const scored = expectStale(report, 0, run1);
+    for (const m of scored) expect(m.failureNote).toContain("completed unmutated in 1500 ms");
+    expectConfirmsAtBaselineDeadline(today, scored.length);
   });
 
   test("R514 control (a), grouped, one call: BSlow at position 2 is replayed unmutated (confirmWarm), so no kill", async () => {
-    const { run1, today, report, reused } = await sameBatchReuse(true);
-    console.log(
-      "R514 (a) grouped",
-      JSON.stringify(
-        report.mutants
-          .filter((m) => m.carried !== true)
-          .map((m) => [m.mutantCode, m.verdict, m.failureNote ?? null]),
-      ),
-      slowBudgets(today),
-    );
+    const today = new ClockBackend(TODAY_MS, { grouped: true });
+    const { run1, report, reused } = await sameBatchReuse(today);
     expect(reused.filter((m) => m.includes(`run ${run1}'s batch 0`))).toHaveLength(1);
     expect(today.runMany).toBeDefined();
     expect(falseKills(report, 0)).toEqual([]);
   });
 
-  test("R514 repro (a), grouped, one method per call: every BSlow run is at position 1", async () => {
-    const { report, today } = await sameBatchReuse(true, 1);
-    console.log("R514 (a) grouped max1", JSON.stringify(verdicts(report, 0)), slowBudgets(today));
+  test("R514 fixed (a), grouped, one method per call: every BSlow run is at position 1, and each is confirmed unmutated", async () => {
+    const today = new ClockBackend(TODAY_MS, { grouped: true });
+    const { run1, report } = await sameBatchReuse(today, { maxMethodsPerCall: 1 });
     expect(falseKills(report, 0)).toEqual([]);
+    const scored = expectStale(report, 0, run1);
+    expectConfirmsAtBaselineDeadline(today, scored.length);
   });
 
-  test("R514 repro (b1): a snapshot kept from a hang at batch start (nothing answered) lends the same short budget", async () => {
+  test("R514 confirmWarm on a reused batch: a replay at position 2 over half the budget is reused-budget-stale", async () => {
+    // One call, AFast at 1 and BSlow at 2. BSlow 1500 unmutated, 2500 mutated, budget 2000: the
+    // replay passes at 1500, inside the budget (the 1x rule's kill) but over half of it.
+    const today = new ClockBackend(1_500, { grouped: true, mutatedMs: 2_500 });
+    const { run1, report } = await sameBatchReuse(today);
+    expect(falseKills(report, 0)).toEqual([]);
+    const scored = expectStale(report, 0, run1);
+    for (const m of scored) expect(m.failureNote).toContain("at position 2 of the replay");
+  });
+
+  test("R514 confirmWarm on a reused batch: a genuine hang at position 2 whose replay passes in under half the budget is timeout-killed", async () => {
+    const today = new ClockBackend(800, { grouped: true, mutatedMs: Number.POSITIVE_INFINITY });
+    const { report } = await sameBatchReuse(today);
+    const scored = scoredOf(report, 0);
+    // The first is killed at position 2 (warm, confirmed by the replay); R197 then puts BSlow
+    // first, so the next is killed at position 1 (cold, confirmed unmutated).
+    expect(scored.map((m) => [m.mutantCode, m.verdict, m.killingTest, m.killPosition])).toEqual([
+      ["M0002", "timeout-killed", "BSlow", 2],
+      ["M0003", "timeout-killed", "BSlow", 1],
+    ]);
+  });
+
+  test("R514 fixed (b1): a snapshot kept from a hang at batch start (nothing answered) lends the same short budget, and is caught by the confirm", async () => {
     const dirs = await twoTestProject(true);
     const store = new ResultsStore(":memory:");
     const base = { ...opts(store, dirs), maxGuardsPerBatch: 1 };
     // Batch 0 completes; batch 1's baseline is recorded, then its first covered run hangs.
-    await runSession({ ...base, backend: new ClockBackend(YESTERDAY_MS, { fromDeploy: 2 }) });
+    await runSession({
+      ...base,
+      backend: new ClockBackend(YESTERDAY_MS, { abort: { fromDeploy: 2 } }),
+    });
     const run1 = lastRun(store);
     expect(suspectRows(store)).toEqual([]);
     const today = new ClockBackend(TODAY_MS);
@@ -4057,20 +4174,24 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
       retryStranded: true,
       emit: [(e) => events.push(e)],
     });
-    console.log("R514 (b1)", JSON.stringify(verdicts(report, 1)), slowBudgets(today));
     expect(reusedOf(events).filter((m) => m.includes(`run ${run1}'s batch 1`))).toHaveLength(1);
     expect(falseKills(report, 1)).toEqual([]);
+    const scored = expectStale(report, 1, run1);
+    expectConfirmsAtBaselineDeadline(today, scored.length);
   });
 
-  test("R514 repro (b2): once R512 marks the newest snapshot, an older one from the same stale period is lent instead", async () => {
+  test("R514 fixed (b2): once R512 marks the newest snapshot, an older one from the same stale period is lent instead, and is caught by the confirm", async () => {
     const dirs = await twoTestProject(false);
     const store = new ResultsStore(":memory:");
     // Run A: fast, records S_A, scores one mutant, hangs.
-    await runSession({ ...opts(store, dirs), backend: new ClockBackend(YESTERDAY_MS, { after: 2 }) });
+    await runSession({
+      ...opts(store, dirs),
+      backend: new ClockBackend(YESTERDAY_MS, { abort: { after: 2 } }),
+    });
     const runA = lastRun(store);
     // Run B: a fresh run (no resume), also fast; records S_B, its covered runs answer unattested,
     // so R512 marks S_B, then it hangs.
-    const b = new ClockBackend(YESTERDAY_MS, { after: 2 });
+    const b = new ClockBackend(YESTERDAY_MS, { abort: { after: 2 } });
     const runB0 = b.run.bind(b);
     b.run = async (ref, o) => {
       const v = await runB0(ref, o);
@@ -4090,36 +4211,126 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
       retryStranded: true,
       emit: [(e) => events.push(e)],
     });
-    console.log(
-      "R514 (b2)",
-      JSON.stringify(reusedOf(events)),
-      JSON.stringify(verdicts(report, 0)),
-      slowBudgets(today),
-    );
     expect(reusedOf(events).filter((m) => m.includes(`run ${runA}'s batch 0`))).toHaveLength(1);
     expect(falseKills(report, 0)).toEqual([]);
+    const scored = expectStale(report, 0, runA);
+    expectConfirmsAtBaselineDeadline(today, scored.length);
   });
 
-  test("R514 direction 2: a GENUINE hang under the mutant on a reused baseline is still timeout-killed (the unmutated confirm passes inside the budget)", async () => {
+  test("R514 direction 2: a GENUINE hang under the mutant on a reused baseline is still timeout-killed, after one unmutated confirm at under half the budget", async () => {
+    // Today BSlow is 800 ms unmutated (2 x 800 = 1600 <= the 2000 budget, off the boundary), and
+    // never ends under any mutant.
+    const today = new ClockBackend(800, { mutatedMs: Number.POSITIVE_INFINITY });
+    const { report, reused } = await sameBatchReuse(today);
+    expect(reused).toHaveLength(1);
+    const scored = scoredOf(report, 0);
+    expect(scored.length).toBeGreaterThan(0);
+    for (const m of scored) {
+      expect([m.verdict, m.killingTest, m.killPosition]).toEqual(["timeout-killed", "BSlow", 1]);
+    }
+    expectConfirmsAtBaselineDeadline(today, scored.length);
+  });
+
+  test("R514 a fresh batch is scored as before: a position-1 timeout is timeout-killed with NO unmutated confirm", async () => {
     const dirs = await twoTestProject(false);
     const store = new ResultsStore(":memory:");
-    await runSession({ ...opts(store, dirs), backend: new ClockBackend(YESTERDAY_MS, { after: 2 }) });
-    // Today BSlow is as fast as yesterday unmutated, and never ends under any mutant.
-    const today = new ClockBackend(YESTERDAY_MS, {}, false, true);
-    const events: RunEvent[] = [];
-    const report = await runSession({
-      ...opts(store, dirs),
-      backend: today,
-      resume: "last",
-      retryStranded: true,
-      emit: [(e) => events.push(e)],
-    });
-    const confirms = today.sent.filter((s) => !s.active && s.method === "BSlow");
-    console.log("R514 dir2", JSON.stringify(verdicts(report, 0)), JSON.stringify(confirms));
-    expect(reusedOf(events)).toHaveLength(1);
-    const scored = verdicts(report, 0);
+    const today = new ClockBackend(800, { mutatedMs: Number.POSITIVE_INFINITY });
+    const report = await runSession({ ...opts(store, dirs), backend: today });
+    const scored = scoredOf(report, 0);
     expect(scored.length).toBeGreaterThan(0);
-    expect(scored.every(([, v, k]) => v === "timeout-killed" && k === "BSlow")).toBe(true);
+    for (const m of scored) expect([m.verdict, m.killingTest]).toEqual(["timeout-killed", "BSlow"]);
+    expect(slowConfirms(today)).toEqual([]);
+  });
+
+  test("R514 a fresh batch's confirmWarm keeps the 1x rule: a replay at 0.75 x the budget still confirms the kill", async () => {
+    // The baseline measures BSlow at 1000 ms (budget 2000); later, unmutated, it takes 1500 ms
+    // (0.75 x), and it hangs under the mutant. One call: AFast at 1, BSlow at 2.
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const today = new ClockBackend(1_500, {
+      grouped: true,
+      mutatedMs: Number.POSITIVE_INFINITY,
+    });
+    const inner = today.run.bind(today);
+    let baselineDone = false;
+    today.run = async (ref, o) => {
+      if (today.mutantRuns === 0 && !baselineDone && ref.method === "BSlow") {
+        baselineDone = true;
+        const v = await inner(ref, { ...o, timeoutMs: Number.POSITIVE_INFINITY });
+        return { ...v, durationMs: YESTERDAY_MS };
+      }
+      return inner(ref, o);
+    };
+    const report = await runSession({ ...opts(store, dirs), backend: today });
+    const first = scoredOf(report, 0)[0];
+    expect([first?.verdict, first?.killingTest, first?.killPosition]).toEqual([
+      "timeout-killed",
+      "BSlow",
+      2,
+    ]);
+  });
+
+  test("R514 the fail path is unchanged on a reused batch: a covered fail whose confirm passes is killed, the confirm sent at the budget", async () => {
+    const today = new ClockBackend(YESTERDAY_MS);
+    const inner = today.run.bind(today);
+    today.run = async (ref, o) => {
+      const v = await inner(ref, o);
+      return today.active !== null && ref.method === "BSlow"
+        ? { ...v, outcome: "fail", failureMessage: "R514 assertion" }
+        : v;
+    };
+    const { report } = await sameBatchReuse(today);
+    const scored = scoredOf(report, 0);
+    expect(scored.length).toBeGreaterThan(0);
+    for (const m of scored) expect([m.verdict, m.killingTest]).toEqual(["killed", "BSlow"]);
+    expect(slowConfirms(today).map((s) => s.timeoutMs)).toEqual(scored.map(() => 2_000));
+  });
+
+  test("R514 the default-floor slow day: a confirm that overruns unmutated is a strand that latches the session, never a kill", async () => {
+    // With the default --mutant-timeout-ms the confirm's deadline is the budget, and bcdev has no
+    // stop hook for an unmutated run, so a test slower than the budget today is aborted:
+    // in-flight-unknown. The same outcome a re-run baseline gives it (I2).
+    const today = new ClockBackend(TODAY_MS);
+    const inner = today.run.bind(today);
+    today.run = async (ref, o) => {
+      const v = await inner(ref, o);
+      if (today.active !== null || ref.method !== "BSlow") return v;
+      return {
+        ref,
+        outcome: "error",
+        durationMs: 5,
+        operation: "in-flight-unknown",
+        failureMessage: "RunMutant timed out: AbortError",
+      };
+    };
+    const { report } = await sameBatchReuse(today);
+    expect(falseKills(report, 0)).toEqual([]);
+    const stranded = scoredOf(report, 0).filter((m) => m.cause === "stranded");
+    expect(stranded.map((m) => m.verdict)).toEqual(["error"]);
+    expect(report.quarantined).toBeDefined();
+  });
+
+  test("R514 the cause's ripple: interpretation, banner and explain", async () => {
+    expect(ERROR_CAUSE_INTERPRETATIONS["reused-budget-stale"].basis).toBe("R514");
+    const today = new ClockBackend(1_500, { mutatedMs: 2_500 });
+    const { report } = await sameBatchReuse(today);
+    const stale = report.mutants.filter((m) => m.cause === "reused-budget-stale");
+    expect(stale).toHaveLength(2);
+    expect(renderConsole(report)).toContain(", reused-budget-stale 2])");
+    const out = explain(report);
+    expect(out.explainSchemaVersion).toBe(14);
+    const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
+    expect(rows).toHaveLength(2);
+    for (const r of rows) {
+      expect(r.interpretation).toBe(ERROR_CAUSE_INTERPRETATIONS["reused-budget-stale"]);
+    }
+  });
+
+  test("R514 RUNNER_DISAGREEMENT_NOTE names the reuse route", () => {
+    expect([
+      RUNNER_DISAGREEMENT_NOTE.includes("--resume"),
+      RUNNER_DISAGREEMENT_NOTE.includes("R192"),
+    ]).toEqual([true, true]);
   });
 
   test("R514 control (c): the same day with a FRESH baseline measures BSlow at 5000 ms, budgets 10000 ms, and kills nothing", async () => {
@@ -4127,14 +4338,14 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     const store = new ResultsStore(":memory:");
     const today = new ClockBackend(TODAY_MS);
     const report = await runSession({ ...opts(store, dirs), backend: today });
-    console.log("R514 (c) fresh", JSON.stringify(verdicts(report, 0)), slowBudgets(today));
     expect(today.baselineRuns).toBeGreaterThan(0);
     expect(slowBudgets(today)).toEqual([2 * TODAY_MS]);
     expect(falseKills(report, 0)).toEqual([]);
   });
 
-  test("R514 control (c2): a fresh baseline, but BSlow runs past 2x its own baseline under a mutant that does not touch it, is ALSO timeout-killed", async () => {
-    // Not reuse-specific: noise of more than 2x inside one run. Measures today's rule, asserts it.
+  test("R514 ruling: a fresh baseline's position-1 timeout is not confirmed (BSlow running past 2x its own baseline inside one run is timeout-killed)", async () => {
+    // Not reuse-specific: noise of more than 2x inside one run (R53's accepted margin). Measures
+    // today's rule and asserts it; the exposure is filed as its own roadmap item (R516).
     const dirs = await twoTestProject(false);
     const store = new ResultsStore(":memory:");
     const today = new ClockBackend(TODAY_MS);
@@ -4152,8 +4363,8 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
       return inner(ref, o);
     };
     const report = await runSession({ ...opts(store, dirs), backend: today });
-    console.log("R514 (c2) fresh+drift", JSON.stringify(verdicts(report, 0)), slowBudgets(today));
     expect(slowBudgets(today)).toEqual([Math.max(2 * YESTERDAY_MS, FLOOR_MS)]);
     expect(falseKills(report, 0).length).toBeGreaterThan(0);
+    expect(slowConfirms(today)).toEqual([]);
   });
 });

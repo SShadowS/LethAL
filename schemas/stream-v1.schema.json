@@ -1110,7 +1110,8 @@
             "session-reused",
             "warm-prefix-unstable",
             "warm-timeout-unconfirmed",
-            "warm-confirmation-incomplete"
+            "warm-confirmation-incomplete",
+            "reused-budget-stale"
           ]
         },
         "killingTestFailure": {

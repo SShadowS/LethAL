@@ -565,7 +565,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "code": "resume-baseline-reused",
-        "message": "[lethal] --resume: batch 1's baseline was not re-run. Its instrumented source and the published test app hash the same as run 1's batch 1, so that run's 1 baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here.",
+        "message": "[lethal] --resume: batch 1's baseline was not re-run. Its instrumented source and the published test app hash the same as run 1's batch 1, so that run's 1 baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).",
         "seq": 21,
         "type": "warning",
       },

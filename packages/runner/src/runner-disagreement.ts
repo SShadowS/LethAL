@@ -57,7 +57,9 @@ export const RUNNER_DISAGREEMENT_NOTE =
   "different session type (GuiAllowed=Yes/ClientType=Web) from every verdict (the fenced " +
   "GuiAllowed=No/ClientType=ODataV4 path, R57) — a test that passes there and fails here is a " +
   'runner disagreement, not necessarily a flaky test. Re-run with coverageMode "fenced" (one ' +
-  "runner for both) to tell the two apart";
+  "runner for both) to tell the two apart; and if this batch's baseline was reused by `--resume` " +
+  "(R192), the green set is from that earlier run too, so a test that has gone red since fails " +
+  "here as well: re-run without `--resume` to re-measure it";
 
 /**
  * The diagnosis for a test that failed its kill-confirmation under a hub coverage mode, or
