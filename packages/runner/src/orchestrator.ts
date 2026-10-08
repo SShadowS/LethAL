@@ -4123,7 +4123,7 @@ interface BatchScope {
   readonly emit: RunEmitter;
   readonly outcomes: SessionOutcome[];
   readonly killLedger: KillLedger;
-  readonly sessionReuse: { warned: boolean };
+  readonly sessionReuse: { warned: boolean; stopWarned?: boolean };
   readonly groupRuns: GroupRunSettings | undefined;
   readonly minMutantBudgetMs: number;
   /** `cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT`; also the covering loop's fallback. */
@@ -8951,8 +8951,11 @@ function timeoutUnconfirmedNote(
       : source.kind === "confirm"
         ? "the budget is twice that confirm's duration"
         : "the budget is twice its measured duration, or on al-runner one-shot the compile counts against it";
-  const band =
-    ratio <= 1.25
+  // R517: failed by the in-run stop alone (twice the test's own run fits the budget, not the stop).
+  const stopBound = judged.stopMs < budgetMs && 2 * judged.confirmMs <= budgetMs;
+  const band = stopBound
+    ? `the test's own run (${judged.confirmMs} ms) is more than half the ${judged.stopMs} ms in-run stop, which is below its budget; the stop is the larger of --mutant-timeout-ms and the baseline timeout, so raising --mutant-timeout-ms above twice this test's own run raises the stop and re-scores it`
+    : ratio <= 1.25
       ? `the test ran about as fast as when its budget was set, so this is R516's boundary band (${why}); raise --mutant-timeout-ms above twice this test's duration to re-score it`
       : "the test is slower now than when its budget was set, or this worker's tier is slower than the baseline's; raise --mutant-timeout-ms to re-score it";
   const half =
@@ -9514,8 +9517,9 @@ async function runMutantsOnBackend(args: {
   readonly memberCountsByTest: ReadonlyMap<string, number>;
   /** R198: group-run settings, or `undefined` for the sequential loop. */
   readonly groupRuns?: GroupRunSettings | undefined;
-  /** R206 §2.1: session-scoped, shared across batches and shards: the once-only warning flag. */
-  readonly sessionReuse: { warned: boolean };
+  /** R206 §2.1: session-scoped, shared across batches and shards: the once-only warning flag.
+   *  R517 (M-a): `stopWarned`, the same for a reported stop that is not the configured one. */
+  readonly sessionReuse: { warned: boolean; stopWarned?: boolean };
   /** R514: this batch's baseline came from a stored snapshot (R192), so its durations, and every
    *  budget derived from them, are from another day. Since R516 every position-1 `timeout` is
    *  confirmed unmutated with R53's 2x margin on every batch; this field only names the cause of
@@ -9728,6 +9732,22 @@ async function runMutantsOnBackend(args: {
           type: "warning",
           code: "session-reuse-observed",
           message: `[lethal] session-reuse-observed: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the call for ${ref.method} (mutant ${m.mutantId}) started — this environment hands LethAL sessions other calls have used; a failure or timeout measured in such a session is recorded as \`session-reused\`, never as a kill (R206)`,
+        });
+      }
+      // R517 (M-a): al-runner enforced a stop other than the --test-timeout it was started with
+      // (a build that ignores the flag). The confirm already judges against the reported one.
+      const configuredStop = args.backend.inRunStopMs;
+      if (
+        v.reportedStopMs !== undefined &&
+        configuredStop !== undefined &&
+        v.reportedStopMs !== configuredStop &&
+        args.sessionReuse.stopWarned !== true
+      ) {
+        args.sessionReuse.stopWarned = true;
+        args.emit({
+          type: "warning",
+          code: "alrunner-stop-mismatch",
+          message: `[lethal] alrunner-stop-mismatch: al-runner reported a ${v.reportedStopMs / 1000}s stop although it was started with --test-timeout ${configuredStop / 1000} (${ref.method}, mutant ${m.mutantId}); a timeout is judged against the stop it reported (R517)`,
         });
       }
       if (reused && v.outcome !== "pass") {
@@ -9950,10 +9970,17 @@ async function runMutantsOnBackend(args: {
             verdict = "error";
             const source = step.testBudgetSource;
             const judged = { confirmMs, wallMs: confirm.durationMs, stopMs };
+            // R517: the in-run stop failed it, not the budget: a re-measured baseline would not
+            // help, so never `reused-budget-stale`.
+            const stopBound = stopMs < budget && 2 * confirmMs <= budget;
             if (stopUnreported) {
               cause = "timeout-unconfirmed";
               failureNote = `timeout-unconfirmed ${ref.method}: timed out at position 1 under the mutant, but al-runner did not say which stop it enforced (its row has no "Test exceeded <N>s timeout."), so the timeout cannot be weighed against the ${confirmMs} ms the test took unmutated and is not attributed to the mutant (R517)`;
-            } else if (args.baselineReused !== undefined && source.kind !== "confirm") {
+            } else if (
+              args.baselineReused !== undefined &&
+              source.kind !== "confirm" &&
+              !stopBound
+            ) {
               cause = "reused-budget-stale";
               failureNote = `reused-budget-stale ${ref.method}: completed unmutated in ${durationsText(judged)}, more than half the ${stopText(stopMs, budget, `set from run ${args.baselineReused.runId}'s reused baseline (R192)`)}, so the timeout at position 1 is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`;
             } else {

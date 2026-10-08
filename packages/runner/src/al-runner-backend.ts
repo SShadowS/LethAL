@@ -1435,9 +1435,13 @@ export class AlRunnerBackend implements ExecutionBackend {
     }
     // R517 (I2): a timed-out test's thread is abandoned, not stopped, and keeps writing to the
     // daemon's row store into later requests, the unmutated confirm included. This suite's results
-    // stand; the daemon does not serve another one.
+    // stand; the daemon does not serve another one. The trigger is STRUCTURAL, any row neither
+    // `pass` nor `fail`, never the timeout wording: al-runner's OnRun-trigger timeout says "...
+    // exceeded the {N}s timeout ..." (43f7617), which RUNNER_TIMEOUT_MESSAGE does not match, and the
+    // wording has moved before (R94). `error` is rare there (setup, unsupported signature, timeout).
+    // `hungTest` (M3's note) and the verdict still read the wording.
     const hungTest = res.tests.find(isTimeoutRow)?.name;
-    if (hungTest !== undefined) await server.close();
+    if (res.tests.some((t) => t.status !== "pass" && t.status !== "fail")) await server.close();
     await watch();
     const byName = new Map<string, ServerTestLine>();
     for (const t of res.tests) byName.set(t.name, t);

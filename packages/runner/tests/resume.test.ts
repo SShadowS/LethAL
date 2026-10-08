@@ -4977,13 +4977,67 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     const dirs = await twoTestProject(false);
     const store = new ResultsStore(":memory:");
     const today = new ClockBackend(bodyMs, { server, mutatedMs });
+    const events: RunEvent[] = [];
     const report = await runSession({
       ...opts(store, dirs),
       mutantTimeoutMs: 180_000,
       backend: today,
+      emit: [(e) => events.push(e)],
     });
-    return { report, today };
+    return { report, today, events };
   }
+  /** R517 (M-a): the stop-mismatch warnings a run emitted. */
+  const stopWarnings = (events: readonly RunEvent[]) =>
+    events.flatMap((e) =>
+      e.type === "warning" && e.code === "alrunner-stop-mismatch" ? [e.message] : [],
+    );
+
+  test("R517 M-a: a reported stop other than the configured one warns ONCE per session; a matching one never", async () => {
+    const off = await serverRun(58_000, { restMs: 30_000, enforcedStopMs: 60_000 }, 61_000);
+    expect(scoredOf(off.report, 0).length).toBeGreaterThan(1);
+    expect(stopWarnings(off.events)).toEqual([
+      expect.stringContaining(
+        "al-runner reported a 60s stop although it was started with --test-timeout 180",
+      ),
+    ]);
+    const same = await serverRun(1_000, { restMs: 94_000 }, Number.POSITIVE_INFINITY);
+    expect(scoredOf(same.report, 0).every((m) => m.verdict === "timeout-killed")).toBe(true);
+    expect(stopWarnings(same.events)).toEqual([]);
+  });
+
+  test("R517 I-2: reused --server, budget 260 s, stop 180 s, confirm body 100 s: timeout-unconfirmed naming the stop, never reused-budget-stale", async () => {
+    // Yesterday BSlow took 130 s (budget 260 s). Today its body is 100 s (130 s wall) and 181 s
+    // under every mutant, stopped at 180 s. 2 x 100 fits the budget but not the stop: re-measuring
+    // the baseline would change nothing, so the stale-budget cause would send the reader astray.
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const o = { ...opts(store, dirs), mutantTimeoutMs: 180_000 };
+    await runSession({
+      ...o,
+      backend: new ClockBackend(130_000, { abort: { after: 2 }, server: { restMs: 0 } }),
+    });
+    const events: RunEvent[] = [];
+    const today = new ClockBackend(100_000, { server: { restMs: 30_000 }, mutatedMs: 181_000 });
+    const report = await runSession({
+      ...o,
+      backend: today,
+      resume: "last",
+      retryStranded: true,
+      emit: [(e) => events.push(e)],
+    });
+    expect(reusedOf(events)).toHaveLength(1);
+    expect(slowBudgets(today)).toEqual([260_000]);
+    const scored = scoredOf(report, 0);
+    expect(scored.length).toBeGreaterThan(0);
+    expect(scored.map((m) => [m.verdict, m.cause])).toEqual(
+      scored.map(() => ["error", "timeout-unconfirmed"]),
+    );
+    const note = scored[0]?.failureNote ?? "";
+    expect(note).toContain("more than half the 180000 ms in-run stop al-runner reported");
+    expect(note).toContain(
+      "The test's own run (100000 ms) is more than half the 180000 ms in-run stop, which is below its budget; the stop is the larger of --mutant-timeout-ms and the baseline timeout, so raising --mutant-timeout-ms above twice this test's own run raises the stop and re-scores it",
+    );
+  });
 
   test("R517 S1: --server, BSlow body 58 s plus 30 s rest (budget 180 s), 61 s under an unrelated mutant: survived, never stopped at al-runner's own 60 s default", async () => {
     // Before R517 the daemon had no --test-timeout, so it stopped the body at 60 s; the confirm's

@@ -611,9 +611,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   figure, never the suite's or the process's wall clock), against the stop al-runner reports it
   enforced, when that is below the budget** (R517). On bcdev nothing changes. On al-runner one-shot
   a genuine hang is no longer lost to the compile time, once one-shot reports timeouts again
-  (R518).
-- **al-runner `--server`: a suite that overruns its deadline, or that contains a timed-out test,
-  now ends that daemon; the next run starts a fresh one** (R517). Before, a late answer could be
+  (R518; that one-shot timeouts exit 3 was measured on al-runner 43f76177 only). A reported stop
+  other than the configured one warns once per session (`alrunner-stop-mismatch`).
+- **al-runner `--server`: a suite that overruns its deadline, or that contains a timed-out test
+  (any row neither `pass` nor `fail`, whatever its wording), now ends that daemon; the next run
+  starts a fresh one** (R517). Before, a late answer could be
   read as the next mutant's results, and a timed-out test's abandoned thread kept running into
   later runs, including the unmutated confirm.
 - **On bcdev and al-runner one-shot, a timeout at group position 1 is now confirmed by one

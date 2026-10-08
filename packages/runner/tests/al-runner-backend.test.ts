@@ -1751,8 +1751,8 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
   });
 
   /** Daemon 1's first suite: A passes, BSlow times out, Later (after it) has no row. Every other
-   *  suite: all three pass. */
-  function hungOnce(timeoutRow: boolean) {
+   *  suite: all three pass. `message` is the timeout row's text (default al-runner's per-test one). */
+  function hungOnce(timeoutRow: boolean, message = "Test exceeded 180s timeout.") {
     return daemons((daemon, request, emit) => {
       const first = daemon === 1 && request === 1;
       emit({ type: "test", name: "Codeunit79100.A", status: "pass", durationMs: 5 });
@@ -1761,7 +1761,8 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
           type: "test",
           name: "Codeunit79100.BSlow",
           status: "error",
-          message: "Test exceeded 180s timeout.",
+          errorKind: "timeout",
+          message,
           durationMs: 180_004,
         });
         emit(summary(2));
@@ -1786,6 +1787,21 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
     const [one, two] = fake.argvs;
     expect(two).toEqual(one);
     expect(one).toContain("--test-timeout");
+    await backend.close();
+  });
+
+  test("I-1: an OnRun-trigger timeout row (status error, wording the timeout regex does not match) still ends the daemon", async () => {
+    const fake = hungOnce(
+      true,
+      "The test codeunit's OnRun trigger exceeded the 180s timeout, so none of its test methods ran.",
+    );
+    const backend = serverOn(fake.spawn);
+    await backend.activate("M0001");
+    // The verdict still reads the wording: not a classified timeout, so never a kill.
+    expect((await backend.run(t("BSlow"), run)).outcome).toBe("error");
+    await backend.activate(null);
+    expect((await backend.run(t("BSlow"), run)).outcome).toBe("pass");
+    expect(fake.argvs.length).toBe(2);
     await backend.close();
   });
 
