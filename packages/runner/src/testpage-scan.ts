@@ -34,6 +34,7 @@ import {
   attributeRun,
   initParser,
   memberArms,
+  nameSegments,
   normalizeAlName,
   parseAL,
   spanText,
@@ -1033,8 +1034,7 @@ function fallBack(st: ReachState, why: string): void {
 
 /** The object name a type or reference text ends in: the last dotted segment, quotes kept whole. */
 function lastSegment(raw: string): string {
-  const segments = raw.trim().match(/"[^"]*"|[^.]+/g) ?? [raw];
-  return normalizeAlName((segments[segments.length - 1] ?? raw).trim());
+  return normalizeAlName(nameSegments(raw).at(-1) ?? raw);
 }
 
 /**
