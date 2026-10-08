@@ -567,6 +567,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A tableextension or subscriber codeunit whose header is split by `#if` now keeps a table's
+  trigger tags** (R494). Such an object was in no index the trigger-skip rule reads, so a
+  `run-trigger-skipped-*` or `run-trigger-forced` tag it should have kept was dropped. It is now
+  read by the conservative text rule and by any subscriber to the table's events. Measured: no
+  change on fixtures or any corpus.
 - **A field of a temporary record now has a type** (R509). The type table read the type text
   `Record "Sales Line" temporary` with the keyword still on, found no table of that name, and gave
   every field of a temporary record no type, so `swap-additive` emitted nothing there. Measured:
