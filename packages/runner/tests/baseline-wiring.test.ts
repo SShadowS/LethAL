@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 import { GATE_BASELINES, PENDING_FIRST_RECORD, SYMBOL_BASELINES } from "../itest/baseline-guard";
 import { SYMBOL_SETS } from "../itest/symbol-fixture";
 

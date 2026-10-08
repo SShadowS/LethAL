@@ -217,8 +217,12 @@ export function coarseIdentityTupleOf(
  * no exemption), and so is a site that deletes or alters a bounded item's only `SetRange` bound,
  * so a later same-tuple twin of a refused mutant takes its ordinal (BC.History: 13,435 mutants
  * refused, 378 keys; fixtures, CDO, DC and DO: none).
+ * 34: R343, an object wrapped whole in `#if` is indexed when the build compiles its arm, so typed
+ * operators gain its sites and Tier 1 cedes the ones Tier 2 claims, and a new or ceded mutant
+ * earlier in a procedure moves a same-tuple twin's ordinal (BC.History: 4 keys; fixtures, CDO, DC
+ * and DO: none).
  */
-export const IDENTITY_SCHEME = 33;
+export const IDENTITY_SCHEME = 34;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

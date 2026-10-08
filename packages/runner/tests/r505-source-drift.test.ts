@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readTargetSource } from "../src/baseline-snapshot";
 import { ProjectChangedDuringRunError, watchProjectInputs } from "../src/source-drift";
@@ -98,6 +98,32 @@ describe("R505: the project's build inputs must not change during the run", () =
     const watch = await started(dir);
     await writeFile(join(dir, "addin", "x.js"), "console.log(2);\n", "utf8");
     expect(await changesOf(watch)).toEqual([`changed ${join("addin", "x.js")}`]);
+  });
+
+  // The Windows CI failure on 736dd7ff: a same-size rewrite inside one timestamp tick leaves the
+  // stat equal to the cached one. Forced here with a stat that never moves. Revert direction 1:
+  // cache every stat (drop the `settled` test) and the fresh-stat case goes red. Revert direction
+  // 2: never cache, and the settled case goes red.
+  const fixedStat = (t: number) => async (path: string) => ({
+    size: (await stat(path)).size,
+    mtimeMs: t,
+    ctimeMs: t,
+  });
+
+  test("a same-size edit under an unchanged but FRESH stat is still named", async () => {
+    const dir = await project();
+    const watch = watchProjectInputs(dir, await readTargetSource(dir), [], fixedStat(Date.now()));
+    await watch.check();
+    await writeFile(join(dir, "addin", "x.js"), "console.log(2);\n", "utf8");
+    expect(await changesOf(watch)).toEqual([`changed ${join("addin", "x.js")}`]);
+  });
+
+  test("a SETTLED unchanged stat is trusted: the stat gate skips the read (a stated limit)", async () => {
+    const dir = await project();
+    const watch = watchProjectInputs(dir, await readTargetSource(dir), [], fixedStat(0));
+    await watch.check();
+    await writeFile(join(dir, "addin", "x.js"), "console.log(2);\n", "utf8");
+    expect(await changesOf(watch)).toBeNull();
   });
 
   // Revert: drop the output exclusion. The results database written into the project must not

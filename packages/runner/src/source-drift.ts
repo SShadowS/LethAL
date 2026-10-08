@@ -13,10 +13,17 @@
  * The inputs are every `.al` file and `app.json` (compared with the snapshot's bytes), and every
  * resource the batch copies (`isProjectResource`, compared with the bytes seen at the first
  * check), minus the run's own output files. A check is stat-gated: a file's bytes are re-read only
- * when its size, mtime or ctime moved.
+ * when its size, mtime or ctime moved, and a stat is trusted only once it is no longer "racily
+ * clean" (git's rule): its mtime and ctime lie more than `RACY_MS` before the check that saw the
+ * bytes equal. A file written within a timestamp's resolution of that check (a same-size edit
+ * inside one mtime tick) would otherwise keep a stat equal to the cached one and never be re-read;
+ * such a file is re-read at every check until it ages (R533).
  *
- * LIMIT, stated (R505): an edit undone between two checks is not seen. The checks bracket every
- * coverage-producing al-runner call, so such an edit must start and end inside one call.
+ * LIMITS, stated (R505, R533): an edit undone between two checks is not seen. The checks bracket
+ * every coverage-producing al-runner call, so such an edit must start and end inside one call. A
+ * same-size edit that leaves size, mtime and ctime all equal on a file settled more than `RACY_MS`
+ * ago is not seen (git's racy-clean assumption), and "settled" assumes the filesystem's timestamps
+ * follow this machine's clock (a share whose clock runs behind can settle a file too early).
  */
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -44,10 +51,22 @@ export class ProjectChangedDuringRunError extends Error {
  */
 const NEVER_AN_INPUT = /\.log$|^nohup\.out$|^~\$/i;
 
-interface Seen {
+export interface Seen {
   readonly size: number;
   readonly mtimeMs: number;
   readonly ctimeMs: number;
+}
+
+/** Wider than any filesystem's timestamp granularity (FAT: 2 s; NTFS: about 15.6 ms in practice). */
+const RACY_MS = 3000;
+
+/** `undefined` when the file is gone. */
+async function statOf(path: string): Promise<Seen | undefined> {
+  const s = await stat(path).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") return undefined;
+    throw err;
+  });
+  return s === undefined ? undefined : { size: s.size, mtimeMs: s.mtimeMs, ctimeMs: s.ctimeMs };
 }
 
 export interface ProjectInputWatch {
@@ -58,11 +77,13 @@ export interface ProjectInputWatch {
 /**
  * `snapshot` is the session's (`readTargetSource`: every `.al` plus `app.json`, keyed by
  * project-relative path). `excludeOutputs` are the run's own output files (exact paths).
+ * `statFile` is for tests, which must force a stat equal to the cached one.
  */
 export function watchProjectInputs(
   projectDir: string,
   snapshot: ReadonlyMap<string, Buffer>,
   excludeOutputs: readonly string[] = [],
+  statFile: (path: string) => Promise<Seen | undefined> = statOf,
 ): ProjectInputWatch {
   const excluded = new Set(excludeOutputs.map(outputPathKey));
   /** The bytes each input must still have. Resources are filled at the first check. */
@@ -89,6 +110,7 @@ export function watchProjectInputs(
 
   return {
     async check() {
+      const checkedAt = Date.now();
       const current = await inputs();
       if (!resourcesKnown) {
         for (const rel of current) {
@@ -109,16 +131,12 @@ export function watchProjectInputs(
         const path = join(projectDir, rel);
         // A file can go between the listing and this read (an editor's atomic save, a delete):
         // that is a removal, named as one, never a raw ENOENT without R505's diagnosis.
-        const s = await stat(path).catch((err: NodeJS.ErrnoException) => {
-          if (err.code === "ENOENT") return undefined;
-          throw err;
-        });
-        if (s === undefined) {
+        const now = await statFile(path);
+        if (now === undefined) {
           changes.push(`removed ${rel}`);
           present.delete(rel);
           continue;
         }
-        const now: Seen = { size: s.size, mtimeMs: s.mtimeMs, ctimeMs: s.ctimeMs };
         const last = seen.get(rel);
         if (
           last !== undefined &&
@@ -134,8 +152,11 @@ export function watchProjectInputs(
         if (bytes === undefined) {
           changes.push(`removed ${rel}`);
           present.delete(rel);
-        } else if (now.size === want.length && bytes.equals(want)) seen.set(rel, now);
-        else changes.push(`changed ${rel}`);
+        } else if (now.size === want.length && bytes.equals(want)) {
+          const settled = Math.max(now.mtimeMs, now.ctimeMs) < checkedAt - RACY_MS;
+          if (settled) seen.set(rel, now);
+          else seen.delete(rel);
+        } else changes.push(`changed ${rel}`);
       }
       for (const rel of expected.keys())
         if (!present.has(rel) && !changes.includes(`removed ${rel}`))
