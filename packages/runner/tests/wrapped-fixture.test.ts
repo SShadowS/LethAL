@@ -91,7 +91,7 @@ describe("R-300b: sandbox-wrapped", () => {
     return built;
   };
 
-  it("gives the pre-committed 34 mutants in one batch", () => {
+  it("gives the pre-committed 36 mutants in one batch (R-343)", () => {
     expect(get().rows).toEqual(
       EXPECTED_WRAPPED.map(
         (r) => `${r.code} ${r.file} ${r.line} ${r.operatorName} ${r.procedureName}`,
@@ -176,6 +176,21 @@ describe("R-300b: the wrapped leg's checker", () => {
     expect(() =>
       assertWrappedRun(reportOf(EXPECTED_WRAPPED), "t", ["... the line is dropped (R300)."]),
     ).toThrow("dropped lines");
+  });
+
+  // R343: strict parity, one red-going case per direction.
+  it("refuses a twin row with no wrapped partner (the old twin-only swap-additive)", () => {
+    const noWrapped = EXPECTED_WRAPPED.filter((r) => r.code !== "M0010");
+    expect(twinDifferences(reportOf(noWrapped))).toEqual([
+      "M0017 (src/WrappedPreTwin.Codeunit.al) has no wrapped partner",
+    ]);
+  });
+
+  it("refuses a wrapped row with no twin", () => {
+    const noTwin = EXPECTED_WRAPPED.filter((r) => r.code !== "M0032");
+    expect(twinDifferences(reportOf(noTwin))).toEqual([
+      "M0024 (src/WrappedTop.Codeunit.al) has no twin mutant at Grow|9|lethal.swap-additive",
+    ]);
   });
 
   it("refuses the two-arm control without its refusal sentence", () => {

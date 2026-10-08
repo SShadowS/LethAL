@@ -618,6 +618,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   starts a fresh one** (R517). Before, a late answer could be
   read as the next mutant's results, and a timed-out test's abandoned thread kept running into
   later runs, including the unmutated confirm.
+- **Typed operators now mutate an object wrapped whole in `#if`; identity scheme 34** (R343). The
+  symbol table left every object inside a file-level `#if` unindexed, so operators that need a type
+  (`swap-additive`, `swap-call-arguments`, `remove-setrange`, `swap-modify-flag` and others) emitted
+  nothing there, and said nothing. An object in an arm the build compiles, that parses clean, is now
+  indexed like any other object (with its arm's own `namespace`, if it has one). An object in an
+  inactive arm, in a file whose arms cannot be decided, or with a parse error stays unindexed, and
+  R-364's hang refusal still guards it. Measured on BaseApp (BC.History w1-28): 546 wrapped objects
+  now indexed, and none left unindexed in a live arm; on DC 21. A few identity keys move (BaseApp: 4;
+  the fixtures, CDO, DC and DO: none). `itest:alrunner`'s wrapped leg now holds 36 mutants, and each
+  wrapped file must equal its unwrapped twin in both directions.
 - **On bcdev and al-runner one-shot, a timeout at group position 1 is now confirmed by one
   unmutated run on every batch, not only a reused one, and on the worker that saw it** (R516). The
   kill stands only if that run takes at most half the budget (R53's margin); otherwise the mutant is

@@ -3,14 +3,16 @@
  * `itest:alrunner` wrapped leg runs against it (one-shot, `--server`, resource selector).
  *
  * Pre-committed in docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md before any
- * al-runner session on the fixture. A difference is a finding and a stop: never edit a row to
- * match a run.
+ * al-runner session on the fixture; the table is R-343's, pre-committed in
+ * docs/superpowers/specs/2026-10-08-r343-wrapped-leg-precommitment.md before the changed code ran.
+ * A difference is a finding and a stop: never edit a row to match a run.
  *
  * What it pins:
  * - each ADMITTED wrapped file (`WrappedTop`, `WrappedPre`) scores exactly as its unwrapped twin,
- *   per mutant, verdict and covering test (the twin's test is the same name plus `Twin`). The
- *   twins also carry a `swap-additive` mutant the wrapped files lack: typed operators see nothing
- *   inside a `#if` object wrapper (R343), so those two rows are twin-only BY NAME;
+ *   per mutant, verdict and covering test (the twin's test is the same name plus `Twin`), in both
+ *   directions: no twin-only and no wrapped-only row. Before R343 the twins' `swap-additive` rows
+ *   were twin-only, because a `#if`-wrapped object was not indexed and typed operators saw nothing
+ *   inside it;
  * - the R353 layout: `Twice`'s lines in the ORIGINAL text lie inside `Grow` in the instrumented
  *   text, so a frame misread moves `Twice`'s mutants to `no-coverage` and `Grow`'s covering set;
  * - the C1 pair: `WrappedPairA` is the arm LethAL reads as compiled (WRAPDEF from the config's
@@ -33,7 +35,7 @@ export const WRAPPED_SELECTOR_IDS = { selectorId: 78949, controlId: 78948, table
 /** The config symbol, sent to al-runner as `--define`. The target's app.json defines WRAPAPP. */
 export const WRAPPED_SYMBOLS: readonly string[] = ["WRAPDEF"];
 
-const SPEC = "docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md";
+const SPEC = "docs/superpowers/specs/2026-10-08-r343-wrapped-leg-precommitment.md";
 const SUITE = "Wrapped Tests";
 
 const TOP = "src/WrappedTop.Codeunit.al";
@@ -45,8 +47,6 @@ const ARMS = "src/WrappedArms.Codeunit.al";
 
 /** Admitted wrapped file -> its unwrapped twin. */
 export const TWINS: Readonly<Record<string, string>> = { [TOP]: TOP_TWIN, [PRE]: PRE_TWIN };
-/** Twin-only mutants (R343: typed operators see nothing inside a wrapped object), by code. */
-export const TWIN_ONLY: readonly string[] = ["M0016", "M0030"];
 /** The C1 pair's rows, which follow one of two readings. */
 export const PAIR_CODES: readonly string[] = ["M0004", "M0005", "M0006"];
 
@@ -95,31 +95,33 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0007", PRE, 9, "empty-block", "Grow", "killed", "GrowPre"),
   row("M0008", PRE, 10, "conditional-boundary", "Grow", "survived", "GrowPre"),
   row("M0009", PRE, 11, "return-value", "Grow", "killed", "GrowPre"),
-  row("M0010", PRE, 12, "return-value", "Grow", "survived", "GrowPre"),
-  row("M0011", PRE, 35, "empty-block", "Twice", "killed", "TwicePre"),
-  row("M0012", PRE, 36, "return-value", "Twice", "killed", "TwicePre"),
-  row("M0013", PRE_TWIN, 9, "empty-block", "Grow", "killed", "GrowPreTwin"),
-  row("M0014", PRE_TWIN, 10, "conditional-boundary", "Grow", "survived", "GrowPreTwin"),
-  row("M0015", PRE_TWIN, 11, "return-value", "Grow", "killed", "GrowPreTwin"),
-  row("M0016", PRE_TWIN, 11, "swap-additive", "Grow", "killed", "GrowPreTwin"),
-  row("M0017", PRE_TWIN, 12, "return-value", "Grow", "survived", "GrowPreTwin"),
-  row("M0018", PRE_TWIN, 35, "empty-block", "Twice", "killed", "TwicePreTwin"),
-  row("M0019", PRE_TWIN, 36, "return-value", "Twice", "killed", "TwicePreTwin"),
-  row("M0020", TOP, 7, "empty-block", "Grow", "killed", "GrowTop"),
-  row("M0021", TOP, 8, "conditional-boundary", "Grow", "survived", "GrowTop"),
-  row("M0022", TOP, 9, "return-value", "Grow", "killed", "GrowTop"),
-  row("M0023", TOP, 10, "return-value", "Grow", "survived", "GrowTop"),
-  row("M0024", TOP, 32, "empty-block", "Twice", "killed", "TwiceTop"),
-  row("M0025", TOP, 34, "remove-assignment", "Twice", "killed", "TwiceTop"),
-  row("M0026", TOP, 36, "return-value", "Twice", "killed", "TwiceTop"),
-  row("M0027", TOP_TWIN, 7, "empty-block", "Grow", "killed", "GrowTopTwin"),
-  row("M0028", TOP_TWIN, 8, "conditional-boundary", "Grow", "survived", "GrowTopTwin"),
-  row("M0029", TOP_TWIN, 9, "return-value", "Grow", "killed", "GrowTopTwin"),
-  row("M0030", TOP_TWIN, 9, "swap-additive", "Grow", "killed", "GrowTopTwin"),
-  row("M0031", TOP_TWIN, 10, "return-value", "Grow", "survived", "GrowTopTwin"),
-  row("M0032", TOP_TWIN, 32, "empty-block", "Twice", "killed", "TwiceTopTwin"),
-  row("M0033", TOP_TWIN, 34, "remove-assignment", "Twice", "killed", "TwiceTopTwin"),
-  row("M0034", TOP_TWIN, 36, "return-value", "Twice", "killed", "TwiceTopTwin"),
+  row("M0010", PRE, 11, "swap-additive", "Grow", "killed", "GrowPre"),
+  row("M0011", PRE, 12, "return-value", "Grow", "survived", "GrowPre"),
+  row("M0012", PRE, 35, "empty-block", "Twice", "killed", "TwicePre"),
+  row("M0013", PRE, 36, "return-value", "Twice", "killed", "TwicePre"),
+  row("M0014", PRE_TWIN, 9, "empty-block", "Grow", "killed", "GrowPreTwin"),
+  row("M0015", PRE_TWIN, 10, "conditional-boundary", "Grow", "survived", "GrowPreTwin"),
+  row("M0016", PRE_TWIN, 11, "return-value", "Grow", "killed", "GrowPreTwin"),
+  row("M0017", PRE_TWIN, 11, "swap-additive", "Grow", "killed", "GrowPreTwin"),
+  row("M0018", PRE_TWIN, 12, "return-value", "Grow", "survived", "GrowPreTwin"),
+  row("M0019", PRE_TWIN, 35, "empty-block", "Twice", "killed", "TwicePreTwin"),
+  row("M0020", PRE_TWIN, 36, "return-value", "Twice", "killed", "TwicePreTwin"),
+  row("M0021", TOP, 7, "empty-block", "Grow", "killed", "GrowTop"),
+  row("M0022", TOP, 8, "conditional-boundary", "Grow", "survived", "GrowTop"),
+  row("M0023", TOP, 9, "return-value", "Grow", "killed", "GrowTop"),
+  row("M0024", TOP, 9, "swap-additive", "Grow", "killed", "GrowTop"),
+  row("M0025", TOP, 10, "return-value", "Grow", "survived", "GrowTop"),
+  row("M0026", TOP, 32, "empty-block", "Twice", "killed", "TwiceTop"),
+  row("M0027", TOP, 34, "remove-assignment", "Twice", "killed", "TwiceTop"),
+  row("M0028", TOP, 36, "return-value", "Twice", "killed", "TwiceTop"),
+  row("M0029", TOP_TWIN, 7, "empty-block", "Grow", "killed", "GrowTopTwin"),
+  row("M0030", TOP_TWIN, 8, "conditional-boundary", "Grow", "survived", "GrowTopTwin"),
+  row("M0031", TOP_TWIN, 9, "return-value", "Grow", "killed", "GrowTopTwin"),
+  row("M0032", TOP_TWIN, 9, "swap-additive", "Grow", "killed", "GrowTopTwin"),
+  row("M0033", TOP_TWIN, 10, "return-value", "Grow", "survived", "GrowTopTwin"),
+  row("M0034", TOP_TWIN, 32, "empty-block", "Twice", "killed", "TwiceTopTwin"),
+  row("M0035", TOP_TWIN, 34, "remove-assignment", "Twice", "killed", "TwiceTopTwin"),
+  row("M0036", TOP_TWIN, 36, "return-value", "Twice", "killed", "TwiceTopTwin"),
 ];
 
 /** The C1 pair's three rows under the "replaces" reading: al-runner compiled `WrappedPairB`. */
@@ -252,7 +254,8 @@ export function assertWrappedRun(
 /**
  * Each admitted wrapped file against its twin, per mutant (same procedure, line, operator): the
  * verdict, the killing test and the covering tests, the twin's names being the wrapped ones plus
- * `Twin`. A twin mutant with no wrapped partner must be one of `TWIN_ONLY`.
+ * `Twin`. Strict both ways (R343): a wrapped mutant with no twin and a twin mutant with no wrapped
+ * partner are each a difference.
  */
 export function twinDifferences(report: WrappedReport): string[] {
   const rows = wrappedRows(report);
@@ -286,11 +289,7 @@ export function twinDifferences(report: WrappedReport): string[] {
       }
     }
     for (const t of twins.values()) {
-      if (!matched.has(t.code) && !TWIN_ONLY.includes(t.code)) {
-        out.push(
-          `${t.code} (${twin}) has no wrapped partner and is not a pre-committed twin-only row`,
-        );
-      }
+      if (!matched.has(t.code)) out.push(`${t.code} (${twin}) has no wrapped partner`);
     }
   }
   return out;

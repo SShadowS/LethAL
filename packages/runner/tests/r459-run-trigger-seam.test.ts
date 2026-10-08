@@ -75,9 +75,10 @@ const seamDir = project("r459-seam-", {
   "M.Codeunit.al":
     "codeunit 50593 Mgt\n{\n    procedure Modify(Run: Boolean)\n    begin\n    end;\n}\n",
   "O.Codeunit.al": `codeunit 50594 Ops\n{\n    procedure P()\n    var\n        Par: Record Par;\n        Nam: Record Nam;\n        Mgt: Codeunit Mgt;\n    begin\n${LINES.map((l) => `        ${l}\n`).join("")}    end;\n}\n`,
-  // A codeunit wrapped whole in `#if` is not indexed, so its receiver does not resolve.
+  // A codeunit wrapped whole in `#if` with a parse error (the stray `Bogus`) is not indexed, so its
+  // receiver does not resolve. R343 indexes a live arm's object only when it parses clean.
   "W.Codeunit.al":
-    "#if not CLEANX\ncodeunit 50595 Wrapped\n{\n    procedure P()\n    var\n        Par: Record Par;\n    begin\n        Par.Modify(true);\n    end;\n}\n#endif\n",
+    "#if not CLEANX\ncodeunit 50595 Wrapped\n{\n    Bogus\n    procedure P()\n    var\n        Par: Record Par;\n    begin\n        Par.Modify(true);\n    end;\n}\n#endif\n",
 });
 afterAll(() => rmSync(seamDir, { recursive: true, force: true }));
 
@@ -229,7 +230,7 @@ describe("R459: an Insert(true, true) moves a later twin's key", () => {
     expect(last.key).toBe(`${first.key}|3`);
   });
 
-  it("the identity scheme is 33 (21 for R459; 20, 23 and 31 unused; 22 R-464; 24 R475; 25 R446; 26 R477; 27 R480; 28 R484; 29 R-300b; 30 R487; 32 R509; 33 R501)", () => {
-    expect(IDENTITY_SCHEME).toBe(33);
+  it("the identity scheme is 34 (21 for R459; 20, 23 and 31 unused; 22 R-464; 24 R475; 25 R446; 26 R477; 27 R480; 28 R484; 29 R-300b; 30 R487; 32 R509; 33 R501; 34 R343)", () => {
+    expect(IDENTITY_SCHEME).toBe(34);
   });
 });

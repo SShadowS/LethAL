@@ -515,10 +515,31 @@ export function buildSymbolTable(
       namespaceName === undefined || namespaceName === null
         ? undefined
         : namespaceName.namedChildren.map((c) => stripQuotes(c.text)).join(".");
-    for (const c of file.root.namedChildren)
-      if (c.rawKind === "preproc_conditional_object")
-        unindexedObjects.push(...objectDeclarationsOf(c));
-    for (const objectNode of file.root.children) {
+    // R343: an object wrapped whole in `#if` is indexed like a root object when the BUILD compiles
+    // it (its arm decided active under the build's symbols). Anything else stays unindexed, as R331
+    // and R-364 rely on: no arm map (every arm would look live), an inactive or undecided arm, or a
+    // node that is not a clean object declaration. A `namespace` declared inside the wrapper's
+    // active arm is that object's namespace (R502).
+    const wrappedLive: ALSyntaxNode[] = [];
+    const namespaceOf = new Map<ALSyntaxNode, string>();
+    for (const c of file.root.namedChildren) {
+      if (c.rawKind !== "preproc_conditional_object") continue;
+      let armNamespace: string | undefined;
+      for (const o of objectDeclarationsOf(c)) {
+        const live = armOf !== undefined && armOf(o) === "active";
+        if (live && o.rawKind === "namespace_declaration") {
+          const name = o.childForFieldName("name");
+          if (name !== null)
+            armNamespace = name.namedChildren.map((n) => stripQuotes(n.text)).join(".");
+        }
+        if (live && isCleanObjectDeclaration(o)) {
+          wrappedLive.push(o);
+          const ns = armNamespace ?? fileNamespace;
+          if (ns !== undefined) namespaceOf.set(o, ns);
+        } else unindexedObjects.push(o);
+      }
+    }
+    for (const objectNode of [...file.root.children, ...wrappedLive]) {
       // R162: enums are indexed for their VALUES only. They declare no procedures and no variables,
       // so they deliberately do not enter `objects` and nothing below needs to know about them.
       if (objectNode.rawKind === "enum_declaration") {
@@ -569,10 +590,11 @@ export function buildSymbolTable(
       }
       const header = parseObjectHeader(objectNode);
       if (header === null) continue;
+      const objectNamespace = namespaceOf.get(objectNode) ?? fileNamespace;
       objects.push({
         ...header,
         node: objectNode,
-        ...(fileNamespace !== undefined ? { namespace: fileNamespace } : {}),
+        ...(objectNamespace !== undefined ? { namespace: objectNamespace } : {}),
       });
       if (header.kind === "table") indexFields(objectNode, header.name);
       // R70: scope is keyed by (kind, name). A bare-name key let a page named after its table
@@ -906,6 +928,16 @@ function declaredNames(decl: ALSyntaxNode): string[] {
 function declarationSymbols(decl: ALSyntaxNode): VarSymbol[] {
   const typeText = decl.childForFieldName("type")?.text ?? "";
   return declaredNames(decl).map((name) => ({ name, typeText, node: decl }));
+}
+
+/** R343: an OBJECT declaration that parsed cleanly (no ERROR or MISSING node anywhere in it). A
+ *  `namespace_declaration` is a declaration too, but no object. */
+function isCleanObjectDeclaration(node: ALSyntaxNode): boolean {
+  return (
+    node.rawKind.endsWith("_declaration") &&
+    node.rawKind !== "namespace_declaration" &&
+    !node.hasError
+  );
 }
 
 function stripQuotes(s: string): string {

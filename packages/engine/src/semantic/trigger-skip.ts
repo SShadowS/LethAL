@@ -263,8 +263,10 @@ function projectObserves(
     });
     return found;
   };
-  // Objects the symbol table does not index. R485: a CLEAN `#if`-wrapped tableextension or
-  // codeunit is read like an indexed one, for THIS table: a tableextension of it keeps the tag
+  // Objects the symbol table does not index. Since R343 a clean wrapped object in an arm the build
+  // compiles IS indexed and is read above like a root one; what lands here is a wrapped object in a
+  // compiled-out arm, in an undecided file, or read without an arm map. R485: a CLEAN
+  // `#if`-wrapped tableextension or codeunit is read like an indexed one, for THIS table: a tableextension of it keeps the tag
   // whatever its triggers (its procedures are not among `procedureNamesOn`'s, and a trigger may
   // call one without parentheses: sol final r1 finding 2); a codeunit keeps it when it subscribes
   // to this table's events, in any member arm (the tree holds every arm). Anything else (an ERROR
