@@ -370,6 +370,12 @@ function parseBuildSymbols(value: string | null): readonly string[] | null {
   return parsed as string[];
 }
 
+/** Verdicts `invalidateBatch` leaves as they are (and so does the R513 read-time rewrite). */
+const INVALIDATION_KEEPS_SQL = "('error', 'known-survivor')";
+/** R513: a row of a lost batch reads as `invalidateBatch` would have rewritten it. `m` is the
+ *  mutants alias. */
+const EFFECTIVE_VERDICT_SQL = `CASE WHEN m.verdict NOT IN ${INVALIDATION_KEEPS_SQL} AND EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index) THEN 'error' ELSE m.verdict END`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -458,6 +464,27 @@ CREATE TABLE IF NOT EXISTS baseline_snapshots (
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_baseline_snapshots_key ON baseline_snapshots(batch_hash, test_app_hash);
+-- R512: a baseline snapshot a run answered unattested against (observedAny false, no clean
+-- attestation yet in that batch). findBaselineSnapshot never lends one. Keyed like
+-- baseline_snapshots' (run_id, batch_index); only the run that set a mark (marked_by_run) clears
+-- it, on its batch's first clean attestation. A whole new TABLE needs no migrate() step.
+CREATE TABLE IF NOT EXISTS suspect_snapshots (
+  run_id INTEGER NOT NULL,
+  batch_index INTEGER NOT NULL,
+  marked_by_run INTEGER NOT NULL,
+  recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (run_id, batch_index)
+);
+-- R513: a batch whose lease was lost. Written at the loss (onLost), before anything else, so a
+-- verdict recorded after the loss note and never corrected (a crash skips the session's finally) is
+-- still refused by every resume reader. A whole new TABLE needs no migrate() step.
+CREATE TABLE IF NOT EXISTS lost_batches (
+  run_id INTEGER NOT NULL REFERENCES runs(id),
+  batch_index INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (run_id, batch_index)
+);
 -- C02-02: one row per PUBLISHED batch, alongside the runs columns above which stay last-batch-wins
 -- (unchanged, for every existing reader). A whole new TABLE needs no migrate() step: see the R90
 -- publish_outcomes comment below.
@@ -876,10 +903,13 @@ export class ResultsStore {
     // verdicts, reporting "0 verdict(s) carried". Not silently wrong (the report says so), but
     // useless exactly when recovery matters — and an aborted run is precisely the kind most likely
     // to have recorded nothing.
+    // R513: a row of a lost batch counts as the `error` `invalidateBatch` would have made it (the
+    // same expression in the three siblings below and in `mutantVerdicts`), so a run whose only
+    // carryable rows are in a lost batch has nothing to carry.
     const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        `SELECT id FROM runs WHERE project_path = ? AND backend = ? AND config_fingerprint = ? AND COALESCE(identity_scheme, 1) = ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+        `SELECT id FROM runs WHERE project_path = ? AND backend = ? AND config_fingerprint = ? AND COALESCE(identity_scheme, 1) = ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
       .get(
         q.projectPath,
@@ -906,7 +936,7 @@ export class ResultsStore {
     const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        `SELECT id, COALESCE(identity_scheme, 1) AS scheme FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) <> ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+        `SELECT id, COALESCE(identity_scheme, 1) AS scheme FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) <> ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
       .get(q.projectPath, q.backend, IDENTITY_SCHEME, ...q.carryableVerdicts) as {
       id: number;
@@ -927,7 +957,7 @@ export class ResultsStore {
     const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        `SELECT id, build_symbols FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) = ? AND (build_symbols IS NULL OR build_symbols <> ?) AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+        `SELECT id, build_symbols FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) = ? AND (build_symbols IS NULL OR build_symbols <> ?) AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
       .get(
         q.projectPath,
@@ -956,7 +986,7 @@ export class ResultsStore {
     const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        `SELECT id, coverage_mode FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) = ? AND coverage_mode IS NOT ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+        `SELECT id, coverage_mode FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) = ? AND coverage_mode IS NOT ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
       .get(q.projectPath, q.backend, IDENTITY_SCHEME, q.coverageMode, ...q.carryableVerdicts) as {
       id: number;
@@ -1096,16 +1126,23 @@ export class ResultsStore {
   }
 
   /** R47: every mutant verdict a prior run recorded, keyed by identity rather than mutant code —
-   *  see `MutantVerdictRow`. */
+   *  see `MutantVerdictRow`.
+   *  R513: a row of a batch in `lost_batches` reads as `invalidateBatch` would have left it:
+   *  `error`, the loss note, no killing fields. Read as error rather than dropped, so a stranded
+   *  row there still reaches `strandedKeys`, and a colliding identity key stays ambiguous. */
   mutantVerdicts(runId: number): MutantVerdictRow[] {
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, verdict, " +
-          "killing_test, failure_note, killing_test_failure, kill_position, duration_ms, runner, " +
-          "covering_tests, coverage_attribution, unplaceable, identity_ordinal, file, member_hash " +
-          "FROM mutants WHERE run_id = ?",
+        `SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major,
+           ${EFFECTIVE_VERDICT_SQL} AS verdict, m.verdict AS stored_verdict,
+           (SELECT l.note FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index) AS lost_note,
+           killing_test, failure_note, killing_test_failure, kill_position, duration_ms, runner,
+           covering_tests, coverage_attribution, unplaceable, identity_ordinal, file, member_hash
+         FROM mutants m WHERE m.run_id = ?`,
       )
       .all(runId) as Array<{
+      stored_verdict: string;
+      lost_note: string | null;
       file: string;
       member_hash: string | null;
       ast_hash: string;
@@ -1125,39 +1162,51 @@ export class ResultsStore {
       unplaceable: number | null;
       identity_ordinal: number | null;
     }>;
-    return rows.map((r) => ({
-      identityOrdinal: r.identity_ordinal ?? 0,
-      file: r.file,
-      memberHash: r.member_hash,
-      ...(r.covering_tests !== null
-        ? { coveringTests: this.parseCoveringTests(r.covering_tests, r) }
-        : {}),
-      ...(r.coverage_attribution !== null
-        ? { coverageAttribution: this.parseAttribution(r.coverage_attribution, r) }
-        : {}),
-      ...(r.unplaceable !== null ? { unplaceable: r.unplaceable !== 0 } : {}),
-      astHash: r.ast_hash,
-      codeunitName: r.codeunit_name,
-      procedureName: r.procedure_name,
-      operatorName: r.operator_name,
-      operatorMajor: r.operator_major,
-      verdict: r.verdict as MutantVerdict,
-      durationMs: r.duration_ms,
-      ...(r.killing_test !== null ? { killingTest: r.killing_test } : {}),
-      ...(r.failure_note !== null ? { failureNote: r.failure_note } : {}),
-      ...(r.killing_test_failure !== null ? { killingTestFailure: r.killing_test_failure } : {}),
-      ...(r.kill_position !== null ? { killPosition: r.kill_position } : {}),
-      ...(r.runner !== null
-        ? {
-            runner: this.parseRunnerKind(r.runner, {
-              astHash: r.ast_hash,
-              codeunitName: r.codeunit_name,
-              operatorName: r.operator_name,
-              operatorMajor: r.operator_major,
-            }),
-          }
-        : {}),
-    }));
+    return rows.map((stored) => {
+      const r =
+        stored.verdict === stored.stored_verdict
+          ? stored
+          : {
+              ...stored,
+              failure_note: stored.lost_note,
+              killing_test: null,
+              killing_test_failure: null,
+              kill_position: null,
+            };
+      return {
+        identityOrdinal: r.identity_ordinal ?? 0,
+        file: r.file,
+        memberHash: r.member_hash,
+        ...(r.covering_tests !== null
+          ? { coveringTests: this.parseCoveringTests(r.covering_tests, r) }
+          : {}),
+        ...(r.coverage_attribution !== null
+          ? { coverageAttribution: this.parseAttribution(r.coverage_attribution, r) }
+          : {}),
+        ...(r.unplaceable !== null ? { unplaceable: r.unplaceable !== 0 } : {}),
+        astHash: r.ast_hash,
+        codeunitName: r.codeunit_name,
+        procedureName: r.procedure_name,
+        operatorName: r.operator_name,
+        operatorMajor: r.operator_major,
+        verdict: r.verdict as MutantVerdict,
+        durationMs: r.duration_ms,
+        ...(r.killing_test !== null ? { killingTest: r.killing_test } : {}),
+        ...(r.failure_note !== null ? { failureNote: r.failure_note } : {}),
+        ...(r.killing_test_failure !== null ? { killingTestFailure: r.killing_test_failure } : {}),
+        ...(r.kill_position !== null ? { killPosition: r.kill_position } : {}),
+        ...(r.runner !== null
+          ? {
+              runner: this.parseRunnerKind(r.runner, {
+                astHash: r.ast_hash,
+                codeunitName: r.codeunit_name,
+                operatorName: r.operator_name,
+                operatorMajor: r.operator_major,
+              }),
+            }
+          : {}),
+      };
+    });
   }
 
   /**
@@ -1638,6 +1687,10 @@ export class ResultsStore {
    * R496: and the run's dependency fingerprint must equal `testAppDeps`, this session's: the same
    * test app against a rebuilt dependency is not the same test app. `=` never matches NULL, so a
    * row recorded before R496 lends none.
+   * R512: and never a snapshot in `suspect_snapshots`: a run answered unattested against it, so it
+   * may have measured a wrong or stale binary, and a test green there but red on the real one
+   * would be sent as covering and could score a false timeout kill.
+   * R513: and never a snapshot of a batch in `lost_batches`, even when `onLost`'s drop failed.
    */
   findBaselineSnapshot(
     batchHash: string,
@@ -1653,6 +1706,8 @@ export class ResultsStore {
              AND test_app_hash = baseline_snapshots.test_app_hash
              AND test_app_proven = 1
              AND test_app_deps = ?)
+           AND NOT EXISTS (SELECT 1 FROM suspect_snapshots s WHERE s.run_id = baseline_snapshots.run_id AND s.batch_index = baseline_snapshots.batch_index)
+           AND NOT EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = baseline_snapshots.run_id AND l.batch_index = baseline_snapshots.batch_index)
          ORDER BY id DESC LIMIT 1`,
       )
       .get(batchHash, testAppHash, IDENTITY_SCHEME, coverageMode, testAppDeps) as {
@@ -1744,6 +1799,10 @@ export class ResultsStore {
    * was never run against this binary at all, so its attestation says nothing about it.
    *
    * Returns the number of rows changed, so a caller can state what it corrected.
+   *
+   * It leaves the batch's baseline snapshot alone. R512: a snapshot an unattested answer was
+   * measured against is refused through `suspect_snapshots` (`markSnapshotSuspect`), written at
+   * that answer, not here.
    */
   invalidateBatch(runId: number, batchIndex: number, note: string): number {
     this.db
@@ -1751,13 +1810,51 @@ export class ResultsStore {
         // R86: `killing_test_failure` is cleared alongside `killing_test` for the same reason —
         // this row is no longer a kill, so a leftover account of "why the test went red" would
         // describe a verdict that has just been withdrawn.
-        "UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL, " +
-          "killing_test_failure = NULL, kill_position = NULL " +
-          "WHERE run_id = ? AND batch_index = ? AND verdict NOT IN ('error', 'known-survivor')",
+        `UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL,
+           killing_test_failure = NULL, kill_position = NULL
+         WHERE run_id = ? AND batch_index = ? AND verdict NOT IN ${INVALIDATION_KEEPS_SQL}`,
       )
       .run(note, runId, batchIndex);
     const r = this.db.query("SELECT changes() AS n").get() as { n: number };
     return r.n;
+  }
+
+  /**
+   * R513: record that a batch's lease was lost, so every resume reader reads that batch's rows as
+   * `invalidateBatch` would have rewritten them (`EFFECTIVE_VERDICT_SQL`), even a row recorded
+   * after the loss and never corrected because a crash skipped the session's `finally`. The first
+   * note wins, like `noteLeaseLost`'s first loss.
+   */
+  markBatchLost(runId: number, batchIndex: number, note: string): void {
+    this.db
+      .query("INSERT OR IGNORE INTO lost_batches (run_id, batch_index, note) VALUES (?, ?, ?)")
+      .run(runId, batchIndex, note);
+  }
+
+  /**
+   * R512: mark the baseline snapshot `key` suspect: run `markedByRun` answered unattested against
+   * it (`observedAny: false`, no clean attestation yet in that batch). `findBaselineSnapshot` never
+   * lends a marked snapshot. Returns true only when THIS call inserted the mark, so only its
+   * owner may clear it (`clearSnapshotSuspect`); another run's existing mark is left as it is.
+   */
+  markSnapshotSuspect(key: { runId: number; batchIndex: number }, markedByRun: number): boolean {
+    this.db
+      .query(
+        "INSERT OR IGNORE INTO suspect_snapshots (run_id, batch_index, marked_by_run) VALUES (?, ?, ?)",
+      )
+      .run(key.runId, key.batchIndex, markedByRun);
+    const r = this.db.query("SELECT changes() AS n").get() as { n: number };
+    return r.n > 0;
+  }
+
+  /** R512: remove the mark `markedByRun` set on `key`, on its batch's first clean attestation. A
+   *  mark another run set is never removed here. */
+  clearSnapshotSuspect(key: { runId: number; batchIndex: number }, markedByRun: number): void {
+    this.db
+      .query(
+        "DELETE FROM suspect_snapshots WHERE run_id = ? AND batch_index = ? AND marked_by_run = ?",
+      )
+      .run(key.runId, key.batchIndex, markedByRun);
   }
 
   recordTestResult(

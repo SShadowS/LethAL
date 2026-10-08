@@ -4091,6 +4091,56 @@ interface BatchScope {
   readonly testPageRefused?: ReadonlyMap<string, string>;
 }
 type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
+
+/**
+ * Design §G: one batch's attestation ledger, shared by reference across every worker/shard that
+ * exercises the batch's one deployed artifact. `clean`: some covered run attested; never reset.
+ * R512: `suspect`: a run answered `observedAny: false` before any clean attestation, and THIS
+ * run's insert marked the snapshot in use (`markSuspect`); the mark is cleared when `clean` turns
+ * true. A store that refuses the mark throws out of `feedAttestation`, in the mutant loop, so the
+ * session fails as for a failed `record()`: it also refuses the verdict the mark would have guarded.
+ */
+export interface AttestationLedger {
+  clean: boolean;
+  /** A mark was attempted (at most once per batch). */
+  markTried: boolean;
+  /** THIS run's insert created the mark, so only then may it clear it. */
+  suspect: boolean;
+  /** True only when the insert created the row (`markSnapshotSuspect`). */
+  readonly markSuspect: () => boolean;
+  readonly clearSuspect: () => void;
+}
+
+/** A ledger whose mark is a no-op: a batch with no snapshot to mark (C02-04's no-snapshot path,
+ *  the named-mutant probes). */
+function unmarkedLedger(): AttestationLedger {
+  return {
+    clean: false,
+    markTried: false,
+    suspect: false,
+    markSuspect: () => false,
+    clearSuspect: () => {},
+  };
+}
+
+/**
+ * Feed one answer's attestation into the batch's ledger. Called at every site an answer is read
+ * (the covering run, the kill-confirmation rerun, and both warm-replay sites), each BEFORE that
+ * mutant's `record()`, so the mark is in the store before any verdict that answer produces.
+ * No attestation is no evidence (a 408, in-flight, a transport error): nothing happens.
+ */
+export function feedAttestation(ledger: AttestationLedger, a: TestVerdict["attestation"]): void {
+  if (a === undefined) return;
+  if (a.observedAny && a.identityMismatch !== true) {
+    if (ledger.clean) return;
+    ledger.clean = true;
+    if (ledger.suspect) ledger.clearSuspect();
+  } else if (!ledger.clean && !ledger.markTried) {
+    ledger.markTried = true;
+    ledger.suspect = ledger.markSuspect(); // false when another run's mark is already there
+  }
+}
+
 /** What `select` hands the covering loop: the mutants to run and everything that orders them. */
 interface CoveringPlan {
   readonly mutants: readonly MutantManifestEntry[];
@@ -4119,7 +4169,7 @@ interface ScoreBatchInput {
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
   readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
   /** Replaces the sequential `runMutantsOnBackend` call. runSession's worker fan-out only. */
-  readonly executeCovering?: (plan: CoveringPlan, attestation: { clean: boolean }) => Promise<void>;
+  readonly executeCovering?: (plan: CoveringPlan, attestation: AttestationLedger) => Promise<void>;
 }
 /** "unsafe": latched during the baseline (the caller stops the session).
  *  "nothing-to-run": `select` returned undefined (the caller moves to the next batch).
@@ -4267,9 +4317,13 @@ async function openLeaseScope(a: {
       // R508 first chance: synchronous (bun:sqlite), so done before `noteLeaseLost` returns.
       // Never throws: the heartbeat and the dispatch paths call `noteLeaseLost` and must keep
       // failing closed. The session's `finally` (`invalidateLostBatch`) writes again.
+      // R513: `markBatchLost` FIRST: each write is safe alone, and it is the one that makes every
+      // resume reader refuse a verdict recorded after this point that nothing corrects.
       onLost: (batchIndex) => {
         try {
-          a.store.invalidateBatch(a.runId, batchIndex, lostBatchNote(a.safety));
+          const note = lostBatchNote(a.safety);
+          a.store.markBatchLost(a.runId, batchIndex, note);
+          a.store.invalidateBatch(a.runId, batchIndex, note);
           a.store.dropBaselineSnapshot(a.runId, batchIndex);
         } catch (err) {
           console.warn(
@@ -4419,6 +4473,7 @@ function invalidateLostBatch(
   const note = lostBatchNote(safety);
   emit({ type: "batch-invalidated", batchIndex: lost, reason: note });
   try {
+    store.markBatchLost(runId, lost, note); // R513: a second chance if `onLost`'s insert failed
     store.invalidateBatch(runId, lost, note);
     store.dropBaselineSnapshot(runId, lost);
   } catch (err) {
@@ -4885,7 +4940,24 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // `attestation.observedAny === true && identityMismatch !== true`. Checked against
   // `contributed` right after the mutant work below finishes, before the next batch (or the
   // final `buildReport`) ever sees this batch's verdicts.
-  const attestation = { clean: false };
+  // R512: the snapshot IN USE (the reused one, else this run's own) is marked suspect at the
+  // batch's first unattested answer, before any clean one, and that mark is cleared at the first
+  // clean one (`feedAttestation`). Written at the answer, not at the gate below, so it also holds
+  // when the session throws or is killed before the gate. Without a snapshot, nothing to mark.
+  const suspectKey =
+    reused !== undefined
+      ? { runId: reused.runId, batchIndex: reused.batchIndex }
+      : { runId, batchIndex: batchIdx };
+  const attestation: AttestationLedger =
+    input.snapshot !== undefined
+      ? {
+          clean: false,
+          markTried: false,
+          suspect: false,
+          markSuspect: () => store.markSnapshotSuspect(suspectKey, runId),
+          clearSuspect: () => store.clearSnapshotSuspect(suspectKey, runId),
+        }
+      : unmarkedLedger();
   emit({ type: "phase-entered", phase: "mutants" });
   const mutantsStartedMs = Date.now();
   if (input.executeCovering !== undefined) {
@@ -6891,7 +6963,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // worker, which needs this batch's directory and files.
       const executeCovering = async (
         plan: CoveringPlan,
-        attestation: { clean: boolean },
+        attestation: AttestationLedger,
       ): Promise<void> => {
         const {
           mutants: toExecute,
@@ -7878,7 +7950,7 @@ async function runProbes(
     };
     const plan = selectNamed(baseline, named, probeScope, batchIndex, strict);
     if (plan !== undefined) {
-      const attestation = { clean: false };
+      const attestation = unmarkedLedger(); // R512: a probe records no snapshot to mark
       await runMutantsOnBackend({
         backend: scope.backend,
         safety: scope.safety,
@@ -8797,7 +8869,7 @@ async function confirmWarm(p: {
     readonly backend: ExecutionBackend;
     readonly safety: SessionSafety;
     readonly emit: RunEmitter;
-    readonly attestation: { clean: boolean };
+    readonly attestation: AttestationLedger;
     readonly quarantineStore?: QuarantineStore | undefined;
     readonly resourceKey?: string | undefined;
     readonly nowIso: () => string;
@@ -8879,12 +8951,7 @@ async function confirmWarm(p: {
       opKind: "many",
       ...(verdict.sessionId !== undefined ? { sessionId: verdict.sessionId } : {}),
     });
-    if (
-      verdict.attestation?.observedAny === true &&
-      verdict.attestation.identityMismatch !== true
-    ) {
-      args.attestation.clean = true;
-    }
+    feedAttestation(args.attestation, verdict.attestation);
     if (cause === "stopped-after-completion") {
       // G3(a): R204's narrowing fired on the REPLAY's own 408; the covering call's wording would
       // describe the mutated run. What it means here is that k's duration could not be established.
@@ -8954,9 +9021,7 @@ async function confirmWarm(p: {
       opKind: "many",
       ...(rv.sessionId !== undefined ? { sessionId: rv.sessionId } : {}),
     });
-    if (rv.attestation?.observedAny === true && rv.attestation.identityMismatch !== true) {
-      args.attestation.clean = true;
-    }
+    feedAttestation(args.attestation, rv.attestation);
   }
   const reusedIn = verdicts.find(sessionWasReused);
   if (reusedIn !== undefined) {
@@ -9272,9 +9337,10 @@ async function runMutantsOnBackend(args: {
    * Layer 5C-A Task 8, Task 10 (design §G): this batch's artifact-scoped clean-attestation
    * ledger — shared (by reference) across every worker/shard `runSession` fans this batch's
    * mutants out to, since they all exercise the SAME deployed artifact. Mutated in place: set
-   * `clean = true` the first time any covered run attests cleanly, never reset.
+   * `clean = true` the first time any covered run attests cleanly, never reset. R512: fed only
+   * through `feedAttestation`, which also marks the snapshot in use suspect.
    */
-  readonly attestation: { clean: boolean };
+  readonly attestation: AttestationLedger;
   /**
    * Layer 5C-B1: the session's lease, when it holds one. Present only for an authoritative
    * session configured with `SessionConfig.lease` — the branch that classifies a `lease-lost`
@@ -9429,9 +9495,7 @@ async function runMutantsOnBackend(args: {
       spent += v.durationMs;
       // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:
       // "none" transport path (the only path that ever attests) — feed the artifact's ledger.
-      if (v.attestation?.observedAny === true && v.attestation.identityMismatch !== true) {
-        args.attestation.clean = true;
-      }
+      feedAttestation(args.attestation, v.attestation);
       // Per-mutant, not just per-artifact: OR-ed across this mutant's covering runs so a survivor
       // can say whether any guarded code ran at all. `undefined` stays `undefined` on a backend
       // that cannot attest — see `MutantOutcome.guardObserved`.
@@ -9587,12 +9651,7 @@ async function runMutantsOnBackend(args: {
         // Layer 5C-A Task 8, Task 10 (design §G): the kill-confirmation rerun is a
         // null-activation run that ALSO goes through the coverage:"none" transport path (see
         // the covering-run feed above) — it attests too, so it must feed the same ledger.
-        if (
-          confirm.attestation?.observedAny === true &&
-          confirm.attestation.identityMismatch !== true
-        ) {
-          args.attestation.clean = true;
-        }
+        feedAttestation(args.attestation, confirm.attestation);
         const confirmLease = classifyLeaseVerdict(confirm);
         if (confirmLease !== "none") {
           // Same design §5/§6 split as the covering run above, applied to the confirmation rerun:
