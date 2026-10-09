@@ -317,8 +317,13 @@ const SERVER_SUITE_MIN_DEADLINE_MS = 10 * 60 * 1000;
 
 /** The real daemon, adapted to the handle `AlRunnerServer` consumes. Exported for R387's gate leg,
  *  which wraps it to record the argv. */
-export const defaultServerSpawn: ServerSpawnFn = (argv) => {
-  const proc = Bun.spawn([...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+export const defaultServerSpawn: ServerSpawnFn = (argv, opts) => {
+  const proc = Bun.spawn([...argv], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
+  });
   const handle: ServerProcessHandle = {
     write: (line) => {
       proc.stdin.write(line);

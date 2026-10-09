@@ -425,6 +425,16 @@ function dirKey(dir: string): string {
 }
 
 /**
+ * R407: whether a coverage label names a file INSIDE `dir`. A relative label is resolved against
+ * `base` (the spawn's cwd: one-shot Cobertura labels are cwd-relative, `--server` labels absolute).
+ * Compared with a trailing `/` after `dirKey`, so `active` never matches `active-old`, and with no
+ * trailing-segment matching, so a source or batch label ending in the same name is outside.
+ */
+export function labelInsideDir(label: string, dir: string, base: string = process.cwd()): boolean {
+  return dirKey(resolve(base, label.replace(/\\/g, "/"))).startsWith(`${dirKey(dir)}/`);
+}
+
+/**
  * R219 run 003. Refuses two files whose keys collide once lower-cased (sol run 002:
  * `Sales/Helper.al` and `sales/Helper.al` on a case-sensitive file system, where one alias would
  * silently replace the other), then returns the exact maps when the batch renamed a file and any

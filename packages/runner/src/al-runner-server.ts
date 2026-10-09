@@ -87,7 +87,11 @@ export interface ServerProcessHandle {
   wait?(): Promise<unknown>;
 }
 
-export type ServerSpawnFn = (argv: readonly string[]) => ServerProcessHandle;
+/** `cwd` is used by R407's frame probe only; the session's daemon inherits LethAL's cwd. */
+export type ServerSpawnFn = (
+  argv: readonly string[],
+  opts?: { readonly cwd?: string },
+) => ServerProcessHandle;
 
 /** One test as the server streams it. */
 export interface ServerTestLine {
