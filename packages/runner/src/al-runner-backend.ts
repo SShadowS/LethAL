@@ -1430,6 +1430,8 @@ export class AlRunnerBackend implements ExecutionBackend {
     // manufactures spurious timeouts. Only one of those invents a verdict.
     // R517: a position-1 timeout confirm is judged on the row's own figure (`measuredDurationMs`)
     // against the stop al-runner reports it enforced (`reportedStopMs`), never on this one.
+    // R534: except an OnRun-trigger timeout, which no pass row's figure covers: it is judged on
+    // this suite wall time, which over-states it (the safe direction).
     return verdictFromRunnerTest(ref, wanted, t, suite.wallMs, coverage);
   }
 
