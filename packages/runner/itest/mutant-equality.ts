@@ -40,10 +40,17 @@ export interface NormalizedMutant {
   readonly mutatedTextSha256?: string;
 }
 
-/** R556: the hash `normalizeForComparison` records. None for a non-string or the redaction marker,
- *  which is not the mutant's text: hashing it would make every redacted row "match" every other. */
+/** The suffix `clipMutationText` (@lethal/schemata) appends to a clipped text. */
+const CLIPPED = /… \[truncated \d+ chars\]$/;
+
+/** R556: the hash `normalizeForComparison` records. None for a non-string, the redaction marker
+ *  (not the mutant's text: hashing it would make every redacted row "match" every other), or a
+ *  clipped text: the clip point counts "\r", so the same mutant clips at a different place in a
+ *  CRLF checkout and its hash would differ for no reason. */
 export function mutatedTextSha256(text: unknown): string | undefined {
-  if (typeof text !== "string" || text === REDACTION_MARKER) return undefined;
+  if (typeof text !== "string" || text === REDACTION_MARKER || CLIPPED.test(text)) {
+    return undefined;
+  }
   return createHash("sha256").update(text.replaceAll("\r\n", "\n"), "utf8").digest("hex");
 }
 

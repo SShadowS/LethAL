@@ -343,7 +343,7 @@ const targets = [
         "CampaignCompareResult",
         `campaign-compare-v${CAMPAIGN_COMPARE_SCHEMA_VERSION}.schema.json`,
         "LethAL campaign compare result",
-        "The JSON document `lethal campaign compare --json` prints on stdout. GENERATED from the CampaignCompareResult TypeScript declaration by scripts/generate-schemas.ts. `coverage.verified: false` always carries a `statement`: a comparison whose coverage mode could not be checked is never a bare match. A stage and report that record DIFFERENT coverage modes are a refusal (an error on stderr) and print no document. R556 added `identity` (same version: an added field): `identical` covers the verdicts, and the mutated text where both sides record a hash; `identity.verified: false` always carries a `statement` saying what could not be checked (a stage frozen before R556, a redacted report, an identity scheme change).",
+        "The JSON document `lethal campaign compare --json` prints on stdout. GENERATED from the CampaignCompareResult TypeScript declaration by scripts/generate-schemas.ts. `coverage.verified: false` always carries a `statement`: a comparison whose coverage mode could not be checked is never a bare match. A stage and report that record DIFFERENT coverage modes are a refusal (an error on stderr) and print no document. v2 (R556) added the required `identity` and widened `identical` to the verdicts and the mutated text where both sides record a hash; `identity.verified: false` always carries a `statement` saying what could not be checked (a stage frozen before R556, a redacted report, an identity scheme change).",
       ),
       "campaignCompareSchemaVersion",
       CAMPAIGN_COMPARE_SCHEMA_VERSION,

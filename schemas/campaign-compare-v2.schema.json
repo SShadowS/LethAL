@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/SShadowS/LethAL/blob/master/schemas/campaign-compare-v1.schema.json",
+  "$id": "https://github.com/SShadowS/LethAL/blob/master/schemas/campaign-compare-v2.schema.json",
   "title": "LethAL campaign compare result",
-  "description": "The JSON document `lethal campaign compare --json` prints on stdout. GENERATED from the CampaignCompareResult TypeScript declaration by scripts/generate-schemas.ts. `coverage.verified: false` always carries a `statement`: a comparison whose coverage mode could not be checked is never a bare match. A stage and report that record DIFFERENT coverage modes are a refusal (an error on stderr) and print no document.",
+  "description": "The JSON document `lethal campaign compare --json` prints on stdout. GENERATED from the CampaignCompareResult TypeScript declaration by scripts/generate-schemas.ts. `coverage.verified: false` always carries a `statement`: a comparison whose coverage mode could not be checked is never a bare match. A stage and report that record DIFFERENT coverage modes are a refusal (an error on stderr) and print no document. v2 (R556) added the required `identity` and widened `identical` to the verdicts and the mutated text where both sides record a hash; `identity.verified: false` always carries a `statement` saying what could not be checked (a stage frozen before R556, a redacted report, an identity scheme change).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,12 +12,13 @@
     "mutantCount",
     "identical",
     "differences",
-    "coverage"
+    "coverage",
+    "identity"
   ],
   "properties": {
     "campaignCompareSchemaVersion": {
       "type": "number",
-      "const": 1
+      "const": 2
     },
     "stage": {
       "type": "string"
@@ -108,6 +109,60 @@
                   "type": "null"
                 }
               ]
+            },
+            "statement": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "identity": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verified",
+            "identityScheme"
+          ],
+          "properties": {
+            "verified": {
+              "const": true
+            },
+            "identityScheme": {
+              "type": "number"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verified",
+            "stageIdentityScheme",
+            "reportIdentityScheme",
+            "textUnverified",
+            "statement"
+          ],
+          "properties": {
+            "verified": {
+              "const": false
+            },
+            "stageIdentityScheme": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "reportIdentityScheme": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "textUnverified": {
+              "type": "number"
             },
             "statement": {
               "type": "string"

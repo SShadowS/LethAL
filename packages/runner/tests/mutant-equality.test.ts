@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { clipMutationText } from "@lethal/schemata";
 import { parseGateBaseline } from "../itest/baseline-guard";
 import {
   compareMutants,
@@ -497,6 +498,21 @@ describe("R556: the mutated-text hash", () => {
     expect(mutatedTextSha256("")).toBe(EMPTY_SHA256);
     expect(mutatedTextSha256("a\r\nb")).toBe(mutatedTextSha256("a\nb"));
     expect(mutatedTextSha256("a\nb")).not.toBe(mutatedTextSha256("a b"));
+  });
+
+  it("gives NO hash for a clipped text: the clip point counts \\r, so a CRLF checkout clips elsewhere", () => {
+    const long = "x := 1;\n".repeat(200);
+    const clipped = clipMutationText(long);
+    expect(clipped).not.toBe(long); // the fixture really is clipped
+    expect(mutatedTextSha256(clipped)).toBeUndefined();
+    expect(mutatedTextSha256(clipMutationText(long.replaceAll("\n", "\r\n")))).toBeUndefined();
+    // Short text is never clipped and keeps its hash.
+    expect(mutatedTextSha256(clipMutationText("x := 1;"))).toBe(mutatedTextSha256("x := 1;"));
+    // A clipped row pairs as text-UNVERIFIED, never a difference.
+    const [row1] = normalizeForComparison(
+      report([outcome({ mutantCode: "M1", mutatedText: clipped })]),
+    );
+    expect(row1 !== undefined && "mutatedTextSha256" in row1).toBe(false);
   });
 
   it("gives NO hash for the redaction marker or a non-string (the marker is not text)", () => {

@@ -589,6 +589,7 @@ describe("lethal campaign freeze | anchors | compare", () => {
   let legacyReportPath: string;
   let textChangedReportPath: string;
   let redactedReportPath: string;
+  let rekeyedReportPath: string;
 
   beforeAll(async () => {
     // A stage frozen before R355 (and R556): the plain list, no hashes.
@@ -703,6 +704,15 @@ describe("lethal campaign freeze | anchors | compare", () => {
       JSON.stringify(withText((m) => (m.mutantCode === "M0002" ? "x := 2;" : m.mutatedText))),
     );
     await writeFile(redactedReportPath, JSON.stringify(withText(() => REDACTION_MARKER)));
+    // Every key moved: no row pairs with the stage, so no text was checked at all.
+    rekeyedReportPath = join(outDir, "report-rekeyed.json");
+    await writeFile(
+      rekeyedReportPath,
+      JSON.stringify({
+        ...TWO_MUTANTS,
+        mutants: TWO_MUTANTS.mutants.map((m) => ({ ...m, astHash: `moved-${m.astHash}` })),
+      }),
+    );
   }, HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -1102,6 +1112,18 @@ describe("lethal campaign freeze | anchors | compare", () => {
         "mutant hash-M0002|Sandbox Logic|Post|conditional-boundary|1: mutated text differs under an unchanged key",
       ]);
       expect(text).toContain("RESULT: DIFFERENT");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R556: identity is never verified vacuously, when no row paired with the stage",
+    async () => {
+      const { result } = await compareQuiet("stage-cmp", rekeyedReportPath);
+      expect(result.identical).toBe(false);
+      const identity = result.identity;
+      if (identity.verified) throw new Error("zero checked rows must not read as verified");
+      expect(identity.statement).toContain("UNVERIFIED");
     },
     TEST_TIMEOUT_MS,
   );
@@ -1594,7 +1616,7 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
       ]);
       expect(code).toBe(0);
       const doc = JSON.parse(stdout);
-      expect(doc.campaignCompareSchemaVersion).toBe(1);
+      expect(doc.campaignCompareSchemaVersion).toBe(2);
       expect(doc.identical).toBe(true);
       expect(doc.coverage.verified).toBe(false);
       expect(doc.coverage.stageCoverageMode).toBeNull();

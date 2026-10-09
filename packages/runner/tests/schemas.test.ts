@@ -1172,6 +1172,16 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "coverage",
         "differences",
         "identical",
+        "mutantCount",
+        "stage",
+      ],
+      // R556: v2 added the REQUIRED `identity` and widened `identical` to the mutated text.
+      "campaign-compare-v2.schema.json": [
+        "baselinePath",
+        "campaignCompareSchemaVersion",
+        "coverage",
+        "differences",
+        "identical",
         "identity",
         "mutantCount",
         "stage",
@@ -1786,4 +1796,15 @@ describe("published JSON Schema - campaign compare (R357)", () => {
     expect(props.campaignCompareSchemaVersion?.const).toBe(CAMPAIGN_COMPARE_SCHEMA_VERSION);
     expect(compareSchema.$id).toContain(`campaign-compare-v${CAMPAIGN_COMPARE_SCHEMA_VERSION}`);
   });
+
+  // R556: v2 added the REQUIRED `identity` and widened `identical`. v1 stays as it was published.
+  test("the build emits v2, and campaign-compare-v1.schema.json is kept as published", async () => {
+    expect(CAMPAIGN_COMPARE_SCHEMA_VERSION).toBe(2);
+    const v1 = loadSchema("campaign-compare-v1.schema.json");
+    expect((v1.properties as Record<string, Schema>).campaignCompareSchemaVersion?.const).toBe(1);
+    expect([...schemaLeafPaths(v1)].some((p) => p.startsWith("$.identity"))).toBe(false);
+    // A v2 document is not a v1 document.
+    const v2doc = await compareCampaignStage(args("verified"));
+    expect(conformsTo(v1, v2doc)).not.toEqual([]);
+  }, 60_000);
 });

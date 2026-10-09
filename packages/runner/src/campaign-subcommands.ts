@@ -432,8 +432,11 @@ export async function runCampaignAnchors(args: CampaignAnchorsArgs): Promise<num
  * R355: the version of `lethal campaign compare --json`'s document. New with R355, so 1. Bumped
  * when a field is renamed, removed or changes meaning, or when a value domain changes in either
  * direction; an added field does not bump it (`schemas/README.md` §Versioning).
+ * 2 (R556): added the REQUIRED `identity` block and widened `identical` from the verdicts to the
+ * verdicts plus the mutated text where both sides record a hash. `campaign-compare-v1.schema.json`
+ * stays as published, so a stored v1 document stays checkable.
  */
-export const CAMPAIGN_COMPARE_SCHEMA_VERSION = 1;
+export const CAMPAIGN_COMPARE_SCHEMA_VERSION = 2;
 
 /**
  * R355: what compare knows about the two coverage modes. `verified: false` REQUIRES `statement`,
@@ -452,7 +455,8 @@ export type CompareCoverageMode =
 
 /**
  * R556: what compare knows about mutant identity. `verified: true` only when the stage and the
- * report record the same identity scheme AND every mutant's mutated text was checked by its hash.
+ * report record the same identity scheme AND every paired mutant's mutated text was checked by its
+ * hash AND at least one was (no paired row checks nothing, which is never "verified").
  * Otherwise `statement` says what was not checked: a stage frozen before R556 (no scheme, no hash),
  * a report with no scheme or no text (a redacted copy), or a scheme change. None is a refusal: keys
  * of unchanged mutants still compare, and the verdicts are compared either way.
@@ -491,7 +495,14 @@ function compareIdentity(
   reportScheme: number | undefined,
   cmp: MutantComparison,
 ): CompareIdentity {
-  if (stageScheme !== undefined && stageScheme === reportScheme && cmp.textUnverified === 0) {
+  // `textVerified > 0`: with no row paired (every key moved), nothing was checked, and "all of
+  // nothing verified" is the empty-vs-empty match this project refuses to call a pass.
+  if (
+    stageScheme !== undefined &&
+    stageScheme === reportScheme &&
+    cmp.textUnverified === 0 &&
+    cmp.textVerified > 0
+  ) {
     return { verified: true, identityScheme: stageScheme };
   }
   const notCaught = "a mutant changed under an unchanged key is not caught there";
@@ -505,6 +516,9 @@ function compareIdentity(
       cmp.textVerified === 0
         ? `identity scheme changed (${stageScheme} -> ${reportScheme}), UNVERIFIED: no mutant's mutated text could be checked by its hash, so ${notCaught.replace(" there", "")}.`
         : `identity scheme changed (${stageScheme} -> ${reportScheme}): ${cmp.textVerified} mutant(s) checked by their mutated-text hash, ${cmp.textUnverified} text-UNVERIFIED (no hash on one side, or a twin's hash shared within its group).`;
+  } else if (cmp.textUnverified === 0) {
+    statement =
+      "identity UNVERIFIED: no mutant paired with the stage under an unchanged key, so no mutated text was checked.";
   } else {
     statement = `identity UNVERIFIED for ${cmp.textUnverified} mutant(s): no mutated-text hash on one side (a stage frozen before R556, or a redacted report), so ${notCaught}.`;
   }
