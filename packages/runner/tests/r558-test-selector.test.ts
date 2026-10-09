@@ -149,6 +149,16 @@ describe("reportTestSelectorFailures — the itest:alrunner per-leg check (R558)
     expect(reportTestSelectorFailures(noReason, true)).not.toEqual([]);
   });
 
+  test("one-shot: exact WITH a reason fails (a reason exactly with substring-with-excludes)", () => {
+    const exactWithReason = build([measured], {
+      alRunnerTestSelector: { selector: "exact", reason: "should not be here" },
+    });
+    expect(exactWithReason.validity.executionContexts[0]?.testSelectorReason).toBe(
+      "should not be here",
+    );
+    expect(reportTestSelectorFailures(exactWithReason, true)).not.toEqual([]);
+  });
+
   test("--server: no field passes; a recorded field fails", () => {
     expect(reportTestSelectorFailures(none, false)).toEqual([]);
     expect(reportTestSelectorFailures(exact, false)).not.toEqual([]);
