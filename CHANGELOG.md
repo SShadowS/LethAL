@@ -701,6 +701,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A reportextension's reach into its BASE report is hang-refused, and a pageextension's bare
+  `Commit()` that binds a base page procedure is no longer claimed** (R547, R548, R549). A bare
+  call from an open reportextension block to a base-report procedure is now followed, so that
+  procedure's mutants are refused like any other one-hop callee (R547). Inside a reportextension, a
+  write of a preset exit name (a base `protected var`, or the extension's own global its open block
+  reads) is refused as it is inside the report, including through a `var` argument of a base
+  procedure (R548); measured on a prototype as 2 more refused BaseApp sites, 0 identity keys moved.
+  `remove-commit` no longer claims a bare `Commit()` in a pageextension when a base page in the
+  project declares a visible procedure of that name (R549; measured 0 such sites). Every same-named
+  base counts, including `#if`-wrapped and split-header ones. A base outside the project keeps the
+  old behaviour, a named residual in each item.
 - **al-runner: a test row al-runner reports as `error` no longer aborts the session** (R534). A
   hang in a test codeunit's OnRun trigger is scored `timeout` and confirmed unmutated on the
   confirm's wall time (al-runner does not report the OnRun's own time). An unexecuted UI handler, a
