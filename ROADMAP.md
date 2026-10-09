@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**75 of 547 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**76 of 550 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -582,7 +582,7 @@ that ordering is the priority.
 - **R439** · Two more unit tests time out at Bun's 5 s default under machine load and pass alone: manifest-stream's short-writes test and runSession's I7 transport-error abort · [R439.md](docs/roadmap/R439.md) · done (8ef7ce7e)
 - **R440** · scripts/r402-shape-sweep.ts crashes since R-307: it calls writeInstrumentedProject without identityOrdinals, and no typecheck covers the script · [R440.md](docs/roadmap/R440.md) · done (3e3555ab)
 - **R449** · Three SQLite-heavy unit tests time out at bun's 5 s default on GitHub CI's Windows job only (7 to 8.3 s), each passing on other runs · [R449.md](docs/roadmap/R449.md) · done (f224fa0d)
-- **R453** · al-runner loses a reportextension after a test calls Code Coverage Mgt. (found by the R-254 probe) · [R453.md](docs/roadmap/R453.md) · open, filed 2026-10-05
+- **R453** · al-runner loses a reportextension after a test calls Code Coverage Mgt. (found by the R-254 probe) · [R453.md](docs/roadmap/R453.md) · closed 2026-10-09 — not reproduced on 43f76177 and c5bbaf89 (3 setups); upstream fix inferred from the title…
 - **R471** · al-runner compiles a project that BC's alc rejects with AL0155 (a report and its reportextension declaring the same global), so LethAL's al-runner path can look green where bcdev errors · [R471.md](docs/roadmap/R471.md) · open
 - **R482** · `r214-history.test.ts` "R214 I4 ... marks: an old-scheme mark on the old key is stale" failed once in a full `verify` run and passed alone and on re-run (flaky) · [R482.md](docs/roadmap/R482.md) · closed 2026-10-05 — not reproduced in 20 repeats under load; the one failure was a starvation timeout during…
 - **R551** · al-runner one-shot: use `--test-exact` once the gate build carries it, and retire R488's learn-and-exclude workaround · [R551.md](docs/roadmap/R551.md) · open, filed 2026-10-09
@@ -592,6 +592,9 @@ that ordering is the priority.
 - **R539** · Upstream al-runner: report the test codeunit's OnRun time on a pass row, and put `errorKind` on the one-shot row · [R539.md](docs/roadmap/R539.md) · open, filed 2026-10-09
 - **R543** · al-runner: a `<ctor>` or `<OnBeforeCodeunitRun>` row still aborts the whole session through "no test named ..." · [R543.md](docs/roadmap/R543.md) · open, filed 2026-10-09
 - **R544** · al-runner `--server`: an OnRun hang at the BASELINE ends the suite and silently shrinks the green set and its coverage · [R544.md](docs/roadmap/R544.md) · open, filed 2026-10-09
+- **R546** · al-runner vs BC verdict agreement has never been measured on a real project: the owner sees mutants survive on one backend and not the other · [R546.md](docs/roadmap/R546.md) · done (5c2d3a39)
+- **R552** · bcdev stages `lethal-control.app` INTO the configured `packageCachePath`, so pointing it at a project's own `.alpackages` changes that folder · [R552.md](docs/roadmap/R552.md) · open
+- **R553** · The assertion screen is vacuous on al-runner (every kill's text starts with an exception type), and its note then blames the suite's assertion style · [R553.md](docs/roadmap/R553.md) · open
 
 ---
 
