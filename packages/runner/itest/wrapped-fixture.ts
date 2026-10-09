@@ -7,6 +7,8 @@
  * docs/superpowers/specs/2026-10-08-r343-wrapped-leg-precommitment.md before the changed code ran.
  * R536 added a wrapped table and a wrapped page with their twins (M0037-M0058), pre-committed in
  * docs/superpowers/specs/2026-10-09-r536-wrapped-table-page-precommitment.md before any live run.
+ * R545 added a wrapped page extension and its twin (M0059-M0070), pre-committed in
+ * docs/superpowers/specs/2026-10-09-r545-wrapped-pageext-precommitment.md before any live run.
  * A difference is a finding and a stop: never edit a row to match a run.
  *
  * What it pins:
@@ -51,6 +53,9 @@ const TRIG = "src/WrappedTrigger.Table.al";
 const TRIG_TWIN = "src/WrappedTriggerTwin.Table.al";
 const VIEW = "src/WrappedView.Page.al";
 const VIEW_TWIN = "src/WrappedViewTwin.Page.al";
+// R545: a wrapped page extension (of `Wrapped View`) and its unwrapped twin (of the twin page).
+const XTRA = "src/WrappedXtra.PageExt.al";
+const XTRA_TWIN = "src/WrappedXtraTwin.PageExt.al";
 
 /** Admitted wrapped file -> its unwrapped twin. */
 export const TWINS: Readonly<Record<string, string>> = {
@@ -58,6 +63,7 @@ export const TWINS: Readonly<Record<string, string>> = {
   [PRE]: PRE_TWIN,
   [TRIG]: TRIG_TWIN,
   [VIEW]: VIEW_TWIN,
+  [XTRA]: XTRA_TWIN,
 };
 /** The C1 pair's rows, which follow one of two readings. */
 export const PAIR_CODES: readonly string[] = ["M0004", "M0005", "M0006"];
@@ -178,6 +184,21 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0056", VIEW_TWIN, 28, "flip-boolean-literal", "", "survived", "LabelViewTwin"),
   row("M0057", VIEW_TWIN, 32, "empty-block", "Label", "killed", "LabelViewTwin"),
   row("M0058", VIEW_TWIN, 33, "conditional-boundary", "Label", "survived", "LabelViewTwin"),
+  // R545, pre-committed in docs/superpowers/specs/2026-10-09-r545-wrapped-pageext-precommitment.md.
+  // The extension's never-run OnOpenPage is placed by the EXTENSION object, which only ScaledXtra
+  // reaches, so its mutants survive under it.
+  row("M0059", XTRA, 14, "empty-block", "", "survived", "ScaledXtra"),
+  row("M0060", XTRA, 15, "remove-assignment", "", "survived", "ScaledXtra"),
+  row("M0061", XTRA, 15, "flip-boolean-literal", "", "survived", "ScaledXtra"),
+  row("M0062", XTRA, 19, "empty-block", "Scaled", "killed", "ScaledXtra"),
+  row("M0063", XTRA, 20, "conditional-boundary", "Scaled", "survived", "ScaledXtra"),
+  row("M0064", XTRA, 21, "return-value", "Scaled", "killed", "ScaledXtra"),
+  row("M0065", XTRA_TWIN, 14, "empty-block", "", "survived", "ScaledXtraTwin"),
+  row("M0066", XTRA_TWIN, 15, "remove-assignment", "", "survived", "ScaledXtraTwin"),
+  row("M0067", XTRA_TWIN, 15, "flip-boolean-literal", "", "survived", "ScaledXtraTwin"),
+  row("M0068", XTRA_TWIN, 19, "empty-block", "Scaled", "killed", "ScaledXtraTwin"),
+  row("M0069", XTRA_TWIN, 20, "conditional-boundary", "Scaled", "survived", "ScaledXtraTwin"),
+  row("M0070", XTRA_TWIN, 21, "return-value", "Scaled", "killed", "ScaledXtraTwin"),
 ];
 
 /**
@@ -369,7 +390,7 @@ export function twinDifferences(report: WrappedReport): string[] {
 /**
  * R497: one bcdev leg (fenced or hub). One batch, a green baseline, the bcdev table per mutant,
  * strict twin parity, and no coverage refusal naming any of the fixture's objects (codeunits,
- * tables and pages 78900-78949, either key case): an admitted file must not be refused, and
+ * tables, pages and page extensions 78900-78949, either key case): an admitted file must not be refused, and
  * `WrappedPairB`'s compiled-out key must not refuse `WrappedPairA` (plan r2 A1).
  */
 export function assertBcWrappedRun(
@@ -383,7 +404,8 @@ export function assertBcWrappedRun(
   problems.push(...diffRows(EXPECTED_WRAPPED_BC, wrappedRows(report)));
   problems.push(...twinDifferences(report));
   for (const w of warnings)
-    if (/coverage refused for (codeunit|table|page):789\d\d/i.test(w)) problems.push(`refusal: ${w}`);
+    if (/coverage refused for (codeunit|table|page|pageextension):789\d\d/i.test(w))
+      problems.push(`refusal: ${w}`);
   for (const m of report.mutants)
     if (m.failureNote?.includes("coverage refused"))
       problems.push(`${m.mutantCode} carries a refusal: ${m.failureNote}`);
