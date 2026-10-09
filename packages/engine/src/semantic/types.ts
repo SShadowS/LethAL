@@ -290,6 +290,11 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
       // grammar attaches to one arm) types nothing, as an unindexed procedure has since R331.
       if (trigger.hasError) return null;
       const header = triggerHeaderSymbols(trigger);
+      // A name declared in a `#if` region of the header. Unreachable by any shape measured today
+      // (R-340 red-check): a `#if` var block's names never enter `locals` (direct children only),
+      // and a `#if` inside the parameter list parses with an ERROR (caught above). Kept because
+      // `collectParameters` walks recursively: if the grammar ever parsed a conditional parameter
+      // cleanly, both arms would land in `parameters`, and this keeps such a name unknown.
       if (header.ambiguous.includes(name)) return null;
       const local = header.locals.find((v) => sameName(v.name, node.text));
       if (local !== undefined) return extractType(local.typeText);
