@@ -997,10 +997,7 @@ export async function generateMutationSet(
         // R500: not in a file whose kind cannot carry the selector var (an XMLport): its specs go to
         // the `skipped` row below, and a refusal here would drop them from both rows.
         const r501 =
-          carrierFile &&
-          targeted &&
-          isMutableSite(node) &&
-          openItemHangRefuses(node, ctx, op.name);
+          carrierFile && targeted && isMutableSite(node) && openItemHangRefuses(node, ctx, op.name);
         if (!targeted || r501) {
           // R447: a site a hang check refused (R196's loop-condition write, or R501 above), counted
           // only where this run would have mutated it: not compiled out, and admitted by

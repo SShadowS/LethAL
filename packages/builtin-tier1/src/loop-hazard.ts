@@ -940,7 +940,8 @@ function r531Call(n: ALSyntaxNode): R531Call | null {
   if (n.rawKind === "call_expression") {
     const f = n.childForFieldName("function") ?? n.namedChildren[0] ?? null;
     if (f === null) return null;
-    if (isIdentifierLike(f)) return { recv: null, method: normalizeAlName(f.text), args: argsOf(n) };
+    if (isIdentifierLike(f))
+      return { recv: null, method: normalizeAlName(f.text), args: argsOf(n) };
     if (f.rawKind === "member_expression") {
       const m = f.childForFieldName("member");
       if (m === null) return null;
@@ -1295,7 +1296,11 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
       return;
     }
     // a bare same-object procedure call that can see R (a global, or the implicit Rec)
-    if (bare && procs.has(c.method) && [...recvs].some((x) => x === "" || !r531Declares(scope, x, true))) {
+    if (
+      bare &&
+      procs.has(c.method) &&
+      [...recvs].some((x) => x === "" || !r531Declares(scope, x, true))
+    ) {
       consume(n, "global-call", "");
       hopCands.push({ n, kind: "global-call", c });
     }
@@ -1388,7 +1393,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
           if (k === null || !recvs.has(k)) return;
           const prm = r531Param(p, i);
           // a by-value parameter is a copy: consuming it does not consume R
-          if (prm !== null && prm[1]) targets.push({ proc: p, key: prm[0] });
+          if (prm?.[1]) targets.push({ proc: p, key: prm[0] });
         });
       }
     }
