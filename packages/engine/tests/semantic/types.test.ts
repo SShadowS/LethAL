@@ -584,9 +584,10 @@ ${first}
   });
 });
 
-// R330, run 002 fix round: inside a trigger, a name the trigger declares in its own header (plain
-// `var` section or `#if` region) is unknown; it never reaches a global, whatever the global's casing.
-describe("buildTypeTable: a trigger's own locals hide the globals (R330)", () => {
+// R330, run 002 fix round: inside a trigger, a name the trigger declares in its own header never
+// reaches a global, whatever the global's casing. R340: a PLAIN header local is now typed by its own
+// declaration (Text here, so typing by the Integer global would still fail); a `#if` one stays unknown.
+describe("buildTypeTable: a trigger's own locals hide the globals (R330, R340)", () => {
   beforeAll(async () => {
     await initParser();
   });
@@ -605,14 +606,26 @@ ${local}
   const PLAIN = "    var\n        Amt: Text;";
   const WRAPPED = "#if not CLEAN27\n    var\n        Amt: Text;\n#endif";
 
-  it("a plain trigger local, global in other casing", () => {
-    expect(typeAt(src(PLAIN, "AMT"), "Amt")).toBeNull();
+  it("a plain trigger local types by its own declaration, global in other casing", () => {
+    expect(typeAt(src(PLAIN, "AMT"), "Amt")).toBe("Text");
   });
-  it("a plain trigger local, global in the same casing (master's older form)", () => {
-    expect(typeAt(src(PLAIN, "Amt"), "Amt")).toBeNull();
+  it("a plain trigger local types by its own declaration, global in the same casing", () => {
+    expect(typeAt(src(PLAIN, "Amt"), "Amt")).toBe("Text");
   });
-  it("a #if trigger local, global in other casing", () => {
+  it("a #if trigger local, global in other casing: unknown", () => {
     expect(typeAt(src(WRAPPED, "AMT"), "Amt")).toBeNull();
+  });
+  // R340 (review I2): a `#if` INSIDE the plain var section, its arms declaring the name with
+  // different types. Unlike WRAPPED (whose name is not a plain local at all), only the header's
+  // `#if`-region rule keeps this unknown.
+  it("a #if inside the plain var section (arms disagree): unknown", () => {
+    const INNER = "    var\n#if X\n        Amt: Integer;\n#else\n        Amt: Text;\n#endif";
+    expect(typeAt(src(INNER, "AMT"), "Amt")).toBeNull();
+  });
+  // R340 (review M1): a trigger that parsed with an ERROR types nothing.
+  it("a trigger with a parse error types nothing", () => {
+    const BROKEN = "    var\n        Amt: Text;\n        Bogus Bogus;";
+    expect(typeAt(src(BROKEN, "AMT"), "Amt")).toBeNull();
   });
   it("control: with no trigger local the global still types", () => {
     expect(typeAt(src("", "AMT"), "Amt")).toBe("Integer");
@@ -652,8 +665,9 @@ ${overload}#if X
   });
 });
 
-// R330 (run 003 fix round): a trigger's PARAMETERS hide the globals too.
-describe("buildTypeTable: a trigger's parameters hide the globals (R330)", () => {
+// R330 (run 003 fix round): a trigger's PARAMETERS hide the globals too. R340: typed by their own
+// declaration (Text; the global is Integer).
+describe("buildTypeTable: a trigger's parameters hide the globals (R330, R340)", () => {
   beforeAll(async () => {
     await initParser();
   });
@@ -668,11 +682,11 @@ describe("buildTypeTable: a trigger's parameters hide the globals (R330)", () =>
         ${global}: Integer;
 }
 `;
-  it("a trigger parameter, global in other casing", () => {
-    expect(typeAt(src("WHICH"), "Which")).toBeNull();
+  it("a trigger parameter types by its own declaration, global in other casing", () => {
+    expect(typeAt(src("WHICH"), "Which")).toBe("Text");
   });
-  it("a trigger parameter, global in the same casing (master's older form)", () => {
-    expect(typeAt(src("Which"), "Which")).toBeNull();
+  it("a trigger parameter types by its own declaration, global in the same casing", () => {
+    expect(typeAt(src("Which"), "Which")).toBe("Text");
   });
 });
 
@@ -807,7 +821,9 @@ ${SHOW}
     ).toBeNull();
   });
 
-  it("n9: a trigger's named return Found is null with a global Found: Integer", () => {
+  // R340: a trigger's named return types by its own declaration (Boolean), before the implicit
+  // record and the Integer global (precedence measured with alc, R-340 plan review I1).
+  it("n9: a trigger's named return Found types Boolean with a global Found: Integer", () => {
     const src = `page 50100 "Repro N9"
 {
     SourceTable = "Repro N9 Tab";
@@ -840,12 +856,11 @@ table 50100 "Repro N9 Tab"
     keys { key(PK; Code) { Clustered = true; } }
 }
 `;
-    expect(typeAt(src, "Found")).toBeNull();
+    expect(typeAt(src, "Found")).toBe("Boolean");
   });
 
-  // R455 point 4: n9's page has a SourceTable, so R294's implicit-record refusal makes it null
-  // even if named-return blocking breaks. Without a SourceTable only the named return blocks it.
-  it("n9b: the same named return Found is null on a page WITHOUT a SourceTable", () => {
+  // R455 point 4: n9's page has a SourceTable; n9b has none, so only the header decides.
+  it("n9b: the same named return Found types Boolean on a page WITHOUT a SourceTable", () => {
     const src = `page 50101 "Repro N9b"
 {
     trigger OnFindRecord(Which: Text) Found: Boolean
@@ -863,7 +878,7 @@ table 50100 "Repro N9 Tab"
         Found: Integer;
 }
 `;
-    expect(typeAt(src, "Found")).toBeNull();
+    expect(typeAt(src, "Found")).toBe("Boolean");
     // Control: the global types where no named return hides it.
     expect(typeAt(src, "Glob")).toBe("Integer");
   });
@@ -959,5 +974,72 @@ codeunit 50110 "R455 Cu"
 
   it("control: outside any record scope, F() types by the codeunit", () => {
     expect(typeAt(cu("I := F();"), "F", true)).toBe("Integer");
+  });
+});
+
+// R340 (plan review I1): a trigger header name beats a same-named FIELD of the implicit record,
+// measured with alc in 11 contexts (header wins and compiles; without the local the field is in
+// scope and an Integer-only use fails AL0133). Pinned here where an implicit record exists: the
+// local (Integer) is typed, never the field (Text) nor nothing.
+describe("buildTypeTable: R340: a trigger header name types before the implicit record's field", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const TABLE = `table 50340 "R340 Tab"
+{
+    fields { field(1; Code; Code[20]) { } field(2; Z; Text[30]) { } }
+    keys { key(PK; Code) { Clustered = true; } }
+}
+`;
+  it("a page with a SourceTable: a trigger local Z: Integer over the field Z: Text", () => {
+    const src = `${TABLE}
+page 50340 "R340 Page"
+{
+    SourceTable = "R340 Tab";
+    trigger OnOpenPage()
+    var
+        Z: Integer;
+    begin
+        Message('%1', Z + Z);
+    end;
+}
+`;
+    expect(typeAt(src, "Z")).toBe("Integer");
+  });
+  it("a TableNo codeunit's OnRun: a trigger local Z: Integer over Rec's field Z: Text", () => {
+    const src = `${TABLE}
+codeunit 50340 "R340 Cu"
+{
+    TableNo = "R340 Tab";
+    trigger OnRun()
+    var
+        Z: Integer;
+    begin
+        Message('%1', Z + Z);
+    end;
+}
+`;
+    expect(typeAt(src, "Z")).toBe("Integer");
+  });
+  it("a report data-item trigger: a trigger local Z: Integer over the data item's field Z: Text", () => {
+    const src = `${TABLE}
+report 50340 "R340 Rep"
+{
+    ProcessingOnly = true;
+    dataset
+    {
+        dataitem(Item; "R340 Tab")
+        {
+            trigger OnAfterGetRecord()
+            var
+                Z: Integer;
+            begin
+                Message('%1', Z + Z);
+            end;
+        }
+    }
+}
+`;
+    expect(typeAt(src, "Z")).toBe("Integer");
   });
 });

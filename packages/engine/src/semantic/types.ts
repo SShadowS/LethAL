@@ -286,6 +286,9 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
     const trigger = enclosingTrigger(node);
     const name = stripQuotes(node.text).toLowerCase();
     if (trigger !== null && triggerLocalNames(trigger).has(name)) {
+      // R340 (review M1): a trigger that parsed with an ERROR (a header split by `#if`, which the
+      // grammar attaches to one arm) types nothing, as an unindexed procedure has since R331.
+      if (trigger.hasError) return null;
       const header = triggerHeaderSymbols(trigger);
       if (header.ambiguous.includes(name)) return null;
       const local = header.locals.find((v) => sameName(v.name, node.text));
