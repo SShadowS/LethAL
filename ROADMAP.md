@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**76 of 545 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**76 of 546 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -201,7 +201,7 @@ that ordering is the priority.
 - **R485** · 301 BaseApp `run-trigger-forced` tags come only from `forceCanRaise`'s text check on unindexed objects: a possible over-tag (safe direction), measure first · [R485.md](docs/roadmap/R485.md) · done (cfaf0f6e)
 - **R486** · An env-tool --resume can carry kills measured under the OUTGOING test app: R247's test-app hash is read before the session publishes the new one (a false-kill path) · [R486.md](docs/roadmap/R486.md) · done (5c4d96cf)
 - **R487** · Hang shapes R484's data-item refusal does not see: measure each, then refuse or rule · [R487.md](docs/roadmap/R487.md) · done (538c38c8)
-- **R488** · al-runner one-shot runs every test whose name CONTAINS the requested one, and LethAL credits the merged coverage to the requested test · [R488.md](docs/roadmap/R488.md) · done (0cbc8cf6); upstream exact-match ask filed 2026-10-07 as StefanMaron/BusinessCentral.AL.Runner#5439
+- **R488** · al-runner one-shot runs every test whose name CONTAINS the requested one, and LethAL credits the merged coverage to the requested test · [R488.md](docs/roadmap/R488.md) · done (0cbc8cf6); upstream exact-match ask #5439 fixed in al-runner c5bbaf89 (`--test-exact`), not yet in the…
 - **R490** · al-runner one-shot: a look-alike test that discovery did not see and that hangs scores the requested test's mutant timeout-killed · [R490.md](docs/roadmap/R490.md) · closed 2026-10-07 — ruling: no false kill is possible; the shape is absent in every corpus, and a test-only…
 - **R494** · a top-level (or `#if`-wrapped) split-header object declaration is invisible to `projectObserves`: a possible under-tag · [R494.md](docs/roadmap/R494.md) · done (85212a5a)
 - **R491** · R488 follow-ups: a duplicate row for the requested test is credited, and three R488 tests would pass with the guarantee broken · [R491.md](docs/roadmap/R491.md) · done (276698c4)
@@ -550,7 +550,7 @@ that ordering is the priority.
 - **R393** · A unit test that times out can still finish later and write its snapshot under the NEXT test's name, so a plain `bun test` rewrites a tracked .snap file with a bogus entry · [R393.md](docs/roadmap/R393.md) · done (427a8e85): verify.ts runs bun test with CI=true and a .snap belt; CLAUDE.md names it as the unit-suite…
 - **R350** · `redact-campaign-report.ts --check` ignores the first-party allowlist, so the check CLAUDE.md mandates before committing a report exits 1 on both first-party sample reports · [R350.md](docs/roadmap/R350.md) · done (512715b1)
 - **R377** · al-runner predefines `CLEANSCHEMA1` to `CLEANSCHEMA25` and alc does not, so a `#if not CLEANSCHEMA<n>` arm is still generated and compiled out on al-runner · [R377.md](docs/roadmap/R377.md) · done (0a9ba1d7)
-- **R352** · al-runner 2.12.0 compiles a test against a dependency built under other --define symbols · [R352.md](docs/roadmap/R352.md) · open, filed 2026-09-30
+- **R352** · al-runner 2.12.0 compiles a test against a dependency built under other --define symbols · [R352.md](docs/roadmap/R352.md) · closed 2026-10-09 — not reproduced on al-runner v2.12.0-main.43f76177 (current) nor c5bbaf89; upstream #4990…
 - **R392** · al-runner's predefined preprocessor symbols are a hard-coded list measured on v2.12.0; nothing checks a newer al-runner's list per session · [R392.md](docs/roadmap/R392.md) · done (27c773b5)
 - **R379** · `scripts/campaign/compile-only.ts` enumerates with no config symbols, so its sites differ from a real run's · [R379.md](docs/roadmap/R379.md) · done (8e6e7cde)
 - **R356** · The al-runner backend leaves its lethal-alrunner-cov-* Cobertura scratch directory behind when it closes · [R356.md](docs/roadmap/R356.md) · done (0924cd93)
@@ -584,6 +584,7 @@ that ordering is the priority.
 - **R453** · al-runner loses a reportextension after a test calls Code Coverage Mgt. (found by the R-254 probe) · [R453.md](docs/roadmap/R453.md) · open, filed 2026-10-05
 - **R471** · al-runner compiles a project that BC's alc rejects with AL0155 (a report and its reportextension declaring the same global), so LethAL's al-runner path can look green where bcdev errors · [R471.md](docs/roadmap/R471.md) · open
 - **R482** · `r214-history.test.ts` "R214 I4 ... marks: an old-scheme mark on the old key is stale" failed once in a full `verify` run and passed alone and on re-run (flaky) · [R482.md](docs/roadmap/R482.md) · closed 2026-10-05 — not reproduced in 20 repeats under load; the one failure was a starvation timeout during…
+- **R551** · al-runner one-shot: use `--test-exact` once the gate build carries it, and retire R488's learn-and-exclude workaround · [R551.md](docs/roadmap/R551.md) · open, filed 2026-10-09
 - **R519** · al-runner `--server`: per-request `test` / `excludeTests` would run only a mutant's covering tests and confine a hang to one test · [R519.md](docs/roadmap/R519.md) · open, filed 2026-10-08
 - **R537** · al-runner scores an unexecuted UI handler or a failing OnRun `runner-test-error`, where BC's test runner reports a failed test (a lost kill against bcdev) · [R537.md](docs/roadmap/R537.md) · open, filed 2026-10-09
 - **R538** · al-runner `--server`: a covering test with no row because a test LethAL orders LATER hung is `runner-test-error`, a lost kill LethAL could recover · [R538.md](docs/roadmap/R538.md) · open, filed 2026-10-09
