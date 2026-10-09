@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**76 of 548 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**75 of 548 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -214,7 +214,7 @@ that ordering is the priority.
 - **R500** · Report-loop hang shapes R487's blanket rule does not cover: code before the item, other-object callees, table and Date items, XMLport Integer elements, outside reportextensions · [R500.md](docs/roadmap/R500.md) · done (58a9fd1b)
 - **R545** · BC and al-runner score `#if`-wrapped table and page EXTENSIONS on the codeunit/table/page measurement; no gate holds one · [R545.md](docs/roadmap/R545.md) · done (5f80da49)
 - **R501** · Condition-side mutants of a report data item's exit guard, and removing the exit itself, can hang an open Integer item · [R501.md](docs/roadmap/R501.md) · done (85b94713)
-- **R550** · BC scores `#if`-wrapped REPORTS on the codeunit/table/page measurement: 30 BaseApp files, up to 1,843 sites, no gate holds one · [R550.md](docs/roadmap/R550.md) · open, filed 2026-10-09
+- **R550** · BC scores `#if`-wrapped REPORTS on the codeunit/table/page measurement: 30 BaseApp files deploy 1,945 sites, no gate held one · [R550.md](docs/roadmap/R550.md) · done (25f68b19)
 - **R502** · The receiver resolver reads a namespace-qualified data item table (`System.Utilities.Integer`) as its first segment · [R502.md](docs/roadmap/R502.md) · done (4a82d91a)
 - **R503** · The runMany watchdog's GetOperationStatus poll has no timeout, so a poll BC never answers holds the call forever · [R503.md](docs/roadmap/R503.md) · done (c637f2dd)
 - **R554** · Request-page trigger mutants run covered-but-unreached: no test shows a request page, and no gate measures one (BaseApp wrapped reports alone: 165 sites) · [R554.md](docs/roadmap/R554.md) · open, filed 2026-10-09
