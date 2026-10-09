@@ -1889,6 +1889,28 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       expect(o.runs()).toBe(2);
       await other.close();
     });
+
+    test("T6 OnRun (final review M-a): after an OnRun-wording hang the hung test is named, so a missing row is runner-test-error, sent once", async () => {
+      const fake = hungOnce(
+        true,
+        "The test codeunit's OnRun trigger exceeded the 180s timeout, so none of its test methods ran.",
+      );
+      const backend = serverOn(fake.spawn);
+      await backend.activate("M0001");
+      expect((await backend.run(t("BSlow"), run)).outcome).toBe("timeout");
+      const c = counted(backend);
+      const later = await runOnce(backend, new SessionSafety(), t("Later"), run);
+      expect([later.outcome, later.operation, later.runnerRow]).toEqual([
+        "error",
+        "completed-accepted",
+        "runner-test-error",
+      ]);
+      expect(later.failureMessage).toContain(
+        'al-runner --server stopped the run at "Codeunit79100.BSlow" (timeout)',
+      );
+      expect(c.runs()).toBe(1);
+      await backend.close();
+    });
   });
 });
 
@@ -2101,6 +2123,10 @@ describe("AlRunnerBackend: an answered row never aborts (R534)", () => {
       `TIMEOUT ${ONRUN_MESSAGE_20}`,
       "An OnAfterTestMethodRun subscriber (codeunit 50100) failed: boom (test result before it: Test exceeded 5s timeout.)",
       "Test exceeded 5s timeout. extra",
+      // Final review I-A: a user OnBeforeTestMethodRun subscriber raising the timeout wording.
+      // Only `^` refuses these (`$` matches them), so a lost `^` alone would be a false kill.
+      "An OnBeforeTestMethodRun subscriber (codeunit 50100) failed, so the test did not run: NavNCLDialogException: Test exceeded 5s timeout.",
+      `An OnBeforeTestMethodRun subscriber (codeunit 50100) failed, so the test did not run: NavNCLDialogException: ${ONRUN_MESSAGE_20}`,
     ]) {
       const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "error", message }, 10, undefined);
       expect([v.outcome, v.runnerRow, v.reportedStopMs, v.timeoutIn], message).toEqual([
@@ -2152,14 +2178,14 @@ describe("AlRunnerBackend: an answered row never aborts (R534)", () => {
   });
 
   test("T5 near-miss: a user message that merely CONTAINS the phrase stays a fail (a kill)", () => {
-    const v = verdictFromRunnerTest(
-      ref,
-      QUALIFIED,
-      { status: "fail", message: "NavNCLDialogException: expected 3, got out-of-scope: x" },
-      10,
-      undefined,
-    );
-    expect([v.outcome, v.runnerRow]).toEqual(["fail", undefined]);
+    // The second is final review M-b: a type-shaped word later in the message. Only `^` refuses it.
+    for (const message of [
+      "NavNCLDialogException: expected 3, got out-of-scope: x",
+      "NavNCLDialogException: wrapped Foo: out-of-scope: x",
+    ]) {
+      const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "fail", message }, 10, undefined);
+      expect([v.outcome, v.runnerRow], message).toEqual(["fail", undefined]);
+    }
   });
 
   test("T7: a row an exit-3 abort line names, in no known timeout wording, is runner-test-error flagged timeoutWordingUnknown; on exit 1 it is not flagged", async () => {

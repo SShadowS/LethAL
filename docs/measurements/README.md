@@ -1307,7 +1307,7 @@ and read from its source at 43f7617. Each row is an ANSWER: al-runner ran the te
 | Hang in the test codeunit's `OnRun` | 3, `error`, `The test codeunit's OnRun trigger exceeded the {N}s timeout, so none of its test methods ran.`, a TEST-TIMEOUT-ABORT line naming the test | `error`, same message, `errorKind: "timeout"` | `timeout` in the OnRun, confirmed unmutated on the confirm's WALL clock (no pass row reports the OnRun's time: 66 ms body beside a 4 s OnRun) |
 | Unexecuted UI handler | 1, `error`, `The following UI handlers were not executed: <h>` | same, `errorKind: "runtime"` | `error`, cause `runner-test-error`, not re-sent |
 | `OnRun` throws | 1, `error`, `The test codeunit's OnRun trigger failed, so none of its test methods ran (as in BC): <Type>: <msg>` | same, `errorKind: "setup"` | `runner-test-error`, or `runner-refused` when `<msg>` is a refusal |
-| Out-of-scope refusal in a test BODY | 1, **`fail`**, `<Type>: out-of-scope: <api> — ...` (any exception type) | same, `errorKind: "runtime"` | `error`, cause `runner-refused`, never a kill |
+| Out-of-scope refusal in a test BODY | 1, **`fail`**, `<Type>: out-of-scope: <api> — ...` (measured with `RunnerOutOfScopeException`; other types, such as `NavNCLDialogException` and `InvalidOperationException`, read from source, not measured) | same, `errorKind: "runtime"` | `error`, cause `runner-refused`, never a kill |
 | `--server`, a test after a hung one | - | no row | `runner-test-error` (presumed after the hang, not measured) |
 
 `errorKind` is on the `--server` wire only; the one-shot row has no such field. The OnRun runs

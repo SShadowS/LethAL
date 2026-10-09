@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import { AL_RUNNER_PREDEFINED_PROBE_TEST } from "../src/al-runner-predefined-probe";
 import type { RunEvent } from "../src/events";
+import { explain } from "../src/explain";
 import { runSession } from "../src/orchestrator";
 import { AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0 } from "../src/preprocessor-symbols";
 import type { SpawnFn } from "../src/publisher";
+import { ERROR_CAUSE_INTERPRETATIONS, renderConsole } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { fakeProbeSpawn, maskFor, probeFailed } from "./helpers/al-runner-predefined";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
@@ -212,6 +214,34 @@ describe("R534: an al-runner row that is an answer never aborts the session", ()
     ]);
     expect(report.mutants[0]?.failureNote).toContain(HANDLER_UNUSED);
     expect(spawns.map((s) => s.active)).toEqual(["", "M0001", "M0002", ""]);
+  });
+
+  test("the causes' ripple (final review M-c): the banner names both causes and explain carries them", async () => {
+    const { report } = await session((active, wanted) =>
+      active === "M0001"
+        ? row(
+            wanted,
+            "fail",
+            "RunnerOutOfScopeException: out-of-scope: TaskScheduler.TaskExists — x",
+          )
+        : active === "M0002"
+          ? row(wanted, "error", HANDLER_UNUSED)
+          : pass(wanted),
+    );
+    expect(report.mutants.map((m) => [m.mutantCode, m.verdict, m.cause])).toEqual([
+      ["M0001", "error", "runner-refused"],
+      ["M0002", "error", "runner-test-error"],
+    ]);
+    const banner = renderConsole(report);
+    expect(banner).toContain(", runner-test-error 1");
+    expect(banner).toContain(", runner-refused 1");
+    const rows = explain(report).notMeasured;
+    expect(rows.map((n) => [n.mutantCode, n.cause])).toEqual([
+      ["M0001", "runner-refused"],
+      ["M0002", "runner-test-error"],
+    ]);
+    expect(rows[0]?.interpretation).toBe(ERROR_CAUSE_INTERPRETATIONS["runner-refused"]);
+    expect(rows[1]?.interpretation).toBe(ERROR_CAUSE_INTERPRETATIONS["runner-test-error"]);
   });
 
   test("S1 (c): a proven abort in an unknown wording warns ONCE per session, however many mutants hit it", async () => {
