@@ -5,6 +5,7 @@ import {
   type SemanticContext,
   armOfNode,
   declarationMembers,
+  enclosingTrigger,
   isObjectContainer,
   isProcedureLike,
   lastFieldChild,
@@ -13,6 +14,7 @@ import {
   procedureLikeArmNames,
   resolveReceiverTable,
   resolveVarRef,
+  triggerLocalNames,
 } from "@lethal/engine";
 
 /**
@@ -1928,6 +1930,26 @@ export function loopConditionReadsByName(
  * across files). Objects in `unparsedObjects`, failed headers and other unindexed members are out
  * of scope and keep the declaration-only rule.
  */
+/**
+ * R340 (plan r2, review C1): a write to a name the enclosing TRIGGER declares in its own header
+ * (a parameter, its named return, or any header local) that the hang path cannot resolve as a
+ * declaration (`triggerScopeVar` reads only the plain `var` section), matched by NAME against the
+ * enclosing loops' exit conditions and any enclosing `for`'s control variable, as R-364 does for an
+ * unindexed object. Only ever adds a refusal. Before R340 this was already a hole for
+ * remove-assignment (master emitted it hang-capable); R340's typing made swap-additive reach it too.
+ */
+function triggerHeaderLoopWrite(node: ALSyntaxNode, name: string, ctx: SemanticContext): boolean {
+  const trigger = enclosingTrigger(node);
+  const wanted = normalizeAlName(name);
+  if (trigger === null || !triggerLocalNames(trigger).has(wanted)) return false;
+  for (let cur: ALSyntaxNode | null = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (cur.rawKind !== "for_statement") continue;
+    const variable = cur.childForFieldName("variable");
+    if (variable !== null && normalizeAlName(variable.text) === wanted) return true;
+  }
+  return loopConditionReadsByName(node, { receiver: null, member: name }, ctx);
+}
+
 function inUnindexedObject(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const unindexed = ctx.symbols.unindexedObjects;
   if (unindexed.length === 0) return false;
@@ -2034,7 +2056,8 @@ export function classifyHangCapable(
   const byName = { receiver: null, member: target.text };
   const targetSym = resolveVarRef(target, ctx);
   if (targetSym === null) {
-    return inUnindexedObject(node, ctx) && loopConditionReadsByName(node, byName, ctx)
+    return (inUnindexedObject(node, ctx) && loopConditionReadsByName(node, byName, ctx)) ||
+      triggerHeaderLoopWrite(node, target.text, ctx)
       ? "loop-condition-target"
       : byNameRefusal(node, byName, ctx, "none");
   }
