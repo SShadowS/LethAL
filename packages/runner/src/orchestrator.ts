@@ -143,8 +143,10 @@ import {
   ManifestDeclarationError,
   activeObjectKeys,
   alRunnerAdmitsWrappedFile,
+  bcWrappedShapeRefusal,
   coverageRefusedObjects,
   duplicateObjectRefusals,
+  fileHoldsWrappedObject,
 } from "./line-map";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
@@ -4092,7 +4094,8 @@ function pinPlatformAppsDir(backend: ExecutionBackend, dir: string, who: string)
 
 /**
  * Sol run 001 (I): `base` plus the objects the backend's deployed coverage index refused by name
- * (al-runner only; a backend without the method adds nothing). The base sentence wins a tie.
+ * (al-runner and, since R497, bcdev; a backend without the method adds nothing). The base
+ * sentence wins a tie.
  */
 async function withBackendRefusals(
   backend: ExecutionBackend,
@@ -5710,20 +5713,42 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Passed to BOTH `coverageFilter` calls so no coverage mode and no fallback scores their mutants.
   // R-300b: per coverage path. On al-runner an admitted wrapped file is scored, and a key two
   // files declare is refused by the sentence the index prints (C1).
+  // R497: on bcdev the BC shape rule under this build's arms admits the measured wrapped shapes,
+  // and a key two compiled files declare is refused there too.
+  const bcArms = new Map(
+    backendName === "bcdev"
+      ? allFiles.map((f) => [f.root, evaluateArms(f.root, f.source, buildSymbols)] as const)
+      : [],
+  );
   const coverageRefused: ReadonlyMap<string, string> = new Map([
-    ...coverageRefusedObjects(allFiles, backendName),
-    ...(backendName === "al-runner" ? duplicateObjects : []),
+    ...coverageRefusedObjects(
+      allFiles,
+      backendName,
+      backendName === "bcdev"
+        ? (f) => bcArms.get(f.root) ?? evaluateArms(f.root, f.source, buildSymbols)
+        : undefined,
+    ),
+    ...duplicateObjects,
   ]);
   // Sol run 002: on al-runner the index can refuse an ADMITTED wrapped file's objects after deploy
   // (its instrumented text re-parses undecided), which the source read here cannot see. So no
   // verdict is carried for such a file's mutants before that (known-survivor, full-batch resume);
-  // the ordinary resume carry runs after the post-deploy split and is safe.
+  // the ordinary resume carry runs after the post-deploy split and is safe. R497: the same holds
+  // on bcdev, whose line map applies the shape rule to the instrumented text.
+  const admittedOnBc = (f: (typeof allFiles)[number]): boolean => {
+    const arms = bcArms.get(f.root);
+    return (
+      fileHoldsWrappedObject(f.root) &&
+      arms !== undefined &&
+      bcWrappedShapeRefusal(f.root, arms) === undefined
+    );
+  };
   const carryBarredFiles = new Set(
-    backendName === "al-runner"
-      ? allFiles
-          .filter((f) => alRunnerAdmitsWrappedFile(f.root))
-          .map((f) => f.path.replaceAll("\\", "/"))
-      : [],
+    allFiles
+      .filter((f) =>
+        backendName === "al-runner" ? alRunnerAdmitsWrappedFile(f.root) : admittedOnBc(f),
+      )
+      .map((f) => f.path.replaceAll("\\", "/")),
   );
   const carryBarred = (m: MutantManifestEntry): boolean =>
     carryBarredFiles.has(m.file.replaceAll("\\", "/"));

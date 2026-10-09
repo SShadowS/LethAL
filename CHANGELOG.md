@@ -125,6 +125,25 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **bcdev scores `#if`-wrapped objects of the shapes measured on BC; identity scheme 36** (R497,
+  R300; 35 is unused). Both BC coverage paths (fenced Code Coverage and the procedure hub) now
+  score an object wrapped in `#if` when its file has exactly one object wrapper with no `#elif` and
+  no nested wrapper, one object per arm (one or two arms, the same object in both), the compiled arm
+  decided by the build's symbols, and at most one bare object before and one after it: the shapes
+  measured on Cronus28 by R-300b. Fenced lines are read by the measured rule (an object is numbered
+  from one past the previous COMPILED object, so an object after a wrapper owns the wrapper's
+  directive and inactive-arm lines; the old rule put such an object 11 lines off in the probe).
+  Every other wrapped shape stays refused by name, now naming the shape. A declaration in a
+  compiled-out arm no longer refuses the same object compiled in another file; two compiled
+  declarations of one object are refused by name; whatever the deployed index refuses is refused in
+  selection too. `lethal verify` is unchanged (it still refuses wrapped objects). Measured offline:
+  BaseApp 241 files with 5,987 mutation sites and DC 21 files with 320 move from refused to scored
+  on bcdev (an upper bound: a file whose instrumented text is refused after deploy stays refused);
+  CDO and DO have none. No key moves, but a key whose verdict was a refusal's `no-coverage` can now
+  be scored, so history, `--resume` and marks recorded under 34 are not carried. A new gate,
+  `itest:bcdev-wrapped` (`fixtures/sandbox-wrapped` on Cronus28, fenced and hub), pins it per
+  mutant: 26 killed / 10 survived / 0 no-coverage.
+
 - **TypeScript 7.0, the native compiler** (R437). `bun run typecheck` takes about 1 s (was 12 s),
   with the same strictness, measured flag by flag. 7.0 no longer ships the JavaScript compiler API,
   so the schema generator and four tests that parse TypeScript import it from Microsoft's

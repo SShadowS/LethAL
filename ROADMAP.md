@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**66 of 531 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**66 of 533 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -117,7 +117,7 @@ that ordering is the priority.
 - **R296** · itest:tables' assertMatchesBaseline fails with a bare Error: the per-mutant difference lines never reach the output · [R296.md](docs/roadmap/R296.md) · done (b2085e51)
 - **R297** · `printWithRewrites` refuses two real corpora with 'overlapping rewrites': a wide rewrite span collides with a nested zero-width insert · [R297.md](docs/roadmap/R297.md) · done (0185b3a); whole BaseApp UNMET (parser and manifest-serialization limits, see [[R292]] and [[R311]])
 - **R298** · An object declaration wrapped in `preproc_conditional_object` defeats `enclosingObjectDeclaration`, so the injector throws instead of instrumenting or filtering the file · [R298.md](docs/roadmap/R298.md) · closed 2026-10-05 — no sites lost; about 7,140 BaseApp sites (0.31%) run without coverage, which is R300's…
-- **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · open, filed 2026-09-28; al-runner half landed 2026-10-06 (597be6e9), the BC paths still refuse
+- **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · done (e02c874b)
 - **R301** · A split-header procedure (`preproc_split_procedure`) has no reach-latch owner, so the injector throws · [R301.md](docs/roadmap/R301.md) · done (4575882..4da7a01); remaining gaps moved to R302 and R309
 - **R399** · Undecided-#if and not-instrumentable rows in excludedSites do not make the report's reliability narrowed, while R-307's refused rows do · [R399.md](docs/roadmap/R399.md) · done (15609994)
 - **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · done (db641338..234cb4b1)
@@ -210,6 +210,7 @@ that ordering is the priority.
 - **R495** · A session without an env-tool hook records the pre-lease served test-app hash without proving it is the installed one · [R495.md](docs/roadmap/R495.md) · done (98748740)
 - **R496** · `test_app_hash` hashes only the test app's bytes: two proven runs whose hook-published dependency changed still match · [R496.md](docs/roadmap/R496.md) · done (47179723)
 - **R499** · Outstanding stop requests are not drained before a score is published · [R499.md](docs/roadmap/R499.md) · done (193257c8)
+- **R536** · BC scores `#if`-wrapped tables and pages on a codeunit-only measurement; `lethal verify` names wrapped objects as no-coverage after a run scored them · [R536.md](docs/roadmap/R536.md) · open, filed 2026-10-09
 - **R500** · Report-loop hang shapes R487's blanket rule does not cover: code before the item, other-object callees, table and Date items, XMLport Integer elements, outside reportextensions · [R500.md](docs/roadmap/R500.md) · done (58a9fd1b)
 - **R501** · Condition-side mutants of a report data item's exit guard, and removing the exit itself, can hang an open Integer item · [R501.md](docs/roadmap/R501.md) · done (85b94713)
 - **R502** · The receiver resolver reads a namespace-qualified data item table (`System.Utilities.Integer`) as its first segment · [R502.md](docs/roadmap/R502.md) · done (4a82d91a)
@@ -385,8 +386,9 @@ that ordering is the priority.
 - **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · closed 2026-10-05 — neither shape reaches the prefix proof today: no Tier-2 claim is made inside a…
 - **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files; correction: the extension's members ARE mutated…
 - **R489** · explain's covering tests are not ordered by duration: no measurement shows a per-test baseline duration is stable enough to rank by · [R489.md](docs/roadmap/R489.md) · open
-- **R497** · BC paths score `#if`-wrapped objects (fenced under H1a, hub by name), and the line map's H1b rule is wrong for a bare object after a wrapper · [R497.md](docs/roadmap/R497.md) · open, filed 2026-10-07
+- **R497** · BC paths score `#if`-wrapped objects (fenced under H1a, hub by name), and the line map's H1b rule is wrong for a bare object after a wrapper · [R497.md](docs/roadmap/R497.md) · done (e02c874b)
 - **R498** · A hook session whose test app carries no `.al` never proves its identity, so it never resumes, skips or reuses · [R498.md](docs/roadmap/R498.md) · open, filed 2026-10-07
+- **R535** · A nested `#if` object wrapper is refused by name on every coverage path: BaseApp has 2 such files (70 sites), unmeasured · [R535.md](docs/roadmap/R535.md) · open, filed 2026-10-09
 
 ## Backends and tooling
 

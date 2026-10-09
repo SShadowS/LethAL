@@ -263,6 +263,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "itest:alrunner",
   ),
   "bcdev.baseline.json": gateHow("LETHAL_ITEST_BCDEV=1", "bcdev.baseline.json", "itest:bcdev"),
+  "bcdev.wrapped.baseline.json": gateHow(
+    "LETHAL_ITEST_BCDEV=1",
+    "bcdev.wrapped.baseline.json",
+    "itest:bcdev-wrapped",
+  ),
   "envtool.baseline.json": gateHow(
     "LETHAL_ITEST_ENVTOOL=1",
     "envtool.baseline.json",
@@ -290,6 +295,9 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * R-300b's wrapped leg (`al-runner.wrapped.baseline.json`) was recorded 2026-10-06 on al-runner
  * v2.12.0-main.c39ad5de (record exit 3, confirm PASS; `--define` measured to ADD to app.json's
  * symbols), per docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md.
+ * R497's bcdev wrapped leg (`bcdev.wrapped.baseline.json`) was recorded 2026-10-08 on Cronus28
+ * (record exit 3, confirm PASS, fenced and hub per mutant equal), per
+ * docs/superpowers/specs/2026-10-08-r497-bcdev-wrapped-precommitment.md.
  */
 export const PENDING_FIRST_RECORD: readonly string[] = [];
 

@@ -415,6 +415,17 @@ in `docs/superpowers/specs/2026-10-08-r343-wrapped-leg-precommitment.md`.
 it with `/define:WRAPDEF` into `sandbox-wrapped-tests/.alpackages` from current source before
 compiling the tests. al-runner compiles both from source and needs neither.
 
+**On bcdev (R497), `itest:bcdev-wrapped`** runs the same fixture on Cronus28 through `fenced` and
+`procedure` (hub) coverage, with `sandbox-app`'s gitignored `lethal.config.local.json` and
+`.vscode/launch.local.json` as the connection (same container). There `WrappedArms` is SCORED (two
+arms with the `#if` arm compiled is a shape BC was measured on), so the table is 26 killed / 10
+survived / 0 no-coverage, pre-committed in
+`docs/superpowers/specs/2026-10-08-r497-bcdev-wrapped-precommitment.md`. LethAL publishes only the
+instrumented target: a fresh container needs `sandbox-wrapped-tests` published once by hand,
+compiled against the target built with `/define:WRAPDEF` (otherwise the run refuses with
+`StaleTestAppError`). The leg's `ArtifactCompiler` must get `WRAPDEF` too, or alc compiles the other
+arm and R-307's manifest check refuses the deploy.
+
 ## sandbox-multiobject (R383)
 
 A target with TWO codeunits in one file, `MultiPair.Codeunit.al` (`Multi A` then `Multi B`), and a
