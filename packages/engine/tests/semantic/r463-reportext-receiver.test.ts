@@ -57,6 +57,14 @@ function sites(files: Record<string, string>, call: string, method: string): Sit
   return out;
 }
 
+/** The project: table Band, the base report and the extension `ext`, plus `extra` files. */
+const proj = (ext: string, extra: Record<string, string> = {}) => ({
+  "t.al": BAND,
+  "b.al": BASE,
+  "e.al": ext,
+  ...extra,
+});
+
 const CLAIMED: Site = { claimed: true, unresolved: false };
 const REFUSED: Site = { claimed: false, unresolved: true };
 
@@ -77,7 +85,7 @@ describe("R-463 reportextension receivers", () => {
         exit(Rel.Count());
     end;
 }`;
-    expect(sites({ "t.al": BAND, "b.al": BASE, "e.al": ext }, 'Rel.SetRange("No.", 1)', "SetRange")).toEqual([CLAIMED]);
+    expect(sites(proj(ext), 'Rel.SetRange("No.", 1)', "SetRange")).toEqual([CLAIMED]);
   });
 
   // T2. Red: drop `reportextension` from OBJECT_KINDS.
@@ -98,7 +106,7 @@ describe("R-463 reportextension receivers", () => {
         }
     }
 }`;
-    expect(sites({ "t.al": BAND, "b.al": BASE, "e.al": ext }, 'SetRange("No.", 2)', "SetRange")).toEqual([CLAIMED]);
+    expect(sites(proj(ext), 'SetRange("No.", 2)', "SetRange")).toEqual([CLAIMED]);
   });
 
   // T3, the named refusal. Red: give `modify(X)` the base item's table (here X names its table).
@@ -116,7 +124,7 @@ describe("R-463 reportextension receivers", () => {
         }
     }
 }`;
-    expect(sites({ "t.al": BAND, "b.al": BASE, "e.al": ext }, 'SetRange("No.", 3)', "SetRange")).toEqual([REFUSED]);
+    expect(sites(proj(ext), 'SetRange("No.", 3)', "SetRange")).toEqual([REFUSED]);
   });
 
   const ownSetRange = (call: string) => `reportextension 50405 "Band Ext4" extends "Base Rep"
@@ -144,16 +152,15 @@ describe("R-463 reportextension receivers", () => {
   // T4, bare half. Red: drop the `declaresProcedure` guard in `claimsRecordMethod`'s bare branch.
   it("T4: a bare call named like a procedure the extension declares is not claimed", () => {
     const call = "SetRange(4, 4)";
-    expect(sites({ "t.al": BAND, "b.al": BASE, "e.al": ownSetRange(call) }, call, "SetRange")).toEqual([
-      { claimed: false, unresolved: false },
-    ]);
+    const site = { claimed: false, unresolved: false };
+    expect(sites(proj(ownSetRange(call)), call, "SetRange")).toEqual([site]);
   });
 
   // T4, qualified half: `Rel.SetRange` binds the record method whatever the extension declares.
   // Red: drop `reportextension` from OBJECT_KINDS.
   it("T4: the QUALIFIED call on a typed record is claimed beside the extension's namesake", () => {
     const call = 'Rel.SetRange("No.", 4)';
-    expect(sites({ "t.al": BAND, "b.al": BASE, "e.al": ownSetRange(call) }, call, "SetRange")).toEqual([CLAIMED]);
+    expect(sites(proj(ownSetRange(call)), call, "SetRange")).toEqual([CLAIMED]);
   });
 
   // T5, a built collision: a codeunit with the extension's NAME declares the global `Rel`. Red:
@@ -180,7 +187,8 @@ describe("R-463 reportextension receivers", () => {
     var
         Rel: Record Band;
 }`;
-    expect(sites({ "t.al": BAND, "b.al": BASE, "e.al": ext, "c.al": cu }, 'Rel.SetRange("No.", 5)', "SetRange")).toEqual([REFUSED]);
+    const call = 'Rel.SetRange("No.", 5)';
+    expect(sites(proj(ext, { "c.al": cu }), call, "SetRange")).toEqual([REFUSED]);
   });
 
   // T5b: the base report's `protected var G` is accessible to the extension (alc 18.0.43), but this
@@ -194,7 +202,7 @@ describe("R-463 reportextension receivers", () => {
         G.SetRange("No.", 6);
     end;
 }`;
-    expect(sites({ "t.al": BAND, "b.al": BASE, "e.al": ext }, 'G.SetRange("No.", 6)', "SetRange")).toEqual([REFUSED]);
+    expect(sites(proj(ext), 'G.SetRange("No.", 6)', "SetRange")).toEqual([REFUSED]);
   });
 });
 
