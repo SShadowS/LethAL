@@ -646,14 +646,18 @@ const EXPECTED = {
    * R-463 leaves this at 15. `CountBand`'s 4 new mutants sort before `DataMain.Table.al`, so the three
    * pins move +4 again (M0175/M0179/M0171 -> M0179/M0183/M0175), same mutants. Ids only, proven in
    * /coord/handoff/R-463/id-shift-proof.txt.
+   * R-463 r2 (MEASURED, its live run 2026-10-09): M0005 and M0009 move from position 2 to 3. They take
+   * the object-level fallback, and `BandCountsFromLow` (1 member, sorting between
+   * `BandClassifiesDirectly` and `BandReportSumsBands`) now covers object 79341 too, so two passing
+   * tests run before the killer. Still warm kills, so the count stays 15.
    */
   warmKills: 15,
   killPositions: [
     { mutantCode: "M0179", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
     { mutantCode: "M0183", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
     { mutantCode: "M0175", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
-    { mutantCode: "M0005", killingTest: "BandReportSumsBands", killPosition: 2 },
-    { mutantCode: "M0009", killingTest: "BandReportSumsBands", killPosition: 2 },
+    { mutantCode: "M0005", killingTest: "BandReportSumsBands", killPosition: 3 },
+    { mutantCode: "M0009", killingTest: "BandReportSumsBands", killPosition: 3 },
   ],
   /**
    * Task 4 (excluded-sites-spine): the `notInstrumented` half's ONLY live proof, added because it

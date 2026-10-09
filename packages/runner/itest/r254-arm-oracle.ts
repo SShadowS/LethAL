@@ -28,12 +28,14 @@ const kill = (
   failure: string,
 ): ArmOracleRow => ({ line, operator, verdict: "killed", killingTest, killPosition, failure });
 
+// R-463 r2 (measured): lines 12 and 20's kills move from position 2 to 3. `BandCountsFromLow` now covers
+// object 79341, and these trigger mutants take the object-level fallback, so it runs before the killer.
 export const R254_ARM_ORACLE: readonly ArmOracleRow[] = [
-  kill(12, "empty-block", "BandReportSumsBands", 2, SUM0),
+  kill(12, "empty-block", "BandReportSumsBands", 3, SUM0),
   kill(13, "remove-assignment", "BandReportSumsBands", 1, SUM0),
   { line: 19, operator: "empty-block", verdict: "survived" },
   { line: 20, operator: "remove-assignment", verdict: "survived" },
-  kill(20, "shift-integer", "BandReportSumsBands", 2, "band total should be 6, got 7"),
+  kill(20, "shift-integer", "BandReportSumsBands", 3, "band total should be 6, got 7"),
   kill(24, "empty-block", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 0"),
   kill(25, "conditional-boundary", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 1"),
   kill(26, "return-value", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 0"),
