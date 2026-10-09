@@ -720,6 +720,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **Deleting a call to a procedure that sets a report's exit flag is hang-refused; identity scheme
+  38** (R555). A report procedure that writes a name an open data item's exit guard reads (a
+  "preset writer", directly or through other calls) is now treated like the write itself: its call,
+  the guard around the call, the blocks holding it and an early exit before it are refused for every
+  operator. This holds inside the report, from a reportextension calling a base procedure, and from
+  any object calling the writer through a `Report X` variable (an extension's procedure too: alc
+  binds it through `Report X`). An unparsed base or a parse-damaged report counts a callee as a
+  writer only where its text declares `procedure <name>`. Measured on master 48d5534f with the
+  prototype: BaseApp hang-refuses about 483 more deployed mutants (0.064%), 244 of them in
+  `CostingErrorsDetection`, whose `AddError` sets the flag; every other corpus project and the
+  fixtures are unchanged; 0 identity tuples moved, five ordinals renumber (a refused twin's sibling),
+  so history, `--resume` and marks recorded under scheme 37 are not carried. Calls through a receiver
+  that does not resolve to a project report are filed as R561.
 - **A reportextension's reach into its BASE report is hang-refused, and a pageextension's bare
   `Commit()` that binds a base page procedure is no longer claimed** (R547, R548, R549). A bare
   (or `this.`) call from an open reportextension block to a base-report procedure is now followed,
