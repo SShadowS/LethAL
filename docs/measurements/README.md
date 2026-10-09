@@ -1002,6 +1002,20 @@ here as measured and neither was.**
 
 ## al-runner v2 — the CLI and wire contract, measured against the released binary
 
+### `--test-exact NAME` (measured 2026-10-09, c5bbaf89 and 43f76177; R551)
+
+On `v2.12.0-main.c5bbaf89`, `--test-exact NAME` selects the WHOLE qualified name, case-insensitively.
+It is repeatable, it intersects `--test` (same name: that test alone; disjoint: nothing), and it exits
+6 when nothing is selected. It is refused with `--server` (exit 2 at startup). On `43f76177` and
+earlier it is an unknown option (exit 2, `Unknown option '--test-exact'`).
+
+LethAL's session probe (`--output-json --test-exact Codeunit0.LethalR551NoSuchTest <empty dir>`) shows
+only that a build PARSES the flag: exit 6 on an empty bundle comes from al-runner's selection audit,
+not the executor. The whole-name guarantee is `--test` kept in the argv plus the refusal of any other
+test's row. The R123 contract probe's argv deliberately does not carry the flag; the fields it reads
+were measured identical with and without it (R551 plan review, M3). The plan
+(`docs/superpowers/plans/2026-10-09-r551-test-exact-probe.md`) summarises the measurements.
+
 ### A bundle's `.al` files must all sit at one directory level (measured 2026-09-08, v2.11.0)
 
 **al-runner does not compile a root-level `.al` together with one in a subdirectory of the same

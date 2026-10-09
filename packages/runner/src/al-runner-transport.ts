@@ -38,12 +38,20 @@ export interface AlRunnerRequest {
    * R488 — whole qualified test names sent as `--exclude-test`, one each.
    *
    * `--test` is a case-insensitive SUBSTRING match, so `Codeunit78950.GrowPre` also selects
-   * `Codeunit78950.GrowPreTwin`. al-runner has no exact `--test` (measured on c39ad5de: no anchor,
-   * quote, regex or `--test-exact`), but its `--exclude-test` matches a WHOLE name only, so `--test X`
-   * plus one exclude per sibling selects exactly X. Never put `qualifiedTest` itself here: al-runner
-   * then exits 0 with an EMPTY test list instead of its exit 6 (measured).
+   * `Codeunit78950.GrowPreTwin`. Whether al-runner has `--test-exact` depends on the build: c39ad5de
+   * and 43f76177 refuse it as an unknown option (exit 2), c5bbaf89 has it (R551, which uses it when
+   * a per-session probe accepts it, and sends no excludes then). Its `--exclude-test` matches a WHOLE
+   * name only, so `--test X` plus one exclude per sibling selects exactly X; that is the path for a
+   * build without the flag. Never put `qualifiedTest` itself here: al-runner then exits 0 with an
+   * EMPTY test list instead of its exit 6 (measured).
    */
   readonly excludeTests?: readonly string[];
+  /**
+   * R551 — also send `--test-exact <qualifiedTest>`, right after `--test <qualifiedTest>`.
+   * Set only when this session's probe found that the build accepts the flag. Absent = today's argv
+   * byte for byte.
+   */
+  readonly testExact?: true;
 }
 
 export interface AlRunnerRawTest {
@@ -501,7 +509,7 @@ export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[]
 }
 
 /** The `--output-json` envelope as parsed JSON (see `parseAlRunnerPayload` for the rule). Throws. */
-function readAlRunnerEnvelope(stdout: string): unknown {
+export function readAlRunnerEnvelope(stdout: string): unknown {
   const lines = stdout.split("\n");
   let start = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -642,6 +650,7 @@ export function buildAlRunnerArgv(
     | "platformAppsDir"
     | "coverageOut"
     | "excludeTests"
+    | "testExact"
   >,
 ): string[] {
   // R147 — the pin and `--auto-provision` are MUTUALLY EXCLUSIVE, and this is the one place that is
@@ -664,6 +673,9 @@ export function buildAlRunnerArgv(
     "test",
     "--test",
     req.qualifiedTest,
+    // R551: see `AlRunnerRequest.testExact`. `--test` stays: the two intersect, so a build that
+    // ignored `--test-exact` would still select no more than today's substring set.
+    ...(req.testExact === true ? ["--test-exact", req.qualifiedTest] : []),
     // R488: see `AlRunnerRequest.excludeTests`. Absent means today's argv byte for byte.
     ...(req.excludeTests ?? []).flatMap((n) => ["--exclude-test", n]),
     // R125 (measured 2026-08-07 on al-runner 2.1.0.0): with no BC version given, the runner selects

@@ -48,6 +48,7 @@ import { runAlRunnerContractProbe } from "../src/al-runner-contract";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import type { ExecutionBackend } from "../src/backend";
 import { applyAlRunnerCoverageGuard, buildBackend } from "../src/cli";
+import type { RunEvent } from "../src/events";
 import { formatFailure } from "../src/format-failure";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { defaultSpawn } from "../src/publisher";
@@ -63,6 +64,7 @@ import {
 import {
   CLI_DEFAULT_SPEC,
   cliDefaultMechanismFailures,
+  cliDefaultSelectorFailures,
   daemonPlatformAppsLines,
   expectedCliDefaultShape,
   expectedOneShotArgvs,
@@ -70,6 +72,7 @@ import {
   oneShotArgvSummary,
   platformAppsAgreement,
   recordSpawns,
+  testSelectorLineFailures,
   watchResourceSelector,
 } from "./cli-default-leg";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
@@ -303,6 +306,8 @@ async function runOnce(
     // M2: the summary line says only `=matches`, and the fact matches on exit 1 too, so keep the
     // fact's own measured text (it begins `exit N`) to show whether the probe's hang exited 3.
     const exitFacts: string[] = [];
+    // R551: the `--test-exact` probe's line. Exactly one on a one-shot leg, none on a server leg.
+    const selectorLines: string[] = [];
     const report = await runSession({
       backend,
       store,
@@ -319,6 +324,8 @@ async function runOnce(
         (e) => {
           if (e.type === "warning" && e.code === "al-runner-contract-pinned")
             contractLines.push(e.message);
+          if (e.type === "warning" && e.code === "al-runner-test-selector")
+            selectorLines.push(e.message);
         },
       ],
       alRunnerContractProbe: async (...args) => {
@@ -337,6 +344,11 @@ async function runOnce(
       console.log(`  ${line}`);
       console.log(`  R518 timeout-exit-readable (pinned probe): ${exitFacts.join(" | ")}`);
     }
+    // R551: printed, not asserted by value (that would need a build table; the pre-commitment pins
+    // it per run). The COUNT is asserted.
+    for (const line of selectorLines) console.log(`  ${line}`);
+    const selectorFailures = testSelectorLineFailures(selectorLines, !serverMode);
+    assert.deepEqual(selectorFailures, [], selectorFailures.join("; "));
     return report;
   } finally {
     store.close();
@@ -910,6 +922,9 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
     backend = built;
     // `buildBackend` gives the backend `<scratch>/al-runner-active`; `deploy()` copies into `active`.
     const resource = watchResourceSelector(backend, join(scratch, "al-runner-active", "active"));
+    // R551 I3: every event this session emits, so "no selector warning" is read off a hook that
+    // demonstrably received the session's other events (`cliDefaultSelectorFailures`).
+    const events: RunEvent[] = [];
     const report = await runSession({
       backend,
       store,
@@ -917,6 +932,7 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
       testDir: TEST_DIR,
       instrumentedDir: join(scratch, "instrumented"),
       selectorIds: SELECTOR_IDS,
+      emit: [(e) => events.push(e)],
     });
 
     console.log(
@@ -994,6 +1010,13 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
         ),
         [],
         "R387: the CLI defaults did not take effect (--server and the resource selector)",
+      ),
+    );
+    check("cli-default selector (R551 I3)", () =>
+      assert.deepEqual(
+        cliDefaultSelectorFailures(events),
+        [],
+        "R551: the --test-exact probe must not run under --server",
       ),
     );
     if (failures.length > 0) {

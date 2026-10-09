@@ -3768,6 +3768,124 @@ describe("runSession — parallel workers", () => {
     store.close();
   });
 
+  // R551: the session backend's `--test-exact` probe, and the boolean it hands every worker.
+  describe("the --test-exact probe (R551)", () => {
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    type Probe =
+      | { kind: "not-applicable" }
+      | { kind: "exact"; elapsedMs: number }
+      | { kind: "substring"; elapsedMs: number; reason: string };
+    type Entry = { backend: number; what: "probe" | "selector" | "run"; on?: boolean };
+
+    /** Backend 0 is the session's. `withSetter: false` leaves the WORKERS without the setter. */
+    async function session(probe: Probe, o: { workers?: number; withSetter?: boolean } = {}) {
+      const dirs = await makeProject();
+      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+      const store = new ResultsStore(":memory:");
+      const log: Entry[] = [];
+      const events: RunEvent[] = [];
+      let made = 0;
+      const make = () => {
+        const id = made++;
+        const b = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
+        const run = b.run.bind(b);
+        const extra: Record<string, unknown> = {
+          run: (ref: TestMethodRef, opts: RunOpts) => {
+            log.push({ backend: id, what: "run" });
+            return run(ref, opts);
+          },
+        };
+        if (id === 0) {
+          extra.probeExactTestSelector = async () => {
+            log.push({ backend: id, what: "probe" });
+            return probe;
+          };
+        }
+        if (id === 0 || o.withSetter !== false) {
+          extra.useExactTestSelector = (on: boolean) => {
+            log.push({ backend: id, what: "selector", on });
+          };
+        }
+        return Object.assign(b, extra);
+      };
+      try {
+        await runSession({
+          backend: make(),
+          backendFactory: make,
+          store,
+          ...dirs,
+          selectorIds,
+          workers: o.workers ?? 2,
+          emit: [(e) => events.push(e)],
+        });
+      } finally {
+        store.close();
+      }
+      const selectorLines = events.flatMap((e) =>
+        e.type === "warning" && e.code === "al-runner-test-selector" ? [e.message] : [],
+      );
+      return { log, made, selectorLines, events };
+    }
+
+    test("O1: the probe runs once, before the session's first run(); every worker gets the boolean before its own", async () => {
+      const { log, made } = await session({ kind: "exact", elapsedMs: 5 });
+      expect(made).toBe(3);
+      const probes = log.filter((e) => e.what === "probe");
+      expect(probes).toEqual([{ backend: 0, what: "probe" }]);
+      const firstRun0 = log.findIndex((e) => e.backend === 0 && e.what === "run");
+      expect(firstRun0).toBeGreaterThan(log.indexOf(probes[0] as Entry));
+      for (const id of [1, 2]) {
+        const sel = log.filter((e) => e.backend === id && e.what === "selector");
+        expect(sel).toEqual([{ backend: id, what: "selector", on: true }]);
+        const at = log.findIndex((e) => e.backend === id && e.what === "selector");
+        const firstRun = log.findIndex((e) => e.backend === id && e.what === "run");
+        expect(firstRun).toBeGreaterThan(at);
+      }
+    });
+
+    test("O2: a rejecting probe hands every worker false", async () => {
+      const { log } = await session({ kind: "substring", elapsedMs: 5, reason: "exit 2" });
+      for (const id of [1, 2]) {
+        expect(log.filter((e) => e.backend === id && e.what === "selector")).toEqual([
+          { backend: id, what: "selector", on: false },
+        ]);
+      }
+    });
+
+    test("O3: a worker without useExactTestSelector makes runSession throw, naming the worker", async () => {
+      await expect(session({ kind: "exact", elapsedMs: 5 }, { withSetter: false })).rejects.toThrow(
+        /worker backend 0.*useExactTestSelector|useExactTestSelector.*worker backend 0/,
+      );
+    });
+
+    test("O4: exactly one al-runner-test-selector warning per probed session; none when not-applicable", async () => {
+      expect(
+        (await session({ kind: "exact", elapsedMs: 7 }, { workers: 1 })).selectorLines,
+      ).toEqual([
+        "al-runner test selector: exact (--test-exact accepted by a one-call probe in 7 ms; R551)",
+      ]);
+      expect(
+        (
+          await session(
+            { kind: "substring", elapsedMs: 9, reason: "exit 2; stderr: Unknown option" },
+            { workers: 1 },
+          )
+        ).selectorLines,
+      ).toEqual([
+        "al-runner test selector: substring with R488 excludes (--test-exact not accepted: exit 2; stderr: Unknown option; probe 9 ms; R551)",
+      ]);
+      const na = await session({ kind: "not-applicable" }, { workers: 1 });
+      expect(na.selectorLines).toEqual([]);
+      // Non-vacuous: the hook did receive the session's other events.
+      expect(na.events.length).toBeGreaterThan(0);
+    });
+  });
+
   test("a worker deploy failure does not double-record a mutant step 5 already marked no-coverage", async () => {
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);

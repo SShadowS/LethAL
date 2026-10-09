@@ -140,6 +140,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **al-runner one-shot runs use `--test-exact` where the build accepts it** (R551). Each one-shot
+  al-runner session makes one extra call before the baseline (about 1.3 s on c5bbaf89, 0.15 s on
+  43f76177) to ask whether the build parses `--test-exact`. If it does, each test runs as
+  `--test X --test-exact X`, with no `--exclude-test`, and a result naming any other test is refused.
+  If not, the run keeps R488's exclude-and-learn path exactly as before. One `al-runner-test-selector`
+  warning names the choice. `--server` is unchanged and makes no extra call. R488's path is retired
+  only when every supported build has the flag (R559).
+
 - **Tier 2 claims record calls inside a `reportextension`** (R463). A record the extension declares
   and a data item it adds (`addfirst`/`addlast`/`addafter`/`addbefore`) now resolve, so
   `remove-setrange`, `remove-testfield`, `remove-calcfields`, `swap-modify-flag` and the other
