@@ -47,7 +47,6 @@ import type {
   ExecutionBackend,
   RunOpts,
   TestMethodRef,
-  TestOutcome,
   TestVerdict,
 } from "./backend";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
@@ -70,30 +69,64 @@ import type { SpawnFn } from "./publisher";
  * on purpose and checks the wording it gets back against THIS regex rather than against a copy of
  * it. A probe with its own spelling could pass while the decode below failed — the two would be
  * measuring different things, which is the one outcome that makes the probe worse than nothing.
+ *
+ * R534 (M1): ANCHORED to the whole message. `TestExecutor.RaiseAfterTestMethodRun` (43f7617) builds
+ * `... (test result before it: <msg>)`, so an unanchored match could read user text that merely
+ * contains "Test exceeded 5s timeout" as a timeout.
  */
-export const RUNNER_TIMEOUT_MESSAGE = /TIMEOUT after \d+s|Test exceeded \d+s timeout/;
+export const RUNNER_TIMEOUT_MESSAGE = /^(?:Test exceeded \d+s timeout\.|TIMEOUT after \d+s\.?)$/;
+
+/**
+ * R534: al-runner's timeout of the test codeunit's OnRun trigger, measured on 2.12.0-main.43f76177
+ * on both transports. The OnRun runs under the SAME `TestTimeout()` as a test body, so N is the
+ * same stop. Anchored, so user text cannot match it.
+ */
+export const RUNNER_ONRUN_TIMEOUT_MESSAGE =
+  /^The test codeunit's OnRun trigger exceeded the (\d+)s timeout, so none of its test methods ran\.$/;
+
+/**
+ * R534 (D3): al-runner REFUSED a surface it does not support. It writes `{Type.Name}: {Message}`
+ * and every refusal message starts `out-of-scope: ` (`OutOfScopeMessage.Prefix`), whatever the
+ * exception type (`RunnerOutOfScopeException`, and the Cecil-injected `NavNCLDialogException` and
+ * `InvalidOperationException` throws); in an OnRun it arrives inside the OnRun-failure sentence.
+ * Matched at the TYPE position only: a user `Error('out-of-scope: ...')` would match and lose a
+ * kill (the safe direction); a message that merely contains the phrase does not match.
+ */
+export const RUNNER_REFUSAL =
+  /^(?:The test codeunit's OnRun trigger failed, so none of its test methods ran \(as in BC\): )?[A-Za-z_][\w.]*: out-of-scope: /;
 
 /**
  * R517: the stop al-runner says it ENFORCED, from a timeout row's whole message
- * (`Test exceeded {N}s timeout.`, built in `TestExecutor.RunOne` from the timeout it used), in ms.
+ * (`Test exceeded {N}s timeout.`, built in `TestExecutor.RunOne` from the timeout it used, or
+ * R534's OnRun-trigger wording, built from the same timeout), in ms.
  * Anchored and N > 0, so a wording that moved gives `undefined`, never a guessed figure: on
  * `--server` that leaves the timeout unconfirmed (a lost kill, never a false one).
  */
 export function parseReportedStopMs(message: string | undefined): number | undefined {
-  const m = message === undefined ? null : /^Test exceeded (\d+)s timeout\.$/.exec(message);
+  const m =
+    message === undefined
+      ? null
+      : (/^Test exceeded (\d+)s timeout\.$/.exec(message) ??
+        RUNNER_ONRUN_TIMEOUT_MESSAGE.exec(message));
   const n = m?.[1] === undefined ? 0 : Number(m[1]);
   return n > 0 ? n * 1000 : undefined;
+}
+
+/** R534: where a timeout row's stop fired, or `undefined` when the row is not a timeout. */
+function timeoutLocation(t: {
+  readonly status: string;
+  readonly message?: string;
+}): "body" | "onrun" | undefined {
+  if (t.status === "pass" || t.status === "fail" || t.message === undefined) return undefined;
+  if (RUNNER_TIMEOUT_MESSAGE.test(t.message)) return "body";
+  if (RUNNER_ONRUN_TIMEOUT_MESSAGE.test(t.message)) return "onrun";
+  return undefined;
 }
 
 /** A row al-runner reported as a timeout: the `timeout` case of `verdictFromRunnerTest`. Exported
  *  for the R123 contract probe's `timeout-exit-readable` fact (R518), so the rule is spelled once. */
 export function isTimeoutRow(t: { readonly status: string; readonly message?: string }): boolean {
-  return (
-    t.status !== "pass" &&
-    t.status !== "fail" &&
-    t.message !== undefined &&
-    RUNNER_TIMEOUT_MESSAGE.test(t.message)
-  );
+  return timeoutLocation(t) !== undefined;
 }
 
 /**
@@ -1230,7 +1263,12 @@ export class AlRunnerBackend implements ExecutionBackend {
         failureMessage: res.detail,
         operation: "pre-dispatch-rejected",
       };
-    const t = res.tests.find((x) => x.name === wanted);
+    const found = res.tests.find((x) => x.name === wanted);
+    // R534 (D1b): whether al-runner proved it stopped this row at its timeout (exit 3).
+    const t =
+      found !== undefined && res.abortProven?.includes(found.name) === true
+        ? { ...found, abortProven: true }
+        : found;
     if (!t)
       return {
         ref,
@@ -1280,7 +1318,7 @@ export class AlRunnerBackend implements ExecutionBackend {
   private async oneShotVerdict(
     ref: TestMethodRef,
     wanted: string,
-    t: AlRunnerRawTest,
+    t: AlRunnerRawTest & { readonly abortProven?: boolean },
     durationMs: number,
     coverageOut: string | undefined,
   ): Promise<TestVerdict> {
@@ -1356,21 +1394,31 @@ export class AlRunnerBackend implements ExecutionBackend {
     }
     const t = suite.byName.get(wanted);
     if (t === undefined) {
+      // Naming both sides, as the one-shot path does: a mismatch means the runner ran something
+      // other than what was asked for, and "missing the requested test" alone leaves nobody able
+      // to see which.
+      const missing = `al-runner --server ran the suite but reported no test named "${wanted}" (it returned: ${
+        [...suite.byName.keys()].join(", ") || "<no tests>"
+      })`;
       // R517 (M3): a timeout ends al-runner's run, so a test after the hung one has no row.
-      const hung =
-        suite.hungTest !== undefined
-          ? `al-runner --server stopped the run at "${suite.hungTest}" (timeout); tests after it have no row, so `
-          : "";
+      // R534 (D4): al-runner answered (it stopped at the hang), so this is a per-mutant
+      // `runner-test-error`, never re-sent and never a §11 abort. That this test came after the
+      // hung one is presumed, not measured. With no hung test the branch is unchanged.
+      if (suite.hungTest !== undefined) {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: Date.now() - started,
+          failureMessage: `al-runner --server stopped the run at "${suite.hungTest}" (timeout); tests after it have no row, and this test has none, presumably because it came after "${suite.hungTest}"; not measured, never a kill (R534). ${missing}`,
+          operation: "completed-accepted",
+          runnerRow: "runner-test-error",
+        };
+      }
       return {
         ref,
         outcome: "error",
         durationMs: Date.now() - started,
-        // Naming both sides, as the one-shot path does: a mismatch means the runner ran something
-        // other than what was asked for, and "missing the requested test" alone leaves nobody able
-        // to see which.
-        failureMessage: `${hung}al-runner --server ran the suite but reported no test named "${wanted}" (it returned: ${
-          [...suite.byName.keys()].join(", ") || "<no tests>"
-        })`,
+        failureMessage: missing,
         operation: "pre-dispatch-rejected",
       };
     }
@@ -1437,10 +1485,10 @@ export class AlRunnerBackend implements ExecutionBackend {
     // R517 (I2): a timed-out test's thread is abandoned, not stopped, and keeps writing to the
     // daemon's row store into later requests, the unmutated confirm included. This suite's results
     // stand; the daemon does not serve another one. The trigger is STRUCTURAL, any row neither
-    // `pass` nor `fail`, never the timeout wording: al-runner's OnRun-trigger timeout says "...
-    // exceeded the {N}s timeout ..." (43f7617), which RUNNER_TIMEOUT_MESSAGE does not match, and the
-    // wording has moved before (R94). `error` is rare there (setup, unsupported signature, timeout).
-    // `hungTest` (M3's note) and the verdict still read the wording.
+    // `pass` nor `fail`, never the timeout wording, which has moved before (R94). `error` is rare
+    // there (setup, unsupported signature, timeout). `hungTest` (M3's note) and the verdict still
+    // read the wording, which since R534 includes the OnRun-trigger timeout
+    // (RUNNER_ONRUN_TIMEOUT_MESSAGE).
     const hungTest = res.tests.find(isTimeoutRow)?.name;
     if (res.tests.some((t) => t.status !== "pass" && t.status !== "fail")) await server.close();
     await watch();
@@ -1502,11 +1550,22 @@ class ServerCoverageRefusal extends Error {
  * hung mutant into a KILL. Under this one the same change costs a mutant its verdict and says so
  * out loud, which is the direction this project is willing to be wrong in. R93's argument that a
  * measured contract beats a version-branched decode matrix.
+ *
+ * R534: a row is an ANSWER (al-runner ran the test, reported and exited), so an `error` from here
+ * is `completed-accepted` with a `runnerRow` cause: never re-sent, never a spec §11 abort. A
+ * timeout records where it fired (`timeoutIn`); a refusal (`RUNNER_REFUSAL`, `fail` or `error`) is
+ * `runner-refused`; any other non-verdict row, `skipped` included, is `runner-test-error`.
  */
 export function verdictFromRunnerTest(
   ref: TestMethodRef,
   wanted: string,
-  t: { readonly status: string; readonly message?: string; readonly durationMs?: number },
+  t: {
+    readonly status: string;
+    readonly message?: string;
+    readonly durationMs?: number;
+    /** R534 (D1b): an exit-3 TEST-TIMEOUT-ABORT line names this row (one-shot only). */
+    readonly abortProven?: boolean;
+  },
   durationMs: number,
   coverage: CoverageMap | undefined,
 ): TestVerdict {
@@ -1525,32 +1584,59 @@ export function verdictFromRunnerTest(
       ...(coverage !== undefined ? { coverage } : {}),
     };
   }
-  const outcome: TestOutcome =
-    t.status === "fail"
-      ? "fail"
-      : t.message !== undefined && RUNNER_TIMEOUT_MESSAGE.test(t.message)
-        ? "timeout"
-        : "error";
-  // R517: the stop al-runner says it enforced, on a timeout. Absent when the wording does not parse.
-  const reportedStopMs = outcome === "timeout" ? parseReportedStopMs(t.message) : undefined;
+  // Wall-clock `durationMs`, NOT the runner's in-VM figure: the orchestrator derives each mutant's
+  // timeout budget from it and must include round-trip cost.
+  const timeoutIn = timeoutLocation(t);
+  if (timeoutIn !== undefined) {
+    // R517: the stop al-runner says it enforced. Absent when the wording does not parse.
+    const reportedStopMs = parseReportedStopMs(t.message);
+    return {
+      ref,
+      outcome: "timeout",
+      durationMs,
+      ...(reportedStopMs !== undefined ? { reportedStopMs } : {}),
+      timeoutIn,
+      ...(t.message !== undefined ? { failureMessage: t.message } : {}),
+    };
+  }
+  // R534 (D1b): al-runner proved it stopped this row at its timeout, in wording neither regex
+  // knows. Still never a kill; the flag makes the orchestrator say so once per session.
+  const unknownTimeout = t.status !== "pass" && t.status !== "fail" && t.abortProven === true;
+  // R534 (D3): a refusal, in a test body (`fail`) or an OnRun (`error`), is not a kill.
+  if (
+    !unknownTimeout &&
+    (t.status === "fail" || t.status === "error") &&
+    t.message !== undefined &&
+    RUNNER_REFUSAL.test(t.message)
+  ) {
+    return {
+      ref,
+      outcome: "error",
+      durationMs,
+      failureMessage: `${t.message} [al-runner refused this surface (out-of-scope), so whether the mutant changes this test's outcome on BC is unknown: NOT scored as a kill; measure this test on bcdev (R534)]`,
+      operation: "completed-accepted",
+      runnerRow: "runner-refused",
+    };
+  }
+  if (t.status === "fail") {
+    return {
+      ref,
+      outcome: "fail",
+      durationMs,
+      ...(t.message !== undefined ? { failureMessage: t.message } : {}),
+    };
+  }
   return {
     ref,
-    outcome,
-    // Wall-clock, NOT the runner's in-VM figure: the orchestrator derives each mutant's timeout
-    // budget from this and must include round-trip cost.
+    outcome: "error",
     durationMs,
-    ...(reportedStopMs !== undefined ? { reportedStopMs } : {}),
-    ...(outcome === "error"
-      ? {
-          failureMessage: `${AL_RUNNER_UNCLASSIFIED_ERROR}: al-runner reported status ${JSON.stringify(
-            t.status,
-          )} for ${wanted} with message ${JSON.stringify(t.message ?? "<none>")}. That is not an assertion failure, so it is NOT scored as a kill; if this is a timeout whose wording changed again, add it to RUNNER_TIMEOUT_MESSAGE.`,
-          // Nothing ran that could leave state behind — al-runner is a fresh process per call and
-          // touches no live container — so this is retry-safe rather than a tier hazard.
-          operation: "pre-dispatch-rejected" as const,
-        }
-      : t.message !== undefined
-        ? { failureMessage: t.message }
-        : {}),
+    failureMessage: `${AL_RUNNER_UNCLASSIFIED_ERROR}: al-runner reported status ${JSON.stringify(
+      t.status,
+    )} for ${wanted} with message ${JSON.stringify(t.message ?? "<none>")}. That is not an assertion failure, so it is NOT scored as a kill. al-runner answered, so it is not re-sent and does not stop the session (R534); if this is a timeout whose wording changed again, add it to RUNNER_TIMEOUT_MESSAGE.`,
+    // R534: the test RAN and al-runner answered, so this is not pre-dispatch: re-sending it is
+    // no recovery (option (c)), and a §11 abort would throw away an answer (option (b)).
+    operation: "completed-accepted",
+    runnerRow: "runner-test-error",
+    ...(unknownTimeout ? { timeoutWordingUnknown: true } : {}),
   };
 }
