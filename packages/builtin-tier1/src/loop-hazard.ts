@@ -5,6 +5,7 @@ import {
   type SemanticContext,
   armOfNode,
   declarationMembers,
+  enclosingTrigger,
   identifierTokens,
   isObjectContainer,
   isProcedureLike,
@@ -14,6 +15,7 @@ import {
   procedureLikeArmNames,
   resolveReceiverTable,
   resolveVarRef,
+  triggerLocalNames,
 } from "@lethal/engine";
 
 /**
@@ -2045,6 +2047,41 @@ export function loopConditionReadsByName(
 }
 
 /**
+ * R340 (plan r2, review C1): a write to a name the enclosing TRIGGER declares in its own header
+ * (a parameter, its named return, or any header local) that the hang path cannot resolve as a
+ * declaration (`triggerScopeVar` reads only the plain `var` section), matched by NAME against the
+ * enclosing loops' exit conditions and any enclosing `for`'s control variable, as R-364 does for an
+ * unindexed object. Only ever adds a refusal. Before R340 this was already a hole for
+ * remove-assignment (master emitted it hang-capable); R340's typing made swap-additive reach it too.
+ */
+function triggerHeaderLoopWrite(node: ALSyntaxNode, name: string, ctx: SemanticContext): boolean {
+  const trigger = enclosingTrigger(node);
+  if (trigger === null || !triggerLocalNames(trigger).has(normalizeAlName(name))) return false;
+  return loopReadsNameAt(node, name, ctx);
+}
+
+/**
+ * R340 (plan r2 review, Important-1): does a loop enclosing `node` (within its scope) read the plain
+ * name `name`, by NAME: an enclosing `for`'s control variable, or any enclosing loop's exit parts
+ * (`loopConditionReadsByName`)? Used where no declaration is resolved: a trigger header name above,
+ * and `swap-call-arguments`, whose swap can redirect a `var` write away from the loop's variable
+ * (`while Steps > 0 do Dec(Steps, One)` -> `Dec(One, Steps)`), which compiles and never ends.
+ */
+export function loopReadsNameAt(node: ALSyntaxNode, name: string, ctx: SemanticContext): boolean {
+  const wanted = normalizeAlName(name);
+  for (
+    let cur: ALSyntaxNode | null = node.parent;
+    cur !== null && !isScope(cur);
+    cur = cur.parent
+  ) {
+    if (cur.rawKind !== "for_statement") continue;
+    const variable = cur.childForFieldName("variable");
+    if (variable !== null && normalizeAlName(variable.text) === wanted) return true;
+  }
+  return loopConditionReadsByName(node, { receiver: null, member: name }, ctx);
+}
+
+/**
  * R-364's gate: is `node` inside an object the symbol table does not index (`unindexedObjects`,
  * R343), where no declaration outside a trigger's own `var` section can resolve? Its OWN enclosing
  * object, matched by file and span, never by wrapper identity or by offset alone (offsets repeat
@@ -2145,7 +2182,13 @@ export function classifyHangCapable(
     const ref = memberRefOf(parts.field, ctx);
     const byName = { receiver: parts.receiver.text, member: parts.member.text };
     if (ref === null) {
-      return inUnindexedObject(node, ctx) && loopConditionReadsByName(node, byName, ctx)
+      // R340 (plan r2 review, Minor-1): a field of a trigger HEADER receiver (a parameter or named
+      // return, which the hang path does not resolve) is matched by name too.
+      const trigger = enclosingTrigger(node);
+      const headerReceiver =
+        trigger !== null && triggerLocalNames(trigger).has(normalizeAlName(parts.receiver.text));
+      return (inUnindexedObject(node, ctx) || headerReceiver) &&
+        loopConditionReadsByName(node, byName, ctx)
         ? "loop-condition-target"
         : byNameRefusal(node, byName, ctx, "none");
     }
@@ -2157,7 +2200,8 @@ export function classifyHangCapable(
   const byName = { receiver: null, member: target.text };
   const targetSym = resolveVarRef(target, ctx);
   if (targetSym === null) {
-    return inUnindexedObject(node, ctx) && loopConditionReadsByName(node, byName, ctx)
+    return (inUnindexedObject(node, ctx) && loopConditionReadsByName(node, byName, ctx)) ||
+      triggerHeaderLoopWrite(node, target.text, ctx)
       ? "loop-condition-target"
       : byNameRefusal(node, byName, ctx, "none");
   }

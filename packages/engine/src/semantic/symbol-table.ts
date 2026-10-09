@@ -784,6 +784,33 @@ export function triggerLocalNames(trigger: ALSyntaxNode): ReadonlySet<string> {
 }
 
 /**
+ * R340: a trigger's header as a procedure's (`parseProcedure`'s rules, read from the trigger node
+ * itself, so a trigger name repeated across an object does not matter): its parameters, its plain
+ * `var` locals and its named return value (R323) with their declared types, and the names it
+ * declares inside a `#if` region of its own header, which stay unknown (R330's
+ * `conditionallyDeclared`).
+ */
+export function triggerHeaderSymbols(trigger: ALSyntaxNode): {
+  readonly parameters: readonly VarSymbol[];
+  readonly locals: readonly VarSymbol[];
+  readonly ambiguous: readonly string[];
+} {
+  const paramsNode = trigger.namedChildren.find((c) => c.kind === ALNodeKind.parameter_list);
+  const parameters = paramsNode === undefined ? [] : collectParameters(paramsNode);
+  const varSection = trigger.namedChildren.find((c) => c.kind === ALNodeKind.var_section);
+  const locals = varSection === undefined ? [] : collectVarDeclarations(varSection);
+  const returnTypeNode = trigger.childForFieldName("return_type");
+  const returnValue = trigger.childForFieldName("return_value");
+  if (returnValue !== null && returnTypeNode !== null)
+    locals.push({
+      name: stripQuotes(returnValue.text),
+      typeText: returnTypeNode.text,
+      node: returnValue,
+    });
+  return { parameters, locals, ambiguous: conditionallyDeclared(trigger) };
+}
+
+/**
  * R330: the lowercase names a member's HEADER declares inside a `#if` region of its own (a
  * `preproc_conditional_var_block`, R303's shape, or a conditional parameter). Neither parser
  * indexes them as locals or parameters, and which of them exists depends on symbols the engine

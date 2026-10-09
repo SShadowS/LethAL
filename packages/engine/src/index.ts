@@ -69,10 +69,12 @@ export type {
 export {
   buildSymbolTable,
   collectVarDeclarations,
+  enclosingTrigger,
   extensionScopeKey,
   objectScopeKey,
   objectScopeKeyOfNode,
   qualifiedObjectName,
+  triggerLocalNames,
 } from "./semantic/symbol-table";
 export type { CFG, BasicBlock } from "./semantic/cfg";
 export { buildCFG } from "./semantic/cfg";

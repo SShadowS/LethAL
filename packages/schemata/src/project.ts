@@ -228,8 +228,9 @@ export function coarseIdentityTupleOf(
  * 15c3a620, BC.History: 23,944 deployed mutants removed, 165 keys; CDO and DO 2 removed, 0 keys;
  * fixtures and DC: none).
  * 36: R497, the BC paths score #if-wrapped objects of the measured shapes; no key moves, but a key whose verdict was a refusal's no-coverage on bcdev can now be scored, so history, --resume and marks recorded under 35 are not carried (the R-300b precedent, scheme 29).
+ * 37: R340, a trigger's header names (parameters, plain var locals, the named return) are typed, so typed operators gain sites in triggers and swap-call-arguments can choose a different pair under an unchanged identity key (measured: DC +59, DO +5, CDO +5 sites, 0 keys moved, but a pair change is invisible to keys); history, --resume and marks recorded under 36 are not carried.
  */
-export const IDENTITY_SCHEME = 36;
+export const IDENTITY_SCHEME = 37;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
