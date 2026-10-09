@@ -1,5 +1,8 @@
 # R-463 itest:tables pre-commitment: the `CountBand` arm in `Data Band Ext`
 
+**r2 (2026-10-09): r1 MISSED ONE FIGURE. Read "r1 miss and r2" at the end first.** r1's text below is kept
+unchanged; where r2 overrides it, r2 wins.
+
 Written by lethal-code on 2026-10-09, BEFORE any live run of R-463's build. It is committed to master on its own
 (specs only, [skip ci]) before the run.
 
@@ -121,3 +124,68 @@ Each of these is a BLOCK, not "close enough":
 - a verdict, killing test, position or failure substring that differs from this table;
 - any existing key whose verdict or killing test moves;
 - any figure above that differs.
+
+## r1 miss and r2 (written 2026-10-09, after the r1 record run and BEFORE the r2 runs)
+
+**What failed.** The r1 record run (Cronus28, lease attempt 053, branch head b01d8e93, merged with master 79f39b01)
+stopped at:
+
+> `AssertionError: R206: M0005 (BandReportSumsBands) killPosition 3, expected 2`
+
+No baseline was written. The run's store, compared with the old `tables.baseline.json` as a per-key multiset with
+identity ordinals (`mutant-equality.ts`'s rule):
+- all 402 existing keys keep their verdict and killing test;
+- exactly the 4 predicted keys are added, all killed by `BandCountsFromLow` at position 1;
+- killed / survived / no-coverage 314 / 70 / 22, score 0.8177083333333334, as r1 predicted.
+
+So the miss is kill POSITIONS only. Evidence: `/coord/handoff/R-463/tables-record.log` and
+`tables-record-diff.txt`.
+
+**The false r1 claim.** Section "Every existing mutant keeps its verdict" said: "The new test covers only
+`CountBand`, so no existing mutant's covering set, member rank or kill order changes." That is FALSE for the
+mutants that take R254's object-level coverage FALLBACK.
+
+**Cause.** The reportextension's trigger mutants have no member entry, so selection falls back to object-level
+coverage (`selection.ts`, fallback 1, measured by R254's M1): every test that covers object 79341 covers them.
+`BandCountsFromLow` calls `CountBand`, so it covers object 79341 and joins every fallback mutant's covering set.
+
+In R197's order (kills in the same procedure first, then fewest members covered, then name):
+1. `BandClassifiesDirectly` (1 member);
+2. `BandCountsFromLow` (1 member; `Cl` < `Co`);
+3. `BandReportSumsBands` (2 members).
+
+Both passing tests now run before the killer.
+
+**Every fallback mutant in object 79341**, all five measured in the r1 run (`coverage_attribution` `object`), each
+now covered by `BandClassifiesDirectly`, `BandCountsFromLow` and `BandReportSumsBands`:
+
+| Code | Line | Operator | Trigger | Verdict | Killer | Position (r1 predicted -> r2) |
+|---|---|---|---|---|---|---|
+| M0005 | 12 | empty-block | modify(BandItem) OnAfterAfterGetRecord | killed | BandReportSumsBands | 2 -> **3** |
+| M0006 | 13 | remove-assignment | same | killed | BandReportSumsBands | 1 -> **1** (its trigger already has a kill this session, so the killer runs first) |
+| M0007 | 19 | empty-block | OnPreReport | survived | - | - (covering set grows by one; still survived) |
+| M0008 | 20 | remove-assignment | OnPreReport | survived | - | - (same) |
+| M0009 | 20 | shift-integer | OnPreReport | killed | BandReportSumsBands | 2 -> **3** |
+
+No other mutant in the object takes the fallback:
+- `Band` M0010-M0013 are `exact`, covered by `BandClassifiesDirectly` and `BandReportSumsBands`, position 1;
+- `GetTotal` M0014-M0015 are `exact`, covered by `BandReportSumsBands`, position 1;
+- `Unreached` M0016-M0019 are no-coverage;
+- `CountBand` M0020-M0023 are `exact`, covered by `BandCountsFromLow`, position 1.
+
+No mutant outside object 79341 gains `BandCountsFromLow` as a covering test (in the r1 run's store, it appears in
+no other mutant's covering set).
+
+**r2 figures** (everything else in r1 holds):
+- `killPositions`: M0179 5 / M0183 4 / M0175 2 / **M0005 3 / M0009 3**, killer `BandReportSumsBands` for both.
+- `r254-arm-oracle.ts`: line 12 `empty-block` and line 20 `shift-integer` move to position **3**.
+- Predictions, not reached by the r1 run, which stopped at the R206 assertion:
+  - `warmKills` **15** (M0005 and M0009 are still warm kills);
+  - `groupedCalls` **384 + 15** (a deeper position adds no call: one grouped call per scored mutant plus one
+    replay per warm kill).
+
+**What R-463 learns.** A new test that reaches an object through the R254 fallback joins the covering set of every
+fallback mutant in that object. That is the cost side of R254, and R463 records it.
+
+**Procedure.** Commit r2 to master (specs only, [skip ci]), then the two branch edits, then the record run and the
+confirm run under lease 053. Any further difference is another BLOCK.

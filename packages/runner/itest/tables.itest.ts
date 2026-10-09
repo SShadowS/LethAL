@@ -273,7 +273,10 @@ const EXPECTED = {
   // (`src/DataBandExt.ReportExt.al`) is instrumented for the first time, 15 deployed mutants, none
   // displaced. Pre-committed in docs/superpowers/specs/2026-10-05-r254-reportextension-arm-precommitment.md
   // and checked row by row by `assertArmOracle` (`r254-arm-oracle.ts`).
-  totalMutantSites: 422,
+  // R-463 moves this from 422 to 428: `Data Band Ext`'s `CountBand` adds 4 deployed mutants plus the
+  // 2 Tier-1 `void-method-call` that dedup removes under its two `remove-setrange` sites.
+  // Pre-committed in docs/superpowers/specs/2026-10-09-r463-reportext-precommitment.md.
+  totalMutantSites: 428,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -381,7 +384,9 @@ const EXPECTED = {
   // pick. A survivor here would mean a test that does not actually separate the two states.
   // R254 moves this from 301 to 310: nine of the reportextension arm's 15 mutants are killed, by
   // `BandClassifiesDirectly` (the `Band` procedure) and `BandReportSumsBands` (the report run).
-  killed: 310,
+  // R-463 moves this from 310 to 314: all four of `CountBand`'s mutants are killed by
+  // `BandCountsFromLow`, at position 1.
+  killed: 314,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -535,7 +540,8 @@ const EXPECTED = {
   // pre-committed before the run, not an independent claim -- though the pre-commitment should have
   // said so explicitly and did not, which cost a re-run.
   // R254 moves it to 310 / 380, about 0.81579 from 0.81572: nine kills against two survivors.
-  mutationScore: 310 / (310 + 70),
+  // R-463 moves it to 314 / 384, about 0.81771: `CountBand`'s four kills and no survivors.
+  mutationScore: 314 / (314 + 70),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.
@@ -567,7 +573,8 @@ const EXPECTED = {
    * R457 TOOK THIS FROM 3 TO 4: `run-trigger-forced` is now kept unless the table provably has no
    * trigger of that kind and no observer, and it is declared by EDIT (flip-boolean-literal's
    * false->true RunTrigger flip as well as swap-modify-flag's forward direction). The one KILLED
-   * mutant that gains it is M0238 (M0223 before R254's arm shifted codes by 15;
+   * mutant that gains it is M0242 (M0223 before R254's arm shifted codes by 15, M0238 before
+   * R-463's `CountBand` shifted them by 4 more;
    * `Data Ops.InsertWithoutTrigger`, Insert(false)->true), a named
    * OVER-TAG: its kill is earned by the test's own Error. Pre-committed in
    * docs/superpowers/specs/2026-10-05-r457-forced-tag-precommitment.md before the run.
@@ -619,8 +626,10 @@ const EXPECTED = {
    * outcome to account for. A number, not a predicate, for the reason bcdev's 15 is one.
    * R254: 310 killed + 70 survived scored, plus 15 warm-kill replays (the arm's 11 scored mutants
    * and its two warm kills, M0005 and M0009).
+   * R-463: 314 killed + 70 survived scored, plus the same 15 replays (`CountBand`'s four kills are at
+   * position 1: `BandCountsFromLow` is the only test covering that procedure).
    */
-  groupedCalls: 380 + 15,
+  groupedCalls: 384 + 15,
   /**
    * R206: kills measured at group position > 1, each confirmed by replaying its call's prefix
    * unmutated (one extra `RunMutantMany` each, hence the `+ 13` above). MEASURED from run 334's
@@ -634,14 +643,21 @@ const EXPECTED = {
    * the `modify` trigger, M0009 in `OnPreReport`) runs after `BandClassifiesDirectly` (1 member,
    * covers the object, passes), so both are at position 2. The arm sorts before `DataMain.Table.al`,
    * so the three older pins move +15 (M0160/M0164/M0156 -> M0175/M0179/M0171), same mutants.
+   * R-463 leaves this at 15. `CountBand`'s 4 new mutants sort before `DataMain.Table.al`, so the three
+   * pins move +4 again (M0175/M0179/M0171 -> M0179/M0183/M0175), same mutants. Ids only, proven in
+   * /coord/handoff/R-463/id-shift-proof.txt.
+   * R-463 r2 (MEASURED, its live run 2026-10-09): M0005 and M0009 move from position 2 to 3. They take
+   * the object-level fallback, and `BandCountsFromLow` (1 member, sorting between
+   * `BandClassifiesDirectly` and `BandReportSumsBands`) now covers object 79341 too, so two passing
+   * tests run before the killer. Still warm kills, so the count stays 15.
    */
   warmKills: 15,
   killPositions: [
-    { mutantCode: "M0175", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
-    { mutantCode: "M0179", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
-    { mutantCode: "M0171", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
-    { mutantCode: "M0005", killingTest: "BandReportSumsBands", killPosition: 2 },
-    { mutantCode: "M0009", killingTest: "BandReportSumsBands", killPosition: 2 },
+    { mutantCode: "M0179", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
+    { mutantCode: "M0183", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
+    { mutantCode: "M0175", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
+    { mutantCode: "M0005", killingTest: "BandReportSumsBands", killPosition: 3 },
+    { mutantCode: "M0009", killingTest: "BandReportSumsBands", killPosition: 3 },
   ],
   /**
    * Task 4 (excluded-sites-spine): the `notInstrumented` half's ONLY live proof, added because it
@@ -1161,7 +1177,7 @@ function assertVerdictTable(report: SessionReport): void {
     deleteGroup.explanation.includes("Delete(false)"),
     "the Delete mechanism must explain ITS own mechanism",
   );
-  // Mechanism 4, R457. Pinned BY MUTANT: the only KILLED forced mutant is M0238, an over-tag.
+  // Mechanism 4, R457. Pinned BY MUTANT: the only KILLED forced mutant is M0242, an over-tag.
   // Survived and no-coverage mutants also carry the tag but never enter the screen's kill list.
   const forcedGroup = groupOf("run-trigger-forced");
   const forcedScreened = forcedGroup.mutants.map(mutantOf);
@@ -1184,7 +1200,7 @@ function assertVerdictTable(report: SessionReport): void {
         96,
       ],
     ],
-    "the ONE screened forced kill is M0238 (Insert(false)->true, an over-tag: its test raises its own " +
+    "the ONE screened forced kill is M0242 (Insert(false)->true, an over-tag: its test raises its own " +
       "Error). It disappearing means the conservative rule dropped the tag on a table that has an " +
       "OnInsert, the under-tagging direction; a verdict change means a diagnosis moved a verdict",
   );

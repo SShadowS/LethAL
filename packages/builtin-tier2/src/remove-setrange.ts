@@ -41,8 +41,9 @@ const MIN_VALUE_ARGUMENTS = 2;
  *   - (spec §4 table) highly data-dependent. With only in-range rows present in the target suite's
  *     data, the mutant is equivalent with respect to that data — the fixture must seed
  *     out-of-filter decoy rows for a kill to be possible at all.
- *   - No site inside a `tableextension`/`pageextension` is ever claimed; see `OBJECT_KINDS` in
- *     `./receiver.ts` for why, and for the rest of that predicate's documented limits.
+ *   - Inside a `tableextension`, `pageextension` or `reportextension` (R30, R-463) only a receiver
+ *     the source proves is claimed: a `pageextension`'s `Rec` and a `reportextension`'s
+ *     `modify(X)` record are refused. See `OBJECT_KINDS` in the engine's `semantic/receiver.ts`.
  */
 export const removeSetRange: MutationOperator = {
   name: "lethal.remove-setrange",

@@ -216,7 +216,9 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // R477 re-pinned (was db5aef54...b4e7): provenance only, `validate-to-assign` 1.1.0 -> 1.2.0.
   // R276 re-pinned (was 59942c7a...4e81): `gapId` values only (a gap's line span and LF text are
   // hashed instead of its byte offsets and raw text); sites, ids and every other field unchanged.
-  const pinned = "c83bdd08f26dcfe93030f9b5b6c354ea05ba5068279866c4f59a2f51dced23eb";
+  // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
+  // c83bdd08...23eb); 4 new arm entries, ids +4 after DataBandExt, proven in id-shift-proof.txt.
+  const pinned = "dc2c1f197b0932e58f3d1cc1fde4f4c6a80a11f9a66d221c3090af766986da48";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(
