@@ -201,7 +201,7 @@ export function multiObjectRows(report: MultiObjectReport): MultiObjectRow[] {
 /** Printed BEFORE any assertion: a failure must show which mutant moved, and the gate is slow. */
 export function printMultiObjectTable(report: MultiObjectReport, leg: string): void {
   console.log(
-    `  R383 multi-object ${leg}: batches=${report.batches} baselineGreen=${report.baselineGreen}`,
+    `  R407 multi-object ${leg}: batches=${report.batches} baselineGreen=${report.baselineGreen}`,
   );
   for (const r of multiObjectRows(report)) {
     console.log(
@@ -270,7 +270,7 @@ export function assertMultiObjectRefusal(
   }
 }
 
-/** One batch, green baseline, coverage "none", then the pre-committed table per mutant. */
+/** One batch, green baseline, coverage "al-runner" (the frame probe admitted), then the pre-committed table per mutant. */
 export function assertMultiObjectRun(report: MultiObjectReport, leg: string): void {
   const problems: string[] = [];
   // R407: the frame probe admitted the file, so coverage stays on (the R383 refusal turned it off).
@@ -282,7 +282,7 @@ export function assertMultiObjectRun(report: MultiObjectReport, leg: string): vo
   problems.push(...diffRows(EXPECTED_MULTIOBJECT, multiObjectRows(report)));
   if (problems.length > 0) {
     throw new Error(
-      `R383 multi-object ${leg}: rows differ from the pre-committed table (${SPEC}):\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+      `R407 multi-object ${leg}: rows differ from the pre-committed table (${SPEC}):\n${problems.map((p) => `  - ${p}`).join("\n")}`,
     );
   }
 }
@@ -296,7 +296,7 @@ export function assertMultiObjectLegsEqual(
   const problems = diffRows(multiObjectRows(oneShot), multiObjectRows(other));
   if (problems.length > 0) {
     throw new Error(
-      `R383 multi-object ${leg}: differs from the one-shot leg:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+      `R407 multi-object ${leg}: differs from the one-shot leg:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
     );
   }
 }

@@ -21,8 +21,8 @@ import { type SpawnFn, defaultSpawn } from "./publisher";
  * WHY A PROBE. On v2.12.0-main.c39ad5de al-runner compiled LethAL's instrumented bundle, found a
  * source project with the same app id beside the test app, labelled coverage with the SOURCE path,
  * and reported every object after a file's first at (previous object's end in the SOURCE) +
- * (distance in the INSTRUMENTED text) (R383). Upstream #5249 fixed it (in 43f76177 and later,
- * measured R-407 step 1), but a host may still run an older build. A known-build list would trust a
+ * (distance in the INSTRUMENTED text) (R383). Upstream #5249 fixed it (measured on 43f76177 and
+ * c5bbaf89, R-407 step 1), but a host may still run an older build. A known-build list would trust a
  * build nobody measured; this measures the build in hand.
  *
  * THE LAYOUT reproduces the shape that broke, under `<root>` (al-runner's cwd):
@@ -35,11 +35,13 @@ import { type SpawnFn, defaultSpawn } from "./publisher";
  * - `tests/` depends on the target by id and calls `Probe B.Reached` only. No `.alpackages`.
  * Probe A is a TABLE with a trigger with code (a non-codeunit object with code), Probe B a codeunit.
  *
- * ADMITTED only when all of these hold, each its own oracle:
+ * ADMITTED only when all of these hold. Items 2 and 4 are the two independent oracles (label and
+ * line frame); item 3 only NAMES a refusal that item 4 would also make (any Probe A hit is a line
+ * outside the expected set), so it is a naming refinement, not a third oracle (R-407 build review):
  * 1. the run completed, the one probe test passed, and coverage for the pair file was read;
  * 2. every label naming the pair file resolves inside `<root>/inst/active/` (never `src/` or
  *    `inst/batch-1/`; one-shot labels are relative to the cwd, server labels absolute);
- * 3. Probe A, the first object, has no hit;
+ * 3. Probe A, the first object, has no hit (refusal `first-object-hit`);
  * 4. Probe B's hit lines equal `FRAME_PROBE_EXPECTED_B_LINES`, MEASURED on 43f76177 (the committed
  *    capture under `tests/fixtures/r407-frame-probe/`), never derived by reasoning.
  * Anything else is `refused`, with a named reason. A deadline is its own refusal. An al-runner

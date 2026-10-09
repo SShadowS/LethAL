@@ -901,8 +901,8 @@ export function fileLineMapEntries(
  *
  * al-runner v2.12.0-main.c39ad5de reported a multi-object file's first object in this frame but
  * every later object in a mixed source/instrumented frame (`al-runner-coverage.ts` header). Such
- * files reach this function only on builds R407's frame probe admits (43f76177 and later report
- * every object in the instrumented frame); on builds it refuses, the index does not admit them and
+ * files reach this function only on builds R407's frame probe admits (43f76177 and c5bbaf89, measured,
+ * report every object in the instrumented frame); on builds it refuses, the index does not admit them and
  * this function sees files whose only object with code is the first (`refusedAsMultiObject`), so
  * its base is 1.
  *

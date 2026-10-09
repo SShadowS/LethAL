@@ -712,7 +712,7 @@ a LethAL feature or a mode.
   declaring more than one object turns it off too, unless a once-per-session frame probe admits the
   installed al-runner build (R407): al-runner v2.12.0-main.c39ad5de reports those objects' lines in
   a frame LethAL cannot convert, so they would land in the wrong object (R383), while 43f76177 and
-  later report them correctly. A warning line names the probe's answer and the build either way. The
+  c5bbaf89 (measured) report them correctly; the probe decides for any other build. A warning line names the probe's answer and the build either way. The
   `#if` reason is R298, pending R300. Without coverage a mutant no test reaches is run against every
   test and comes back `survived` rather than `no-coverage`. That is one measured route to a false survivor. No measurement has shown a false
   kill from this backend, but none rules one out either; in particular, a pinned platform-app directory
