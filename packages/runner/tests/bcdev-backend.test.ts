@@ -570,6 +570,41 @@ codeunit 70000 "Some Codeunit"
     });
   }
 
+  // R497: the installed path hands the build's symbols to the line map too. With them the same
+  // one-arm file (compiled under no symbols) is admitted; without them it is refused as above.
+  test("R497: attach (fenced) with the build's symbols admits the wrapped object, nothing refused", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const s = await attachSetup({
+      coverageMode: "fenced",
+      alSources: [
+        {
+          path: "src/Some.Codeunit.al",
+          text: `namespace X;
+#if not CLEAN27
+codeunit 70000 "Some Codeunit"
+{
+    procedure Post()
+    begin
+    end;
+}
+#endif
+`,
+        },
+      ],
+    });
+    try {
+      s.backend.useBuildSymbols([]);
+      warn.mockClear();
+      await s.backend.attach(s.bound);
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((x) => x.includes("coverage refused"))).toEqual([]);
+      expect(await s.backend.coverageRefusals()).toEqual(new Map());
+    } finally {
+      warn.mockRestore();
+      await s.cleanup();
+    }
+  });
+
   // R318 review I1: the in-memory path names a renamed member from the VERIFIED manifest's
   // coverage names, as `buildLineMap` does from the manifest on disk. The source re-parses with an
   // ERROR node (in `Other`), so the tree alone would name nothing on lines 8 and 9.
