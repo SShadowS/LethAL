@@ -140,6 +140,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Typed operators reach a trigger's header names; identity scheme 37** (R340). A trigger's
+  parameters, plain `var` locals and named return are now typed by their own declarations (they
+  were unknown since R330/R323), so `swap-additive` and `swap-call-arguments` gain sites in
+  triggers (BaseApp +780 in trigger files, DC +59, DO +5, CDO +5, fixtures 0). The hang check now
+  also refuses a loop write to a trigger parameter or named return, and `swap-call-arguments`
+  refuses a swap whose argument an enclosing loop reads (a `var` write redirected away from the
+  loop's variable never ends), in procedures too: BaseApp 560, DC 84, DO 20, CDO 9 such sites are
+  no longer emitted. History, `--resume` and equivalence marks recorded under scheme 36 are not
+  carried: a swap can now pick a different argument pair under an unchanged identity key.
+
 - **Tier 2 claims record calls inside a `reportextension`** (R463). A record the extension declares
   and a data item it adds (`addfirst`/`addlast`/`addafter`/`addbefore`) now resolve, so
   `remove-setrange`, `remove-testfield`, `remove-calcfields`, `swap-modify-flag` and the other
