@@ -911,6 +911,9 @@ export class AlRunnerBackend implements ExecutionBackend {
       // the half that is not measured; the canary reports 2.11.0 may have closed it, and that
       // needs measuring against bcdev before this changes.
       authoritative: false,
+      // R553: identity, not inferred from `authoritative`. The assertion screen reads past
+      // al-runner's `{Type}Exception: ` prefix on this kind only.
+      kind: "al-runner",
     };
   }
 
