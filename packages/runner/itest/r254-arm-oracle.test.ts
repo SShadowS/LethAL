@@ -26,10 +26,11 @@ const other: ArmMutant = {
 };
 
 describe("R254 arm oracle", () => {
-  test("has the 15 pre-committed rows: 9 killed, 2 survived, 4 no-coverage", () => {
+  // R-463 adds `CountBand`'s four rows, all killed (15 -> 19, 9 -> 13 killed).
+  test("has the 19 pre-committed rows: 13 killed, 2 survived, 4 no-coverage", () => {
     const n = (v: string) => R254_ARM_ORACLE.filter((r) => r.verdict === v).length;
     expect([R254_ARM_ORACLE.length, n("killed"), n("survived"), n("no-coverage")]).toEqual([
-      15, 9, 2, 4,
+      19, 13, 2, 4,
     ]);
   });
 
@@ -56,7 +57,7 @@ describe("R254 arm oracle", () => {
   test("M0009 at position 1 is a diff", () => {
     const ms = exact().map((m) => (m.mutantCode === "M0009" ? { ...m, killPosition: 1 } : m));
     expect(armOracleDiffs(ms)).toEqual([
-      "M0009 src/DataBandExt.ReportExt.al line 20 shift-integer: killPosition 1, expected 2",
+      "M0009 src/DataBandExt.ReportExt.al line 20 shift-integer: killPosition 1, expected 3",
     ]);
   });
 
@@ -99,6 +100,6 @@ describe("R254 arm oracle", () => {
   });
 
   test("an empty report is a diff for every row, never a pass", () => {
-    expect(armOracleDiffs([])).toHaveLength(15);
+    expect(armOracleDiffs([])).toHaveLength(19);
   });
 });
