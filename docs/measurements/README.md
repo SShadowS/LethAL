@@ -1297,6 +1297,24 @@ error's marker is exactly `TEST-TIMEOUT-ABORT` and names a row that did not pass
 pre-session probe and, inside a session, wherever the session pins the platform-app directory (the
 one-shot runs).
 
+### Rows that are not a verdict about the mutant (R534)
+
+Measured 2026-10-09 on `2.12.0-main.43f76177` (`/coord/handoff/R-534/measure.md`), both transports,
+and read from its source at 43f7617. Each row is an ANSWER: al-runner ran the test and reported.
+
+| Shape | One-shot exit / row | `--server` row | LethAL since R534 |
+|---|---|---|---|
+| Hang in the test codeunit's `OnRun` | 3, `error`, `The test codeunit's OnRun trigger exceeded the {N}s timeout, so none of its test methods ran.`, a TEST-TIMEOUT-ABORT line naming the test | `error`, same message, `errorKind: "timeout"` | `timeout` in the OnRun, confirmed unmutated on the confirm's WALL clock (no pass row reports the OnRun's time: 66 ms body beside a 4 s OnRun) |
+| Unexecuted UI handler | 1, `error`, `The following UI handlers were not executed: <h>` | same, `errorKind: "runtime"` | `error`, cause `runner-test-error`, not re-sent |
+| `OnRun` throws | 1, `error`, `The test codeunit's OnRun trigger failed, so none of its test methods ran (as in BC): <Type>: <msg>` | same, `errorKind: "setup"` | `runner-test-error`, or `runner-refused` when `<msg>` is a refusal |
+| Out-of-scope refusal in a test BODY | 1, **`fail`**, `<Type>: out-of-scope: <api> — ...` (any exception type) | same, `errorKind: "runtime"` | `error`, cause `runner-refused`, never a kill |
+| `--server`, a test after a hung one | - | no row | `runner-test-error` (presumed after the hang, not measured) |
+
+`errorKind` is on the `--server` wire only; the one-shot row has no such field. The OnRun runs
+under the same `TestTimeout()` as a test body, so `N` is the same stop. Before R534 every one of
+these rows except the body refusal was re-sent and then aborted the whole session under spec §11;
+the body refusal was scored a kill.
+
 ### Passing the same bundle dir twice CRASHES the runner
 
 Also measured 2026-08-07 on 2.0.1.0, found while writing that probe. Two positional bundle dirs with
