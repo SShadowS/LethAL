@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { MutantOutcome } from "../packages/runner/src/report";
-import { bucket, classify } from "./r546-bucket";
+import type { MutantOutcome, SessionReport } from "../packages/runner/src/report";
+import { bucket, bucketReports, classify } from "./r546-bucket";
 
 describe("R546 verdict-pair table", () => {
   test("each class from its pair", () => {
@@ -44,11 +44,40 @@ describe("R546 row checks", () => {
   test("a key twice on one side is refused", () => {
     expect(() => bucket([m({}), m({})], [m({})])).toThrow(/group size/);
   });
-  test("a different mutated text for one key is refused as a LethAL defect", () => {
-    expect(() => bucket([m({})], [m({ mutatedText: "xyw" })])).toThrow(/mutatedText/);
+  test.each([
+    ["file", { file: "g.al" }],
+    ["startIndex", { startIndex: 1 }],
+    ["endIndex", { endIndex: 4 }],
+    ["originalText", { originalText: "abd" }],
+    ["mutatedText", { mutatedText: "xyw" }],
+  ] as const)("a different %s for one key is refused as a LethAL defect", (field, over) => {
+    expect(() => bucket([m({})], [m(over)])).toThrow(new RegExp(`differs in ${field}`));
   });
   test("the same mutant on both sides buckets", () => {
     const rows = bucket([m({})], [m({ verdict: "survived" })]);
     expect(rows.map((r) => r.cls)).toEqual(["kill-vs-survive"]);
+  });
+  test("a key on one side only is its own row", () => {
+    const rows = bucket([m({}), m({ astHash: "h2" })], [m({})]);
+    // Rows are sorted by key, and "h2|..." sorts before "h|...".
+    expect(rows.map((r) => [r.cls, r.bc, r.ar])).toEqual([
+      ["one-side-only", "killed", null],
+      ["agree", "killed", "killed"],
+    ]);
+  });
+  test("an empty side is refused, never an empty-vs-empty agreement", () => {
+    expect(() => bucket([], [])).toThrow(/no mutants/);
+    expect(() => bucket([m({})], [])).toThrow(/no mutants/);
+  });
+});
+
+describe("R546 report pairing", () => {
+  const rep = (backend: string) => ({ backend, mutants: [m({})] }) as unknown as SessionReport;
+  test("one bcdev report then one al-runner report is accepted", () => {
+    expect(bucketReports(rep("bcdev"), rep("al-runner")).length).toBe(1);
+  });
+  test("the same backend twice, or the wrong order, is refused", () => {
+    expect(() => bucketReports(rep("al-runner"), rep("al-runner"))).toThrow(/expected a bcdev/);
+    expect(() => bucketReports(rep("al-runner"), rep("bcdev"))).toThrow(/expected a bcdev/);
   });
 });

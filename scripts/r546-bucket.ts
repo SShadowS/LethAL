@@ -10,7 +10,7 @@
  *   bun scripts/r546-bucket.ts <bcdev report.json> <al-runner report.json> [--json <out>]
  */
 import { keyOf } from "../packages/runner/itest/mutant-equality";
-import type { MutantOutcome } from "../packages/runner/src/report";
+import type { MutantOutcome, SessionReport } from "../packages/runner/src/report";
 import { loadReport } from "./report-summary.ts";
 
 export type R546Class =
@@ -65,6 +65,10 @@ export function bucket(
   bcMutants: readonly MutantOutcome[],
   arMutants: readonly MutantOutcome[],
 ): R546Row[] {
+  // Empty against empty "agrees" perfectly, which is this project's signature bug: refuse it.
+  if (bcMutants.length === 0 || arMutants.length === 0) {
+    throw new Error("a side has no mutants: nothing to compare");
+  }
   const bc = byKey(bcMutants, "bcdev");
   const ar = byKey(arMutants, "al-runner");
   const keys = [...new Set([...bc.keys(), ...ar.keys()])].sort();
@@ -96,9 +100,20 @@ export function bucket(
   });
 }
 
+/** The two reports must be one bcdev run and one al-runner run, in that order. */
+export function bucketReports(bcReport: SessionReport, arReport: SessionReport): R546Row[] {
+  if (bcReport.backend !== "bcdev" || arReport.backend !== "al-runner") {
+    throw new Error(
+      `expected a bcdev report then an al-runner report, got ${bcReport.backend} then ${arReport.backend}`,
+    );
+  }
+  return bucket(bcReport.mutants, arReport.mutants);
+}
+
 if (import.meta.main) {
   const [bcPath, arPath, flag, out] = process.argv.slice(2);
-  if (bcPath === undefined || arPath === undefined || (flag !== undefined && flag !== "--json")) {
+  const badJson = flag !== undefined && (flag !== "--json" || out === undefined);
+  if (bcPath === undefined || arPath === undefined || badJson) {
     console.error(
       "usage: bun scripts/r546-bucket.ts <bcdev report.json> <al-runner report.json> [--json <out>]",
     );
@@ -106,7 +121,7 @@ if (import.meta.main) {
   }
   let rows: R546Row[];
   try {
-    rows = bucket(loadReport(bcPath).mutants, loadReport(arPath).mutants);
+    rows = bucketReports(loadReport(bcPath), loadReport(arPath));
   } catch (e) {
     console.error(`REFUSED: ${(e as Error).message}`);
     process.exit(2);
