@@ -2,7 +2,7 @@
   "id": "9d2e6a47-1c35-4f8b-b0a9-6e4c2d18f573",
   "name": "LethAL Sandbox Wrapped Tests",
   "publisher": "LethAL",
-  "version": "1.0.0.2",
+  "version": "1.0.0.3",
   "brief": "LethAL R-300b fixture: tests for the #if-wrapped target and its unwrapped twins.",
   "description": "One test per procedure of fixtures/sandbox-wrapped; each twin's tests mirror its wrapped file's. Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
   "privacyStatement": "",
@@ -15,7 +15,7 @@
       "id": "4b0f3c1e-8d27-4a52-9e61-3c5d7a9b2f10",
       "name": "LethAL Sandbox Wrapped",
       "publisher": "LethAL",
-      "version": "1.0.0.2"
+      "version": "1.0.0.3"
     }
   ],
   "screenshots": [],

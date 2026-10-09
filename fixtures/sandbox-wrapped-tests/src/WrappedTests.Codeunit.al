@@ -165,4 +165,69 @@ codeunit 78950 "Wrapped Tests"
         if View.Scaled(4) <> 40 then
             Error('Scaled(4) must be 40');
     end;
+
+    // R550: the wrapped REPORT, reached on an un-run report variable (BandYDirect) and by running it
+    // with no request page over four seeded rows (BandYRun: Band(1..4) = 1+1+2+2 = 6), and its
+    // unwrapped twin. Each run test deletes its own rows first, so no backend's rollback matters.
+    [Test]
+    procedure BandYDirect()
+    var
+        Rep: Report "Wrapped Y Band";
+    begin
+        if Rep.Band(3) <> 2 then
+            Error('Band(3) should be 2, got %1', Rep.Band(3));
+        if Rep.Band(2) <> 1 then
+            Error('Band(2) should be 1, got %1', Rep.Band(2));
+    end;
+
+    [Test]
+    procedure BandYDirectTwin()
+    var
+        Rep: Report "Wrapped Y Band Twin";
+    begin
+        if Rep.Band(3) <> 2 then
+            Error('Band(3) should be 2, got %1', Rep.Band(3));
+        if Rep.Band(2) <> 1 then
+            Error('Band(2) should be 1, got %1', Rep.Band(2));
+    end;
+
+    [Test]
+    procedure BandYRun()
+    var
+        Rep: Report "Wrapped Y Band";
+    begin
+        SeedBandRows('BAND');
+        Rep.UseRequestPage(false);
+        Rep.RunModal();
+        if Rep.GetTotal() <> 6 then
+            Error('band total should be 6, got %1', Rep.GetTotal());
+    end;
+
+    [Test]
+    procedure BandYRunTwin()
+    var
+        Rep: Report "Wrapped Y Band Twin";
+    begin
+        SeedBandRows('BANDTWIN');
+        Rep.UseRequestPage(false);
+        Rep.RunModal();
+        if Rep.GetTotal() <> 6 then
+            Error('band total should be 6, got %1', Rep.GetTotal());
+    end;
+
+    local procedure SeedBandRows(BandCode: Code[20])
+    var
+        Row: Record "Wrapped Band Row";
+        I: Integer;
+    begin
+        Row.SetRange("Band Code", BandCode);
+        Row.DeleteAll();
+        for I := 1 to 4 do begin
+            Row.Init();
+            Row."Band Code" := BandCode;
+            Row.Entry := I;
+            Row.Qty := I;
+            Row.Insert();
+        end;
+    end;
 }
