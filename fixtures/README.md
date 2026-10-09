@@ -438,6 +438,15 @@ tests app (the server compiles the tests against the installed target), and unde
 the resident one, which is LethAL's own minted instrumented build: a plain `1.0.0.x` is refused as a
 downgrade.
 
+**R545 added a wrapped PAGE EXTENSION** (1.0.0.2): `Wrapped Xtra` (pageextension 78911, extends
+`Wrapped View`: a never-run `OnOpenPage` and `Scaled`, called on a variable of the extended page)
+and its unwrapped twin (78912, extends `Wrapped View Twin`), with `ScaledXtra` and its `Twin`. Its 12
+mutants (M0059-M0070) take every gate to 70, pre-committed in
+`docs/superpowers/specs/2026-10-09-r545-wrapped-pageext-precommitment.md`: al-runner 40 / 27 / 3
+(measured), bcdev 42 / 28 / 0 (PRE-COMMITTED, the BC leg not yet run). On al-runner the extension's
+trigger is placed by the EXTENSION object, so the base page's `OnOpenPage` rows keep `LabelView`
+alone.
+
 ## sandbox-multiobject (R383)
 
 A target with TWO codeunits in one file, `MultiPair.Codeunit.al` (`Multi A` then `Multi B`), and a
