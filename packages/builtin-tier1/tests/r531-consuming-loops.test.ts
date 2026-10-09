@@ -423,7 +423,7 @@ describe("R531 NEG: every operator in the cursor condition but swap-find-directi
   });
 });
 
-/** HOP: DC's shape (a dequeue call passing R as `var`), and its by-value control. */
+/** HOP: DC's shape (a dequeue call passing R as `var`), by-value parameters, and overloads. */
 const HOP = `codeunit 50106 "R531 Hop"
 {
     procedure Drain(var TempQ: Record "R531 Line" temporary)
@@ -451,6 +451,41 @@ const HOP = `codeunit 50106 "R531 Hop"
     begin
         Copy.Delete();
     end;
+
+    procedure Narrows()
+    var
+        Nw: Record "R531 Line";
+    begin
+        while Nw.FindFirst() do begin
+            Nw.Delete();
+            Narrow(Nw);
+        end;
+    end;
+
+    local procedure Narrow(Own: Record "R531 Line")
+    begin
+        Own.SetRange(Qty, 1);
+        Own.Reset();
+        Own.Mark(true);
+    end;
+
+    procedure Overloads()
+    var
+        OvRec: Record "R531 Line";
+    begin
+        while OvRec.FindFirst() do
+            Ov(OvRec);
+    end;
+
+    local procedure Ov(V: Record "R531 Line"; I: Integer)
+    begin
+        V.Qty := I;
+    end;
+
+    local procedure Ov(var W: Record "R531 Line")
+    begin
+        W.Delete();
+    end;
 }`;
 
 describe("R531 HOP: one hop into a same-object callee", () => {
@@ -459,8 +494,19 @@ describe("R531 HOP: one hop into a same-object callee", () => {
   it("refuses the callee's Delete when R is passed to a `var` parameter", () => {
     expect(project(files).refused(H, "TempQueue.Delete()")).toBe(true);
   });
-  it("control: R passed BY VALUE (a copy) does not make the callee's Delete refused", () => {
-    expect(project(files).refused(H, "Copy.Delete()")).toBe(false);
+  // The plan's by-value control (plan r3 item 5) assumed a by-value Record copies the table. It
+  // copies the VARIABLE: the callee's Delete hits the real row (R-531 build review finding 1).
+  it("refuses the callee's Delete when R is passed BY VALUE (the copy deletes the real row)", () => {
+    expect(project(files).refused(H, "Copy.Delete()")).toBe(true);
+  });
+  it("control: a by-value callee that only refilters or marks its copy is not refused", () => {
+    const p = project(files);
+    expect(p.refused(H, "Own.SetRange(Qty, 1)", "lethal.remove-setrange")).toBe(false);
+    expect(p.refused(H, "Own.Reset()")).toBe(false);
+    expect(p.refused(H, "Own.Mark(true)")).toBe(false);
+  });
+  it("follows every overload whose parameter count fits: `Ov(OvRec)` reaches `Ov(var W)`, declared second", () => {
+    expect(project(files).refused(H, "W.Delete()")).toBe(true);
   });
 });
 
@@ -528,5 +574,48 @@ describe("R531 FEEDS: the stepping loop (`Last := St.No.`, then `St.SetFilter(No
     const p = project(KFILES);
     const feed = `Last := St."No."`;
     expect(p.refused("Kinds.Codeunit.al", feed, "lethal.remove-assignment")).toBe(true);
+  });
+});
+
+/** Alias through `Copy`: a bare `Copy(X, true)` on the implicit Rec, and a non-literal share flag. */
+const SHARED = `table 50108 "R531 Shared"
+{
+    fields
+    {
+        field(1; K; Code[20]) { }
+    }
+
+    procedure BareCopy()
+    var
+        Other: Record "R531 Shared";
+    begin
+        Copy(Other, true);
+        while FindFirst() do
+            Other.Delete();
+    end;
+}`;
+
+const SHARE_FLAG = `codeunit 50109 "R531 Share Flag"
+{
+    procedure Shared(ShareIt: Boolean)
+    var
+        S1: Record "R531 Line";
+        S2: Record "R531 Line";
+    begin
+        S2.Copy(S1, ShareIt);
+        while S1.FindFirst() do
+            S2.Delete();
+    end;
+}`;
+
+describe("R531 MARK alias through Copy (R-531 build review finding 4)", () => {
+  it("a bare `Copy(Other, true)` and `S2.Copy(S1, ShareIt)` both make the copy R", () => {
+    const p = project({
+      "Line.Table.al": LINE,
+      "Shared.Table.al": SHARED,
+      "ShareFlag.Codeunit.al": SHARE_FLAG,
+    });
+    expect(p.refused("Shared.Table.al", "Other.Delete()")).toBe(true);
+    expect(p.refused("ShareFlag.Codeunit.al", "S2.Delete()")).toBe(true);
   });
 });

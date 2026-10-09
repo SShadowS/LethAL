@@ -806,7 +806,7 @@ export function openItemHangRefuses(
 /*
  * R-531: a loop that ends only by CONSUMING its record set.
  *
- * THE SHAPE. A `while`/`repeat` (or `for`) whose condition calls a cursor method (`Find`,
+ * THE SHAPE. A `while`/`repeat` (`LOOP_KINDS`; never a `for`) whose condition calls a cursor method (`Find`,
  * `FindFirst`, `FindLast`, `FindSet`, `IsEmpty`, `Count`; called or bare) on a record R and does NOT
  * call `Next`, and whose body holds at least one CONSUMER of R. `repeat ... until R.Next() = 0` is
  * never this shape: `Next` advances whatever the body does. Receivers compare by name (`Rec` and a
@@ -828,8 +828,9 @@ export function openItemHangRefuses(
  *   `StrSubstNo`/`Confirm`/`Clear`/`Evaluate` nor a built-in method of another record), `recv-proc`
  *   (a call on R that is not a built-in record method: a table procedure, a `Dequeue`), `global-call`
  *   (a same-object procedure call while R is a global or the implicit Rec);
- * - `alias`: a consumer on a same-procedure ALIAS of R (`X := R`, `R := X`, `X.Copy(R, true)`,
- *   `R.Copy(X, true)`, to a fixpoint, by name), which counts as R everywhere above.
+ * - `alias`: a consumer on a same-procedure ALIAS of R (`X := R`, `R := X`, `X.Copy(R, S)`,
+ *   `R.Copy(X, S)` or a bare `Copy(X, S)` on the implicit Rec, where `S` is anything but the literal
+ *   `false`; to a fixpoint, by name), which counts as R everywhere above.
  *
  * REFUSED, for every operator (owner rulings 2026-10-09: refusal only; no exemption for an `or`
  * operand that is not a cursor test, so a counter in such an `or` is a known false positive):
@@ -849,11 +850,14 @@ export function openItemHangRefuses(
  *   arguments, a consumer write's right side, a consumer's guard, a pre-loop filter's arguments or a
  *   guard around a pre-loop filter call (R480's by-name `indirectFeeds` rule over the scope); and
  *   those guards around a pre-loop filter call.
- * - HOP, one hop into a same-object callee: for `pass-rec`, the callee's `var` parameter at R's
- *   argument position (a by-value parameter is a copy and is not followed); for `global-call`, the
- *   same global R (unless the callee declares a local of that name) or the implicit Rec; for
- *   `recv-proc`, the table procedure on R (`declaredType` + `objectsOfType`), where R is the implicit
- *   Rec. The callee's consumers, the sites containing them and their guards are refused.
+ * - HOP, one hop into a same-object callee, EVERY overload whose parameter count fits the call: for
+ *   `pass-rec`, the callee's parameter at R's argument position; for `global-call`, the same global
+ *   R (unless the callee declares a local of that name) or the implicit Rec; for `recv-proc`, the
+ *   table procedure on R (`declaredType` + `objectsOfType`), where R is the implicit Rec. The callee's
+ *   consumers, the sites containing them and their guards are refused. A BY-VALUE Record parameter
+ *   copies the variable, not the table: its Delete, DeleteAll, Rename and Modify (with its writes)
+ *   are followed, its refilter, mark and unknown consumers are not (they change only the copy). A
+ *   temporary record passed by value is treated the same way (its table sharing is unmeasured).
  *
  * LIMITS (stated): cross-object and DotNet callees, more than one hop, a filter set through a
  * procedure (`SetTemplateFilter(xRec)`), and a refilter through a FieldRef (`FieldRef.SetRange`).
@@ -1008,18 +1012,24 @@ function r531Walk(n: ALSyntaxNode, ctx: SemanticContext, f: (n: ALSyntaxNode) =>
   for (const c of n.namedChildren) r531Walk(c, ctx, f);
 }
 
-/** The procedure-like node named `name` in object `obj`, or null. */
-function r531ProcIn(obj: ALSyntaxNode, name: string): ALSyntaxNode | null {
-  let hit: ALSyntaxNode | null = null;
+/** Every procedure-like node named `name` in object `obj` that takes `arity` parameters: an
+ *  overload is chosen by its arguments, so every one that fits the call is followed. */
+function r531ProcsIn(obj: ALSyntaxNode, name: string, arity: number): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
   visitAll(obj, (x) => {
     if (
-      hit === null &&
       (isProcedureLike(x) || x.rawKind === "procedure") &&
-      procNames(x).includes(name)
+      procNames(x).includes(name) &&
+      r531Arity(x) === arity
     )
-      hit = x;
+      out.push(x);
   });
-  return hit;
+  return out;
+}
+
+function r531Arity(proc: ALSyntaxNode): number {
+  const list = proc.namedChildren.find((c) => c.rawKind === "parameter_list");
+  return list?.namedChildren.filter((c) => c.rawKind === "parameter").length ?? 0;
 }
 
 /** The i-th parameter of `proc` as [name, isVar], or null. */
@@ -1033,8 +1043,16 @@ function r531Param(proc: ALSyntaxNode, i: number): [string, boolean] | null {
   return [normalizeAlName(id.text), p.namedChildren.some((c) => c.rawKind === "var_keyword")];
 }
 
-/** HOP: the consumers of receiver `key` in callee `proc`'s body (no further hop) and their guards. */
-function r531CalleeHop(proc: ALSyntaxNode, key: string, ctx: SemanticContext): R531Hop | null {
+/** HOP: the consumers of receiver `key` in callee `proc`'s body (no further hop) and their guards.
+ *  `byValue`: `key` is a by-value parameter. A by-value Record copies the VARIABLE, not the table,
+ *  so its Delete, DeleteAll, Rename and Modify still change the rows R's loop reads; its filters
+ *  and marks are its own, so its refilter, mark and unknown consumers are not followed. */
+function r531CalleeHop(
+  proc: ALSyntaxNode,
+  key: string,
+  ctx: SemanticContext,
+  byValue: boolean,
+): R531Hop | null {
   const body = proc.namedChildren.find((c) => c.rawKind === "code_block") ?? null;
   if (body === null) return null;
   const procs = r531ObjectProcs(proc, ctx);
@@ -1067,13 +1085,15 @@ function r531CalleeHop(proc: ALSyntaxNode, key: string, ctx: SemanticContext): R
         consumers.push(n);
       } else if (
         R531_DEL.has(c.method) ||
-        R531_FILTER.has(c.method) ||
-        R531_MARKS.has(c.method) ||
-        (!R531_BUILTIN.has(c.method) && c.recv !== null && n.rawKind === "call_expression")
+        (!byValue &&
+          (R531_FILTER.has(c.method) ||
+            R531_MARKS.has(c.method) ||
+            (!R531_BUILTIN.has(c.method) && c.recv !== null && n.rawKind === "call_expression")))
       )
         consumers.push(n);
       return;
     }
+    if (byValue) return;
     if (c.args.some((a) => r531Key(a) === key && (key !== "" || normalizeAlName(a.text) === "rec")))
       if (!R531_PURE.has(c.method) && !(c.recv !== null && R531_BUILTIN.has(c.method)))
         consumers.push(n);
@@ -1169,14 +1189,19 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
           const c = r531Call(n);
           const a0 = c?.args[0];
           const a1 = c?.args[1];
+          // `Copy(X, true)` shares the table; a non-literal second argument may be true too. A
+          // bare `Copy` is the implicit Rec's (unless the object declares a procedure `Copy`).
           if (
             c !== null &&
             c.method === "copy" &&
             a0 !== undefined &&
             a1 !== undefined &&
-            normalizeAlName(a1.text) === "true"
+            normalizeAlName(a1.text) !== "false"
           )
-            pair = [c.recv, r531Key(a0)];
+            pair = [
+              c.recv ?? (r531Implicit(n, ctx) && !procs.has("copy") ? "" : null),
+              r531Key(a0),
+            ];
         }
         if (pair === null) return;
         const [x, y] = pair;
@@ -1369,36 +1394,35 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   const hops: R531Hop[] = [];
   const obj = objectOf(loop);
   for (const h of hopCands) {
-    const targets: { proc: ALSyntaxNode; key: string }[] = [];
+    const targets: { proc: ALSyntaxNode; key: string; byValue: boolean }[] = [];
+    const arity = h.c.args.length;
     if (h.kind === "recv-proc") {
       const fn = h.n.childForFieldName("function");
       const recvNode = fn?.rawKind === "member_expression" ? fn.childForFieldName("object") : null;
       const t = recvNode !== null && recvNode !== undefined ? declaredType(recvNode, ctx) : null;
       if (t !== null && t.kind === "table")
-        for (const o of objectsOfType(t, ctx)) {
-          const p = r531ProcIn(o, h.c.method);
-          if (p !== null) targets.push({ proc: p, key: "" });
-        }
+        for (const o of objectsOfType(t, ctx))
+          for (const p of r531ProcsIn(o, h.c.method, arity))
+            targets.push({ proc: p, key: "", byValue: false });
     } else if (h.c.recv === null && obj !== null) {
-      const p = r531ProcIn(obj, h.c.method);
-      if (p !== null) {
+      for (const p of r531ProcsIn(obj, h.c.method, arity)) {
         if (h.kind === "global-call")
           for (const r of recvs) {
             // only R the callee can see: a global it does not shadow, or the implicit Rec
             if (r === "" || (!r531Declares(scope, r, true) && !r531Declares(p, r, true)))
-              targets.push({ proc: p, key: r });
+              targets.push({ proc: p, key: r, byValue: false });
           }
         h.c.args.forEach((a, i) => {
           const k = r531Key(a);
           if (k === null || !recvs.has(k)) return;
           const prm = r531Param(p, i);
-          // a by-value parameter is a copy: consuming it does not consume R
-          if (prm?.[1]) targets.push({ proc: p, key: prm[0] });
+          // a by-value parameter copies the VARIABLE, not the table (see r531CalleeHop)
+          if (prm !== null) targets.push({ proc: p, key: prm[0], byValue: !prm[1] });
         });
       }
     }
     for (const t of targets) {
-      const hop = r531CalleeHop(t.proc, t.key, ctx);
+      const hop = r531CalleeHop(t.proc, t.key, ctx, t.byValue);
       if (hop !== null) hops.push(hop);
     }
   }
