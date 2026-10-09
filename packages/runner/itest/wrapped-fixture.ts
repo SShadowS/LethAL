@@ -9,6 +9,11 @@
  * docs/superpowers/specs/2026-10-09-r536-wrapped-table-page-precommitment.md before any live run.
  * R545 added a wrapped page extension and its twin (M0059-M0070), pre-committed in
  * docs/superpowers/specs/2026-10-09-r545-wrapped-pageext-precommitment.md before any live run.
+ * R550 added a wrapped report and its twin (M0071-M0098), pre-committed in
+ * docs/superpowers/specs/2026-10-09-r550-wrapped-report-precommitment.md before any live run; its
+ * kills also pin their failure text (`KILL_TEXTS`), because every one comes from a test's own
+ * `Error(...)` and a kill for another reason (a duplicate key, a refused RunModal) would otherwise
+ * match the table.
  * A difference is a finding and a stop: never edit a row to match a run.
  *
  * What it pins:
@@ -56,6 +61,9 @@ const VIEW_TWIN = "src/WrappedViewTwin.Page.al";
 // R545: a wrapped page extension (of `Wrapped View`) and its unwrapped twin (of the twin page).
 const XTRA = "src/WrappedXtra.PageExt.al";
 const XTRA_TWIN = "src/WrappedXtraTwin.PageExt.al";
+// R550: a wrapped report (data-item, request-page and report triggers; `Band`, `GetTotal`) and twin.
+const BAND = "src/WrappedYBand.Report.al";
+const BAND_TWIN = "src/WrappedYBandTwin.Report.al";
 
 /** Admitted wrapped file -> its unwrapped twin. */
 export const TWINS: Readonly<Record<string, string>> = {
@@ -64,6 +72,7 @@ export const TWINS: Readonly<Record<string, string>> = {
   [TRIG]: TRIG_TWIN,
   [VIEW]: VIEW_TWIN,
   [XTRA]: XTRA_TWIN,
+  [BAND]: BAND_TWIN,
 };
 /** The C1 pair's rows, which follow one of two readings. */
 export const PAIR_CODES: readonly string[] = ["M0004", "M0005", "M0006"];
@@ -113,6 +122,48 @@ const row = (
 // `Label` and never opens the page, so those mutants survive.
 const TRIG_TESTS = ["ClampTrigger", "DoubledTrigger"];
 const TRIG_TWIN_TESTS = ["ClampTriggerTwin", "DoubledTriggerTwin"];
+// R550: the report's triggers (object-placed) and `Band` (called by both tests) are covered by both.
+const BAND_TESTS = ["BandYDirect", "BandYRun"];
+const BAND_TWIN_TESTS = ["BandYDirectTwin", "BandYRunTwin"];
+
+/**
+ * R550 (plan review I3): the failure text each report-arm kill must carry, by code. Every one is the
+ * killing test's own `Error(...)`, worked out from the mutation (replacements read offline): a kill
+ * that died for another reason (a duplicate key, a refused RunModal, a permission error) would match
+ * the verdict table and is caught here instead.
+ */
+export const KILL_TEXTS: Readonly<Record<string, string>> = {
+  M0071: "band total should be 6, got 0",
+  M0072: "band total should be 6, got 0",
+  M0078: "band total should be 6, got 7",
+  M0079: "Band(3) should be 2, got 0",
+  M0080: "Band(2) should be 1, got 2",
+  M0081: "Band(3) should be 2, got 0",
+  M0082: "Band(2) should be 1, got 0",
+  M0083: "band total should be 6, got 0",
+  M0084: "band total should be 6, got 0",
+  M0085: "band total should be 6, got 0",
+  M0086: "band total should be 6, got 0",
+  M0092: "band total should be 6, got 7",
+  M0093: "Band(3) should be 2, got 0",
+  M0094: "Band(2) should be 1, got 2",
+  M0095: "Band(3) should be 2, got 0",
+  M0096: "Band(2) should be 1, got 0",
+  M0097: "band total should be 6, got 0",
+  M0098: "band total should be 6, got 0",
+};
+
+/** Each code in `KILL_TEXTS` is killed and its `killingTestFailure` contains the pinned text. */
+export function killTextDifferences(report: WrappedReport): string[] {
+  const out: string[] = [];
+  for (const [code, text] of Object.entries(KILL_TEXTS)) {
+    const m = report.mutants.find((x) => x.mutantCode === code);
+    if (m === undefined) out.push(`${code}: missing (its kill text is pinned)`);
+    else if (!(m.killingTestFailure ?? "").includes(text))
+      out.push(`${code}: killingTestFailure ${JSON.stringify(m.killingTestFailure)} lacks ${JSON.stringify(text)}`);
+  }
+  return out;
+}
 
 /** The spec's table under the "adds" reading (the reading LethAL's own arm choice assumes). */
 export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
@@ -199,6 +250,38 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0068", XTRA_TWIN, 19, "empty-block", "Scaled", "killed", "ScaledXtraTwin"),
   row("M0069", XTRA_TWIN, 20, "conditional-boundary", "Scaled", "survived", "ScaledXtraTwin"),
   row("M0070", XTRA_TWIN, 21, "return-value", "Scaled", "killed", "ScaledXtraTwin"),
+  // R550, pre-committed in docs/superpowers/specs/2026-10-09-r550-wrapped-report-precommitment.md.
+  // Triggers are placed by the REPORT object: every test that ran anything in it (BandYDirect runs
+  // `Band` only, BandYRun runs the report). The request page is never shown (survivors), and
+  // OnPreReport's two mutants are equivalent (Total starts at 0 on a fresh report variable).
+  row("M0071", BAND, 22, "empty-block", "", "killed", "BandYRun", BAND_TESTS),
+  row("M0072", BAND, 23, "remove-assignment", "", "killed", "BandYRun", BAND_TESTS),
+  row("M0073", BAND, 42, "empty-block", "", "survived", "BandYRun", BAND_TESTS),
+  row("M0074", BAND, 43, "remove-assignment", "", "survived", "BandYRun", BAND_TESTS),
+  row("M0075", BAND, 43, "flip-boolean-literal", "", "survived", "BandYRun", BAND_TESTS),
+  row("M0076", BAND, 52, "empty-block", "", "survived", "BandYRun", BAND_TESTS),
+  row("M0077", BAND, 53, "remove-assignment", "", "survived", "BandYRun", BAND_TESTS),
+  row("M0078", BAND, 53, "shift-integer", "", "killed", "BandYRun", BAND_TESTS),
+  row("M0079", BAND, 57, "empty-block", "Band", "killed", "BandYDirect", BAND_TESTS),
+  row("M0080", BAND, 58, "conditional-boundary", "Band", "killed", "BandYDirect", BAND_TESTS),
+  row("M0081", BAND, 59, "return-value", "Band", "killed", "BandYDirect", BAND_TESTS),
+  row("M0082", BAND, 60, "return-value", "Band", "killed", "BandYDirect", BAND_TESTS),
+  row("M0083", BAND, 64, "empty-block", "GetTotal", "killed", "BandYRun"),
+  row("M0084", BAND, 65, "return-value", "GetTotal", "killed", "BandYRun"),
+  row("M0085", BAND_TWIN, 22, "empty-block", "", "killed", "BandYRunTwin", BAND_TWIN_TESTS),
+  row("M0086", BAND_TWIN, 23, "remove-assignment", "", "killed", "BandYRunTwin", BAND_TWIN_TESTS),
+  row("M0087", BAND_TWIN, 42, "empty-block", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
+  row("M0088", BAND_TWIN, 43, "remove-assignment", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
+  row("M0089", BAND_TWIN, 43, "flip-boolean-literal", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
+  row("M0090", BAND_TWIN, 52, "empty-block", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
+  row("M0091", BAND_TWIN, 53, "remove-assignment", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
+  row("M0092", BAND_TWIN, 53, "shift-integer", "", "killed", "BandYRunTwin", BAND_TWIN_TESTS),
+  row("M0093", BAND_TWIN, 57, "empty-block", "Band", "killed", "BandYDirectTwin", BAND_TWIN_TESTS),
+  row("M0094", BAND_TWIN, 58, "conditional-boundary", "Band", "killed", "BandYDirectTwin", BAND_TWIN_TESTS),
+  row("M0095", BAND_TWIN, 59, "return-value", "Band", "killed", "BandYDirectTwin", BAND_TWIN_TESTS),
+  row("M0096", BAND_TWIN, 60, "return-value", "Band", "killed", "BandYDirectTwin", BAND_TWIN_TESTS),
+  row("M0097", BAND_TWIN, 64, "empty-block", "GetTotal", "killed", "BandYRunTwin"),
+  row("M0098", BAND_TWIN, 65, "return-value", "GetTotal", "killed", "BandYRunTwin"),
 ];
 
 /**
@@ -233,6 +316,8 @@ export interface WrappedMutant {
   readonly killingTest?: string;
   readonly coveringTests: readonly string[];
   readonly failureNote?: string;
+  /** R550: the killing test's failure text, which `killTextDifferences` reads. */
+  readonly killingTestFailure?: string;
 }
 
 /** The slice of a `SessionReport` these checks read. */
@@ -330,6 +415,7 @@ export function assertWrappedRun(
     }
   }
   problems.push(...twinDifferences(report));
+  problems.push(...killTextDifferences(report));
   const positionWins = warnings.filter((w) => w.includes("the position wins (R383)"));
   const dropped = warnings.filter((w) => w.includes("the line is dropped (R300)"));
   if (positionWins.length > 0)
@@ -390,7 +476,7 @@ export function twinDifferences(report: WrappedReport): string[] {
 /**
  * R497: one bcdev leg (fenced or hub). One batch, a green baseline, the bcdev table per mutant,
  * strict twin parity, and no coverage refusal naming any of the fixture's objects (codeunits,
- * tables, pages and page extensions 78900-78949, either key case): an admitted file must not be refused, and
+ * tables, pages, page extensions and reports 78900-78949, either key case): an admitted file must not be refused, and
  * `WrappedPairB`'s compiled-out key must not refuse `WrappedPairA` (plan r2 A1).
  */
 export function assertBcWrappedRun(
@@ -403,8 +489,9 @@ export function assertBcWrappedRun(
   if (!report.baselineGreen) problems.push("the baseline must be green");
   problems.push(...diffRows(EXPECTED_WRAPPED_BC, wrappedRows(report)));
   problems.push(...twinDifferences(report));
+  problems.push(...killTextDifferences(report));
   for (const w of warnings)
-    if (/coverage refused for (codeunit|table|page|pageextension):789\d\d/i.test(w))
+    if (/coverage refused for (codeunit|table|page|pageextension|report):789\d\d/i.test(w))
       problems.push(`refusal: ${w}`);
   for (const m of report.mutants)
     if (m.failureNote?.includes("coverage refused"))
