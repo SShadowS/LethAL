@@ -540,7 +540,8 @@ const EXPECTED = {
   // pre-committed before the run, not an independent claim -- though the pre-commitment should have
   // said so explicitly and did not, which cost a re-run.
   // R254 moves it to 310 / 380, about 0.81579 from 0.81572: nine kills against two survivors.
-  mutationScore: 310 / (310 + 70),
+  // R-463 moves it to 314 / 384, about 0.81771: `CountBand`'s four kills and no survivors.
+  mutationScore: 314 / (314 + 70),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.
@@ -572,7 +573,8 @@ const EXPECTED = {
    * R457 TOOK THIS FROM 3 TO 4: `run-trigger-forced` is now kept unless the table provably has no
    * trigger of that kind and no observer, and it is declared by EDIT (flip-boolean-literal's
    * false->true RunTrigger flip as well as swap-modify-flag's forward direction). The one KILLED
-   * mutant that gains it is M0238 (M0223 before R254's arm shifted codes by 15;
+   * mutant that gains it is M0242 (M0223 before R254's arm shifted codes by 15, M0238 before
+   * R-463's `CountBand` shifted them by 4 more;
    * `Data Ops.InsertWithoutTrigger`, Insert(false)->true), a named
    * OVER-TAG: its kill is earned by the test's own Error. Pre-committed in
    * docs/superpowers/specs/2026-10-05-r457-forced-tag-precommitment.md before the run.
@@ -1171,7 +1173,7 @@ function assertVerdictTable(report: SessionReport): void {
     deleteGroup.explanation.includes("Delete(false)"),
     "the Delete mechanism must explain ITS own mechanism",
   );
-  // Mechanism 4, R457. Pinned BY MUTANT: the only KILLED forced mutant is M0238, an over-tag.
+  // Mechanism 4, R457. Pinned BY MUTANT: the only KILLED forced mutant is M0242, an over-tag.
   // Survived and no-coverage mutants also carry the tag but never enter the screen's kill list.
   const forcedGroup = groupOf("run-trigger-forced");
   const forcedScreened = forcedGroup.mutants.map(mutantOf);
