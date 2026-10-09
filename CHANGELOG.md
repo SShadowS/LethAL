@@ -738,10 +738,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `swap-find-direction` in the loop's own condition; the pre-loop filters the ending depends on (so
   `swap-rec-xrec` in an OnRename filter on `xRec`); the same-scope assignments feeding those; and a
   consumer one hop away in a same-object callee or a table procedure on the record. A
-  `repeat ... until Rec.Next() = 0` loop is unaffected. Measured on the prototype: BC.History 981
-  deployed mutants removed (0.044%), CDO 9, DC 39, DO 9, fixtures 0; 0 identity tuples moved and 45
-  ordinals renumber (41 BaseApp, 4 System Application), so history, `--resume` and marks recorded under
-  scheme 38 are not carried. Four sampled loops with a counter beside the cursor test are refused
+  `repeat ... until Rec.Next() = 0` loop is unaffected. A callee's `Delete`, `DeleteAll`, `Rename` or
+  `Modify` is followed through a by-value record parameter too, since it changes the real rows. The
+  cost is PENDING the re-dump on the built branch; the prototype measured BC.History 981 deployed
+  mutants removed (0.044%), CDO 9, DC 39, DO 9, fixtures 0, 0 identity tuples moved and 45 ordinals
+  renumbered (41 BaseApp, 4 System Application), and the build refuses somewhat more. History,
+  `--resume` and marks recorded under scheme 38 are not carried. Four sampled loops with a counter beside the cursor test are refused
   anyway (a known cost). A filter set through a table procedure and a refilter through a FieldRef are
   filed as R562 and R563.
 - **Deleting a call to a procedure that sets a report's exit flag is hang-refused; identity scheme
