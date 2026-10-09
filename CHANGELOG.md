@@ -140,6 +140,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Baseline and campaign comparisons see a mutant that changed under an unchanged key** (R556).
+  A newly recorded itest baseline or frozen campaign stage records the identity scheme and a
+  sha256 of each mutant's mutated text (never the text). Comparing then reports "mutated text
+  differs under an unchanged key" as a difference, and a scheme change as "identity scheme
+  changed", never a refusal. `campaign compare --json` gains an `identity` block beside
+  `coverage`; `campaign freeze` refuses a redacted report. Existing baselines and stages are
+  unchanged and still pass, with a line saying text is UNVERIFIED until they are re-recorded
+  (R560 lists them).
+
 - **al-runner one-shot runs use `--test-exact` where the build accepts it** (R551). Each one-shot
   al-runner session makes one extra call before the baseline (about 1.3 s on c5bbaf89, 0.15 s on
   43f76177) to ask whether the build parses `--test-exact`. If it does, each test runs as
