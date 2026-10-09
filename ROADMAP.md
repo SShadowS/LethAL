@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**75 of 558 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**74 of 558 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -217,7 +217,7 @@ that ordering is the priority.
 - **R550** · BC scores `#if`-wrapped REPORTS on the codeunit/table/page measurement: 30 BaseApp files deploy 1,945 sites, no gate held one · [R550.md](docs/roadmap/R550.md) · done (25f68b19)
 - **R502** · The receiver resolver reads a namespace-qualified data item table (`System.Utilities.Integer`) as its first segment · [R502.md](docs/roadmap/R502.md) · done (4a82d91a)
 - **R503** · The runMany watchdog's GetOperationStatus poll has no timeout, so a poll BC never answers holds the call forever · [R503.md](docs/roadmap/R503.md) · done (c637f2dd)
-- **R554** · Request-page trigger mutants run covered-but-unreached: no test shows a request page, and no gate measures one (BaseApp wrapped reports alone: 165 sites) · [R554.md](docs/roadmap/R554.md) · open, filed 2026-10-09
+- **R554** · Request-page trigger mutants run covered-but-unreached: no test shows a request page, and no gate measures one (BaseApp wrapped reports alone: 165 sites) · [R554.md](docs/roadmap/R554.md) · closed 2026-10-09 — measured on BC by R-554: request-page mutants are covered but unreached on both backends…
 - **R504** · The lease client's `postLeaseAction` clears its abort timer once the headers arrive, so a lease response body BC never finishes has no bound (the R191 class) · [R504.md](docs/roadmap/R504.md) · done (f45d3196)
 - **R556** · `campaign compare` and the frozen itest baselines compare by identity key with no scheme and no mutated text, so a mutant that changed under an unchanged key reads as identical or as a regression · [R556.md](docs/roadmap/R556.md) · done (b0e24094)
 - **R505** · Not measured: how al-runner maps a compiled file back to the source path it labels coverage with, when an object moves between files or its workspace cache is stale · [R505.md](docs/roadmap/R505.md) · done (63594b46)
