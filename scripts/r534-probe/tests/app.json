@@ -1,0 +1,12 @@
+{
+  "id": "5b2e0c1a-7d44-4e8a-9c31-534000000012",
+  "name": "R534 Session Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "dependencies": [
+    { "id": "5b2e0c1a-7d44-4e8a-9c31-534000000011", "name": "R534 Session", "publisher": "LethAL", "version": "1.0.0.0" }
+  ],
+  "idRanges": [{ "from": 79690, "to": 79699 }],
+  "runtime": "13.0",
+  "features": []
+}

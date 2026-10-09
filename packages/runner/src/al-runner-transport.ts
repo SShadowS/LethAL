@@ -54,7 +54,16 @@ export interface AlRunnerRawTest {
 }
 
 export type AlRunnerResult =
-  | { readonly kind: "tests"; readonly tests: readonly AlRunnerRawTest[] }
+  | {
+      readonly kind: "tests";
+      readonly tests: readonly AlRunnerRawTest[];
+      /**
+       * R534 (D1b): on an exit 3 read through `timeoutAbortTests`, the names of the rows a
+       * TEST-TIMEOUT-ABORT line names, i.e. rows al-runner PROVED it stopped at its timeout.
+       * Beside the rows rather than on them, so the rows stay exactly what al-runner printed.
+       */
+      readonly abortProven?: readonly string[];
+    }
   | { readonly kind: "deadline" }
   | { readonly kind: "error"; readonly detail: string };
 
@@ -552,6 +561,13 @@ function absentOrEmpty(v: unknown): boolean {
  * or a fail-closed `error`, exactly as on exit 1.
  */
 export function timeoutAbortTests(stdout: string): readonly AlRunnerRawTest[] | undefined {
+  return readTimeoutAbort(stdout)?.tests;
+}
+
+/** `timeoutAbortTests`, plus (R534 D1b) the names of the rows its abort lines name (check 5). */
+function readTimeoutAbort(
+  stdout: string,
+): { readonly tests: readonly AlRunnerRawTest[]; readonly proven: readonly string[] } | undefined {
   let env: unknown;
   try {
     env = readAlRunnerEnvelope(stdout);
@@ -581,17 +597,19 @@ export function timeoutAbortTests(stdout: string): readonly AlRunnerRawTest[] | 
   // Covers `suiteErrors: []` too. Without it `[].every(...)` passes: empty-vs-empty.
   if (lines.length === 0) return undefined;
   if (!lines.every((l) => alRunnerMarkerOf(l) === "TEST-TIMEOUT-ABORT")) return undefined;
-  const needles: string[] = [];
+  const needles: { readonly name: string; readonly needle: string }[] = [];
   for (const row of tests as readonly Partial<AlRunnerRawTest>[]) {
     if (typeof row?.name !== "string" || row.status === "pass" || row.status === "fail") continue;
     const dot = row.name.lastIndexOf(".");
     if (dot < 0) continue;
-    needles.push(
-      ` (${row.name.slice(0, dot)}).${row.name.slice(dot + 1)}: watchdog timeout aborted the run`,
-    );
+    needles.push({
+      name: row.name,
+      needle: ` (${row.name.slice(0, dot)}).${row.name.slice(dot + 1)}: watchdog timeout aborted the run`,
+    });
   }
-  if (!lines.every((l) => needles.some((n) => l.includes(n)))) return undefined;
-  return tests as readonly AlRunnerRawTest[];
+  if (!lines.every((l) => needles.some((n) => l.includes(n.needle)))) return undefined;
+  const proven = needles.filter((n) => lines.some((l) => l.includes(n.needle))).map((n) => n.name);
+  return { tests: tests as readonly AlRunnerRawTest[], proven };
 }
 
 /**
@@ -804,8 +822,9 @@ export class OneShotTransport implements AlRunnerTransport {
       if (res.exitCode === 0 || res.exitCode === 1)
         return { kind: "tests", tests: parseAlRunnerPayload(res.stdout) };
       if (res.exitCode === 3) {
-        const tests = timeoutAbortTests(res.stdout);
-        if (tests !== undefined) return { kind: "tests", tests };
+        const abort = readTimeoutAbort(res.stdout);
+        if (abort !== undefined)
+          return { kind: "tests", tests: abort.tests, abortProven: abort.proven };
       }
       return {
         kind: "error",

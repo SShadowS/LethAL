@@ -2722,7 +2722,8 @@ interface CoveringStep {
   readonly testBudgetSource: BudgetSource;
   readonly groupBudgetMs: number;
   readonly opKind: "single" | "many";
-  readonly cause?: RunManyCause;
+  /** R534: plus al-runner's answered-row causes (`TestVerdict.runnerRow`), single path only. */
+  readonly cause?: RunManyCause | "runner-test-error" | "runner-refused";
   readonly abortSession?: string;
   /**
    * R206 §2.4: the 1-based position of `ref` within the CALL that ran it (1 on the sequential
@@ -2801,12 +2802,16 @@ async function* coveringRuns(args: {
       retried: out.retried,
       ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
       ...(out.original !== undefined ? { original: out.original } : {}),
-      // R-204b: the single path's two causes, carried exactly as the grouped call's are.
+      // R-204b: the single path's two causes, carried exactly as the grouped call's are. R534:
+      // al-runner's answered row, keyed on `runnerRow` ONLY (never on `completed-accepted`, which
+      // R488/R491's refusals also carry and which must still abort).
       ...(out.cause !== undefined
         ? { cause: out.cause }
         : out.verdict.stopRefusal !== undefined
           ? { cause: out.verdict.stopRefusal }
-          : {}),
+          : out.verdict.runnerRow !== undefined
+            ? { cause: out.verdict.runnerRow }
+            : {}),
       testBudgetMs: budget,
       testBudgetSource: source,
       groupBudgetMs: budget,
@@ -4130,7 +4135,7 @@ interface BatchScope {
   readonly emit: RunEmitter;
   readonly outcomes: SessionOutcome[];
   readonly killLedger: KillLedger;
-  readonly sessionReuse: { warned: boolean; stopWarned?: boolean };
+  readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
   readonly groupRuns: GroupRunSettings | undefined;
   readonly minMutantBudgetMs: number;
   /** `cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT`; also the covering loop's fallback. */
@@ -8931,7 +8936,8 @@ async function closeIfSupported(backend: ExecutionBackend): Promise<void> {
 
 /** R517: the figures a position-1 timeout confirm was judged on. */
 interface JudgedConfirm {
-  /** The confirm's own duration (`measuredDurationMs ?? durationMs`), the figure judged. */
+  /** The figure judged: the confirm's own duration (`measuredDurationMs ?? durationMs`) for a
+   *  timeout in the test body, else (R534) its wall clock. */
   readonly confirmMs: number;
   /** The confirm's wall clock (`durationMs`). */
   readonly wallMs: number;
@@ -9547,8 +9553,9 @@ async function runMutantsOnBackend(args: {
   /** R198: group-run settings, or `undefined` for the sequential loop. */
   readonly groupRuns?: GroupRunSettings | undefined;
   /** R206 §2.1: session-scoped, shared across batches and shards: the once-only warning flag.
-   *  R517 (M-a): `stopWarned`, the same for a reported stop that is not the configured one. */
-  readonly sessionReuse: { warned: boolean; stopWarned?: boolean };
+   *  R517 (M-a): `stopWarned`, the same for a reported stop that is not the configured one.
+   *  R534 (D1b): `wordingWarned`, the same for a proven al-runner timeout in unknown wording. */
+  readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
   /** R514: this batch's baseline came from a stored snapshot (R192), so its durations, and every
    *  budget derived from them, are from another day. Since R516 every position-1 `timeout` is
    *  confirmed unmutated with R53's 2x margin on every batch; this field only names the cause of
@@ -9729,6 +9736,16 @@ async function runMutantsOnBackend(args: {
       else {
         reachAnswered = true;
         if (v.reachedActive) reachedBy.push(qualifiedTestName(ref));
+      }
+      // R534 (D1b): al-runner proved it stopped this row at its timeout, in wording LethAL does not
+      // know. Scored `runner-test-error` below; said once per session, so a moved wording is loud.
+      if (v.timeoutWordingUnknown === true && args.sessionReuse.wordingWarned !== true) {
+        args.sessionReuse.wordingWarned = true;
+        args.emit({
+          type: "warning",
+          code: "alrunner-timeout-wording-unrecognised",
+          message: `[lethal] alrunner-timeout-wording-unrecognised: al-runner stopped ${ref.method} (mutant ${m.mutantId}) at its timeout but the row's message is neither known timeout wording (${v.failureMessage ?? "no message"}); such hangs are scored runner-test-error, not timeout-killed, until RUNNER_TIMEOUT_MESSAGE / RUNNER_ONRUN_TIMEOUT_MESSAGE learn it (R534)`,
+        });
       }
       // R206: every non-verdict ending (a lease answer, a lost ack, a group cause, our own
       // deadline, a transport error) is classified by `classifyNonVerdictStep`, the same branches
@@ -9990,8 +10007,14 @@ async function runMutantsOnBackend(args: {
             args.backend.inRunStopMs ?? Number.POSITIVE_INFINITY,
           );
           // The test's own duration, on the stop's clock (al-runner's per-test figure, not the
-          // suite's or the process's wall clock); bcdev's is its wall clock.
-          const confirmMs = confirm.measuredDurationMs ?? confirm.durationMs;
+          // suite's or the process's wall clock); bcdev's is its wall clock. R534 (I1): only when
+          // the stop fired in the test BODY. An OnRun-trigger timeout, or one that does not say
+          // where it fired, is judged on the wall clock, which includes the OnRun (no pass row
+          // reports its time): fail-closed, it can only over-state the unmutated run.
+          const confirmMs =
+            v.timeoutIn === "body"
+              ? (confirm.measuredDurationMs ?? confirm.durationMs)
+              : confirm.durationMs;
           if (timedOut && (stopUnreported || 2 * confirmMs > stopMs)) {
             // R514, R516: the test passes unmutated but takes more than half the stop it ran
             // under, so a budget measured now would be larger: the timeout is not the mutant's. The
@@ -10015,6 +10038,9 @@ async function runMutantsOnBackend(args: {
             } else {
               cause = "timeout-unconfirmed";
               failureNote = timeoutUnconfirmedNote(ref.method, judged, budget, source);
+            }
+            if (v.timeoutIn === "onrun") {
+              failureNote = `${failureNote ?? ""} The stop fired in the test codeunit's OnRun trigger, and al-runner does not report the OnRun's own time, so the confirm's wall clock was judged; it includes the OnRun and, on one-shot, the compile (R534).`;
             }
             break;
           }

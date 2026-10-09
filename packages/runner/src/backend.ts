@@ -101,12 +101,33 @@ export interface TestVerdict {
   readonly measuredDurationMs?: number;
   /**
    * R517: on a `timeout`, the stop the runner says it ENFORCED, parsed from al-runner's row
-   * (`Test exceeded {N}s timeout.`, N x 1000). The position-1 confirm is judged against
-   * `min(budget, reportedStopMs, backend.inRunStopMs)`. Absent: the runner did not say (bcdev,
-   * or a row whose wording did not parse); on a backend that declares `inRunStopMs` that leaves
-   * the timeout unconfirmed.
+   * (`Test exceeded {N}s timeout.`, or R534's OnRun-trigger wording, N x 1000). The position-1
+   * confirm is judged against `min(budget, reportedStopMs, backend.inRunStopMs)`. Absent: the
+   * runner did not say (bcdev, or a row whose wording did not parse); on a backend that declares
+   * `inRunStopMs` that leaves the timeout unconfirmed.
    */
   readonly reportedStopMs?: number;
+  /**
+   * R534: on a `timeout`, where the runner's stop fired. `body`: the test's own figure
+   * (`measuredDurationMs`) is on the stop's clock. `onrun`: the test codeunit's OnRun trigger; no
+   * pass row reports the OnRun's time (measured: 66 ms body beside a 4 s OnRun). Absent (bcdev,
+   * whose measured figure IS its wall time): the confirm uses the wall time, so an unknown
+   * location can only over-state the unmutated run. Internal only; not in the report.
+   */
+  readonly timeoutIn?: "body" | "onrun";
+  /**
+   * R534: al-runner ANSWERED with a row that is not a verdict about the mutant. Lifted into the
+   * covering step's cause, like `stopRefusal`: a per-mutant `error`, never re-sent, never a
+   * spec §11 abort. `runner-refused`: the test reached a surface al-runner refuses
+   * (`<Type>: out-of-scope: ...`). `runner-test-error`: any other such row.
+   */
+  readonly runnerRow?: "runner-test-error" | "runner-refused";
+  /**
+   * R534 (D1b): al-runner proved this row was stopped at its timeout (an exit-3 TEST-TIMEOUT-ABORT
+   * line names it), but its message is neither known timeout wording. Scored `runner-test-error`
+   * (never a kill); the orchestrator warns once per session.
+   */
+  readonly timeoutWordingUnknown?: boolean;
   readonly failureMessage?: string;
   readonly coverage?: CoverageMap;
   /**

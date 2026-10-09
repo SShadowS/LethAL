@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**66 of 533 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**73 of 541 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -232,13 +232,16 @@ that ordering is the priority.
 - **R517** · al-runner `--server`: a timeout is judged on the suite's wall clock against a 60 s in-run limit LethAL never set · [R517.md](docs/roadmap/R517.md) · done (b89f2f34)
 - **R518** · al-runner one-shot: a test timeout exits 3, was scored `error` and retried, and the second error aborted the whole session · [R518.md](docs/roadmap/R518.md) · done (cef943c2)
 - **R520** · Report-loop hang refusal follows other-object callees one hop only: a callee's own calls into a third object are not refused · [R520.md](docs/roadmap/R520.md) · open, filed 2026-10-08
-- **R534** · al-runner: an unclassified `error` row (an OnRun-trigger hang, a RunnerOutOfScopeException) aborts the whole session under spec §11. Should it? · [R534.md](docs/roadmap/R534.md) · open, filed 2026-10-08
+- **R534** · al-runner: an unclassified `error` row (an OnRun-trigger hang, a RunnerOutOfScopeException) aborts the whole session under spec §11. Should it? · [R534.md](docs/roadmap/R534.md) · done (2629351e)
 - **R521** · Report-loop hang refusal cannot type RecordRef, Variant, parameter, array-element, Report/Page or namespaced-interface receivers, so their callees are not refused · [R521.md](docs/roadmap/R521.md) · open, filed 2026-10-08
 - **R522** · Report-loop hang refusal does not see callee objects wrapped in `#if` (they are not object declarations to it) · [R522.md](docs/roadmap/R522.md) · open, filed 2026-10-08
 - **R523** · Report-loop hang refusal does not follow table triggers that open-item code fires (`Insert(true)`, `Modify(true)`, `Validate`, `Rename`) · [R523.md](docs/roadmap/R523.md) · open, filed 2026-10-08
 - **R524** · Report-loop hang refusal follows events raised by open-item code and by one-hop callees only, not events raised deeper · [R524.md](docs/roadmap/R524.md) · open, filed 2026-10-08
+- **R540** · al-runner refusals R534 does not match (`BcShapeGapException`, `BcAppSymbolReadException`, a refusal trapped by a `[TryFunction]`) can still score a kill or a pass · [R540.md](docs/roadmap/R540.md) · open, filed 2026-10-09
 - **R525** · Report-loop hang refusal does not cross apps: interface implementers and event subscribers in another app are not refused · [R525.md](docs/roadmap/R525.md) · open, filed 2026-10-08
+- **R541** · al-runner auto-discovers `tests/expectations`: a manifest can turn a pass into `fail` (a false kill) or a failure into `pass` (a lost kill) · [R541.md](docs/roadmap/R541.md) · open, filed 2026-10-09
 - **R526** · Report-loop hang refusal ignores `interface B extends A`: a receiver typed A does not reach implementers of B · [R526.md](docs/roadmap/R526.md) · open, filed 2026-10-08
+- **R542** · al-runner: a `fail` row whose exception type AL cannot raise (`NullReferenceException`, `NotImplementedException`) is an al-runner bug, but is scored a kill · [R542.md](docs/roadmap/R542.md) · open, filed 2026-10-09
 - **R527** · Report-loop hang refusal does not follow `Codeunit.Run` or `Report.Run` targets called from open-item code · [R527.md](docs/roadmap/R527.md) · open, filed 2026-10-08
 - **R528** · Report-loop hang refusal does not match events published by a tableextension (keyed to the extension, raised on the base table) · [R528.md](docs/roadmap/R528.md) · open, filed 2026-10-08
 - **R529** · Self-inserting report items: an insert made from another object is not seen, so the item's own filter is not protected · [R529.md](docs/roadmap/R529.md) · open, filed 2026-10-08
@@ -578,6 +581,11 @@ that ordering is the priority.
 - **R471** · al-runner compiles a project that BC's alc rejects with AL0155 (a report and its reportextension declaring the same global), so LethAL's al-runner path can look green where bcdev errors · [R471.md](docs/roadmap/R471.md) · open
 - **R482** · `r214-history.test.ts` "R214 I4 ... marks: an old-scheme mark on the old key is stale" failed once in a full `verify` run and passed alone and on re-run (flaky) · [R482.md](docs/roadmap/R482.md) · closed 2026-10-05 — not reproduced in 20 repeats under load; the one failure was a starvation timeout during…
 - **R519** · al-runner `--server`: per-request `test` / `excludeTests` would run only a mutant's covering tests and confine a hang to one test · [R519.md](docs/roadmap/R519.md) · open, filed 2026-10-08
+- **R537** · al-runner scores an unexecuted UI handler or a failing OnRun `runner-test-error`, where BC's test runner reports a failed test (a lost kill against bcdev) · [R537.md](docs/roadmap/R537.md) · open, filed 2026-10-09
+- **R538** · al-runner `--server`: a covering test with no row because a test LethAL orders LATER hung is `runner-test-error`, a lost kill LethAL could recover · [R538.md](docs/roadmap/R538.md) · open, filed 2026-10-09
+- **R539** · Upstream al-runner: report the test codeunit's OnRun time on a pass row, and put `errorKind` on the one-shot row · [R539.md](docs/roadmap/R539.md) · open, filed 2026-10-09
+- **R543** · al-runner: a `<ctor>` or `<OnBeforeCodeunitRun>` row still aborts the whole session through "no test named ..." · [R543.md](docs/roadmap/R543.md) · open, filed 2026-10-09
+- **R544** · al-runner `--server`: an OnRun hang at the BASELINE ends the suite and silently shrinks the green set and its coverage · [R544.md](docs/roadmap/R544.md) · open, filed 2026-10-09
 
 ---
 
