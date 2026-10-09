@@ -1090,9 +1090,10 @@ function declaresProcedure(objectNode: ALSyntaxNode, name: string, armOf: ArmRea
  * R549: does any project page a pageextension may extend declare a procedure `name` that the
  * extension can see? Candidates are every page of the `extends` name (indexed, or wrapped whole in
  * `#if`, any arm), plus any split-header or unparsed object whose text names a page, the base and
- * `name` (the conservative token rule of `projectDeclaresProcedureOnTable`). A `local` procedure is
- * invisible (alc: the system `Commit` wins); `internal` is visible, the base being in this app. A
- * split procedure is visible if any arm the build does not compile out is non-local. No candidate
+ * `name` (the conservative token rule of `projectDeclaresProcedureOnTable`; it over-matches: ANY
+ * such object whose text holds those three tokens refuses, page or not, local or not). A `local`
+ * procedure is invisible (alc: the system `Commit` wins); `internal` is visible, the base being in
+ * this app. A split procedure is visible if any arm the build does not compile out is non-local. No candidate
  * (a dependency base page): false, the claim stands (a named residual in R549). No readable base
  * name: true, the safe direction.
  */

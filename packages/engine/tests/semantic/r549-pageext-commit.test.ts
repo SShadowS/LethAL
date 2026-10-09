@@ -31,8 +31,8 @@ ${members}
 
 /** `claimsSystemCall(.., "Commit")` at every call in the extension. `symbols`: evaluate every
  *  file's arms under those preprocessor symbols; "undecided": every node answers undecided. */
-function claims(bases: string[], symbols?: string[] | "undecided"): boolean[] {
-  const srcs = [...bases, EXT];
+function claims(bases: string[], symbols?: string[] | "undecided", ext = EXT): boolean[] {
+  const srcs = [...bases, ext];
   const parsed = srcs.map((src, i) => ({ path: `f${i}.al`, root: wrapRoot(parseAL(src)) }));
   const built = buildSemanticContext(
     parsed,
@@ -63,6 +63,12 @@ describe("R549: claimsSystemCall inside a pageextension", () => {
   // Red: treat a `local` procedure as visible.
   it("keep: the base page's Commit is local (invisible)", () => {
     expect(claims([page(`    local ${PUBLIC.trim()}`)])).toEqual([true]);
+  });
+  // Build review F4: `extends` with no name parses to an empty (MISSING) `base_object`.
+  // Red: drop the "no readable base name" refusal in `basePageDeclaresVisible`.
+  it("refuse: no readable base name", () => {
+    const nameless = EXT.replace('extends "Base Page"', "extends");
+    expect(claims([page(OTHER)], undefined, nameless)).toEqual([false]);
   });
   // Red: refuse when there is no candidate.
   it("keep: the base page is not in the project (the named residual)", () => {

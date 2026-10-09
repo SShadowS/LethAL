@@ -173,6 +173,15 @@ describe("R547: a base-report procedure called bare from an open reportextension
     expect(p.proc("b.al", "BaseProc")).toEqual([true, true]);
   });
 
+  // Build review F1: `this.BaseProc()` binds the base report's procedure (alc, runtime 16).
+  // Red: drop the `this` mapping in `callTargets`' member branch.
+  it("`this.BaseProc()` from the open block: BaseProc and its closure are refused", () => {
+    const viaThis = ext("Loop").replace("BaseProc();", "this.BaseProc();");
+    const p = project({ "b.al": BASE, "e.al": viaThis });
+    expect(p.proc("b.al", "BaseProc")).toEqual([true, true]);
+    expect(p.proc("b.al", "BaseInner")).toEqual([true]);
+  });
+
   // r3 F1: a base report whose HEADER is split by `#if` is a candidate, not a dependency.
   // Red: drop `splitObjects` from `baseCandidatesOf`.
   it("split header: the split base report's BaseProc is refused", () => {
@@ -293,5 +302,66 @@ describe("R548: a reportextension's write of a preset exit name", () => {
   });
   it("a write no exit guard reads emits", () => {
     expect(p().at("e.al", "assignment_statement", "Mine := 1")).toBe(false);
+  });
+});
+
+// Build review F3: two same-named bases (one in an undecided `#if` arm) declare `BaseInit`. The
+// extension's open block calls `BaseInit(Stop)` and breaks on `Stop`; OnPreReport writes `Stop`.
+// If the open call writes `Stop`, `Stop` is not preset and its write emits; if that is unknown,
+// `Stop` stays preset (the safe side inside `presetExitNames`) and the write is refused.
+const initBase = (param: string, id: number) => `report ${id} "Init Base"
+{
+    dataset
+    {
+        dataitem(Loop; Integer)
+        {
+        }
+    }
+
+    procedure BaseInit(${param}: Boolean)
+    begin
+    end;
+}`;
+const INIT_EXT = `reportextension 50522 "Init Ext" extends "Init Base"
+{
+    dataset
+    {
+        modify(Loop)
+        {
+            trigger OnAfterAfterGetRecord()
+            begin
+                BaseInit(Stop);
+                if Stop then
+                    CurrReport.Break();
+            end;
+        }
+    }
+
+    trigger OnPreReport()
+    begin
+        Stop := false;
+    end;
+
+    var
+        Stop: Boolean;
+}`;
+const initProject = (second: string) =>
+  project(
+    {
+      "a.al": initBase("var C", 50520),
+      "b.al": `#if V2\n${initBase(second, 50521)}\n#endif\n`,
+      "e.al": INIT_EXT,
+    },
+    true,
+  );
+
+describe("R548 build review F3: base candidates that disagree on a var parameter", () => {
+  // Red: `argWritten`'s base branch back to `procs.some(isVarAt)`.
+  it("disagree (var in one, by value in the other): unknown, so `Stop` stays preset and its write is refused", () => {
+    expect(initProject("C").at("e.al", "assignment_statement", "Stop := false")).toBe(true);
+  });
+  // Red: the base branch answers `unknown` even when the candidates agree.
+  it("control: both var, so the open call writes `Stop` and its OnPreReport write emits", () => {
+    expect(initProject("var C").at("e.al", "assignment_statement", "Stop := false")).toBe(false);
   });
 });

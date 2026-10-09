@@ -923,14 +923,14 @@ function argWritten(c: ALSyntaxNode, i: number, ctx: SemanticContext, unknown: b
     return params[i]?.childForFieldName("modifier")?.rawKind === "var_keyword";
   };
   if (own !== null && obj !== null && procedureNamesOf(obj, ctx).has(own)) collect(obj, own);
-  else if (isIdentifierLike(f) && obj?.rawKind === "reportextension_declaration") {
-    // R548 (F4): a bare name in a reportextension may be a BASE report procedure. Candidates that
-    // disagree, or one that cannot be read, answer `unknown`.
-    const name = normalizeAlName(f.text);
+  else if (own !== null && obj?.rawKind === "reportextension_declaration") {
+    // R548 (F4): a bare name (or `this.P`) in a reportextension may be a BASE report procedure.
+    // Candidates that disagree, or one that cannot be read, answer `unknown`.
     const { objs, unread } = baseCandidatesOf(obj, ctx);
-    if (unread.some((o) => identifierTokens(o.text).has(name))) return unknown;
-    for (const o of objs) if (procedureNamesOf(o, ctx).has(name)) collect(o, name);
-    if (procs.length === 0) return WRITING_BUILTINS.has(name) && i === 0;
+    if (unread.some((o) => identifierTokens(o.text).has(own))) return unknown;
+    for (const o of objs) if (procedureNamesOf(o, ctx).has(own)) collect(o, own);
+    if (procs.length === 0)
+      return isIdentifierLike(f) ? WRITING_BUILTINS.has(own) && i === 0 : unknown;
     const answers = new Set(procs.map(isVarAt));
     return answers.size === 1 ? answers.has(true) : unknown;
   } else if (isIdentifierLike(f)) return WRITING_BUILTINS.has(normalizeAlName(f.text)) && i === 0;
@@ -1497,6 +1497,18 @@ function callTargets(
     const recv = f.childForFieldName("object");
     const member = normalizeAlName(f.childForFieldName("member")?.text ?? "");
     if (recv === null || !isIdentifierLike(recv)) return null;
+    // R547: `this.P()` in a reportextension binds a base-report procedure, protected ones too
+    // (alc 18.0.43, runtime 16; BaseApp's MfgGetOutboundSourceDocs calls `this.GetLocation`). The
+    // extension's own `P` is `bareCallee`'s same-object shape, not followed here.
+    const obj = objectOf(c);
+    if (
+      normalizeAlName(recv.text) === "this" &&
+      obj?.rawKind === "reportextension_declaration" &&
+      !procedureNamesOf(obj, ctx).has(member)
+    ) {
+      const bases = baseProceduresOwners(obj, member, ctx);
+      return bases.length === 0 ? null : { objs: bases, member, kind: "report" };
+    }
     const t = declaredType(recv, ctx);
     if (t !== null) {
       return { objs: objectsOfType(t, ctx), member, kind: t.kind === "table" ? "record" : t.kind };
@@ -1513,14 +1525,25 @@ function callTargets(
   if (obj.rawKind === "report_declaration") return tbl;
   // R547: a bare name in a reportextension also binds a procedure of the BASE report; every
   // candidate declaring it is followed, beside the data item's table. (`CurrReport.P()` there does
-  // not compile, AL0161, measured with alc 18.0.43, so the member branch needs no mapping.)
-  const { objs, unread } = baseCandidatesOf(obj, ctx);
-  const bases = [
+  // not compile, AL0161 for a public and a protected `P` alike, alc 18.0.43, so `CurrReport` needs
+  // no mapping; `this.P()` does, above.)
+  const bases = baseProceduresOwners(obj, member, ctx);
+  if (bases.length === 0) return tbl;
+  return { objs: [...(tbl?.objs ?? []), ...bases], member, kind: tbl?.kind ?? "report" };
+}
+
+/** R547: the base-report candidates of `ext` that declare procedure `member` (an unparsed one by
+ *  its tokens). */
+function baseProceduresOwners(
+  ext: ALSyntaxNode,
+  member: string,
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  const { objs, unread } = baseCandidatesOf(ext, ctx);
+  return [
     ...objs.filter((o) => procedureNamesOf(o, ctx).has(member)),
     ...unread.filter((o) => identifierTokens(o.text).has(member)),
   ];
-  if (bases.length === 0) return tbl;
-  return { objs: [...(tbl?.objs ?? []), ...bases], member, kind: tbl?.kind ?? "report" };
 }
 
 /**
