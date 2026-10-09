@@ -95,7 +95,7 @@ describe("R-300b: sandbox-wrapped", () => {
     return built;
   };
 
-  it("gives the pre-committed 36 mutants in one batch (R-343)", () => {
+  it("gives the pre-committed 58 mutants in one batch (R-343, R536)", () => {
     expect(get().rows).toEqual(
       EXPECTED_WRAPPED.map(
         (r) => `${r.code} ${r.file} ${r.line} ${r.operatorName} ${r.procedureName}`,
@@ -103,7 +103,7 @@ describe("R-300b: sandbox-wrapped", () => {
     );
   });
 
-  it("admits WrappedTop, WrappedPre and WrappedPairA; refuses WrappedArms; skips WrappedPairB", async () => {
+  it("admits WrappedTop, WrappedPre, WrappedPairA, WrappedTrigger and WrappedView; refuses WrappedArms; skips WrappedPairB", async () => {
     const index = await buildAlRunnerCoverageIndex(get().dir, {
       symbols: ["WRAPAPP", ...WRAPPED_SYMBOLS, ...predefined.symbols],
     });
@@ -111,6 +111,8 @@ describe("R-300b: sandbox-wrapped", () => {
       "wrappedpaira.codeunit.al",
       "wrappedpre.codeunit.al",
       "wrappedtop.codeunit.al",
+      "wrappedtrigger.table.al",
+      "wrappedview.page.al",
     ]);
     expect(index.refusedFiles).toEqual(["WrappedArms.Codeunit.al"]);
     expect(index.skippedFiles).toEqual(["wrappedarms.codeunit.al", "wrappedpairb.codeunit.al"]);
@@ -223,7 +225,7 @@ function bcReportOf(rows: typeof EXPECTED_WRAPPED): WrappedReport {
 }
 
 describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline)", () => {
-  it("a bcdev build gives the pre-committed 36 mutants, and its line map refuses none of them", async () => {
+  it("a bcdev build gives the pre-committed 58 mutants, and its line map refuses none of them", async () => {
     const root = await mkdtemp(join(tmpdir(), "lethal-r497-fixture-"));
     try {
       const set = await generateMutationSet(WRAPPED_PROJECT_DIR, {
@@ -248,16 +250,36 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
       expect(
         written.mutants.map((m) => `${m.mutantId} ${m.file} ${m.startLine} ${m.operatorName}`),
       ).toEqual(EXPECTED_WRAPPED_BC.map((r) => `${r.code} ${r.file} ${r.line} ${r.operatorName}`));
-      // The deployed batch's line map under the bcdev build's symbols: every fixture codeunit is
-      // mapped, none refused (A1: WrappedPairB's compiled-out 78905 does not refuse WrappedPairA).
+      // The deployed batch's line map under the bcdev build's symbols: every fixture object is
+      // mapped, none refused (A1: WrappedPairB's compiled-out 78905 does not refuse WrappedPairA;
+      // R536: the wrapped table and page and their twins).
       const symbols = await effectiveBuildSymbols(WRAPPED_PROJECT_DIR, WRAPPED_SYMBOLS, undefined, {
         kind: "bcdev",
       });
-      const declared = new Set(
-        [78901, 78902, 78903, 78904, 78905, 78906].map((id) => `codeunit:${id}`),
-      );
+      const declared = new Set([
+        ...[78901, 78902, 78903, 78904, 78905, 78906].map((id) => `codeunit:${id}`),
+        "table:78907",
+        "table:78908",
+        "page:78909",
+        "page:78910",
+      ]);
       const map = await buildLineMap(dir, declared, symbols);
       expect([...map.refusedByKey().keys()].filter((k) => declared.has(k))).toEqual([]);
+      // R536: and the new kinds are really mapped (not merely unrefused): each procedure's own
+      // line in the instrumented text names it, in the wrapped file and in its twin.
+      const lineOf = async (file: string, text: string) =>
+        (await readFile(join(dir, file), "utf8")).split("\n").findIndex((l) => l.includes(text)) +
+        1;
+      for (const [file, type, id, name] of [
+        ["WrappedTrigger.Table.al", "Table", 78907, "Doubled"],
+        ["WrappedTriggerTwin.Table.al", "Table", 78908, "Doubled"],
+        ["WrappedView.Page.al", "Page", 78909, "Label"],
+        ["WrappedViewTwin.Page.al", "Page", 78910, "Label"],
+      ] as const) {
+        const at = await lineOf(file, `procedure ${name}(`);
+        expect(at).toBeGreaterThan(0);
+        expect(map.lookup(type, id, at)).toBe(name);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
