@@ -1,0 +1,43 @@
+{
+  "_note": "R-407: al-runner v2.12.0-main.43f76177, --server, driven through LethAL's AlRunnerServer + defaultServerSpawn with cwd = the probe root; daemon argv [al-runner, --server, --test-timeout, 60]; daemon stderr '[bc] selected BC 28.5.54151.55132 (...)'. Request runTests {sourcePaths: [<root>/inst/active, <root>/tests], testIsolation: test, coverage: true, perTestCoverage: true}. Exit 0, total 1, the one test passed. The frame probe's own layout (writeFrameProbeProject, projectDir fixtures/sandbox-multiobject). Measured 2026-10-09. Per-test coverage trimmed to the pair file; statements verbatim; the probe root replaced by <root>.",
+  "tests": [{ "name": "Codeunit50409.ProbeReached", "status": "pass", "durationMs": 77 }],
+  "perTestCoverage": [
+    {
+      "test": "Codeunit50409.ProbeReached",
+      "coverage": [
+        {
+          "file": "<root>/inst/active/R407Pair.Table.al",
+          "statements": [
+            {
+              "id": 0,
+              "scope": "Reached",
+              "line": 45,
+              "column": 12,
+              "endLine": 45,
+              "endColumn": 18,
+              "hits": 2
+            },
+            {
+              "id": 1,
+              "scope": "Reached",
+              "line": 46,
+              "column": 13,
+              "endLine": 46,
+              "endColumn": 25,
+              "hits": 1
+            },
+            {
+              "id": 2,
+              "scope": "Reached",
+              "line": 47,
+              "column": 9,
+              "endLine": 47,
+              "endColumn": 17,
+              "hits": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

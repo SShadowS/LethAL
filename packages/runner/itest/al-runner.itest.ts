@@ -47,7 +47,7 @@ import { AlRunnerBackend, defaultServerSpawn } from "../src/al-runner-backend";
 import { runAlRunnerContractProbe } from "../src/al-runner-contract";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import type { ExecutionBackend } from "../src/backend";
-import { buildBackend, withAlRunnerCoverageGuard } from "../src/cli";
+import { applyAlRunnerCoverageGuard, buildBackend } from "../src/cli";
 import { formatFailure } from "../src/format-failure";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { defaultSpawn } from "../src/publisher";
@@ -87,7 +87,6 @@ import {
   MULTIOBJECT_SELECTOR_IDS,
   MULTIOBJECT_TEST_DIR,
   assertMultiObjectLegsEqual,
-  assertMultiObjectRefusal,
   assertMultiObjectRun,
   printMultiObjectTable,
 } from "./multiobject-fixture";
@@ -257,13 +256,32 @@ async function runOnce(
     // R220: the caller decides, having first asked whether al-runner can report this project's
     // coverage correctly at all. `capabilities()` is read at the top of `runSession`, before an
     // instrumented bundle exists, so the answer has to come from the source tree.
-    // R383: the multi-object legs pass `coverage: "none"`, as the CLI guard decided for them.
+    // R407: a fixture with a multi-object file runs the CLI's own coverage guard, on THIS leg's
+    // transport, so the frame probe answers for the transport the leg uses. The gate REQUIRES
+    // `admitted` there; any other answer stops the leg by name.
     const coverage = fixture.coverage ?? "al-runner";
     const support = await alRunnerCoverageSupport(fixture.projectDir);
+    let admitMultiObjectFiles = false;
     if (coverage === "al-runner" && !support.supported) {
-      throw new Error(
-        `al-runner coverage is unsupported for this fixture, which it must not be: ${support.multiObjectFiles.join(", ")}`,
+      const warned: string[] = [];
+      const guarded = await applyAlRunnerCoverageGuard(
+        {
+          alRunner: { alRunnerPath, coverage, serverMode },
+          ...(fixture.symbols.length > 0 ? { preprocessorSymbols: fixture.symbols } : {}),
+        },
+        fixture.projectDir,
+        (line) => {
+          console.warn(line);
+          warned.push(line);
+        },
+        { testDir: fixture.testDir },
       );
+      admitMultiObjectFiles = guarded.admitMultiObjectFiles;
+      if (!admitMultiObjectFiles) {
+        throw new Error(
+          `R407: the coverage-frame probe (${serverMode ? "--server" : "one-shot"}) did not admit ${support.multiObjectFiles.join(", ")}; this gate requires "admitted". Guard said: ${warned.join(" | ")}`,
+        );
+      }
     }
     const backend = new AlRunnerBackend({
       alRunnerPath,
@@ -271,6 +289,7 @@ async function runOnce(
       testDir: fixture.testDir,
       selectorObjectId: fixture.selectorIds.selectorId,
       coverage,
+      ...(admitMultiObjectFiles ? { admitMultiObjectFiles: true } : {}),
       ...(serverMode ? { serverMode: true } : {}),
       ...(selectorMode === "resource" ? { selectorMode } : {}),
       // R321: the one-shot argv (`buildAlRunnerArgv`) and the daemon's start argv (R319) read this.
@@ -683,34 +702,28 @@ async function runLayoutLegs(): Promise<SessionReport> {
 }
 
 /**
- * R383: `sandbox-multiobject`, one-shot then `--server`, under the multi-object REFUSAL. Two
- * codeunits in one file, whose later object al-runner reports in a frame LethAL cannot undo, so
- * the CLI guard must turn the requested coverage off, by name, before either leg runs. Both legs
- * then run with coverage "none" and must equal the pre-committed refusal table per mutant,
- * covering tests included, and each other.
+ * R383/R407: `sandbox-multiobject`, one-shot, `--server`, then `--server` + resource selector. Two
+ * codeunits in one file. Each leg requests coverage "al-runner" and `runOnce` runs the CLI's
+ * coverage guard on that leg's transport; the gate REQUIRES the frame probe to say `admitted` (R407
+ * plan r2), and a refusal stops the leg by name. Every leg must equal the pre-committed table per
+ * mutant, covering tests included, and the one-shot leg. The resource leg is the DEFAULT user
+ * combination, added by docs/superpowers/specs/2026-10-09-r407-resource-leg-addendum.md because the
+ * probe does not vary with the selector mode.
+ *
+ * R407: `EXPECTED_MULTIOBJECT` is the admission table (bc2511ba, adopted by
+ * docs/superpowers/specs/2026-10-09-r407-multiobject-admission-precommitment.md: 6 / 1 / 5), and
+ * `al-runner.multiobject.baseline.json` is re-frozen to it under R332.
  *
  * Checks are collected and thrown once, so a failure shows both legs. Returns the one-shot report
  * for `main()` to compare with the frozen baseline LAST, after every table check passed.
  */
 async function runMultiObjectLegs(): Promise<SessionReport> {
-  const warnings: string[] = [];
-  const guarded = await withAlRunnerCoverageGuard(
-    { alRunner: { alRunnerPath, coverage: "al-runner" } },
-    MULTIOBJECT_PROJECT_DIR,
-    (line) => {
-      console.warn(line);
-      warnings.push(line);
-    },
-  );
-  const coverage = guarded.alRunner?.coverage;
-  // Thrown at once: without the refusal there is nothing for the legs to measure.
-  assertMultiObjectRefusal(coverage, warnings);
   const fixture: GateFixture = {
     projectDir: MULTIOBJECT_PROJECT_DIR,
     testDir: MULTIOBJECT_TEST_DIR,
     selectorIds: MULTIOBJECT_SELECTOR_IDS,
     symbols: [],
-    coverage: coverage === "none" ? "none" : "al-runner",
+    coverage: "al-runner",
   };
   const failures: string[] = [];
   const check = (what: string, fn: () => void): void => {
@@ -724,6 +737,7 @@ async function runMultiObjectLegs(): Promise<SessionReport> {
   };
   const oneShotDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-oneshot-"));
   const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-server-"));
+  const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-resource-"));
   try {
     const oneShot = await runOnce(oneShotDir, false, "static", fixture);
     printMultiObjectTable(oneShot, "one-shot");
@@ -736,18 +750,28 @@ async function runMultiObjectLegs(): Promise<SessionReport> {
       assertMultiObjectLegsEqual(oneShot, viaServer, "--server"),
     );
 
+    const viaResource = await runOnce(resourceDir, true, "resource", fixture);
+    printMultiObjectTable(viaResource, "--server + resource");
+    check("multi-object --server + resource", () =>
+      assertMultiObjectRun(viaResource, "--server + resource"),
+    );
+    check("multi-object --server + resource vs one-shot", () =>
+      assertMultiObjectLegsEqual(oneShot, viaResource, "--server + resource"),
+    );
+
     if (failures.length > 0) {
       throw new Error(
-        `R383: ${failures.length} multi-object-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+        `R407: ${failures.length} multi-object-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
       );
     }
     console.log(
-      `  multi-object legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server identical`,
+      `  multi-object legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server and --server + resource identical`,
     );
     return oneShot;
   } finally {
     await rm(oneShotDir, { recursive: true, force: true });
     await rm(serverDir, { recursive: true, force: true });
+    await rm(resourceDir, { recursive: true, force: true });
   }
 }
 
@@ -1114,6 +1138,7 @@ async function main(): Promise<void> {
       "layout-server",
       "multiobject-one-shot",
       "multiobject-server",
+      "multiobject-resource",
       "wrapped-one-shot",
       "wrapped-server",
       "wrapped-resource",

@@ -27,7 +27,11 @@ import {
 // workspace packages stay at 0.0.0 and are private.
 import rootPackageJson from "../../../package.json" with { type: "json" };
 import type { ActivationConfig, FetchFn } from "./activation";
-import { AlRunnerBackend } from "./al-runner-backend";
+import {
+  AlRunnerBackend,
+  type AlRunnerConfig,
+  type AlRunnerProvisionResult,
+} from "./al-runner-backend";
 import { readAlRunnerCache } from "./al-runner-cache";
 import type { AlRunnerCacheReport } from "./al-runner-cache";
 import {
@@ -37,6 +41,11 @@ import {
 } from "./al-runner-canary";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { alRunnerCoverageSupport } from "./al-runner-coverage";
+import {
+  type AlRunnerFrameProbeRequest,
+  type AlRunnerFrameProbeResult,
+  probeAlRunnerCoverageFrame,
+} from "./al-runner-frame-probe";
 import {
   predefinedSymbolsChangedWarning,
   probeAlRunnerPredefinedSymbols,
@@ -2285,42 +2294,77 @@ export function alRunnerAdvisory(
 
 /**
  * R387: an `alRunner.coverage: "al-runner"` request, checked against the project before anything
- * is built. al-runner reports every object after a file's first in a frame LethAL cannot convert
- * (R383, measured on v2.12.0-main.c39ad5de; upstream #3713's object loss is fixed, this is a
- * different defect), and the index drops a file holding a `#if`-wrapped object of a shape it does
- * not admit (`alRunnerAdmitsWrappedFile`, R298, R-300b), so either would turn real coverage into wrong
- * coverage. Such a run falls back to `"none"` with ONE warning naming the files. Called once per
- * session, so the warning is not repeated per worker.
+ * is built. The index drops a file holding a `#if`-wrapped object of a shape it does not admit
+ * (`alRunnerAdmitsWrappedFile`, R298, R-300b), which would turn real coverage into wrong coverage,
+ * so such a run falls back to `"none"` with ONE warning naming the files. Called once per session,
+ * so the warning is not repeated per worker.
+ *
+ * R407: a multi-object file is admitted only when THIS al-runner passes the coverage-frame probe
+ * (`probeAlRunnerCoverageFrame`), run on the transport the session will use. On
+ * v2.12.0-main.c39ad5de al-runner reported every object after a file's first at the wrong line
+ * (R383); upstream #5249 fixed it, and the probe tells the two apart. Refused, the run falls back
+ * to `"none"` exactly as before, and the warning names the probe's reason and the build.
  */
 export async function withAlRunnerCoverageGuard(
   configFile: LethalConfigFile,
   projectDir: string,
   warn: (line: string) => void = console.warn,
+  opts: AlRunnerCoverageGuardOptions = {},
 ): Promise<LethalConfigFile> {
-  return (await applyAlRunnerCoverageGuard(configFile, projectDir, warn)).config;
+  return (await applyAlRunnerCoverageGuard(configFile, projectDir, warn, opts)).config;
 }
 
-/** The guard, also returning the files it named (empty when it did not fall back). */
-async function applyAlRunnerCoverageGuard(
+/** R407: what the guard needs beyond the config, and its seams for tests. */
+export interface AlRunnerCoverageGuardOptions {
+  /** R205: the session's source snapshot, so the guard judges the files the build uses. */
+  readonly snapshot?: ReadonlyMap<string, Buffer>;
+  /** The session's test project: a one-shot probe provisions on it for the R147 pin. */
+  readonly testDir?: string;
+  readonly frameProbe?: (req: AlRunnerFrameProbeRequest) => Promise<AlRunnerFrameProbeResult>;
+  readonly provision?: (cfg: AlRunnerConfig) => Promise<AlRunnerProvisionResult>;
+}
+
+/**
+ * The guard, also returning the files it named (empty when it did not fall back) and whether
+ * multi-object files are admitted (R407). `admitMultiObjectFiles` is true only when coverage stays
+ * `"al-runner"`, the project holds a multi-object file, and the frame probe admitted.
+ */
+export async function applyAlRunnerCoverageGuard(
   configFile: LethalConfigFile,
   projectDir: string,
   warn: (line: string) => void,
-  snapshot?: ReadonlyMap<string, Buffer>,
-): Promise<{ readonly config: LethalConfigFile; readonly named: readonly string[] }> {
+  opts: AlRunnerCoverageGuardOptions = {},
+): Promise<{
+  readonly config: LethalConfigFile;
+  readonly named: readonly string[];
+  readonly admitMultiObjectFiles: boolean;
+}> {
   const section = configFile.alRunner;
-  if (section?.coverage !== "al-runner") return { config: configFile, named: [] };
-  const support = await alRunnerCoverageSupport(projectDir, snapshot);
-  if (support.multiObjectFiles.length === 0 && support.wrappedObjectFiles.length === 0) {
-    return { config: configFile, named: [] };
+  if (section?.coverage !== "al-runner") {
+    return { config: configFile, named: [], admitMultiObjectFiles: false };
+  }
+  const support = await alRunnerCoverageSupport(projectDir, opts.snapshot);
+  let probe: AlRunnerFrameProbeResult | undefined;
+  if (support.multiObjectFiles.length > 0) {
+    probe = await runFrameProbe(configFile, projectDir, opts);
+    if (probe.outcome === "admitted") {
+      warn(
+        `[lethal] al-runner-coverage-frame-admitted: ${support.multiObjectFiles.join(", ")} (more than one object) keep al-runner coverage: the frame probe (${probe.transport}) found every object reported in the instrumented frame, labelled inside the bundle (Probe B at lines ${probe.lines.join(", ")}). al-runner build: ${probe.build ?? "<not printed>"} (R407).`,
+      );
+    }
+  }
+  const multi = probe?.outcome === "admitted" ? [] : support.multiObjectFiles;
+  if (multi.length === 0 && support.wrappedObjectFiles.length === 0) {
+    return { config: configFile, named: [], admitMultiObjectFiles: probe?.outcome === "admitted" };
   }
   const named = [
-    ...support.multiObjectFiles.map((f) => `${f} (more than one object)`),
+    ...multi.map((f) => `${f} (more than one object)`),
     ...support.wrappedObjectFiles.map((f) => `${f} (an #if-wrapped object)`),
   ];
   const why = [
-    ...(support.multiObjectFiles.length > 0
+    ...(probe?.outcome === "refused"
       ? [
-          "al-runner reports every object after a file's first at the wrong line (measured on v2.12.0-main.c39ad5de, R383)",
+          `al-runner reports every object after a file's first at the wrong line on some builds (measured on v2.12.0-main.c39ad5de, R383), and the frame probe (${probe.transport}) REFUSED this one: ${probe.refusal}: ${probe.reason}. al-runner build: ${probe.build ?? "<not printed>"} (R407)`,
         ]
       : []),
     ...(support.wrappedObjectFiles.length > 0
@@ -2330,7 +2374,59 @@ async function applyAlRunnerCoverageGuard(
   warn(
     `[lethal] al-runner-coverage-unsupported: "alRunner.coverage": "al-runner" is IGNORED for this run, which runs with coverage "none" instead. al-runner's coverage cannot be placed in ${named.join(", ")}: ${why.join("; ")}. Trusting it would credit those objects' mutants to the wrong tests, or report them no-coverage while tests do reach them.`,
   );
-  return { config: { ...configFile, alRunner: { ...section, coverage: "none" } }, named };
+  return {
+    config: { ...configFile, alRunner: { ...section, coverage: "none" } },
+    named,
+    admitMultiObjectFiles: false,
+  };
+}
+
+/**
+ * R407: the frame probe on the session's transport. A one-shot session's probe takes the R147 pin
+ * from one `provisionOnce` on the session's test project, as the session's own runs will; the
+ * daemon never takes one (R242).
+ */
+async function runFrameProbe(
+  configFile: LethalConfigFile,
+  projectDir: string,
+  opts: AlRunnerCoverageGuardOptions,
+): Promise<AlRunnerFrameProbeResult> {
+  const section = configFile.alRunner ?? {};
+  const { alRunnerPath, packagesDir } = section;
+  if (alRunnerPath === undefined || alRunnerPath === "") {
+    throw new Error("the al-runner coverage guard needs alRunner.alRunnerPath to probe (R407)");
+  }
+  const preprocessorSymbols = validatePreprocessorSymbols(configFile.preprocessorSymbols);
+  const { serverMode } = effectiveAlRunnerTransport(section);
+  let platformAppsDir: string | undefined;
+  if (!serverMode) {
+    if (opts.testDir === undefined) {
+      throw new Error(
+        "the al-runner coverage guard needs the test project for a one-shot probe (R407)",
+      );
+    }
+    const cfg: AlRunnerConfig = {
+      alRunnerPath,
+      instrumentedDir: opts.testDir,
+      testDir: opts.testDir,
+      selectorObjectId: 0,
+      ...(packagesDir !== undefined ? { packagesDir } : {}),
+      ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
+    };
+    // ponytail: a throwaway backend, only for `provisionOnce`'s argv and pin checks.
+    const provisioned = await (opts.provision ?? ((c) => new AlRunnerBackend(c).provisionOnce()))(
+      cfg,
+    );
+    if ("platformAppsDir" in provisioned) platformAppsDir = provisioned.platformAppsDir;
+  }
+  return (opts.frameProbe ?? probeAlRunnerCoverageFrame)({
+    alRunnerPath,
+    projectDir,
+    serverMode,
+    ...(platformAppsDir !== undefined ? { platformAppsDir } : {}),
+    ...(packagesDir !== undefined ? { packagesDir } : {}),
+    ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
+  });
 }
 
 /**
@@ -2338,25 +2434,28 @@ async function applyAlRunnerCoverageGuard(
  * the section (the same call `buildBackend` makes), apply the coverage guard, and print the ONE
  * advisory line. Returns the config every backend of the session is built from. A config with no
  * `alRunner` section is returned untouched, so `buildBackend` still throws its own targeted error.
- * R205: `snapshot` is the session's source snapshot, so the guard judges the files the build uses.
+ * R205: `opts.snapshot` is the session's source snapshot, so the guard judges the files the build uses.
+ * R407: also returns whether multi-object files are admitted, which `buildBackend` hands to every
+ * backend it builds. It is never a config key.
  */
 export async function prepareAlRunnerSession(
   configFile: LethalConfigFile,
   projectDir: string,
   warn: (line: string) => void = console.warn,
-  snapshot?: ReadonlyMap<string, Buffer>,
-): Promise<LethalConfigFile> {
-  if (configFile.alRunner === undefined) return configFile;
+  opts: AlRunnerCoverageGuardOptions = {},
+): Promise<{ readonly config: LethalConfigFile; readonly admitMultiObjectFiles: boolean }> {
+  if (configFile.alRunner === undefined)
+    return { config: configFile, admitMultiObjectFiles: false };
   validateAlRunnerConfig(configFile.alRunner);
-  const { config: sessionConfig, named } = await applyAlRunnerCoverageGuard(
+  const { config, named, admitMultiObjectFiles } = await applyAlRunnerCoverageGuard(
     configFile,
     projectDir,
     warn,
-    snapshot,
+    opts,
   );
-  const advisory = alRunnerAdvisory(sessionConfig.alRunner ?? {}, named);
+  const advisory = alRunnerAdvisory(config.alRunner ?? {}, named);
   if (advisory !== undefined) warn(advisory);
-  return sessionConfig;
+  return { config, admitMultiObjectFiles };
 }
 
 export interface LethalConfigFile {
@@ -2986,6 +3085,8 @@ export async function buildBackend(
   selectorIds: SelectorConfig = DEFAULT_SELECTOR_IDS,
   /** R205: the session's source snapshot, so the id check reads the source the build uses. */
   source?: ReadonlyMap<string, Buffer>,
+  /** R407: the coverage guard's frame-probe admission (`prepareAlRunnerSession`), never config. */
+  admitMultiObjectFiles = false,
 ): Promise<ExecutionBackend> {
   // R101(c): validated FIRST, for both backends, before anything is constructed — a typo'd symbol
   // list must fail immediately rather than after a compile that silently used the other branch.
@@ -3018,6 +3119,7 @@ export async function buildBackend(
         serverMode: t.serverMode,
         selectorMode: t.selectorMode,
         coverage: t.coverage,
+        ...(admitMultiObjectFiles ? { admitMultiObjectFiles: true } : {}),
         // R101(c): the same list the bcdev path's `alc` step gets below. Both compile paths must
         // select the same branch, or their verdicts describe two different programs.
         ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
@@ -3801,6 +3903,9 @@ export async function runFromCli(
     /** R123: same injection point and same reason as `runAlRunnerCanary` above — a test drives a
      *  canned contract result without spawning a real al-runner. */
     runAlRunnerContractProbe?: typeof runAlRunnerContractProbe;
+    /** R407: the coverage guard's frame probe and its one-shot provisioning, for tests. */
+    alRunnerFrameProbe?: AlRunnerCoverageGuardOptions["frameProbe"];
+    alRunnerProvision?: AlRunnerCoverageGuardOptions["provision"];
     /** GH-25: the spawn `--changed-since` runs git through, so a test can neutralise the
      *  machine's inherited git config (a global `*.al -diff` would make an edit look binary). */
     gitSpawn?: SpawnFn;
@@ -3884,6 +3989,8 @@ export async function runFromCli(
     // R387: the config every backend of this session is built from. Differs from `configFile` only
     // when the al-runner coverage guard below turned a requested coverage off.
     let sessionConfig = configFile;
+    // R407: the guard's frame-probe admission, handed to the main backend AND every worker.
+    let admitMultiObjectFiles = false;
     if (parsed.backendKind === "al-runner") {
       // R123: the contract first — if it has moved, nothing measured after it can be trusted,
       // including the canary. Throws on a divergence; see `announceAlRunnerContract`.
@@ -3909,12 +4016,14 @@ export async function runFromCli(
         );
       }
       // R387: once per session, here rather than in `buildBackend`, which runs once per worker.
-      sessionConfig = await prepareAlRunnerSession(
-        configFile,
-        parsed.projectDir,
-        console.warn,
-        source,
-      );
+      const prepared = await prepareAlRunnerSession(configFile, parsed.projectDir, console.warn, {
+        snapshot: source,
+        testDir: parsed.testDir,
+        ...(deps.alRunnerFrameProbe !== undefined ? { frameProbe: deps.alRunnerFrameProbe } : {}),
+        ...(deps.alRunnerProvision !== undefined ? { provision: deps.alRunnerProvision } : {}),
+      });
+      sessionConfig = prepared.config;
+      admitMultiObjectFiles = prepared.admitMultiObjectFiles;
     }
 
     // Task 7: resolves the bcdev section EXACTLY ONCE (see `resolveEnvToolSession`'s doc comment)
@@ -3981,6 +4090,7 @@ export async function runFromCli(
             {},
             selectorIds,
             source,
+            admitMultiObjectFiles,
           );
           // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
           // without awaiting — see orchestrator.ts), but building a worker's backend
@@ -4010,6 +4120,7 @@ export async function runFromCli(
                   {},
                   selectorIds,
                   source,
+                  admitMultiObjectFiles,
                 ),
               );
             }

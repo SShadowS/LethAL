@@ -11,6 +11,7 @@ import {
   emitStaticSelector,
 } from "@lethal/schemata";
 import {
+  AlRunnerCoverageFrameError,
   type AlRunnerCoverageIndex,
   alRunnerCoverageFrom,
   alRunnerCoverageFromServer,
@@ -317,8 +318,13 @@ const SERVER_SUITE_MIN_DEADLINE_MS = 10 * 60 * 1000;
 
 /** The real daemon, adapted to the handle `AlRunnerServer` consumes. Exported for R387's gate leg,
  *  which wraps it to record the argv. */
-export const defaultServerSpawn: ServerSpawnFn = (argv) => {
-  const proc = Bun.spawn([...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+export const defaultServerSpawn: ServerSpawnFn = (argv, opts) => {
+  const proc = Bun.spawn([...argv], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
+  });
   const handle: ServerProcessHandle = {
     write: (line) => {
       proc.stdin.write(line);
@@ -389,15 +395,24 @@ export interface AlRunnerConfig {
    * every mutant runs every green test and an unreached one is reported `survived`, which
    * over-reports. With coverage wrongly enabled it would be reported `no-coverage`, which HIDES
    * it. So the caller has to opt in, and must first ask `alRunnerCoverageSupport(projectDir)`
-   * whether al-runner's coverage can be trusted for this project at all -- it cannot for a file
-   * declaring more than one object (al-runner reports every object after the first in the wrong
-   * frame, measured on v2.12.0-main.c39ad5de, R383; see `al-runner-coverage.ts`), and the CLI also
+   * whether al-runner's coverage can be trusted for this project at all -- for a file declaring
+   * more than one object only when R407's frame probe admits the build (c39ad5de reported every
+   * object after the first in the wrong frame, R383; see `al-runner-coverage.ts`), and the CLI also
    * refuses a file holding a `#if`-wrapped object (R298, pending R300).
    *
    * Decided by the caller rather than here because `capabilities()` is synchronous and is read at
    * the top of `runSession`, before an instrumented bundle exists to inspect.
    */
   readonly coverage?: "al-runner" | "none";
+  /**
+   * R407 — multi-object files are indexed for coverage. Set ONLY from the CLI coverage guard's
+   * frame-probe admission (`buildBackend`, for the main backend and every worker; the gate's own
+   * legs from the same guard). Never a config-file key: `AL_RUNNER_KEYS` refuses it. With coverage
+   * on, an index holding a multi-object file throws `AlRunnerCoverageFrameError` unless this is
+   * true, so a construction path that drops it fails loudly instead of reading every reached mutant
+   * `no-coverage`.
+   */
+  readonly admitMultiObjectFiles?: boolean;
   /**
    * R222 — how the active mutant reaches the compiled AL.
    *
@@ -815,20 +830,41 @@ export class AlRunnerBackend implements ExecutionBackend {
     this.buildSymbols = [...symbols];
   }
 
-  /** The index, under the session's symbols; with coverage on, a deploy without them refuses. */
-  private coverageIndexOf(dir: string): Promise<AlRunnerCoverageIndex> {
+  /**
+   * The index, under the session's symbols; with coverage on, a deploy without them refuses.
+   *
+   * R407 backstops, for a bundle holding a multi-object file: it throws unless the guard's
+   * admission reached this backend (`cfg.admitMultiObjectFiles`), and unless `deploy()` ran first.
+   * Without a deploy the index would be built from `cfg.instrumentedDir`, the PARENT of the batch
+   * folders, and the label check would then let a batch label through.
+   */
+  private async coverageIndexOf(dir: string): Promise<AlRunnerCoverageIndex> {
     const symbols = this.buildSymbols;
     if (symbols === undefined) {
       throw new Error(
         "AlRunnerBackend: coverage is on but the session's build symbols were never handed over (useBuildSymbols), so the #if arms of the bundle are unknown; refusing rather than guessing them (R-300b).",
       );
     }
-    return buildAlRunnerCoverageIndex(dir, {
+    const admit = this.cfg.admitMultiObjectFiles === true;
+    const index = await buildAlRunnerCoverageIndex(dir, {
       symbols,
+      ...(admit ? { admitMultiObjectFiles: true } : {}),
       ...(this.cfg.sourceProjectDir !== undefined
         ? { sourceProjectDir: this.cfg.sourceProjectDir }
         : {}),
     });
+    const multi = index.multiObjectFiles;
+    if (multi.length > 0 && !admit) {
+      throw new AlRunnerCoverageFrameError(
+        `AlRunnerBackend: coverage is on and the bundle holds multi-object file(s) ${multi.join(", ")}, but no frame-probe admission reached this backend. Their objects would read no-coverage while tests reach them`,
+      );
+    }
+    if (multi.length > 0 && this.deployedDir === undefined) {
+      throw new AlRunnerCoverageFrameError(
+        `AlRunnerBackend: a coverage index for the multi-object file(s) ${multi.join(", ")} was asked for before any deploy(), so it would be built from ${dir} rather than the deployed bundle`,
+      );
+    }
+    return index;
   }
 
   /**
@@ -863,9 +899,11 @@ export class AlRunnerBackend implements ExecutionBackend {
    * - `coverage: "none"` — NO LONGER TRUE since R220 (2026-09-09): `cfg.coverage: "al-runner"`
    *   reads al-runner's own per-test `--coverage`. What keeps `authoritative` false on this point
    *   is that the coverage is CONDITIONAL: a file declaring more than one object disables it for
-   *   the whole run, so it is a property of the project's layout, not a capability of the backend.
-   *   The reason moved in R383: upstream #3713 (objects after the first lost) is fixed, but on
-   *   v2.12.0-main.c39ad5de those objects' lines come back in a frame LethAL cannot undo.
+   *   the whole run unless R407's frame probe admits the al-runner build, so it is a property of the
+   *   project's layout AND the build, not a capability of the backend. The reason moved in R383:
+   *   upstream #3713 (objects after the first lost) is fixed, but on v2.12.0-main.c39ad5de those
+   *   objects' lines come back in a frame LethAL cannot undo; 43f76177 reports them correctly.
+   *   A `#if`-wrapped object of an unmeasured shape still disables it (R298).
    * - **`Codeunit.Run` does not scope a write transaction.** `remove-commit` at
    *   `Data Commit Ops.CommitThenRunValueForm` is killed on bcdev and survives here, and a direct
    *   probe confirms the mechanism: a row inserted inside `Codeunit.Run` survives the error that
