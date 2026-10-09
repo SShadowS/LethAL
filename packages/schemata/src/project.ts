@@ -230,8 +230,9 @@ export function coarseIdentityTupleOf(
  * 36: R497, the BC paths score #if-wrapped objects of the measured shapes; no key moves, but a key whose verdict was a refusal's no-coverage on bcdev can now be scored, so history, --resume and marks recorded under 35 are not carried (the R-300b precedent, scheme 29).
  * 37: R340, a trigger's header names (parameters, plain var locals, the named return) are typed, so typed operators gain sites in triggers and swap-call-arguments can choose a different pair under an unchanged identity key (measured: DC +59, DO +5, CDO +5 sites, 0 keys moved, but a pair change is invisible to keys); history, --resume and marks recorded under 36 are not carried.
  * 38: R555, a call to a procedure that writes a preset exit name (in the report, its extension's base, or through a typed `Report X` receiver in any object) is hang-refused like the write itself; a refused site renumbers its same-tuple twins (measured on BaseApp at 48d5534f: 483 deployed mutants removed, 0 tuples moved, five ordinals moved; every other corpus: none).
+ * 39 R-531: 45 ordinals renumber (41 BaseApp, 4 System Application); no tuple moves. A loop whose cursor condition (`Find*`, `IsEmpty`, `Count`, never `Next`) ends only because its body consumes the record set is hang-refused (the consumers, their guards and feeds, a one-hop same-object callee's consumers, the pre-loop filters the ending depends on, and every operator in the condition but swap-find-direction), so a refused site renumbers its same-tuple twins.
  */
-export const IDENTITY_SCHEME = 38;
+export const IDENTITY_SCHEME = 39;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
