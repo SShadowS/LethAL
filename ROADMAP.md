@@ -232,7 +232,7 @@ that ordering is the priority.
 - **R517** · al-runner `--server`: a timeout is judged on the suite's wall clock against a 60 s in-run limit LethAL never set · [R517.md](docs/roadmap/R517.md) · done (b89f2f34)
 - **R518** · al-runner one-shot: a test timeout exits 3, was scored `error` and retried, and the second error aborted the whole session · [R518.md](docs/roadmap/R518.md) · done (cef943c2)
 - **R520** · Report-loop hang refusal follows other-object callees one hop only: a callee's own calls into a third object are not refused · [R520.md](docs/roadmap/R520.md) · open, filed 2026-10-08
-- **R534** · al-runner: an unclassified `error` row (an OnRun-trigger hang, a RunnerOutOfScopeException) aborts the whole session under spec §11. Should it? · [R534.md](docs/roadmap/R534.md) · done (<commit>)
+- **R534** · al-runner: an unclassified `error` row (an OnRun-trigger hang, a RunnerOutOfScopeException) aborts the whole session under spec §11. Should it? · [R534.md](docs/roadmap/R534.md) · done (2629351e)
 - **R521** · Report-loop hang refusal cannot type RecordRef, Variant, parameter, array-element, Report/Page or namespaced-interface receivers, so their callees are not refused · [R521.md](docs/roadmap/R521.md) · open, filed 2026-10-08
 - **R522** · Report-loop hang refusal does not see callee objects wrapped in `#if` (they are not object declarations to it) · [R522.md](docs/roadmap/R522.md) · open, filed 2026-10-08
 - **R523** · Report-loop hang refusal does not follow table triggers that open-item code fires (`Insert(true)`, `Modify(true)`, `Validate`, `Rename`) · [R523.md](docs/roadmap/R523.md) · open, filed 2026-10-08
