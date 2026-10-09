@@ -2670,8 +2670,10 @@ describe("C02-09: gap ids", () => {
       w.store.close();
     });
 
-    // R536 part 2, the other direction: a one-arm wrapper the source run's symbols compile is the
-    // shape the run scored (R497), so verify places the survivor and narrows like an unwrapped one.
+    // R536 part 2, the other direction: a bare object before a one-arm wrapper the source run's
+    // symbols compile is a shape the run scored (R497), so verify places the survivor and narrows
+    // like an unwrapped one. Under OTHER symbols ([]) the wrapper's object is compiled out, a shape
+    // that refuses its bare neighbour too, so the result pins WHICH symbols were read.
     test("R536: a survivor in an admitted #if-wrapped object (compiled under the source's symbols) is narrowed", async () => {
       const events: Array<{ code: string; message: string }> = [];
       const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
@@ -2685,7 +2687,7 @@ describe("C02-09: gap ids", () => {
             alSources: [
               {
                 path: "src/Logic.Codeunit.al",
-                text: '#if LETHALQ\ncodeunit 50000 "Logic"\n{\n    procedure Post()\n    begin\n    end;\n}\n#endif\n',
+                text: 'codeunit 50000 "Logic"\n{\n    procedure Post()\n    begin\n    end;\n}\n#if LETHALQ\ncodeunit 50001 "Extra"\n{\n    procedure Other()\n    begin\n    end;\n}\n#endif\n',
               },
             ],
           },
