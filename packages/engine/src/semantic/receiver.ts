@@ -49,6 +49,7 @@ import {
   declarationMembers,
   findEnclosingProcedure,
   isProcedureLike,
+  memberArms,
 } from "../ast/tree-walks";
 import { type NodeArm, type SemanticContext, rawArmOf } from "./context";
 
@@ -438,6 +439,13 @@ export function claimsSystemCall(node: ALSyntaxNode, ctx: SemanticContext, name:
 
   // GUARD 2: the enclosing object's own declaration wins over the system function.
   if (declaresProcedure(objectNode, target.name, armOf)) return false;
+  // R549: inside a pageextension a bare call binds a VISIBLE procedure of the BASE page (alc 18.0.43,
+  // R-547 measurement), so any project base-page candidate declaring one refuses.
+  if (
+    objectNode.kind === ALNodeKind.pageextension &&
+    basePageDeclaresVisible(symbols, objectNode, target.name, armOf)
+  )
+    return false;
   // …and so does one added to the enclosing TABLE by an extension, which is callable on the
   // implicit `Rec` here exactly as the table's own is.
   // R67, R-464: every record a bare name here can bind to (each `with` subject, dataitem, and the
@@ -1079,6 +1087,59 @@ function declaresProcedure(objectNode: ALSyntaxNode, name: string, armOf: ArmRea
 }
 
 /**
+ * R549: does any project page a pageextension may extend declare a procedure `name` that the
+ * extension can see? Candidates are every page of the `extends` name (indexed, or wrapped whole in
+ * `#if`, any arm), plus any split-header or unparsed object whose text names a page, the base and
+ * `name` (the conservative token rule of `projectDeclaresProcedureOnTable`). A `local` procedure is
+ * invisible (alc: the system `Commit` wins); `internal` is visible, the base being in this app. A
+ * split procedure is visible if any arm the build does not compile out is non-local. No candidate
+ * (a dependency base page): false, the claim stands (a named residual in R549). No readable base
+ * name: true, the safe direction.
+ */
+function basePageDeclaresVisible(
+  symbols: SymbolTable,
+  ext: ALSyntaxNode,
+  name: string,
+  armOf: ArmReader,
+): boolean {
+  const base = stripQuotes(ext.childForFieldName("base_object")?.text ?? "").toLowerCase();
+  if (base === "") return true;
+  const pages = [
+    ...symbols.objects.filter((o) => o.kind === "page").map((o) => o.node),
+    ...symbols.unindexedObjects.filter((o) => o.kind === ALNodeKind.page),
+  ];
+  const named = (p: ALSyntaxNode): boolean =>
+    stripQuotes(p.childForFieldName("object_name")?.text ?? "").toLowerCase() === base;
+  if (pages.some((p) => named(p) && declaresVisibleProcedure(p, name, armOf))) return true;
+  return [...symbols.unparsedObjects, ...symbols.splitObjects].some((o) => {
+    const tokens = identifierTokens(o.text);
+    return tokens.has("page") && tokens.has(base) && tokens.has(name.toLowerCase());
+  });
+}
+
+/** `declaresProcedure`, counting only an arm that is not `local` (see `basePageDeclaresVisible`). */
+function declaresVisibleProcedure(
+  objectNode: ALSyntaxNode,
+  name: string,
+  armOf: ArmReader,
+): boolean {
+  for (const member of allProcedureLikes(objectNode)) {
+    if (armOf !== undefined && armOf(member) === "inactive") continue;
+    for (const arm of memberArms(member)) {
+      const [head] = arm;
+      if (head === undefined || (armOf !== undefined && armOf(head) === "inactive")) continue;
+      if (!arm.some((c) => c.fieldName === "name" && equalsIgnoreCase(stripQuotes(c.text), name)))
+        continue;
+      const local = arm.some(
+        (c) => c.fieldName === "modifier" && c.children.some((k) => k.rawKind === "local_keyword"),
+      );
+      if (!local) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Does this project declare a procedure named `procName` ON the table `tableRef` — in the table's
  * own declaration, or in any `tableextension` of it?
  *
@@ -1176,8 +1237,9 @@ function projectDeclaresProcedureOnTable(
 }
 
 /** R331 (run 005): the lowercase identifier tokens of `text`, comments stripped. A quoted
- *  identifier counts as its inner text. Strings are not stripped: a false match only refuses. */
-function identifierTokens(text: string): ReadonlySet<string> {
+ *  identifier counts as its inner text. Strings are not stripped: a false match only refuses.
+ *  Exported for loop-hazard's R-547 base-report candidates (the same conservative rule). */
+export function identifierTokens(text: string): ReadonlySet<string> {
   // R-464: the engine's lexer, so a `//` inside a string no longer hides the rest of the line.
   const code = maskAlNonCode(text, { blankStringContents: false });
   const out = new Set<string>();
