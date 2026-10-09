@@ -1940,8 +1940,19 @@ export function loopConditionReadsByName(
  */
 function triggerHeaderLoopWrite(node: ALSyntaxNode, name: string, ctx: SemanticContext): boolean {
   const trigger = enclosingTrigger(node);
+  if (trigger === null || !triggerLocalNames(trigger).has(normalizeAlName(name))) return false;
+  return loopReadsNameAt(node, name, ctx);
+}
+
+/**
+ * R340 (plan r2 review, Important-1): does a loop enclosing `node` (within its scope) read the plain
+ * name `name`, by NAME: an enclosing `for`'s control variable, or any enclosing loop's exit parts
+ * (`loopConditionReadsByName`)? Used where no declaration is resolved: a trigger header name above,
+ * and `swap-call-arguments`, whose swap can redirect a `var` write away from the loop's variable
+ * (`while Steps > 0 do Dec(Steps, One)` -> `Dec(One, Steps)`), which compiles and never ends.
+ */
+export function loopReadsNameAt(node: ALSyntaxNode, name: string, ctx: SemanticContext): boolean {
   const wanted = normalizeAlName(name);
-  if (trigger === null || !triggerLocalNames(trigger).has(wanted)) return false;
   for (let cur: ALSyntaxNode | null = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
     if (cur.rawKind !== "for_statement") continue;
     const variable = cur.childForFieldName("variable");
@@ -2044,7 +2055,13 @@ export function classifyHangCapable(
     const ref = memberRefOf(parts.field, ctx);
     const byName = { receiver: parts.receiver.text, member: parts.member.text };
     if (ref === null) {
-      return inUnindexedObject(node, ctx) && loopConditionReadsByName(node, byName, ctx)
+      // R340 (plan r2 review, Minor-1): a field of a trigger HEADER receiver (a parameter or named
+      // return, which the hang path does not resolve) is matched by name too.
+      const trigger = enclosingTrigger(node);
+      const headerReceiver =
+        trigger !== null && triggerLocalNames(trigger).has(normalizeAlName(parts.receiver.text));
+      return (inUnindexedObject(node, ctx) || headerReceiver) &&
+        loopConditionReadsByName(node, byName, ctx)
         ? "loop-condition-target"
         : byNameRefusal(node, byName, ctx, "none");
     }

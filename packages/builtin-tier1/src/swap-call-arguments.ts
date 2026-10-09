@@ -7,6 +7,7 @@ import {
   type SemanticContext,
   isStatementPosition,
 } from "@lethal/operator-sdk";
+import { loopReadsNameAt } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
 
 /**
@@ -80,11 +81,17 @@ export const swapCallArguments: MutationOperator = {
   requiresSemantic: ["symbol-table", "type-info"],
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-    return swappablePair(node, ctx) !== null;
+    return pairFor(node, ctx) !== null;
+  },
+
+  // R340 (plan r2 review, Important-1): counted per file like the other operators' hang refusals.
+  refusesHangCapable(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    const pair = swappablePair(node, ctx);
+    return pair !== null && swapFeedsLoop(node, pair, ctx);
   },
 
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
-    const pair = swappablePair(node, ctx);
+    const pair = pairFor(node, ctx);
     if (pair === null) return [];
     const mutatedText = swapSpans(node, pair[0], pair[1]);
     if (mutatedText === null) return [];
@@ -154,6 +161,27 @@ export const swapCallArguments: MutationOperator = {
  * claims sites outside statement position, so hardcoding the hint would state something
  * `isStatementPosition` measures as false.
  */
+/**
+ * R340 (plan r2 review, Important-1): the swappable pair, unless swapping it could stop a loop. If
+ * either argument's NAME is read by an enclosing loop (an exit condition, or a `for`'s control
+ * variable), the swap can redirect a `var` write away from that variable (`Dec(Steps, One)` ->
+ * `Dec(One, Steps)` inside `while Steps > 0`): it compiles and never ends. The callee is never
+ * resolved, so the site is refused whole (no other pair is tried: one site, one decision). Found in
+ * triggers once R340 typed their header names; procedures had the same door, closed here too.
+ */
+function pairFor(node: ALSyntaxNode, ctx: SemanticContext): readonly [ALSyntaxNode, ALSyntaxNode] | null {
+  const pair = swappablePair(node, ctx);
+  return pair === null || swapFeedsLoop(node, pair, ctx) ? null : pair;
+}
+
+function swapFeedsLoop(
+  node: ALSyntaxNode,
+  pair: readonly [ALSyntaxNode, ALSyntaxNode],
+  ctx: SemanticContext,
+): boolean {
+  return pair.some((a) => loopReadsNameAt(node, a.text, ctx));
+}
+
 function parentContextOf(node: ALSyntaxNode): ParentContextHint {
   return isStatementPosition(node) ? "statement-position" : "expression-position";
 }

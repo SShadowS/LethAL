@@ -19,6 +19,7 @@ import {
 import { assignmentTargetOf, classifyHangCapable } from "../src/loop-hazard";
 import { removeAssignment } from "../src/remove-assignment";
 import { swapAdditive } from "../src/swap-additive";
+import { swapCallArguments } from "../src/swap-call-arguments";
 
 function load(src: string) {
   const root = wrapRoot(parseAL(src));
@@ -135,6 +136,70 @@ describe("R340: the hang check sees a loop over a trigger header name", () => {
   it("a for loop whose control variable is a trigger parameter: the write is hang-capable", () => {
     const { root, ctx } = load(FOR_PARAM);
     const assignment = nodeOf(root, ALNodeKind.assignment_statement, "Steps := Steps + 1");
+    expect(classifyHangCapable(assignment, ctx)).toBe("loop-condition-target");
+  });
+
+  // Plan r2 review, Important-1: swap-call-arguments can redirect a `var` write away from the loop's
+  // variable (`Dec(Steps, One)` -> `Dec(One, Steps)` compiles and never ends). R340 types these
+  // arguments in triggers; the same door was open in procedures.
+  const SWAP = `page 50345 "S"
+{
+    trigger OnNextRecord(Steps: Integer): Integer
+    var
+        One: Integer;
+        A: Integer;
+        B: Integer;
+        I: Integer;
+    begin
+        One := 1;
+        while Steps > 0 do
+            Dec(Steps, One);
+        for I := 1 to 3 do
+            Inc(I, One);
+        Take(A, B);
+        exit(Steps);
+    end;
+
+    procedure Loop(N: Integer)
+    var
+        Step: Integer;
+    begin
+        Step := 1;
+        while N > 0 do
+            Dec(N, Step);
+    end;
+
+    procedure Take(X: Integer; Y: Integer)
+    begin
+    end;
+}`;
+
+  it("swap-call-arguments refuses a swap whose argument a loop reads (trigger parameter, for variable, procedure); a call in no loop still swaps", () => {
+    const { root, ctx } = load(SWAP);
+    for (const call of ["Dec(Steps, One)", "Inc(I, One)", "Dec(N, Step)"]) {
+      const node = nodeOf(root, ALNodeKind.procedure_call, call);
+      expect(swapCallArguments.refusesHangCapable?.(node, ctx)).toBe(true);
+      expect(swapCallArguments.targets(node, ctx)).toBe(false);
+      expect(swapCallArguments.generate(node, ctx)).toEqual([]);
+    }
+    const free = nodeOf(root, ALNodeKind.procedure_call, "Take(A, B)");
+    expect(swapCallArguments.refusesHangCapable?.(free, ctx)).toBe(false);
+    expect(swapCallArguments.generate(free, ctx).map((s) => s.after.text)).toEqual(["Take(B, A)"]);
+  });
+
+  // Plan r2 review, Minor-1: a field of a record-typed trigger PARAMETER, written in a loop over it.
+  // No standard trigger is known to take a Record parameter; the shape is pinned so the member path
+  // cannot regress silently.
+  it("a member write on a trigger header record parameter in a loop over it is hang-capable", () => {
+    const { root, ctx } = load(`page 50346 "M"
+{
+    trigger OnNextRecord(var P: Record "Some Tab"): Integer
+    begin
+        while P.Amount < 10 do
+            P.Amount := P.Amount + 1;
+    end;
+}`);
+    const assignment = nodeOf(root, ALNodeKind.assignment_statement, "P.Amount := P.Amount + 1");
     expect(classifyHangCapable(assignment, ctx)).toBe("loop-condition-target");
   });
 
