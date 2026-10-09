@@ -265,7 +265,7 @@ async function deployEveryBackend(
             ar.useBuildSymbols([]);
             try {
               await ar.deploy(bundle);
-              results.push("ok");
+              results.push(`ok, coverage ${ar.capabilities().coverage}`);
             } catch (e) {
               results.push(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
             }
@@ -284,12 +284,12 @@ describe("R407 P3: admission reaches the main backend AND every pre-built worker
   test("admitted at --workers 3: all four backends deploy the pair with coverage on", async () => {
     const { results, probes } = await deployEveryBackend(ADMITTED, 3);
     expect(probes).toBe(1);
-    expect(results).toEqual(["ok", "ok", "ok", "ok"]);
+    expect(results).toEqual(Array(4).fill("ok, coverage al-runner"));
   });
 
   test("refused: coverage is none, so no backend builds a coverage index at all", async () => {
     const { results } = await deployEveryBackend(REFUSED, 2);
-    expect(results).toEqual(["ok", "ok", "ok"]);
+    expect(results).toEqual(Array(3).fill("ok, coverage none"));
   });
 
   test("buildBackend never admits unless told: the same deploy throws AlRunnerCoverageFrameError", async () => {
@@ -380,20 +380,23 @@ describe("R407 P5: the backend's backstops", () => {
       };
     };
     const b = backendOver(work, true, spawn);
-    await b.deploy(await pairBundle());
-    const ref = { codeunitId: 79100, codeunitName: "T", method: "T" };
-    // In the deployed bundle (`<work>/active`), relative to LethAL's cwd as al-runner prints it.
-    label = relative(process.cwd(), join(work, "active", PAIR_FILE));
-    const ok = await b.run(ref, { coverage: "none", timeoutMs: 5000 });
-    expect(ok.coverage?.entries).toEqual([
-      { objectType: "Codeunit", objectId: 50105, procedure: "Run", line: 5 },
-    ]);
-    // A batch folder beside `active`: same file name, same app, outside the bundle.
-    label = relative(process.cwd(), join(work, "batch-1", PAIR_FILE));
-    await expect(b.run(ref, { coverage: "none", timeoutMs: 5000 })).rejects.toThrow(
-      AlRunnerCoverageFrameError,
-    );
-    await b.close();
+    try {
+      await b.deploy(await pairBundle());
+      const ref = { codeunitId: 79100, codeunitName: "T", method: "T" };
+      // In the deployed bundle (`<work>/active`), relative to LethAL's cwd as al-runner prints it.
+      label = relative(process.cwd(), join(work, "active", PAIR_FILE));
+      const ok = await b.run(ref, { coverage: "none", timeoutMs: 5000 });
+      expect(ok.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50105, procedure: "Run", line: 5 },
+      ]);
+      // A batch folder beside `active`: same file name, same app, outside the bundle.
+      label = relative(process.cwd(), join(work, "batch-1", PAIR_FILE));
+      await expect(b.run(ref, { coverage: "none", timeoutMs: 5000 })).rejects.toThrow(
+        AlRunnerCoverageFrameError,
+      );
+    } finally {
+      await b.close();
+    }
   });
 });
 
