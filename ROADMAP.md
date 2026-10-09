@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**73 of 541 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**74 of 542 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -586,6 +586,7 @@ that ordering is the priority.
 - **R539** · Upstream al-runner: report the test codeunit's OnRun time on a pass row, and put `errorKind` on the one-shot row · [R539.md](docs/roadmap/R539.md) · open, filed 2026-10-09
 - **R543** · al-runner: a `<ctor>` or `<OnBeforeCodeunitRun>` row still aborts the whole session through "no test named ..." · [R543.md](docs/roadmap/R543.md) · open, filed 2026-10-09
 - **R544** · al-runner `--server`: an OnRun hang at the BASELINE ends the suite and silently shrinks the green set and its coverage · [R544.md](docs/roadmap/R544.md) · open, filed 2026-10-09
+- **R546** · al-runner vs BC verdict agreement has never been measured on a real project: the owner sees mutants survive on one backend and not the other · [R546.md](docs/roadmap/R546.md) · open
 
 ---
 
