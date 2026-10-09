@@ -447,6 +447,17 @@ al-runner 40 / 27 / 3, bcdev 42 / 28 / 0 (Cronus28, hub identical). On both back
 trigger is placed by the EXTENSION object, so the base page's `OnOpenPage` rows keep `LabelView`
 alone.
 
+**R550 added a wrapped REPORT** (target 1.0.0.3, tests 1.0.0.4): `Wrapped Y Band` (report 78913,
+`ProcessingOnly`, one table data item over the plain code-free table `Wrapped Band Row` 78915; a
+data-item trigger, a never-shown request page, `OnPreReport`, then `Band` and `GetTotal`) and its
+unwrapped twin 78914 (filtered to its own rows), with `BandYDirect` (`Band` on an un-run report
+variable), `BandYRun` (delete own rows, seed four, `UseRequestPage(false)` + `RunModal`) and twins.
+Its 28 mutants (M0071-M0098) take every gate to 98: bcdev 60 / 38 / 0 (Cronus28, hub identical),
+al-runner 58 / 37 / 3, pre-committed in
+`docs/superpowers/specs/2026-10-09-r550-wrapped-report-precommitment.md` (r2), each kill's failure
+text pinned in `KILL_TEXTS`. The tests codeunit declares `TestPermissions = Disabled`: without it
+BC's RunMutant path refuses `BandYRun`'s insert (measured, R-550 `diag.md`).
+
 ## sandbox-multiobject (R383)
 
 A target with TWO codeunits in one file, `MultiPair.Codeunit.al` (`Multi A` then `Multi B`), and a
