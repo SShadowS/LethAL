@@ -114,8 +114,9 @@ const QUOTED_IDENTIFIER = "quoted_identifier";
  * Documented limits:
  *   - the single-argument `Validate(F)` form and a call outside statement position are refused, both
  *     recorded above as guards rather than omissions.
- *   - a `pageextension`'s implicit `Rec` is refused, inherited from `claimsRecordMethod`; see
- *     `OBJECT_KINDS` in `./receiver.ts`.
+ *   - a `pageextension`'s implicit `Rec` and a `reportextension`'s `modify(X)` record (R-463) are
+ *     refused, inherited from `claimsRecordMethod`; see `OBJECT_KINDS` in the engine's
+ *     `semantic/receiver.ts`.
  *   - the parenthesis-less call form never reaches this operator: it parses as a `member_expression`
  *     rather than a `call_expression`, the same grammar gap `void-method-call` and every other
  *     Tier-2 operator in this file share.
