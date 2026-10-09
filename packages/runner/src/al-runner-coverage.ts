@@ -12,21 +12,28 @@
  * reports that file at `line-rate 0.0000`, so the two backends already agree; only the wiring was
  * missing.
  *
- * ## Multi-object files: still refused, for a different reason than before
+ * ## Multi-object files: admitted only on builds the frame probe admits (R407)
  *
  * al-runner 2.11.0 lost every object after a file's first (upstream #3713). That is FIXED on
- * v2.12.0: the second object's lines are reported now, on both transports. But measured on the
- * pinned build v2.12.0-main.c39ad5de (`docs/roadmap/R383.md`), they are reported in the WRONG
- * FRAME. al-runner compiles LethAL's instrumented bundle, finds the source project with the same
- * app id, and labels coverage with the SOURCE path. For the first object in a file the lines are
- * right. For every object after it, a line is reported as (the previous object's closing line in
- * the SOURCE) + (its distance from that line in the INSTRUMENTED text). On `sandbox-multiobject`
- * instrumented lines 33/35/40/45/50 of `Multi B` come back as 16/18/23/28/33, which lie inside
- * `Multi A`. Nothing in the report says which frame a line is in, so LethAL cannot undo it.
+ * v2.12.0: the second object's lines are reported now, on both transports. But measured on
+ * v2.12.0-main.c39ad5de (`docs/roadmap/R383.md`), they were reported in the WRONG FRAME.
+ * al-runner compiled LethAL's instrumented bundle, found the source project with the same app id,
+ * and labelled coverage with the SOURCE path. For the first object in a file the lines were right.
+ * For every object after it, a line was reported as (the previous object's closing line in the
+ * SOURCE) + (its distance from that line in the INSTRUMENTED text). On `sandbox-multiobject`
+ * instrumented lines 33/35/40/45/50 of `Multi B` came back as 16/18/23/28/33, inside `Multi A`.
+ * Upstream #5249 fixed it (measured on 43f76177, both transports: instrumented frame, bundle label).
  *
- * So a file declaring more than one object still disables coverage for the WHOLE run
- * (`supported: false`, and the CLI guard falls back to `"none"`), and the index skips such a file
- * so nothing can resolve against it. Coarse on purpose: dropping just that file's objects would
+ * So the CLI guard runs `probeAlRunnerCoverageFrame` (`al-runner-frame-probe.ts`) once per session
+ * when the project holds a multi-object file. Admitted, the backend's index admits such files
+ * (`AlRunnerConfig.admitMultiObjectFiles`, never a config key), and three backstops stop the session
+ * with `AlRunnerCoverageFrameError` if a run does not look like the probe: a label for an admitted
+ * file outside the index's own bundle (`assertAdmittedLabel`), a `--server` scope its position
+ * contradicts in such a file, and a multi-object index built without admission or before any
+ * `deploy()` (`AlRunnerBackend.coverageIndexOf`). Refused (c39ad5de, or any other answer), a file
+ * declaring more than one object disables coverage for the WHOLE run (`supported: false`, and the
+ * CLI guard falls back to `"none"`), and the index skips such a file so nothing can resolve against
+ * it. Coarse on purpose: dropping just that file's objects would
  * read their mutants a false `no-coverage`, because `coverageFilter`'s every-green-test fallback is
  * gated to table triggers. The rule (`refusedAsMultiObject`, R383 r2 ruling): a file is refused
  * unless every object after its first is code-free (a permission set, permission set extension,
@@ -35,12 +42,10 @@
  * on the gate fixtures only `sandbox-multiobject` (which exists to) and `sandbox-coverage-probe`
  * trip this, and no file on DC, System Application, Business Foundation, BaseApp or CDO does.
  *
- * What R383 built stays as infrastructure for the day upstream fixes the frame: every row is
- * resolved by POSITION (`resolveFileLine`) to the declaration whose file span holds it, and that
- * object's base line converts it to the object-relative frame BC and the line map use. In a
- * single-object file the base is 1, so this is exactly the old behaviour.
- * `buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true })` turns the admission on, and
- * only tests use it today.
+ * What R383 built carries the admitted case: every row is resolved by POSITION (`resolveFileLine`)
+ * to the declaration whose file span holds it, and that object's base line converts it to the
+ * object-relative frame BC and the line map use. In a single-object file the base is 1, so this is
+ * exactly the old behaviour, and no R407 backstop applies to it.
  */
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -221,7 +226,9 @@ export interface ExactResolution {
  * Scanning the SOURCE is sound because instrumentation is one output file per input file, so a
  * file's objects are the same on both sides. See this module's header for why a multi-object file
  * disqualifies the whole run rather than just its own objects (R383: al-runner's frame for every
- * object after a file's first, measured on v2.12.0-main.c39ad5de).
+ * object after a file's first, measured on v2.12.0-main.c39ad5de). `supported` still answers the
+ * raw multi-object question; R407's frame probe, run by the CLI guard on top of it, decides whether
+ * this build is trusted with such files.
  *
  * R387: `wrappedObjectFiles` uses the SAME rule the index uses to refuse a file
  * (`fileHoldsWrappedObject`, and since R-300b not `alRunnerAdmitsWrappedFile`), so the guard and

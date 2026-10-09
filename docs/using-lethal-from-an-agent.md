@@ -101,10 +101,12 @@ and `--tests-only` gives `tests-narrowed`.
 
 **Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is OFF by
 default and CONDITIONAL when on. `lethal run` reads al-runner's own coverage output (R220) only with
-`"alRunner": { "coverage": "al-runner" }`, and one file declaring more than one object or holding a
-`#if`-wrapped object turns it off for the whole run, with a warning naming the file. (Multi-object:
-upstream #3713 is fixed, but al-runner v2.12.0-main.c39ad5de reports later objects' lines in the
-wrong frame, R383. `#if`: R298, pending R300.) Without coverage an unreached mutant comes back survived rather than no-coverage. That is one measured route to a false survivor. No measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). Do not quote a score from it. (Its `asserterror` DID
+`"alRunner": { "coverage": "al-runner" }`. One file holding a `#if`-wrapped object turns it off for
+the whole run, with a warning naming the file. One file declaring more than one object keeps it only
+when a once-per-session frame probe admits the installed al-runner build, and turns it off
+otherwise; either way one warning line names the probe's answer and the build. (Multi-object:
+al-runner v2.12.0-main.c39ad5de reports later objects' lines in the wrong frame, R383; 43f76177 and
+later do not, and the probe tells them apart, R407. `#if`: R298, pending R300.) Without coverage an unreached mutant comes back survived rather than no-coverage. That is one measured route to a false survivor. No measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). Do not quote a score from it. (Its `asserterror` DID
 fail to fail a test in 2026-07; that was fixed upstream in v2 and the startup canary re-measures
 it every session.)
 

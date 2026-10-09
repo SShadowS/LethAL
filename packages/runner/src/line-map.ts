@@ -899,10 +899,12 @@ export function fileLineMapEntries(
  * R383: a FILE-relative line of the INSTRUMENTED text to the object whose declaration holds it and
  * the OBJECT-relative line the line map is keyed on.
  *
- * Infrastructure only for now. al-runner v2.12.0-main.c39ad5de reports a multi-object file's
- * first object in this frame but every later object in a mixed source/instrumented frame
- * (`al-runner-coverage.ts` header), so the index does not admit such files and this function sees
- * files whose only object with code is the first (`refusedAsMultiObject`), so its base is 1.
+ * al-runner v2.12.0-main.c39ad5de reported a multi-object file's first object in this frame but
+ * every later object in a mixed source/instrumented frame (`al-runner-coverage.ts` header). Such
+ * files reach this function only on builds R407's frame probe admits (43f76177 and later report
+ * every object in the instrumented frame); on builds it refuses, the index does not admit them and
+ * this function sees files whose only object with code is the first (`refusedAsMultiObject`), so
+ * its base is 1.
  *
  * Selects by the declaration node's own FILE span and converts with the same `baseLine` `spansOf`
  * used, so the two cannot disagree. `undefined` for a line in no indexed object (a blank or comment

@@ -1243,8 +1243,9 @@ describe("R383: the --server procedure rule (r3 Design 3)", () => {
         { scope: "RunB", line: 20 },
       ]);
       expect(() => alRunnerCoverageFromServer(disagree, index)).toThrow(AlRunnerCoverageFrameError);
+      // The message names file and line as `<file>:<line>`; matched by pattern (R117's line check).
       expect(() => alRunnerCoverageFromServer(disagree, index)).toThrow(
-        'two/app/Two.Codeunit.al:19 "RunA", but that line is inside "RunB", in an admitted multi-object file',
+        /Two\.Codeunit\.al.19 "RunA", but that line is inside "RunB", in an admitted multi-object file/,
       );
       expect(warn).not.toHaveBeenCalled();
       // Agreeing scopes in the same file pass.

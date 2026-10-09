@@ -13,6 +13,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **al-runner coverage can admit multi-object files, per build, by a frame probe** (R407). Upstream
+  #5249 fixed the frame defect R383 measured on v2.12.0-main.c39ad5de (later objects reported
+  against the SOURCE file). When `"alRunner.coverage": "al-runner"` meets a project with a
+  multi-object file, `lethal run` now runs a small probe once, on the session's transport: a
+  two-object file (a table with code, then a codeunit) beside a same-id source copy and batch copy.
+  If every label is inside the bundle, the table has no hit and the codeunit's lines equal the
+  measured set, coverage stays on and the index admits multi-object files; otherwise the run falls
+  back to coverage `"none"` exactly as before. One warning line names the answer and the al-runner
+  build either way. Measured: 43f76177 admitted on one-shot and `--server`; c39ad5de refused on both
+  (label `src/...`, lines 12 early). Three backstops stop a run whose coverage does not look like
+  the probe (`AlRunnerCoverageFrameError`): a label for an admitted file outside the deployed
+  bundle, a `--server` scope its position contradicts in such a file, and a multi-object index built
+  without the admission or before any deploy. The admission is never a config key. Costs about 5 s
+  (one-shot, with its provisioning call) or 7 s (`--server`), only for such projects.
+
 - **`lethal explain` lists each gap's covering tests with file and line** (R272). Every gap gains
   `coveringTests` (name, file, line, how many of its survivors each test reached, and the test's
   measured baseline duration) ordered by survivors reached, then by name; duration is shown, not
