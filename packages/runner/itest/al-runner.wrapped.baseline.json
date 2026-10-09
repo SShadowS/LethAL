@@ -42,6 +42,34 @@
     "errorClass": null
   },
   {
+    "key": "0db505a43289b34f235943287d53f4f55643a84dfb4afd16669be7ac3d0c4805|Wrapped Xtra Twin|Scaled|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "0db505a43289b34f235943287d53f4f55643a84dfb4afd16669be7ac3d0c4805|Wrapped Xtra|Scaled|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3a82669da88fad5f5254d9672dd089ac537b8985d233a8a5b985c3d696ebd73d|Wrapped Xtra Twin|Scaled|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ScaledXtraTwin",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3a82669da88fad5f5254d9672dd089ac537b8985d233a8a5b985c3d696ebd73d|Wrapped Xtra|Scaled|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ScaledXtra",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "3afe126943d733d84261089f652d03e2b42d9729c2767b04ca266801482eb69a|Wrapped View Twin|OnOpenPage|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
@@ -50,6 +78,20 @@
   },
   {
     "key": "3afe126943d733d84261089f652d03e2b42d9729c2767b04ca266801482eb69a|Wrapped View|OnOpenPage|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3afe126943d733d84261089f652d03e2b42d9729c2767b04ca266801482eb69a|Wrapped Xtra Twin|OnOpenPage|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3afe126943d733d84261089f652d03e2b42d9729c2767b04ca266801482eb69a|Wrapped Xtra|OnOpenPage|lethal.empty-block|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
@@ -162,6 +204,20 @@
   },
   {
     "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Wrapped View|OnOpenPage|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Wrapped Xtra Twin|OnOpenPage|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Wrapped Xtra|OnOpenPage|lethal.flip-boolean-literal|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
@@ -308,6 +364,20 @@
     "errorClass": null
   },
   {
+    "key": "a44b2c27892d0f70fce10eb92d9de40d1c9d954df55bdf1ce423f5848f3a904d|Wrapped Xtra Twin|Scaled|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "ScaledXtraTwin",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "a44b2c27892d0f70fce10eb92d9de40d1c9d954df55bdf1ce423f5848f3a904d|Wrapped Xtra|Scaled|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "ScaledXtra",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "ba313d6fdbc3283a56e6a1edc914d1263266d1fd2f3f483465b1a86ea2ea0397|Wrapped View Twin|OnOpenPage|lethal.remove-assignment|1",
     "verdict": "survived",
     "killingTest": null,
@@ -316,6 +386,20 @@
   },
   {
     "key": "ba313d6fdbc3283a56e6a1edc914d1263266d1fd2f3f483465b1a86ea2ea0397|Wrapped View|OnOpenPage|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ba313d6fdbc3283a56e6a1edc914d1263266d1fd2f3f483465b1a86ea2ea0397|Wrapped Xtra Twin|OnOpenPage|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ba313d6fdbc3283a56e6a1edc914d1263266d1fd2f3f483465b1a86ea2ea0397|Wrapped Xtra|OnOpenPage|lethal.remove-assignment|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
