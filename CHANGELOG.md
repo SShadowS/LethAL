@@ -707,8 +707,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   so that procedure's mutants are refused like any other one-hop callee (R547). Inside a
   reportextension, a write of a preset exit name (a base `protected var`, or the extension's own
   global its open block reads) is refused as it is inside the report, including through a `var`
-  argument of a base procedure (R548). BaseApp site counts are pending the built-branch re-dump (a
-  prototype without the `this.` follow measured 2 more refused sites, 0 identity keys moved).
+  argument of a base procedure (R548). Measured on the built branch against master 0e017cb5: BaseApp
+  hang-refuses 2 more deployed mutants (`MfgWhseSourceCreateDocument`'s `SetProdOrder`; hang-refused
+  44,207 -> 44,209); every other corpus project and the fixtures are unchanged; 0 identity keys,
+  ordinals or kill tags moved.
   `remove-commit` no longer claims a bare `Commit()` in a pageextension when a base page in the
   project declares a visible procedure of that name (R549; measured 0 such sites). Every same-named
   base counts, including `#if`-wrapped and split-header ones. A base outside the project keeps the
