@@ -325,7 +325,7 @@
       "mutants": 10
     },
     "fixtures/sandbox-wrapped-tests/src/WrappedTests.Codeunit.al": {
-      "sha256": "b116aaa9ec32cd99c45874e9dabcbf9d45f974305a03e0ec39a146bc8890de11",
+      "sha256": "6ff11f2ae54a42d29a31af37dc4c16a179cc19a7739ac78f70f9ae28e461465a",
       "mutants": 119
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedArms.Codeunit.al": {
