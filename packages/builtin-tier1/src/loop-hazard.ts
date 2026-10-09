@@ -6,6 +6,7 @@ import {
   armOfNode,
   declarationMembers,
   enclosingTrigger,
+  identifierTokens,
   isObjectContainer,
   isProcedureLike,
   lastFieldChild,
@@ -804,11 +805,21 @@ export function openItemHangRefuses(node: ALSyntaxNode, ctx: SemanticContext): b
  * an early exit (`exit`, Break/Quit/Skip, `Error`, or a guard holding one) that comes before such a
  * write in its scope. Not seen: a write in another object, and a value that reaches the name through
  * another variable.
+ *
+ * R548: inside a reportextension the names are the extension's own (`presetExitNames` over its
+ * blocks, its globals seeded with the base's protected names) plus every base candidate's preset
+ * names that the base declares `protected var` (`extensionPresetExitNames`). A non-protected base
+ * global is not accessible from an extension (AL0161). Not seen (R548 residuals): a BASE write of a
+ * protected name only an extension's guard reads.
  */
 function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const obj = objectOf(node);
-  if (obj === null || obj.rawKind !== "report_declaration") return false;
-  const names = presetExitNames(obj, ctx);
+  if (obj === null) return false;
+  let names: Set<string>;
+  if (obj.rawKind === "report_declaration") names = presetExitNames(obj, ctx);
+  else if (obj.rawKind === "reportextension_declaration")
+    names = extensionPresetExitNames(obj, ctx);
+  else return false;
   if (names.size === 0 || inOpenItemCode(node, ctx)) return false;
   const writes = (n: ALSyntaxNode): boolean => {
     if (n.rawKind === "assignment_statement") {
@@ -890,7 +901,8 @@ const WRITING_BUILTINS: ReadonlySet<string> = new Set(["clear", "evaluate"]);
 
 /**
  * Does call `c` write its argument at position `i`? Yes for a `var` parameter of a project
- * procedure it resolves to (same object, or through `callTargets`), or for a writing built-in; no for
+ * procedure it resolves to (same object, a reportextension's base report candidates for a bare name
+ * (R548), or through `callTargets`), or for a writing built-in; no for
  * a by-value parameter, another built-in, or a record method. `unknown` answers for a project-style
  * call whose target cannot be found.
  */
@@ -906,8 +918,24 @@ function argWritten(c: ALSyntaxNode, i: number, ctx: SemanticContext, unknown: b
         procs.push(p);
     });
   };
+  const isVarAt = (p: ALSyntaxNode): boolean => {
+    const params = (p.childForFieldName("parameters")?.namedChildren ?? []).filter(
+      (x) => x.rawKind === "parameter",
+    );
+    return params[i]?.childForFieldName("modifier")?.rawKind === "var_keyword";
+  };
   if (own !== null && obj !== null && procedureNamesOf(obj, ctx).has(own)) collect(obj, own);
-  else if (isIdentifierLike(f)) return WRITING_BUILTINS.has(normalizeAlName(f.text)) && i === 0;
+  else if (own !== null && obj?.rawKind === "reportextension_declaration") {
+    // R548 (F4): a bare name (or `this.P`) in a reportextension may be a BASE report procedure.
+    // Candidates that disagree, or one that cannot be read, answer `unknown`.
+    const { objs, unread } = baseCandidatesOf(obj, ctx);
+    if (unread.some((o) => identifierTokens(o.text).has(own))) return unknown;
+    for (const o of objs) if (procedureNamesOf(o, ctx).has(own)) collect(o, own);
+    if (procs.length === 0)
+      return isIdentifierLike(f) ? WRITING_BUILTINS.has(own) && i === 0 : unknown;
+    const answers = new Set(procs.map(isVarAt));
+    return answers.size === 1 ? answers.has(true) : unknown;
+  } else if (isIdentifierLike(f)) return WRITING_BUILTINS.has(normalizeAlName(f.text)) && i === 0;
   else {
     const t = callTargets(c, ctx);
     if (t === null) {
@@ -920,13 +948,7 @@ function argWritten(c: ALSyntaxNode, i: number, ctx: SemanticContext, unknown: b
     if (procs.length === 0) return t.kind === "record" ? false : unknown;
   }
   if (procs.length === 0) return unknown;
-  return procs.some((p) => {
-    const params = (p.childForFieldName("parameters")?.namedChildren ?? []).filter(
-      (x) => x.rawKind === "parameter",
-    );
-    const param = params[i];
-    return param !== undefined && param.childForFieldName("modifier")?.rawKind === "var_keyword";
-  });
+  return procs.some(isVarAt);
 }
 
 /** The variable an assignment target writes: its LEFTMOST identifier node (`X`, `X.F`, `X[i]`,
@@ -937,9 +959,29 @@ function rootName(n: ALSyntaxNode): string {
   return c === undefined ? "" : normalizeAlName(c.text);
 }
 
-function presetExitNames(obj: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+/** R548: a reportextension's preset exit names (see `writesPresetExitName`). */
+function extensionPresetExitNames(ext: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+  return cached(ctx, ext, "extpresetexit", () => {
+    const { objs, unread } = baseCandidatesOf(ext, ctx);
+    const prot = new Set<string>();
+    const out = new Set<string>();
+    for (const b of [...objs, ...unread]) {
+      const p = protectedVarNames(b);
+      for (const n of p) prot.add(n);
+      for (const n of presetExitNames(b, ctx)) if (p.has(n)) out.add(n);
+    }
+    for (const n of presetExitNames(ext, ctx, prot)) out.add(n);
+    return out;
+  });
+}
+
+function presetExitNames(
+  obj: ALSyntaxNode,
+  ctx: SemanticContext,
+  inherited: ReadonlySet<string> = new Set(),
+): Set<string> {
   return cached(ctx, obj, "presetexit", () => {
-    const globals = new Set<string>();
+    const globals = new Set<string>(inherited);
     for (const c of obj.childForFieldName("body")?.namedChildren ?? []) {
       if (c.rawKind !== "var_section") continue;
       visitAll(c, (v) => {
@@ -1457,6 +1499,18 @@ function callTargets(
     const recv = f.childForFieldName("object");
     const member = normalizeAlName(f.childForFieldName("member")?.text ?? "");
     if (recv === null || !isIdentifierLike(recv)) return null;
+    // R547: `this.P()` in a reportextension binds a base-report procedure, protected ones too
+    // (alc 18.0.43, runtime 16; BaseApp's MfgGetOutboundSourceDocs calls `this.GetLocation`). The
+    // extension's own `P` is `bareCallee`'s same-object shape, not followed here.
+    const obj = objectOf(c);
+    if (
+      normalizeAlName(recv.text) === "this" &&
+      obj?.rawKind === "reportextension_declaration" &&
+      !procedureNamesOf(obj, ctx).has(member)
+    ) {
+      const bases = baseProceduresOwners(obj, member, ctx);
+      return bases.length === 0 ? null : { objs: bases, member, kind: "report" };
+    }
     const t = declaredType(recv, ctx);
     if (t !== null) {
       return { objs: objectsOfType(t, ctx), member, kind: t.kind === "table" ? "record" : t.kind };
@@ -1469,7 +1523,76 @@ function callTargets(
   if (obj === null || procedureNamesOf(obj, ctx).has(member)) return null;
   if (obj.rawKind !== "report_declaration" && obj.rawKind !== "reportextension_declaration")
     return null;
-  return onTable(resolveReceiverTable(c, ctx), member);
+  const tbl = onTable(resolveReceiverTable(c, ctx), member);
+  if (obj.rawKind === "report_declaration") return tbl;
+  // R547: a bare name in a reportextension also binds a procedure of the BASE report; every
+  // candidate declaring it is followed, beside the data item's table. (`CurrReport.P()` there does
+  // not compile, AL0161 for a public and a protected `P` alike, alc 18.0.43, so `CurrReport` needs
+  // no mapping; `this.P()` does, above.)
+  const bases = baseProceduresOwners(obj, member, ctx);
+  if (bases.length === 0) return tbl;
+  return { objs: [...(tbl?.objs ?? []), ...bases], member, kind: tbl?.kind ?? "report" };
+}
+
+/** R547: the base-report candidates of `ext` that declare procedure `member` (an unparsed one by
+ *  its tokens). */
+function baseProceduresOwners(
+  ext: ALSyntaxNode,
+  member: string,
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  const { objs, unread } = baseCandidatesOf(ext, ctx);
+  return [
+    ...objs.filter((o) => procedureNamesOf(o, ctx).has(member)),
+    ...unread.filter((o) => identifierTokens(o.text).has(member)),
+  ];
+}
+
+/**
+ * R-547: every project object a reportextension's base name may denote. `objs`: each
+ * `report_declaration` of that name (in a `#if` wrapper too, every arm: `projectObjects`), and
+ * each split-header object (`symbols.splitObjects`, whose body parses like any object's) whose
+ * text names a report and the base by the conservative token rule `projectDeclaresProcedureOnTable`
+ * uses. `unread`: an unparsed object passing the same rule; its structure cannot be read. Both
+ * empty: the base is a dependency. Over-matching only adds refusals.
+ */
+function baseCandidatesOf(
+  ext: ALSyntaxNode,
+  ctx: SemanticContext,
+): { readonly objs: ALSyntaxNode[]; readonly unread: ALSyntaxNode[] } {
+  return cached(ctx, ext, "bases", () => {
+    const base = extendedBaseName(ext);
+    const names = (o: ALSyntaxNode): boolean => {
+      const t = identifierTokens(o.text);
+      return t.has("report") && (base === null || t.has(base));
+    };
+    return {
+      objs: [
+        ...projectObjects(ctx).filter(
+          (o) => o.rawKind === "report_declaration" && (base === null || objectNameOf(o) === base),
+        ),
+        ...ctx.symbols.splitObjects.filter(names),
+      ],
+      unread: ctx.symbols.unparsedObjects.filter(names),
+    };
+  });
+}
+
+/** The names a report declares in a `protected var` section (accessible from its extensions). */
+function protectedVarNames(report: ALSyntaxNode): Set<string> {
+  const out = new Set<string>();
+  for (const c of report.childForFieldName("body")?.namedChildren ?? []) {
+    if (
+      c.rawKind !== "var_section" ||
+      !c.namedChildren.some((k) => k.rawKind === "protected_keyword")
+    )
+      continue;
+    visitAll(c, (v) => {
+      if (v.rawKind === "variable_declaration")
+        out.add(normalizeAlName(v.childForFieldName("name")?.text ?? ""));
+    });
+  }
+  return out;
 }
 
 /** The attribute names written directly before a procedure (`EventSubscriber`, `IntegrationEvent`). */
