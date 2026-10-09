@@ -85,8 +85,9 @@ export function parseReportedStopMs(message: string | undefined): number | undef
   return n > 0 ? n * 1000 : undefined;
 }
 
-/** A row al-runner reported as a timeout: the `timeout` case of `verdictFromRunnerTest`. */
-function isTimeoutRow(t: { readonly status: string; readonly message?: string }): boolean {
+/** A row al-runner reported as a timeout: the `timeout` case of `verdictFromRunnerTest`. Exported
+ *  for the R123 contract probe's `timeout-exit-readable` fact (R518), so the rule is spelled once. */
+export function isTimeoutRow(t: { readonly status: string; readonly message?: string }): boolean {
   return (
     t.status !== "pass" &&
     t.status !== "fail" &&
