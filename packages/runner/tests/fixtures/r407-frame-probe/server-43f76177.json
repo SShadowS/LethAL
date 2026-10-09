@@ -8,9 +8,33 @@
         {
           "file": "<root>/inst/active/R407Pair.Table.al",
           "statements": [
-            { "id": 0, "scope": "Reached", "line": 45, "column": 12, "endLine": 45, "endColumn": 18, "hits": 2 },
-            { "id": 1, "scope": "Reached", "line": 46, "column": 13, "endLine": 46, "endColumn": 25, "hits": 1 },
-            { "id": 2, "scope": "Reached", "line": 47, "column": 9, "endLine": 47, "endColumn": 17, "hits": 1 }
+            {
+              "id": 0,
+              "scope": "Reached",
+              "line": 45,
+              "column": 12,
+              "endLine": 45,
+              "endColumn": 18,
+              "hits": 2
+            },
+            {
+              "id": 1,
+              "scope": "Reached",
+              "line": 46,
+              "column": 13,
+              "endLine": 46,
+              "endColumn": 25,
+              "hits": 1
+            },
+            {
+              "id": 2,
+              "scope": "Reached",
+              "line": 47,
+              "column": 9,
+              "endLine": 47,
+              "endColumn": 17,
+              "hits": 1
+            }
           ]
         }
       ]
