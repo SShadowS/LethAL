@@ -45,16 +45,16 @@
       "mutants": 11
     },
     "fixtures/sandbox-data-tests/src/DataTests.Codeunit.al": {
-      "sha256": "ab1aa9f8623b7aa686dd5a247af7bcbf386446d763ce442176d905d05f41a29a",
-      "mutants": 548
+      "sha256": "f6909bf98151c8c0c3f6c82c0a1fa16179a7be95d637266393e2d9007486f8d8",
+      "mutants": 559
     },
     "fixtures/sandbox-data/src/DataAssertOps.Codeunit.al": {
       "sha256": "ab73e45da78c6edd02e17cf89592632809f5de666029cdb79dbe96f91c41c217",
       "mutants": 4
     },
     "fixtures/sandbox-data/src/DataBandExt.ReportExt.al": {
-      "sha256": "49f5318b439f664dfc8f3f4e8ddd621039e38f6f5033841d402890f66003ff8c",
-      "mutants": 15
+      "sha256": "ff1c0d72bcaeaa4f3616ec91858be0daa809c073a5925206d9a84098fe34b66f",
+      "mutants": 19
     },
     "fixtures/sandbox-data/src/DataBlankOps.Codeunit.al": {
       "sha256": "3b070898d4aa27f35d8504da4b7001ba449a8fa065354826c17894513c245c2b",
