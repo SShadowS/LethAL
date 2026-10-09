@@ -702,11 +702,13 @@ async function runLayoutLegs(): Promise<SessionReport> {
 }
 
 /**
- * R383/R407: `sandbox-multiobject`, one-shot then `--server`. Two codeunits in one file. Each leg
- * requests coverage "al-runner" and `runOnce` runs the CLI's coverage guard on that leg's
- * transport; the gate REQUIRES the frame probe to say `admitted` (R407 plan r2), and a refusal
- * stops the leg by name. Both legs must equal the pre-committed table per mutant, covering tests
- * included, and each other.
+ * R383/R407: `sandbox-multiobject`, one-shot, `--server`, then `--server` + resource selector. Two
+ * codeunits in one file. Each leg requests coverage "al-runner" and `runOnce` runs the CLI's
+ * coverage guard on that leg's transport; the gate REQUIRES the frame probe to say `admitted` (R407
+ * plan r2), and a refusal stops the leg by name. Every leg must equal the pre-committed table per
+ * mutant, covering tests included, and the one-shot leg. The resource leg is the DEFAULT user
+ * combination, added by docs/superpowers/specs/2026-10-09-r407-resource-leg-addendum.md because the
+ * probe does not vary with the selector mode.
  *
  * R407: `EXPECTED_MULTIOBJECT` is the admission table (bc2511ba, adopted by
  * docs/superpowers/specs/2026-10-09-r407-multiobject-admission-precommitment.md: 6 / 1 / 5), and
@@ -735,6 +737,7 @@ async function runMultiObjectLegs(): Promise<SessionReport> {
   };
   const oneShotDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-oneshot-"));
   const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-server-"));
+  const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-resource-"));
   try {
     const oneShot = await runOnce(oneShotDir, false, "static", fixture);
     printMultiObjectTable(oneShot, "one-shot");
@@ -747,18 +750,28 @@ async function runMultiObjectLegs(): Promise<SessionReport> {
       assertMultiObjectLegsEqual(oneShot, viaServer, "--server"),
     );
 
+    const viaResource = await runOnce(resourceDir, true, "resource", fixture);
+    printMultiObjectTable(viaResource, "--server + resource");
+    check("multi-object --server + resource", () =>
+      assertMultiObjectRun(viaResource, "--server + resource"),
+    );
+    check("multi-object --server + resource vs one-shot", () =>
+      assertMultiObjectLegsEqual(oneShot, viaResource, "--server + resource"),
+    );
+
     if (failures.length > 0) {
       throw new Error(
-        `R383: ${failures.length} multi-object-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+        `R407: ${failures.length} multi-object-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
       );
     }
     console.log(
-      `  multi-object legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server identical`,
+      `  multi-object legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server and --server + resource identical`,
     );
     return oneShot;
   } finally {
     await rm(oneShotDir, { recursive: true, force: true });
     await rm(serverDir, { recursive: true, force: true });
+    await rm(resourceDir, { recursive: true, force: true });
   }
 }
 
@@ -1125,6 +1138,7 @@ async function main(): Promise<void> {
       "layout-server",
       "multiobject-one-shot",
       "multiobject-server",
+      "multiobject-resource",
       "wrapped-one-shot",
       "wrapped-server",
       "wrapped-resource",
