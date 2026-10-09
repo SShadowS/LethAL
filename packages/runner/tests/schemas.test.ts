@@ -1317,6 +1317,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v16.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -1550,6 +1562,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "warm-confirmation-incomplete",
         "reused-budget-stale",
         "timeout-unconfirmed",
+        "runner-test-error",
+        "runner-refused",
       ],
       "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
       // R273: new domains on the new optional `suggestions` (an optional additive field, so no
@@ -1612,6 +1626,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v14.schema.json")).toEqual(required("explain-v13.schema.json"));
     // R516's v15 added a cause value, not a required field.
     expect(required("explain-v15.schema.json")).toEqual(required("explain-v14.schema.json"));
+    // R534's v16 added two cause values, not a required field.
+    expect(required("explain-v16.schema.json")).toEqual(required("explain-v15.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",
