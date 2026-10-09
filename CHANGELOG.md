@@ -673,6 +673,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`lethal verify` reads a `#if`-wrapped object as the run did** (R536). Verify now hands the
+  backend the build symbols its source run recorded, so the installed artifact's line map scores
+  the wrapped shapes the run scored (R497) instead of refusing them with "Its mutants read
+  no-coverage", and its reach filter refuses exactly what the run refused. A source run that
+  recorded no build symbols is refused by name.
+
 - **al-runner one-shot: a test that hits its in-run stop is scored `timeout` again and goes
   through the unmutated confirm, so a genuine hang is `timeout-killed`** (R518). al-runner now
   exits 3 on a test timeout; LethAL read that as a failed run, re-ran the hang, and then ABORTED
