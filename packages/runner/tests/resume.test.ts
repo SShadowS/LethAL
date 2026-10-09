@@ -528,7 +528,9 @@ describe("sessionFingerprint (R47)", () => {
   // limits); it was 16607059...1e76 under scheme 34. It moved again for R497 (scheme 36, #if-wrapped
   // objects of the measured shapes are scored on the BC paths); it was 400af96f...8760 under scheme 35.
   // It moved again for R340 (scheme 37, trigger header names typed); it was 7f7b02f9...181f under scheme 36.
-  const PINNED = "9d5d97b372f52b45e9468079550599669070e935558b37624d06a1d9028691ce";
+  // It moved again for R555 (scheme 38, a preset-exit-name writer call is hang-refused); it was
+  // 9d5d97b3...91ce under scheme 37.
+  const PINNED = "5ee5c7b66e4fd3fe483c986531eefd80ac5c597b109d6ea8dc4a4ebc2fa63ec0";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2174,7 +2176,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // sites move twins). 34 is R343 (a wrapped object the build compiles is indexed). 35 is R500
     // (Date items, one-hop callees, subscribers and the two stated limits are hang-refused). 36 is
     // R497 (#if-wrapped objects of the measured shapes are scored on the BC paths). 37 is R340 (trigger header names typed).
-    expect(IDENTITY_SCHEME).toBe(37);
+    // 38 is R555 (a call to a preset-exit-name writer is hang-refused).
+    expect(IDENTITY_SCHEME).toBe(38);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

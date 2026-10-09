@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**75 of 557 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**75 of 558 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -256,8 +256,9 @@ that ordering is the priority.
 - **R547** · A base-report procedure called bare from an open `reportextension` block is looked up on the data item's table, never on the base report, so its hang-capable mutants stay deployed · [R547.md](docs/roadmap/R547.md) · done (6ec70aac): bare and this. calls followed into the base report; 0 BaseApp sites today
 - **R548** · A base report's `protected var` written by a `reportextension` is not seen by loop-hazard's `writesPresetExitName` · [R548.md](docs/roadmap/R548.md) · done (6ec70aac): BaseApp 2 more hang-refused (MfgWhseSourceCreateDocument SetProdOrder); 0 keys moved
 - **R549** · `claimsSystemCall` inside a `pageextension` can claim a bare `Commit()` that binds a procedure of the BASE page · [R549.md](docs/roadmap/R549.md) · done (8ebc888c): in-project base page checked exactly; dependency base keeps the claim (named residual)
-- **R555** · Deleting a call to a procedure that writes a preset exit name without a `var` argument is not refused, in a report or a reportextension · [R555.md](docs/roadmap/R555.md) · open
+- **R555** · Deleting a call to a procedure that writes a preset exit name without a `var` argument is not refused, in a report or a reportextension · [R555.md](docs/roadmap/R555.md) · done (2d14d2f9): preset-writer calls refused in-report and cross-object; BaseApp +487 hang-refused, scheme 38
 - **R557** · al-runner reports a quoted AL test name CLR-mangled (`"Stone Quoted"` → `Stone_Quoted`), so LethAL never runs that test on al-runner — a possible FALSE SURVIVE · [R557.md](docs/roadmap/R557.md) · open
+- **R561** · A call to a report's preset-exit-name writer through a receiver R555 cannot resolve to a project report is not refused · [R561.md](docs/roadmap/R561.md) · open, filed 2026-10-09
 
 ## Product gaps a real project hits
 
