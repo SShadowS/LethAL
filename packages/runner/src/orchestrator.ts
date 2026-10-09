@@ -5344,6 +5344,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             ? `al-runner test selector: exact (--test-exact accepted by a one-call probe in ${p.elapsedMs} ms; R551)`
             : `al-runner test selector: substring with R488 excludes (--test-exact not accepted: ${p.reason}; probe ${p.elapsedMs} ms; R551)`,
       });
+      // R558: the same choice as a structured event, which the report folds into
+      // `ExecutionContext.testSelector`. The warning above stays for the console line.
+      emit(
+        p.kind === "exact"
+          ? { type: "al-runner-test-selector", selector: "exact" }
+          : {
+              type: "al-runner-test-selector",
+              selector: "substring-with-excludes",
+              reason: p.reason,
+            },
+      );
     }
   }
 

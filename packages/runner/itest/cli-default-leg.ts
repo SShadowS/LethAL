@@ -257,6 +257,40 @@ export function testSelectorLineFailures(lines: readonly string[], oneShot: bool
       ];
 }
 
+/**
+ * R558: the report's `executionContexts[].testSelector` per leg. A one-shot leg records it on every
+ * measured context (either value: the gate prints it, the pre-commitment pins it per run), with
+ * `testSelectorReason` exactly when it is `substring-with-excludes`. A `--server` leg (server,
+ * resource, cli-default) records it on none. A one-shot leg with no measured context fails: an
+ * absent field there would prove nothing.
+ */
+export function reportTestSelectorFailures(report: SessionReport, oneShot: boolean): string[] {
+  const contexts = report.validity.executionContexts;
+  if (!oneShot) {
+    const recorded = contexts.filter((c) => c.testSelector !== undefined);
+    return recorded.length === 0
+      ? []
+      : [
+          `selector: a --server leg recorded testSelector (${recorded.map((c) => c.testSelector).join(", ")}), but --server never probes (R558)`,
+        ];
+  }
+  const measured = contexts.filter((c) => c.verdictCount > 0 && !c.basis.includes("carried"));
+  if (measured.length === 0) {
+    return ["selector: the one-shot leg has no measured execution context to check (R558)"];
+  }
+  return measured.flatMap((c) => {
+    if (c.testSelector === undefined) {
+      return [`selector: a one-shot ${c.runner} context recorded no testSelector (R558)`];
+    }
+    const wantReason = c.testSelector === "substring-with-excludes";
+    return wantReason === (c.testSelectorReason !== undefined)
+      ? []
+      : [
+          `selector: testSelector ${c.testSelector} with testSelectorReason ${JSON.stringify(c.testSelectorReason)} (R558: a reason exactly with substring-with-excludes)`,
+        ];
+  });
+}
+
 /** What two legs are compared on, per mutant. */
 export interface LegRow {
   readonly mutantCode: string;

@@ -159,6 +159,16 @@
               },
               "platformAppsDir": {
                 "type": "string"
+              },
+              "testSelector": {
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "substring-with-excludes"
+                ]
+              },
+              "testSelectorReason": {
+                "type": "string"
               }
             }
           }

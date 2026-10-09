@@ -3813,8 +3813,9 @@ describe("runSession — parallel workers", () => {
         }
         return Object.assign(b, extra);
       };
+      let report: Awaited<ReturnType<typeof runSession>>;
       try {
-        await runSession({
+        report = await runSession({
           backend: make(),
           backendFactory: make,
           store,
@@ -3829,7 +3830,9 @@ describe("runSession — parallel workers", () => {
       const selectorLines = events.flatMap((e) =>
         e.type === "warning" && e.code === "al-runner-test-selector" ? [e.message] : [],
       );
-      return { log, made, selectorLines, events };
+      const selectorEvents = events.filter((e) => e.type === "al-runner-test-selector");
+      const contexts = report.validity.executionContexts.filter((c) => c.verdictCount > 0);
+      return { log, made, selectorLines, events, selectorEvents, contexts };
     }
 
     test("O1: the probe runs once, before the session's first run(); every worker gets the boolean before its own", async () => {
@@ -3883,6 +3886,45 @@ describe("runSession — parallel workers", () => {
       expect(na.selectorLines).toEqual([]);
       // Non-vacuous: the hook did receive the session's other events.
       expect(na.events.length).toBeGreaterThan(0);
+    });
+
+    // R558: the choice reaches the report through a structured event, not the warning text.
+    test("R558 exact: one structured event, and every measured context records exact with no reason", async () => {
+      const s = await session({ kind: "exact", elapsedMs: 7 }, { workers: 1 });
+      expect(s.selectorEvents).toHaveLength(1);
+      const [ev] = s.selectorEvents;
+      expect(ev).toMatchObject({ type: "al-runner-test-selector", selector: "exact" });
+      expect(ev !== undefined && "reason" in ev).toBe(false);
+      expect(s.contexts.length).toBeGreaterThan(0);
+      for (const c of s.contexts) {
+        expect(c.testSelector).toBe("exact");
+        expect(c.testSelectorReason).toBeUndefined();
+      }
+    });
+
+    test("R558 substring: the event and every measured context carry substring-with-excludes and the probe's reason", async () => {
+      const s = await session(
+        { kind: "substring", elapsedMs: 9, reason: "exit 2; stderr: Unknown option" },
+        { workers: 1 },
+      );
+      expect(s.selectorEvents).toHaveLength(1);
+      expect(s.selectorEvents[0]).toMatchObject({
+        type: "al-runner-test-selector",
+        selector: "substring-with-excludes",
+        reason: "exit 2; stderr: Unknown option",
+      });
+      expect(s.contexts.length).toBeGreaterThan(0);
+      for (const c of s.contexts) {
+        expect(c.testSelector).toBe("substring-with-excludes");
+        expect(c.testSelectorReason).toBe("exit 2; stderr: Unknown option");
+      }
+    });
+
+    test("R558 not-applicable (--server): no event, and no measured context records a selector", async () => {
+      const s = await session({ kind: "not-applicable" }, { workers: 1 });
+      expect(s.selectorEvents).toEqual([]);
+      expect(s.contexts.length).toBeGreaterThan(0);
+      for (const c of s.contexts) expect(c.testSelector).toBeUndefined();
     });
   });
 
@@ -17248,7 +17290,10 @@ describe("R536: runNamedMutants reads the installed artifact under the source ru
       ...fx.cfg,
       backend: withSymbolsTaker(fx, []),
       narrow: (_baseline, ctx) => {
-        seen.push({ buildSymbols: ctx.buildSymbols, backendRefused: [...ctx.backendRefused.keys()] });
+        seen.push({
+          buildSymbols: ctx.buildSymbols,
+          backendRefused: [...ctx.backendRefused.keys()],
+        });
         return { methods: new Map([["M0001", [OVER]]]), unreached: new Set() };
       },
     });

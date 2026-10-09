@@ -988,7 +988,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
 
 /**
  * The two BIG surfaces are GENERATED (`scripts/generate-schemas.ts`) rather than hand-written:
- * `SessionReport` has 130 leaves and the stream is a union of 22 event shapes, and at that size a
+ * `SessionReport` has 130 leaves and the stream is a union of 23 event shapes, and at that size a
  * hand-written file is a second copy of the type rather than a guarantee. So the tests differ too —
  * freshness against the generator replaces the leaf-path pin, and both are checked against real
  * committed data.
@@ -1090,6 +1090,32 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       expect(conformsTo(reportSchema, { ...without, coverageMode: mode })).toEqual([]);
     }
     expect(conformsTo(reportSchema, { ...without, coverageMode: "None" })).not.toEqual([]);
+  });
+
+  test("R558: executionContexts[].testSelector is additive under v3: without it, with either value, and nothing else", () => {
+    // Optional and nested, so R157's rule keeps v3: the committed reports were deliberately NOT
+    // regenerated (they are bcdev reports, where the field can never appear).
+    const raw = readFileSync(
+      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+      "utf8",
+    );
+    expect(raw).not.toContain("testSelector");
+    const without = JSON.parse(raw) as {
+      validity: { executionContexts: Record<string, unknown>[] };
+    };
+    expect(without.validity.executionContexts.length).toBeGreaterThan(0);
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    const withSelector = (selector: string, reason?: string) => {
+      const doc = JSON.parse(raw) as typeof without;
+      for (const c of doc.validity.executionContexts) {
+        c.testSelector = selector;
+        if (reason !== undefined) c.testSelectorReason = reason;
+      }
+      return doc;
+    };
+    expect(conformsTo(reportSchema, withSelector("exact"))).toEqual([]);
+    expect(conformsTo(reportSchema, withSelector("substring-with-excludes", "exit 2"))).toEqual([]);
+    expect(conformsTo(reportSchema, withSelector("substring"))).not.toEqual([]);
   });
 
   test("R381: buildSymbols is additive under v3: optional, a report without it validates, and with it, [] included", () => {

@@ -208,6 +208,12 @@ export interface FoldedReport {
    *  every other backend, and absent on an al-runner session that declined to pin (which emits a
    *  named `al-runner-platform-apps-unpinned` warning carrying the reason instead). */
   readonly alRunnerPlatformAppsDir?: string;
+  /** R558 — the test selector R551's probe chose for this session's one-shot al-runner runs. Absent
+   *  on every other backend and on `--server`, where the probe is not-applicable. */
+  readonly alRunnerTestSelector?: {
+    readonly selector: "exact" | "substring-with-excludes";
+    readonly reason?: string;
+  };
 }
 
 interface BatchInvalidation {
@@ -378,6 +384,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let permissionCanary: PermissionCanaryResult | undefined;
   let alRunnerBcBuild: { build: string; announcement: string } | undefined;
   let alRunnerPlatformAppsDir: string | undefined;
+  let alRunnerTestSelector:
+    | { selector: "exact" | "substring-with-excludes"; reason?: string }
+    | undefined;
   let resumeFromRunId: number | undefined;
 
   const outcomes: SessionOutcome[] = [];
@@ -536,6 +545,12 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "al-runner-platform-apps":
         alRunnerPlatformAppsDir = e.dir;
+        break;
+      case "al-runner-test-selector":
+        alRunnerTestSelector = {
+          selector: e.selector,
+          ...(e.reason !== undefined ? { reason: e.reason } : {}),
+        };
         break;
       case "resume-resolved":
         resumeFromRunId = e.fromRunId;
@@ -783,6 +798,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
     ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),
     ...(alRunnerPlatformAppsDir !== undefined ? { alRunnerPlatformAppsDir } : {}),
+    ...(alRunnerTestSelector !== undefined ? { alRunnerTestSelector } : {}),
     ...(numbering !== undefined ? { numbering } : {}),
     ...(sourceSha256 !== undefined ? { sourceSha256 } : {}),
   };
