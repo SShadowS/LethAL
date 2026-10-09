@@ -96,6 +96,7 @@
     "r289-probe/sidecar.ts",
     "r289-probe/sidecar.test.ts",
     "r514-probe/probe.ts",
+    "r518-probe/run.ts",
     "roadmap-index.ts",
     "roadmap-index.test.ts",
     "roadmap-next-id.ts",

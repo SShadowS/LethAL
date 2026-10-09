@@ -478,6 +478,21 @@ function stdoutPrefix(stdout: string): string {
  * the reason R97 exists.
  */
 export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[] {
+  const parsed = readAlRunnerEnvelope(stdout);
+  const tests =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { tests?: unknown }).tests
+      : undefined;
+  if (!Array.isArray(tests)) {
+    throw new Error(
+      `al-runner's --output-json envelope has no "tests" array — a project that failed to COMPILE answers with compilationErrors[] and no tests, and must not be read as "no test failed": ${stdoutPrefix(stdout)}`,
+    );
+  }
+  return tests as readonly AlRunnerRawTest[];
+}
+
+/** The `--output-json` envelope as parsed JSON (see `parseAlRunnerPayload` for the rule). Throws. */
+function readAlRunnerEnvelope(stdout: string): unknown {
   const lines = stdout.split("\n");
   let start = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -491,23 +506,91 @@ export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[]
       `al-runner produced no --output-json envelope (no line beginning with "{"): ${stdoutPrefix(stdout)}`,
     );
   }
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(lines.slice(start).join("\n"));
+    return JSON.parse(lines.slice(start).join("\n"));
   } catch (err) {
     throw new Error(
       `al-runner's --output-json envelope is not valid JSON (${err instanceof Error ? err.message : String(err)}): ${stdoutPrefix(stdout)}`,
     );
   }
-  const tests =
-    typeof parsed === "object" && parsed !== null
-      ? (parsed as { tests?: unknown }).tests
-      : undefined;
-  if (!Array.isArray(tests)) {
-    throw new Error(
-      `al-runner's --output-json envelope has no "tests" array — a project that failed to COMPILE answers with compilationErrors[] and no tests, and must not be read as "no test failed": ${stdoutPrefix(stdout)}`,
+}
+
+/**
+ * al-runner's `BundleFailureStage.MarkerOf` (43f7617): the run of `[A-Z-]` right after the first
+ * `": "`, trailing `-` trimmed. Compared by EQUALITY, so `TEST-TIMEOUT-ABORTED` is not a match.
+ */
+function alRunnerMarkerOf(line: string): string | undefined {
+  const sep = line.indexOf(": ");
+  if (sep < 0) return undefined;
+  const token = (/^[A-Z-]*/.exec(line.slice(sep + 2))?.[0] ?? "").replace(/-+$/, "");
+  return token === "" ? undefined : token;
+}
+
+/** Absent, `null`, or an empty array. */
+function absentOrEmpty(v: unknown): boolean {
+  return v === undefined || v === null || (Array.isArray(v) && v.length === 0);
+}
+
+/**
+ * R518: the rows of a one-shot EXIT 3 that al-runner gave because a test hit its in-run stop, or
+ * `undefined` for any other exit 3. Never throws.
+ *
+ * al-runner (measured on 2.12.0-main.43f76177) exits 3 when a bundle that RAN has a suite error,
+ * and a watchdog abort is one (#2415, #2762): the timed-out row is in `tests`, and `suiteErrors`
+ * holds `"<file>: TEST-TIMEOUT-ABORT: <Display> (<cu>).<m>: watchdog timeout aborted the run ..."`.
+ * A real compile failure also exits 3, with `compilationErrors` and no rows. The rows are returned
+ * only when ALL of these hold:
+ * 1. the envelope parses and has a `tests` array;
+ * 2. `compilationErrors` and `executionErrors` are absent, `null` or empty, and the envelope's own
+ *    `exitCode`, when present, is 3;
+ * 3. `suiteErrors` is an array, each entry has an `errors` array of strings, and the flattened
+ *    list is non-empty (an empty list must not pass `every`);
+ * 4. every line's marker is exactly `TEST-TIMEOUT-ABORT`;
+ * 5. every line names a row whose status is neither `pass` nor `fail`, matched from the row side
+ *    as al-runner's `AbortReasonNamesTest` does.
+ * The row itself is NOT classified here: the backend's `verdictFromRunnerTest` decides `timeout`
+ * or a fail-closed `error`, exactly as on exit 1.
+ */
+export function timeoutAbortTests(stdout: string): readonly AlRunnerRawTest[] | undefined {
+  let env: unknown;
+  try {
+    env = readAlRunnerEnvelope(stdout);
+  } catch {
+    return undefined;
+  }
+  if (typeof env !== "object" || env === null) return undefined;
+  const e = env as Record<string, unknown>;
+  const tests = e.tests;
+  if (!Array.isArray(tests)) return undefined;
+  if (!absentOrEmpty(e.compilationErrors) || !absentOrEmpty(e.executionErrors)) return undefined;
+  if (e.exitCode !== undefined && e.exitCode !== null && e.exitCode !== 3) return undefined;
+  const suiteErrors = e.suiteErrors;
+  if (!Array.isArray(suiteErrors)) return undefined;
+  const lines: string[] = [];
+  for (const entry of suiteErrors) {
+    const errors =
+      typeof entry === "object" && entry !== null
+        ? (entry as { errors?: unknown }).errors
+        : undefined;
+    if (!Array.isArray(errors)) return undefined;
+    for (const line of errors) {
+      if (typeof line !== "string") return undefined;
+      lines.push(line);
+    }
+  }
+  // Covers `suiteErrors: []` too. Without it `[].every(...)` passes: empty-vs-empty.
+  if (lines.length === 0) return undefined;
+  if (!lines.every((l) => alRunnerMarkerOf(l) === "TEST-TIMEOUT-ABORT")) return undefined;
+  const needles: string[] = [];
+  for (const row of tests as readonly Partial<AlRunnerRawTest>[]) {
+    if (typeof row?.name !== "string" || row.status === "pass" || row.status === "fail") continue;
+    const dot = row.name.lastIndexOf(".");
+    if (dot < 0) continue;
+    needles.push(
+      ` (${row.name.slice(0, dot)}).${row.name.slice(dot + 1)}: watchdog timeout aborted the run`,
     );
   }
+  if (!lines.every((l) => needles.some((n) => l.includes(n)))) return undefined;
   return tests as readonly AlRunnerRawTest[];
 }
 
@@ -713,8 +796,17 @@ export class OneShotTransport implements AlRunnerTransport {
       // into a silently skipped mutant with no verdict and no error anyone would see. 2 and
       // 3 alike mean "we measured nothing", and so does any negative code (spawn failure),
       // so all of them are errors.
+      //
+      // R518: 3 is "a bundle did not compile, OR a bundle that RAN has a suite error". A test that
+      // hit al-runner's in-run stop is the second kind (#2415, #2762): its row is there, beside a
+      // TEST-TIMEOUT-ABORT suite error. Only that kind is read, and only when the envelope proves
+      // it (`timeoutAbortTests`); every other exit 3 stays an error.
       if (res.exitCode === 0 || res.exitCode === 1)
         return { kind: "tests", tests: parseAlRunnerPayload(res.stdout) };
+      if (res.exitCode === 3) {
+        const tests = timeoutAbortTests(res.stdout);
+        if (tests !== undefined) return { kind: "tests", tests };
+      }
       return {
         kind: "error",
         detail: res.stderr || res.stdout || `al-runner exited ${res.exitCode} with no output`,

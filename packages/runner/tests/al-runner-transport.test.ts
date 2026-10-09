@@ -5,6 +5,7 @@ import {
   buildAlRunnerArgv,
   parseAlRunnerPayload,
   qualifiedTestName,
+  timeoutAbortTests,
 } from "../src/al-runner-transport";
 import type { SpawnFn } from "../src/publisher";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
@@ -238,5 +239,184 @@ describe("buildAlRunnerArgv — --auto-provision (R125)", () => {
       "--package-cache",
       "C:/proj/.alpackages",
     ]);
+  });
+});
+
+/**
+ * R518. al-runner 2.12.0-main.43f76177 exits 3 on a one-shot test timeout: a bundle that RAN has a
+ * TEST-TIMEOUT-ABORT suite error. Exit 3 is read as results ONLY when the envelope proves that
+ * (`timeoutAbortTests`); every other exit 3 stays `kind: "error"`.
+ */
+describe("OneShotTransport exit 3: read only a proven test-timeout abort (R518)", () => {
+  // /coord/handoff/R-518/measure.md run 1: the stdout al-runner printed, byte for byte.
+  const RUN1_STDOUT = String.raw`{
+  "tests": [
+    {
+      "name": "Codeunit79620.LongSpin",
+      "status": "error",
+      "durationMs": 20072,
+      "message": "Test exceeded 20s timeout.",
+      "stackTrace": "\u0022R517 Probe Logic\u0022(CodeUnit 79600).SpinFor line 8 - R517 Probe by LethAL version 1.0.0.0\n\u0022R517 Probe Tests\u0022(CodeUnit 79620).LongSpin line 5 - R517 Probe Tests by LethAL version 1.0.0.0"
+    }
+  ],
+  "passed": 0,
+  "failed": 0,
+  "errors": 1,
+  "skipped": 0,
+  "total": 1,
+  "exitCode": 3,
+  "seed": 598161538,
+  "suiteErrors": [
+    {
+      "file": "/work/lethal-wt/r518/scripts/r517-probe/tests",
+      "errors": [
+        "tests: TEST-TIMEOUT-ABORT: R517 Probe Tests (Codeunit79620).LongSpin: watchdog timeout aborted the run \u2014 0 further [Test] method(s) in this codeunit did not run (0 total)"
+      ]
+    }
+  ],
+  "wallSeconds": 21.8637794
+}
+`;
+  // measure.md run 3: a TEST-app compile error, also exit 3 (the scratch path shortened).
+  const RUN3_STDOUT = String.raw`{
+  "tests": [],
+  "passed": 0,
+  "failed": 0,
+  "errors": 0,
+  "skipped": 0,
+  "total": 0,
+  "exitCode": 3,
+  "seed": 41286883,
+  "compilationErrors": [
+    {
+      "file": "/tmp/scratchpad/badtests",
+      "errors": [
+        "\u003Cbundled\u003E: EMIT-ZERO (1 AL error(s))"
+      ]
+    }
+  ],
+  "wallSeconds": 4.4625051
+}
+`;
+
+  const NAME = "Codeunit79620.LongSpin";
+  const ABORT_LINE =
+    "tests: TEST-TIMEOUT-ABORT: R517 Probe Tests (Codeunit79620).LongSpin: watchdog timeout aborted the run — 0 further [Test] method(s) in this codeunit did not run (0 total)";
+  const ROW = {
+    name: NAME,
+    status: "error",
+    durationMs: 20072,
+    message: "Test exceeded 20s timeout.",
+  };
+  function envelope(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      tests: [ROW],
+      exitCode: 3,
+      suiteErrors: [{ file: "/tests", errors: [ABORT_LINE] }],
+      ...over,
+    };
+  }
+  async function sendExit3(stdout: string) {
+    const spawn: SpawnFn = async () => ({ exitCode: 3, stdout, stderr: "stderr text" });
+    return new OneShotTransport("al-runner", spawn).send({ ...req, qualifiedTest: NAME });
+  }
+
+  test("run 1's envelope, verbatim, on exit 3 is kind=tests with the rows unchanged", async () => {
+    const res = await sendExit3(RUN1_STDOUT);
+    expect(res.kind).toBe("tests");
+    if (res.kind === "tests") expect(res.tests).toEqual(JSON.parse(RUN1_STDOUT).tests);
+  });
+
+  test("the same envelope behind al-runner's banner is accepted too", async () => {
+    expect((await sendExit3(alRunnerStdout(envelope()))).kind).toBe("tests");
+  });
+
+  test("(a) a second suite-error line that is not a timeout abort refuses", async () => {
+    // The EXEC-FAIL line names the row too, so only the marker check can refuse it.
+    const errors = [ABORT_LINE, ABORT_LINE.replace("TEST-TIMEOUT-ABORT", "EXEC-FAIL")];
+    const res = await sendExit3(
+      alRunnerStdout(envelope({ suiteErrors: [{ file: "/t", errors }] })),
+    );
+    expect(res.kind).toBe("error");
+  });
+
+  test("(b) compilationErrors beside a valid abort refuses", async () => {
+    const compilationErrors = [{ file: "/x", errors: ["x: COMPILE-FAIL"] }];
+    expect((await sendExit3(alRunnerStdout(envelope({ compilationErrors })))).kind).toBe("error");
+  });
+
+  test("(c) executionErrors beside a valid abort refuses", async () => {
+    const executionErrors = [{ file: "/x", errors: ["x: EXEC-FAIL"] }];
+    expect((await sendExit3(alRunnerStdout(envelope({ executionErrors })))).kind).toBe("error");
+  });
+
+  test("null compilationErrors and executionErrors count as absent", async () => {
+    const env = envelope({ compilationErrors: null, executionErrors: null });
+    expect((await sendExit3(alRunnerStdout(env))).kind).toBe("tests");
+  });
+
+  test("(d) an abort naming a test with no row, or naming a row that passed, refuses", async () => {
+    const other = ABORT_LINE.replace(").LongSpin:", ").Other:");
+    const noRow = envelope({ suiteErrors: [{ file: "/t", errors: [other] }] });
+    expect((await sendExit3(alRunnerStdout(noRow))).kind).toBe("error");
+    const passed = envelope({ tests: [{ ...ROW, status: "pass" }] });
+    expect((await sendExit3(alRunnerStdout(passed))).kind).toBe("error");
+  });
+
+  test("(e) no suite error refuses: absent, [], [{ errors: [] }], null", async () => {
+    const { suiteErrors: _absent, ...absent } = envelope();
+    for (const env of [
+      absent,
+      envelope({ suiteErrors: [] }),
+      envelope({ suiteErrors: [{ file: "/t", errors: [] }] }),
+      envelope({ suiteErrors: null }),
+    ]) {
+      expect((await sendExit3(alRunnerStdout(env))).kind).toBe("error");
+    }
+  });
+
+  test("(f) a non-string suite-error entry refuses", async () => {
+    const env = envelope({ suiteErrors: [{ file: "/t", errors: [ABORT_LINE, 42] }] });
+    expect((await sendExit3(alRunnerStdout(env))).kind).toBe("error");
+    // Refused, not thrown: `send` would turn a throw into an error too, hiding a missing guard.
+    expect(timeoutAbortTests(alRunnerStdout(env))).toBeUndefined();
+  });
+
+  test("(f) an envelope exitCode other than 3 on a process exit 3 refuses; null is absent", async () => {
+    expect((await sendExit3(alRunnerStdout(envelope({ exitCode: 1 })))).kind).toBe("error");
+    expect((await sendExit3(alRunnerStdout(envelope({ exitCode: null })))).kind).toBe("tests");
+  });
+
+  test("(g) run 3's compile-error envelope, verbatim, stays kind=error", async () => {
+    const res = await sendExit3(RUN3_STDOUT);
+    expect(res.kind).toBe("error");
+    if (res.kind === "error") expect(res.detail).toBe("stderr text");
+  });
+
+  test("marker near-miss: TEST-TIMEOUT-ABORTED and TEST-TIMEOUT refuse (equality, not prefix)", async () => {
+    for (const marker of ["TEST-TIMEOUT-ABORTED", "TEST-TIMEOUT"]) {
+      const line = ABORT_LINE.replace("TEST-TIMEOUT-ABORT", marker);
+      const env = envelope({ suiteErrors: [{ file: "/t", errors: [line] }] });
+      expect((await sendExit3(alRunnerStdout(env))).kind).toBe("error");
+    }
+  });
+
+  test("timeoutAbortTests never throws on unreadable stdout", () => {
+    expect(timeoutAbortTests("")).toBeUndefined();
+    expect(timeoutAbortTests("{ not json")).toBeUndefined();
+    expect(timeoutAbortTests("[1,2]")).toBeUndefined();
+  });
+
+  test("an exit-3 envelope with no `tests` key is refused, not thrown", async () => {
+    const { tests: _tests, ...noTests } = envelope();
+    expect(() => timeoutAbortTests(alRunnerStdout(noTests))).not.toThrow();
+    expect(timeoutAbortTests(alRunnerStdout(noTests))).toBeUndefined();
+    expect((await sendExit3(alRunnerStdout(noTests))).kind).toBe("error");
+  });
+
+  test("a suite-error entry with no `errors` array is refused, not thrown", () => {
+    const env = envelope({ suiteErrors: [{ file: "/t" }] });
+    expect(() => timeoutAbortTests(alRunnerStdout(env))).not.toThrow();
+    expect(timeoutAbortTests(alRunnerStdout(env))).toBeUndefined();
   });
 });
