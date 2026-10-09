@@ -6,6 +6,10 @@ using LethAL.SandboxWrapped.Pre;
 codeunit 78950 "Wrapped Tests"
 {
     Subtype = Test;
+    // R550: BandYRun writes the plain table 78915. Without this, the RunMutant path runs a test codeunit
+    // under restrictive test permissions and refuses the insert (measured on Cronus28, R-550 diag.md);
+    // sandbox-data-tests declares it for the same measured reason, and a real BC suite declares it.
+    TestPermissions = Disabled;
 
     var
         WrappedTop: Codeunit "Wrapped Top";
