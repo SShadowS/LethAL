@@ -84,4 +84,65 @@ codeunit 78950 "Wrapped Tests"
         if WrappedArms.Pick(5) <> 1 then
             Error('Pick(5) must be 1');
     end;
+
+    // R536: the wrapped table's field trigger and procedure, and the wrapped page's procedure
+    // (called on a page variable, never opened), each against its unwrapped twin. Nothing is
+    // inserted.
+    [Test]
+    procedure ClampTrigger()
+    var
+        Item: Record "Wrapped Trigger";
+    begin
+        Item.Validate(Qty, -5);
+        if Item.Qty <> 0 then
+            Error('Validate(Qty, -5) must clamp to 0');
+    end;
+
+    [Test]
+    procedure ClampTriggerTwin()
+    var
+        Item: Record "Wrapped Trigger Twin";
+    begin
+        Item.Validate(Qty, -5);
+        if Item.Qty <> 0 then
+            Error('Validate(Qty, -5) must clamp to 0');
+    end;
+
+    [Test]
+    procedure DoubledTrigger()
+    var
+        Item: Record "Wrapped Trigger";
+    begin
+        Item.Qty := 4;
+        if Item.Doubled() <> 8 then
+            Error('Doubled() of 4 must be 8');
+    end;
+
+    [Test]
+    procedure DoubledTriggerTwin()
+    var
+        Item: Record "Wrapped Trigger Twin";
+    begin
+        Item.Qty := 4;
+        if Item.Doubled() <> 8 then
+            Error('Doubled() of 4 must be 8');
+    end;
+
+    [Test]
+    procedure LabelView()
+    var
+        View: Page "Wrapped View";
+    begin
+        if View.Label(7) <> 'big' then
+            Error('Label(7) must be big');
+    end;
+
+    [Test]
+    procedure LabelViewTwin()
+    var
+        View: Page "Wrapped View Twin";
+    begin
+        if View.Label(7) <> 'big' then
+            Error('Label(7) must be big');
+    end;
 }

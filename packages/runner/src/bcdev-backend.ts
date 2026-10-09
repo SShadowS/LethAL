@@ -324,8 +324,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // the line map's rule. `buildCoverageMap` drops every method id of one, named or not.
   private hubRefused: ReadonlyMap<string, string> = new Map();
   // R497: the session's effective build symbols (`useBuildSymbols`). With them the line map and the
-  // hub refusals admit the measured `#if`-wrapped shapes; without them (`lethal verify`, which hands
-  // none over) every wrapped file stays refused, as before.
+  // hub refusals admit the measured `#if`-wrapped shapes; without them every wrapped file stays
+  // refused, as before. R536: `runNamedMutants` (so `lethal verify`) hands over the source run's set.
   private buildSymbols: readonly string[] | undefined;
   // R58 (`coverageMode: "fenced"` only): the `SetFilter` expression over `Code Coverage."Object ID"`
   // this batch's artifact declares — see `coverageObjectIdFilterOf`.

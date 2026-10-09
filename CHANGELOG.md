@@ -680,6 +680,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   re-sent. A test that fails with al-runner's `out-of-scope: ` refusal (any exception type) is
   `error`, cause `runner-refused`, no longer a kill. Spec §11's abort is kept for real transport
   failures (R534). Explain schema 16 adds the two causes.
+- **`lethal verify` reads a `#if`-wrapped object as the run did** (R536). Verify now hands the
+  backend the build symbols its source run recorded, so the installed artifact's line map scores
+  the wrapped shapes the run scored (R497) instead of refusing them with "Its mutants read
+  no-coverage", and its reach filter refuses exactly what the run refused. A source run that
+  recorded no build symbols is refused by name. Pinned by unit tests and the real backend's attach
+  test; no live verify gate runs on a wrapped fixture (it changes which new tests run, never a
+  verdict on its own).
 - **al-runner one-shot: a test that hits its in-run stop is scored `timeout` again and goes
   through the unmutated confirm, so a genuine hang is `timeout-killed`** (R518). al-runner now
   exits 3 on a test timeout; LethAL read that as a failed run, re-ran the hang, and then ABORTED

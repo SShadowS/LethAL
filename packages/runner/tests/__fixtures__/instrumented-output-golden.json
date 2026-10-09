@@ -325,8 +325,8 @@
       "mutants": 10
     },
     "fixtures/sandbox-wrapped-tests/src/WrappedTests.Codeunit.al": {
-      "sha256": "dfbc236140ab4b9728de26016a5db038dcf51324c93d980765104e215ef7d29a",
-      "mutants": 40
+      "sha256": "baf736ff52a5e8a00e0b9aaacd39dcaa120dad50f3aa88c3323ddbfad17ca79e",
+      "mutants": 72
     },
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedArms.Codeunit.al": {
       "sha256": "db5dba667bbfc23a2a618be821a6a75500d499d7464bb979f615bb8c3b0511d7",
@@ -351,6 +351,22 @@
     "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTopTwin.Codeunit.al": {
       "sha256": "457f08db1d8aedd8e638dff84e45e770a48b7c56d46bbbf287da3787ea4c4495",
       "mutants": 8
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTrigger.Table.al": {
+      "sha256": "ec7079b1c5fc06cb8b03dea2e8abfdad43819b8b3a54a7d1845a8347246778fe",
+      "mutants": 6
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTriggerTwin.Table.al": {
+      "sha256": "b63fbdf3a251ea9b5af35b3b1b9e6f00fd3953f0e301628ccd93c7a4f74249a8",
+      "mutants": 6
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedView.Page.al": {
+      "sha256": "9657ea20b4e2e3f08c3ab2fcb7010e13edc50044696a83b988d95572f3489ea2",
+      "mutants": 5
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedViewTwin.Page.al": {
+      "sha256": "09ffa62b3a8759d4f06480fe98b9542f547b11c54055ac5f3bca2f4573618993",
+      "mutants": 5
     }
   }
 }

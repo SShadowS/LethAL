@@ -1,6 +1,6 @@
 import { realpath, stat } from "node:fs/promises";
 import nodePath, { join, resolve } from "node:path";
-import { initParser, parseAL, wrapRoot } from "@lethal/engine";
+import { evaluateArms, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import {
   type MutantManifest,
   type MutantManifestEntry,
@@ -1751,7 +1751,11 @@ export async function runVerify(
             coveringKeys: plan.covering,
             newTests: plan.newTests,
             baseline,
-            refusedObjects: refusedObjectsOfSources(ctx.alSources),
+            refusedObjects: refusedObjectsOfSources(
+              ctx.alSources,
+              ctx.buildSymbols,
+              ctx.backendRefused,
+            ),
           });
           // The cap, check 2: no mutant is in flight yet, and runNamedMutants releases the lease
           // on the way out, so the refusal is safe here.
@@ -2088,13 +2092,26 @@ function memberOf(e: MutantManifestEntry): string {
  * parses them. These are the files `attach` built the fenced line map from, so the coverage lines
  * were placed in them; the project on disk may have changed since, the installed build has not.
  * The parser was initialised by `planVerify`.
+ *
+ * R536: read under the source run's build symbols, as the run's selection read them (R497's BC
+ * shape rule: an admitted wrapped object is placeable, every other shape refused by name), joined
+ * with what the attached line map itself refuses (a key two compiled files declare, an unmapped
+ * object), so verify refuses exactly what the run refused.
  */
-function refusedObjectsOfSources(sources: readonly AlSource[]): ReadonlyMap<string, string> {
-  return coverageRefusedObjects(
-    sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
-    // R-300b: verify reads the fenced line map's coverage (bcdev), which still refuses.
-    "bcdev",
-  );
+function refusedObjectsOfSources(
+  sources: readonly AlSource[],
+  buildSymbols: readonly string[],
+  backendRefused: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  const files = sources.map((s) => ({
+    path: s.path,
+    root: wrapRoot(parseAL(s.text)),
+    text: s.text,
+  }));
+  return new Map([
+    ...backendRefused,
+    ...coverageRefusedObjects(files, "bcdev", (f) => evaluateArms(f.root, f.text, buildSymbols)),
+  ]);
 }
 
 /** R-384 rules 7 and 8: the `verify-reach-fail-closed` warnings and the state lines. */
