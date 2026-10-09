@@ -10,6 +10,7 @@ import {
   isObjectContainer,
   isProcedureLike,
   lastFieldChild,
+  maskAlNonCode,
   normalizeAlName,
   objectDeclarationsOf,
   procedureLikeArmNames,
@@ -803,39 +804,43 @@ export function openItemHangRefuses(node: ALSyntaxNode, ctx: SemanticContext): b
  * that leaves it true walks forever. Refused, outside open-item code: a site that contains or sits in
  * a write of such a name; the condition of an if/while/repeat/case whose body holds such a write; and
  * an early exit (`exit`, Break/Quit/Skip, `Error`, or a guard holding one) that comes before such a
- * write in its scope. Not seen: a write in another object, and a value that reaches the name through
- * another variable.
+ * write in its scope. Not seen: a write in another object other than a call to a report's writer
+ * through a typed `Report X` receiver (R555, below; the unresolvable receivers are filed), and a value
+ * that reaches the name through another variable.
  *
  * R548: inside a reportextension the names are the extension's own (`presetExitNames` over its
  * blocks, its globals seeded with the base's protected names) plus every base candidate's preset
  * names that the base declares `protected var` (`extensionPresetExitNames`). A non-protected base
  * global is not accessible from an extension (AL0161). Not seen (R548 residuals): a BASE write of a
  * protected name only an extension's guard reads.
+ *
+ * R555: a CALL to a preset writer (`presetWriters`: a procedure that writes such a name, directly or
+ * through another writer) is a write too, so the call, its guards, its enclosing blocks and an early
+ * exit before it are refused like an inline write. In ANY object, a call through a receiver declared
+ * `Report X` to a writer of project report X, or of a project reportextension of X, is one as well
+ * (`crossWriterCall`; alc 18.0.43 binds an extension procedure through `Report X`, R555 build.md).
  */
 function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const obj = objectOf(node);
   if (obj === null) return false;
-  let names: Set<string>;
+  let names: Set<string> = new Set();
   if (obj.rawKind === "report_declaration") names = presetExitNames(obj, ctx);
   else if (obj.rawKind === "reportextension_declaration")
     names = extensionPresetExitNames(obj, ctx);
-  else return false;
-  if (names.size === 0 || inOpenItemCode(node, ctx)) return false;
-  const writes = (n: ALSyntaxNode): boolean => {
-    if (n.rawKind === "assignment_statement") {
-      const l = n.childForFieldName("left");
-      return l !== null && names.has(rootName(l));
-    }
-    if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
-      const args = n.childForFieldName("arguments")?.namedChildren ?? [];
-      // an unresolved callee counts as writing (the safe direction on this side)
-      return args.some(
-        (a, i) =>
-          isIdentifierLike(a) && names.has(normalizeAlName(a.text)) && argWritten(n, i, ctx, true),
-      );
-    }
-    return false;
-  };
+  const w =
+    obj.rawKind === "report_declaration" || obj.rawKind === "reportextension_declaration"
+      ? presetWriters(obj, names, ctx)
+      : null;
+  // an extension with no names of its own can still call a base writer (the bypass of R548's return)
+  const local = w !== null && (names.size > 0 || w.procs.size > 0 || w.unreadProcs.size > 0);
+  const cross = crossWriters(ctx).all.size > 0;
+  // open-item code is refused by `openItemHangRefuses`' first part already, cross-object or not
+  if ((!local && !cross) || inOpenItemCode(node, ctx)) return false;
+  const writes = (n: ALSyntaxNode): boolean =>
+    (local &&
+      w !== null &&
+      (directWrite(n, names, ctx) || callsPresetWriter(n, w, ctx, names.size > 0))) ||
+    (cross && crossWriterCall(n, ctx));
   const containsWrite = (n: ALSyntaxNode, after = -1): boolean => {
     let found = false;
     visitAll(n, (x) => {
@@ -867,6 +872,198 @@ function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean
     if (scope !== null && isEarlyExit(a, scope) && containsWrite(scope, a.endIndex)) return true;
   }
   return containsWrite(node);
+}
+
+/** R500 shape 1's direct write of a name in `names`: an assignment to it, or a call that passes it
+ *  to a `var` parameter (an unresolved callee counts as writing, the safe direction on this side). */
+function directWrite(n: ALSyntaxNode, names: ReadonlySet<string>, ctx: SemanticContext): boolean {
+  if (n.rawKind === "assignment_statement") {
+    const l = n.childForFieldName("left");
+    return l !== null && names.has(rootName(l));
+  }
+  if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
+    const args = n.childForFieldName("arguments")?.namedChildren ?? [];
+    return args.some(
+      (a, i) =>
+        isIdentifierLike(a) && names.has(normalizeAlName(a.text)) && argWritten(n, i, ctx, true),
+    );
+  }
+  return false;
+}
+
+interface PresetWriters {
+  /** every name of every writer procedure */
+  readonly procs: ReadonlySet<string>;
+  /** every procedure name the scanned objects declare */
+  readonly known: ReadonlySet<string>;
+  /** names an UNPARSED base candidate declares as `procedure <name>` (a reportextension only) */
+  readonly unreadProcs: ReadonlySet<string>;
+  /** names declared as `procedure <name>` inside an ERROR descendant of a parse-damaged report */
+  readonly damagedProcs: ReadonlySet<string>;
+}
+
+/**
+ * R555: the procedures whose call writes a preset exit name: a procedure with a `directWrite` of
+ * one, or a call (`bareCallee`, `hiddenCallee`, the shapes `openReachable` follows) to such a
+ * procedure, to a fixpoint. In a report: its own procedures over `names`. In a reportextension: its
+ * own over `names`, plus every base candidate's (`baseCandidatesOf`) over `names` and that base's
+ * own `presetExitNames`, since a base procedure can write a base-private name the extension cannot
+ * spell. `names` must be the object's own (`presetExitNames` / `extensionPresetExitNames`): the
+ * result is cached per object.
+ */
+function presetWriters(
+  obj: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  ctx: SemanticContext,
+): PresetWriters {
+  return cached(ctx, obj, "presetwriters", () => {
+    const bases =
+      obj.rawKind === "reportextension_declaration"
+        ? baseCandidatesOf(obj, ctx)
+        : { objs: [], unread: [] };
+    const scans = [
+      { o: obj, ns: names },
+      ...bases.objs.map((b) => ({ o: b, ns: new Set([...names, ...presetExitNames(b, ctx)]) })),
+    ];
+    const known = new Set<string>();
+    for (const { o } of scans) for (const k of procedureNamesOf(o, ctx)) known.add(k);
+    const procs: { names: string[]; direct: boolean; calls: string[] }[] = [];
+    for (const { o, ns } of scans) {
+      visitAll(o, (p) => {
+        if (!isProcedureLike(p) && p.rawKind !== "procedure") return;
+        let direct = false;
+        const calls: string[] = [];
+        visitAll(p, (n) => {
+          if (!direct && ns.size > 0 && directWrite(n, ns, ctx)) direct = true;
+          const c = bareCallee(n) ?? hiddenCallee(n, known, ctx);
+          if (c !== null) calls.push(c);
+        });
+        procs.push({ names: procNames(p), direct, calls });
+      });
+    }
+    const out = new Set<string>();
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const p of procs) {
+        if (p.names.every((k) => out.has(k))) continue;
+        if (p.direct || p.calls.some((c) => out.has(c))) {
+          for (const k of p.names) out.add(k);
+          changed = true;
+        }
+      }
+    }
+    const unreadProcs = new Set<string>();
+    for (const u of bases.unread)
+      for (const k of declaredProcedureNames(u.text)) unreadProcs.add(k);
+    const damagedProcs = new Set<string>();
+    if (obj.rawKind === "report_declaration" && obj.hasError)
+      visitAll(obj, (n) => {
+        if (n.rawKind === "ERROR")
+          for (const k of declaredProcedureNames(n.text)) damagedProcs.add(k);
+      });
+    return { procs: out, known, unreadProcs, damagedProcs };
+  });
+}
+
+/**
+ * R555: does `n` call a preset writer of its own object (`w`)? Also, an unknown callee (no parsed
+ * procedure declares it) that may be a writer the parse could not read: in a reportextension, one
+ * an unparsed base candidate declares (`procedure <name>`); in a parse-damaged report with preset
+ * names (`hasNames`), one declared inside an ERROR descendant. Any other unknown bare name is a
+ * built-in, which cannot write a report global (as `argWritten` reads built-ins).
+ */
+function callsPresetWriter(
+  n: ALSyntaxNode,
+  w: PresetWriters,
+  ctx: SemanticContext,
+  hasNames: boolean,
+): boolean {
+  const c = bareCallee(n) ?? hiddenCallee(n, w.known, ctx);
+  if (c === null) return false;
+  if (w.procs.has(c)) return true;
+  if (w.known.has(c)) return false;
+  return w.unreadProcs.has(c) || (hasNames && w.damagedProcs.has(c));
+}
+
+/**
+ * R555 (F5): the names `text` declares as `procedure <name>` (two tokens in sequence), comments
+ * masked. Matching the bare token instead would make `Error`, `Message` or `Format` a writer
+ * wherever an unread text mentions them. A match inside a string only adds a refusal.
+ */
+function declaredProcedureNames(text: string): Set<string> {
+  const out = new Set<string>();
+  let prev = "";
+  const code = maskAlNonCode(text, { blankStringContents: false });
+  for (const m of code.matchAll(/"([^"\n]*)"|[\p{L}_][\p{L}\p{N}_]*/gu)) {
+    const t = (m[1] ?? m[0]).toLowerCase();
+    if (prev === "procedure") out.add(t);
+    prev = t;
+  }
+  return out;
+}
+
+const crossWritersMemo = new WeakMap<object, CrossWriters>();
+interface CrossWriters {
+  /** report name -> the writers callable through `Report <name>` */
+  readonly byReport: ReadonlyMap<string, ReadonlySet<string>>;
+  /** the writers of reportextensions with no readable base name: callable through any report */
+  readonly anyReport: ReadonlySet<string>;
+  /** every such writer name (a cheap prefilter) */
+  readonly all: ReadonlySet<string>;
+}
+
+/**
+ * R555: per report name, the preset writers a `Report X` receiver can call: every project report
+ * named X (`presetWriters` over its own names) and every project reportextension of X (over the
+ * extension's names, base candidates included): alc 18.0.43 binds an extension procedure through a
+ * `Report X` variable from a codeunit (the R555 probe, AL0432 at the call). An extension with no
+ * readable base name counts for every report, the safe direction.
+ */
+function crossWriters(ctx: SemanticContext): CrossWriters {
+  const hit = crossWritersMemo.get(ctx);
+  if (hit !== undefined) return hit;
+  const byReport = new Map<string, Set<string>>();
+  const anyReport = new Set<string>();
+  const add = (key: string | null, ws: ReadonlySet<string>): void => {
+    if (ws.size === 0) return;
+    let s = anyReport;
+    if (key !== null) {
+      s = byReport.get(key) ?? new Set();
+      byReport.set(key, s);
+    }
+    for (const k of ws) s.add(k);
+  };
+  for (const o of projectObjects(ctx)) {
+    if (o.rawKind === "report_declaration")
+      add(objectNameOf(o), presetWriters(o, presetExitNames(o, ctx), ctx).procs);
+    else if (o.rawKind === "reportextension_declaration")
+      add(extendedBaseName(o), presetWriters(o, extensionPresetExitNames(o, ctx), ctx).procs);
+  }
+  const all = new Set<string>(anyReport);
+  for (const s of byReport.values()) for (const k of s) all.add(k);
+  const out: CrossWriters = { byReport, anyReport, all };
+  crossWritersMemo.set(ctx, out);
+  return out;
+}
+
+/**
+ * R555: `Rep.M(...)` in any object, where `Rep` is declared `Report X` (a variable or a parameter,
+ * `Sender` in a subscriber too: `declaredType`) and `M` is one of X's writers (`crossWriters`).
+ * `CurrReport.M()` and `this.M()` are the same-object shapes `callsPresetWriter` reads. The report
+ * lookup is local to this rule: `objectsOfType` stays `[]` for kind `report`.
+ */
+function crossWriterCall(n: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return false;
+  const f = n.childForFieldName("function");
+  if (f === null || f.rawKind !== "member_expression") return false;
+  const m = normalizeAlName(f.childForFieldName("member")?.text ?? "");
+  const cw = crossWriters(ctx);
+  if (!cw.all.has(m)) return false;
+  const recv = f.childForFieldName("object");
+  if (recv === null || !isIdentifierLike(recv)) return false;
+  const t = declaredType(recv, ctx);
+  if (t === null || t.kind !== "report") return false;
+  return cw.byReport.get(t.name)?.has(m) === true || cw.anyReport.has(m);
 }
 
 /** An exit that can stop the rest of `scope`: `exit`, `CurrReport.Break/Quit/Skip` (and the XMLport
@@ -929,7 +1126,8 @@ function argWritten(c: ALSyntaxNode, i: number, ctx: SemanticContext, unknown: b
     // R548 (F4): a bare name (or `this.P`) in a reportextension may be a BASE report procedure.
     // Candidates that disagree, or one that cannot be read, answer `unknown`.
     const { objs, unread } = baseCandidatesOf(obj, ctx);
-    if (unread.some((o) => identifierTokens(o.text).has(own))) return unknown;
+    // R555 (F5): an unread base answers only for a name it declares as `procedure <name>`
+    if (unread.some((o) => declaredProcedureNames(o.text).has(own))) return unknown;
     for (const o of objs) if (procedureNamesOf(o, ctx).has(own)) collect(o, own);
     if (procs.length === 0)
       return isIdentifierLike(f) ? WRITING_BUILTINS.has(own) && i === 0 : unknown;
@@ -975,7 +1173,9 @@ function extensionPresetExitNames(ext: ALSyntaxNode, ctx: SemanticContext): Set<
   });
 }
 
-function presetExitNames(
+/** R500 shape 1: an object's preset exit names (see `writesPresetExitName`). Exported for the R555
+ *  test that asserts a parse-damaged report still has some (internal). */
+export function presetExitNames(
   obj: ALSyntaxNode,
   ctx: SemanticContext,
   inherited: ReadonlySet<string> = new Set(),
@@ -1345,7 +1545,7 @@ function attributesOf(p: ALSyntaxNode): ALSyntaxNode[] {
   return out;
 }
 
-interface DeclaredType {
+export interface DeclaredType {
   /** `table` for a Record, else the object keyword: `codeunit`, `interface`, `report`, ... */
   readonly kind: string;
   /** The full object name, normalized (`normalizeAlName`): `"Cust. Ledger Entry"` stays one name. */
@@ -1428,8 +1628,11 @@ function projectObjects(ctx: SemanticContext): ALSyntaxNode[] {
 }
 
 /** The project objects a declared type names: a codeunit; a table plus its tableextensions; or every
- *  codeunit that implements an interface. Names compared normalized, in full. */
-function objectsOfType(t: DeclaredType, ctx: SemanticContext): ALSyntaxNode[] {
+ *  codeunit that implements an interface. Names compared normalized, in full. Kind `report` stays
+ *  `[]` on purpose: `callTargets` feeds R500 shape 2's callee follow, and widening it to reports is a
+ *  separate decision from R555, whose report lookup is local (`crossWriters`). Exported for the
+ *  test that pins that (internal). */
+export function objectsOfType(t: DeclaredType, ctx: SemanticContext): ALSyntaxNode[] {
   const objects = projectObjects(ctx);
   if (t.kind === "codeunit") {
     return objects.filter(
