@@ -693,12 +693,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   is unchanged, and the stored `killingTestFailure` is never rewritten. The backend is told by a new
   optional `kind` that each backend declares (stream schema gains it), not by `authoritative`. A
   `vacuous` al-runner screen whose killed kills include text without that prefix gets a note that
-  names the backend as a possible cause, instead of blaming the suite.
+  names the backend as a possible cause, instead of blaming the suite. `caps` in the stream schema
+  has `additionalProperties: false`, so a validator still holding the previous `stream-v1` rejects
+  a new stream for the `kind` field alone.
 - **bcdev no longer writes `lethal-control.app` into `packageCachePath`** (R552). The control
   symbol is staged in the private compile copy's own `.lethal-symbols` directory and passed to alc
   as a second package-cache path; `scripts/campaign/compile-only.ts` does the same. A
   `lethal-control.app` an older LethAL left in the cache gets one warning (safe to delete) and is
-  never touched. A `;` or `,` in either path is refused before alc runs.
+  never touched. A `;` or `,` in either path is refused before alc runs, because alc splits its
+  package-cache list on both; that now includes the temp directory, so a temp path with a comma (a
+  Windows user name containing one) is refused where it used to work. The `stale-publish` itest
+  stages the symbol the same way. A two-path list on the Windows alc (18.0.2668733) is NOT
+  measured; Linux alc is.
 - **al-runner: a test row al-runner reports as `error` no longer aborts the session** (R534). A
   hang in a test codeunit's OnRun trigger is scored `timeout` and confirmed unmutated on the
   confirm's wall time (al-runner does not report the OnRun's own time). An unexecuted UI handler, a

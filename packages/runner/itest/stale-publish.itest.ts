@@ -86,6 +86,8 @@ const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
 const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+/** R552: where the control symbol is staged, under the run's scratch root, never the user's cache. */
+const SYMBOL_DIR = ".lethal-symbols";
 
 // Same ids as bcdev.itest.ts / al-runner.itest.ts — must live inside the fixture's declared
 // idRanges (79000-79199), enforced by real alc.exe (AL0297).
@@ -345,6 +347,7 @@ async function compileArtifact(
     appVersion,
     mutantManifest,
     appManifest,
+    extraPackageCachePath: join(ctx.scratchRoot, SYMBOL_DIR),
   });
 }
 
@@ -682,10 +685,12 @@ async function main(): Promise<void> {
     { alcPath: toolPaths.alcPath, packageCachePath: bcdev.packageCachePath, outputDir },
     defaultArtifactIo,
   );
-  // Stage the LethAL Control symbol into the compiler's package cache so the instrumented target's
-  // `LC Control State` reference resolves (mirrors BcDevMcpBackend.deploy()'s staging; the
-  // dependency itself is injected per-artifact in compileArtifact). Once — the cache persists.
-  await copyFile(bcdev.controlSymbolPath, join(bcdev.packageCachePath, "lethal-control.app"));
+  // Stage the LethAL Control symbol in a scratch directory passed to alc as a second package cache
+  // (R552, as BcDevMcpBackend does), so the instrumented target's `LC Control State` reference
+  // resolves without writing into the configured `packageCachePath`. The dependency itself is
+  // injected per-artifact in compileArtifact.
+  await mkdir(join(scratchRoot, SYMBOL_DIR), { recursive: true });
+  await copyFile(bcdev.controlSymbolPath, join(scratchRoot, SYMBOL_DIR, "lethal-control.app"));
   // Task 8b: instrument the real deployer IO so Probe B can prove the serializer actually held
   // the two concurrent publishes one-at-a-time, not just that BC's final state happened to be
   // B (see `instrumentedDeployerIo`'s doc comment above).
