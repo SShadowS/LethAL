@@ -1953,7 +1953,11 @@ function triggerHeaderLoopWrite(node: ALSyntaxNode, name: string, ctx: SemanticC
  */
 export function loopReadsNameAt(node: ALSyntaxNode, name: string, ctx: SemanticContext): boolean {
   const wanted = normalizeAlName(name);
-  for (let cur: ALSyntaxNode | null = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+  for (
+    let cur: ALSyntaxNode | null = node.parent;
+    cur !== null && !isScope(cur);
+    cur = cur.parent
+  ) {
     if (cur.rawKind !== "for_statement") continue;
     const variable = cur.childForFieldName("variable");
     if (variable !== null && normalizeAlName(variable.text) === wanted) return true;

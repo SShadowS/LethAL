@@ -802,7 +802,11 @@ export function triggerHeaderSymbols(trigger: ALSyntaxNode): {
   const returnTypeNode = trigger.childForFieldName("return_type");
   const returnValue = trigger.childForFieldName("return_value");
   if (returnValue !== null && returnTypeNode !== null)
-    locals.push({ name: stripQuotes(returnValue.text), typeText: returnTypeNode.text, node: returnValue });
+    locals.push({
+      name: stripQuotes(returnValue.text),
+      typeText: returnTypeNode.text,
+      node: returnValue,
+    });
   return { parameters, locals, ambiguous: conditionallyDeclared(trigger) };
 }
 

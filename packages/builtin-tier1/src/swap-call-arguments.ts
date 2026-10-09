@@ -169,7 +169,10 @@ export const swapCallArguments: MutationOperator = {
  * resolved, so the site is refused whole (no other pair is tried: one site, one decision). Found in
  * triggers once R340 typed their header names; procedures had the same door, closed here too.
  */
-function pairFor(node: ALSyntaxNode, ctx: SemanticContext): readonly [ALSyntaxNode, ALSyntaxNode] | null {
+function pairFor(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+): readonly [ALSyntaxNode, ALSyntaxNode] | null {
   const pair = swappablePair(node, ctx);
   return pair === null || swapFeedsLoop(node, pair, ctx) ? null : pair;
 }

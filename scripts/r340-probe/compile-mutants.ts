@@ -23,7 +23,8 @@ import { defaultAlToolPaths } from "../../packages/runner/src/publisher";
 import { writeInstrumentedProject } from "../../packages/schemata/src/index";
 
 const [out = "", configPath = ""] = process.argv.slice(2);
-if (out === "" || configPath === "") throw new Error("usage: compile-mutants.ts <out dir> <config>");
+if (out === "" || configPath === "")
+  throw new Error("usage: compile-mutants.ts <out dir> <config>");
 const here = import.meta.dir;
 const proj = join(here, "alcp");
 const repo = join(here, "..", "..");
@@ -34,7 +35,9 @@ for (const f of set.files)
   for (const s of f.specs)
     if (s.before.text === "Z + Z") {
       zSites++;
-      console.log(`  ${f.path}:${s.before.startPosition.row + 1} ${s.operatorName} -> ${s.after.text}`);
+      console.log(
+        `  ${f.path}:${s.before.startPosition.row + 1} ${s.operatorName} -> ${s.after.text}`,
+      );
     }
 console.log(`Z + Z mutants emitted: ${zSites}`);
 
@@ -52,7 +55,9 @@ await writeInstrumentedProject({
   operatorTiers,
 });
 const app = JSON.parse(await readFile(join(proj, "app.json"), "utf8"));
-const control = JSON.parse(await readFile(join(repo, "extensions/lethal-control/app.json"), "utf8"));
+const control = JSON.parse(
+  await readFile(join(repo, "extensions/lethal-control/app.json"), "utf8"),
+);
 app.dependencies = [
   { id: control.id, name: control.name, publisher: control.publisher, version: control.version },
 ];
@@ -63,12 +68,17 @@ if (!tools) throw new Error("no alc under the AL Language extension");
 const cache = join(out, "cache");
 await mkdir(cache, { recursive: true });
 for (const n of await readdir(bcdev.packageCachePath))
-  if (n.toLowerCase().endsWith(".app")) await copyFile(join(bcdev.packageCachePath, n), join(cache, n));
+  if (n.toLowerCase().endsWith(".app"))
+    await copyFile(join(bcdev.packageCachePath, n), join(cache, n));
 await copyFile(bcdev.controlSymbolPath, join(cache, "LethAL_LethAL Control.app"));
 await mkdir(join(out, "app"), { recursive: true });
 const compiler = new ArtifactCompiler(
   { alcPath: tools.alcPath, packageCachePath: cache, outputDir: join(out, "app") },
   defaultArtifactIo,
 );
-const r = await compiler.compileProject({ projectDir: dir, packageCachePath: cache, name: "r340probe" });
+const r = await compiler.compileProject({
+  projectDir: dir,
+  packageCachePath: cache,
+  name: "r340probe",
+});
 console.log(`alc: the instrumented project COMPILES (sha256 ${r.sha256.slice(0, 12)})`);
