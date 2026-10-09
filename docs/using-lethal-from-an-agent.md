@@ -196,7 +196,11 @@ only on `compare`.
 
 `lethal campaign compare --json` prints one object on stdout and its lines on stderr:
 `{campaignCompareSchemaVersion, stage, baselinePath, mutantCount, identical, differences[],
-coverage}`. Read `coverage` before `identical` (R355). `coverage.verified: true` carries the one
+coverage, identity}`. Read `coverage` and `identity` before `identical` (R355, R556).
+`identity.verified: true` means both sides record the same identity scheme and every paired mutant's
+mutated text was checked by hash, so `identical` covers the text too; `identity.verified: false`
+carries a `statement` (a stage frozen before R556 has no hashes, a scheme changed, or rows could not
+be checked) and then `identical` means matching VERDICTS only. `coverage.verified: true` carries the one
 `coverageMode` both sides share. `coverage.verified: false` means the stage was frozen before R355
 (its baseline records no mode) or the report predates R252, and it always carries
 `stageCoverageMode`, `reportCoverageMode` (`null` where unrecorded) and a `statement`: a matching
