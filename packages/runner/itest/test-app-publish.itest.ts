@@ -51,11 +51,10 @@ import { ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
 import type { CompiledTestApp, PublishedTestApp } from "../src/test-app-publish";
 import { scanTestPageTests } from "../src/testpage-scan";
-import { preflightReadOnlyBaseline } from "./baseline-guard";
+import { preflightReadOnlyBaseline, readGateBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
-import type { NormalizedMutant } from "./mutant-equality";
 import { expectedTestAppVersion } from "./test-app-version";
 
 if (!process.env.LETHAL_ITEST_TESTAPP) {
@@ -245,7 +244,7 @@ async function main(): Promise<void> {
       ...shared,
     });
     assert.equal(report.quarantined, undefined, "step 1: the full run must not quarantine");
-    const committed = JSON.parse(await readFile(BASELINE_PATH, "utf8")) as NormalizedMutant[];
+    const committed = (await readGateBaseline(BASELINE_PATH)).entries;
     const diffs = diffMutants(committed, normalizeForComparison(report));
     assert.equal(
       diffs.length,

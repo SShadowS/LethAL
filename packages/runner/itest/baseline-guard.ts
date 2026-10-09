@@ -21,10 +21,11 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { CoverageMode } from "../src/backend";
 import type { SessionReport } from "../src/report";
-import { canonical, diffMutants, normalizeForComparison } from "./mutant-equality";
-import type { NormalizedMutant } from "./mutant-equality";
+import { canonical, compareMutants, normalizeForComparison } from "./mutant-equality";
+import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
 /**
  * Deterministic on-disk ordering — a baseline file's diff must never depend on report order.
@@ -42,23 +43,67 @@ function sortedForDisk(mutants: readonly NormalizedMutant[]): NormalizedMutant[]
 }
 
 /**
- * Parses a committed baseline's raw JSON. Refuses a baseline that is not a non-empty array: an
- * empty (or non-array) baseline would silently match an empty-mutant report, which is this
- * project's signature bug (empty-vs-empty "matches"). A parse failure is also wrapped with the
- * file's path and the remedy, instead of surfacing a bare, unlabelled SyntaxError.
+ * R556: a committed per-mutant baseline, gate or stage. Two on-disk forms, both read:
+ *   - a plain list of rows: recorded before R556 (or, for a stage, before R355), so the identity
+ *     scheme and coverage mode are unknown, never assumed;
+ *   - `{ "identityScheme"?: <integer>, "coverageMode"?: <mode>, "entries": [rows] }`: what a gate
+ *     record (R556) and `campaign freeze` (R355, R556) write.
  */
-function parseBaseline(
+export interface GateBaseline {
+  readonly identityScheme?: number | undefined;
+  readonly coverageMode?: CoverageMode | undefined;
+  readonly entries: NormalizedMutant[];
+}
+
+const OBJECT_KEYS = new Set(["identityScheme", "coverageMode", "entries"]);
+
+/**
+ * Parses a committed baseline's raw JSON. Refuses one with no rows: an empty baseline would
+ * silently match an empty-mutant report, which is this project's signature bug (empty-vs-empty
+ * "matches"). Refuses any shape but the two above, and a non-integer scheme or unknown mode. A
+ * parse failure is wrapped with the file's path and the remedy, never a bare SyntaxError.
+ */
+export function parseGateBaseline(
   baselineRaw: string,
   baselinePath: string,
   remedy: string,
-): NormalizedMutant[] {
+): GateBaseline {
   let parsed: unknown;
   try {
     parsed = JSON.parse(baselineRaw);
   } catch (err) {
     throw new Error(`${baselinePath} is not valid JSON (${(err as Error).message}).\n${remedy}`);
   }
-  return rowsOf(parsed, baselinePath, remedy);
+  // A list, or anything that is not an object (null, a string): `rowsOf` refuses all but a
+  // non-empty list.
+  if (Array.isArray(parsed) || parsed === null || typeof parsed !== "object") {
+    return { entries: rowsOf(parsed, baselinePath, remedy) };
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (
+    Object.keys(obj).some((k) => !OBJECT_KEYS.has(k)) ||
+    (obj.identityScheme !== undefined && !Number.isInteger(obj.identityScheme)) ||
+    (obj.coverageMode !== undefined && !isCoverageMode(obj.coverageMode))
+  ) {
+    throw new Error(
+      `${baselinePath} is neither a list of mutant rows nor {"identityScheme"?: <integer>, "coverageMode"?: <one of ${Object.keys(COVERAGE_MODES).join(", ")}>, "entries": [...]}. Refusing to read a baseline of unknown shape.\n${remedy}`,
+    );
+  }
+  const { identityScheme, coverageMode } = obj;
+  return {
+    ...(typeof identityScheme === "number" ? { identityScheme } : {}),
+    ...(isCoverageMode(coverageMode) ? { coverageMode } : {}),
+    entries: rowsOf(obj.entries, baselinePath, remedy),
+  };
+}
+
+/** R556: the one reader every itest and script uses for a committed `*.baseline.json`. */
+export async function readGateBaseline(baselinePath: string): Promise<GateBaseline> {
+  return parseGateBaseline(
+    await readFile(baselinePath, "utf8"),
+    baselinePath,
+    "Refusing to compare against it; a committed baseline is changed only by a pre-committed record run (R332).",
+  );
 }
 
 function rowsOf(parsed: unknown, baselinePath: string, remedy: string): NormalizedMutant[] {
@@ -87,11 +132,13 @@ export function isCoverageMode(value: unknown): value is CoverageMode {
  * R355: a campaign stage baseline. Two on-disk forms, both read:
  *   - a plain list of rows: frozen before R355, so the coverage mode it was measured under is
  *     UNKNOWN (`coverageMode: undefined`), never assumed;
- *   - `{ "coverageMode": <mode>, "entries": [rows] }`: what `campaign freeze` writes from R355 on.
- * Gate baselines (`assertGateBaseline`) stay plain lists and never go through this.
+ *   - `{ "coverageMode": <mode>, "identityScheme"?: <integer>, "entries": [rows] }`: what
+ *     `campaign freeze` writes from R355 on (the scheme from R556 on).
+ * The object form of a stage REQUIRES its coverage mode; `parseGateBaseline` reads both forms.
  */
 export interface StageBaseline {
   readonly coverageMode: CoverageMode | undefined;
+  readonly identityScheme: number | undefined;
   readonly entries: NormalizedMutant[];
 }
 
@@ -100,22 +147,17 @@ export function parseStageBaseline(
   baselinePath: string,
   remedy: string,
 ): StageBaseline {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(baselineRaw);
-  } catch (err) {
-    throw new Error(`${baselinePath} is not valid JSON (${(err as Error).message}).\n${remedy}`);
-  }
-  if (Array.isArray(parsed)) {
-    return { coverageMode: undefined, entries: rowsOf(parsed, baselinePath, remedy) };
-  }
-  const obj = parsed as { coverageMode?: unknown; entries?: unknown } | null;
-  if (obj === null || typeof obj !== "object" || !isCoverageMode(obj.coverageMode)) {
+  const read = parseGateBaseline(baselineRaw, baselinePath, remedy);
+  if (read.coverageMode === undefined && !Array.isArray(JSON.parse(baselineRaw))) {
     throw new Error(
-      `${baselinePath} is neither a list of mutant rows nor {"coverageMode": <one of ${Object.keys(COVERAGE_MODES).join(", ")}>, "entries": [...]}. Refusing to read a stage baseline of unknown shape.\n${remedy}`,
+      `${baselinePath} is neither a list of mutant rows nor {"coverageMode": <one of ${Object.keys(COVERAGE_MODES).join(", ")}>, "identityScheme"?: <integer>, "entries": [...]}. Refusing to read a stage baseline of unknown shape.\n${remedy}`,
     );
   }
-  return { coverageMode: obj.coverageMode, entries: rowsOf(obj.entries, baselinePath, remedy) };
+  return {
+    coverageMode: read.coverageMode,
+    identityScheme: read.identityScheme,
+    entries: read.entries,
+  };
 }
 
 /**
@@ -151,31 +193,42 @@ function withStack<E extends Error>(err: E): E {
   return err;
 }
 
-/** Throws when `actual` differs from the committed baseline text. Never writes. */
-function throwOnDiff(
-  actual: readonly NormalizedMutant[],
-  baselineRaw: string,
-  baselinePath: string,
+/**
+ * R556: what a compare could not check about mutant identity, as one line, or undefined when the
+ * baseline and the run share a recorded scheme and every paired row's text was compared.
+ */
+export function identityStatement(
   label: string,
-  remedy: string,
-): void {
-  throwOnRowDiff(
-    actual,
-    parseBaseline(baselineRaw, baselinePath, remedy),
-    baselinePath,
-    label,
-    remedy,
-  );
+  baselineScheme: number | undefined,
+  currentScheme: number | undefined,
+  cmp: MutantComparison,
+): string | undefined {
+  if (baselineScheme === undefined) {
+    return `${label}: baseline predates R556 (no identity scheme, no mutated-text hash): a mutant changed under an unchanged key is UNVERIFIED`;
+  }
+  const unverified = `${cmp.textUnverified} mutant(s) text-UNVERIFIED (no mutated-text hash on one side, or a twin's hash shared within its group): a mutant changed under an unchanged key is not caught there`;
+  if (baselineScheme !== currentScheme) {
+    return `${label}: identity scheme changed (${baselineScheme} -> ${currentScheme ?? "unrecorded"}): ${cmp.textVerified} mutant(s) checked by their mutated-text hash, ${unverified}`;
+  }
+  return cmp.textUnverified > 0 ? `${label}: ${unverified}` : undefined;
 }
 
+/**
+ * Throws on any per-mutant difference; returns the comparison. `sameScheme` only when both sides
+ * record the same identity scheme (see `compareMutants`).
+ */
 function throwOnRowDiff(
   actual: readonly NormalizedMutant[],
-  baseline: readonly NormalizedMutant[],
+  baseline: GateBaseline,
+  currentScheme: number | undefined,
   baselinePath: string,
   label: string,
   remedy: string,
-): void {
-  const diffs = diffMutants(baseline, actual);
+): MutantComparison {
+  const sameScheme =
+    baseline.identityScheme !== undefined && baseline.identityScheme === currentScheme;
+  const cmp = compareMutants(baseline.entries, actual, { sameScheme });
+  const diffs = cmp.differences;
   if (diffs.length > 0) {
     throw withStack(
       new Error(
@@ -183,6 +236,13 @@ function throwOnRowDiff(
       ),
     );
   }
+  return cmp;
+}
+
+/** Report-side scheme, or undefined when the report records none (or a non-integer). */
+function schemeOf(report: SessionReport): number | undefined {
+  const s: unknown = report.identityScheme;
+  return Number.isInteger(s) ? (s as number) : undefined;
 }
 
 /**
@@ -202,10 +262,19 @@ export async function assertMatchesBaseline(
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
+  const scheme = schemeOf(report);
   if (baselineRaw === undefined) {
-    // R355: `campaign freeze` passes the report's mode and the stage records it. Without one (the
-    // seeding use in baseline-guard.test.ts) this writes the plain list a gate baseline uses.
-    const body = coverageMode === undefined ? actual : { coverageMode, entries: actual };
+    // R355: `campaign freeze` passes the report's mode and the stage records it, and (R556) the
+    // report's identity scheme. Without a mode (the seeding use in baseline-guard.test.ts) this
+    // writes the plain list.
+    const body =
+      coverageMode === undefined
+        ? actual
+        : {
+            coverageMode,
+            ...(scheme !== undefined ? { identityScheme: scheme } : {}),
+            entries: actual,
+          };
     await writeFile(baselinePath, `${JSON.stringify(body, null, 2)}\n`, "utf8");
     console.log(
       `${label}: no committed baseline at ${baselinePath}, recorded this run's per-mutant verdicts as the new baseline. Review and commit this file.`,
@@ -213,16 +282,23 @@ export async function assertMatchesBaseline(
     return;
   }
   const remedy = `If this difference is EXPECTED (the fixture or an operator legitimately changed), delete ${baselinePath}, re-run to record a new baseline, review the diff, then commit it.`;
-  if (coverageMode === undefined) {
-    throwOnDiff(actual, baselineRaw, baselinePath, label, remedy);
-    return;
-  }
-  const stage = parseStageBaseline(baselineRaw, baselinePath, remedy);
-  if (stage.coverageMode !== undefined && stage.coverageMode !== coverageMode) {
+  const stage: GateBaseline =
+    coverageMode === undefined
+      ? parseGateBaseline(baselineRaw, baselinePath, remedy)
+      : parseStageBaseline(baselineRaw, baselinePath, remedy);
+  if (
+    coverageMode !== undefined &&
+    stage.coverageMode !== undefined &&
+    stage.coverageMode !== coverageMode
+  ) {
     throw coverageModeMismatch(`${label} freeze`, label, stage.coverageMode, coverageMode);
   }
-  throwOnRowDiff(actual, stage.entries, baselinePath, label, remedy);
-  if (stage.coverageMode === undefined) console.log(`${label}: ${stageModeUnverified(label)}`);
+  const cmp = throwOnRowDiff(actual, stage, scheme, baselinePath, label, remedy);
+  if (coverageMode !== undefined && stage.coverageMode === undefined) {
+    console.log(`${label}: ${stageModeUnverified(label)}`);
+  }
+  const identity = identityStatement(label, stage.identityScheme, scheme, cmp);
+  if (identity !== undefined) console.log(identity);
 }
 
 /** R332: lists the gate baselines a record run may write, by basename, comma-separated. */
@@ -401,8 +477,10 @@ async function writeBaselineOnce(
   baselinePath: string,
   label: string,
 ): Promise<void> {
+  // R556: the object form, so a later compare knows the scheme these keys were minted under.
+  const body = { identityScheme: IDENTITY_SCHEME, entries: actual };
   try {
-    await writeFile(baselinePath, `${JSON.stringify(actual, null, 2)}\n`, {
+    await writeFile(baselinePath, `${JSON.stringify(body, null, 2)}\n`, {
       encoding: "utf8",
       flag: "wx",
     });
@@ -419,13 +497,23 @@ async function compareWithCommitted(
   label: string,
 ): Promise<void> {
   if (!existsSync(baselinePath)) throw missingRefusal(baselinePath, label);
-  throwOnDiff(
-    actual,
-    await readFile(baselinePath, "utf8"),
-    baselinePath,
-    label,
-    `If this difference is EXPECTED, write a pre-commitment, delete ${baselinePath}, record once with:\n  ${recordHowFor(baselinePath)}\nthen re-run without the record variable to confirm a pass, review the diff and commit it.`,
-  );
+  const remedy = `If this difference is EXPECTED, write a pre-commitment, delete ${baselinePath}, record once with:\n  ${recordHowFor(baselinePath)}\nthen re-run without the record variable to confirm a pass, review the diff and commit it.`;
+  const baseline = parseGateBaseline(await readFile(baselinePath, "utf8"), baselinePath, remedy);
+  // R556: a baseline that records hashes must be met by a run that has them, or the text check
+  // would switch itself off without a word.
+  if (baseline.entries.some((e) => e.mutatedTextSha256 !== undefined)) {
+    const bare = actual.filter((m) => m.mutatedTextSha256 === undefined);
+    if (bare.length > 0) {
+      throw withStack(
+        new Error(
+          `${label}: the committed baseline at ${baselinePath} records a mutated-text hash per mutant, but ${bare.length} mutant(s) of this run have no mutated-text hash (no mutatedText, or a redacted one), first ${bare[0]?.key}. Refusing: the text check would switch itself off.`,
+        ),
+      );
+    }
+  }
+  const cmp = throwOnRowDiff(actual, baseline, IDENTITY_SCHEME, baselinePath, label, remedy);
+  const identity = identityStatement(label, baseline.identityScheme, IDENTITY_SCHEME, cmp);
+  if (identity !== undefined) console.log(identity);
 }
 
 /** R332: compare, or (record mode naming this file) write once and throw BaselineRecordedError. */

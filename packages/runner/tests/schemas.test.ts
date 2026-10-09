@@ -1172,6 +1172,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "coverage",
         "differences",
         "identical",
+        "identity",
         "mutantCount",
         "stage",
       ],
@@ -1765,6 +1766,15 @@ describe("published JSON Schema - campaign compare (R357)", () => {
     // The validator must be able to say no: an unverified result WITHOUT its statement.
     const { statement: _dropped, ...bare } = legacy.coverage as Record<string, unknown>;
     expect(conformsTo(compareSchema, { ...legacy, coverage: bare }).length).toBeGreaterThan(0);
+
+    // R556: the identity block, both variants; an unverified one without its statement fails.
+    expect(legacy.identity.verified).toBe(false);
+    const { statement: _noStatement, ...bareIdentity } = legacy.identity as Record<string, unknown>;
+    expect(conformsTo(compareSchema, { ...legacy, identity: bareIdentity }).length).toBeGreaterThan(
+      0,
+    );
+    const ok = { ...verified, identity: { verified: true, identityScheme: 37 } };
+    expect(conformsTo(compareSchema, ok)).toEqual([]);
   }, 60_000);
 
   test("a coverage-mode mismatch is a refusal: it throws, so there is no document to validate", async () => {

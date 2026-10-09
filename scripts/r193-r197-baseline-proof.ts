@@ -11,6 +11,7 @@
  *
  * Pre-committed in `docs/superpowers/specs/2026-09-02-r193-r197-relabelling-precommitment.md`.
  */
+import { readGateBaseline } from "../packages/runner/itest/baseline-guard";
 import { normalizeForComparison } from "../packages/runner/itest/mutant-equality";
 import type { NormalizedMutant } from "../packages/runner/itest/mutant-equality";
 import type { SessionReport } from "../packages/runner/src/report";
@@ -114,9 +115,12 @@ if (import.meta.main) {
     );
     process.exit(2);
   }
-  const oldBaseline = (await Bun.file(oldPath).json()) as NormalizedMutant[];
-  // The new side is a run's report (`--out`) or a re-recorded baseline; both are accepted.
-  const newSide = (await Bun.file(newPath).json()) as SessionReport | NormalizedMutant[];
+  const oldBaseline = (await readGateBaseline(oldPath)).entries;
+  // The new side is a run's report (`--out`) or a re-recorded baseline; both are accepted. A
+  // report has `mutants`; anything else is read as a baseline, in either on-disk form (R556).
+  const raw: unknown = await Bun.file(newPath).json();
+  const isReport = raw !== null && typeof raw === "object" && "mutants" in raw;
+  const newSide = isReport ? (raw as SessionReport) : (await readGateBaseline(newPath)).entries;
   const { failures, lines } = prove(oldBaseline, newSide);
   for (const l of lines) console.log(l);
   if (failures.length > 0) {

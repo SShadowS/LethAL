@@ -57,10 +57,10 @@ import type { PublishedTestApp } from "../src/test-app-publish";
 import { scanTestPageTests } from "../src/testpage-scan";
 import { runVerify } from "../src/verify";
 import type { VerifyOutput } from "../src/verify";
-import { preflightReadOnlyBaseline } from "./baseline-guard";
+import { preflightReadOnlyBaseline, readGateBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { type NormalizedMutant, keyOf } from "./mutant-equality";
+import { keyOf } from "./mutant-equality";
 import { assertFreshFullRun } from "./verify-agreement";
 import {
   type StampedEvent,
@@ -360,7 +360,7 @@ async function main(): Promise<void> {
       began.push({ leg: "A", path: aDb });
       const { report: a, outerMs: aOuterMs } = await fullRun("a", aDb, TEST_DIR);
       console.log(`step 3: A ${runSummary(a)}`);
-      const committed = JSON.parse(await readFile(BASELINE_PATH, "utf8")) as NormalizedMutant[];
+      const committed = (await readGateBaseline(BASELINE_PATH)).entries;
       const aDiffs = verdictDiffs(committed, a);
       assert.deepEqual(
         aDiffs,

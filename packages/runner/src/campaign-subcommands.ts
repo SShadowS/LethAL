@@ -64,7 +64,11 @@ import {
   parseStageBaseline,
   stageModeUnverified,
 } from "../itest/baseline-guard";
-import { diffMutants, normalizeForComparison } from "../itest/mutant-equality";
+import {
+  type MutantComparison,
+  compareMutants,
+  normalizeForComparison,
+} from "../itest/mutant-equality";
 import type { CoverageMode } from "./backend";
 import { assertCardinality } from "./campaign-anchors";
 import { parseAnchorConfig, runAnchorCheck } from "./campaign-anchors-run";
@@ -446,16 +450,71 @@ export type CompareCoverageMode =
       readonly statement: string;
     };
 
+/**
+ * R556: what compare knows about mutant identity. `verified: true` only when the stage and the
+ * report record the same identity scheme AND every mutant's mutated text was checked by its hash.
+ * Otherwise `statement` says what was not checked: a stage frozen before R556 (no scheme, no hash),
+ * a report with no scheme or no text (a redacted copy), or a scheme change. None is a refusal: keys
+ * of unchanged mutants still compare, and the verdicts are compared either way.
+ */
+export type CompareIdentity =
+  | { readonly verified: true; readonly identityScheme: number }
+  | {
+      readonly verified: false;
+      readonly stageIdentityScheme: number | null;
+      readonly reportIdentityScheme: number | null;
+      /** Mutants whose mutated text could not be checked by its hash. */
+      readonly textUnverified: number;
+      readonly statement: string;
+    };
+
 /** R355: `lethal campaign compare`'s result, printed by `--json`. */
 export interface CampaignCompareResult {
   readonly campaignCompareSchemaVersion: number;
   readonly stage: string;
   readonly baselinePath: string;
   readonly mutantCount: number;
-  /** True when every mutant's verdict matches. Says nothing about the mode: read `coverage`. */
+  /**
+   * True when every mutant matches: its verdicts, and its mutated text where both sides record a
+   * hash (R556). Says nothing about the mode or what could not be checked: read `coverage` and
+   * `identity`.
+   */
   readonly identical: boolean;
   readonly differences: readonly string[];
   readonly coverage: CompareCoverageMode;
+  readonly identity: CompareIdentity;
+}
+
+function compareIdentity(
+  stage: string,
+  stageScheme: number | undefined,
+  reportScheme: number | undefined,
+  cmp: MutantComparison,
+): CompareIdentity {
+  if (stageScheme !== undefined && stageScheme === reportScheme && cmp.textUnverified === 0) {
+    return { verified: true, identityScheme: stageScheme };
+  }
+  const notCaught = "a mutant changed under an unchanged key is not caught there";
+  let statement: string;
+  if (stageScheme === undefined) {
+    statement = `identity UNVERIFIED: stage ${stage} predates R556 (no identity scheme, no mutated-text hash), so a mutant changed under an unchanged key is not caught. Re-freeze the stage to make this comparison check the text.`;
+  } else if (reportScheme === undefined) {
+    statement = `identity UNVERIFIED: the report records no identityScheme, so its keys may have been minted under another scheme; ${cmp.textUnverified} mutant(s) text-UNVERIFIED, ${notCaught}.`;
+  } else if (stageScheme !== reportScheme) {
+    statement =
+      cmp.textVerified === 0
+        ? `identity scheme changed (${stageScheme} -> ${reportScheme}), UNVERIFIED: no mutant's mutated text could be checked by its hash, so ${notCaught.replace(" there", "")}.`
+        : `identity scheme changed (${stageScheme} -> ${reportScheme}): ${cmp.textVerified} mutant(s) checked by their mutated-text hash, ${cmp.textUnverified} text-UNVERIFIED (no hash on one side, or a twin's hash shared within its group).`;
+  } else {
+    statement = `identity UNVERIFIED for ${cmp.textUnverified} mutant(s): no mutated-text hash on one side (a stage frozen before R556, or a redacted report), so ${notCaught}.`;
+  }
+  return {
+    verified: false,
+    stageIdentityScheme: stageScheme ?? null,
+    reportIdentityScheme: reportScheme ?? null,
+    textUnverified: cmp.textUnverified,
+    statement,
+  };
 }
 
 function compareCoverage(
@@ -532,13 +591,29 @@ export async function compareCampaignStage(args: CampaignArgsBase): Promise<Camp
   const coverage = compareCoverage(args.stage, baseline.coverageMode, reportMode);
 
   c.step("compare");
-  const differences = diffMutants(baseline.entries, normalizeForComparison(report));
+  const reportScheme: unknown = report.identityScheme;
+  if (reportScheme !== undefined && !Number.isInteger(reportScheme)) {
+    throw new Error(
+      `campaign compare: ${args.reportPath} records a non-integer identityScheme ${JSON.stringify(reportScheme)}. Refusing to compare a report whose identity scheme cannot be read.`,
+    );
+  }
+  const schemeOfReport = reportScheme as number | undefined;
+  // R556: hashes compare row by row only under one recorded scheme (see `compareMutants`).
+  const cmp = compareMutants(baseline.entries, normalizeForComparison(report), {
+    sameScheme: baseline.identityScheme !== undefined && baseline.identityScheme === schemeOfReport,
+  });
+  const identity = compareIdentity(args.stage, baseline.identityScheme, schemeOfReport, cmp);
+  const differences = cmp.differences;
   const n = baseline.entries.length;
   if (differences.length === 0) {
+    const unverified = [
+      ...(coverage.verified ? [] : ["coverage mode UNVERIFIED"]),
+      ...(identity.verified ? [] : ["identity UNVERIFIED"]),
+    ];
     c.log(
-      coverage.verified
+      coverage.verified && unverified.length === 0
         ? `[compare] ${args.stage}: identical — all ${n} mutant(s) match the committed baseline at ${baselinePath}, both under coverageMode "${coverage.coverageMode}"`
-        : `[compare] ${args.stage}: verdicts match, coverage mode UNVERIFIED, all ${n} mutant(s) match the committed baseline at ${baselinePath}`,
+        : `[compare] ${args.stage}: verdicts match, ${unverified.join(", ")}, all ${n} mutant(s) match the committed baseline at ${baselinePath}`,
     );
   } else {
     c.log(
@@ -548,6 +623,7 @@ export async function compareCampaignStage(args: CampaignArgsBase): Promise<Camp
     c.log(`[compare] RESULT: DIFFERENT (${differences.length} mutant(s))`);
   }
   if (!coverage.verified) c.log(`[compare] ${coverage.statement}`);
+  if (!identity.verified) c.log(`[compare] ${identity.statement}`);
   return {
     campaignCompareSchemaVersion: CAMPAIGN_COMPARE_SCHEMA_VERSION,
     stage: args.stage,
@@ -556,6 +632,7 @@ export async function compareCampaignStage(args: CampaignArgsBase): Promise<Camp
     identical: differences.length === 0,
     differences,
     coverage,
+    identity,
   };
 }
 

@@ -21,6 +21,8 @@
  * nondeterministic by design (clock-derived versions, random per-artifact ids, wall-clock
  * timings), never part of a mutant's semantic identity or verdict.
  */
+import { createHash } from "node:crypto";
+import { REDACTION_MARKER } from "../src/explain";
 import type { MutantOutcome, SessionReport } from "../src/report";
 
 export interface NormalizedMutant {
@@ -29,6 +31,20 @@ export interface NormalizedMutant {
   readonly killingTest: string | null;
   readonly coverageFiltered: boolean;
   readonly errorClass: string | null;
+  /**
+   * R556: sha256 (hex) of `mutatedText`, "\r\n" read as "\n". `keyOf` hashes the ORIGINAL node, so a
+   * mutant whose replacement changed keeps its key; this says whether the key still names the same
+   * mutant. A hash, never the text, so a committed baseline publishes no source. Absent on rows
+   * recorded before R556 and where the report has no text (a redacted report).
+   */
+  readonly mutatedTextSha256?: string;
+}
+
+/** R556: the hash `normalizeForComparison` records. None for a non-string or the redaction marker,
+ *  which is not the mutant's text: hashing it would make every redacted row "match" every other. */
+export function mutatedTextSha256(text: unknown): string | undefined {
+  if (typeof text !== "string" || text === REDACTION_MARKER) return undefined;
+  return createHash("sha256").update(text.replaceAll("\r\n", "\n"), "utf8").digest("hex");
 }
 
 export function keyOf(m: MutantOutcome): string {
@@ -61,13 +77,17 @@ function errorClassOf(m: MutantOutcome): string | null {
 
 /** Excludes duration, runId, version and artifactId — nondeterministic by design. */
 export function normalizeForComparison(report: SessionReport): NormalizedMutant[] {
-  return report.mutants.map((m) => ({
-    key: keyOf(m),
-    verdict: m.verdict,
-    killingTest: m.killingTest ?? null,
-    coverageFiltered: m.verdict === "no-coverage",
-    errorClass: errorClassOf(m),
-  }));
+  return report.mutants.map((m) => {
+    const hash = mutatedTextSha256(m.mutatedText);
+    return {
+      key: keyOf(m),
+      verdict: m.verdict,
+      killingTest: m.killingTest ?? null,
+      coverageFiltered: m.verdict === "no-coverage",
+      errorClass: errorClassOf(m),
+      ...(hash !== undefined ? { mutatedTextSha256: hash } : {}),
+    };
+  });
 }
 
 function fmt(v: string | boolean | null): string {
@@ -79,9 +99,42 @@ function recordOrder(a: NormalizedMutant, b: NormalizedMutant): number {
   return canonical(a).localeCompare(canonical(b));
 }
 
-/** Every compared field, in a single string. Used ONLY for ordering, never for reporting. */
+/** Every compared field, in a single string, the R556 hash last. Used ONLY for ordering, never for
+ *  reporting. */
 export function canonical(m: NormalizedMutant): string {
-  return `${m.verdict}|${fmt(m.killingTest)}|${fmt(m.coverageFiltered)}|${fmt(m.errorClass)}`;
+  return `${m.verdict}|${fmt(m.killingTest)}|${fmt(m.coverageFiltered)}|${fmt(m.errorClass)}|${m.mutatedTextSha256 ?? ""}`;
+}
+
+/** The key without a trailing `|<ordinal>`: the group R193's twins share. `keyOf`'s tuple has five
+ *  fields and the ordinal is a sixth (operatorMajor is also digits, so a suffix regex cannot tell).
+ *  ponytail: a `|` inside a quoted AL name would split wrong; the cost is a twin read UNVERIFIED or
+ *  a lone row compared as a twin, never a false difference under the same scheme. */
+function tupleOf(key: string): string {
+  const parts = key.split("|");
+  return parts.length > 5 ? parts.slice(0, -1).join("|") : key;
+}
+
+/** Hashes that occur more than once within one tuple group: twins' shared text. */
+function sharedHashes(mutants: readonly NormalizedMutant[]): Set<string> {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const m of mutants) {
+    if (m.mutatedTextSha256 === undefined) continue;
+    const id = `${tupleOf(m.key)}\u0000${m.mutatedTextSha256}`;
+    if (seen.has(id)) shared.add(id);
+    else seen.add(id);
+  }
+  return shared;
+}
+
+/** R556: what `compareMutants` found, and how many paired rows it could check the text of. */
+export interface MutantComparison {
+  readonly differences: string[];
+  /** Paired rows whose mutated-text hash was compared (and, when equal, verified). */
+  readonly textVerified: number;
+  /** Paired rows whose text could not be checked: a hash missing on either side, or a twin's hash
+   *  shared within its tuple group when the two sides' identity schemes differ or are unknown. */
+  readonly textUnverified: number;
 }
 
 function times(n: number): string {
@@ -130,7 +183,35 @@ export function diffMutants(
   before: readonly NormalizedMutant[],
   after: readonly NormalizedMutant[],
 ): string[] {
+  return compareMutants(before, after, { sameScheme: true }).differences;
+}
+
+/**
+ * `diffMutants` plus the R556 text check. A paired row's `mutatedTextSha256` is compared only when
+ * BOTH sides carry one; a mismatch is a difference ("mutated text differs under an unchanged key").
+ * `sameScheme` is true only when both sides record the same identity scheme. Otherwise keys may
+ * have been reassigned, and byte-identical twins share one hash while their ordinals move, so a row
+ * is checked only when its hash is unique within its tuple group on both sides; the rest are
+ * counted `textUnverified`, never a difference.
+ */
+export function compareMutants(
+  before: readonly NormalizedMutant[],
+  after: readonly NormalizedMutant[],
+  opts: { readonly sameScheme: boolean },
+): MutantComparison {
   const diffs: string[] = [];
+  let textVerified = 0;
+  let textUnverified = 0;
+  const sharedBefore = opts.sameScheme ? new Set<string>() : sharedHashes(before);
+  const sharedAfter = opts.sameScheme ? new Set<string>() : sharedHashes(after);
+  const checkable = (
+    m: NormalizedMutant,
+    shared: Set<string>,
+  ): m is NormalizedMutant & {
+    mutatedTextSha256: string;
+  } =>
+    m.mutatedTextSha256 !== undefined &&
+    !shared.has(`${tupleOf(m.key)}\u0000${m.mutatedTextSha256}`);
   const beforeByKey = groupByKey(before);
   const afterByKey = groupByKey(after);
 
@@ -175,6 +256,14 @@ export function diffMutants(
       if (bi.errorClass !== ai.errorClass) {
         fieldDiffs.push(`errorClass ${fmt(bi.errorClass)} -> ${fmt(ai.errorClass)}`);
       }
+      if (checkable(bi, sharedBefore) && checkable(ai, sharedAfter)) {
+        textVerified++;
+        if (bi.mutatedTextSha256 !== ai.mutatedTextSha256) {
+          fieldDiffs.push("mutated text differs under an unchanged key");
+        }
+      } else {
+        textUnverified++;
+      }
       if (fieldDiffs.length > 0) {
         const where = b.length > 1 ? ` [occurrence ${i + 1} of ${b.length}]` : "";
         diffs.push(`mutant ${key}${where}: ${fieldDiffs.join("; ")}`);
@@ -182,5 +271,5 @@ export function diffMutants(
     }
   }
 
-  return diffs.sort();
+  return { differences: diffs.sort(), textVerified, textUnverified };
 }
