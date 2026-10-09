@@ -99,6 +99,12 @@ import {
  * name)`, so `lookupVar` finds them here while `resolveProcedure("My Ext", ...)` keeps answering
  * null. Measured value of that half: +18 mutants on Document Output for the `tableextension` kind,
  * and 18 more sites for the `pageextension` kind.
+ *
+ * - `reportextension` (R-463) — PARTIAL. Its own variables resolve under
+ *   `extensionScopeKey("reportextension", name)`, and a data item it ADDS (`addfirst(X) {
+ *   dataitem(D; T) }`) binds `T` like a report's own data item. A `modify(X)` block's implicit
+ *   record stays unresolved (see `recordScopesAt`), so does its request page, and `claimsSystemCall`
+ *   refuses every site in one (a bare `Commit()` there may bind a base-report procedure).
  */
 const OBJECT_KINDS: ReadonlySet<string> = new Set<string>([
   ALNodeKind.codeunit,
@@ -107,6 +113,7 @@ const OBJECT_KINDS: ReadonlySet<string> = new Set<string>([
   ALNodeKind.report,
   ALNodeKind.tableextension,
   ALNodeKind.pageextension,
+  ALNodeKind.reportextension,
 ]);
 
 /** The grammar's quoted-identifier kind; not declared in `ALNodeKind`. */
@@ -260,8 +267,10 @@ export function claimedRunTriggerSkip(
  * unresolved receiver proves nothing (R143). Inside an object the symbol table does not index
  * (R343) every receiver outside a trigger's own `var` section is unresolved.
  *
- * R-254: inside a `reportextension` (not in `OBJECT_KINDS`, so never claimed: R463) every
- * qualified receiver counts as unresolved, so Tier-1 RunTrigger flips there keep their tag.
+ * R-254, R-463: inside a `reportextension` a qualified receiver resolves like anywhere else (its
+ * own variables, an added data item), so one that resolves loses the tag; a `modify(X)` record or
+ * a base report's `protected var` stays unresolved and keeps it. An extension whose name did not
+ * parse keeps every tag.
  */
 export function receiverUnresolved(
   node: ALSyntaxNode,
@@ -276,14 +285,9 @@ export function receiverUnresolved(
   if (!equalsIgnoreCase(target.name, methodName)) return false;
   if (target.receiver === null) return implicitRecordUnresolved(node, ctx, target.name);
   const objectNode = enclosingObject(node);
-  if (objectNode === null) {
-    for (let p = node.parent; p !== null; p = p.parent) {
-      if (p.kind === ALNodeKind.reportextension) return true;
-    }
-    return false;
-  }
+  if (objectNode === null) return false;
   const objectName = objectNameOf(objectNode);
-  if (objectName === null) return false;
+  if (objectName === null) return objectNode.kind === ALNodeKind.reportextension;
   return resolveReceiver(target.receiver, node, ctx.symbols).kind === "unresolved";
 }
 
@@ -291,10 +295,11 @@ export function receiverUnresolved(
  * R479: the BARE form of `receiverUnresolved`. A bare call binds the innermost record scope
  * (`recordScopesAt`). It is unresolved when that record exists but its table is not provable (a
  * pageextension's `Rec`, a reportextension request page or `modify`, a `with` subject that is not
- * a provable table), or when it sits outside `OBJECT_KINDS` (a reportextension's added dataitem),
- * where `claimsRecordMethod` refuses every call. NOT unresolved, checked before the reportextension
- * case: no record scope at all (a codeunit outside a TableNo `OnRun`, a page without
- * `SourceTable`: the call is not a record method); a procedure of that name declared by the
+ * a provable table), or when it sits outside `OBJECT_KINDS` or in an object whose name did not
+ * parse, where `claimsRecordMethod` refuses every call (R-463: a reportextension's added data item
+ * now resolves like a report's). NOT unresolved, checked first: no record scope at all (a
+ * codeunit outside a TableNo `OnRun`, a page without `SourceTable`: the call is not a record
+ * method); a procedure of that name declared by the
  * enclosing object, or by the project on the scope's known table or a tableextension of it (rule
  * 3); a `with` subject DECLARED as a non-record (R460's control). A `with` subject that is not
  * declared where the index can see it counts as unresolved and is tagged.
@@ -305,39 +310,21 @@ function implicitRecordUnresolved(node: ALSyntaxNode, ctx: SemanticContext, name
   const [scope] = recordScopesAt(node, symbols);
   if (scope === undefined) return false;
   const objectNode = enclosingObject(node);
-  let owner = objectNode;
-  for (let p = node.parent; owner === null && p !== null; p = p.parent)
-    if (p.kind === ALNodeKind.reportextension) owner = p;
-  if (owner !== null && declaresProcedure(owner, name, armOf)) return false;
+  if (objectNode !== null && declaresProcedure(objectNode, name, armOf)) return false;
   if (scope.table !== null && projectDeclaresProcedureOnTable(symbols, scope.table, name, armOf))
     return false;
-  if (
-    scope.kind === "with" &&
-    scope.at !== undefined &&
-    withSubjectIsNonRecord(scope.at, owner, symbols)
-  )
+  if (scope.kind === "with" && scope.at !== undefined && withSubjectIsNonRecord(scope.at, symbols))
     return false;
-  if (objectNode === null) return true;
+  if (objectNode === null || objectNameOf(objectNode) === null) return true;
   return scope.table === null;
 }
 
-/** R479: is a `with` statement's subject declared as a non-record (a codeunit, a Text...)? Inside a
- *  reportextension, outside `OBJECT_KINDS`, the extension's own variable scope is read directly. */
-function withSubjectIsNonRecord(
-  at: ALSyntaxNode,
-  owner: ALSyntaxNode | null,
-  symbols: SymbolTable,
-): boolean {
+/** R479: is a `with` statement's subject declared as a non-record (a codeunit, a Text...)? */
+function withSubjectIsNonRecord(at: ALSyntaxNode, symbols: SymbolTable): boolean {
   const subject = at.childForFieldName("record");
   const subjectName = subject === null ? null : identifierText(subject);
   if (subjectName === null) return false;
-  if (owner?.kind !== ALNodeKind.reportextension)
-    return resolveReceiverName(subjectName, at, symbols).kind === "non-record";
-  const extensionName = objectNameOf(owner);
-  if (extensionName === null) return false;
-  const scopeKey = extensionScopeKey("reportextension", extensionName);
-  const declared = lookupVar(subjectName, at, scopeKey, symbols);
-  return declared !== null && classifyDeclaredType(declared, symbols).kind === "non-record";
+  return resolveReceiverName(subjectName, at, symbols).kind === "non-record";
 }
 
 /**
@@ -442,6 +429,10 @@ export function claimsSystemCall(node: ALSyntaxNode, ctx: SemanticContext, name:
 
   const objectNode = enclosingObject(node);
   if (objectNode === null) return false;
+  // R-463: never inside a reportextension. A bare `Commit()` there may bind a procedure of the BASE
+  // report (alc compiles `I := Commit();` against a base `procedure Commit(): Integer`), which this
+  // guard cannot see when the base report is a dependency. Master never claimed here either.
+  if (objectNode.kind === ALNodeKind.reportextension) return false;
   const objectName = objectNameOf(objectNode);
   if (objectName === null) return false;
 
@@ -589,7 +580,9 @@ function scopeOwnerOf(objectNode: ALSyntaxNode, objectName: string): string | nu
     ? extensionScopeKey("tableextension", objectName)
     : objectNode.kind === ALNodeKind.pageextension
       ? extensionScopeKey("pageextension", objectName)
-      : objectScopeKeyOfNode(objectNode, objectName);
+      : objectNode.kind === ALNodeKind.reportextension
+        ? extensionScopeKey("reportextension", objectName)
+        : objectScopeKeyOfNode(objectNode, objectName);
 }
 
 /** R-464: one record a bare name or a bare record-method call can bind to at some position. */
@@ -608,7 +601,8 @@ export interface RecordScope {
    *  (`""` when the subject is not a plain name). Raw source text, quotes kept. */
   readonly receiver: string;
   /** The table, or `null` where this source cannot prove it (pageextension, reportextension
-   *  `modify`, a `with` subject that does not resolve to a record). */
+   *  `modify` or request page, a `with` subject that does not resolve to a record). A data item a
+   *  reportextension ADDS has its own table (R-463). */
   readonly table: string | null;
   /** Does `xRec` exist beside `Rec` here? */
   readonly xRec: boolean;
@@ -664,6 +658,11 @@ export function recordScopesAt(node: ALSyntaxNode, symbols: SymbolTable): Record
         // Only a reportextension dataset's `modify(X)`; a tableextension field's or pageextension
         // control's `modify` has the same node kind and binds nothing new.
         if (!hasAncestor(p, (a) => a.rawKind === "reportextension_declaration")) continue;
+        // R-463, a NAMED refusal: the record is the base report's data item X, whose table is
+        // knowable when the base report is in the project. It stays `null` (unresolved, refused):
+        // resolving X through the base report (unique report, unique data item) added 0 claimed
+        // sites on every corpus, measured 2026-10-09 (BC.History's four projects with
+        // reportextensions and the tables fixture), so it would be code no gate exercises.
         const name = p.childForFieldName("target");
         out.push({ kind: "modify", receiver: name?.text ?? "", table: null, xRec: false });
         continue;

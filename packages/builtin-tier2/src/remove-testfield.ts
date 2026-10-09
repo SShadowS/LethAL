@@ -37,8 +37,9 @@ const METHOD_NAME = "TestField";
  *   - (spec §4 table) only observable on a failing path. A `TestField` mutant survives trivially
  *     without an `asserterror` negative test in the target suite — that is the intended signal,
  *     but the fixture must supply one or the baseline teaches nothing.
- *   - No site inside a `tableextension`/`pageextension` is ever claimed; see `OBJECT_KINDS` in
- *     `./receiver.ts` for why, and for the rest of that predicate's documented limits.
+ *   - Inside a `tableextension`, `pageextension` or `reportextension` (R30, R-463) only a receiver
+ *     the source proves is claimed: a `pageextension`'s `Rec` and a `reportextension`'s
+ *     `modify(X)` record are refused. See `OBJECT_KINDS` in the engine's `semantic/receiver.ts`.
  */
 export const removeTestField: MutationOperator = {
   name: "lethal.remove-testfield",

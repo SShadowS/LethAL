@@ -253,7 +253,9 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R474: every entry gains `memberHash`, the only change (was 105d129b...b83f).
       // R477: validate-to-assign's operatorVersion 1.2.0 is the only change (was db5aef54...b4e7).
       // R276: `gapId` values only, the gap partition unchanged (was 59942c7a...4e81).
-      "c83bdd08f26dcfe93030f9b5b6c354ea05ba5068279866c4f59a2f51dced23eb",
+      // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
+      // c83bdd08...23eb); 4 new arm entries, ids +4 after DataBandExt, proven in id-shift-proof.txt.
+      "dc2c1f197b0932e58f3d1cc1fde4f4c6a80a11f9a66d221c3090af766986da48",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -269,8 +271,11 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // e166345f...1358, which the same tree at 1.1.0 still gives).
     // R276: only the manifest moved it, by its `gapId` values (was 3e3a8ec9...f6ae); gap ids are not
     // in the instrumented AL.
+    // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
+    // d77b17a3...49ea); DataBandExt gains 4 mutants, ids +4 after DataBandExt, proven in
+    // id-shift-proof.txt (/coord/handoff/R-463/).
     expect(all.digest("hex")).toBe(
-      "d77b17a3a9eb414d1376632e5dfb2cd51ff2080982e675cfb078b914fac749ea",
+      "0e1a6cbb7b0cd434b8e7de141ccf567a2d483a112f21611429daf22027c82166",
     );
   }, 60_000);
 });

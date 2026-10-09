@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**73 of 543 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**75 of 546 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -249,6 +249,9 @@ that ordering is the priority.
 - **R530** · Self-inserting report items: a bound set in a callee or in OnPreReport is not protected · [R530.md](docs/roadmap/R530.md) · open, filed 2026-10-08
 - **R531** · A loop that ends only by consuming its record set (`while Rec.FindFirst() do ... Rec.Delete()`) is not hang-refused anywhere · [R531.md](docs/roadmap/R531.md) · open, filed 2026-10-08
 - **R532** · Preset report exit names: a value computed in another object, or passed through another variable, is not refused · [R532.md](docs/roadmap/R532.md) · open, filed 2026-10-08
+- **R547** · A base-report procedure called bare from an open `reportextension` block is looked up on the data item's table, never on the base report, so its hang-capable mutants stay deployed · [R547.md](docs/roadmap/R547.md) · open
+- **R548** · A base report's `protected var` written by a `reportextension` is not seen by loop-hazard's `writesPresetExitName` · [R548.md](docs/roadmap/R548.md) · open
+- **R549** · `claimsSystemCall` inside a `pageextension` can claim a bare `Commit()` that binds a procedure of the BASE page · [R549.md](docs/roadmap/R549.md) · open
 
 ## Product gaps a real project hits
 
@@ -385,7 +388,7 @@ that ordering is the priority.
 - **R461** · A target that does not compile UNMUTATED is reported as a deploy failure "not attributable to any single mutant", not as "your project does not compile" · [R461.md](docs/roadmap/R461.md) · done (65e20ee8)
 - **R467** · `empty-block` never empties a `repeat` body; the safe half (an `until` that advances a cursor) is ~11,500 BaseApp sites with no coarse mutant · [R467.md](docs/roadmap/R467.md) · closed 2026-10-06 — not built: bodies already carry ~11 fine mutants each, no measured added signal, and…
 - **R462** · `StaleTestAppError` says the published test app is OLDER when it may be being REPLACED under the running baseline; its remedy (republish) is then wrong in cause · [R462.md](docs/roadmap/R462.md) · done (65e20ee8)
-- **R463** · Tier 2 never claims a record call inside a `reportextension`: `receiver.ts` knows table and page extensions only · [R463.md](docs/roadmap/R463.md) · open
+- **R463** · Tier 2 never claims a record call inside a `reportextension`: `receiver.ts` knows table and page extensions only · [R463.md](docs/roadmap/R463.md) · done (28cc9da9): itest:tables PASS on Cronus28 (pre-commitment r2 36c3e775)
 - **R477** · Guarded bare fallback for the validate-to-assign sites R464 refuses (35: 29 previously mutated, 6 new) · [R477.md](docs/roadmap/R477.md) · done (467e2faf)
 - **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · closed 2026-10-05 — neither shape reaches the prefix proof today: no Tier-2 claim is made inside a…
 - **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files; correction: the extension's members ARE mutated…
