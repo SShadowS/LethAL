@@ -12,21 +12,28 @@
  * reports that file at `line-rate 0.0000`, so the two backends already agree; only the wiring was
  * missing.
  *
- * ## Multi-object files: still refused, for a different reason than before
+ * ## Multi-object files: admitted only on builds the frame probe admits (R407)
  *
  * al-runner 2.11.0 lost every object after a file's first (upstream #3713). That is FIXED on
- * v2.12.0: the second object's lines are reported now, on both transports. But measured on the
- * pinned build v2.12.0-main.c39ad5de (`docs/roadmap/R383.md`), they are reported in the WRONG
- * FRAME. al-runner compiles LethAL's instrumented bundle, finds the source project with the same
- * app id, and labels coverage with the SOURCE path. For the first object in a file the lines are
- * right. For every object after it, a line is reported as (the previous object's closing line in
- * the SOURCE) + (its distance from that line in the INSTRUMENTED text). On `sandbox-multiobject`
- * instrumented lines 33/35/40/45/50 of `Multi B` come back as 16/18/23/28/33, which lie inside
- * `Multi A`. Nothing in the report says which frame a line is in, so LethAL cannot undo it.
+ * v2.12.0: the second object's lines are reported now, on both transports. But measured on
+ * v2.12.0-main.c39ad5de (`docs/roadmap/R383.md`), they were reported in the WRONG FRAME.
+ * al-runner compiled LethAL's instrumented bundle, found the source project with the same app id,
+ * and labelled coverage with the SOURCE path. For the first object in a file the lines were right.
+ * For every object after it, a line was reported as (the previous object's closing line in the
+ * SOURCE) + (its distance from that line in the INSTRUMENTED text). On `sandbox-multiobject`
+ * instrumented lines 33/35/40/45/50 of `Multi B` came back as 16/18/23/28/33, inside `Multi A`.
+ * Upstream #5249 fixed it (measured on 43f76177, both transports: instrumented frame, bundle label).
  *
- * So a file declaring more than one object still disables coverage for the WHOLE run
- * (`supported: false`, and the CLI guard falls back to `"none"`), and the index skips such a file
- * so nothing can resolve against it. Coarse on purpose: dropping just that file's objects would
+ * So the CLI guard runs `probeAlRunnerCoverageFrame` (`al-runner-frame-probe.ts`) once per session
+ * when the project holds a multi-object file. Admitted, the backend's index admits such files
+ * (`AlRunnerConfig.admitMultiObjectFiles`, never a config key), and three backstops stop the session
+ * with `AlRunnerCoverageFrameError` if a run does not look like the probe: a label for an admitted
+ * file outside the index's own bundle (`assertAdmittedLabel`), a `--server` scope its position
+ * contradicts in such a file, and a multi-object index built without admission or before any
+ * `deploy()` (`AlRunnerBackend.coverageIndexOf`). Refused (c39ad5de, or any other answer), a file
+ * declaring more than one object disables coverage for the WHOLE run (`supported: false`, and the
+ * CLI guard falls back to `"none"`), and the index skips such a file so nothing can resolve against
+ * it. Coarse on purpose: dropping just that file's objects would
  * read their mutants a false `no-coverage`, because `coverageFilter`'s every-green-test fallback is
  * gated to table triggers. The rule (`refusedAsMultiObject`, R383 r2 ruling): a file is refused
  * unless every object after its first is code-free (a permission set, permission set extension,
@@ -35,12 +42,10 @@
  * on the gate fixtures only `sandbox-multiobject` (which exists to) and `sandbox-coverage-probe`
  * trip this, and no file on DC, System Application, Business Foundation, BaseApp or CDO does.
  *
- * What R383 built stays as infrastructure for the day upstream fixes the frame: every row is
- * resolved by POSITION (`resolveFileLine`) to the declaration whose file span holds it, and that
- * object's base line converts it to the object-relative frame BC and the line map use. In a
- * single-object file the base is 1, so this is exactly the old behaviour.
- * `buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true })` turns the admission on, and
- * only tests use it today.
+ * What R383 built carries the admitted case: every row is resolved by POSITION (`resolveFileLine`)
+ * to the declaration whose file span holds it, and that object's base line converts it to the
+ * object-relative frame BC and the line map use. In a single-object file the base is 1, so this is
+ * exactly the old behaviour, and no R407 backstop applies to it.
  */
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -169,6 +174,31 @@ export interface AlRunnerCoverageIndex {
    * guess from the reported label's basename. Absent: quote the label (indexes built by hand).
    */
   readonly shownByKey?: ReadonlyMap<string, string>;
+  /**
+   * R407: present when `admitMultiObjectFiles` indexed at least one multi-object file. `keys` are
+   * those files' `byFile` keys; `dir` is the directory this index was built from (the deployed
+   * `active` bundle); `labelBase` is what a relative label resolves against. Every coverage label
+   * resolving to such a key must name a file inside `dir`, or `AlRunnerCoverageFrameError` is
+   * thrown (`assertAdmittedLabel`).
+   */
+  readonly frameAdmission?: {
+    readonly dir: string;
+    readonly keys: ReadonlySet<string>;
+    readonly labelBase: string;
+  };
+}
+
+/**
+ * R407: coverage for an ADMITTED multi-object file came back in a shape the frame probe did not
+ * admit (a label outside the bundle, or a `--server` procedure name its position contradicts), or
+ * a multi-object index was built without the probe's admission. Stops the session: a wrong frame
+ * would credit mutants to the wrong tests with nothing to show for it. Extends `Error` directly.
+ */
+export class AlRunnerCoverageFrameError extends Error {
+  constructor(message: string) {
+    super(`${message} (R407). Run with "alRunner.coverage": "none" to measure without coverage.`);
+    this.name = "AlRunnerCoverageFrameError";
+  }
 }
 
 /** R219 run 003: see `AlRunnerCoverageIndex.exact`. Paths are resolved, `/`-separated, lower-cased. */
@@ -196,7 +226,9 @@ export interface ExactResolution {
  * Scanning the SOURCE is sound because instrumentation is one output file per input file, so a
  * file's objects are the same on both sides. See this module's header for why a multi-object file
  * disqualifies the whole run rather than just its own objects (R383: al-runner's frame for every
- * object after a file's first, measured on v2.12.0-main.c39ad5de).
+ * object after a file's first, measured on v2.12.0-main.c39ad5de). `supported` still answers the
+ * raw multi-object question; R407's frame probe, run by the CLI guard on top of it, decides whether
+ * this build is trusted with such files.
  *
  * R387: `wrappedObjectFiles` uses the SAME rule the index uses to refuse a file
  * (`fileHoldsWrappedObject`, and since R-300b not `alRunnerAdmitsWrappedFile`), so the guard and
@@ -276,6 +308,11 @@ export async function buildAlRunnerCoverageIndex(
      * contested file name is refused.
      */
     readonly sourceProjectDir?: string;
+    /**
+     * R407: what a RELATIVE coverage label of an admitted multi-object file is resolved against:
+     * al-runner's cwd. The one-shot transport sets none, so that is LethAL's own, the default.
+     */
+    readonly labelBase?: string;
   } = {},
 ): Promise<AlRunnerCoverageIndex> {
   await initParser();
@@ -311,6 +348,7 @@ export async function buildAlRunnerCoverageIndex(
   const exempt = new Set<string>();
   const refusals = new Map<string, string>();
   const admittedWrappedFiles = new Set<string>();
+  const admittedMultiObjectKeys = new Set<string>();
   /** Files that pass every per-file rule, before the duplicate-key pass. */
   const candidates: { file: string; keys: string[]; entries: LineMapEntry[] }[] = [];
 
@@ -362,6 +400,7 @@ export async function buildAlRunnerCoverageIndex(
         skippedFiles.push(...keysOf(rel));
         continue;
       }
+      for (const k of keysOf(rel)) admittedMultiObjectKeys.add(k);
     }
     candidates.push({
       file: shown(rel),
@@ -416,12 +455,46 @@ export async function buildAlRunnerCoverageIndex(
     skippedFiles,
     ...(exact !== undefined ? { exact } : {}),
     shownByKey,
+    ...(admittedMultiObjectKeys.size > 0
+      ? {
+          frameAdmission: {
+            dir: instrumentedDir,
+            keys: admittedMultiObjectKeys,
+            labelBase: options.labelBase ?? process.cwd(),
+          },
+        }
+      : {}),
   };
+}
+
+/**
+ * R407: a label that resolved to an ADMITTED multi-object file must name a file inside the index's
+ * own bundle. A one-shot label is relative to al-runner's cwd, which is LethAL's own (the transport
+ * sets none); a `--server` label is absolute. A source-path or batch-sibling label is the R383
+ * defect's signature, so it throws rather than being credited by its trailing segments.
+ */
+function assertAdmittedLabel(label: string, key: string, index: AlRunnerCoverageIndex): void {
+  const admission = index.frameAdmission;
+  if (admission === undefined || !admission.keys.has(key)) return;
+  if (labelInsideDir(label, admission.dir, admission.labelBase)) return;
+  throw new AlRunnerCoverageFrameError(
+    `al-runner labelled coverage for the multi-object file ${index.shownByKey?.get(key) ?? key} as "${label}", which is outside the bundle it was handed (${admission.dir}). The frame probe admitted multi-object files for this al-runner build, but this run does not look like the probe: refusing rather than placing those lines`,
+  );
 }
 
 /** A directory as `ExactResolution` compares it: absolute, `/`-separated, lower-cased, no trailing `/`. */
 function dirKey(dir: string): string {
   return normalizeFileKey(resolve(dir)).replace(/\/+$/, "");
+}
+
+/**
+ * R407: whether a coverage label names a file INSIDE `dir`. A relative label is resolved against
+ * `base` (the spawn's cwd: one-shot Cobertura labels are cwd-relative, `--server` labels absolute).
+ * Compared with a trailing `/` after `dirKey`, so `active` never matches `active-old`, and with no
+ * trailing-segment matching, so a source or batch label ending in the same name is outside.
+ */
+export function labelInsideDir(label: string, dir: string, base: string = process.cwd()): boolean {
+  return dirKey(resolve(base, label.replace(/\\/g, "/"))).startsWith(`${dirKey(dir)}/`);
 }
 
 /**
@@ -533,16 +606,8 @@ function fileKeyCandidates(coberturaPath: string): string[] {
  * a shorter ending another file owns (`src/Foo.Codeunit.al` refused, a root `Foo.Codeunit.al`
  * indexed): that would attribute the refused object's lines to a different object. R383 r2: the
  * same holds for EVERY skipped file (`skippedFiles`), a non-admitted multi-object one included.
+ * Returned with the matched `byFile` key (R-300b's I3 rule and R407's label check read it).
  */
-function objectsForFile(
-  file: string,
-  index: AlRunnerCoverageIndex,
-  skipped: ReadonlySet<string>,
-): readonly LineMapEntry[] | undefined {
-  return indexedFile(file, index, skipped)?.entries;
-}
-
-/** `objectsForFile`, with the matched `byFile` key (R-300b: the I3 rule reads it). */
 function indexedFile(
   file: string,
   index: AlRunnerCoverageIndex,
@@ -590,13 +655,14 @@ export function alRunnerCoverageFrom(
   const skipped = new Set(index.skippedFiles);
   for (const ln of lines) {
     if (ln.hits <= 0) continue;
-    const objects = objectsForFile(ln.file, index, skipped);
+    const found = indexedFile(ln.file, index, skipped);
     // A coverage row for something this bundle does not declare — the test app, Base Application,
     // a dependency — is skipped rather than an error, the same rule `LineMap` states for the
     // hub path. Cobertura serialises every file it instrumented, and most are legitimately not
     // ours.
-    if (objects === undefined) continue;
-    const at = resolveFileLine(objects, ln.line);
+    if (found === undefined) continue;
+    assertAdmittedLabel(ln.file, found.key, index);
+    const at = resolveFileLine(found.entries, ln.line);
     if (at === undefined) continue;
     const procedure = index.lineMap.lookup(at.objectType, at.objectId, at.objectLine);
     const key = `${at.objectType}:${at.objectId}:${procedure ?? ""}:${at.objectLine}`;
@@ -651,7 +717,10 @@ export function alRunnerCoverageFromServer(
   for (const file of entry.coverage ?? []) {
     const found = indexedFile(file.file, index, skipped);
     if (found === undefined) continue;
+    assertAdmittedLabel(file.file, found.key, index);
     const objects = found.entries;
+    // R407: in an admitted multi-object file a scope its position contradicts throws (below).
+    const admittedMulti = index.frameAdmission?.keys.has(found.key) === true;
     // R219: quoted by the project path of the file it RESOLVED to (R-219c M1).
     const shownFile = index.shownByKey?.get(found.key) ?? file.file;
     // R-300b (I3): in an admitted wrapped file a disagreement drops the line instead.
@@ -681,6 +750,11 @@ export function alRunnerCoverageFromServer(
                 `[lethal] al-runner --server named the covered statement at ${shownFile}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}", in a #if-wrapped file; the line is dropped (R300).`,
               );
               continue;
+            }
+            if (admittedMulti && st.scope?.toLowerCase() !== byPosition.toLowerCase()) {
+              throw new AlRunnerCoverageFrameError(
+                `al-runner --server named the covered statement at ${shownFile}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}", in an admitted multi-object file. The frame probe admitted this al-runner build, but this run does not look like the probe: refusing rather than letting either name win`,
+              );
             }
             if (st.scope?.toLowerCase() !== byPosition.toLowerCase()) {
               console.warn(

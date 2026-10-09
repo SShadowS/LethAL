@@ -1180,6 +1180,35 @@ the provisioning call is already verbose (R235) and still gets its `[pkg-cache] 
 line. `itest:alrunner` on 2.12.0: PASS, 3 / 12 / 4 on all four legs, identical per mutant, pin
 engaged on both one-shot legs, and both R321 symbol sets 5 / 8 / 0 on every leg.
 
+### Multi-object coverage frame: fixed upstream, checked per session by a probe (R407, 2026-10-09)
+
+**On v2.12.0-main.c39ad5de** a file declaring two objects was reported in a mixed frame (R383): with
+a source project of the same app id beside the test app, al-runner labelled coverage with the SOURCE
+path and reported every object after the first at (previous object's end in the SOURCE) + (distance
+in the INSTRUMENTED text). **Upstream #5249 (merged 2026-10-02) fixed it.** Measured on
+v2.12.0-main.43f76177 and c5bbaf89, one-shot and `--server`, in the layout that broke: every object
+in the instrumented frame, labelled with the bundle path (`inst/active/...`, cwd-relative on
+one-shot, absolute on the daemon); the same-id rows equal the fresh-app-id control row for row.
+
+LethAL does not trust a build list for this. When a project holds a multi-object file and coverage is
+`"al-runner"`, the CLI guard runs `probeAlRunnerCoverageFrame` once, on the session's transport: a
+scratch layout with a source sibling (`src/`), the bundle (`inst/active/`) and a batch sibling
+(`inst/batch-1/`), all one app id, and a pair file whose first object is a table with a trigger and
+whose second is a codeunit, longer in the bundle than in the source. Admitted only when the probe
+test passes, every label for the pair file is inside `inst/active/`, the table has no hit, and the
+codeunit's hit lines equal the measured set (45, 46, 47 on 43f76177, both transports;
+`packages/runner/tests/fixtures/r407-frame-probe/`). Anything else is a named refusal and the run
+falls back to coverage `"none"`.
+
+Measured with the production probe from the repo root: 43f76177 admitted on both transports;
+c39ad5de (built from source) refused on both, labelled `src/...` with the codeunit 12 lines early,
+inside the table. On c39ad5de a same-id BATCH sibling alone is also discovered and used as the label
+(with `src/` deleted: label `inst/batch-1/...`, lines right), so only the label check catches that
+case; with both siblings deleted c39ad5de is admitted. Cost on 43f76177 (warm caches): one-shot
+about 2.7 s plus a 2 s provisioning call for the pin; `--server` about 7 s (daemon start, one
+`runTests`, one `--version`). The daemon prints only `[bc] selected BC <build>`, never its own
+version, so the server probe reads `--version` for the build banner its warning line quotes.
+
 ### It runs on Windows
 
 R98 recorded that upstream `main` P/Invoked `libc`'s `mprotect` and died before any test ran. On the

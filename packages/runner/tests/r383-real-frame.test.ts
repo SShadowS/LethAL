@@ -1,45 +1,83 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  AlRunnerCoverageFrameError,
+  type AlRunnerCoverageIndex,
+  type CoberturaLine,
   alRunnerCoverageFrom,
   alRunnerCoverageFromServer,
   buildAlRunnerCoverageIndex,
   parseCobertura,
 } from "../src/al-runner-coverage";
 import type { ServerPerTestCoverage } from "../src/al-runner-server";
+import { scratchDirs } from "./helpers/scratch";
 
 /**
- * R383: the EVIDENCE that the multi-object refusal is needed, from al-runner's real output.
+ * R383/R407: what the coverage-frame probe separates, on al-runner's REAL output for LethAL's
+ * instrumented `MultiPair.Codeunit.al` (two codeunits, `Multi A` on lines 1-24, `Multi B` on 26-76).
  *
- * `fixtures/r383-real-frame/` holds LethAL's instrumented `MultiPair.Codeunit.al` (two codeunits,
- * `Multi A` on lines 1-24, `Multi B` on 26-76) and what al-runner v2.12.0-main.c39ad5de reported
- * for the baseline run of `Multi Tests.ReachedBothWays`, which calls only `Multi B.Reached`. The
- * source fixture's `Multi A` ends at line 7, so every `Multi B` line comes back 24 - 7 = 17 lines
- * early: (A's end in the SOURCE) + (distance in the INSTRUMENTED text). Three of them land inside
- * `Multi A.Never`. The control is the same bundle under a fresh app id, where al-runner finds no
- * source project and reports the instrumented frame.
+ * NEGATIVE evidence, v2.12.0-main.c39ad5de (`cobertura-reached-both-ways.xml`,
+ * `server-reached-both-ways.json`, `cobertura-calls-never.xml`, `server-calls-never.json`): al-runner
+ * found the source project with the same app id, labelled coverage with the SOURCE path, and
+ * reported every `Multi B` line 24 - 7 = 17 lines early ((A's end in the SOURCE) + (distance in the
+ * INSTRUMENTED text)); three of them land inside `Multi A.Never`. Through an admitted index the
+ * source label now STOPS the session (`AlRunnerCoverageFrameError`), and had the label been right
+ * the lines would still mis-attribute, which is why the probe checks lines as well as labels.
  *
- * R383 r3 added the MEASURED positive control: `cobertura-calls-never.xml` and
- * `server-calls-never.json` are a real run of the same bundle with one more test, `CallsNever`,
- * which calls `Multi A.Never(1)` (each file's header says how it was captured).
+ * POSITIVE evidence, v2.12.0-main.43f76177 (`cobertura-43f76177-*.xml`, `server-43f76177.json`,
+ * R-407 step 1): the same layout, the same bundle byte for byte, every object in the instrumented
+ * frame, labelled inside the bundle, so every hit resolves to its true owner.
  *
- * The index is built with `admitMultiObjectFiles`, i.e. as the R383 admission would have run.
- * Production refuses the file instead; this file is why.
+ * The bundle is laid out as it was measured: `<root>/inst/active/MultiPair.Codeunit.al`, with the
+ * one-shot labels relative to `<root>` (al-runner's cwd) and the server's absolute.
  */
 
 const DIR = join(import.meta.dir, "fixtures", "r383-real-frame");
+const PAIR = "MultiPair.Codeunit.al";
 const A = 79800;
 const B = 79801;
+const scratch = scratchDirs();
 
-const admittedIndex = () => buildAlRunnerCoverageIndex(DIR, { admitMultiObjectFiles: true });
+/** The measured layout, and an admitted index over its bundle. */
+async function layout(): Promise<{ root: string; index: AlRunnerCoverageIndex }> {
+  const root = scratch("lethal-r407-real-frame-");
+  const bundle = join(root, "inst", "active");
+  await mkdir(bundle, { recursive: true });
+  await copyFile(join(DIR, PAIR), join(bundle, PAIR));
+  const index = await buildAlRunnerCoverageIndex(bundle, {
+    admitMultiObjectFiles: true,
+    labelBase: root,
+  });
+  return { root, index };
+}
 const cobertura = async (name: string) => parseCobertura(await readFile(join(DIR, name), "utf8"));
 const hitLines = async (name: string) =>
   (await cobertura(name)).filter((l) => l.hits > 0).map((l) => l.line);
 const show = (entries: readonly { objectId: number; procedure?: string; line?: number }[]) =>
   entries.map((e) => `${e.objectId} ${e.procedure ?? "-"} ${e.line ?? "-"}`);
+const serverOf = async (name: string) =>
+  JSON.parse(await readFile(join(DIR, name), "utf8")) as ServerPerTestCoverage;
+/** The 43f76177 daemon payload for one test, its `<scratch>/work` prefix re-rooted at `root`. */
+async function server43(test: string, root: string): Promise<ServerPerTestCoverage> {
+  const all = JSON.parse(await readFile(join(DIR, "server-43f76177.json"), "utf8")) as {
+    perTestCoverage: ServerPerTestCoverage[];
+  };
+  const entry = all.perTestCoverage.find((p) => p.test === test);
+  if (entry === undefined) throw new Error(`no 43f76177 server entry for ${test}`);
+  return {
+    ...entry,
+    coverage: (entry.coverage ?? []).map((f) => ({
+      ...f,
+      file: f.file.replace("<scratch>/work", root),
+    })),
+  };
+}
+/** A c39ad5de row relabelled into the bundle: "what if only the label had been fixed". */
+const intoBundle = (rows: readonly CoberturaLine[]) =>
+  rows.map((r) => ({ ...r, file: `inst/active/${PAIR}` }));
 
-describe("R383: al-runner's real frame mis-resolves every object after a file's first", () => {
+describe("R383/R407: c39ad5de's real frame (negative evidence)", () => {
   test("the formula: B's hit lines are the instrumented ones shifted 17 up, A's own lines are not moved", async () => {
     const real = await cobertura("cobertura-reached-both-ways.xml");
     const fresh = await cobertura("cobertura-fresh-app-id.xml");
@@ -53,10 +91,26 @@ describe("R383: al-runner's real frame mis-resolves every object after a file's 
     for (const l of fresh.filter((x) => x.line <= 24)) expect(realLines.has(l.line)).toBe(true);
   });
 
-  test("Cobertura: B.Reached's lines 16, 18 and 23 are attributed to Multi A.Never", async () => {
+  test("R407: the SOURCE label stops the session, on both transports and for both tests", async () => {
+    const { index } = await layout();
+    for (const name of ["cobertura-reached-both-ways.xml", "cobertura-calls-never.xml"]) {
+      const rows = await cobertura(name);
+      expect(rows[0]?.file).toBe(`fixtures/sandbox-multiobject/src/${PAIR}`);
+      expect(() => alRunnerCoverageFrom(rows, index)).toThrow(AlRunnerCoverageFrameError);
+    }
+    for (const name of ["server-reached-both-ways.json", "server-calls-never.json"]) {
+      const payload = await serverOf(name);
+      expect(() => alRunnerCoverageFromServer(payload, index)).toThrow(
+        `as "fixtures/sandbox-multiobject/src/${PAIR}", which is outside the bundle`,
+      );
+    }
+  });
+
+  test("had only the label been right, Cobertura would credit B.Reached's lines 16, 18 and 23 to Multi A.Never", async () => {
+    const { index } = await layout();
     const map = alRunnerCoverageFrom(
-      await cobertura("cobertura-reached-both-ways.xml"),
-      await admittedIndex(),
+      intoBundle(await cobertura("cobertura-reached-both-ways.xml")),
+      index,
     );
     expect(show(map.entries)).toEqual(REAL_RESOLVED);
     expect(map.entries.filter((e) => e.objectId === A).map((e) => [e.procedure, e.line])).toEqual([
@@ -66,92 +120,89 @@ describe("R383: al-runner's real frame mis-resolves every object after a file's 
     ]);
   });
 
-  test("--server: the same three statements land in Multi A.Never, overruling scope Reached", async () => {
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const payload = JSON.parse(
-        await readFile(join(DIR, "server-reached-both-ways.json"), "utf8"),
-      ) as ServerPerTestCoverage;
-      const map = alRunnerCoverageFromServer(payload, await admittedIndex());
-      expect(show(map.entries)).toEqual(REAL_RESOLVED_SERVER);
-      expect(map.entries.filter((e) => e.objectId === A).map((e) => [e.procedure, e.line])).toEqual(
-        [
-          ["Never", 16],
-          ["Never", 18],
-          ["Never", 23],
-        ],
-      );
-      // The daemon's own scope says Reached for all three; position overruled it, once each.
-      expect(warn.mock.calls.length).toBe(3);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  test("positive control, MEASURED: CallsNever's real hits on A resolve to exactly Multi A.Never at the same lines, on both transports", async () => {
-    // A real run of the same bundle with a test that calls Multi A.Never(1). A is the file's FIRST
-    // object, so al-runner reports it in the instrumented frame: 8, 10 and 14 are the Active
-    // checks, 20 is `exit(X + 7)`. Base 1, so each file line is its own object line.
-    const exact = [8, 10, 14, 20].map((line) => ({
-      objectType: "Codeunit",
-      objectId: A,
-      procedure: "Never",
-      line,
-    }));
-    expect(await hitLines("cobertura-calls-never.xml")).toEqual([8, 10, 14, 20]);
-    const index = await admittedIndex();
-    expect(
-      alRunnerCoverageFrom(await cobertura("cobertura-calls-never.xml"), index).entries,
-    ).toEqual(exact);
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const payload = JSON.parse(
-        await readFile(join(DIR, "server-calls-never.json"), "utf8"),
-      ) as ServerPerTestCoverage;
-      expect(alRunnerCoverageFromServer(payload, index).entries).toEqual(exact);
-      // The daemon's scope agrees with the position for every statement: nothing overruled.
-      expect(warn.mock.calls.length).toBe(0);
-    } finally {
-      warn.mockRestore();
-    }
+  test("had only the label been right, --server would still stop: scope Reached at a line inside Never", async () => {
+    const { root, index } = await layout();
+    const payload = await serverOf("server-reached-both-ways.json");
+    const relabelled: ServerPerTestCoverage = {
+      ...payload,
+      coverage: (payload.coverage ?? []).map((f) => ({
+        ...f,
+        file: join(root, "inst", "active", PAIR),
+      })),
+    };
+    expect(() => alRunnerCoverageFromServer(relabelled, index)).toThrow(
+      `${PAIR}:16 "Reached", but that line is inside "Never", in an admitted multi-object file`,
+    );
   });
 
   test("MAPPER test (synthetic, not evidence): a hit placed on A's line 20 resolves to exactly Multi A.Never 20, on both transports", async () => {
-    // Line 20 is a real row of the ReachedBothWays capture (hits 0), EDITED to 1, and the server
-    // statement is invented: this pins the mapper's arithmetic, not al-runner's behaviour. The
-    // measured counterpart is the positive control above.
+    // Line 20 is a real row of the ReachedBothWays capture (hits 0), EDITED to 1 and relabelled
+    // into the bundle, and the server statement is invented: this pins the mapper's arithmetic.
     const real = await cobertura("cobertura-reached-both-ways.xml");
     const row = real.find((l) => l.line === 20);
     if (row === undefined) throw new Error("the captured Cobertura lost its line 20 row");
-    const index = await admittedIndex();
+    const { root, index } = await layout();
     const exact = [{ objectType: "Codeunit", objectId: A, procedure: "Never", line: 20 }];
-    expect(alRunnerCoverageFrom([{ ...row, hits: 1 }], index).entries).toEqual(exact);
-    const payload = JSON.parse(
-      await readFile(join(DIR, "server-reached-both-ways.json"), "utf8"),
-    ) as ServerPerTestCoverage;
-    const [file] = payload.coverage ?? [];
-    if (file === undefined) throw new Error("the captured --server payload lost its file");
+    expect(alRunnerCoverageFrom(intoBundle([{ ...row, hits: 1 }]), index).entries).toEqual(exact);
     const one: ServerPerTestCoverage = {
-      ...payload,
-      coverage: [{ ...file, statements: [{ scope: "Never", line: 20, hits: 1 }] }],
+      test: "Codeunit79850.ReachedBothWays",
+      coverage: [
+        {
+          file: join(root, "inst", "active", PAIR),
+          statements: [{ scope: "Never", line: 20, hits: 1 }],
+        },
+      ],
     };
     expect(alRunnerCoverageFromServer(one, index).entries).toEqual(exact);
   });
+});
 
-  test("control: in the instrumented frame (fresh app id) every hit resolves to Multi B.Reached", async () => {
-    const map = alRunnerCoverageFrom(
-      await cobertura("cobertura-fresh-app-id.xml"),
-      await admittedIndex(),
+describe("R407: 43f76177's real frame (positive evidence, the same layout)", () => {
+  test("the same-id ReachedBothWays rows equal the c39ad5de fresh-app-id control, row for row", async () => {
+    const now = (await cobertura("cobertura-43f76177-reached-both-ways.xml")).map(
+      (l) => `${l.line}x${l.hits}`,
     );
-    expect(map.entries.filter((e) => e.objectId === A)).toEqual([]);
-    expect(new Set(map.entries.map((e) => `${e.objectId} ${e.procedure}`))).toEqual(
-      new Set([`${B} Reached`]),
+    const control = (await cobertura("cobertura-fresh-app-id.xml")).map(
+      (l) => `${l.line}x${l.hits}`,
     );
+    expect(now).toEqual(control);
+  });
+
+  test("ReachedBothWays resolves to Multi B.Reached only, at its true lines, on both transports", async () => {
+    const { root, index } = await layout();
+    const exact = [9, 11, 16, 21, 26, 33, 34, 35].map((line) => `${B} Reached ${line}`);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(
+        show(
+          alRunnerCoverageFrom(await cobertura("cobertura-43f76177-reached-both-ways.xml"), index)
+            .entries,
+        ),
+      ).toEqual(exact);
+      const server = await server43("Codeunit79850.ReachedBothWays", root);
+      expect(show(alRunnerCoverageFromServer(server, index).entries)).toEqual(exact);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("CallsNever resolves to Multi A.Never only, at 8, 10, 14 and 20, on both transports", async () => {
+    const { root, index } = await layout();
+    const exact = [8, 10, 14, 20].map((line) => `${A} Never ${line}`);
+    expect(await hitLines("cobertura-43f76177-calls-never.xml")).toEqual([8, 10, 14, 20]);
+    expect(
+      show(
+        alRunnerCoverageFrom(await cobertura("cobertura-43f76177-calls-never.xml"), index).entries,
+      ),
+    ).toEqual(exact);
+    const server = await server43("Codeunit79850.CallsNever", root);
+    expect(show(alRunnerCoverageFromServer(server, index).entries)).toEqual(exact);
   });
 });
 
 /**
- * `<objectId> <procedure> <object line>` for each hit line, checked by hand against the
+ * `<objectId> <procedure> <object line>` for each c39ad5de hit line, checked by hand against the
  * instrumented file. 16, 18 and 23 are inside `Never` (lines 6-23), so they become A's. 28 is
  * B's `var` header line (object line 4); 33, 40, 41 and 42 are inside `Reached` but at the WRONG
  * lines (B's base is 25: object lines 9, 16, 17, 18, where the true ones are 9, 11, 16, 21, 26,
@@ -167,5 +218,3 @@ const REAL_RESOLVED = [
   "79801 Reached 17",
   "79801 Reached 18",
 ];
-/** The same, except the header line keeps the daemon's scope (lookup names nothing there). */
-const REAL_RESOLVED_SERVER = REAL_RESOLVED.map((e) => (e === "79801 - 4" ? "79801 Reached 4" : e));
