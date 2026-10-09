@@ -7518,10 +7518,20 @@ export interface NamedMutantsConfig {
    * sent to no kept mutant. Refused when a key is not in `rerunOnUnmutated`, is in any kept
    * mutant's narrowed list, or had an invalid baseline (`invalidBaselineReason`). Answered in
    * `NamedMutantsResult.notRerun`.
+   *
+   * R536: `buildSymbols` is the source run's recorded set (the one the installed artifact and its
+   * line map were built under), and `backendRefused` is the backend's own refused set after the
+   * attach (`coverageRefusals()`, empty for a backend without one), so the filter refuses what the
+   * run's selection refused.
    */
   readonly narrow?: (
     baseline: ReadonlyArray<{ readonly ref: TestMethodRef; readonly verdict: TestVerdict }>,
-    ctx: { readonly coverage: CoverageMode; readonly alSources: readonly AlSource[] },
+    ctx: {
+      readonly coverage: CoverageMode;
+      readonly alSources: readonly AlSource[];
+      readonly buildSymbols: readonly string[];
+      readonly backendRefused: ReadonlyMap<string, string>;
+    },
   ) => {
     readonly methods: ReadonlyMap<string, readonly TestMethodRef[]>;
     readonly unreached: ReadonlySet<string>;
@@ -7649,6 +7659,14 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       `${who}: run ${runId} is finished; its rows are history that priorSurvivorKeys reads, so create a new run row for this call`,
     );
   }
+  // R536: the installed artifact was built under the SOURCE run's symbols, so its line map must read
+  // the #if arms under the same set. A run that recorded none is refused, never read as [] (R214).
+  const buildSymbols = store.getRun(installed.fromRunId)?.buildSymbols ?? null;
+  if (buildSymbols === null) {
+    throw new NamedMutantError(
+      `${who}: source run ${installed.fromRunId} recorded no build symbols (before R214), so the installed artifact's #if arms cannot be read as it was built; run lethal run again`,
+    );
+  }
   const { artifact, manifest } = await loadInstalledArtifact(store, installed);
   // R-384: `narrow` may replace this, inside `select`, before any mutant runs.
   let named = resolveNamedMutants(manifest, cfg.requests);
@@ -7675,6 +7693,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       `${who}: this backend cannot attach to an installed artifact`,
     );
   }
+  handBuildSymbols(backend, buildSymbols);
   const safety = new SessionSafety();
   const caps = backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
@@ -7755,6 +7774,8 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     }
     // Mandatory: binds the transport to this artifact after anything `inLease` published.
     await attach(artifact);
+    // R536: what the attached line map refuses, as the run's selection read it.
+    const backendRefused = await withBackendRefusals(backend, new Map());
     const scope: BatchScope = {
       backend,
       caps,
@@ -7786,7 +7807,12 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
         for (const b of baseline) baselineRan.set(testKeyOf(b.ref), b.verdict);
         const narrow = cfg.narrow;
         if (narrow !== undefined) {
-          const n = narrow(baseline, { coverage: caps.coverage, alSources: artifact.alSources });
+          const n = narrow(baseline, {
+            coverage: caps.coverage,
+            alSources: artifact.alSources,
+            buildSymbols,
+            backendRefused,
+          });
           const applied = applyNarrow(named, n, who, { rerunRefs, baselineRan });
           named = applied.named;
           unreached = applied.unreached;

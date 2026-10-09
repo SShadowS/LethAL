@@ -17077,6 +17077,67 @@ async function installedFixture(
   return { cfg, trace, store, client, installed, inner, dirs, compiled };
 }
 
+// R536 part 2: every runNamedMutants caller (lethal verify, its itests) hands the backend the build
+// symbols the SOURCE run recorded, before the first attach, so the installed artifact's line map
+// reads #if arms as the run did; and `narrow` gets the backend's whole refused set with them.
+describe("R536: runNamedMutants reads the installed artifact under the source run's build symbols", () => {
+  function withSymbolsTaker(fx: Awaited<ReturnType<typeof installedFixture>>, log: string[]) {
+    const base = fx.cfg.backend;
+    return {
+      ...base,
+      attach: async (a: BoundArtifact) => {
+        log.push("attach");
+        return base.attach?.(a);
+      },
+      useBuildSymbols: (s: readonly string[]) => {
+        log.push(`symbols ${JSON.stringify(s)}`);
+      },
+      coverageRefusals: async () => new Map([["codeunit:79199", "refused by the line map"]]),
+    } as ExecutionBackend;
+  }
+  function setSourceSymbols(fx: Awaited<ReturnType<typeof installedFixture>>, json: string | null) {
+    fx.store.db
+      .query("UPDATE runs SET build_symbols = ? WHERE id = ?")
+      .run(json, fx.installed.fromRunId);
+  }
+
+  test("the source run's recorded symbols reach the backend before the first attach", async () => {
+    const fx = await installedFixture();
+    setSourceSymbols(fx, JSON.stringify(["LETHALQ"]));
+    const log: string[] = [];
+    await runNamedMutants({ ...fx.cfg, backend: withSymbolsTaker(fx, log) });
+    expect(log.slice(0, 2)).toEqual(['symbols ["LETHALQ"]', "attach"]);
+    expect(log.filter((l) => l.startsWith("symbols"))).toHaveLength(1);
+  });
+
+  test("a source run that recorded no build symbols is refused before any backend call, never read as []", async () => {
+    const fx = await installedFixture();
+    setSourceSymbols(fx, null);
+    const log: string[] = [];
+    const err = await runNamedMutants({ ...fx.cfg, backend: withSymbolsTaker(fx, log) }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toMatch(/recorded no build symbols/);
+    expect(log).toEqual([]);
+  });
+
+  test("narrow is handed the source run's symbols and the backend's refused set", async () => {
+    const fx = await installedFixture();
+    setSourceSymbols(fx, JSON.stringify(["LETHALQ"]));
+    const seen: Array<{ buildSymbols: readonly string[]; backendRefused: string[] }> = [];
+    await runNamedMutants({
+      ...fx.cfg,
+      backend: withSymbolsTaker(fx, []),
+      narrow: (_baseline, ctx) => {
+        seen.push({ buildSymbols: ctx.buildSymbols, backendRefused: [...ctx.backendRefused.keys()] });
+        return { methods: new Map([["M0001", [OVER]]]), unreached: new Set() };
+      },
+    });
+    expect(seen).toEqual([{ buildSymbols: ["LETHALQ"], backendRefused: ["codeunit:79199"] }]);
+  });
+});
+
 async function rewriteManifestKeepingId(
   dir: string,
   f: (m: { artifactId: string; mutants: unknown[] }) => unknown,
