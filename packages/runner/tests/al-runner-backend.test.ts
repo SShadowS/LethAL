@@ -1791,10 +1791,9 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
   });
 
   test("I-1: an OnRun-trigger timeout row (status error, wording the timeout regex does not match) still ends the daemon", async () => {
-    const fake = hungOnce(
-      true,
-      "The test codeunit's OnRun trigger exceeded the 180s timeout, so none of its test methods ran.",
-    );
+    // R534: the measured OnRun wording is now a classified timeout (T2 below). This keeps what I-1
+    // guards, the STRUCTURAL close, with a wording no timeout regex matches.
+    const fake = hungOnce(true, "OnRun trigger did not complete");
     const backend = serverOn(fake.spawn);
     await backend.activate("M0001");
     // The verdict still reads the wording: not a classified timeout, so never a kill.
@@ -1827,6 +1826,91 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       'al-runner --server stopped the run at "Codeunit79100.BSlow" (timeout); tests after it have no row',
     );
     await backend.close();
+  });
+
+  describe("an answered row never aborts (R534)", () => {
+    /** `backend.run`, counted, so a test can say how many times runOnce sent it. */
+    function counted(backend: AlRunnerBackend): { runs: () => number } {
+      let n = 0;
+      const inner = backend.run.bind(backend);
+      backend.run = async (r, o) => {
+        n += 1;
+        return inner(r, o);
+      };
+      return { runs: () => n };
+    }
+
+    test("T2: the --server OnRun-trigger timeout row (measure.md B verbatim) is a timeout in the OnRun, and the daemon is not reused", async () => {
+      const fake = hungOnce(
+        true,
+        "The test codeunit's OnRun trigger exceeded the 10s timeout, so none of its test methods ran.",
+      );
+      const backend = serverOn(fake.spawn);
+      await backend.activate("M0001");
+      const v = await backend.run(t("BSlow"), run);
+      expect([v.outcome, v.reportedStopMs, v.timeoutIn]).toEqual(["timeout", 10_000, "onrun"]);
+      await backend.activate(null);
+      expect((await backend.run(t("BSlow"), run)).outcome).toBe("pass");
+      expect(fake.argvs.length).toBe(2);
+      await backend.close();
+    });
+
+    test("T6: a covering test with no row after a hung one is runner-test-error, presumed, sent once; with no hung row it stays pre-dispatch-rejected and is retried", async () => {
+      const fake = hungOnce(true);
+      const backend = serverOn(fake.spawn);
+      await backend.activate("M0001");
+      await backend.run(t("BSlow"), run);
+      const c = counted(backend);
+      const later = await runOnce(backend, new SessionSafety(), t("Later"), run);
+      expect([later.outcome, later.operation, later.runnerRow]).toEqual([
+        "error",
+        "completed-accepted",
+        "runner-test-error",
+      ]);
+      expect(later.failureMessage).toContain("presumably");
+      expect(c.runs()).toBe(1);
+      await backend.close();
+
+      // Control: the same missing row with no hung test in the suite.
+      const plain = daemons((_d, _r, emit) => {
+        emit({ type: "test", name: "Codeunit79100.A", status: "pass", durationMs: 5 });
+        emit(summary(1));
+        return undefined;
+      });
+      const other = serverOn(plain.spawn);
+      await other.activate("M0001");
+      const o = counted(other);
+      const missing = await runOnce(other, new SessionSafety(), t("Later"), run);
+      expect([missing.outcome, missing.operation, missing.runnerRow]).toEqual([
+        "error",
+        "pre-dispatch-rejected",
+        undefined,
+      ]);
+      expect(o.runs()).toBe(2);
+      await other.close();
+    });
+
+    test("T6 OnRun (final review M-a): after an OnRun-wording hang the hung test is named, so a missing row is runner-test-error, sent once", async () => {
+      const fake = hungOnce(
+        true,
+        "The test codeunit's OnRun trigger exceeded the 180s timeout, so none of its test methods ran.",
+      );
+      const backend = serverOn(fake.spawn);
+      await backend.activate("M0001");
+      expect((await backend.run(t("BSlow"), run)).outcome).toBe("timeout");
+      const c = counted(backend);
+      const later = await runOnce(backend, new SessionSafety(), t("Later"), run);
+      expect([later.outcome, later.operation, later.runnerRow]).toEqual([
+        "error",
+        "completed-accepted",
+        "runner-test-error",
+      ]);
+      expect(later.failureMessage).toContain(
+        'al-runner --server stopped the run at "Codeunit79100.BSlow" (timeout)',
+      );
+      expect(c.runs()).toBe(1);
+      await backend.close();
+    });
   });
 });
 
@@ -1872,10 +1956,10 @@ describe("AlRunnerBackend one-shot: a test timeout exits 3 (R518)", () => {
     expect(calls.length).toBe(1);
   });
 
-  // Plan D2's last point: a hang in the test codeunit's OnRun trigger (or a RunnerOutOfScopeException)
-  // can give a TEST-TIMEOUT abort whose row is not a timeout wording. The transport accepts the
-  // envelope (the row is explained by the abort); the backend scores it the fail-closed `error`,
-  // never `timeout`.
+  // Plan D2's last point: a TEST-TIMEOUT abort whose row is not a known timeout wording (here an
+  // invented one; R534 made al-runner's measured OnRun-trigger wording a classified timeout, T1).
+  // The transport accepts the envelope (the row is explained by the abort); the backend scores it
+  // the fail-closed `error`, never `timeout`, and (R534 D1b) flags the unknown wording.
   test("an OnRun-trigger exit 3 is accepted as rows but scored a fail-closed error, never timeout", async () => {
     const onRun = {
       ...timeoutExit3,
@@ -1896,6 +1980,7 @@ describe("AlRunnerBackend one-shot: a test timeout exits 3 (R518)", () => {
     expect(v.failureMessage).toContain(AL_RUNNER_UNCLASSIFIED_ERROR);
     expect(v.failureMessage).toContain("OnRun trigger did not complete");
     expect(v.reportedStopMs).toBeUndefined();
+    expect(v.timeoutWordingUnknown).toBe(true);
     expect(calls.length).toBe(1);
   });
 
@@ -1938,5 +2023,190 @@ describe("AlRunnerBackend one-shot: a test timeout exits 3 (R518)", () => {
     expect(calls.length).toBe(2);
     const second = calls[1] ?? [];
     expect(second[second.indexOf("--exclude-test") + 1]).toBe(TWIN);
+  });
+});
+
+/**
+ * R534. An al-runner row is an ANSWER: al-runner ran the test, reported and exited. So it is never
+ * re-sent and never a spec §11 abort. It is a `timeout` when it provably is one (now also the
+ * test codeunit's OnRun trigger), a `runner-refused` error when al-runner refused a surface
+ * (`<Type>: out-of-scope: ...`), and otherwise a `runner-test-error` error. Rows below are the ones
+ * measured on al-runner 2.12.0-main.43f76177 (/coord/handoff/R-534/measure.md), names kept.
+ */
+describe("AlRunnerBackend: an answered row never aborts (R534)", () => {
+  const ONRUN_MESSAGE_20 =
+    "The test codeunit's OnRun trigger exceeded the 20s timeout, so none of its test methods ran.";
+  const hangRef = { codeunitId: 79660, codeunitName: "R534 OnRun Hang", method: "AfterHang" };
+  const hangOpts = { coverage: "none", timeoutMs: 20_000 } as const;
+  // measure.md A1, the one-shot envelope verbatim, with N = the budget (20 s) as LethAL sends it.
+  const onRunExit3 = {
+    tests: [
+      {
+        name: "Codeunit79660.AfterHang",
+        status: "error",
+        durationMs: 20001,
+        message: ONRUN_MESSAGE_20,
+        stackTrace:
+          '"R534 Probe Logic"(CodeUnit 79640).SpinFor line 8 - R534 Probe by LethAL version 1.0.0.0\n"R534 OnRun Hang"(CodeUnit 79660).OnRun(Trigger) line 4 - R534 Probe Tests by LethAL version 1.0.0.0',
+      },
+    ],
+    passed: 0,
+    failed: 0,
+    errors: 1,
+    skipped: 0,
+    total: 1,
+    exitCode: 3,
+    seed: 1953595511,
+    suiteErrors: [
+      {
+        file: "/coord/handoff/R-534/probe/tests",
+        errors: [
+          "tests: TEST-TIMEOUT-ABORT: R534 OnRun Hang (Codeunit79660).AfterHang: watchdog timeout aborted the run — 0 further [Test] method(s) in this codeunit did not run (0 total)",
+        ],
+      },
+    ],
+    wallSeconds: 16.276267,
+  };
+
+  test("T1 REPRO: an OnRun-trigger hang (exit 3) is a timeout in the OnRun, with its reported stop, sent ONCE", async () => {
+    const { calls, spawn } = okSpawn(onRunExit3, 3);
+    const { backend } = await makeBackend(spawn);
+    const v = await runOnce(backend, new SessionSafety(), hangRef, hangOpts);
+    expect([v.outcome, v.reportedStopMs, v.timeoutIn]).toEqual(["timeout", 20_000, "onrun"]);
+    expect(calls.length).toBe(1);
+  });
+
+  test("T1b: a body timeout row, in either measured wording, records timeoutIn body", () => {
+    for (const message of ["Test exceeded 40s timeout.", "TIMEOUT after 30s"]) {
+      const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "error", message }, 10, undefined);
+      expect([v.outcome, v.timeoutIn], message).toEqual(["timeout", "body"]);
+    }
+  });
+
+  // measure.md A, rows HandlerUnused (verbatim), plus the two other shapes al-runner's source
+  // writes as `error` without a test verdict: an unsupported signature and a `skipped` row.
+  const HANDLER_UNUSED = "The following UI handlers were not executed: ConfirmYes";
+  const answeredRows: ReadonlyArray<{ status: string; message?: string }> = [
+    { status: "error", message: HANDLER_UNUSED },
+    { status: "error", message: "unsupported test signature (1 params)" },
+    { status: "skipped" },
+  ];
+
+  test("T3 REPRO: an unexecuted UI handler, an unsupported signature and a skipped row are runner-test-error, completed-accepted, sent ONCE", async () => {
+    for (const row of answeredRows) {
+      const { calls, spawn } = okSpawn(
+        { tests: [{ name: QUALIFIED, durationMs: 71, ...row }], exitCode: 1 },
+        1,
+      );
+      const { backend } = await makeBackend(spawn);
+      const v = await runOnce(backend, new SessionSafety(), ref, {
+        coverage: "none",
+        timeoutMs: 5000,
+      });
+      const label = row.message ?? row.status;
+      expect([v.outcome, v.operation, v.runnerRow], label).toEqual([
+        "error",
+        "completed-accepted",
+        "runner-test-error",
+      ]);
+      expect(v.failureMessage, label).toContain(AL_RUNNER_UNCLASSIFIED_ERROR);
+      expect(v.failureMessage, label).toContain(row.message ?? '"skipped"');
+      expect(v.failureMessage, label).toContain("not re-sent and does not stop the session (R534)");
+      expect(calls.length, label).toBe(1);
+    }
+  });
+
+  test("T4: near-miss timeout wordings stay runner-test-error, never a timeout", () => {
+    for (const message of [
+      "The test codeunit's OnRun trigger exceeded the timeout, so none of its test methods ran.",
+      `${ONRUN_MESSAGE_20} Later`,
+      `TIMEOUT ${ONRUN_MESSAGE_20}`,
+      "An OnAfterTestMethodRun subscriber (codeunit 50100) failed: boom (test result before it: Test exceeded 5s timeout.)",
+      "Test exceeded 5s timeout. extra",
+      // Final review I-A: a user OnBeforeTestMethodRun subscriber raising the timeout wording.
+      // Only `^` refuses these (`$` matches them), so a lost `^` alone would be a false kill.
+      "An OnBeforeTestMethodRun subscriber (codeunit 50100) failed, so the test did not run: NavNCLDialogException: Test exceeded 5s timeout.",
+      `An OnBeforeTestMethodRun subscriber (codeunit 50100) failed, so the test did not run: NavNCLDialogException: ${ONRUN_MESSAGE_20}`,
+    ]) {
+      const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "error", message }, 10, undefined);
+      expect([v.outcome, v.runnerRow, v.reportedStopMs, v.timeoutIn], message).toEqual([
+        "error",
+        "runner-test-error",
+        undefined,
+        undefined,
+      ]);
+    }
+  });
+
+  // measure.md A rows OosInBody and AfterOosOnRun verbatim; the InvalidOperationException row is
+  // the source's Cecil-injected throw (NclCecilRewrite.Reports.cs), same `out-of-scope: ` prefix.
+  const OOS_TASK =
+    "RunnerOutOfScopeException: out-of-scope: TaskScheduler.TaskExists — task-scheduler — the runner has no scheduler and no scheduled-task store, so it cannot say whether a task exists; BC's real body queries the scheduled-task table over a SQL connection that does not exist here. Nothing is ever scheduled: CanCreateTask() is false and CreateTask() is refused by BC's own guard, so no task can have been created either — see docs/scope.md#jobs";
+  const refusals: ReadonlyArray<{ status: string; message: string }> = [
+    { status: "fail", message: OOS_TASK },
+    {
+      status: "fail",
+      message:
+        "InvalidOperationException: out-of-scope: NavReport.Run — reports — see docs/scope.md",
+    },
+    {
+      status: "error",
+      message: `The test codeunit's OnRun trigger failed, so none of its test methods ran (as in BC): ${OOS_TASK}`,
+    },
+  ];
+
+  test("T5: an out-of-scope refusal (any exception type, body or OnRun) is runner-refused, never a kill", async () => {
+    for (const row of refusals) {
+      const { calls, spawn } = okSpawn(
+        { tests: [{ name: QUALIFIED, durationMs: 71, ...row }], exitCode: 1 },
+        1,
+      );
+      const { backend } = await makeBackend(spawn);
+      const v = await runOnce(backend, new SessionSafety(), ref, {
+        coverage: "none",
+        timeoutMs: 5000,
+      });
+      expect([v.outcome, v.operation, v.runnerRow], row.message).toEqual([
+        "error",
+        "completed-accepted",
+        "runner-refused",
+      ]);
+      // The row's own words lead the note (the pre-commitment's B3 reads its start).
+      expect(v.failureMessage?.startsWith(row.message), row.message).toBe(true);
+      expect(calls.length, row.message).toBe(1);
+    }
+  });
+
+  test("T5 near-miss: a user message that merely CONTAINS the phrase stays a fail (a kill)", () => {
+    // The second is final review M-b: a type-shaped word later in the message. Only `^` refuses it.
+    for (const message of [
+      "NavNCLDialogException: expected 3, got out-of-scope: x",
+      "NavNCLDialogException: wrapped Foo: out-of-scope: x",
+    ]) {
+      const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "fail", message }, 10, undefined);
+      expect([v.outcome, v.runnerRow], message).toEqual(["fail", undefined]);
+    }
+  });
+
+  test("T7: a row an exit-3 abort line names, in no known timeout wording, is runner-test-error flagged timeoutWordingUnknown; on exit 1 it is not flagged", async () => {
+    const watchdog = {
+      ...onRunExit3,
+      tests: [{ name: "Codeunit79660.AfterHang", status: "error", message: "Watchdog stop." }],
+    };
+    const proven = await makeBackend(okSpawn(watchdog, 3).spawn);
+    const v = await proven.backend.run(hangRef, hangOpts);
+    expect([v.outcome, v.runnerRow, v.timeoutWordingUnknown]).toEqual([
+      "error",
+      "runner-test-error",
+      true,
+    ]);
+    const { suiteErrors: _, ...noAbort } = watchdog;
+    const plain = await makeBackend(okSpawn({ ...noAbort, exitCode: 1 }, 1).spawn);
+    const w = await plain.backend.run(hangRef, hangOpts);
+    expect([w.outcome, w.runnerRow, w.timeoutWordingUnknown]).toEqual([
+      "error",
+      "runner-test-error",
+      undefined,
+    ]);
   });
 });

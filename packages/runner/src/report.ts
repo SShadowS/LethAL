@@ -594,7 +594,11 @@ export type MutantErrorCause =
   | "reused-budget-stale"
   // R516: a position-1 timeout whose unmutated confirm took more than half the budget it was
   // sent, where that budget was not a reused snapshot's (this run's baseline, or R515's confirm).
-  | "timeout-unconfirmed";
+  | "timeout-unconfirmed"
+  // R534: al-runner ANSWERED with a row that is not a verdict about the mutant, or refused a
+  // surface it does not support. Never re-sent, never a session abort, never a kill.
+  | "runner-test-error"
+  | "runner-refused";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -830,6 +834,30 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "band (a lost kill, never a false one). Not `unstable`: the test passed with no mutant. Not " +
       "`survived`: the mutated run never finished.",
     basis: "R516",
+  },
+  "runner-test-error": {
+    meaning:
+      "al-runner ran the test and answered with a row that is not a verdict about the mutant: an " +
+      "OnRun-trigger failure, an unexecuted UI handler, an unsupported test signature, a " +
+      "`skipped` row, a timeout in wording this build does not know, or no row because the run " +
+      "stopped at an earlier test's timeout. Not measured; never a kill. On bcdev, BC's test " +
+      "runner reports most of these as a failed test. Read the note: it carries al-runner's own " +
+      "message (R534).",
+    entailedNegative:
+      "Not `killed`: al-runner did not report that the test's assertion failed. Not a transport " +
+      "failure: al-runner answered, so the row was not re-sent and the session went on. Not " +
+      "`unstable`: that means the test also fails with no mutant.",
+    basis: "R534",
+  },
+  "runner-refused": {
+    meaning:
+      "The test reached a surface al-runner refuses (`out-of-scope: ...`), so whether the mutant " +
+      "changes its outcome on BC is unknown. Not measured; never a kill. Such a test cannot be " +
+      "measured under al-runner; run it on bcdev (R534).",
+    entailedNegative:
+      "Not `killed`: the failure is al-runner's refusal, not the test's assertion. Not " +
+      "`survived`: the test did not run to its end.",
+    basis: "R534",
   },
 };
 
@@ -3095,7 +3123,8 @@ function summarizeRunnerContexts(
  * R206: the banner's error breakdown. `counts.unstable` keeps counting `unstable` alone; the four
  * R206 causes are listed beside it when non-zero, so a run full of them does not read
  * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
- * when its run's answer was lost. R514 adds `reused-budget-stale`, R516 `timeout-unconfirmed`.
+ * when its run's answer was lost. R514 adds `reused-budget-stale`, R516 `timeout-unconfirmed`,
+ * R534 `runner-test-error` and `runner-refused`.
  */
 function errorBreakdown(r: SessionReport): string {
   const named: MutantErrorCause[] = [
@@ -3106,6 +3135,8 @@ function errorBreakdown(r: SessionReport): string {
     "stop-outcome-unconfirmed",
     "reused-budget-stale",
     "timeout-unconfirmed",
+    "runner-test-error",
+    "runner-refused",
   ];
   const parts: string[] = [];
   for (const cause of named) {

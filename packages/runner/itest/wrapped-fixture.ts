@@ -5,6 +5,8 @@
  * Pre-committed in docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md before any
  * al-runner session on the fixture; the table is R-343's, pre-committed in
  * docs/superpowers/specs/2026-10-08-r343-wrapped-leg-precommitment.md before the changed code ran.
+ * R536 added a wrapped table and a wrapped page with their twins (M0037-M0058), pre-committed in
+ * docs/superpowers/specs/2026-10-09-r536-wrapped-table-page-precommitment.md before any live run.
  * A difference is a finding and a stop: never edit a row to match a run.
  *
  * What it pins:
@@ -44,9 +46,19 @@ const PRE = "src/WrappedPre.Codeunit.al";
 const PRE_TWIN = "src/WrappedPreTwin.Codeunit.al";
 const PAIR_A = "src/WrappedPairA.Codeunit.al";
 const ARMS = "src/WrappedArms.Codeunit.al";
+// R536: a wrapped table (field trigger + procedure) and a wrapped page, each with an unwrapped twin.
+const TRIG = "src/WrappedTrigger.Table.al";
+const TRIG_TWIN = "src/WrappedTriggerTwin.Table.al";
+const VIEW = "src/WrappedView.Page.al";
+const VIEW_TWIN = "src/WrappedViewTwin.Page.al";
 
 /** Admitted wrapped file -> its unwrapped twin. */
-export const TWINS: Readonly<Record<string, string>> = { [TOP]: TOP_TWIN, [PRE]: PRE_TWIN };
+export const TWINS: Readonly<Record<string, string>> = {
+  [TOP]: TOP_TWIN,
+  [PRE]: PRE_TWIN,
+  [TRIG]: TRIG_TWIN,
+  [VIEW]: VIEW_TWIN,
+};
 /** The C1 pair's rows, which follow one of two readings. */
 export const PAIR_CODES: readonly string[] = ["M0004", "M0005", "M0006"];
 
@@ -73,6 +85,8 @@ const row = (
   procedureName: string,
   verdict: WrappedRow["verdict"],
   test?: string,
+  /** R536: the whole covering set, when it is more than the killing (or only) test. Sorted. */
+  covering?: readonly string[],
 ): WrappedRow => ({
   code,
   file,
@@ -81,8 +95,18 @@ const row = (
   procedureName,
   verdict,
   ...(verdict === "killed" && test !== undefined ? { killingTest: test } : {}),
-  coveringTests: verdict === "no-coverage" || test === undefined ? [] : [`${SUITE}.${test}`],
+  coveringTests:
+    verdict === "no-coverage" || test === undefined
+      ? []
+      : (covering ?? [test]).map((t) => `${SUITE}.${t}`),
 });
+
+// R536: a trigger mutant has no member name, so every backend places it by its OBJECT (selection's
+// fallback 1): the tests that ran anything in that object. The table's trigger mutants are
+// therefore covered by both table tests; the page's never-run OnOpenPage by LabelView, which calls
+// `Label` and never opens the page, so those mutants survive.
+const TRIG_TESTS = ["ClampTrigger", "DoubledTrigger"];
+const TRIG_TWIN_TESTS = ["ClampTriggerTwin", "DoubledTriggerTwin"];
 
 /** The spec's table under the "adds" reading (the reading LethAL's own arm choice assumes). */
 export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
@@ -122,6 +146,38 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0034", TOP_TWIN, 32, "empty-block", "Twice", "killed", "TwiceTopTwin"),
   row("M0035", TOP_TWIN, 34, "remove-assignment", "Twice", "killed", "TwiceTopTwin"),
   row("M0036", TOP_TWIN, 36, "return-value", "Twice", "killed", "TwiceTopTwin"),
+  // R536, pre-committed in docs/superpowers/specs/2026-10-09-r536-wrapped-table-page-precommitment.md.
+  row("M0037", TRIG, 19, "empty-block", "", "killed", "ClampTrigger", TRIG_TESTS),
+  row("M0038", TRIG, 20, "conditional-boundary", "", "survived", "ClampTrigger", TRIG_TESTS),
+  row("M0039", TRIG, 21, "remove-assignment", "", "killed", "ClampTrigger", TRIG_TESTS),
+  row("M0040", TRIG, 21, "shift-integer", "", "killed", "ClampTrigger", TRIG_TESTS),
+  row("M0041", TRIG, 35, "empty-block", "Doubled", "killed", "DoubledTrigger"),
+  row("M0042", TRIG, 36, "return-value", "Doubled", "killed", "DoubledTrigger"),
+  row("M0043", TRIG_TWIN, 19, "empty-block", "", "killed", "ClampTriggerTwin", TRIG_TWIN_TESTS),
+  row(
+    "M0044",
+    TRIG_TWIN,
+    20,
+    "conditional-boundary",
+    "",
+    "survived",
+    "ClampTriggerTwin",
+    TRIG_TWIN_TESTS,
+  ),
+  row("M0045", TRIG_TWIN, 21, "remove-assignment", "", "killed", "ClampTriggerTwin", TRIG_TWIN_TESTS),
+  row("M0046", TRIG_TWIN, 21, "shift-integer", "", "killed", "ClampTriggerTwin", TRIG_TWIN_TESTS),
+  row("M0047", TRIG_TWIN, 35, "empty-block", "Doubled", "killed", "DoubledTriggerTwin"),
+  row("M0048", TRIG_TWIN, 36, "return-value", "Doubled", "killed", "DoubledTriggerTwin"),
+  row("M0049", VIEW, 27, "empty-block", "", "survived", "LabelView"),
+  row("M0050", VIEW, 28, "remove-assignment", "", "survived", "LabelView"),
+  row("M0051", VIEW, 28, "flip-boolean-literal", "", "survived", "LabelView"),
+  row("M0052", VIEW, 32, "empty-block", "Label", "killed", "LabelView"),
+  row("M0053", VIEW, 33, "conditional-boundary", "Label", "survived", "LabelView"),
+  row("M0054", VIEW_TWIN, 27, "empty-block", "", "survived", "LabelViewTwin"),
+  row("M0055", VIEW_TWIN, 28, "remove-assignment", "", "survived", "LabelViewTwin"),
+  row("M0056", VIEW_TWIN, 28, "flip-boolean-literal", "", "survived", "LabelViewTwin"),
+  row("M0057", VIEW_TWIN, 32, "empty-block", "Label", "killed", "LabelViewTwin"),
+  row("M0058", VIEW_TWIN, 33, "conditional-boundary", "Label", "survived", "LabelViewTwin"),
 ];
 
 /**
@@ -312,9 +368,9 @@ export function twinDifferences(report: WrappedReport): string[] {
 
 /**
  * R497: one bcdev leg (fenced or hub). One batch, a green baseline, the bcdev table per mutant,
- * strict twin parity, and no coverage refusal naming any of the fixture's objects (codeunits
- * 78900-78949): an admitted file must not be refused, and `WrappedPairB`'s compiled-out key must
- * not refuse `WrappedPairA` (plan r2 A1).
+ * strict twin parity, and no coverage refusal naming any of the fixture's objects (codeunits,
+ * tables and pages 78900-78949, either key case): an admitted file must not be refused, and
+ * `WrappedPairB`'s compiled-out key must not refuse `WrappedPairA` (plan r2 A1).
  */
 export function assertBcWrappedRun(
   report: WrappedReport,
@@ -327,7 +383,7 @@ export function assertBcWrappedRun(
   problems.push(...diffRows(EXPECTED_WRAPPED_BC, wrappedRows(report)));
   problems.push(...twinDifferences(report));
   for (const w of warnings)
-    if (/coverage refused for Codeunit:789\d\d/.test(w)) problems.push(`refusal: ${w}`);
+    if (/coverage refused for (codeunit|table|page):789\d\d/i.test(w)) problems.push(`refusal: ${w}`);
   for (const m of report.mutants)
     if (m.failureNote?.includes("coverage refused"))
       problems.push(`${m.mutantCode} carries a refusal: ${m.failureNote}`);

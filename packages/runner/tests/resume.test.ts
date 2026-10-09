@@ -4,7 +4,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
-import { oneShotLimits } from "../src/al-runner-backend";
+import { oneShotLimits, verdictFromRunnerTest } from "../src/al-runner-backend";
 import { reserveAppVersion } from "../src/app-version";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
@@ -4020,11 +4020,13 @@ class ClockBackend extends CountingBackend {
       if (ms > stop) {
         const { attestation: _, measuredDurationMs: __, ...rest } = v;
         const reported = server.reportedStopMs === undefined ? stop : server.reportedStopMs;
+        // R534: al-runner's body-timeout row (`Test exceeded {N}s timeout.`) is decoded `body`.
         return {
           ...rest,
           outcome: "timeout",
           durationMs: stop + server.restMs,
           ...reportedStop(reported),
+          timeoutIn: "body",
         };
       }
       return { ...v, durationMs: ms + server.restMs, measuredDurationMs: ms };
@@ -4034,8 +4036,15 @@ class ClockBackend extends CountingBackend {
       const limit = oneShotLimits(opts.timeoutMs).testTimeoutSeconds * 1000;
       if (ms > limit) {
         const { attestation: _, measuredDurationMs: __, ...rest } = v;
-        // R517: al-runner's row says which stop fired (`Test exceeded {N}s timeout.`).
-        return { ...rest, outcome: "timeout", durationMs: limit + compile, ...reportedStop(limit) };
+        // R517: al-runner's row says which stop fired (`Test exceeded {N}s timeout.`); R534: in
+        // the test body.
+        return {
+          ...rest,
+          outcome: "timeout",
+          durationMs: limit + compile,
+          ...reportedStop(limit),
+          timeoutIn: "body",
+        };
       }
       return { ...v, durationMs: ms + compile, measuredDurationMs: ms };
     }
@@ -4454,7 +4463,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(15);
+    expect(out.explainSchemaVersion).toBe(16);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {
@@ -5163,6 +5172,95 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect([first?.verdict, first?.cause]).toEqual(["error", "timeout-unconfirmed"]);
     expect(first?.failureNote).toContain(
       "unmutated it completed in 1500 ms by its own figure (1800 ms wall clock) on this backend, more than half its 2600 ms budget",
+    );
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // R534 S2: a timeout in the test codeunit's OnRun trigger is confirmed on the confirm's WALL
+  // clock. al-runner's pass row reports the body only (measured: 66 ms beside a 4 s OnRun), so the
+  // body figure would compare a mutated OnRun with an unmutated ~50 ms body: a false kill.
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * BSlow, decoded by al-runner's own `verdictFromRunnerTest`: under a mutant the OnRun-trigger
+   * timeout row at 20 s (or, `rowMessage: null`, a hand-built timeout with no `timeoutIn`);
+   * unmutated after the first mutant, a pass whose wall clock is `confirmWallMs` and whose body is
+   * 50 ms. The baseline's BSlow takes 100 ms, so the budget is the 20 000 ms floor.
+   */
+  class OnRunClock extends ClockBackend {
+    constructor(
+      private readonly confirmWallMs: number,
+      private readonly rowMessage: string | null,
+    ) {
+      super(100);
+    }
+    override async run(ref: TestMethodRef, o: RunOpts): Promise<TestVerdict> {
+      const v = await super.run(ref, o);
+      if (ref.method !== "BSlow") return v;
+      if (this.active !== null) {
+        if (this.rowMessage === null) {
+          const { attestation: _, measuredDurationMs: __, ...rest } = v;
+          return { ...rest, outcome: "timeout", durationMs: 20_000, reportedStopMs: 20_000 };
+        }
+        const row = { status: "error", message: this.rowMessage };
+        return verdictFromRunnerTest(ref, "Codeunit79100.BSlow", row, 20_500, undefined);
+      }
+      if (this.mutantRuns === 0) return v;
+      const confirm = { status: "pass", durationMs: 50 };
+      return {
+        ...verdictFromRunnerTest(
+          ref,
+          "Codeunit79100.BSlow",
+          confirm,
+          this.confirmWallMs,
+          undefined,
+        ),
+        ...(v.attestation !== undefined ? { attestation: v.attestation } : {}),
+      };
+    }
+  }
+  const ONRUN_20 =
+    "The test codeunit's OnRun trigger exceeded the 20s timeout, so none of its test methods ran.";
+  async function onRunSession(confirmWallMs: number, rowMessage: string | null) {
+    const dirs = await twoTestProject(false);
+    const backend = new OnRunClock(confirmWallMs, rowMessage);
+    const report = await runSession({
+      ...opts(new ResultsStore(":memory:"), dirs),
+      mutantTimeoutMs: 20_000,
+      backend,
+    });
+    return { report, backend };
+  }
+
+  test("R534 S2: an OnRun timeout whose confirm takes 15 s of wall clock (body 50 ms) is timeout-unconfirmed, never a kill", async () => {
+    const { report, backend } = await onRunSession(15_000, ONRUN_20);
+    // The first budget is the floor; R515 then re-budgets from the confirm's wall (2 x 15 s).
+    expect(slowBudgets(backend)[0]).toBe(20_000);
+    expect(falseKills(report, 0)).toEqual([]);
+    const scored = scoredOf(report, 0);
+    expect(scored.length).toBeGreaterThan(0);
+    expect(scored.map((m) => [m.verdict, m.cause])).toEqual(
+      scored.map(() => ["error", "timeout-unconfirmed"]),
+    );
+    expect(scored[0]?.failureNote).toContain("al-runner does not report the OnRun's own time");
+  });
+
+  test("R534 S2 other direction: the same OnRun timeout whose confirm takes 5 s of wall clock is timeout-killed", async () => {
+    const { report } = await onRunSession(5_000, ONRUN_20);
+    const scored = scoredOf(report, 0);
+    expect(scored.length).toBeGreaterThan(0);
+    for (const m of scored) {
+      expect([m.verdict, m.killingTest, m.killPosition]).toEqual(["timeout-killed", "BSlow", 1]);
+    }
+  });
+
+  test("R534 S2 fail-closed: a timeout that does not say where it fired (no timeoutIn) is judged on the wall clock too", async () => {
+    const { report } = await onRunSession(15_000, null);
+    expect(falseKills(report, 0)).toEqual([]);
+    const scored = scoredOf(report, 0);
+    expect(scored.length).toBeGreaterThan(0);
+    expect(scored.map((m) => [m.verdict, m.cause])).toEqual(
+      scored.map(() => ["error", "timeout-unconfirmed"]),
     );
   });
 

@@ -42,6 +42,20 @@
     "errorClass": null
   },
   {
+    "key": "3afe126943d733d84261089f652d03e2b42d9729c2767b04ca266801482eb69a|Wrapped View Twin|OnOpenPage|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3afe126943d733d84261089f652d03e2b42d9729c2767b04ca266801482eb69a|Wrapped View|OnOpenPage|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Wrapped Pre Twin|Grow|lethal.return-value|1",
     "verdict": "survived",
     "killingTest": null,
@@ -98,6 +112,20 @@
     "errorClass": null
   },
   {
+    "key": "473f8aabd89fb3776cd184869a26a1c95377d88cd9b8b6de8951a4d5feaddea4|Wrapped Trigger Twin|Doubled|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "DoubledTriggerTwin",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "473f8aabd89fb3776cd184869a26a1c95377d88cd9b8b6de8951a4d5feaddea4|Wrapped Trigger|Doubled|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "DoubledTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52|Wrapped Pre Twin|Grow|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "GrowPreTwin",
@@ -122,6 +150,34 @@
     "key": "556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52|Wrapped Top|Grow|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "GrowTop",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Wrapped View Twin|OnOpenPage|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "637aa2af14e55ecf9861ea851a23f1ede61feeb72f8de7759d4fe738d201f242|Wrapped View|OnOpenPage|lethal.flip-boolean-literal|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Wrapped Trigger Twin|OnValidate|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "ClampTriggerTwin",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Wrapped Trigger|OnValidate|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "ClampTrigger",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -196,6 +252,20 @@
     "errorClass": null
   },
   {
+    "key": "8bd53cb7fe5412a1d8ab6df47d159ec458ee1fdbdb91b9f6beadf46514c1a80b|Wrapped View Twin|Label|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "LabelViewTwin",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8bd53cb7fe5412a1d8ab6df47d159ec458ee1fdbdb91b9f6beadf46514c1a80b|Wrapped View|Label|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "LabelView",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "9223e82ad7544c25083f5b08316d3c99343c1fd6ff40da16b8d09c55a9a1a837|Wrapped Arms|Pick|lethal.conditional-boundary|1",
     "verdict": "no-coverage",
     "killingTest": null,
@@ -204,6 +274,48 @@
   },
   {
     "key": "9223e82ad7544c25083f5b08316d3c99343c1fd6ff40da16b8d09c55a9a1a837|Wrapped Pair|Pick|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "96a63130808135b948b1586ff3955d7a0691ff1d8a86e6c03212ba73831d4f29|Wrapped Trigger Twin|OnValidate|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "ClampTriggerTwin",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "96a63130808135b948b1586ff3955d7a0691ff1d8a86e6c03212ba73831d4f29|Wrapped Trigger|OnValidate|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "ClampTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9fa418bd3099628824821473c3620b498265ca9993ee9e1dff7d52a97f4c600f|Wrapped Trigger Twin|OnValidate|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ClampTriggerTwin",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9fa418bd3099628824821473c3620b498265ca9993ee9e1dff7d52a97f4c600f|Wrapped Trigger|OnValidate|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ClampTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ba313d6fdbc3283a56e6a1edc914d1263266d1fd2f3f483465b1a86ea2ea0397|Wrapped View Twin|OnOpenPage|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ba313d6fdbc3283a56e6a1edc914d1263266d1fd2f3f483465b1a86ea2ea0397|Wrapped View|OnOpenPage|lethal.remove-assignment|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
@@ -220,6 +332,34 @@
     "key": "e0227de3081ca2802aff69f83c9c34df2332781f4eb548dca858bad5f4f9c193|Wrapped Pre|Twice|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "TwicePre",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e0227de3081ca2802aff69f83c9c34df2332781f4eb548dca858bad5f4f9c193|Wrapped Trigger Twin|Doubled|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "DoubledTriggerTwin",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e0227de3081ca2802aff69f83c9c34df2332781f4eb548dca858bad5f4f9c193|Wrapped Trigger|Doubled|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "DoubledTrigger",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ed2fa8a3e6af59a97c9da7d0b611469c269023ed0c05c110ac25dac23c118010|Wrapped View Twin|Label|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "ed2fa8a3e6af59a97c9da7d0b611469c269023ed0c05c110ac25dac23c118010|Wrapped View|Label|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -246,6 +386,20 @@
   },
   {
     "key": "f48256d2232900b052c4f5d1051d47aa0ecd6ffd925bd33c5a526b4c44333cca|Wrapped Top|Grow|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "fc15ec3036dca5e21a2e79675b48f28e5815811f32dff4eb3426e0ff803575bb|Wrapped Trigger Twin|OnValidate|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "fc15ec3036dca5e21a2e79675b48f28e5815811f32dff4eb3426e0ff803575bb|Wrapped Trigger|OnValidate|lethal.conditional-boundary|1",
     "verdict": "survived",
     "killingTest": null,
     "coverageFiltered": false,
