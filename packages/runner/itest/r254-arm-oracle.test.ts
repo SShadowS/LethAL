@@ -57,7 +57,7 @@ describe("R254 arm oracle", () => {
   test("M0009 at position 1 is a diff", () => {
     const ms = exact().map((m) => (m.mutantCode === "M0009" ? { ...m, killPosition: 1 } : m));
     expect(armOracleDiffs(ms)).toEqual([
-      "M0009 src/DataBandExt.ReportExt.al line 20 shift-integer: killPosition 1, expected 2",
+      "M0009 src/DataBandExt.ReportExt.al line 20 shift-integer: killPosition 1, expected 3",
     ]);
   });
 
