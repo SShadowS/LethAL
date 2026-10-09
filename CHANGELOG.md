@@ -686,6 +686,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The assertion screen reads past al-runner's exception-type prefix** (R553). al-runner writes
+  every failure as `<Type>Exception: <message>`, so the screen found no `Assert.` text on any
+  al-runner kill and reported `vacuous` where bcdev, on the same kills, reported `partial`. On the
+  al-runner backend the screen now reads the message with ONE leading `...Exception: ` removed; bcdev
+  is unchanged, and the stored `killingTestFailure` is never rewritten. The backend is told by a new
+  optional `kind` that each backend declares (stream schema gains it), not by `authoritative`. A
+  `vacuous` al-runner screen whose killed kills include text without that prefix gets a note that
+  names the backend as a possible cause, instead of blaming the suite.
+- **bcdev no longer writes `lethal-control.app` into `packageCachePath`** (R552). The control
+  symbol is staged in the private compile copy's own `.lethal-symbols` directory and passed to alc
+  as a second package-cache path; `scripts/campaign/compile-only.ts` does the same. A
+  `lethal-control.app` an older LethAL left in the cache gets one warning (safe to delete) and is
+  never touched. A `;` or `,` in either path is refused before alc runs.
 - **al-runner: a test row al-runner reports as `error` no longer aborts the session** (R534). A
   hang in a test codeunit's OnRun trigger is scored `timeout` and confirmed unmutated on the
   confirm's wall time (al-runner does not report the OnRun's own time). An unexecuted UI handler, a

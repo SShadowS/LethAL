@@ -100,8 +100,11 @@ The bcdev path requires this order on the container (Cronus281):
    publish (a missing or incompatible harness fails the session loudly, never a silent bad verdict).
 2. The **instrumented sandbox target** — the bcdev backend compiles it in a private staging copy
    with the `LethAL Control` dependency injected into the staged `app.json` and `lethal-control.app`
-   staged into the package cache (bcdev-only — al-runner shares the emit path and strips the two
-   control-registration codeunits, so it stays dependency-free).
+   staged into that copy's own `.lethal-symbols` directory, which alc gets as a second
+   `/packagecachepath:` entry after the configured cache (bcdev-only — al-runner shares the emit
+   path and strips the two control-registration codeunits, so it stays dependency-free). Since R552
+   the configured `packageCachePath` is only read: a `lethal-control.app` an older LethAL left there
+   gets one warning and is never touched, and is safe to delete.
 3. **`sandbox-tests`**, then **`sandbox-probes`**.
 
 ### Attestation fence (the correctness guarantee)

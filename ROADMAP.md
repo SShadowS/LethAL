@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**76 of 550 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**74 of 550 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -593,8 +593,8 @@ that ordering is the priority.
 - **R543** · al-runner: a `<ctor>` or `<OnBeforeCodeunitRun>` row still aborts the whole session through "no test named ..." · [R543.md](docs/roadmap/R543.md) · open, filed 2026-10-09
 - **R544** · al-runner `--server`: an OnRun hang at the BASELINE ends the suite and silently shrinks the green set and its coverage · [R544.md](docs/roadmap/R544.md) · open, filed 2026-10-09
 - **R546** · al-runner vs BC verdict agreement has never been measured on a real project: the owner sees mutants survive on one backend and not the other · [R546.md](docs/roadmap/R546.md) · done (5c2d3a39)
-- **R552** · bcdev stages `lethal-control.app` INTO the configured `packageCachePath`, so pointing it at a project's own `.alpackages` changes that folder · [R552.md](docs/roadmap/R552.md) · open
-- **R553** · The assertion screen is vacuous on al-runner (every kill's text starts with an exception type), and its note then blames the suite's assertion style · [R553.md](docs/roadmap/R553.md) · open
+- **R552** · bcdev stages `lethal-control.app` INTO the configured `packageCachePath`, so pointing it at a project's own `.alpackages` changes that folder · [R552.md](docs/roadmap/R552.md) · done (<commit>)
+- **R553** · The assertion screen is vacuous on al-runner (every kill's text starts with an exception type), and its note then blames the suite's assertion style · [R553.md](docs/roadmap/R553.md) · done (<commit>)
 
 ---
 
