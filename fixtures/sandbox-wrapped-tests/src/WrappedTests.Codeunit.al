@@ -145,4 +145,24 @@ codeunit 78950 "Wrapped Tests"
         if View.Label(7) <> 'big' then
             Error('Label(7) must be big');
     end;
+
+    // R545: the wrapped page EXTENSION's procedure, called on a variable of the extended page
+    // (never opened), and its unwrapped twin.
+    [Test]
+    procedure ScaledXtra()
+    var
+        View: Page "Wrapped View";
+    begin
+        if View.Scaled(4) <> 40 then
+            Error('Scaled(4) must be 40');
+    end;
+
+    [Test]
+    procedure ScaledXtraTwin()
+    var
+        View: Page "Wrapped View Twin";
+    begin
+        if View.Scaled(4) <> 40 then
+            Error('Scaled(4) must be 40');
+    end;
 }

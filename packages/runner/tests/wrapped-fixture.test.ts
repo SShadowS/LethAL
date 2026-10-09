@@ -95,7 +95,7 @@ describe("R-300b: sandbox-wrapped", () => {
     return built;
   };
 
-  it("gives the pre-committed 58 mutants in one batch (R-343, R536)", () => {
+  it("gives the pre-committed 70 mutants in one batch (R-343, R536, R545)", () => {
     expect(get().rows).toEqual(
       EXPECTED_WRAPPED.map(
         (r) => `${r.code} ${r.file} ${r.line} ${r.operatorName} ${r.procedureName}`,
@@ -103,7 +103,7 @@ describe("R-300b: sandbox-wrapped", () => {
     );
   });
 
-  it("admits WrappedTop, WrappedPre, WrappedPairA, WrappedTrigger and WrappedView; refuses WrappedArms; skips WrappedPairB", async () => {
+  it("admits WrappedTop, WrappedPre, WrappedPairA, WrappedTrigger, WrappedView and WrappedXtra; refuses WrappedArms; skips WrappedPairB", async () => {
     const index = await buildAlRunnerCoverageIndex(get().dir, {
       symbols: ["WRAPAPP", ...WRAPPED_SYMBOLS, ...predefined.symbols],
     });
@@ -113,6 +113,7 @@ describe("R-300b: sandbox-wrapped", () => {
       "wrappedtop.codeunit.al",
       "wrappedtrigger.table.al",
       "wrappedview.page.al",
+      "wrappedxtra.pageext.al",
     ]);
     expect(index.refusedFiles).toEqual(["WrappedArms.Codeunit.al"]);
     expect(index.skippedFiles).toEqual(["wrappedarms.codeunit.al", "wrappedpairb.codeunit.al"]);
@@ -225,7 +226,7 @@ function bcReportOf(rows: typeof EXPECTED_WRAPPED): WrappedReport {
 }
 
 describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline)", () => {
-  it("a bcdev build gives the pre-committed 58 mutants, and its line map refuses none of them", async () => {
+  it("a bcdev build gives the pre-committed 70 mutants, and its line map refuses none of them", async () => {
     const root = await mkdtemp(join(tmpdir(), "lethal-r497-fixture-"));
     try {
       const set = await generateMutationSet(WRAPPED_PROJECT_DIR, {
@@ -252,7 +253,7 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
       ).toEqual(EXPECTED_WRAPPED_BC.map((r) => `${r.code} ${r.file} ${r.line} ${r.operatorName}`));
       // The deployed batch's line map under the bcdev build's symbols: every fixture object is
       // mapped, none refused (A1: WrappedPairB's compiled-out 78905 does not refuse WrappedPairA;
-      // R536: the wrapped table and page and their twins).
+      // R536: the wrapped table and page and their twins; R545: the page extension and its twin).
       const symbols = await effectiveBuildSymbols(WRAPPED_PROJECT_DIR, WRAPPED_SYMBOLS, undefined, {
         kind: "bcdev",
       });
@@ -262,6 +263,8 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
         "table:78908",
         "page:78909",
         "page:78910",
+        "pageextension:78911",
+        "pageextension:78912",
       ]);
       const map = await buildLineMap(dir, declared, symbols);
       expect([...map.refusedByKey().keys()].filter((k) => declared.has(k))).toEqual([]);
@@ -275,6 +278,8 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
         ["WrappedTriggerTwin.Table.al", "Table", 78908, "Doubled"],
         ["WrappedView.Page.al", "Page", 78909, "Label"],
         ["WrappedViewTwin.Page.al", "Page", 78910, "Label"],
+        ["WrappedXtra.PageExt.al", "PageExtension", 78911, "Scaled"],
+        ["WrappedXtraTwin.PageExt.al", "PageExtension", 78912, "Scaled"],
       ] as const) {
         const at = await lineOf(file, `procedure ${name}(`);
         expect(at).toBeGreaterThan(0);
