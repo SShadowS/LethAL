@@ -1,86 +1,101 @@
-[
-  {
-    "key": "08b5df0c6213325221a366d8032c0fe4713b3b1fe95a37656c29cc9ef9b8dc65|Multi B|Unreached|lethal.return-value|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Multi B|Reached|lethal.return-value|1",
-    "verdict": "killed",
-    "killingTest": "ReachedBothWays",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "473f8aabd89fb3776cd184869a26a1c95377d88cd9b8b6de8951a4d5feaddea4|Multi Control|Double|lethal.empty-block|1",
-    "verdict": "killed",
-    "killingTest": "ControlDoubles",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52|Multi B|Reached|lethal.empty-block|1",
-    "verdict": "killed",
-    "killingTest": "ReachedBothWays",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "7614385dd80401244ba54b3318153ca3f2bb8db19e67ced84e921dc7c0e801d7|Multi A|Never|lethal.swap-additive|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Multi B|Reached|lethal.return-value|1",
-    "verdict": "killed",
-    "killingTest": "ReachedBothWays",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Multi B|Reached|lethal.swap-additive|1",
-    "verdict": "killed",
-    "killingTest": "ReachedBothWays",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "a75c8d5c57533c2919fb66da9ae2c5d5a15b02f9e5dea53154756d69ced184a2|Multi B|Unreached|lethal.empty-block|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "ac06335609aef4800dd5c6830fca2c69faa9ec8d89d2a1e14619d81ea1ea1e5f|Multi A|Never|lethal.empty-block|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "b60a3ce789948937255ffa390b4172e39691ccd13ffb170adff41c994676f805|Multi A|Never|lethal.return-value|1",
-    "verdict": "no-coverage",
-    "killingTest": null,
-    "coverageFiltered": true,
-    "errorClass": null
-  },
-  {
-    "key": "e0227de3081ca2802aff69f83c9c34df2332781f4eb548dca858bad5f4f9c193|Multi Control|Double|lethal.return-value|1",
-    "verdict": "killed",
-    "killingTest": "ControlDoubles",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "f48256d2232900b052c4f5d1051d47aa0ecd6ffd925bd33c5a526b4c44333cca|Multi B|Reached|lethal.conditional-boundary|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  }
-]
+{
+  "identityScheme": 38,
+  "entries": [
+    {
+      "key": "08b5df0c6213325221a366d8032c0fe4713b3b1fe95a37656c29cc9ef9b8dc65|Multi B|Unreached|lethal.return-value|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Multi B|Reached|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "ReachedBothWays",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "473f8aabd89fb3776cd184869a26a1c95377d88cd9b8b6de8951a4d5feaddea4|Multi Control|Double|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "ControlDoubles",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52|Multi B|Reached|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "ReachedBothWays",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "7614385dd80401244ba54b3318153ca3f2bb8db19e67ced84e921dc7c0e801d7|Multi A|Never|lethal.swap-additive|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "37cc5dcb0153624c9eb377f2f81d4f7e2768af42718ccbcd1392b71df234adae"
+    },
+    {
+      "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Multi B|Reached|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "ReachedBothWays",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Multi B|Reached|lethal.swap-additive|1",
+      "verdict": "killed",
+      "killingTest": "ReachedBothWays",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "35b49207abf6429f63f388a2ea7fbddf79a3cf595ca14afb9a29a7cbb81ee903"
+    },
+    {
+      "key": "a75c8d5c57533c2919fb66da9ae2c5d5a15b02f9e5dea53154756d69ced184a2|Multi B|Unreached|lethal.empty-block|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "ac06335609aef4800dd5c6830fca2c69faa9ec8d89d2a1e14619d81ea1ea1e5f|Multi A|Never|lethal.empty-block|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "b60a3ce789948937255ffa390b4172e39691ccd13ffb170adff41c994676f805|Multi A|Never|lethal.return-value|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "e0227de3081ca2802aff69f83c9c34df2332781f4eb548dca858bad5f4f9c193|Multi Control|Double|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "ControlDoubles",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "f48256d2232900b052c4f5d1051d47aa0ecd6ffd925bd33c5a526b4c44333cca|Multi B|Reached|lethal.conditional-boundary|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "3f5f83b8d8c65510ab00dec0525a9476e4bf942ceecc395b66e31f40934e4da3"
+    }
+  ]
+}
