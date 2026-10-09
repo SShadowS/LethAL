@@ -1,5 +1,12 @@
 [
   {
+    "key": "00ed47bf355eb62ca9cc531725c7c9cc461fbad7fdb090000f7ce22f563e963a|Data Band Ext|CountBand|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "BandCountsFromLow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "011800dc3dc096db219e3ab1e9c8fa68ff80c5820a45247198b4fe96d636c4b4|Data Filter Ops|CountDecoyOrTarget|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "DroppedPlaceholderFreeAlternativeChangesTheCount",
@@ -378,6 +385,13 @@
     "errorClass": null
   },
   {
+    "key": "26535d339402dd7cf986723d403031f284c7cedf3e656ff5e5013c6bd1ab8cd2|Data Band Ext|CountBand|lethal.remove-setrange|1",
+    "verdict": "killed",
+    "killingTest": "BandCountsFromLow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "26725a0933de87fd5079866a6ab5244e23e170884960325c02c5d378ec5e2e6f|Data Filter Ops|CountDecoyOrTarget|lethal.flip-filter-literal|1",
     "verdict": "killed",
     "killingTest": "DroppedPlaceholderFreeAlternativeChangesTheCount",
@@ -640,6 +654,13 @@
     "key": "3afe10ce8658f8de551bb09af57eb19026f2b30e323192a1f224b096db80c695|Data Find Ops|LastLevelInRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "FindLastPicksTheHighestKeyInRange",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Data Band Ext|CountBand|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "BandCountsFromLow",
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -2166,6 +2187,13 @@
     "key": "be99bd808e7c564330214c222affe4f78d23be74eeab76b0dab9fcf755f0176a|Data Ops|RequireCategoryA|lethal.remove-testfield|1",
     "verdict": "killed",
     "killingTest": "RequireCategoryAFails",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c1cb148a6657320ac66aa04aaf8a7bf1ef8ba8ec8dc2ea09696982f715797214|Data Band Ext|CountBand|lethal.remove-setrange|1",
+    "verdict": "killed",
+    "killingTest": "BandCountsFromLow",
     "coverageFiltered": false,
     "errorClass": null
   },
