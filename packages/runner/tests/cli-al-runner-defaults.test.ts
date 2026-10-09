@@ -707,6 +707,15 @@ codeunit 50103 B
 #endif
 `;
 const TWO_OBJECTS = "codeunit 50104 P\n{\n}\ncodeunit 50105 Q\n{\n}\n";
+// R407: a multi-object project runs the frame probe; these pin the REFUSED path, as on c39ad5de.
+const REFUSED_FRAME_PROBE = async () =>
+  ({
+    outcome: "refused",
+    transport: "server",
+    build: "al-runner v2.12.0-main.c39ad5de",
+    refusal: "label-outside-bundle",
+    reason: "labelled src/R407Pair.Table.al",
+  }) as const;
 
 async function alProject(files: Record<string, string>): Promise<string> {
   const dir = scratch("lethal-r387-guard-");
@@ -718,6 +727,7 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
   const cfg = (_dir: string): LethalConfigFile => ({
     alRunner: { alRunnerPath: "a", coverage: "al-runner" },
   });
+  const refused = { frameProbe: REFUSED_FRAME_PROBE };
 
   test("a single #if-wrapped object falls back to none, with one warning naming the file", async () => {
     const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
@@ -732,11 +742,14 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
   test("a multi-object file falls back to none", async () => {
     const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS });
     const warned: string[] = [];
-    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l), refused);
     expect(out.alRunner?.coverage).toBe("none");
     expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
     // R383: the warning names the REAL reason, al-runner's frame for later objects, not #3713.
     expect(warned[0]).toContain("every object after a file's first at the wrong line");
+    // R407: and the probe's own outcome and the build it ran against.
+    expect(warned[0]).toContain("label-outside-bundle: labelled src/R407Pair.Table.al");
+    expect(warned[0]).toContain("al-runner build: al-runner v2.12.0-main.c39ad5de");
     expect(warned[0]).not.toContain("R300");
   });
 
@@ -745,7 +758,7 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
       "codeunit 50104 P\n{\n}\n#if FEATURE\ncodeunit 50105 Q\n#else\ncodeunit 50105 Q\n#endif\n{\n    procedure Q()\n    begin\n    end;\n}\n";
     const dir = await alProject({ "Split.Codeunit.al": split });
     const warned: string[] = [];
-    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l), refused);
     expect(out.alRunner?.coverage).toBe("none");
     expect(warned).toHaveLength(1);
     expect(warned[0]).toContain("Split.Codeunit.al (more than one object)");
@@ -754,7 +767,7 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
   test("R383: a multi-object file beside a wrapped one: ONE warning naming both, with both reasons", async () => {
     const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS, "B.Codeunit.al": TWO_ARM });
     const warned: string[] = [];
-    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l), refused);
     expect(out.alRunner?.coverage).toBe("none");
     expect(warned).toHaveLength(1);
     expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
@@ -775,7 +788,7 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
     const warned: string[] = [];
     const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l));
-    expect(out.alRunner?.coverage).toBe("none");
+    expect(out.config.alRunner?.coverage).toBe("none");
     expect(warned.filter((l) => l.startsWith("[lethal] al-runner settings:"))).toHaveLength(1);
     expect(warned).toHaveLength(2);
   });
@@ -796,8 +809,11 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     const snapshot = await readTargetSource(dir);
     await writeFile(join(dir, "Two.Codeunit.al"), "codeunit 50104 P\n{\n}\n", "utf8");
     const warned: string[] = [];
-    const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l), snapshot);
-    expect(out.alRunner?.coverage).toBe("none");
+    const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l), {
+      snapshot,
+      ...refused,
+    });
+    expect(out.config.alRunner?.coverage).toBe("none");
     expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
   });
 
@@ -806,8 +822,8 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     const snapshot = await readTargetSource(dir);
     await writeFile(join(dir, "Two.Codeunit.al"), TWO_OBJECTS, "utf8");
     const warned: string[] = [];
-    const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l), snapshot);
-    expect(out.alRunner?.coverage).toBe("al-runner");
+    const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l), { snapshot });
+    expect(out.config.alRunner?.coverage).toBe("al-runner");
     expect(warned.filter((l) => l.includes("al-runner-coverage-unsupported"))).toEqual([]);
   });
 
@@ -878,6 +894,7 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
             bannerOnStdout: true,
           }),
           runAlRunnerCanary: async () => CANARY,
+          alRunnerFrameProbe: REFUSED_FRAME_PROBE,
           buildBackend: async (_p, configFile, _s, _d, _deps, _ids, source) => {
             coverage = configFile.alRunner?.coverage;
             built = source;

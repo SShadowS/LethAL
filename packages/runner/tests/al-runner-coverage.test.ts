@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import {
+  AlRunnerCoverageFrameError,
   alRunnerCoverageFrom,
   alRunnerCoverageFromServer,
   alRunnerCoverageSupport,
@@ -490,12 +491,26 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
     expect([...index.byFile.keys()]).toEqual(["foo.codeunit.al"]);
     expect(alRunnerCoverageFrom(rows, index).entries).toEqual([]);
     expect(alRunnerCoverageFromServer(server, index).entries).toEqual([]);
-    // Admitted (tests only), the same hit resolves to src/Foo's own first object: the stop-list
-    // does not block an index that was let in.
-    const admittedIndex = await buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true });
+    // Admitted, the same hit resolves to src/Foo's own first object: the stop-list does not block
+    // an index that was let in. R407: an admitted file's label must name a file inside the bundle,
+    // so here the labels are the bundle's own (relative to `labelBase`, and absolute).
+    const admittedIndex = await buildAlRunnerCoverageIndex(dir, {
+      admitMultiObjectFiles: true,
+      labelBase: dir,
+    });
     const own = [{ objectType: "Codeunit", objectId: 50151, procedure: "Reached", line: 6 }];
-    expect(alRunnerCoverageFrom(rows, admittedIndex).entries).toEqual(own);
-    expect(alRunnerCoverageFromServer(server, admittedIndex).entries).toEqual(own);
+    const inBundle = [{ file: "src/Foo.Codeunit.al", line: 6, hits: 1 }];
+    expect(alRunnerCoverageFrom(inBundle, admittedIndex).entries).toEqual(own);
+    const absServer: ServerPerTestCoverage = {
+      test: "Codeunit50140.T",
+      coverage: [
+        {
+          file: join(dir, "src/Foo.Codeunit.al"),
+          statements: [{ line: 6, hits: 1, scope: "Reached" }],
+        },
+      ],
+    };
+    expect(alRunnerCoverageFromServer(absServer, admittedIndex).entries).toEqual(own);
   });
 
   test("a file holding a wrapped ENUM is refused too, though an enum has no coverage identity", async () => {
@@ -736,13 +751,16 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
 
 /**
  * R383 infrastructure: multi-object files, both transports, through an index built with
- * `admitMultiObjectFiles`. Production does NOT admit them (al-runner v2.12.0-main.c39ad5de reports
- * later objects in the wrong frame; see the real-frame evidence test), so these pin the resolver for
- * the day it does: every row resolved by POSITION (`resolveFileLine`) from the INSTRUMENTED file
- * frame before a procedure is looked up. The probe inputs below come from an UNinstrumented probe
- * app, where the compiled text is the source, so the frame defect cannot show in them.
+ * `admitMultiObjectFiles`. Production admits them only when the R407 frame probe admits the
+ * al-runner build (v2.12.0-main.c39ad5de reported later objects in the wrong frame; see the
+ * real-frame evidence test). These pin the resolver: every row resolved by POSITION
+ * (`resolveFileLine`) from the INSTRUMENTED file frame before a procedure is looked up. The probe
+ * inputs below come from an UNinstrumented probe app, where the compiled text is the source, so the
+ * frame defect cannot show in them. R407: relative labels resolve against the bundle itself
+ * (`labelBase`), as if al-runner ran there, so they name files inside it.
  */
-const admitted = (dir: string) => buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true });
+const admitted = (dir: string) =>
+  buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true, labelBase: dir });
 
 /** The probe's own `two/app/Two.Codeunit.al`, verbatim. A: 1-11, B: 13-23 (bases 1 and 12). */
 const PROBE_TWO = `codeunit 50100 ProbeA
@@ -795,6 +813,7 @@ const PROBE_S1 = `<coverage line-rate="0.2857" branch-rate="0" lines-covered="4"
   </packages>
 </coverage>`;
 
+const PROBE_ROOT = "C:/Users/SShadowS/AppData/Local/Temp/claude/r383probe";
 /** The probe's `server-two.json`, test `OnlyB`, trimmed to the fields LethAL reads. */
 const PROBE_SERVER_ONLY_B = {
   test: "Codeunit50110.OnlyB",
@@ -848,11 +867,17 @@ describe("R383: a multi-object file's rows resolve by position, on both transpor
 
   test("--server: the probe's OnlyB record covers B.RunB only (LF, CRLF, BOM)", async () => {
     for (const [label, src] of variantsOf(PROBE_TWO)) {
-      const index = await admitted(await bundle({ "two/app/Two.Codeunit.al": src }));
-      expect([label, alRunnerCoverageFromServer(PROBE_SERVER_ONLY_B, index).entries]).toEqual([
-        label,
-        ONLY_B,
-      ]);
+      const dir = await bundle({ "two/app/Two.Codeunit.al": src });
+      const index = await admitted(dir);
+      // R407: the probe's absolute paths re-rooted at this bundle, so they name files inside it.
+      const record = {
+        ...PROBE_SERVER_ONLY_B,
+        coverage: PROBE_SERVER_ONLY_B.coverage.map((f) => ({
+          ...f,
+          file: f.file.replace(PROBE_ROOT, dir),
+        })),
+      };
+      expect([label, alRunnerCoverageFromServer(record, index).entries]).toEqual([label, ONLY_B]);
     }
   });
 
@@ -1209,24 +1234,49 @@ describe("R383: the --server procedure rule (r3 Design 3)", () => {
     }
   });
 
-  test("a disagreeing scope: POSITION wins, the statement is kept, and one warning names it", async () => {
+  test("R407: in an ADMITTED multi-object file a disagreeing scope throws instead of letting position win", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const index = await admitted(await bundle({ "two/app/Two.Codeunit.al": PROBE_TWO }));
+      const disagree = serverOne("two/app/Two.Codeunit.al", [
+        { scope: "RunA", line: 19 },
+        { scope: "RunB", line: 20 },
+      ]);
+      expect(() => alRunnerCoverageFromServer(disagree, index)).toThrow(AlRunnerCoverageFrameError);
+      // The message names file and line as `<file>:<line>`; matched by pattern (R117's line check).
+      expect(() => alRunnerCoverageFromServer(disagree, index)).toThrow(
+        /Two\.Codeunit\.al.19 "RunA", but that line is inside "RunB", in an admitted multi-object file/,
+      );
+      expect(warn).not.toHaveBeenCalled();
+      // Agreeing scopes in the same file pass.
+      const agree = serverOne("two/app/Two.Codeunit.al", [{ scope: "RunB", line: 20 }]);
+      expect(alRunnerCoverageFromServer(agree, index).entries).toEqual([
+        { objectType: "Codeunit", objectId: 50101, procedure: "RunB", line: 9 },
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a disagreeing scope in a SINGLE-object file: POSITION wins, the statement is kept, and one warning names it", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const onlyB = PROBE_TWO.slice(PROBE_TWO.indexOf("codeunit 50101"));
+    try {
+      const index = await admitted(await bundle({ "two/app/B.Codeunit.al": onlyB }));
       const map = alRunnerCoverageFromServer(
-        serverOne("two/app/Two.Codeunit.al", [
-          { scope: "RunA", line: 19 },
-          { scope: "RunB", line: 20 },
+        serverOne("two/app/B.Codeunit.al", [
+          { scope: "RunA", line: 7 },
+          { scope: "RunB", line: 8 },
         ]),
         index,
       );
       expect(map.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50101, procedure: "RunB", line: 7 },
         { objectType: "Codeunit", objectId: 50101, procedure: "RunB", line: 8 },
-        { objectType: "Codeunit", objectId: 50101, procedure: "RunB", line: 9 },
       ]);
       const said = warn.mock.calls.map((c) => String(c[0]));
       expect(said).toHaveLength(1);
-      for (const part of ["two/app/Two.Codeunit.al", "19", "RunA", "RunB"]) {
+      for (const part of ["two/app/B.Codeunit.al", "7", "RunA", "RunB", "the position wins"]) {
         expect(said[0]).toContain(part);
       }
     } finally {

@@ -1,0 +1,133 @@
+{
+  "_note": "R-407 step 1 (copied from /coord/handoff/R-407/captures/43f76177-server-same.json): al-runner v2.12.0-main.43f76177 --server driven through LethAL's AlRunnerServer (defaultServerSpawn), daemon argv [al-runner, --server, --test-timeout, 120], runTests {sourcePaths: [<bundle>, <tests>], testIsolation: test, coverage: true, perTestCoverage: true}, SAME app id as the source project, the layout of cobertura-43f76177-reached-both-ways.xml. All three tests passed. Per-test coverage trimmed to the MultiPair file; statements verbatim; the scratch prefix replaced by <scratch>.",
+  "perTestCoverage": [
+    {
+      "test": "Codeunit79850.CallsNever",
+      "coverage": [
+        {
+          "file": "<scratch>/work/inst/active/MultiPair.Codeunit.al",
+          "statements": [
+            {
+              "id": 0,
+              "scope": "Never",
+              "line": 8,
+              "column": 4,
+              "endLine": 8,
+              "endColumn": 36,
+              "hits": 1
+            },
+            {
+              "id": 4,
+              "scope": "Never",
+              "line": 10,
+              "column": 13,
+              "endLine": 10,
+              "endColumn": 45,
+              "hits": 1
+            },
+            {
+              "id": 9,
+              "scope": "Never",
+              "line": 14,
+              "column": 13,
+              "endLine": 14,
+              "endColumn": 45,
+              "hits": 1
+            },
+            {
+              "id": 14,
+              "scope": "Never",
+              "line": 20,
+              "column": 9,
+              "endLine": 20,
+              "endColumn": 21,
+              "hits": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "test": "Codeunit79850.ReachedBothWays",
+      "coverage": [
+        {
+          "file": "<scratch>/work/inst/active/MultiPair.Codeunit.al",
+          "statements": [
+            {
+              "id": 0,
+              "scope": "Reached",
+              "line": 33,
+              "column": 4,
+              "endLine": 33,
+              "endColumn": 36,
+              "hits": 2
+            },
+            {
+              "id": 4,
+              "scope": "Reached",
+              "line": 35,
+              "column": 13,
+              "endLine": 35,
+              "endColumn": 45,
+              "hits": 2
+            },
+            {
+              "id": 11,
+              "scope": "Reached",
+              "line": 40,
+              "column": 13,
+              "endLine": 40,
+              "endColumn": 45,
+              "hits": 2
+            },
+            {
+              "id": 18,
+              "scope": "Reached",
+              "line": 45,
+              "column": 13,
+              "endLine": 45,
+              "endColumn": 45,
+              "hits": 2
+            },
+            {
+              "id": 25,
+              "scope": "Reached",
+              "line": 50,
+              "column": 13,
+              "endLine": 50,
+              "endColumn": 45,
+              "hits": 2
+            },
+            {
+              "id": 32,
+              "scope": "Reached",
+              "line": 57,
+              "column": 12,
+              "endLine": 57,
+              "endColumn": 18,
+              "hits": 2
+            },
+            {
+              "id": 33,
+              "scope": "Reached",
+              "line": 58,
+              "column": 13,
+              "endLine": 58,
+              "endColumn": 25,
+              "hits": 1
+            },
+            {
+              "id": 34,
+              "scope": "Reached",
+              "line": 59,
+              "column": 9,
+              "endLine": 59,
+              "endColumn": 17,
+              "hits": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

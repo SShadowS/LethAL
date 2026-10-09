@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**76 of 550 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**75 of 550 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -565,7 +565,7 @@ that ordering is the priority.
 - **R395** · al-runner's `--server` path runs the whole suite under ONE long deadline, so a hung test becomes an error after at least 10 minutes rather than a per-test timeout, and no live gate checks an al-runner hang · [R395.md](docs/roadmap/R395.md) · open, filed 2026-10-01 (a stated limit)
 - **R397** · A hard-killed lethal run can leave its al-runner --server daemon running: no signal handler closes the backend, and Windows does not kill a child with its parent · [R397.md](docs/roadmap/R397.md) · closed 2026-10-02: measured, does not reproduce. al-runner v2.12.0's --server daemon exits within 5 s when…
 - **R406** · R393's control test (b), CI unset, fails under load: the late call lands while bun runs another test concurrently and toMatchSnapshot throws · [R406.md](docs/roadmap/R406.md) · done (63677f0a)
-- **R407** · Admit multi-object files to al-runner coverage once upstream fixes the source-base frame defect · [R407.md](docs/roadmap/R407.md) · open, blocked on upstream: al-runner v2.12.0-main.c39ad5de reports every object after a file's first in a…
+- **R407** · Admit multi-object files to al-runner coverage once upstream fixes the source-base frame defect · [R407.md](docs/roadmap/R407.md) · done (09ebef20): itest:alrunner PASS on 43f76177 (pre-commitment e4561cbe + addendum 3e1ed1a2)
 - **R409** · On Linux, Bun's os.homedir() ignores a HOME set at run time, so the unit-test fake home (R264) does not reach any product default · [R409.md](docs/roadmap/R409.md) · done (a1e0a7c9)
 - **R410** · redact-campaign-report's first-party proof cannot find a Windows-made report's mutant files on Linux (`src\X.al` is one file name there) · [R410.md](docs/roadmap/R410.md) · done (b9ce5250)
 - **R411** · Unit tests pin project-relative paths in the Windows form (`src\X.al`), so they fail on Linux where the product writes `src/X.al` · [R411.md](docs/roadmap/R411.md) · done (3217c6bf)
