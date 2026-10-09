@@ -221,8 +221,14 @@ export function coarseIdentityTupleOf(
  * operators gain its sites and Tier 1 cedes the ones Tier 2 claims, and a new or ceded mutant
  * earlier in a procedure moves a same-tuple twin's ordinal (BC.History: 4 keys; fixtures, CDO, DC
  * and DO: none).
+ * 35: R500, the dispatch check also refuses `Date` items, one-hop callees of open-item code in other
+ * objects (codeunits, records, interface implementers, event subscribers), outside filter calls on
+ * an open item, and two stated limits (a preset exit name's writes, a self-inserting item's own
+ * filter), so a later same-tuple twin of a refused mutant takes its ordinal (measured against master
+ * 15c3a620, BC.History: 23,944 deployed mutants removed, 165 keys; CDO and DO 2 removed, 0 keys;
+ * fixtures and DC: none).
  */
-export const IDENTITY_SCHEME = 34;
+export const IDENTITY_SCHEME = 35;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
