@@ -2047,13 +2047,6 @@ export function loopConditionReadsByName(
 }
 
 /**
- * R-364's gate: is `node` inside an object the symbol table does not index (`unindexedObjects`,
- * R343), where no declaration outside a trigger's own `var` section can resolve? Its OWN enclosing
- * object, matched by file and span, never by wrapper identity or by offset alone (offsets repeat
- * across files). Objects in `unparsedObjects`, failed headers and other unindexed members are out
- * of scope and keep the declaration-only rule.
- */
-/**
  * R340 (plan r2, review C1): a write to a name the enclosing TRIGGER declares in its own header
  * (a parameter, its named return, or any header local) that the hang path cannot resolve as a
  * declaration (`triggerScopeVar` reads only the plain `var` section), matched by NAME against the
@@ -2088,6 +2081,13 @@ export function loopReadsNameAt(node: ALSyntaxNode, name: string, ctx: SemanticC
   return loopConditionReadsByName(node, { receiver: null, member: name }, ctx);
 }
 
+/**
+ * R-364's gate: is `node` inside an object the symbol table does not index (`unindexedObjects`,
+ * R343), where no declaration outside a trigger's own `var` section can resolve? Its OWN enclosing
+ * object, matched by file and span, never by wrapper identity or by offset alone (offsets repeat
+ * across files). Objects in `unparsedObjects`, failed headers and other unindexed members are out
+ * of scope and keep the declaration-only rule.
+ */
 function inUnindexedObject(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const unindexed = ctx.symbols.unindexedObjects;
   if (unindexed.length === 0) return false;

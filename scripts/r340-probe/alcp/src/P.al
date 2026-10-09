@@ -15,6 +15,30 @@ page 92800 "PP"
                     Message('%1', Z + Z);
                 end;
             }
+            usercontrol(Ctl; "PAddIn")
+            {
+                trigger Ready(Z: Integer)
+                begin
+                    TakeInts(Q, Z); // POS usercontrol event trigger parameter (build review M2)
+                    Message('%1', Z + Z);
+                end;
+            }
+        }
+    }
+    actions
+    {
+        area(Processing)
+        {
+            action(Act)
+            {
+                trigger OnAction()
+                var
+                    Q, Z: Integer;
+                begin
+                    TakeInts(Q, Z); // POS page action trigger (build review M2: the most common header trigger)
+                    Message('%1', Z + Z);
+                end;
+            }
         }
     }
     var

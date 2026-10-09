@@ -148,7 +148,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refuses a swap whose argument an enclosing loop reads (a `var` write redirected away from the
   loop's variable never ends), in procedures too: BaseApp 560, DC 84, DO 20, CDO 9 such sites are
   no longer emitted. History, `--resume` and equivalence marks recorded under scheme 36 are not
-  carried: a swap can now pick a different argument pair under an unchanged identity key.
+  carried: a swap can now pick a different argument pair under an unchanged identity key. Known
+  residual, as in procedures: a loop whose progress goes through a call argument or an indirect flag
+  is not hang-checked (R196's exclusions, R531).
 
 - **Tier 2 claims record calls inside a `reportextension`** (R463). A record the extension declares
   and a data item it adds (`addfirst`/`addlast`/`addafter`/`addbefore`) now resolve, so

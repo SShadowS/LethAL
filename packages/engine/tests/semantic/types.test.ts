@@ -616,8 +616,9 @@ ${local}
     expect(typeAt(src(WRAPPED, "AMT"), "Amt")).toBeNull();
   });
   // R340 (review I2): a `#if` INSIDE the plain var section, its arms declaring the name with
-  // different types. Unlike WRAPPED (whose name is not a plain local at all), only the header's
-  // `#if`-region rule keeps this unknown.
+  // different types: an outcome pin. What keeps it unknown is that `collectVarDeclarations` reads
+  // direct children only, so neither arm's declaration enters `locals` (the header `#if`-region rule
+  // is unreachable for this shape; R-340 red-check, revert 3).
   it("a #if inside the plain var section (arms disagree): unknown", () => {
     const INNER = "    var\n#if X\n        Amt: Integer;\n#else\n        Amt: Text;\n#endif";
     expect(typeAt(src(INNER, "AMT"), "Amt")).toBeNull();

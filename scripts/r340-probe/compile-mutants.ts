@@ -4,12 +4,14 @@
 // `Z - Z`; if alc resolved Z to the Text field instead, that mutant would fail (AL0175). This generates
 // with this checkout, instruments every emitted mutant behind its guard into ONE project, and compiles
 // it with alc against a bcdev symbol cache plus the LethAL Control symbol file, as a real deploy does.
-// Measured 2026-10-09: 12 `Z - Z` mutants (table, table field, page, page field, page parameter,
-// pageextension x2, tableextension, report data items x2, request page, TableNo codeunit; the xmlport
-// is not instrumented), and the instrumented project COMPILES.
+// Measured 2026-10-09: 14 `Z - Z` mutants (table, table field, page, page field, page parameter,
+// page action `OnAction`, usercontrol event parameter, pageextension x2, tableextension, report data
+// items x2, request page, TableNo codeunit; the xmlport is not instrumented), and the instrumented
+// project COMPILES. The batch is completed by the runner's own `prepareBatchProject` (app.json
+// stamped, every file without sites and every resource copied), as a real deploy does.
 // Usage (repo root): bun scripts/r340-probe/compile-mutants.ts <out dir> <bcdev lethal.config json>
 //   The config is read only for `bcdev.packageCachePath` and `bcdev.controlSymbolPath`.
-import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { ArtifactCompiler, defaultArtifactIo } from "../../packages/runner/src/artifact";
 import { validateBcDevConfig } from "../../packages/runner/src/cli";
@@ -18,6 +20,7 @@ import {
   identityOrdinalsOf,
   operatorTiers,
   planArtifacts,
+  prepareBatchProject,
 } from "../../packages/runner/src/orchestrator";
 import { defaultAlToolPaths } from "../../packages/runner/src/publisher";
 import { writeInstrumentedProject } from "../../packages/schemata/src/index";
@@ -61,7 +64,7 @@ const control = JSON.parse(
 app.dependencies = [
   { id: control.id, name: control.name, publisher: control.publisher, version: control.version },
 ];
-await writeFile(join(dir, "app.json"), JSON.stringify(app, null, 2));
+await prepareBatchProject(proj, dir, app, "1.0.0.0");
 const bcdev = validateBcDevConfig(JSON.parse(await readFile(configPath, "utf8")).bcdev);
 const tools = await defaultAlToolPaths();
 if (!tools) throw new Error("no alc under the AL Language extension");
