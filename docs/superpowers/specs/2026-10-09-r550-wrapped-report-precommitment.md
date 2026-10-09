@@ -1,5 +1,21 @@
 # R-550 pre-commitment: a wrapped report in `fixtures/sandbox-wrapped`
 
+## r2 (2026-10-09, after the first BC record run was BLOCKED; written BEFORE the gate re-runs)
+The r1 BC run (Cronus28, lease 056) was a BLOCK: `BandYRun`/`BandYRunTwin` failed the fenced baseline and errored under
+every RunMutant run. The orchestrator-approved diagnostic (`/coord/handoff/R-550/diag.md`, failure text verbatim) found
+the cause: `Sorry, the current permissions prevented the action. (TableData 78915 Wrapped Band Row Insert: LethAL
+Sandbox Wrapped Tests)` at `SeedBandRows`, i.e. the tests codeunit ran under restrictive TEST permissions in the
+RunMutant path (it never wrote before). **Fix (arm only): `TestPermissions = Disabled;` on `codeunit 78950 "Wrapped
+Tests"`, tests app 1.0.0.4**, the setting `sandbox-data-tests` declares with its own measurement (a real suite declares
+it). Nothing else changes: same target, same mutants M0071-M0098, same replacements.
+
+**Every prediction in §4 is UNCHANGED** (verdicts, killers, covering sets, pinned failure texts, totals bcdev 60 / 38 /
+0 and al-runner 58 / 37 / 3 over 98). Evidence seen before this r2, stated so it is not mistaken for a prediction: the
+diagnostic's fenced leg, scoped to the report file, scored the four `Band` mutants killed by `BandYDirect` with the
+pinned texts (r1 rows M0079-M0082 as predicted). Not yet seen live on BC: whether `RunModal` runs this report in the
+fenced session (the insert failed first). If it does not, that is a STOP (r1 §6), not a re-prediction. R-545's rows and
+al-runner's 58 / 37 / 3 (already measured on the pre-fix tests app) must hold unchanged after the fix.
+
 Written 2026-10-09, BEFORE any live run of the R-550 fixture change (branch `lethal/r550`, plan r2 adopted on master
 as `docs/superpowers/plans/2026-10-09-r550-wrapped-report-arm.md`). It extends the R-545 pre-commitment (bcf4ca32);
 every row pinned before (M0001-M0070) is unchanged. A difference in a live run is a finding and a STOP, never a
