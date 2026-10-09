@@ -94,11 +94,12 @@ describe("R501: openItemHangRefuses", () => {
     expect(openItemHangRefuses(stringLit(), ctx)).toBe(false);
   });
 
-  it("a context without `files` answers 'extended': the item is open and every site refused", () => {
+  it("a context without `files` throws (R500: the one-hop callee rule needs every object), whatever the site", () => {
     const { ctx, stringLit, literal } = setup();
     const { files: _files, ...noFiles } = ctx;
-    expect(openItemHangRefuses(stringLit(), noFiles)).toBe(true);
-    // MaxIteration still holds without `files`: an engine cap no extension can lift.
-    expect(openItemHangRefuses(literal("6"), noFiles)).toBe(false);
+    expect(() => openItemHangRefuses(stringLit(), noFiles)).toThrow(/R500: .*`files`/);
+    // a MaxIteration item's site throws too: no answer is read from a context missing objects
+    expect(() => openItemHangRefuses(literal("6"), noFiles)).toThrow(/R500: .*`files`/);
+    expect(openItemHangRefuses(literal("6"), ctx)).toBe(false);
   });
 });

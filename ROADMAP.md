@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**61 of 526 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**73 of 541 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -117,7 +117,7 @@ that ordering is the priority.
 - **R296** · itest:tables' assertMatchesBaseline fails with a bare Error: the per-mutant difference lines never reach the output · [R296.md](docs/roadmap/R296.md) · done (b2085e51)
 - **R297** · `printWithRewrites` refuses two real corpora with 'overlapping rewrites': a wide rewrite span collides with a nested zero-width insert · [R297.md](docs/roadmap/R297.md) · done (0185b3a); whole BaseApp UNMET (parser and manifest-serialization limits, see [[R292]] and [[R311]])
 - **R298** · An object declaration wrapped in `preproc_conditional_object` defeats `enclosingObjectDeclaration`, so the injector throws instead of instrumenting or filtering the file · [R298.md](docs/roadmap/R298.md) · closed 2026-10-05 — no sites lost; about 7,140 BaseApp sites (0.31%) run without coverage, which is R300's…
-- **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · open, filed 2026-09-28; al-runner half landed 2026-10-06 (597be6e9), the BC paths still refuse
+- **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · done (e02c874b)
 - **R301** · A split-header procedure (`preproc_split_procedure`) has no reach-latch owner, so the injector throws · [R301.md](docs/roadmap/R301.md) · done (4575882..4da7a01); remaining gaps moved to R302 and R309
 - **R399** · Undecided-#if and not-instrumentable rows in excludedSites do not make the report's reliability narrowed, while R-307's refused rows do · [R399.md](docs/roadmap/R399.md) · done (15609994)
 - **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · done (db641338..234cb4b1)
@@ -210,7 +210,8 @@ that ordering is the priority.
 - **R495** · A session without an env-tool hook records the pre-lease served test-app hash without proving it is the installed one · [R495.md](docs/roadmap/R495.md) · done (98748740)
 - **R496** · `test_app_hash` hashes only the test app's bytes: two proven runs whose hook-published dependency changed still match · [R496.md](docs/roadmap/R496.md) · done (47179723)
 - **R499** · Outstanding stop requests are not drained before a score is published · [R499.md](docs/roadmap/R499.md) · done (193257c8)
-- **R500** · Report-loop hang shapes R487's blanket rule does not cover: code before the item, other-object callees, table and Date items, XMLport Integer elements, outside reportextensions · [R500.md](docs/roadmap/R500.md) · open, filed 2026-10-07
+- **R536** · BC scores `#if`-wrapped tables and pages on a codeunit-only measurement; `lethal verify` names wrapped objects as no-coverage after a run scored them · [R536.md](docs/roadmap/R536.md) · open, filed 2026-10-09
+- **R500** · Report-loop hang shapes R487's blanket rule does not cover: code before the item, other-object callees, table and Date items, XMLport Integer elements, outside reportextensions · [R500.md](docs/roadmap/R500.md) · done (58a9fd1b)
 - **R501** · Condition-side mutants of a report data item's exit guard, and removing the exit itself, can hang an open Integer item · [R501.md](docs/roadmap/R501.md) · done (85b94713)
 - **R502** · The receiver resolver reads a namespace-qualified data item table (`System.Utilities.Integer`) as its first segment · [R502.md](docs/roadmap/R502.md) · done (4a82d91a)
 - **R503** · The runMany watchdog's GetOperationStatus poll has no timeout, so a poll BC never answers holds the call forever · [R503.md](docs/roadmap/R503.md) · done (c637f2dd)
@@ -230,10 +231,23 @@ that ordering is the priority.
 - **R516** · A fresh baseline's position-1 timeout is scored with no unmutated confirm · [R516.md](docs/roadmap/R516.md) · done (a29e3187)
 - **R517** · al-runner `--server`: a timeout is judged on the suite's wall clock against a 60 s in-run limit LethAL never set · [R517.md](docs/roadmap/R517.md) · done (b89f2f34)
 - **R518** · al-runner one-shot: a test timeout exits 3, was scored `error` and retried, and the second error aborted the whole session · [R518.md](docs/roadmap/R518.md) · done (cef943c2)
+- **R520** · Report-loop hang refusal follows other-object callees one hop only: a callee's own calls into a third object are not refused · [R520.md](docs/roadmap/R520.md) · open, filed 2026-10-08
 - **R534** · al-runner: an unclassified `error` row (an OnRun-trigger hang, a RunnerOutOfScopeException) aborts the whole session under spec §11. Should it? · [R534.md](docs/roadmap/R534.md) · done (<commit>)
+- **R521** · Report-loop hang refusal cannot type RecordRef, Variant, parameter, array-element, Report/Page or namespaced-interface receivers, so their callees are not refused · [R521.md](docs/roadmap/R521.md) · open, filed 2026-10-08
+- **R522** · Report-loop hang refusal does not see callee objects wrapped in `#if` (they are not object declarations to it) · [R522.md](docs/roadmap/R522.md) · open, filed 2026-10-08
+- **R523** · Report-loop hang refusal does not follow table triggers that open-item code fires (`Insert(true)`, `Modify(true)`, `Validate`, `Rename`) · [R523.md](docs/roadmap/R523.md) · open, filed 2026-10-08
+- **R524** · Report-loop hang refusal follows events raised by open-item code and by one-hop callees only, not events raised deeper · [R524.md](docs/roadmap/R524.md) · open, filed 2026-10-08
 - **R540** · al-runner refusals R534 does not match (`BcShapeGapException`, `BcAppSymbolReadException`, a refusal trapped by a `[TryFunction]`) can still score a kill or a pass · [R540.md](docs/roadmap/R540.md) · open, filed 2026-10-09
+- **R525** · Report-loop hang refusal does not cross apps: interface implementers and event subscribers in another app are not refused · [R525.md](docs/roadmap/R525.md) · open, filed 2026-10-08
 - **R541** · al-runner auto-discovers `tests/expectations`: a manifest can turn a pass into `fail` (a false kill) or a failure into `pass` (a lost kill) · [R541.md](docs/roadmap/R541.md) · open, filed 2026-10-09
+- **R526** · Report-loop hang refusal ignores `interface B extends A`: a receiver typed A does not reach implementers of B · [R526.md](docs/roadmap/R526.md) · open, filed 2026-10-08
 - **R542** · al-runner: a `fail` row whose exception type AL cannot raise (`NullReferenceException`, `NotImplementedException`) is an al-runner bug, but is scored a kill · [R542.md](docs/roadmap/R542.md) · open, filed 2026-10-09
+- **R527** · Report-loop hang refusal does not follow `Codeunit.Run` or `Report.Run` targets called from open-item code · [R527.md](docs/roadmap/R527.md) · open, filed 2026-10-08
+- **R528** · Report-loop hang refusal does not match events published by a tableextension (keyed to the extension, raised on the base table) · [R528.md](docs/roadmap/R528.md) · open, filed 2026-10-08
+- **R529** · Self-inserting report items: an insert made from another object is not seen, so the item's own filter is not protected · [R529.md](docs/roadmap/R529.md) · open, filed 2026-10-08
+- **R530** · Self-inserting report items: a bound set in a callee or in OnPreReport is not protected · [R530.md](docs/roadmap/R530.md) · open, filed 2026-10-08
+- **R531** · A loop that ends only by consuming its record set (`while Rec.FindFirst() do ... Rec.Delete()`) is not hang-refused anywhere · [R531.md](docs/roadmap/R531.md) · open, filed 2026-10-08
+- **R532** · Preset report exit names: a value computed in another object, or passed through another variable, is not refused · [R532.md](docs/roadmap/R532.md) · open, filed 2026-10-08
 
 ## Product gaps a real project hits
 
@@ -375,8 +389,9 @@ that ordering is the priority.
 - **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · closed 2026-10-05 — neither shape reaches the prefix proof today: no Tier-2 claim is made inside a…
 - **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files; correction: the extension's members ARE mutated…
 - **R489** · explain's covering tests are not ordered by duration: no measurement shows a per-test baseline duration is stable enough to rank by · [R489.md](docs/roadmap/R489.md) · open
-- **R497** · BC paths score `#if`-wrapped objects (fenced under H1a, hub by name), and the line map's H1b rule is wrong for a bare object after a wrapper · [R497.md](docs/roadmap/R497.md) · open, filed 2026-10-07
+- **R497** · BC paths score `#if`-wrapped objects (fenced under H1a, hub by name), and the line map's H1b rule is wrong for a bare object after a wrapper · [R497.md](docs/roadmap/R497.md) · done (e02c874b)
 - **R498** · A hook session whose test app carries no `.al` never proves its identity, so it never resumes, skips or reuses · [R498.md](docs/roadmap/R498.md) · open, filed 2026-10-07
+- **R535** · A nested `#if` object wrapper is refused by name on every coverage path: BaseApp has 2 such files (70 sites), unmeasured · [R535.md](docs/roadmap/R535.md) · open, filed 2026-10-09
 
 ## Backends and tooling
 

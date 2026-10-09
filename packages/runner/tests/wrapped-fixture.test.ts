@@ -6,16 +6,19 @@ import { writeInstrumentedProject } from "@lethal/schemata";
 import {
   ARMS_REFUSAL,
   EXPECTED_WRAPPED,
+  EXPECTED_WRAPPED_BC,
   PAIR_CODES,
   PAIR_REPLACES,
   WRAPPED_PROJECT_DIR,
   WRAPPED_SELECTOR_IDS,
   WRAPPED_SYMBOLS,
   type WrappedReport,
+  assertBcWrappedRun,
   assertWrappedRun,
   twinDifferences,
 } from "../itest/wrapped-fixture";
 import { alRunnerCoverageFrom, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
+import { buildLineMap } from "../src/line-map";
 import {
   generateMutationSet,
   identityOrdinalsOf,
@@ -23,6 +26,7 @@ import {
   planArtifacts,
   prepareBatchProject,
 } from "../src/orchestrator";
+import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 import { AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0 } from "../src/preprocessor-symbols";
 
 /**
@@ -203,5 +207,71 @@ describe("R-300b: the wrapped leg's checker", () => {
       }),
     };
     expect(() => assertWrappedRun(silent, "t", [])).toThrow("not refused by name");
+  });
+});
+
+/** A bcdev report whose rows are exactly `rows`: no refusal notes. */
+function bcReportOf(rows: typeof EXPECTED_WRAPPED): WrappedReport {
+  const r = reportOf(rows);
+  return {
+    ...r,
+    mutants: r.mutants.map((m) => {
+      const { failureNote: _f, ...rest } = m;
+      return rest;
+    }),
+  };
+}
+
+describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline)", () => {
+  it("a bcdev build gives the pre-committed 36 mutants, and its line map refuses none of them", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-r497-fixture-"));
+    try {
+      const set = await generateMutationSet(WRAPPED_PROJECT_DIR, {
+        preprocessorSymbols: WRAPPED_SYMBOLS,
+        backend: { kind: "bcdev" },
+      });
+      const [batch, ...more] = planArtifacts(set.files, {});
+      if (batch === undefined || more.length > 0) throw new Error("expected exactly one batch");
+      const dir = join(root, "batch-0");
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: batch,
+        identityOrdinals: identityOrdinalsOf(set),
+        selectorIds: WRAPPED_SELECTOR_IDS,
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: "4b0f3c1e-8d27-4a52-9e61-3c5d7a9b2f10",
+        operatorTiers,
+      });
+      const written = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+        mutants: { mutantId: string; file: string; startLine: number; operatorName: string }[];
+      };
+      expect(
+        written.mutants.map((m) => `${m.mutantId} ${m.file} ${m.startLine} ${m.operatorName}`),
+      ).toEqual(EXPECTED_WRAPPED_BC.map((r) => `${r.code} ${r.file} ${r.line} ${r.operatorName}`));
+      // The deployed batch's line map under the bcdev build's symbols: every fixture codeunit is
+      // mapped, none refused (A1: WrappedPairB's compiled-out 78905 does not refuse WrappedPairA).
+      const symbols = await effectiveBuildSymbols(WRAPPED_PROJECT_DIR, WRAPPED_SYMBOLS, undefined, {
+        kind: "bcdev",
+      });
+      const declared = new Set(
+        [78901, 78902, 78903, 78904, 78905, 78906].map((id) => `codeunit:${id}`),
+      );
+      const map = await buildLineMap(dir, declared, symbols);
+      expect([...map.refusedByKey().keys()].filter((k) => declared.has(k))).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the checker passes the table, and refuses a WrappedArms refusal or a 78905 refusal", () => {
+    expect(() => assertBcWrappedRun(bcReportOf(EXPECTED_WRAPPED_BC), "t", [])).not.toThrow();
+    // Direction 1: al-runner's table (WrappedArms refused) is NOT the bcdev table.
+    expect(() => assertBcWrappedRun(reportOf(EXPECTED_WRAPPED), "t", [])).toThrow("M0001");
+    // Direction 2: a refusal naming the fixture's compiled-out pair key fails the leg.
+    expect(() =>
+      assertBcWrappedRun(bcReportOf(EXPECTED_WRAPPED_BC), "t", [
+        "[lethal] coverage refused for Codeunit:78905 (WrappedPairB.Codeunit.al): ...",
+      ]),
+    ).toThrow("refusal");
   });
 });

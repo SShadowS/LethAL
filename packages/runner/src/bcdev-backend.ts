@@ -323,6 +323,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // R298 (`coverageMode: "procedure"`, the hub): refused declared objects, `type:id` -> reason, by
   // the line map's rule. `buildCoverageMap` drops every method id of one, named or not.
   private hubRefused: ReadonlyMap<string, string> = new Map();
+  // R497: the session's effective build symbols (`useBuildSymbols`). With them the line map and the
+  // hub refusals admit the measured `#if`-wrapped shapes; without them (`lethal verify`, which hands
+  // none over) every wrapped file stays refused, as before.
+  private buildSymbols: readonly string[] | undefined;
   // R58 (`coverageMode: "fenced"` only): the `SetFilter` expression over `Code Coverage."Object ID"`
   // this batch's artifact declares — see `coverageObjectIdFilterOf`.
   private coverageObjectIdFilter: string | undefined;
@@ -658,7 +662,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
     this.methodIndex = await AppMethodIndex.fromAppFile(appPath);
     const keys = manifestObjectKeys(manifest.mutants);
     if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
-      this.lineMap = await buildLineMap(instrumentedDir, this.methodIndex.declaredObjects());
+      this.lineMap = await buildLineMap(
+        instrumentedDir,
+        this.methodIndex.declaredObjects(),
+        this.buildSymbols,
+      );
       this.checkFencedManifest(keys, this.lineMap);
       this.nameRefusals(this.lineMap.refusedByKey());
       this.coverageObjectIdFilter = await coverageObjectIdFilterOf(instrumentedDir);
@@ -680,6 +688,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         artifact.alSources,
         this.methodIndex.declaredObjects(),
         artifact.renamedMemberNames,
+        this.buildSymbols,
       );
       this.checkFencedManifest(artifact.manifestObjectKeys, this.lineMap);
       this.nameRefusals(this.lineMap.refusedByKey());
@@ -727,10 +736,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
       );
     }
     const declared = methodIndex.declaredObjects();
-    const all = await coverageRefusedFromSources(sources);
+    const all = await coverageRefusedFromSources(sources, this.buildSymbols);
     assertManifestObjectsDeclared(manifestKeys, declared, undefined, new Set(all.keys()));
     this.hubRefused = new Map([...all].filter(([key]) => declared.has(key)));
     this.nameRefusals(this.hubRefused);
+  }
+
+  /** R497: the session's effective build symbols, handed over by `runSession` before any deploy. */
+  useBuildSymbols(symbols: readonly string[]): void {
+    this.buildSymbols = [...symbols];
+  }
+
+  /**
+   * R497 A2: every object this batch's coverage index refuses, whatever the reason, so selection
+   * refuses it too: one the source admits but the INSTRUMENTED parse refuses would otherwise send
+   * its table-trigger mutants to the all-green fallback. Read by `runSession` after each deploy.
+   */
+  async coverageRefusals(): Promise<ReadonlyMap<string, string>> {
+    return this.lineMap?.refusedByKey() ?? this.hubRefused;
   }
 
   /**
