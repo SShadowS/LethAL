@@ -127,8 +127,8 @@ beforeAll(async () => {
 });
 
 describe("R-405 (a): a newly admitted same-tuple twin moves a key", () => {
-  test("the identity scheme is 36 (8 for this key move, 9 R307, 10 R196, 11 R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20, 23 and 31 unused, 21 R459, 22 R-464, 24 R475, 25 R446, 26 R477, 27 R480, 28 R484, 29 R-300b, 30 R487, 32 R509, 33 R501, 34 R343, 35 R500, 36 R497)", () => {
-    expect(IDENTITY_SCHEME).toBe(36);
+  test("the identity scheme is 37 (8 for this key move, 9 R307, 10 R196, 11 R295/R294, 13 R455, 14 R454, 16 R-364, 17 R254, 18 R-458, 19 R468, 20, 23 and 31 unused, 21 R459, 22 R-464, 24 R475, 25 R446, 26 R477, 27 R480, 28 R484, 29 R-300b, 30 R487, 32 R509, 33 R501, 34 R343, 35 R500, 36 R497, 37 R340)", () => {
+    expect(IDENTITY_SCHEME).toBe(37);
   });
 
   test("under [X] B.Modify() takes ordinal 0 and A.Modify()'s key moves to ordinal 1", () => {

@@ -527,7 +527,8 @@ describe("sessionFingerprint (R47)", () => {
   // scheme 33. It moved again for R500 (scheme 35, Date items, one-hop callees and the stated
   // limits); it was 16607059...1e76 under scheme 34. It moved again for R497 (scheme 36, #if-wrapped
   // objects of the measured shapes are scored on the BC paths); it was 400af96f...8760 under scheme 35.
-  const PINNED = "7f7b02f90bfe3a53fb3465c2896c00584b3214aa8c9355a667610e09a717181f";
+  // It moved again for R340 (scheme 37, trigger header names typed); it was 7f7b02f9...181f under scheme 36.
+  const PINNED = "9d5d97b372f52b45e9468079550599669070e935558b37624d06a1d9028691ce";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2172,8 +2173,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
     // sites move twins). 34 is R343 (a wrapped object the build compiles is indexed). 35 is R500
     // (Date items, one-hop callees, subscribers and the two stated limits are hang-refused). 36 is
-    // R497 (#if-wrapped objects of the measured shapes are scored on the BC paths).
-    expect(IDENTITY_SCHEME).toBe(36);
+    // R497 (#if-wrapped objects of the measured shapes are scored on the BC paths). 37 is R340 (trigger header names typed).
+    expect(IDENTITY_SCHEME).toBe(37);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
