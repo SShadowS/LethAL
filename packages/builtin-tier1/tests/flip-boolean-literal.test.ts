@@ -443,13 +443,13 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     expect(tagged({ "M.al": mgt, "O.al": withCu })).toEqual(["true->false -", "false->true -"]);
   });
 
-  // F15 (R479, sol final r1). The reportextension case (outside the claimable object kinds, so every
-  // bare record call there counts as unresolved) still honours both exclusions, both directions:
-  // - an added dataitem on Par: tagged (the control); on a Par that DECLARES `Modify`, the call is
-  //   Par's own procedure, untagged. Revert: drop the `projectDeclaresProcedureOnTable` check.
-  // - `with Mgt do`, Mgt a codeunit declared in the extension: untagged. Revert: drop the
-  //   `withSubjectIsNonRecord` check.
-  it("keeps a reportextension's bare project procedure and codeunit `with` untagged", () => {
+  // F15 (R479, sol final r1; R-463). Since R-463 an added dataitem on Par RESOLVES (the extension is
+  // a claimable object kind): `Modify(true)` is ceded to `swap-modify-flag` and `Modify(false)` on a
+  // Par without triggers is untagged, exactly like F14's page. Red: drop `reportextension` from
+  // receiver.ts's OBJECT_KINDS (both flips come back tagged). On a Par that DECLARES `Modify` the
+  // call is Par's own procedure, untagged. `with Mgt do`, Mgt a codeunit declared in the extension:
+  // untagged. Revert: drop the `withSubjectIsNonRecord` check.
+  it("resolves a reportextension's added dataitem; its bare project procedure and codeunit `with` stay untagged", () => {
     const rx = (body: string, vars = "") =>
       `reportextension 50315 "RX2" extends "Customer - List" { dataset { add(Customer) { dataitem(ParItem; "Par") { trigger OnAfterGetRecord() ${vars} begin ${body} end; } } } }`;
     const both = "Modify(true); Modify(false);";
@@ -457,10 +457,7 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     // project and walks a real table (bounded), so the R-452 metadata below is unchanged. With the
     // base ABSENT the added item counts as open and every flip is refused (the open twin, last).
     const B = `report 50316 "Customer - List" { dataset { dataitem(Customer; Customer) { } } }`;
-    expect(tagged({ "P.al": par(""), "B.al": B, "O.al": rx(both) })).toEqual([
-      "true->false run-trigger-skipped-modify",
-      "false->true run-trigger-forced",
-    ]);
+    expect(tagged({ "P.al": par(""), "B.al": B, "O.al": rx(both) })).toEqual(["false->true -"]);
     const own = par("    procedure Modify(Run: Boolean) begin end;\n");
     expect(tagged({ "P.al": own, "B.al": B, "O.al": rx(both) })).toEqual([
       "true->false -",
@@ -491,17 +488,22 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     expect(tagged(files)).toEqual(["true->false -", "true->false -", "true->false -"]);
   });
 
-  // F11 (R-254, review R-254-001). Inside a `reportextension` (admitted by R-254) the receiver is
-  // treated as UNRESOLVED for tagging, so every RunTrigger flip keeps its tag even on a `Par` with
-  // no triggers. Controls: the same calls from a codeunit keep today's behaviour (resolved receiver,
-  // no trigger, untagged). Revert: `receiverUnresolved` returns false outside `OBJECT_KINDS`.
-  it("KEEPS the RunTrigger tags inside a reportextension (receiver unresolved for tagging)", () => {
+  // F11 (R-254, review R-254-001; R-463). Inside a `reportextension` a receiver the extension
+  // DECLARES now resolves, so its flips are untagged exactly as from a codeunit (the control below).
+  // Red: drop `reportextension` from receiver.ts's OBJECT_KINDS (tags come back). A receiver the
+  // extension does not declare (`G`, e.g. a base report's `protected var`) stays unresolved and
+  // keeps its tag. Red: `receiverUnresolved` answers false for an unresolved qualified receiver.
+  it("resolves a declared receiver inside a reportextension; an undeclared one keeps its tag", () => {
     const body = "Par.Insert(false); Par.ModifyAll(Amount, 1, true); Par.DeleteAll(true);";
-    const repExt = `reportextension 50304 "RX" extends "Base"\n{\n    procedure P()\n    var\n        Par: Record "Par";\n    begin\n        ${body}\n    end;\n}\n`;
-    expect(tagged({ "P.al": par(""), "O.al": repExt })).toEqual([
+    const repExt = (b: string) =>
+      `reportextension 50304 "RX" extends "Base"\n{\n    procedure P()\n    var\n        Par: Record "Par";\n    begin\n        ${b}\n    end;\n}\n`;
+    expect(tagged({ "P.al": par(""), "O.al": repExt(body) })).toEqual([
+      "false->true -",
+      "true->false -",
+      "true->false -",
+    ]);
+    expect(tagged({ "P.al": par(""), "O.al": repExt("G.Insert(false);") })).toEqual([
       "false->true run-trigger-forced",
-      "true->false run-trigger-skipped-modify",
-      "true->false run-trigger-skipped-delete",
     ]);
     expect(tagged({ "P.al": par(""), "O.al": caller(body) })).toEqual([
       "false->true -",

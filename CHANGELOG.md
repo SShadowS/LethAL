@@ -140,6 +140,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Tier 2 claims record calls inside a `reportextension`** (R463). A record the extension declares
+  and a data item it adds (`addfirst`/`addlast`/`addafter`/`addbefore`) now resolve, so
+  `remove-setrange`, `remove-testfield`, `remove-calcfields`, `swap-modify-flag` and the other
+  Tier-2 operators reach those calls; Tier-1's RunTrigger tag drops where the receiver resolves.
+  Still refused by name: a `modify(X)` block's record (resolving it through the base report gains 0
+  sites on every corpus, measured), the extension's request page, and every bare `Commit()` in an
+  extension (it may bind a base-report procedure). It also closes a hang hole: a table procedure
+  called from an OPEN extension block through an untyped receiver (a bare `Proc()`, or `D.Proc()`
+  for an added data item) is now followed, so its hang-capable mutants are refused. Measured
+  offline on BaseApp: 62 such mutants were deployed (`ProdOrderComponent.Table.al` 30,
+  `ServiceLine.Table.al` 32); hang-refused 44,126 -> 44,207, deployed -60 net (+7 Tier-2, -67),
+  identity keys moved 0, so no scheme change.
+
 - **bcdev scores `#if`-wrapped objects of the shapes measured on BC; identity scheme 36** (R497,
   R300; 35 is unused). Both BC coverage paths (fenced Code Coverage and the procedure hub) now
   score an object wrapped in `#if` when its file has exactly one object wrapper with no `#elif` and
