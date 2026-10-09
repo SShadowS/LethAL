@@ -188,7 +188,10 @@ async function serverCoverage(
     payload.perTestCoverage.map((p) => ({
       ...p,
       coverage: p.coverage.map((f) => {
-        const file = f.file.replace("<root>", root);
+        // A NATIVE path, as the daemon writes one on the host's OS: `<root>/a/b` joined with the
+        // platform separator. A `/`-joined tail under a `\` root gave Windows two label strings for
+        // one file, and a `join`-based relabel that never matched (CI run 37936016083).
+        const file = join(root, ...f.file.replace("<root>/", "").split("/"));
         return { ...f, file: relabel !== undefined ? relabel(file) : file };
       }),
     }));
