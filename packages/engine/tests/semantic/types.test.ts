@@ -1021,6 +1021,49 @@ codeunit 50340 "R340 Cu"
 `;
     expect(typeAt(src, "Z")).toBe("Integer");
   });
+  // Plan r2 §6: triggers are found by POSITION, not by name. Two field triggers named OnValidate in
+  // one table declare Z with different types; each use types by its OWN trigger's header (a name
+  // lookup would answer with one trigger's declaration for both).
+  it("two triggers with the same name in one object each type by their own header", () => {
+    const src = `table 50341 "R340 Two"
+{
+    fields
+    {
+        field(1; A; Integer)
+        {
+            trigger OnValidate()
+            var
+                Z: Decimal;
+            begin
+                Message('%1', Z + Z);
+            end;
+        }
+        field(2; B; Integer)
+        {
+            trigger OnValidate()
+            var
+                Z: Integer;
+            begin
+                Message('%1', Z + Z);
+            end;
+        }
+    }
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const symbols = buildSymbolTable([{ path: "t.al", root }]);
+    const types = buildTypeTable([{ path: "t.al", root }], symbols);
+    const uses: ALSyntaxNode[] = [];
+    visit(root, (n) => {
+      if (
+        n.kind === ALNodeKind.identifier &&
+        n.text === "Z" &&
+        n.parent?.kind !== ALNodeKind.variable_declaration
+      )
+        uses.push(n);
+    });
+    expect(uses.map((u) => types.typeOf(u))).toEqual(["Decimal", "Decimal", "Integer", "Integer"]);
+  });
   it("a report data-item trigger: a trigger local Z: Integer over the data item's field Z: Text", () => {
     const src = `${TABLE}
 report 50340 "R340 Rep"
