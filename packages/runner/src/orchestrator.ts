@@ -986,6 +986,7 @@ export async function generateMutationSet(
     const specs: MutationSpec[] = [];
     let declarativeInThisFile = 0;
     const hangRefusedHere = new Map<string, number>();
+    const carrierFile = canCarryMutationSelectorVar(root);
     visit(root, (node) => {
       for (const op of allOperators) {
         const targeted = op.targets(node, ctx);
@@ -993,7 +994,10 @@ export async function generateMutationSet(
         // a site in open report-data-item code, or one that deletes or alters a bounded item's only
         // bound. Only a MUTABLE site: a declarative one (a report column's source) keeps its normal
         // path below, dropped and tallied as non-executable, so it is never counted here.
-        const r501 = targeted && isMutableSite(node) && openItemHangRefuses(node, ctx);
+        // R500: not in a file whose kind cannot carry the selector var (an XMLport): its specs go to
+        // the `skipped` row below, and a refusal here would drop them from both rows.
+        const r501 =
+          carrierFile && targeted && isMutableSite(node) && openItemHangRefuses(node, ctx);
         if (!targeted || r501) {
           // R447: a site a hang check refused (R196's loop-condition write, or R501 above), counted
           // only where this run would have mutated it: not compiled out, and admitted by

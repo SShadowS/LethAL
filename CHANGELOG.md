@@ -155,6 +155,53 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   stored v14 document stays checkable.
 - **`lethal explain` schema v14: the cause value `reused-budget-stale`** (R514). v13 is kept so a
   stored v13 document stays checkable.
+- **More report-loop hang shapes are refused for every operator; identity scheme 35** (R500). The
+  dispatch check of R501 now also refuses: a `Date` data item's code unless `MaxIteration` bounds it;
+  procedures in OTHER project objects that open report-item code calls, one hop, with their
+  same-object closure (codeunits, records and their tableextensions, interface implementers, and
+  subscribers of events that code or a refused callee raises); a filter call on an open item's record
+  made from outside the item; an unparsed or `#if`-split reportextension, which now counts as
+  extending every report; and `CurrReport.P()` and bare procedure names in expressions as calls. Two
+  stated limits: the writes, before the item, of a global the item's exit reads (with their guards and
+  any earlier exit), and the OnPreDataItem filter of an item that inserts into its own table. An
+  XMLport `Integer` element is a loop too, but dormant while xmlport files are skipped. Record callees
+  are refused like codeunit callees although no measured hang is of that kind: a table procedure
+  called from open-item code can hold its own `FindNext` loop, and they cost 0.16% of BC.History's
+  mutants (measured against master 15c3a620). BaseApp's `Finance Charge Memo - Test` and `Reminder - Test` already loop forever, unmutated,
+  on a document whose lines are all blank (DimensionLoop's `Continue` is never reset); LethAL refuses
+  the mutants that could reach that state, but the hazard is BaseApp's own. Measured against master
+  15c3a620 with production code, on BC.History: 23,944 deployed mutants removed (1.06%), 0 added, 165
+  keys move, `skipped` unchanged on every project; CDO and DO lose 2 each; DC, the fixtures and the
+  examples are unchanged. By shape, measured against master 15c3a620:
+
+  | shape | removed | shape | removed |
+  |---|---:|---|---:|
+  | codeunit callees | 17,575 | code before the item (limit) | 803 |
+  | record callees | 3,622 | `Date` items | 241 |
+  | event subscribers | 1,057 | self-inserting item (limit) | 41 |
+  | interface implementers | 605 | | |
+
+  By operator, measured against master 15c3a620:
+
+  | operator | removed | operator | removed |
+  |---|---:|---|---:|
+  | void-method-call | 5,225 | remove-not | 538 |
+  | remove-assignment | 4,896 | conditional-boundary | 293 |
+  | empty-block | 2,975 | loop-truncate | 280 |
+  | negate-conditional | 2,150 | remove-testfield | 119 |
+  | negate-guard | 1,273 | swap-modify-flag | 117 |
+  | flip-boolean-literal | 1,075 | flip-filter-literal | 112 |
+  | swap-call-arguments | 965 | swap-find-direction | 107 |
+  | remove-setrange | 849 | swap-enum-member | 89 |
+  | toggle-blank-string | 762 | validate-to-assign | 89 |
+  | shift-integer | 744 | remove-calcfields | 63 |
+  | return-value | 619 | toggle-blank-temporal | 44 |
+  | swap-additive | 540 | loop-skip | 16 |
+  | remove-commit | 4 | | |
+
+  History, `--resume` and marks recorded under 34 are not carried: marks files need
+  `"identityScheme": 35` after you re-check each mark (R325). Scheme 34 is R-343's. The shapes still
+  not refused are filed as R520 to R532.
 - **Every operator is refused in open report data-item code, and at a bounded item's only bound;
   identity scheme 33** (R501). One check at dispatch now covers EVERY operator, with no exemption:
   a site in an open `Integer` data item's code (R487's scope) is not mutated, and neither is a site

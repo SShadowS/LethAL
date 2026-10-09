@@ -74,7 +74,7 @@ beforeAll(async () => {
 });
 
 describe("R477: the bare fallback moves a same-tuple twin's key", () => {
-  test("the identity scheme is 36 (26 for this key move, 25 R446, 27 R480, 28 R484, 29 R-300b, 30 R487, 31 unused, 32 R509, 33 R501, 34 R343, 35 unused (R-500), 36 R497)", () => {
+  test("the identity scheme is 36 (26 for this key move, 25 R446, 27 R480, 28 R484, 29 R-300b, 30 R487, 31 unused, 32 R509, 33 R501, 34 R343, 35 R500, 36 R497)", () => {
     expect(IDENTITY_SCHEME).toBe(36);
   });
 
