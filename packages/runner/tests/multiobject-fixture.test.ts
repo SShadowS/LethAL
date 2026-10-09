@@ -187,33 +187,40 @@ describe("R383: sandbox-multiobject", () => {
     expect(() => assertMultiObjectRefusal("none", [])).toThrow("expected ONE");
   });
 
-  it("the legs' table check passes the refusal table and fails the admitted run's rows", () => {
-    const report = (rows: readonly MultiObjectRow[], coverageMode = "none") => ({
+  it("the legs' table check passes the R407 admission table and fails the refusal and wrong-frame rows", () => {
+    const report = (rows: readonly MultiObjectRow[], coverageMode = "al-runner") => ({
       coverageMode,
       baselineGreen: true,
       batches: 1,
       mutants: rows.map((r) => ({ ...r, mutantCode: r.code })),
     });
     expect(() => assertMultiObjectRun(report(EXPECTED_MULTIOBJECT), "offline")).not.toThrow();
-    expect(() => assertMultiObjectRun(report(EXPECTED_MULTIOBJECT, "al-runner"), "x")).toThrow(
-      "coverageMode is al-runner",
+    expect(() => assertMultiObjectRun(report(EXPECTED_MULTIOBJECT, "none"), "x")).toThrow(
+      "coverageMode is none",
     );
-    // The first live run of the R383 admission (itest-record.log): A's mutants covered by
-    // ReachedBothWays alone, Unreached's no-coverage. Both must fail the refusal table.
-    const admittedRun = EXPECTED_MULTIOBJECT.map((r) =>
-      r.procedureName === "Unreached"
-        ? { ...r, verdict: "no-coverage" as const, coveringTests: [] }
-        : {
+    // The R383 refusal (coverage off): every mutant runs both green tests, so A's and Unreached's
+    // mutants read survived. It must fail the admission table.
+    const both = ["Multi Tests.ControlDoubles", "Multi Tests.ReachedBothWays"];
+    const refusalRun = EXPECTED_MULTIOBJECT.map((r) => {
+      const { coverageAttribution: _, ...rest } = r;
+      return r.verdict === "no-coverage"
+        ? { ...rest, verdict: "survived" as const, coveringTests: both }
+        : { ...rest, coveringTests: both };
+    });
+    expect(() => assertMultiObjectRun(report(refusalRun), "refusal")).toThrow(/M0003:.*\n.*M0004/);
+    // The c39ad5de wrong frame admitted silently (R383's first live run, itest-record.log): B's
+    // lines land in A.Never, so A's mutants gain ReachedBothWays and read survived.
+    const wrongFrame = EXPECTED_MULTIOBJECT.map((r) =>
+      r.procedureName === "Never"
+        ? {
             ...r,
-            coveringTests: [
-              r.procedureName === "Double"
-                ? "Multi Tests.ControlDoubles"
-                : "Multi Tests.ReachedBothWays",
-            ],
+            verdict: "survived" as const,
+            coveringTests: ["Multi Tests.ReachedBothWays"],
             coverageAttribution: "exact",
-          },
+          }
+        : r,
     );
-    expect(() => assertMultiObjectRun(report(admittedRun), "admitted")).toThrow(
+    expect(() => assertMultiObjectRun(report(wrongFrame), "wrong frame")).toThrow(
       /M0003:.*\n.*M0004/,
     );
     // R383 r2: a duplicated row fails, though every code still matches its expected row.

@@ -708,9 +708,9 @@ async function runLayoutLegs(): Promise<SessionReport> {
  * stops the leg by name. Both legs must equal the pre-committed table per mutant, covering tests
  * included, and each other.
  *
- * NOTE (R407 build): `EXPECTED_MULTIOBJECT` still holds the R383 REFUSAL table. Moving it to the
- * admission table (bc2511ba) and re-recording `al-runner.multiobject.baseline.json` is the
- * pre-committed step that follows this build; until then these legs fail their table check.
+ * R407: `EXPECTED_MULTIOBJECT` is the admission table (bc2511ba, adopted by
+ * docs/superpowers/specs/2026-10-09-r407-multiobject-admission-precommitment.md: 6 / 1 / 5), and
+ * `al-runner.multiobject.baseline.json` is re-frozen to it under R332.
  *
  * Checks are collected and thrown once, so a failure shows both legs. Returns the one-shot report
  * for `main()` to compare with the frozen baseline LAST, after every table check passed.
