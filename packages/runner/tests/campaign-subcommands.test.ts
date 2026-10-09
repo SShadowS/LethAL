@@ -21,6 +21,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { normalizeForComparison } from "../itest/mutant-equality";
 import { UncommittedPathError } from "../src/campaign-git";
 import {
@@ -34,8 +35,14 @@ import {
   runCampaignCompare,
   runCampaignFreeze,
 } from "../src/campaign-subcommands";
+import { REDACTION_MARKER } from "../src/explain";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { git, makeGitRepo } from "./helpers/git-repo";
+
+/** R556: a stage frozen before R556 records no mutated-text hash; seed the legacy rows that way. */
+function legacyRows(r: SessionReport): object[] {
+  return normalizeForComparison(r).map(({ mutatedTextSha256: _hash, ...row }) => row);
+}
 
 // ---------------------------------------------------------------------------------------------
 // Real-git fixtures
@@ -140,6 +147,7 @@ function report(mutants: readonly MutantOutcome[]): SessionReport {
     testFiles: {},
     backend: "bcdev",
     coverageMode: "fenced",
+    identityScheme: IDENTITY_SCHEME,
     authoritative: true,
     baselineGreen: true,
     batches: 1,
@@ -579,12 +587,25 @@ describe("lethal campaign freeze | anchors | compare", () => {
   let noneReportPath: string;
   let procedureReportPath: string;
   let legacyReportPath: string;
+  let textChangedReportPath: string;
+  let redactedReportPath: string;
+  let rekeyedReportPath: string;
 
   beforeAll(async () => {
-    const baseline = JSON.stringify(normalizeForComparison(TWO_MUTANTS), null, 2);
-    // R355: the form `campaign freeze` writes from R355 on, one per coverage mode under test.
+    // A stage frozen before R355 (and R556): the plain list, no hashes.
+    const baseline = JSON.stringify(legacyRows(TWO_MUTANTS), null, 2);
+    // R355: the form `campaign freeze` writes from R355 on, one per coverage mode under test, with
+    // R556's identity scheme and per-row hashes.
     const stageIn = (coverageMode: string) =>
-      JSON.stringify({ coverageMode, entries: normalizeForComparison(TWO_MUTANTS) }, null, 2);
+      JSON.stringify(
+        {
+          coverageMode,
+          identityScheme: IDENTITY_SCHEME,
+          entries: normalizeForComparison(TWO_MUTANTS),
+        },
+        null,
+        2,
+      );
     repo = await makeRepo({
       [rec("stage-cov-none.precommit.md")]: "# stage-cov-none\n",
       [rec("stage-cov-none.baseline.json")]: stageIn("none"),
@@ -605,6 +626,19 @@ describe("lethal campaign freeze | anchors | compare", () => {
       [rec("stage-crosscheck.anchors.json")]: JSON.stringify(PASSING_ANCHORS, null, 2),
       [rec("stage-cmp.precommit.md")]: "# stage-cmp\n",
       [rec("stage-cmp.baseline.json")]: stageIn("fenced"),
+      // R556: frozen under an older identity scheme, without and with per-row hashes.
+      [rec("stage-oldscheme.precommit.md")]: "# stage-oldscheme\n",
+      [rec("stage-oldscheme.baseline.json")]: JSON.stringify({
+        coverageMode: "fenced",
+        identityScheme: 12,
+        entries: legacyRows(TWO_MUTANTS),
+      }),
+      [rec("stage-oldhashed.precommit.md")]: "# stage-oldhashed\n",
+      [rec("stage-oldhashed.baseline.json")]: JSON.stringify({
+        coverageMode: "fenced",
+        identityScheme: 12,
+        entries: normalizeForComparison(TWO_MUTANTS),
+      }),
       [rec("stage-nobaseline.precommit.md")]: "# stage-nobaseline\n",
       [rec("stage-freeze.precommit.md")]: "# stage-freeze\n",
       // Fix round 1, Important 1/2: stages whose PRE-COMMITMENT is committed and clean, so the only
@@ -657,6 +691,28 @@ describe("lethal campaign freeze | anchors | compare", () => {
     );
     const { coverageMode: _dropped, ...legacy } = TWO_MUTANTS;
     await writeFile(legacyReportPath, JSON.stringify(legacy));
+    // R556: the same verdicts, M0002's replacement changed under its unchanged key (R340's shape),
+    // and the same report as a committed, redacted copy reads.
+    textChangedReportPath = join(outDir, "report-text-changed.json");
+    redactedReportPath = join(outDir, "report-redacted.json");
+    const withText = (text: (m: MutantOutcome) => string): SessionReport => ({
+      ...TWO_MUTANTS,
+      mutants: TWO_MUTANTS.mutants.map((m) => ({ ...m, mutatedText: text(m) })),
+    });
+    await writeFile(
+      textChangedReportPath,
+      JSON.stringify(withText((m) => (m.mutantCode === "M0002" ? "x := 2;" : m.mutatedText))),
+    );
+    await writeFile(redactedReportPath, JSON.stringify(withText(() => REDACTION_MARKER)));
+    // Every key moved: no row pairs with the stage, so no text was checked at all.
+    rekeyedReportPath = join(outDir, "report-rekeyed.json");
+    await writeFile(
+      rekeyedReportPath,
+      JSON.stringify({
+        ...TWO_MUTANTS,
+        mutants: TWO_MUTANTS.mutants.map((m) => ({ ...m, astHash: `moved-${m.astHash}` })),
+      }),
+    );
   }, HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -725,6 +781,13 @@ describe("lethal campaign freeze | anchors | compare", () => {
         await readFile(join(recordsDir, "stage-freeze.report.json"), "utf8"),
       ) as SessionReport;
       expect(archived.mutants).toHaveLength(2);
+      // R556: the stage records the report's identity scheme and a hash per row.
+      const frozen = JSON.parse(
+        await readFile(join(recordsDir, "stage-freeze.baseline.json"), "utf8"),
+      );
+      expect(frozen.identityScheme).toBe(IDENTITY_SCHEME);
+      expect(frozen.coverageMode).toBe("fenced");
+      for (const row of frozen.entries) expect(row.mutatedTextSha256).toMatch(/^[0-9a-f]{64}$/);
     },
     TEST_TIMEOUT_MS,
   );
@@ -1018,6 +1081,133 @@ describe("lethal campaign freeze | anchors | compare", () => {
     expect(omitted.verified).toBe(false);
   });
 
+  // ---- R556: identity scheme and mutated-text hash ------------------------------------------
+
+  async function compareQuiet(stage: string, path: string) {
+    const lines: string[] = [];
+    const result = await compareCampaignStage({
+      manifestPath,
+      stage,
+      reportPath: path,
+      log: (l) => lines.push(l),
+    });
+    return { result, text: lines.join("\n") };
+  }
+
+  test(
+    "R556: the same scheme with every hash matching is verified",
+    async () => {
+      const { result } = await compareQuiet("stage-cmp", reportPath);
+      expect(result.identity).toEqual({ verified: true, identityScheme: IDENTITY_SCHEME });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R556: a mutant changed under an unchanged key is DIFFERENT, naming the key",
+    async () => {
+      const { result, text } = await compareQuiet("stage-cmp", textChangedReportPath);
+      expect(result.identical).toBe(false);
+      expect(result.differences).toEqual([
+        "mutant hash-M0002|Sandbox Logic|Post|conditional-boundary|1: mutated text differs under an unchanged key",
+      ]);
+      expect(text).toContain("RESULT: DIFFERENT");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R556: identity is never verified vacuously, when no row paired with the stage",
+    async () => {
+      const { result } = await compareQuiet("stage-cmp", rekeyedReportPath);
+      expect(result.identical).toBe(false);
+      const identity = result.identity;
+      if (identity.verified) throw new Error("zero checked rows must not read as verified");
+      expect(identity.statement).toContain("UNVERIFIED");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R556: a redacted report is UNVERIFIED for its text, never DIFFERENT",
+    async () => {
+      const { result, text } = await compareQuiet("stage-cmp", redactedReportPath);
+      expect(result.identical).toBe(true);
+      const identity = result.identity;
+      if (identity.verified) throw new Error("a redacted report must not read as verified");
+      expect(identity.textUnverified).toBe(2);
+      expect(identity.statement).toContain("UNVERIFIED");
+      expect(text).toContain(identity.statement);
+      expect(text).not.toContain("DIFFERENT");
+      expect(text).not.toContain("identical");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R556: a stage frozen before R556 is compared and says so",
+    async () => {
+      const { result, text } = await compareQuiet("stage-legacy", reportPath);
+      expect(result.identical).toBe(true);
+      const identity = result.identity;
+      if (identity.verified) throw new Error("a legacy stage must not read as verified");
+      expect(identity.stageIdentityScheme).toBeNull();
+      expect(identity.reportIdentityScheme).toBe(IDENTITY_SCHEME);
+      expect(identity.statement).toContain("predates R556");
+      expect(text).toContain(identity.statement);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R556: a scheme change with no hash to check is 'identity scheme changed, UNVERIFIED', not a refusal",
+    async () => {
+      const { result, text } = await compareQuiet("stage-oldscheme", reportPath);
+      expect(result.identical).toBe(true);
+      const identity = result.identity;
+      if (identity.verified) throw new Error("a scheme change without hashes must not verify");
+      expect(identity.stageIdentityScheme).toBe(12);
+      expect(identity.statement).toContain(
+        `identity scheme changed (12 -> ${IDENTITY_SCHEME}), UNVERIFIED`,
+      );
+      expect(text).toContain(identity.statement);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R556: across a scheme change a unique hash still catches a changed mutant",
+    async () => {
+      const same = await compareQuiet("stage-oldhashed", reportPath);
+      expect(same.result.identical).toBe(true);
+      if (same.result.identity.verified) throw new Error("a scheme change is always stated");
+      expect(same.result.identity.textUnverified).toBe(0);
+      const moved = await compareQuiet("stage-oldhashed", textChangedReportPath);
+      expect(moved.result.identical).toBe(false);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R556: freeze REFUSES a redacted report, before writing anything",
+    async () => {
+      const err = await refusalFrom(
+        runCampaignFreeze({
+          manifestPath,
+          stage: "stage-cov-none",
+          reportPath: redactedReportPath,
+          expectedMutantCount: 2,
+        }),
+      );
+      expect(err.message).toContain("redact");
+      expect(err.message).toContain(redactedReportPath);
+      expect(
+        (await readdir(recordsDir)).filter((f) => f.startsWith("stage-cov-none.mismatch")),
+      ).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   // ---- WHICH paths each verb checks (fix round 1, Important 1) --------------------------------
   //
   // Everything above pins HOW a path is checked and precisely WHEN. None of it pinned WHICH: each
@@ -1279,11 +1469,7 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
       [rec("stage-spawncount.precommit.md")]: "# stage-spawncount\n",
       // R355: a stage frozen before R355, the plain list form.
       [rec("stage-spawnlegacy.precommit.md")]: "# stage-spawnlegacy\n",
-      [rec("stage-spawnlegacy.baseline.json")]: JSON.stringify(
-        normalizeForComparison(TWO_MUTANTS),
-        null,
-        2,
-      ),
+      [rec("stage-spawnlegacy.baseline.json")]: JSON.stringify(legacyRows(TWO_MUTANTS), null, 2),
       // The reconciliation stage — the only config in this file that turns it on, so `--project`
       // is REQUIRED and a dropped `projectDir` surfaces as "Refusing to skip a requested gate item".
       [rec("stage-recon.precommit.md")]: "# stage-recon\n",
@@ -1430,7 +1616,7 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
       ]);
       expect(code).toBe(0);
       const doc = JSON.parse(stdout);
-      expect(doc.campaignCompareSchemaVersion).toBe(1);
+      expect(doc.campaignCompareSchemaVersion).toBe(2);
       expect(doc.identical).toBe(true);
       expect(doc.coverage.verified).toBe(false);
       expect(doc.coverage.stageCoverageMode).toBeNull();

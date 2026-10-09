@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import {
   BaselineRecordedError,
   GATE_BASELINES,
@@ -15,8 +16,11 @@ import {
   preflightFrozenBaseline,
   preflightGateBaseline,
   preflightReadOnlyBaseline,
+  readGateBaseline,
   recordRequested,
 } from "../itest/baseline-guard";
+import { mutatedTextSha256 } from "../itest/mutant-equality";
+import { REDACTION_MARKER } from "../src/explain";
 import type { MutantOutcome, SessionReport } from "../src/report";
 
 function outcome(
@@ -123,6 +127,7 @@ describe("assertMatchesBaseline", () => {
         killingTest: "OverBudgetDetected",
         coverageFiltered: false,
         errorClass: null,
+        mutatedTextSha256: mutatedTextSha256(""),
       },
       {
         key: "hash-M0002|Sandbox Logic|Post|conditional-boundary|1",
@@ -130,6 +135,7 @@ describe("assertMatchesBaseline", () => {
         killingTest: null,
         coverageFiltered: false,
         errorClass: null,
+        mutatedTextSha256: mutatedTextSha256(""),
       },
     ]);
   });
@@ -306,14 +312,19 @@ describe("R332: a frozen baseline never records itself", () => {
     expect(existsSync(p)).toBe(false);
   });
 
-  test("missing, record on: writes once, byte-identical to the old writer, then BaselineRecordedError", async () => {
+  test("missing, record on: writes once in the R556 object form, then BaselineRecordedError", async () => {
     const p = join(dir, NAME);
     const ref = join(dir, "reference.json");
     await assertMatchesBaseline(r(), ref, "ref");
     const err = await assertGateBaseline(r(), p, "t", arm(NAME)).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BaselineRecordedError);
     expect((err as Error).message).toMatch(/NOT a pass/);
-    expect(await readFile(p, "utf8")).toBe(await readFile(ref, "utf8"));
+    const written = JSON.parse(await readFile(p, "utf8"));
+    expect(written).toEqual({
+      identityScheme: IDENTITY_SCHEME,
+      entries: JSON.parse(await readFile(ref, "utf8")),
+    });
+    expect(typeof written.entries[0].mutatedTextSha256).toBe("string");
   });
 
   test("present, record on: the write itself refuses (wx), bytes unchanged", async () => {
@@ -422,6 +433,116 @@ describe("R332: a frozen baseline never records itself", () => {
     const warned = seen.join("\n");
     expect(warned).toContain("tables.baseline.json");
     expect(warned).toContain(NAME);
+  });
+
+  /** Runs `fn` with console.log captured; returns what it printed. */
+  async function logged(fn: () => Promise<unknown>): Promise<string> {
+    const original = console.log;
+    const seen: string[] = [];
+    console.log = (...args: unknown[]) => {
+      seen.push(args.map(String).join(" "));
+    };
+    try {
+      await fn();
+    } finally {
+      console.log = original;
+    }
+    return seen.join("\n");
+  }
+  const legacyRow = {
+    key: "hash-M0001|Sandbox Logic|Post|conditional-boundary|1",
+    verdict: "killed",
+    killingTest: "RateSmall",
+    coverageFiltered: false,
+    errorClass: null,
+  };
+  const hashOf = (text: string) => mutatedTextSha256(text) ?? "unreachable";
+
+  test("R556: a legacy bare-array baseline still passes and says it is UNVERIFIED", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, JSON.stringify([legacyRow]), "utf8");
+    const out = await logged(() => assertGateBaseline(r(), p, "gate", none));
+    expect(out).toContain(
+      "gate: baseline predates R556 (no identity scheme, no mutated-text hash): a mutant changed under an unchanged key is UNVERIFIED",
+    );
+  });
+
+  test("R556: the current scheme with matching hashes passes silently", async () => {
+    const p = join(dir, NAME);
+    const row = { ...legacyRow, mutatedTextSha256: hashOf("") };
+    await writeFile(p, JSON.stringify({ identityScheme: IDENTITY_SCHEME, entries: [row] }), "utf8");
+    const out = await logged(() => assertGateBaseline(r(), p, "gate", none));
+    expect(out).not.toContain("UNVERIFIED");
+    expect(out).not.toContain("identity scheme changed");
+  });
+
+  test("R556: a changed hash under an unchanged key fails, naming the key", async () => {
+    const p = join(dir, NAME);
+    const row = { ...legacyRow, mutatedTextSha256: hashOf("other();") };
+    await writeFile(p, JSON.stringify({ identityScheme: IDENTITY_SCHEME, entries: [row] }), "utf8");
+    const err = await assertGateBaseline(r(), p, "gate", none).catch((e: unknown) => e);
+    expect((err as Error).message).toContain(
+      `mutant ${legacyRow.key}: mutated text differs under an unchanged key`,
+    );
+  });
+
+  test("R556: another recorded scheme is stated, never refused by itself", async () => {
+    const p = join(dir, NAME);
+    const row = { ...legacyRow, mutatedTextSha256: hashOf("") };
+    await writeFile(p, JSON.stringify({ identityScheme: 12, entries: [row] }), "utf8");
+    const out = await logged(() => assertGateBaseline(r(), p, "gate", none));
+    expect(out).toContain(`gate: identity scheme changed (12 -> ${IDENTITY_SCHEME})`);
+  });
+
+  test("R556: a hashed baseline REFUSES an actual row without a hash (the check cannot switch itself off)", async () => {
+    const p = join(dir, NAME);
+    const row = { ...legacyRow, mutatedTextSha256: hashOf("") };
+    await writeFile(p, JSON.stringify({ identityScheme: IDENTITY_SCHEME, entries: [row] }), "utf8");
+    const redacted = report([
+      outcome({
+        mutantCode: "M0001",
+        verdict: "killed",
+        killingTest: "RateSmall",
+        mutatedText: REDACTION_MARKER,
+      }),
+    ]);
+    const err = await assertGateBaseline(redacted, p, "gate", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/no mutated-text hash/);
+    expect((err as Error).message).toContain(p);
+  });
+
+  test("R556: an unknown baseline shape or a non-integer scheme is refused, naming the file", async () => {
+    const p = join(dir, NAME);
+    for (const body of [
+      { rows: [legacyRow] },
+      { identityScheme: 37, entries: [legacyRow], mutants: [] },
+      { identityScheme: 1.5, entries: [legacyRow] },
+      { identityScheme: "37", entries: [legacyRow] },
+      { identityScheme: 37 },
+      { identityScheme: 37, entries: [] },
+      "text",
+    ]) {
+      await writeFile(p, JSON.stringify(body), "utf8");
+      await expect(readGateBaseline(p)).rejects.toThrow(p);
+      const err = await assertGateBaseline(r(), p, "gate", none).catch((e: unknown) => e);
+      expect((err as Error).message).toContain(p);
+    }
+  });
+
+  test("R556: readGateBaseline reads the legacy array and the object form", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, JSON.stringify([legacyRow]), "utf8");
+    expect(await readGateBaseline(p)).toEqual({ entries: [legacyRow] });
+    await writeFile(
+      p,
+      JSON.stringify({ identityScheme: 7, coverageMode: "fenced", entries: [legacyRow] }),
+      "utf8",
+    );
+    expect(await readGateBaseline(p)).toEqual({
+      identityScheme: 7,
+      coverageMode: "fenced",
+      entries: [legacyRow],
+    });
   });
 
   test("BaselineRecordedError sets this.name, not just its constructor", async () => {
@@ -554,5 +675,25 @@ describe("R355: stage baselines, list form and moded form", () => {
     expect(() =>
       parseStageBaseline(JSON.stringify({ coverageMode: "none", entries: [] }), "p.json", "r"),
     ).toThrow(/p\.json holds no mutant rows/);
+  });
+
+  test("R556: a stage records an optional integer identityScheme; anything else is refused", () => {
+    const rows = [
+      { key: "k", verdict: "killed", killingTest: "T", coverageFiltered: false, errorClass: null },
+    ];
+    const read = (identityScheme: unknown) =>
+      parseStageBaseline(
+        JSON.stringify({ coverageMode: "none", identityScheme, entries: rows }),
+        "p.json",
+        "r",
+      );
+    expect(read(37).identityScheme).toBe(37);
+    expect(read(undefined).identityScheme).toBeUndefined();
+    expect(() => read(3.5)).toThrow(/p\.json is neither/);
+    expect(() => read("37")).toThrow(/p\.json is neither/);
+    // A stage still needs its coverage mode (R355); a gate-form object is not a stage.
+    expect(() =>
+      parseStageBaseline(JSON.stringify({ identityScheme: 37, entries: rows }), "p.json", "r"),
+    ).toThrow(/p\.json is neither/);
   });
 });

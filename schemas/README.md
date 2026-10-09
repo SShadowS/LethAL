@@ -18,7 +18,8 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`explain-v6.schema.json`](explain-v6.schema.json) | the same, from builds before R265; kept so a stored v6 document stays checkable (v7 added the required `survivors[].markKey` and `markIdentityScheme`, and `markKeysStale`) | `EXPLAIN_SCHEMA_VERSION` = 6 |
 | [`explain-v5.schema.json`](explain-v5.schema.json) | the same, from builds before R-236c; kept so a stored v5 document stays checkable (v6 added the caveat `tests-testpage-refused`) | `EXPLAIN_SCHEMA_VERSION` = 5 |
 | [`explain-v4.schema.json`](explain-v4.schema.json) | the same, from builds before GH-24; kept so a stored v4 document stays checkable (its value sets drifted, see `docs/roadmap/R233.md`) | `EXPLAIN_SCHEMA_VERSION` = 4 |
-| [`campaign-compare-v1.schema.json`](campaign-compare-v1.schema.json) | `lethal campaign compare --json` on stdout (R357); a coverage-mode mismatch is a refusal and prints none | `CAMPAIGN_COMPARE_SCHEMA_VERSION` = 1 |
+| [`campaign-compare-v2.schema.json`](campaign-compare-v2.schema.json) | `lethal campaign compare --json` on stdout (R357); a coverage-mode mismatch is a refusal and prints none | `CAMPAIGN_COMPARE_SCHEMA_VERSION` = 2 |
+| [`campaign-compare-v1.schema.json`](campaign-compare-v1.schema.json) | the same, from builds before R556; kept so a stored v1 document stays checkable (v2 added `identity` and widened `identical`) | `CAMPAIGN_COMPARE_SCHEMA_VERSION` = 1 |
 | [`doctor-v1.schema.json`](doctor-v1.schema.json) | `lethal doctor --json` on stdout | `DOCTOR_SCHEMA_VERSION` = 1 |
 | [`verify-v8.schema.json`](verify-v8.schema.json) | `lethal verify` on stdout | `VERIFY_SCHEMA_VERSION` = 8 |
 | [`verify-v7.schema.json`](verify-v7.schema.json) | the same, from builds before R259; kept so a stored v7 document stays checkable (v8 added `results[].sameProcedure`) | `VERIFY_SCHEMA_VERSION` = 7 |

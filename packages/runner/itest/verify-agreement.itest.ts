@@ -58,7 +58,7 @@ import type { PublishedTestApp } from "../src/test-app-publish";
 import { scanTestPageTests } from "../src/testpage-scan";
 import { VERIFY_EXIT, runVerify } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
-import { preflightReadOnlyBaseline } from "./baseline-guard";
+import { preflightReadOnlyBaseline, readGateBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -72,7 +72,6 @@ import {
   siteOf,
 } from "./harden-expected";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
-import type { NormalizedMutant } from "./mutant-equality";
 import {
   SCRATCH_ANSWERS,
   assertFreshFullRun,
@@ -330,7 +329,7 @@ async function main(): Promise<void> {
     const a = await fullRun("a", aDb, TEST_DIR);
     assert.equal(a.quarantined, undefined, "step 1: A must not quarantine");
     assert.equal(a.baselineGreen, true, "step 1: A's baseline is green");
-    const committed = JSON.parse(await readFile(BASELINE_PATH, "utf8")) as NormalizedMutant[];
+    const committed = (await readGateBaseline(BASELINE_PATH)).entries;
     const aDiffs = diffMutants(committed, normalizeForComparison(a));
     assert.equal(
       aDiffs.length,

@@ -1175,6 +1175,17 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "mutantCount",
         "stage",
       ],
+      // R556: v2 added the REQUIRED `identity` and widened `identical` to the mutated text.
+      "campaign-compare-v2.schema.json": [
+        "baselinePath",
+        "campaignCompareSchemaVersion",
+        "coverage",
+        "differences",
+        "identical",
+        "identity",
+        "mutantCount",
+        "stage",
+      ],
       "doctor-v1.schema.json": ["checks", "doctorSchemaVersion", "notChecked", "ok"],
       "explain-v4.schema.json": [
         "caveats",
@@ -1765,6 +1776,15 @@ describe("published JSON Schema - campaign compare (R357)", () => {
     // The validator must be able to say no: an unverified result WITHOUT its statement.
     const { statement: _dropped, ...bare } = legacy.coverage as Record<string, unknown>;
     expect(conformsTo(compareSchema, { ...legacy, coverage: bare }).length).toBeGreaterThan(0);
+
+    // R556: the identity block, both variants; an unverified one without its statement fails.
+    expect(legacy.identity.verified).toBe(false);
+    const { statement: _noStatement, ...bareIdentity } = legacy.identity as Record<string, unknown>;
+    expect(conformsTo(compareSchema, { ...legacy, identity: bareIdentity }).length).toBeGreaterThan(
+      0,
+    );
+    const ok = { ...verified, identity: { verified: true, identityScheme: 37 } };
+    expect(conformsTo(compareSchema, ok)).toEqual([]);
   }, 60_000);
 
   test("a coverage-mode mismatch is a refusal: it throws, so there is no document to validate", async () => {
@@ -1776,4 +1796,15 @@ describe("published JSON Schema - campaign compare (R357)", () => {
     expect(props.campaignCompareSchemaVersion?.const).toBe(CAMPAIGN_COMPARE_SCHEMA_VERSION);
     expect(compareSchema.$id).toContain(`campaign-compare-v${CAMPAIGN_COMPARE_SCHEMA_VERSION}`);
   });
+
+  // R556: v2 added the REQUIRED `identity` and widened `identical`. v1 stays as it was published.
+  test("the build emits v2, and campaign-compare-v1.schema.json is kept as published", async () => {
+    expect(CAMPAIGN_COMPARE_SCHEMA_VERSION).toBe(2);
+    const v1 = loadSchema("campaign-compare-v1.schema.json");
+    expect((v1.properties as Record<string, Schema>).campaignCompareSchemaVersion?.const).toBe(1);
+    expect([...schemaLeafPaths(v1)].some((p) => p.startsWith("$.identity"))).toBe(false);
+    // A v2 document is not a v1 document.
+    const v2doc = await compareCampaignStage(args("verified"));
+    expect(conformsTo(v1, v2doc)).not.toEqual([]);
+  }, 60_000);
 });

@@ -15,6 +15,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readGateBaseline } from "../packages/runner/itest/baseline-guard";
 import { itestConfigPath } from "../packages/runner/itest/config-path";
 import { diffMutants, normalizeForComparison } from "../packages/runner/itest/mutant-equality";
 import type { NormalizedMutant } from "../packages/runner/itest/mutant-equality";
@@ -163,7 +164,7 @@ async function main(): Promise<void> {
     }
     // Compare READ-ONLY against the COMMITTED baseline. The probe never writes it: a baseline this
     // run created would be an oracle that agrees with whatever the run produced.
-    const committed = JSON.parse(await readFile(BASELINE_PATH, "utf8")) as NormalizedMutant[];
+    const committed = (await readGateBaseline(BASELINE_PATH)).entries;
     const firstRunDiffs = diffMutants(committed, normalizeForComparison(report));
     if (firstRunDiffs.length > 0) {
       throw new Error(
@@ -199,7 +200,7 @@ async function main(): Promise<void> {
     );
 
     // 2. Pick three survivors and three kills from the installed batch, with their covering tests.
-    const baseline = JSON.parse(await readFile(BASELINE_PATH, "utf8")) as NormalizedMutant[];
+    const baseline = committed;
     const baselineByKey = new Map<string, NormalizedMutant[]>();
     for (const b of baseline) baselineByKey.set(b.key, [...(baselineByKey.get(b.key) ?? []), b]);
     const refByName = new Map<string, TestMethodRef>();

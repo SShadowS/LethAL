@@ -48,11 +48,10 @@ import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT, runVerify } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
-import { preflightReadOnlyBaseline } from "./baseline-guard";
+import { preflightReadOnlyBaseline, readGateBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
-import type { NormalizedMutant } from "./mutant-equality";
 import { assertReachFields } from "./verify-reach-fields";
 
 if (!process.env.LETHAL_ITEST_VERIFY) {
@@ -291,7 +290,7 @@ async function main(): Promise<void> {
     store.close();
     store = undefined;
     assert.equal(report.quarantined, undefined, "step 1: the full run must not quarantine");
-    const committed = JSON.parse(await readFile(BASELINE_PATH, "utf8")) as NormalizedMutant[];
+    const committed = (await readGateBaseline(BASELINE_PATH)).entries;
     const diffs = diffMutants(committed, normalizeForComparison(report));
     assert.equal(
       diffs.length,

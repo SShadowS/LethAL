@@ -1143,10 +1143,15 @@ CAMPAIGN — the measurement gates, with 'committed before the run' machine-chec
             freeze. R355: refused when the stage and the report both record a coverage mode and
             they differ. A stage frozen before R355 (or a report from before R252) records none:
             it is still compared, but the result says the mode is UNVERIFIED, never a bare
-            "identical". Freeze refuses a report with no coverageMode, so new stages are strict
+            "identical". Freeze refuses a report with no coverageMode, so new stages are strict.
+            R556: a stage records the identity scheme and a hash of each mutant's text, so a
+            mutant changed under an unchanged key is a difference; a stage frozen before R556,
+            a redacted report or a scheme change is compared and says the identity is
+            UNVERIFIED. Freeze refuses a redacted report
   --json                     compare only: print the result as one JSON object on stdout
-                             (campaignCompareSchemaVersion, identical, differences, coverage); the
-                             lines go to stderr. Exit code unchanged: 0 identical, 1 different
+                             (campaignCompareSchemaVersion, identical, differences, coverage,
+                             identity); the lines go to stderr. Exit code unchanged: 0
+                             identical, 1 different
 
 VERIFY — prove named survivors are now killed, on the build the run left installed (bcdev only)
   Compiles and publishes the test project once, then runs each named survivor's covering tests

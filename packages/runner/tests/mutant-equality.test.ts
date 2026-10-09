@@ -1,9 +1,20 @@
 import { describe, expect, it, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { diffMutants, normalizeForComparison } from "../itest/mutant-equality";
+import { clipMutationText } from "@lethal/schemata";
+import { parseGateBaseline } from "../itest/baseline-guard";
+import {
+  compareMutants,
+  diffMutants,
+  mutatedTextSha256,
+  normalizeForComparison,
+} from "../itest/mutant-equality";
 import type { NormalizedMutant } from "../itest/mutant-equality";
+import { REDACTION_MARKER } from "../src/explain";
 import type { MutantOutcome, SessionReport } from "../src/report";
+
+/** sha256 of the empty string: the `mutatedText` every fixture row here carries by default. */
+const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 function outcome(
   overrides: Partial<MutantOutcome> & Pick<MutantOutcome, "mutantCode">,
@@ -113,6 +124,7 @@ describe("normalizeForComparison", () => {
         killingTest: "OverBudgetDetected",
         coverageFiltered: false,
         errorClass: null,
+        mutatedTextSha256: EMPTY_SHA256,
       },
       {
         key: "hash-M0002|Sandbox Pricing|Post|return-value|1",
@@ -120,6 +132,7 @@ describe("normalizeForComparison", () => {
         killingTest: null,
         coverageFiltered: true,
         errorClass: null,
+        mutatedTextSha256: EMPTY_SHA256,
       },
       {
         key: "hash-M0003|Sandbox Logic|Post|conditional-boundary|1",
@@ -127,6 +140,7 @@ describe("normalizeForComparison", () => {
         killingTest: null,
         coverageFiltered: false,
         errorClass: "unstable",
+        mutatedTextSha256: EMPTY_SHA256,
       },
     ]);
   });
@@ -454,8 +468,8 @@ describe("committed itest baselines", () => {
 
   for (const name of names) {
     test(`${name} parses, is non-empty, and diffs clean against itself`, () => {
-      const parsed = JSON.parse(readFileSync(join(ITEST_DIR, name), "utf8")) as NormalizedMutant[];
-      expect(Array.isArray(parsed)).toBe(true);
+      const path = join(ITEST_DIR, name);
+      const parsed = parseGateBaseline(readFileSync(path, "utf8"), path, "remedy").entries;
       expect(parsed.length).toBeGreaterThan(0);
       for (const m of parsed) {
         expect(typeof m.key).toBe("string");
@@ -466,4 +480,114 @@ describe("committed itest baselines", () => {
       expect(diffMutants(parsed, parsed)).toEqual([]);
     });
   }
+});
+
+describe("R556: the mutated-text hash", () => {
+  const row = (key: string, hash?: string, verdict = "killed"): NormalizedMutant => ({
+    key,
+    verdict,
+    killingTest: verdict === "killed" ? "T" : null,
+    coverageFiltered: false,
+    errorClass: null,
+    ...(hash !== undefined ? { mutatedTextSha256: hash } : {}),
+  });
+  const SAME = { sameScheme: true };
+  const CROSS = { sameScheme: false };
+
+  it("hashes mutatedText with \\r\\n read as \\n", () => {
+    expect(mutatedTextSha256("")).toBe(EMPTY_SHA256);
+    expect(mutatedTextSha256("a\r\nb")).toBe(mutatedTextSha256("a\nb"));
+    expect(mutatedTextSha256("a\nb")).not.toBe(mutatedTextSha256("a b"));
+  });
+
+  it("gives NO hash for a clipped text: the clip point counts \\r, so a CRLF checkout clips elsewhere", () => {
+    const long = "x := 1;\n".repeat(200);
+    const clipped = clipMutationText(long);
+    expect(clipped).not.toBe(long); // the fixture really is clipped
+    expect(mutatedTextSha256(clipped)).toBeUndefined();
+    expect(mutatedTextSha256(clipMutationText(long.replaceAll("\n", "\r\n")))).toBeUndefined();
+    // Short text is never clipped and keeps its hash.
+    expect(mutatedTextSha256(clipMutationText("x := 1;"))).toBe(mutatedTextSha256("x := 1;"));
+    // A clipped row pairs as text-UNVERIFIED, never a difference.
+    const [row1] = normalizeForComparison(
+      report([outcome({ mutantCode: "M1", mutatedText: clipped })]),
+    );
+    expect(row1 !== undefined && "mutatedTextSha256" in row1).toBe(false);
+  });
+
+  it("gives NO hash for the redaction marker or a non-string (the marker is not text)", () => {
+    expect(mutatedTextSha256(REDACTION_MARKER)).toBeUndefined();
+    expect(mutatedTextSha256(undefined)).toBeUndefined();
+    const [marked, plain] = normalizeForComparison(
+      report([
+        outcome({ mutantCode: "M1", mutatedText: REDACTION_MARKER }),
+        outcome({ mutantCode: "M2", mutatedText: "x := 1;" }),
+      ]),
+    );
+    expect(marked !== undefined && "mutatedTextSha256" in marked).toBe(false);
+    expect(plain?.mutatedTextSha256).toBe(mutatedTextSha256("x := 1;"));
+  });
+
+  it("same key, same hash: no difference, the row is text-verified", () => {
+    const r = compareMutants([row("k", "h1")], [row("k", "h1")], SAME);
+    expect(r).toEqual({ differences: [], textVerified: 1, textUnverified: 0 });
+  });
+
+  it("same key, different hash: a difference naming the key, never the hash", () => {
+    const r = compareMutants([row("k", "h1")], [row("k", "h2")], SAME);
+    expect(r.differences).toEqual(["mutant k: mutated text differs under an unchanged key"]);
+    expect(diffMutants([row("k", "h1")], [row("k", "h2")])).toEqual(r.differences);
+    // Across a scheme change too, when the hash is unique in its tuple group.
+    expect(compareMutants([row("k", "h1")], [row("k", "h2")], CROSS).differences).toEqual(
+      r.differences,
+    );
+  });
+
+  it("a hash on one side only: no difference, counted text-UNVERIFIED", () => {
+    for (const [b, a] of [
+      [row("k", "h1"), row("k")],
+      [row("k"), row("k", "h1")],
+      [row("k"), row("k")],
+    ] as const) {
+      expect(compareMutants([b], [a], SAME)).toEqual({
+        differences: [],
+        textVerified: 0,
+        textUnverified: 1,
+      });
+    }
+  });
+
+  it("twins sharing one hash across a scheme change are UNVERIFIED, not verified", () => {
+    // A real five-field tuple: operatorMajor is digits too, so only the SIXTH field is an ordinal.
+    const T = "hash-A|Sandbox Logic|Post|remove-assignment|1";
+    const twins = [row(T, "h"), row(`${T}|1`, "h")];
+    expect(compareMutants(twins, twins, CROSS)).toEqual({
+      differences: [],
+      textVerified: 0,
+      textUnverified: 2,
+    });
+    // Under the same scheme the same rows compare row by row and are verified.
+    expect(compareMutants(twins, twins, SAME).textVerified).toBe(2);
+    // A twin hash mismatch across schemes is not a difference: ordinals may have moved.
+    expect(compareMutants(twins, [row(T, "h"), row(`${T}|1`, "other")], CROSS).differences).toEqual(
+      [],
+    );
+    // Two lone rows in DIFFERENT tuple groups sharing a hash are still checked across schemes.
+    const U = "hash-B|Sandbox Logic|Post|remove-assignment|1";
+    expect(compareMutants([row(T, "h"), row(U, "h")], [row(T, "h"), row(U, "h")], CROSS)).toEqual({
+      differences: [],
+      textVerified: 2,
+      textUnverified: 0,
+    });
+  });
+
+  it("the hash is the last tie-break inside a group, so member order is not a difference", () => {
+    const before = [row("k", "h1"), row("k", "h2")];
+    const after = [row("k", "h2"), row("k", "h1")];
+    expect(compareMutants(before, after, SAME)).toEqual({
+      differences: [],
+      textVerified: 2,
+      textUnverified: 0,
+    });
+  });
 });
