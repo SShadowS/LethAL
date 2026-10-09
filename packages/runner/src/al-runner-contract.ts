@@ -483,6 +483,10 @@ export async function runAlRunnerContractProbe(
     const wantedName = qualifiedTestName(CONTRACT_TESTS_CODEUNIT_ID, PASSING_METHOD);
 
     // 3. the qualified test-name shape, plus the banner reading, from one real run
+    // R551 (M3): this argv deliberately does NOT carry `--test-exact`, even in a session whose
+    // mutants send it. The fields this probe reads were measured identical with and without it
+    // (compile failure and hang byte-identical in those fields, R551 plan review M3), and a probe
+    // that sent it would exit 2 on a build without the flag and lose its own answer.
     const passArgv = buildAlRunnerArgv(alRunnerPath, {
       sourceDir: dirs.appDir,
       testDir: dirs.testDir,

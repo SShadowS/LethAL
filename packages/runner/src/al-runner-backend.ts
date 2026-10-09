@@ -33,6 +33,7 @@ import {
   parseAlRunnerBcBuild,
   parseAlRunnerPlatformAppsDir,
   qualifiedTestName,
+  readAlRunnerEnvelope,
 } from "./al-runner-transport";
 import type {
   AlRunnerBcBuild,
@@ -189,6 +190,12 @@ const PROVISION_TEST_TIMEOUT_SECONDS = 600;
  * failure mode than the one being fixed.
  */
 const PROVISION_DEADLINE_MS = 30 * 60 * 1000;
+
+/** R551: the `--test-exact` probe's bound. Measured at 1.3 s on c5bbaf89 and 0.15 s on 43f76177. */
+const TEST_EXACT_PROBE_DEADLINE_MS = 30_000;
+
+/** R551: the probe's test name. Codeunit 0 does not exist, so it can never select a test. */
+export const TEST_EXACT_PROBE_NAME = "Codeunit0.LethalR551NoSuchTest";
 
 /**
  * R516: the two limits a ONE-SHOT covering or confirm run is sent, from the budget the orchestrator
@@ -448,6 +455,72 @@ export function provisionArgv(
   });
 }
 
+/** R551 — what `AlRunnerBackend.probeExactTestSelector` found. */
+export type TestSelectorProbe =
+  | { readonly kind: "not-applicable" }
+  | { readonly kind: "exact"; readonly elapsedMs: number }
+  | { readonly kind: "substring"; readonly elapsedMs: number; readonly reason: string };
+
+/** R551 — the raw outcome of the probe's one al-runner call. */
+export type TestExactProbeRaw =
+  | {
+      readonly kind: "exited";
+      readonly exitCode: number;
+      readonly stdout: string;
+      readonly stderr: string;
+    }
+  | { readonly kind: "deadline" }
+  | { readonly kind: "spawn-failed"; readonly message: string };
+
+/**
+ * R551 — the probe's decision, pure. Accepted only on the process's OWN exit 6 with an
+ * `--output-json` envelope whose `tests` is an empty array and whose `exitCode` is 6. The decision
+ * reads the exit code and the envelope only; stderr's first non-blank line (trimmed, at most 200
+ * chars) is appended to `reason` for the reader and never decides anything.
+ *
+ * Exit 6 with an empty envelope shows that this build PARSES `--test-exact` and counts it in its
+ * selection audit. It does not show that the flag selects, or that it matches whole names: on an
+ * empty bundle al-runner never reaches the executor. A build without the flag exits 2 before doing
+ * anything. The whole-name guarantee is NOT this probe: it is `--test <name>` kept in the argv (so a
+ * build that ignored `--test-exact` still selects no more than today's substring match) plus the
+ * exact-path refusal of any result naming another test (`run()`).
+ */
+export function classifyTestExactProbe(
+  raw: TestExactProbeRaw,
+): { readonly kind: "exact" } | { readonly kind: "substring"; readonly reason: string } {
+  if (raw.kind === "deadline") return { kind: "substring", reason: "deadline" };
+  if (raw.kind === "spawn-failed") {
+    return { kind: "substring", reason: `spawn failed: ${raw.message}` };
+  }
+  const code = testExactProbeCode(raw.exitCode, raw.stdout);
+  if (code === undefined) return { kind: "exact" };
+  const line = raw.stderr
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l !== "");
+  return {
+    kind: "substring",
+    reason: line === undefined ? code : `${code}; stderr: ${line.slice(0, 200)}`,
+  };
+}
+
+/** R551: why an exited probe is not accepted, or `undefined` when it is. */
+function testExactProbeCode(exitCode: number, stdout: string): string | undefined {
+  if (!isChildChosenExit(exitCode)) return `signal exit ${exitCode}`;
+  if (exitCode !== 6) return `exit ${exitCode}`;
+  let env: unknown;
+  try {
+    env = readAlRunnerEnvelope(stdout);
+  } catch {
+    return "exit 6 but no readable envelope";
+  }
+  const e = typeof env === "object" && env !== null ? (env as Record<string, unknown>) : {};
+  if (!Array.isArray(e.tests)) return "exit 6 but no readable envelope";
+  if (e.tests.length > 0) return `exit 6 but ${e.tests.length} test row(s)`;
+  if (e.exitCode !== 6) return `exit 6 but envelope exitCode ${String(e.exitCode)}`;
+  return undefined;
+}
+
 export class AlRunnerBackend implements ExecutionBackend {
   /** R516 I1: one-shot's in-run limit is the budget (`oneShotLimits`); the daemon's is the one stop
    *  it was started with (R517: `inRunStopMs`), never the budget. */
@@ -539,6 +612,70 @@ export class AlRunnerBackend implements ExecutionBackend {
    */
   useDiscoveredTests(tests: readonly TestMethodRef[]): void {
     this.discoveredTests = tests.map((t) => qualifiedTestName(t.codeunitId, t.method));
+  }
+
+  /**
+   * R551 — whether one-shot calls send `--test X --test-exact X` (and no excludes) instead of R488's
+   * `--test X --exclude-test <sibling>...`. FALSE until an accepting probe on this backend, or
+   * `useExactTestSelector(true)` from `runSession` after the session backend's probe accepted. A
+   * backend nobody probed is an R488 backend.
+   */
+  private exactTestSelector = false;
+
+  /**
+   * R551 — one al-runner call, once per session, one-shot transport only, through this backend's
+   * injected spawn: `<path> --output-json --test-exact Codeunit0.LethalR551NoSuchTest <empty dir>`.
+   * Bounded by `deadlineMs`. Sets this backend's selector from the answer, in BOTH directions. See
+   * `classifyTestExactProbe` for what an acceptance does and does not show. Never throws: anything
+   * but an acceptance keeps R488's path, which is correct on every build measured.
+   *
+   * Under `serverMode` it spawns nothing and returns `not-applicable`: the daemon path has no
+   * per-test selector (it runs the whole suite per activation), and `--server --test-exact` is
+   * refused at startup.
+   */
+  async probeExactTestSelector(
+    deadlineMs = TEST_EXACT_PROBE_DEADLINE_MS,
+  ): Promise<TestSelectorProbe> {
+    if (this.server !== undefined) return { kind: "not-applicable" };
+    const started = Date.now();
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r551-probe-"));
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let raw: TestExactProbeRaw;
+    try {
+      raw = await Promise.race([
+        this.spawn(
+          [this.cfg.alRunnerPath, "--output-json", "--test-exact", TEST_EXACT_PROBE_NAME, dir],
+          { signal: controller.signal },
+        ).then(
+          (r): TestExactProbeRaw => ({ kind: "exited", ...r }),
+          (e): TestExactProbeRaw => ({
+            kind: "spawn-failed",
+            message: e instanceof Error ? e.message : String(e),
+          }),
+        ),
+        new Promise<TestExactProbeRaw>((resolve) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            resolve({ kind: "deadline" });
+          }, deadlineMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+    const decided = classifyTestExactProbe(raw);
+    const elapsedMs = Date.now() - started;
+    this.exactTestSelector = decided.kind === "exact";
+    return decided.kind === "exact"
+      ? { kind: "exact", elapsedMs }
+      : { kind: "substring", elapsedMs, reason: decided.reason };
+  }
+
+  /** R551 — set by `runSession` on every worker from the session backend's probe, true or false. */
+  useExactTestSelector(on: boolean): void {
+    this.exactTestSelector = on;
   }
 
   private siblingsOf(wanted: string): readonly string[] {
@@ -1273,6 +1410,17 @@ export class AlRunnerBackend implements ExecutionBackend {
       }
       const extras = names.filter((n) => n !== wanted);
       if (extras.length === 0) break;
+      // R551: on the exact path there is nothing to learn. A build that accepted `--test-exact`
+      // and still returned another test is refused at once, never re-run and never credited.
+      if (this.exactTestSelector) {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: Date.now() - started,
+          failureMessage: `al-runner ran tests other than the requested "${wanted}" (${extras.join(", ")}) despite --test-exact; a result naming another test is never credited (R488, R551)`,
+          operation: "completed-accepted",
+        };
+      }
       const known = this.siblingsOf(wanted);
       const fresh = extras.filter(
         (n) => !known.includes(n) && n.toLowerCase() !== wanted.toLowerCase(),
@@ -1329,7 +1477,9 @@ export class AlRunnerBackend implements ExecutionBackend {
     // another test's coverage — a wrong covering-test set, which is a wrong verdict rather than a
     // slow one.
     const coverageOut = await this.coverageOutPath();
-    const siblings = this.siblingsOf(wanted);
+    // R551: the exact path sends `--test-exact` and no excludes; otherwise R488's path, unchanged.
+    const exact = this.exactTestSelector;
+    const siblings = exact ? [] : this.siblingsOf(wanted);
     const excludeTests = siblings.length > 0 ? siblings : undefined;
     // R505: bracket the call that will label coverage from the live project.
     if (coverageOut !== undefined) await this.cfg.projectWatch?.check();
@@ -1348,6 +1498,7 @@ export class AlRunnerBackend implements ExecutionBackend {
       ...oneShotLimits(opts.timeoutMs),
       ...(coverageOut !== undefined ? { coverageOut } : {}),
       ...(excludeTests !== undefined ? { excludeTests } : {}),
+      ...(exact ? { testExact: true as const } : {}),
     });
     if (coverageOut !== undefined) await this.cfg.projectWatch?.check();
     return { res, coverageOut };

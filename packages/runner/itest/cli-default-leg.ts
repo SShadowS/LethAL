@@ -33,6 +33,7 @@ import {
   parseAlRunnerPlatformAppsDir,
 } from "../src/al-runner-transport";
 import type { ExecutionBackend } from "../src/backend";
+import type { RunEvent } from "../src/events";
 import type { SpawnFn } from "../src/publisher";
 import type { SessionReport } from "../src/report";
 
@@ -222,6 +223,38 @@ export function cliDefaultMechanismFailures(
     );
   }
   return out;
+}
+
+const TEST_SELECTOR_CODE = "al-runner-test-selector";
+
+/**
+ * R551 I3: the cli-default leg runs under `--server`, where the `--test-exact` probe must not spawn,
+ * so its session emits NO `al-runner-test-selector` warning. Non-vacuous: a hook that received no
+ * event at all proves nothing, so that fails too.
+ */
+export function cliDefaultSelectorFailures(events: readonly RunEvent[]): string[] {
+  if (events.length === 0) {
+    return [
+      "selector: the cli-default leg's emit hook received nothing; the zero is vacuous (R551)",
+    ];
+  }
+  const n = events.filter((e) => e.type === "warning" && e.code === TEST_SELECTOR_CODE).length;
+  return n === 0
+    ? []
+    : [`selector: expected no ${TEST_SELECTOR_CODE} warning under --server, saw ${n} (R551)`];
+}
+
+/**
+ * R551: the selector lines one `runOnce` leg's session emitted. Exactly one on a one-shot leg, none
+ * on a `--server` or resource leg. The VALUE is printed by the gate, not asserted here.
+ */
+export function testSelectorLineFailures(lines: readonly string[], oneShot: boolean): string[] {
+  const want = oneShot ? 1 : 0;
+  return lines.length === want
+    ? []
+    : [
+        `selector: expected ${want} ${TEST_SELECTOR_CODE} warning(s) on a ${oneShot ? "one-shot" : "--server/resource"} leg, saw ${lines.length}: ${JSON.stringify(lines)} (R551)`,
+      ];
 }
 
 /** What two legs are compared on, per mutant. */

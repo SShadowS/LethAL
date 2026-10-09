@@ -53,7 +53,7 @@ import {
   varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
-import type { AlRunnerProvisionResult } from "./al-runner-backend";
+import type { AlRunnerProvisionResult, TestSelectorProbe } from "./al-runner-backend";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { predefinedSymbolsChangedWarning } from "./al-runner-predefined-probe";
 import type { AlRunnerBcBuild } from "./al-runner-transport";
@@ -5323,6 +5323,30 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     }
   }
 
+  // R551: does this al-runner build accept `--test-exact`? One call, once per session, on the
+  // session backend, before the baseline, so the baseline and every mutant run under one selector.
+  // Structural, like `provisionOnce`. Anything but an acceptance keeps R488's path, which is
+  // correct on every build measured, so "not accepted" never refuses the session.
+  let exactTestSelector = false;
+  const selectorProber = cfg.backend as {
+    probeExactTestSelector?: () => Promise<TestSelectorProbe>;
+  };
+  const selectorProbed = selectorProber.probeExactTestSelector !== undefined;
+  if (selectorProber.probeExactTestSelector !== undefined) {
+    const p = await selectorProber.probeExactTestSelector();
+    if (p.kind !== "not-applicable") {
+      exactTestSelector = p.kind === "exact";
+      emit({
+        type: "warning",
+        code: "al-runner-test-selector",
+        message:
+          p.kind === "exact"
+            ? `al-runner test selector: exact (--test-exact accepted by a one-call probe in ${p.elapsedMs} ms; R551)`
+            : `al-runner test selector: substring with R488 excludes (--test-exact not accepted: ${p.reason}; probe ${p.elapsedMs} ms; R551)`,
+      });
+    }
+  }
+
   // R392: MEASURE al-runner's predefined symbols, every al-runner session, after provisioning and
   // before anything computes the build's symbols. Awaited, with nothing else in flight. A probe that
   // cannot give a complete answer throws AlRunnerPredefinedProbeError and the run is refused.
@@ -6210,6 +6234,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           );
         }
         handBuildSymbols(worker, buildSymbols);
+        // R551: every worker gets the session's selector, true or false, every time. Workers never
+        // probe. A worker that cannot take it would run other argv than the baseline: refuse.
+        if (selectorProbed) {
+          const sel = worker as { useExactTestSelector?: (on: boolean) => void };
+          if (typeof sel.useExactTestSelector !== "function") {
+            throw new Error(
+              `runSession: the session backend probed al-runner's --test-exact (${exactTestSelector ? "accepted" : "not accepted"}) but worker backend ${i} has no useExactTestSelector, so the baseline and the mutants could run under different test selectors (R551).`,
+            );
+          }
+          sel.useExactTestSelector(exactTestSelector);
+        }
         // R488: each worker starts with an empty sibling cache, so it needs the list too.
         worker.useDiscoveredTests?.(discovery.unfiltered);
         worker.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);

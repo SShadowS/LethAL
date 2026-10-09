@@ -242,6 +242,49 @@ describe("buildAlRunnerArgv — --auto-provision (R125)", () => {
   });
 });
 
+// R551: `--test-exact <name>` rides right after `--test <name>`, only when asked for.
+describe("buildAlRunnerArgv — --test-exact (R551)", () => {
+  const argvReq = {
+    sourceDir: "C:/proj/app",
+    testDir: "C:/proj/tests",
+    qualifiedTest: "Codeunit78950.GrowPre",
+  };
+
+  test("A1: testExact gives --test X --test-exact X, adjacent, once, and no --exclude-test", () => {
+    const argv = buildAlRunnerArgv("al-runner", { ...argvReq, testExact: true });
+    const t = argv.indexOf("--test");
+    expect(argv.slice(t, t + 4)).toEqual([
+      "--test",
+      argvReq.qualifiedTest,
+      "--test-exact",
+      argvReq.qualifiedTest,
+    ]);
+    expect(argv.filter((a) => a === "--test-exact").length).toBe(1);
+    expect(argv).not.toContain("--exclude-test");
+  });
+
+  test("A2: without testExact the argv is today's, element for element", () => {
+    expect(
+      buildAlRunnerArgv("al-runner", {
+        ...argvReq,
+        excludeTests: ["Codeunit78950.GrowPreTwin"],
+      }),
+    ).toEqual([
+      "al-runner",
+      "--output-json",
+      "--isolation",
+      "test",
+      "--test",
+      "Codeunit78950.GrowPre",
+      "--exclude-test",
+      "Codeunit78950.GrowPreTwin",
+      "--auto-provision",
+      "C:/proj/app",
+      "C:/proj/tests",
+    ]);
+  });
+});
+
 /**
  * R518. al-runner 2.12.0-main.43f76177 exits 3 on a one-shot test timeout: a bundle that RAN has a
  * TEST-TIMEOUT-ABORT suite error. Exit 3 is read as results ONLY when the envelope proves that
