@@ -94,7 +94,7 @@ function refusedIn(anchor: string, proc: string): boolean[] {
       normalizeAlName(n.childForFieldName("name")?.text ?? "") === normalizeAlName(proc)
     )
       for (const s of n.childForFieldName("body")?.childForFieldName("body")?.namedChildren ?? [])
-        out.push(openItemHangRefuses(s, ctx));
+        out.push(openItemHangRefuses(s, ctx, undefined));
   });
   if (out.length !== 2) throw new Error(`procedure ${proc}: ${out.length} statements, want 2`);
   return out;

@@ -228,8 +228,8 @@ describe("R500 step 7: an XMLport is not a carrier, so its own refusal is dorman
       if (hit === null) throw new Error(`no Calls write in ${path}`);
       return hit;
     };
-    expect(openItemHangRefuses(callsWrite(XP), ctx)).toBe(true);
-    expect(openItemHangRefuses(callsWrite(XP_BOUNDED), ctx)).toBe(false);
+    expect(openItemHangRefuses(callsWrite(XP), ctx, undefined)).toBe(true);
+    expect(openItemHangRefuses(callsWrite(XP_BOUNDED), ctx, undefined)).toBe(false);
   });
 
   test("so the open XMLport's `skipped` sites equal its bounded twin's: nothing moved out of `skipped`", () => {

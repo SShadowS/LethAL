@@ -781,8 +781,16 @@ function altersBoundCall(node: ALSyntaxNode, ctx: SemanticContext): boolean {
  * and in an open item the item's own progress often lives in that inner loop (a skipped `while`
  * never sets the flag the item's Break reads). R500 adds the one-hop callees, the outside filter
  * calls and the two LIMITS (header). It needs `ctx.files` and throws without it.
+ *
+ * R-531 adds loops that end only by consuming their record set (`consumingLoopRefuses`). `op` is
+ * the operator's name and is REQUIRED: that rule exempts `lethal.swap-find-direction` inside the
+ * loop's own condition, and a caller that passes `undefined` gets no exemption (the safe default).
  */
-export function openItemHangRefuses(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+export function openItemHangRefuses(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  op: string | undefined,
+): boolean {
   projectObjects(ctx); // R500: throws on a context without `files`, whatever the site
   return (
     inOpenItemCode(node, ctx) ||
@@ -790,8 +798,715 @@ export function openItemHangRefuses(node: ALSyntaxNode, ctx: SemanticContext): b
     inOneHopCallee(node, ctx) ||
     altersSelfInsertFilter(node, ctx) ||
     altersOpenItemFilter(node, ctx) ||
-    writesPresetExitName(node, ctx)
+    writesPresetExitName(node, ctx) ||
+    consumingLoopRefuses(node, ctx, op)
   );
+}
+
+/*
+ * R-531: a loop that ends only by CONSUMING its record set.
+ *
+ * THE SHAPE. A `while`/`repeat` (or `for`) whose condition calls a cursor method (`Find`,
+ * `FindFirst`, `FindLast`, `FindSet`, `IsEmpty`, `Count`; called or bare) on a record R and does NOT
+ * call `Next`, and whose body holds at least one CONSUMER of R. `repeat ... until R.Next() = 0` is
+ * never this shape: `Next` advances whatever the body does. Receivers compare by name (`Rec` and a
+ * bare call are the implicit record; a non-identifier receiver such as `Buf[1]` by its text).
+ *
+ * THE CONSUMERS, by kind label (`r531Analyze(...).kinds`):
+ * - `delete`, `deleteall`, `rename`: those methods on R;
+ * - `refilter`: `SetRange`/`SetFilter` on R inside the loop;
+ * - `mark`: a filter- or mark-changing method on R (Reset, Copy, CopyFilter(s), SetView, SetRecFilter,
+ *   FilterGroup, Mark, MarkedOnly, ClearMarks);
+ * - `modify-filtered`: `Modify`/`ModifyAll` on a plain local R after a write (`R.F :=` or
+ *   `R.Validate(F, ...)`) of a field a `SetRange`/`SetFilter` on R in the procedure names, the write
+ *   included; `modify-all`: the same when R is a global, a parameter or the implicit Rec (its filters
+ *   can be set elsewhere), so EVERY written field counts; `modify-unseen`: no filter on R in the
+ *   procedure, so every written field counts;
+ * - `delete-reinsert`: a consumer plus an `Insert` of R with a filtered field written in the body (a
+ *   rename by hand), the writes included;
+ * - unknown, counted as consuming: `pass-rec` (a call passing R, not `Format`/`Message`/`Error`/
+ *   `StrSubstNo`/`Confirm`/`Clear`/`Evaluate` nor a built-in method of another record), `recv-proc`
+ *   (a call on R that is not a built-in record method: a table procedure, a `Dequeue`), `global-call`
+ *   (a same-object procedure call while R is a global or the implicit Rec);
+ * - `alias`: a consumer on a same-procedure ALIAS of R (`X := R`, `R := X`, `X.Copy(R, true)`,
+ *   `R.Copy(X, true)`, to a fixpoint, by name), which counts as R everywhere above.
+ *
+ * REFUSED, for every operator (owner rulings 2026-10-09: refusal only; no exemption for an `or`
+ * operand that is not a cursor test, so a counter in such an `or` is a known false positive):
+ * - BASE, inside the loop body: a site inside a consumer, a site containing one (its statement or
+ *   block, `empty-block` of the body or a branch, `loop-skip`/`loop-truncate` of an inner loop
+ *   holding it), and a site in a guard between a consumer, or a `continue` of this loop, and the loop
+ *   (R446's `exitGuards`). Not an `exit`/`break`/`Error` (each ENDS the loop) nor a site after it.
+ * - NEG, inside the loop's own condition: every operator but `lethal.swap-find-direction` (which
+ *   swaps only FindFirst/FindLast, both "is the set non-empty"); `remove-not` on `not R.IsEmpty()`
+ *   or `conditional-boundary` on `Count > 0` leaves the test true on an exhausted set.
+ * - FILTER, before the loop in the same scope: every site inside a `SetRange`/`SetFilter` on R whose
+ *   field the consumer changes (a write before `Modify` or a re-`Insert`, a `ModifyAll` field), or any
+ *   such filter when the consumer is a `Rename` (its key fields are unknown without the table's key):
+ *   `swap-rec-xrec` on an OnRename `SetRange(.., xRec.Name)` finds the renamed lines for ever. Also a
+ *   pre-loop `MarkedOnly` on R when a consumer is `Mark(...)`.
+ * - FEEDS: a same-scope assignment whose target name is read, to a fixpoint, by a consumer's
+ *   arguments, a consumer write's right side, a consumer's guard, a pre-loop filter's arguments or a
+ *   guard around a pre-loop filter call (R480's by-name `indirectFeeds` rule over the scope); and
+ *   those guards around a pre-loop filter call.
+ * - HOP, one hop into a same-object callee: for `pass-rec`, the callee's `var` parameter at R's
+ *   argument position (a by-value parameter is a copy and is not followed); for `global-call`, the
+ *   same global R (unless the callee declares a local of that name) or the implicit Rec; for
+ *   `recv-proc`, the table procedure on R (`declaredType` + `objectsOfType`), where R is the implicit
+ *   Rec. The callee's consumers, the sites containing them and their guards are refused.
+ *
+ * LIMITS (stated): cross-object and DotNet callees, more than one hop, a filter set through a
+ * procedure (`SetTemplateFilter(xRec)`), and a refilter through a FieldRef (`FieldRef.SetRange`).
+ */
+const R531_COND: ReadonlySet<string> = new Set([
+  "find",
+  "findfirst",
+  "findlast",
+  "findset",
+  "isempty",
+  "count",
+]);
+const R531_DEL: ReadonlySet<string> = new Set(["delete", "deleteall", "rename"]);
+const R531_MOD: ReadonlySet<string> = new Set(["modify", "modifyall"]);
+const R531_FILTER: ReadonlySet<string> = new Set(["setrange", "setfilter"]);
+/** Filter- and mark-changing record methods: consumers of kind `mark` (checked before the built-ins). */
+const R531_MARKS: ReadonlySet<string> = new Set(
+  "reset copy copyfilter copyfilters setview setrecfilter filtergroup mark markedonly clearmarks".split(
+    " ",
+  ),
+);
+/** Built-in record methods that cannot consume the set (anything else on R is unknown). */
+const R531_BUILTIN: ReadonlySet<string> = new Set(
+  (
+    "setrange setfilter reset get getbysystemid find findfirst findlast findset next isempty count " +
+    "countapprox calcfields calcsums testfield validate init insert transferfields copy copyfilter " +
+    "copyfilters setcurrentkey currentkey setautocalcfields setloadfields addloadfields areloadfields " +
+    "fieldno fieldcaption fieldname tablecaption tablename getfilter getfilters getrangemin getrangemax " +
+    "locktable mark marked markedonly clearmarks hasfilter filtergroup ascending getposition " +
+    "setposition recordid setrecfilter readisolation istemporary setpermissionfilter fieldactive " +
+    "fielderror relation readpermission writepermission consistent changecompany currentcompany " +
+    "systemid recordlevellocking securityfiltering getview setview haslinks copylinks " +
+    "deletelinks addlink deletelink truncate isdirty"
+  ).split(" "),
+);
+/** Global functions that take a record but cannot consume it. */
+const R531_PURE: ReadonlySet<string> = new Set(
+  "format strsubstno message error confirm clear evaluate".split(" "),
+);
+const SWAP_FIND_DIRECTION = "lethal.swap-find-direction";
+
+/** A consumer found one hop away, in a same-object callee or a table procedure on R. */
+export interface R531Hop {
+  readonly proc: ALSyntaxNode;
+  readonly consumers: ALSyntaxNode[];
+  readonly guards: ALSyntaxNode[];
+}
+
+/** A loop of the R-531 shape (see the block comment above). */
+export interface R531Loop {
+  readonly loop: ALSyntaxNode;
+  /** The consumer kind labels, sorted and distinct. */
+  readonly kinds: string[];
+  readonly consumers: ALSyntaxNode[];
+  readonly guards: ALSyntaxNode[];
+  /** Pre-loop filter (and `MarkedOnly`) calls the loop's ending depends on. */
+  readonly preFilters: ALSyntaxNode[];
+  /** Same-scope assignments feeding consumers, guards and pre-loop filters. */
+  readonly feeds: ALSyntaxNode[];
+  /** Conditions around a pre-loop filter call, up to the scope. */
+  readonly preGuards: ALSyntaxNode[];
+  readonly hops: R531Hop[];
+}
+
+interface R531Call {
+  readonly recv: string | null; // null: bare (the implicit record, or a procedure)
+  readonly method: string;
+  readonly args: ALSyntaxNode[];
+}
+
+/** A receiver's key: its normalized name (`Rec` is ""), or its whitespace-free text when it is not
+ *  a plain name (`Buf[1]`). */
+const r531Key = (n: ALSyntaxNode | null): string | null => {
+  if (n === null) return null;
+  if (!isIdentifierLike(n)) return `\u0001${n.text.replace(/\s+/g, "").toLowerCase()}`;
+  const k = normalizeAlName(n.text);
+  return k === "rec" ? "" : k;
+};
+
+function r531Call(n: ALSyntaxNode): R531Call | null {
+  const argsOf = (c: ALSyntaxNode): ALSyntaxNode[] => [
+    ...(c.namedChildren.find((x) => x.rawKind === "argument_list")?.namedChildren ?? []),
+  ];
+  if (n.rawKind === "call_expression") {
+    const f = n.childForFieldName("function") ?? n.namedChildren[0] ?? null;
+    if (f === null) return null;
+    if (isIdentifierLike(f)) return { recv: null, method: normalizeAlName(f.text), args: argsOf(n) };
+    if (f.rawKind === "member_expression") {
+      const m = f.childForFieldName("member");
+      if (m === null) return null;
+      const o = f.childForFieldName("object");
+      return { recv: r531Key(o) ?? "\u0000", method: normalizeAlName(m.text), args: argsOf(n) };
+    }
+    return null;
+  }
+  if (n.rawKind === "call_statement") {
+    const f = n.namedChildren[0] ?? null;
+    if (f === null || !isIdentifierLike(f)) return null;
+    return { recv: null, method: normalizeAlName(f.text), args: argsOf(n) };
+  }
+  if (n.rawKind === "member_expression" && n.parent?.rawKind !== "call_expression") {
+    const m = n.childForFieldName("member");
+    const o = r531Key(n.childForFieldName("object"));
+    if (m === null || o === null) return null;
+    return { recv: o, method: normalizeAlName(m.text), args: [] };
+  }
+  return null;
+}
+
+/** Is a bare name an implicit-Rec member (no declared variable of that name)? */
+function r531Implicit(n: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const f = n.rawKind === "call_expression" ? n.childForFieldName("function") : n;
+  return f !== null && resolveVarRef(f, ctx) === null;
+}
+
+/** Procedure names declared in the object holding `n`. */
+function r531ObjectProcs(n: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+  const obj = objectOf(n);
+  if (obj === null) return new Set();
+  return cached(ctx, obj, "r531procs", () => {
+    const out = new Set<string>();
+    visitAll(obj, (x) => {
+      if (isProcedureLike(x)) for (const p of procNames(x)) out.add(p);
+    });
+    return out;
+  });
+}
+
+/** Is `name` declared in `scope`'s header: a local variable, or (with `params`) a parameter? */
+function r531Declares(scope: ALSyntaxNode | null, name: string, params: boolean): boolean {
+  if (scope === null || name === "") return false;
+  let hit = false;
+  const walk = (n: ALSyntaxNode): void => {
+    for (const c of n.namedChildren) {
+      if (hit) return;
+      if (c.rawKind === "code_block" || (!params && c.rawKind === "parameter_list")) continue;
+      if (c.rawKind === "variable_declaration" || c.rawKind === "parameter") {
+        const id =
+          c.childForFieldName("name") ?? c.namedChildren.find((x) => isIdentifierLike(x)) ?? null;
+        if (id !== null && normalizeAlName(id.text) === name) hit = true;
+      } else walk(c);
+    }
+  };
+  walk(scope);
+  return hit;
+}
+
+function r531Walk(n: ALSyntaxNode, ctx: SemanticContext, f: (n: ALSyntaxNode) => void): void {
+  if (DIRECTIVE_MARKERS.has(n.rawKind) || armOfNode(ctx, n) === "inactive") return;
+  f(n);
+  for (const c of n.namedChildren) r531Walk(c, ctx, f);
+}
+
+/** The procedure-like node named `name` in object `obj`, or null. */
+function r531ProcIn(obj: ALSyntaxNode, name: string): ALSyntaxNode | null {
+  let hit: ALSyntaxNode | null = null;
+  visitAll(obj, (x) => {
+    if (
+      hit === null &&
+      (isProcedureLike(x) || x.rawKind === "procedure") &&
+      procNames(x).includes(name)
+    )
+      hit = x;
+  });
+  return hit;
+}
+
+/** The i-th parameter of `proc` as [name, isVar], or null. */
+function r531Param(proc: ALSyntaxNode, i: number): [string, boolean] | null {
+  const list = proc.namedChildren.find((c) => c.rawKind === "parameter_list");
+  const p = list?.namedChildren.filter((c) => c.rawKind === "parameter")[i];
+  if (p === undefined) return null;
+  const id =
+    p.childForFieldName("name") ?? p.namedChildren.find((x) => isIdentifierLike(x)) ?? null;
+  if (id === null) return null;
+  return [normalizeAlName(id.text), p.namedChildren.some((c) => c.rawKind === "var_keyword")];
+}
+
+/** HOP: the consumers of receiver `key` in callee `proc`'s body (no further hop) and their guards. */
+function r531CalleeHop(proc: ALSyntaxNode, key: string, ctx: SemanticContext): R531Hop | null {
+  const body = proc.namedChildren.find((c) => c.rawKind === "code_block") ?? null;
+  if (body === null) return null;
+  const procs = r531ObjectProcs(proc, ctx);
+  const consumers: ALSyntaxNode[] = [];
+  const writes: ALSyntaxNode[] = [];
+  let modifies = false;
+  r531Walk(body, ctx, (n) => {
+    if (n.kind === ALNodeKind.assignment_statement) {
+      const left = n.childForFieldName("left") ?? n.namedChildren[0] ?? null;
+      if (
+        left?.rawKind === "member_expression" &&
+        r531Key(left.childForFieldName("object")) === key
+      )
+        writes.push(n);
+      else if (
+        key === "" &&
+        left !== null &&
+        isIdentifierLike(left) &&
+        resolveVarRef(left, ctx) === null
+      )
+        writes.push(n);
+      return;
+    }
+    const c = r531Call(n);
+    if (c === null) return;
+    const r = c.recv ?? (r531Implicit(n, ctx) && !procs.has(c.method) ? "" : null);
+    if (r === key) {
+      if (R531_MOD.has(c.method)) {
+        modifies = true;
+        consumers.push(n);
+      } else if (
+        R531_DEL.has(c.method) ||
+        R531_FILTER.has(c.method) ||
+        R531_MARKS.has(c.method) ||
+        (!R531_BUILTIN.has(c.method) && c.recv !== null && n.rawKind === "call_expression")
+      )
+        consumers.push(n);
+      return;
+    }
+    if (c.args.some((a) => r531Key(a) === key && (key !== "" || normalizeAlName(a.text) === "rec")))
+      if (!R531_PURE.has(c.method) && !(c.recv !== null && R531_BUILTIN.has(c.method)))
+        consumers.push(n);
+  });
+  if (modifies) consumers.push(...writes);
+  if (consumers.length === 0) return null;
+  const isC = (n: ALSyntaxNode): boolean => consumers.some((c) => samePos(c, n));
+  return { proc, consumers, guards: exitGuards(body, body, isC) };
+}
+
+/** FEEDS: assignments in `scope` whose target name `parts` read, to a fixpoint (R480
+ *  `indirectFeeds`'s by-name rule, over the whole scope instead of one loop body). */
+function r531Feeds(
+  scope: ALSyntaxNode,
+  parts: ALSyntaxNode[],
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  const names = new Set<string>();
+  const collect = (n: ALSyntaxNode): void => {
+    if (DIRECTIVE_MARKERS.has(n.rawKind) || armOfNode(ctx, n) === "inactive") return;
+    if (isIdentifierLike(n)) names.add(normalizeAlName(n.text));
+    for (const c of n.namedChildren) collect(c);
+  };
+  for (const p of parts) collect(p);
+  const assignments: ALSyntaxNode[] = [];
+  visitAll(scope, (n) => {
+    if (n.kind === ALNodeKind.assignment_statement) assignments.push(n);
+  });
+  const out: ALSyntaxNode[] = [];
+  const used = new Set<number>();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const a of assignments) {
+      if (used.has(a.startIndex)) continue;
+      const left = a.childForFieldName("left");
+      const right = a.childForFieldName("right");
+      if (left === null || right === null) continue;
+      const name =
+        left.rawKind === "member_expression" || left.kind === ALNodeKind.field_access
+          ? left.childForFieldName("member")
+          : left;
+      if (name === null || !isIdentifierLike(name) || !names.has(normalizeAlName(name.text)))
+        continue;
+      used.add(a.startIndex);
+      out.push(a);
+      collect(right);
+      changed = true;
+    }
+  }
+  return out;
+}
+
+/** The R-531 analysis of a loop, or null when it is not the shape (no cursor method in its
+ *  condition, a `Next` in it, or no consumer in its body). Cached per loop. */
+export function r531Analyze(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | null {
+  if (!LOOP_KINDS.has(loop.kind)) return null;
+  return cached(ctx, loop, "r531", () => r531AnalyzeOnce(loop, ctx));
+}
+
+function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | null {
+  const recvs = new Set<string>();
+  let next = false;
+  for (const p of loopConditionParts(loop)) {
+    r531Walk(p, ctx, (n) => {
+      let c = r531Call(n);
+      if (c === null && isIdentifierLike(n) && n.parent?.rawKind !== "member_expression") {
+        c = { recv: null, method: normalizeAlName(n.text), args: [] };
+      }
+      if (c === null) return;
+      if (c.recv === null && !r531Implicit(n, ctx)) return;
+      if (R531_COND.has(c.method)) recvs.add(c.recv ?? "");
+      if (c.method === "next") next = true;
+    });
+  }
+  if (next || recvs.size === 0) return null;
+  const body = loop.childForFieldName("body");
+  if (body === null) return null;
+  const scope = codeScope(loop);
+  const procs = r531ObjectProcs(loop, ctx);
+  // same-procedure aliases of R count as R
+  const aliases = new Set<string>();
+  if (scope !== null) {
+    for (let changed = true; changed; ) {
+      changed = false;
+      r531Walk(scope, ctx, (n) => {
+        let pair: [string | null, string | null] | null = null;
+        if (n.kind === ALNodeKind.assignment_statement) {
+          const l = n.childForFieldName("left");
+          const rt = n.childForFieldName("right");
+          if (l !== null && rt !== null && isIdentifierLike(l) && isIdentifierLike(rt))
+            pair = [r531Key(l), r531Key(rt)];
+        } else {
+          const c = r531Call(n);
+          const a0 = c?.args[0];
+          const a1 = c?.args[1];
+          if (
+            c !== null &&
+            c.method === "copy" &&
+            a0 !== undefined &&
+            a1 !== undefined &&
+            normalizeAlName(a1.text) === "true"
+          )
+            pair = [c.recv, r531Key(a0)];
+        }
+        if (pair === null) return;
+        const [x, y] = pair;
+        if (x === null || y === null) return;
+        for (const [p, q] of [
+          [x, y],
+          [y, x],
+        ] as const) {
+          if (recvs.has(q) && !recvs.has(p)) {
+            recvs.add(p);
+            aliases.add(p);
+            changed = true;
+          }
+        }
+      });
+    }
+  }
+  // filters on R anywhere in the scope, and the pre-loop `MarkedOnly` calls on R
+  const filtered = new Map<string, Set<string>>();
+  const filterCalls: { n: ALSyntaxNode; r: string; field: string }[] = [];
+  const markedOnly: { n: ALSyntaxNode; r: string }[] = [];
+  if (scope !== null) {
+    r531Walk(scope, ctx, (n) => {
+      const c = r531Call(n);
+      if (c === null) return;
+      const isFilter = R531_FILTER.has(c.method);
+      if (!isFilter && c.method !== "markedonly") return;
+      const r = c.recv ?? (r531Implicit(n, ctx) ? "" : null);
+      if (r === null || !recvs.has(r)) return;
+      if (!isFilter) {
+        markedOnly.push({ n, r });
+        return;
+      }
+      const f = c.args[0];
+      if (f === undefined) return;
+      const s = filtered.get(r) ?? new Set<string>();
+      s.add(normalizeAlName(f.text));
+      filtered.set(r, s);
+      filterCalls.push({ n, r, field: normalizeAlName(f.text) });
+    });
+  }
+  // the fields whose filter the loop's ending depends on ("*": any filter, for Rename)
+  const depends = new Map<string, Set<string>>();
+  const dep = (r: string, f: string): void => {
+    const s = depends.get(r) ?? new Set<string>();
+    s.add(f);
+    depends.set(r, s);
+  };
+  const consumers: ALSyntaxNode[] = [];
+  const kinds: string[] = [];
+  const consume = (n: ALSyntaxNode, kind: string, r: string): void => {
+    consumers.push(n);
+    kinds.push(kind);
+    if (aliases.has(r)) kinds.push("alias");
+  };
+  const modifies: { n: ALSyntaxNode; r: string; all: string | null }[] = [];
+  const writes: { n: ALSyntaxNode; r: string; field: string }[] = [];
+  const inserts = new Set<string>();
+  const markRecvs = new Set<string>();
+  const hopCands: { n: ALSyntaxNode; kind: string; c: R531Call }[] = [];
+  r531Walk(body, ctx, (n) => {
+    if (n.kind === ALNodeKind.assignment_statement) {
+      const left = n.childForFieldName("left") ?? n.namedChildren[0] ?? null;
+      if (left?.rawKind === "member_expression") {
+        const r = r531Key(left.childForFieldName("object"));
+        const m = left.childForFieldName("member");
+        if (r !== null && recvs.has(r) && m !== null)
+          writes.push({ n, r, field: normalizeAlName(m.text) });
+      } else if (
+        left !== null &&
+        isIdentifierLike(left) &&
+        recvs.has("") &&
+        resolveVarRef(left, ctx) === null
+      ) {
+        writes.push({ n, r: "", field: normalizeAlName(left.text) });
+      }
+      return;
+    }
+    const c = r531Call(n);
+    if (c === null) return;
+    const bare = c.recv === null;
+    const r = c.recv ?? (r531Implicit(n, ctx) && !procs.has(c.method) ? "" : null);
+    if (r !== null && recvs.has(r)) {
+      if (R531_DEL.has(c.method)) {
+        consume(n, c.method, r);
+        if (c.method === "rename") dep(r, "*");
+      } else if (R531_MOD.has(c.method)) {
+        modifies.push({
+          n,
+          r,
+          all: c.method === "modifyall" ? normalizeAlName(c.args[0]?.text ?? "") : null,
+        });
+      } else if (R531_FILTER.has(c.method)) {
+        consume(n, "refilter", r);
+      } else if (R531_MARKS.has(c.method)) {
+        consume(n, "mark", r);
+        if (c.method === "mark") markRecvs.add(r);
+      } else if (c.method === "insert") {
+        inserts.add(r);
+      } else if (c.method === "validate") {
+        const f = c.args[0];
+        if (f !== undefined) writes.push({ n, r, field: normalizeAlName(f.text) });
+      } else if (!R531_BUILTIN.has(c.method) && !bare && n.rawKind === "call_expression") {
+        consume(n, "recv-proc", r);
+        hopCands.push({ n, kind: "recv-proc", c });
+      }
+      return;
+    }
+    // a call passing R whole
+    const passes = c.args.some((a) => {
+      const k = r531Key(a);
+      return k !== null && recvs.has(k) && (k !== "" || normalizeAlName(a.text) === "rec");
+    });
+    if (passes && !R531_PURE.has(c.method) && !(c.recv !== null && R531_BUILTIN.has(c.method))) {
+      consume(n, "pass-rec", "");
+      hopCands.push({ n, kind: "pass-rec", c });
+      return;
+    }
+    // a bare same-object procedure call that can see R (a global, or the implicit Rec)
+    if (bare && procs.has(c.method) && [...recvs].some((x) => x === "" || !r531Declares(scope, x, true))) {
+      consume(n, "global-call", "");
+      hopCands.push({ n, kind: "global-call", c });
+    }
+  });
+  // a consumer plus a re-Insert under a changed filtered field is a rename by hand
+  for (const r of inserts) {
+    const f = filtered.get(r);
+    const ws = writes.filter((w) => w.r === r && (f === undefined || f.has(w.field)));
+    if (ws.length > 0 && consumers.length > 0) {
+      kinds.push("delete-reinsert");
+      for (const w of ws) {
+        consumers.push(w.n);
+        dep(r, w.field);
+      }
+    }
+  }
+  for (const m of modifies) {
+    const f = filtered.get(m.r);
+    const ws = writes.filter((w) => w.r === m.r);
+    if (f === undefined) {
+      // no filter on R in the procedure: it is set elsewhere, so every written field counts
+      consume(m.n, "modify-unseen", m.r);
+      for (const w of ws) consumers.push(w.n);
+    } else if (!r531Declares(scope, m.r, false)) {
+      // R a global, a parameter or the implicit Rec: filters can be set elsewhere too
+      if (ws.length === 0 && m.all === null) continue;
+      consume(m.n, "modify-all", m.r);
+      for (const w of ws) {
+        consumers.push(w.n);
+        dep(m.r, w.field);
+      }
+      if (m.all !== null) dep(m.r, m.all);
+    } else {
+      const hit = ws.filter((w) => f.has(w.field));
+      const all = m.all !== null && f.has(m.all) ? m.all : null;
+      if (hit.length === 0 && all === null) continue;
+      consume(m.n, "modify-filtered", m.r);
+      for (const w of hit) {
+        consumers.push(w.n);
+        dep(m.r, w.field);
+      }
+      if (all !== null) dep(m.r, all);
+    }
+  }
+  if (consumers.length === 0) return null;
+  // the filter calls BEFORE the loop, same scope, that the ending depends on
+  const preFilters = [
+    ...filterCalls.filter((c) => {
+      const d = depends.get(c.r);
+      return d !== undefined && (d.has("*") || d.has(c.field));
+    }),
+    ...markedOnly.filter((c) => markRecvs.has(c.r)),
+  ]
+    .filter((c) => c.n.endIndex <= loop.startIndex)
+    .map((c) => c.n);
+  const isConsumer = (n: ALSyntaxNode): boolean => consumers.some((c) => samePos(c, n));
+  const isContinue = (n: ALSyntaxNode): boolean => {
+    if (n.rawKind !== "continue_statement") return false;
+    for (let a = n.parent; a !== null; a = a.parent) {
+      if (BREAK_SCOPES.has(a.rawKind)) return samePos(a, loop);
+    }
+    return false;
+  };
+  const guards = [...exitGuards(body, loop, isConsumer), ...exitGuards(body, loop, isContinue)];
+  // HOP: one hop into same-object callees and table procedures on R
+  const hops: R531Hop[] = [];
+  const obj = objectOf(loop);
+  for (const h of hopCands) {
+    const targets: { proc: ALSyntaxNode; key: string }[] = [];
+    if (h.kind === "recv-proc") {
+      const fn = h.n.childForFieldName("function");
+      const recvNode = fn?.rawKind === "member_expression" ? fn.childForFieldName("object") : null;
+      const t = recvNode !== null && recvNode !== undefined ? declaredType(recvNode, ctx) : null;
+      if (t !== null && t.kind === "table")
+        for (const o of objectsOfType(t, ctx)) {
+          const p = r531ProcIn(o, h.c.method);
+          if (p !== null) targets.push({ proc: p, key: "" });
+        }
+    } else if (h.c.recv === null && obj !== null) {
+      const p = r531ProcIn(obj, h.c.method);
+      if (p !== null) {
+        if (h.kind === "global-call")
+          for (const r of recvs) {
+            // only R the callee can see: a global it does not shadow, or the implicit Rec
+            if (r === "" || (!r531Declares(scope, r, true) && !r531Declares(p, r, true)))
+              targets.push({ proc: p, key: r });
+          }
+        h.c.args.forEach((a, i) => {
+          const k = r531Key(a);
+          if (k === null || !recvs.has(k)) return;
+          const prm = r531Param(p, i);
+          // a by-value parameter is a copy: consuming it does not consume R
+          if (prm !== null && prm[1]) targets.push({ proc: p, key: prm[0] });
+        });
+      }
+    }
+    for (const t of targets) {
+      const hop = r531CalleeHop(t.proc, t.key, ctx);
+      if (hop !== null) hops.push(hop);
+    }
+  }
+  // FEEDS: indirect feeds, and the guards around a pre-loop filter call
+  let feeds: ALSyntaxNode[] = [];
+  const preGuards: ALSyntaxNode[] = [];
+  if (scope !== null) {
+    for (const f of preFilters) {
+      for (let a = f.parent; a !== null && !samePos(a, scope); a = a.parent) {
+        let g: ALSyntaxNode | null = null;
+        if (
+          a.rawKind === "if_statement" ||
+          a.rawKind === "while_statement" ||
+          a.rawKind === "repeat_statement"
+        )
+          g = a.childForFieldName("condition");
+        else if (a.rawKind === "case_statement") g = a.childForFieldName("expression");
+        else if (a.rawKind === "case_branch") g = a.childForFieldName("pattern");
+        if (g !== null) preGuards.push(g);
+      }
+    }
+    const parts: ALSyntaxNode[] = [...guards, ...preGuards];
+    for (const c of [...consumers, ...preFilters]) {
+      if (c.kind === ALNodeKind.assignment_statement) {
+        const rt = c.childForFieldName("right");
+        if (rt !== null) parts.push(rt);
+      } else {
+        const call = r531Call(c);
+        if (call !== null) parts.push(...call.args);
+      }
+    }
+    feeds = r531Feeds(scope, parts, ctx).filter((a) => !consumers.some((c) => samePos(c, a)));
+  }
+  return {
+    loop,
+    kinds: [...new Set(kinds)].sort(),
+    consumers,
+    guards,
+    preFilters,
+    feeds,
+    preGuards,
+    hops,
+  };
+}
+
+/** Every R-531 loop in a scope (FILTER and FEEDS sites can sit outside the loop). */
+function r531ScopeLoops(scope: ALSyntaxNode, ctx: SemanticContext): R531Loop[] {
+  return cached(ctx, scope, "r531scope", () => {
+    const out: R531Loop[] = [];
+    visitAll(scope, (x) => {
+      const a = r531Analyze(x, ctx);
+      if (a !== null) out.push(a);
+    });
+    return out;
+  });
+}
+
+const r531HopMemo = new WeakMap<object, R531Hop[]>();
+/** HOP: every hop of every R-531 loop in the project, built once per context. */
+function r531HopIndex(ctx: SemanticContext): R531Hop[] {
+  const hit = r531HopMemo.get(ctx);
+  if (hit !== undefined) return hit;
+  const out: R531Hop[] = [];
+  r531HopMemo.set(ctx, out);
+  for (const f of ctx.files ?? []) {
+    visitAll(f.root, (x) => {
+      const a = r531Analyze(x, ctx);
+      if (a !== null) out.push(...a.hops);
+    });
+  }
+  return out;
+}
+
+/** R-531's refusal (see the block comment above `R531_COND`). */
+function consumingLoopRefuses(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  op: string | undefined,
+): boolean {
+  const inside = (a: ALSyntaxNode, b: ALSyntaxNode): boolean =>
+    b.startIndex <= a.startIndex && a.endIndex <= b.endIndex;
+  for (let cur = node.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    const a = r531Analyze(cur, ctx);
+    if (a === null) continue;
+    // NEG: every operator but swap-find-direction inside the loop's own condition
+    if (op !== SWAP_FIND_DIRECTION && loopConditionParts(cur).some((p) => inside(node, p)))
+      return true;
+    const body = cur.childForFieldName("body");
+    if (body === null || !inside(node, body)) continue;
+    if (a.consumers.some((c) => inside(node, c) || inside(c, node))) return true;
+    if (a.guards.some((g) => inside(node, g))) return true;
+  }
+  const scope = codeScope(node);
+  if (scope === null) return false;
+  if (
+    r531ScopeLoops(scope, ctx).some((a) =>
+      [...a.preFilters, ...a.feeds, ...a.preGuards].some((f) => inside(node, f)),
+    )
+  )
+    return true;
+  const root = rootOf(node);
+  for (const h of r531HopIndex(ctx)) {
+    if (!samePos(h.proc, scope) || !sameFile(rootOf(h.proc), root)) continue;
+    if (
+      h.consumers.some(
+        (c) =>
+          inside(node, c) || (inside(c, node) && inside(node, h.proc) && !samePos(node, h.proc)),
+      )
+    )
+      return true;
+    if (h.guards.some((g) => inside(node, g))) return true;
+  }
+  return false;
 }
 
 /**
