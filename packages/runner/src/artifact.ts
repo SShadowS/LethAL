@@ -126,6 +126,30 @@ export interface CompileInput {
   readonly appVersion: string;
   readonly mutantManifest: MutantManifest;
   readonly appManifest: Readonly<Record<string, unknown>>;
+  /**
+   * R552: a second package-cache directory LethAL owns (the staged copy's `.lethal-symbols`, holding
+   * `lethal-control.app`), sent after the configured cache in ONE `/packagecachepath:A;B`. alc
+   * takes a `;`- or `,`-split list and resolves the highest version whatever the order (measured on
+   * Linux alc 18.0.2732683; the Windows alc is unmeasured, R552). Absent: the argv is unchanged.
+   */
+  readonly extraPackageCachePath?: string;
+}
+
+/**
+ * R552: the `/packagecachepath:` value for `compile`. With an extra path, a `;` or `,` in either
+ * path is refused before any spawn: alc would split it silently and resolve symbols from a
+ * directory nobody named. `ArtifactPrepareError`, never `AlcCompileError`: alc never ran.
+ */
+function packageCacheListOf(cache: string, extra: string | undefined): string {
+  if (extra === undefined) return cache;
+  for (const p of [cache, extra]) {
+    if (/[;,]/.test(p)) {
+      throw new ArtifactPrepareError(
+        `package cache path ${p} contains ';' or ',', which alc reads as a list separator; LethAL refuses to pass it rather than let alc split it silently. Move the cache or the project to a path without them.`,
+      );
+    }
+  }
+  return `${cache};${extra}`;
 }
 
 export interface ArtifactCompilerConfig {
@@ -197,7 +221,7 @@ export class ArtifactCompiler {
     }
     const { appPath, sha256 } = await this.alcToContentAddressed(
       input.projectDir,
-      this.cfg.packageCachePath,
+      packageCacheListOf(this.cfg.packageCachePath, input.extraPackageCachePath),
       input.artifactId,
     );
     return {

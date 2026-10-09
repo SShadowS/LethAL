@@ -416,6 +416,70 @@ describe("C02-05: compile's argv parity", () => {
   });
 });
 
+describe("R552: the control symbol's own package-cache path", () => {
+  const ID = "0123456789abcdef0123456789abcdef";
+  const input = {
+    projectDir: "C:/proj",
+    artifactId: ID,
+    appId: "app",
+    appVersion: "1.0.0.0",
+    mutantManifest: { artifactId: ID, mutants: [] } as unknown as MutantManifest,
+    appManifest: {},
+  };
+  function io(argvs: string[][]): ArtifactIo {
+    return {
+      spawn: async (argv) => {
+        argvs.push([...argv]);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      readArtifact: async () => new TextEncoder().encode("x"),
+      writeArtifact: async () => {},
+    };
+  }
+  const cachesOf = (argv: readonly string[] | undefined) =>
+    (argv ?? []).filter((a) => a.startsWith("/packagecachepath:"));
+
+  test("without the extra path the argv sends the one cache, as before", async () => {
+    const argvs: string[][] = [];
+    await new ArtifactCompiler(
+      { alcPath: "C:/alc.exe", packageCachePath: "C:/cache", outputDir: "C:/out" },
+      io(argvs),
+    ).compile(input);
+    expect(cachesOf(argvs[0])).toEqual(["/packagecachepath:C:/cache"]);
+  });
+
+  test("with it, ONE /packagecachepath: lists the user's cache, then LethAL's", async () => {
+    const argvs: string[][] = [];
+    await new ArtifactCompiler(
+      { alcPath: "C:/alc.exe", packageCachePath: "C:\\cache", outputDir: "C:/out" },
+      io(argvs),
+    ).compile({ ...input, extraPackageCachePath: "C:\\proj-staged\\.lethal-symbols" });
+    expect(cachesOf(argvs[0])).toEqual([
+      "/packagecachepath:C:/cache;C:/proj-staged/.lethal-symbols",
+    ]);
+  });
+
+  for (const [what, cache, extra] of [
+    ["; in the user's cache", "C:/a;b", "C:/x"],
+    [", in the user's cache", "C:/a,b", "C:/x"],
+    ["; in the extra path", "C:/cache", "C:/x;y"],
+    [", in the extra path", "C:/cache", "C:/x,y"],
+  ] as const) {
+    test(`refuses ${what} with ArtifactPrepareError, before any spawn (I4)`, async () => {
+      const argvs: string[][] = [];
+      const err = await new ArtifactCompiler(
+        { alcPath: "C:/alc.exe", packageCachePath: cache, outputDir: "C:/out" },
+        io(argvs),
+      )
+        .compile({ ...input, extraPackageCachePath: extra })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ArtifactPrepareError);
+      expect(err).not.toBeInstanceOf(AlcCompileError);
+      expect(argvs).toHaveLength(0);
+    });
+  }
+});
+
 describe("R461: a failed compile cleans up only its own scratch output", () => {
   const outOf = (argv: readonly string[]) =>
     argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length) ?? "";

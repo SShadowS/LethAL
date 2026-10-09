@@ -27,8 +27,9 @@ export interface CompileOnlyArgs {
   readonly packageCachePath: string;
   /**
    * Absolute path to the compiled `lethal-control.app` — the same `BcDevConfig.controlSymbolPath`
-   * a real run reads from its config. Required, not optional: the driver stages it into the
-   * package cache itself (exactly as `BcDevMcpBackend.stageForCompile` does), so that an operator
+   * a real run reads from its config. Required, not optional: the driver stages it itself, into its
+   * private compile copy and never into `--package-cache` (R552; exactly as
+   * `BcDevMcpBackend.stageForCompile` does), so that an operator
    * running gate 0 never meets the missing symbol as an unexplained alc resolution failure. An
    * optional flag would reinstate that trap for anyone who left it off.
    */

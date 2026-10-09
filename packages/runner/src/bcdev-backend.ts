@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
@@ -61,6 +62,21 @@ import {
 } from "./test-app-publish";
 import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
 
+/** R552: LethAL's own package-cache directory inside a private compile copy; holds only
+ *  `lethal-control.app` and is removed with that copy. */
+export const CONTROL_SYMBOL_DIR = ".lethal-symbols";
+
+/**
+ * R552: the warning for a `lethal-control.app` an older LethAL left in the user's package cache, or
+ * `undefined` when there is none. The file is never deleted or overwritten: it may be the user's own
+ * copy, and a cache shared by two sessions would race.
+ */
+export function controlLeftoverWarning(packageCachePath: string): string | undefined {
+  const leftover = join(packageCachePath, "lethal-control.app");
+  if (!existsSync(leftover)) return undefined;
+  return `[lethal] ${leftover} is a leftover from an older LethAL, which copied the LethAL Control symbol into your package cache (R552). LethAL now compiles against its own copy and never writes this cache; the file is safe to delete. While it stays, alc sees it beside LethAL's copy and picks the higher version, so a NEWER leftover would win.`;
+}
+
 export interface BcDevConfig {
   readonly mcpCommand: readonly string[]; // e.g. ["bun", "x", "bc-dev-mcp"] — argv to spawn
   readonly project: string; // AL project dir (launch.json defaults source)
@@ -74,9 +90,10 @@ export interface BcDevConfig {
   // StdioClientTransport's underlying spawn only inherits a fixed OS-level allowlist
   // (getDefaultEnvironment()) — anything else, including these, must be passed explicitly.
   readonly env?: Record<string, string>;
-  // Absolute path to the compiled `lethal-control.app` — staged into `packageCachePath` by
-  // `stageForCompile` (Task 8) so a private compile copy of the target can resolve its
-  // delegating selector's `Codeunit "LC Control State"` reference (schemata/selector.ts).
+  // Absolute path to the compiled `lethal-control.app` — staged by `stageForCompile` into the
+  // private compile copy's own `CONTROL_SYMBOL_DIR` (R552; never into `packageCachePath`) so that
+  // copy can resolve its delegating selector's `Codeunit "LC Control State"` reference
+  // (schemata/selector.ts).
   readonly controlSymbolPath: string;
   /**
    * R53 (`--stop-hung-sessions`), opt-in. When set, a RunMutant that exceeds its budget is HELD
@@ -86,9 +103,9 @@ export interface BcDevConfig {
    */
   readonly stopHungSessions?: boolean;
   // The `ArtifactCompiler`'s own package-cache directory (mirrors
-  // `ArtifactCompilerConfig.packageCachePath`, fixed at compiler construction) — `deploy()`/
-  // `compileCheck()` need this SEPARATELY so `stageForCompile` can stage the control symbol
-  // into the exact cache alc reads from via `/packagecachepath:`.
+  // `ArtifactCompilerConfig.packageCachePath`, fixed at compiler construction). The USER's cache:
+  // read by alc, never written by LethAL (R552). `stageForCompile` reads it only to warn once
+  // about a `lethal-control.app` an older LethAL left there; `compilePlainCheck` passes it to alc.
   readonly packageCachePath: string;
   /**
    * Coverage the backend claims. **Default `"fenced"` (R58 rollout, spec step 5):** per-procedure
@@ -320,6 +337,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // R298: `type:id` keys whose coverage refusal this backend already named, so the warning is
   // printed once per object per session, at index time (`nameRefusals`), rows or not.
   private readonly refusalsWarned = new Set<string>();
+  /** R552: the leftover `lethal-control.app` warning is printed once per backend. */
+  private leftoverWarned = false;
   // R298 (`coverageMode: "procedure"`, the hub): refused declared objects, `type:id` -> reason, by
   // the line map's rule. `buildCoverageMap` drops every method id of one, named or not.
   private hubRefused: ReadonlyMap<string, string> = new Map();
@@ -371,6 +390,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
       deploy: "publish",
       isolation: "session",
       authoritative: true,
+      // R553: identity, not inferred from `authoritative`.
+      kind: "bcdev",
     };
   }
 
@@ -612,34 +633,60 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
   /**
    * Builds a private, compile-only staging copy of `instrumentedDir` with the LethAL Control
-   * dependency injected into its `app.json` and `lethal-control.app` staged into the compiler's
-   * package cache. The instrumented target's delegating selector always references `Codeunit
-   * "LC Control State"` (schemata/selector.ts) and cannot compile without both — bcdev-ONLY:
-   * `instrumentedDir` itself is NEVER touched. AlRunnerBackend reads that same shared dir
-   * directly (it strips the control-registration codeunits instead) and must stay
+   * dependency injected into its `app.json` and `lethal-control.app` staged into
+   * `<staging>/.lethal-symbols` (`CONTROL_SYMBOL_DIR`), which `compileStaged` hands to alc as a
+   * second package-cache path. The instrumented target's delegating selector always references
+   * `Codeunit "LC Control State"` (schemata/selector.ts) and cannot compile without both —
+   * bcdev-ONLY: `instrumentedDir` itself is NEVER touched. AlRunnerBackend reads that same shared
+   * dir directly (it strips the control-registration codeunits instead) and must stay
    * dependency-free, so the injection must land only on this throwaway sibling copy.
+   *
+   * R552: the user's `packageCachePath` is never written. The symbol used to be copied there, so
+   * it outlived the run and a stale one in a shared cache could resolve a later compile. A leftover
+   * from an older LethAL is warned about ONCE per backend and never deleted or overwritten.
    *
    * Idempotent: re-staging the same `instrumentedDir` wipes and rebuilds the sibling (Windows
    * retry knobs mirror AlRunnerBackend's own `rm` of `activeDir` — a stale copy can be locked by
-   * an indexer/AV a moment after the previous compile).
+   * an indexer/AV a moment after the previous compile). A throw after the copy exists removes it,
+   * since the callers' cleanup `finally` only covers the compile.
    */
   private async stageForCompile(instrumentedDir: string): Promise<string> {
     const staging = `${instrumentedDir}-staged`;
     await rm(staging, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     await cp(instrumentedDir, staging, { recursive: true });
-    // Inject the dependency into the STAGED app.json only (never the shared instrumented dir).
-    const appJsonPath = join(staging, "app.json");
-    const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
-    await writeFile(
-      appJsonPath,
-      `${JSON.stringify(injectControlDependency(app), null, 2)}\n`,
-      "utf8",
-    );
-    // Stage the control symbol into the compiler's package cache (safe to share: al-runner's
-    // compiled source carries no LC Control State reference, so an unused symbol is harmless).
-    await mkdir(this.cfg.packageCachePath, { recursive: true });
-    await cp(this.cfg.controlSymbolPath, join(this.cfg.packageCachePath, "lethal-control.app"));
+    try {
+      // Inject the dependency into the STAGED app.json only (never the shared instrumented dir).
+      const appJsonPath = join(staging, "app.json");
+      const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+      await writeFile(
+        appJsonPath,
+        `${JSON.stringify(injectControlDependency(app), null, 2)}\n`,
+        "utf8",
+      );
+      await mkdir(this.cfg.packageCachePath, { recursive: true });
+      const leftover = controlLeftoverWarning(this.cfg.packageCachePath);
+      if (leftover !== undefined && !this.leftoverWarned) {
+        this.leftoverWarned = true;
+        console.warn(leftover);
+      }
+      await mkdir(join(staging, CONTROL_SYMBOL_DIR));
+      await cp(this.cfg.controlSymbolPath, join(staging, CONTROL_SYMBOL_DIR, "lethal-control.app"));
+    } catch (e) {
+      await rm(staging, { recursive: true, force: true }).catch(() => {});
+      throw e;
+    }
     return staging;
+  }
+
+  /** R552: compile a `stageForCompile` copy, with its own symbol directory as the second cache. */
+  private async compileStaged(
+    compiler: ArtifactCompiler,
+    staged: string,
+  ): Promise<CompiledArtifact> {
+    return compiler.compile({
+      ...(await this.prepareCompileInput(staged)),
+      extraPackageCachePath: join(staged, CONTROL_SYMBOL_DIR),
+    });
   }
 
   // Must happen before publish(): resolves this batch's coverage methodIds ahead of any run()
@@ -781,7 +828,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const staged = await this.stageForCompile(instrumentedDir);
     let artifact: CompiledArtifact;
     try {
-      artifact = await deployment.compiler.compile(await this.prepareCompileInput(staged));
+      artifact = await this.compileStaged(deployment.compiler, staged);
     } finally {
       // Reclaim the staged copy — each batch has a distinct batchDir, so `${batchDir}-staged`
       // would otherwise accumulate one full instrumented-project copy per batch (the `rm` at
@@ -940,7 +987,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
     const staged = await this.stageForCompile(instrumentedDir);
     try {
-      const artifact = await deployment.compiler.compile(await this.prepareCompileInput(staged));
+      const artifact = await this.compileStaged(deployment.compiler, staged);
       await rm(artifact.appPath, { force: true }).catch(() => {});
     } finally {
       await rm(staged, { recursive: true, force: true }).catch(() => {});

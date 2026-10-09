@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "../../packages/engine/src";
+import type { ArtifactIo } from "../../packages/runner/src/artifact";
 import { generateMutationSet } from "../../packages/runner/src/orchestrator";
 import { flatNamesFor } from "../../packages/schemata/src";
-import { stageCompileOnlyBatch } from "./compile-only";
+import { compileOnly, stageCompileOnlyBatch } from "./compile-only";
 
 // R219 (sol run 001, finding 3): the compile-only batch is written by two writers, which must name
 // a duplicate basename alike. Only Sales/Helper has a mutation site; Purchase/Helper has none, so
@@ -71,5 +72,59 @@ describe("stageCompileOnlyBatch (R219)", () => {
     expect(sales).not.toBe(SALES_AL);
     expect(sales).toContain('codeunit 50100 "Sales Helper"');
     expect(await readFile(join(target, names.flatOf(PURCHASE)), "utf8")).toBe(PURCHASE_AL);
+  });
+});
+
+describe("compileOnly (R552): the --package-cache is never written", () => {
+  test("the symbol reaches alc through LethAL's own path; the cache listing is unchanged", async () => {
+    const projectDir = join(root, "r552-app");
+    await Bun.write(join(projectDir, "app.json"), JSON.stringify(APP));
+    await Bun.write(join(projectDir, SALES), SALES_AL);
+    const cache = join(root, "r552-cache");
+    await mkdir(cache, { recursive: true });
+    const other = join(cache, "Microsoft_System_1.0.0.0.app");
+    await Bun.write(other, "system-symbol-bytes");
+    const past = new Date("2020-01-02T03:04:05Z");
+    await utimes(other, past, past);
+    const controlSymbolPath = join(root, "r552-control", "lethal-control.app");
+    await Bun.write(controlSymbolPath, "control-symbol-bytes");
+    const listing = async () =>
+      Promise.all(
+        (await readdir(cache)).sort().map(async (n) => {
+          const s = await stat(join(cache, n));
+          const sha = Bun.SHA256.hash(await readFile(join(cache, n)), "hex");
+          return `${n} ${s.size} ${sha} ${s.mtimeMs}`;
+        }),
+      );
+    const before = await listing();
+
+    let caches: string[] = [];
+    let seen = "";
+    const io: ArtifactIo = {
+      spawn: async (argv) => {
+        caches = argv.filter((a) => a.startsWith("/packagecachepath:"));
+        const extra = caches[0]?.slice("/packagecachepath:".length).split(";")[1];
+        if (extra !== undefined) seen = await readFile(join(extra, "lethal-control.app"), "utf8");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      readArtifact: async () => new TextEncoder().encode("x"),
+      writeArtifact: async () => {},
+    };
+    await compileOnly(
+      {
+        projectDir,
+        selectorIds: { selectorId: 50197, controlId: 50198, tableId: 50199 },
+        alcPath: "alc",
+        packageCachePath: cache,
+        controlSymbolPath,
+        configPath: join(root, "no-such-config.json"),
+      },
+      io,
+    );
+
+    expect(caches).toHaveLength(1);
+    expect((caches[0] ?? "").split(";")).toHaveLength(2);
+    expect(seen).toBe("control-symbol-bytes");
+    expect(await listing()).toEqual(before);
   });
 });

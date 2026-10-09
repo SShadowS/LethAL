@@ -15,9 +15,11 @@
  * `--config` (default `<project>/lethal.config.json`, as `lethal run`) supplies the
  * `preprocessorSymbols` a real run builds with, for both enumeration and alc (R379).
  *
- * `--control-symbol` is staged into `--package-cache` here, exactly as
- * `BcDevMcpBackend.stageForCompile` does for a real run — so gate 0 imposes no setup step that a
- * real `lethal run` does not.
+ * `--control-symbol` is staged into the private compile copy's own `.lethal-symbols` directory and
+ * passed to alc as a second package-cache path, exactly as `BcDevMcpBackend.stageForCompile` does
+ * for a real run — so gate 0 imposes no setup step that a real `lethal run` does not. R552:
+ * `--package-cache` is only read; a `lethal-control.app` an older LethAL left there gets one
+ * warning and is never touched.
  *
  * Exit 0 = validation passed AND alc produced an artifact. Any other exit is a gate-0 failure.
  */
@@ -26,7 +28,15 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ArtifactCompiler, defaultArtifactIo } from "../../packages/runner/src/artifact";
+import {
+  ArtifactCompiler,
+  type ArtifactIo,
+  defaultArtifactIo,
+} from "../../packages/runner/src/artifact";
+import {
+  CONTROL_SYMBOL_DIR,
+  controlLeftoverWarning,
+} from "../../packages/runner/src/bcdev-backend";
 import { validateSelectorIdsForProject } from "../../packages/runner/src/cli";
 // Parsing lives in packages/runner/src, not here — see that file's doc comment for why
 // (packages/runner/tests needs to import it, and packages/runner/tsconfig.json's composite
@@ -91,7 +101,10 @@ export async function stageCompileOnlyBatch(input: {
   );
 }
 
-export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
+export async function compileOnly(
+  args: CompileOnlyArgs,
+  io: ArtifactIo = defaultArtifactIo,
+): Promise<void> {
   // 1. The check --dry-run never reaches. Throws naming the offending id and range.
   await validateSelectorIdsForProject(args.projectDir, args.selectorIds);
   console.log(`[compile-only] selector ids validated against ${args.projectDir}/app.json`);
@@ -134,21 +147,27 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
     // throwaway sibling copy, for exactly this reason; `target` here is already our own private
     // temp dir, so the injection lands directly on it.
     //
-    // The DEPENDENCY needs the SYMBOL: alc resolves the declared dependency out of the package
-    // cache, so both halves have to be present. `stageForCompile` does both (`cp(controlSymbolPath,
-    // join(packageCachePath, "lethal-control.app"))`, bcdev-backend.ts), so this driver does too —
-    // an earlier version injected the dependency and left the staging to the caller, described as
-    // "the same requirement any real `lethal run` has". It is not: no other path imposes it, and
-    // on a hard gate the operator would have met it as an unexplained alc symbol-resolution
-    // failure.
+    // The DEPENDENCY needs the SYMBOL: alc resolves the declared dependency out of a package
+    // cache, so both halves have to be present. `stageForCompile` does both, so this driver does
+    // too — an earlier version injected the dependency and left the staging to the caller,
+    // described as "the same requirement any real `lethal run` has". It is not: no other path
+    // imposes it, and on a hard gate the operator would have met it as an unexplained alc
+    // symbol-resolution failure.
+    //
+    // R552: like `stageForCompile`, the symbol goes into `target`'s own `CONTROL_SYMBOL_DIR`, passed
+    // to alc as a second cache path, and never into `--package-cache`, which is only read.
     if (!existsSync(args.controlSymbolPath)) {
       throw new Error(
         `compile-only: --control-symbol ${args.controlSymbolPath} does not exist. Build the LethAL Control extension first (the /control-app skill); a missing symbol would surface as an alc symbol-resolution error with no hint about its cause.`,
       );
     }
     await mkdir(args.packageCachePath, { recursive: true });
-    await cp(args.controlSymbolPath, join(args.packageCachePath, "lethal-control.app"));
-    console.log(`[compile-only] staged lethal-control.app into ${args.packageCachePath}`);
+    const leftover = controlLeftoverWarning(args.packageCachePath);
+    if (leftover !== undefined) console.warn(leftover);
+    const symbolDir = join(target, CONTROL_SYMBOL_DIR);
+    await mkdir(symbolDir);
+    await cp(args.controlSymbolPath, join(symbolDir, "lethal-control.app"));
+    console.log(`[compile-only] staged lethal-control.app into ${symbolDir}`);
 
     const targetAppJsonPath = join(target, "app.json");
     const stagedManifest = JSON.parse(await readFile(targetAppJsonPath, "utf8")) as Record<
@@ -170,7 +189,7 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
         // R379: alc builds under the config's symbols too, as a real run's compile does.
         ...(configSymbols.length > 0 ? { preprocessorSymbols: configSymbols } : {}),
       },
-      defaultArtifactIo,
+      io,
     );
     const artifact = await compiler.compile({
       projectDir: target,
@@ -179,6 +198,7 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
       appVersion: String(compiledManifest.version),
       mutantManifest,
       appManifest: compiledManifest,
+      extraPackageCachePath: symbolDir,
     });
     console.log(
       `[compile-only] OK — instrumented project compiled, artifact ${artifactId} (${JSON.stringify(
