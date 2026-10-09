@@ -426,6 +426,18 @@ compiled against the target built with `/define:WRAPDEF` (otherwise the run refu
 `StaleTestAppError`). The leg's `ArtifactCompiler` must get `WRAPDEF` too, or alc compiles the other
 arm and R-307's manifest check refuses the deploy.
 
+**R536 added a wrapped TABLE and a wrapped PAGE** (1.0.0.1): `Wrapped Trigger` (table 78907, a field
+`OnValidate` and `Doubled`) and `Wrapped View` (page 78909, a never-run `OnOpenPage` and `Label`,
+called on a page variable, never opened), each with an unwrapped twin (78908, 78910), and six tests
+(`ClampTrigger`, `DoubledTrigger`, `LabelView` and their `Twin`s). Their 22 mutants (M0037-M0058)
+take every gate to 58: bcdev 38 / 20 / 0, al-runner 36 / 19 / 3, pre-committed in
+`docs/superpowers/specs/2026-10-09-r536-wrapped-table-page-precommitment.md`. A trigger mutant is
+placed by its object, so the table's trigger mutants are covered by both table tests and the page's
+`OnOpenPage` mutants survive under `LabelView`. Changing the target means publishing it BEFORE the
+tests app (the server compiles the tests against the installed target), and under a version above
+the resident one, which is LethAL's own minted instrumented build: a plain `1.0.0.x` is refused as a
+downgrade.
+
 ## sandbox-multiobject (R383)
 
 A target with TWO codeunits in one file, `MultiPair.Codeunit.al` (`Multi A` then `Multi B`), and a
