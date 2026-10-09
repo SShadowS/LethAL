@@ -137,7 +137,11 @@ describe("R383: sandbox-multiobject", () => {
 
   it("admitted (infrastructure), each baseline line of the emitted pair resolves to its owner", async () => {
     const { dir } = get();
-    const index = await buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true });
+    // R407: the bare label resolves against the bundle, so it names the bundle's own file.
+    const index = await buildAlRunnerCoverageIndex(dir, {
+      admitMultiObjectFiles: true,
+      labelBase: dir,
+    });
     expect(index.multiObjectFiles).toEqual([PAIR]);
     const lines = (await readFile(join(dir, PAIR), "utf8")).split(/\r?\n/);
     /** The LAST line holding `needle`: the unmutated `else` arm, which the baseline runs. */
@@ -160,12 +164,22 @@ describe("R383: sandbox-multiobject", () => {
     }
   });
 
-  it("the real CLI guard refuses the fixture as the legs require: coverage none, one warning naming the pair", async () => {
+  it("the real CLI guard refuses the fixture on a build the frame probe refuses: coverage none, one warning naming the pair", async () => {
     const warned: string[] = [];
     const out = await withAlRunnerCoverageGuard(
       { alRunner: { alRunnerPath: "a", coverage: "al-runner" } },
       PROJECT,
       (l) => warned.push(l),
+      {
+        // R407: the c39ad5de answer; the guard admits only on the probe's say-so.
+        frameProbe: async () => ({
+          outcome: "refused",
+          transport: "server",
+          build: undefined,
+          refusal: "lines-differ",
+          reason: "Probe B was reported hit at lines [33, 34, 35]",
+        }),
+      },
     );
     expect(() => assertMultiObjectRefusal(out.alRunner?.coverage, warned)).not.toThrow();
     // And the check is not vacuous: coverage left on, or no warning, both fail it.

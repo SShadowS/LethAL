@@ -11,6 +11,7 @@ import {
   emitStaticSelector,
 } from "@lethal/schemata";
 import {
+  AlRunnerCoverageFrameError,
   type AlRunnerCoverageIndex,
   alRunnerCoverageFrom,
   alRunnerCoverageFromServer,
@@ -403,6 +404,15 @@ export interface AlRunnerConfig {
    * the top of `runSession`, before an instrumented bundle exists to inspect.
    */
   readonly coverage?: "al-runner" | "none";
+  /**
+   * R407 — multi-object files are indexed for coverage. Set ONLY from the CLI coverage guard's
+   * frame-probe admission (`buildBackend`, for the main backend and every worker; the gate's own
+   * legs from the same guard). Never a config-file key: `AL_RUNNER_KEYS` refuses it. With coverage
+   * on, an index holding a multi-object file throws `AlRunnerCoverageFrameError` unless this is
+   * true, so a construction path that drops it fails loudly instead of reading every reached mutant
+   * `no-coverage`.
+   */
+  readonly admitMultiObjectFiles?: boolean;
   /**
    * R222 — how the active mutant reaches the compiled AL.
    *
@@ -820,20 +830,41 @@ export class AlRunnerBackend implements ExecutionBackend {
     this.buildSymbols = [...symbols];
   }
 
-  /** The index, under the session's symbols; with coverage on, a deploy without them refuses. */
-  private coverageIndexOf(dir: string): Promise<AlRunnerCoverageIndex> {
+  /**
+   * The index, under the session's symbols; with coverage on, a deploy without them refuses.
+   *
+   * R407 backstops, for a bundle holding a multi-object file: it throws unless the guard's
+   * admission reached this backend (`cfg.admitMultiObjectFiles`), and unless `deploy()` ran first.
+   * Without a deploy the index would be built from `cfg.instrumentedDir`, the PARENT of the batch
+   * folders, and the label check would then let a batch label through.
+   */
+  private async coverageIndexOf(dir: string): Promise<AlRunnerCoverageIndex> {
     const symbols = this.buildSymbols;
     if (symbols === undefined) {
       throw new Error(
         "AlRunnerBackend: coverage is on but the session's build symbols were never handed over (useBuildSymbols), so the #if arms of the bundle are unknown; refusing rather than guessing them (R-300b).",
       );
     }
-    return buildAlRunnerCoverageIndex(dir, {
+    const admit = this.cfg.admitMultiObjectFiles === true;
+    const index = await buildAlRunnerCoverageIndex(dir, {
       symbols,
+      ...(admit ? { admitMultiObjectFiles: true } : {}),
       ...(this.cfg.sourceProjectDir !== undefined
         ? { sourceProjectDir: this.cfg.sourceProjectDir }
         : {}),
     });
+    const multi = index.multiObjectFiles;
+    if (multi.length > 0 && !admit) {
+      throw new AlRunnerCoverageFrameError(
+        `AlRunnerBackend: coverage is on and the bundle holds multi-object file(s) ${multi.join(", ")}, but no frame-probe admission reached this backend. Their objects would read no-coverage while tests reach them`,
+      );
+    }
+    if (multi.length > 0 && this.deployedDir === undefined) {
+      throw new AlRunnerCoverageFrameError(
+        `AlRunnerBackend: a coverage index for the multi-object file(s) ${multi.join(", ")} was asked for before any deploy(), so it would be built from ${dir} rather than the deployed bundle`,
+      );
+    }
+    return index;
   }
 
   /**
