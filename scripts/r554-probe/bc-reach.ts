@@ -12,6 +12,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { itestConfigName, itestConfigPath } from "../../packages/runner/itest/config-path";
+import {
+  WRAPPED_PROJECT_DIR,
+  WRAPPED_SELECTOR_IDS,
+  WRAPPED_SYMBOLS,
+  WRAPPED_TEST_DIR,
+} from "../../packages/runner/itest/wrapped-fixture";
 import { ArtifactCompiler, defaultArtifactIo } from "../../packages/runner/src/artifact";
 import { BcDevMcpBackend } from "../../packages/runner/src/bcdev-backend";
 import { odataBaseUrl, validateBcDevConfig } from "../../packages/runner/src/cli";
@@ -28,13 +35,6 @@ import {
 import type { SessionReport } from "../../packages/runner/src/report";
 import { RunMutantTransport } from "../../packages/runner/src/run-mutant-transport";
 import { ResultsStore } from "../../packages/runner/src/store";
-import { itestConfigName, itestConfigPath } from "../../packages/runner/itest/config-path";
-import {
-  WRAPPED_PROJECT_DIR,
-  WRAPPED_SELECTOR_IDS,
-  WRAPPED_SYMBOLS,
-  WRAPPED_TEST_DIR,
-} from "../../packages/runner/itest/wrapped-fixture";
 
 const out = process.argv[2];
 if (out === undefined) throw new Error("usage: bun scripts/r554-probe/bc-reach.ts <out dir>");
