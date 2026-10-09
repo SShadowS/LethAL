@@ -91,9 +91,9 @@ const BASE_APPLICATION_ID = "437dbf0e-84ff-417a-965d-ed2bb9650972";
 /** R254 moved this from 68 to 70 (the reportextension arm's two equivalent survivors). */
 const SURVIVORS = 70;
 /** One `[Test]` string in DataTests.Codeunit.al is inside R79's comment, and discovery (correctly)
- *  does not count it. R254 added two tests (68 -> 70, measured offline), so the scratch suite
- *  has 75. */
-const COMMITTED_TESTS = 70;
+ *  does not count it. R254 added two tests (68 -> 70, measured offline). R-463 added
+ *  `BandCountsFromLow` (70 -> 71, measured offline), so the scratch suite has 76. */
+const COMMITTED_TESTS = 71;
 const NOOP_TESTS = 5;
 const NOOP_CODEUNIT_ID = 79396;
 const NOOP_CODEUNIT_NAME = "Data Verify Scale NoOp";

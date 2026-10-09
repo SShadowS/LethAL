@@ -44,6 +44,14 @@ export const R254_ARM_ORACLE: readonly ArmOracleRow[] = [
   { line: 37, operator: "conditional-boundary", verdict: "no-coverage" },
   { line: 38, operator: "return-value", verdict: "no-coverage" },
   { line: 38, operator: "swap-additive", verdict: "no-coverage" },
+  // R-463 (docs/superpowers/specs/2026-10-09-r463-reportext-precommitment.md): `CountBand`, a typed
+  // record in the extension. The two `remove-setrange` rows are `void-method-call` under master's code,
+  // so a reverted R-463 fails here as two rows "not in the oracle". Line 47's count is not pinned:
+  // any `Data Related` row in [3, 99] other than BAND 3 and 4 adds to it.
+  kill(46, "empty-block", "BandCountsFromLow", 1, "CountBand(3) should be 2, got 0"),
+  kill(47, "remove-setrange", "BandCountsFromLow", 1, "CountBand(3) should be 2, got"),
+  kill(48, "remove-setrange", "BandCountsFromLow", 1, "CountBand(3) should be 2, got 4"),
+  kill(49, "return-value", "BandCountsFromLow", 1, "CountBand(3) should be 2, got 0"),
 ];
 
 /** The fields of a report mutant the oracle reads. */
