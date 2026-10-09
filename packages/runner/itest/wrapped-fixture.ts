@@ -368,9 +368,9 @@ export function twinDifferences(report: WrappedReport): string[] {
 
 /**
  * R497: one bcdev leg (fenced or hub). One batch, a green baseline, the bcdev table per mutant,
- * strict twin parity, and no coverage refusal naming any of the fixture's objects (codeunits
- * 78900-78949): an admitted file must not be refused, and `WrappedPairB`'s compiled-out key must
- * not refuse `WrappedPairA` (plan r2 A1).
+ * strict twin parity, and no coverage refusal naming any of the fixture's objects (codeunits,
+ * tables and pages 78900-78949, either key case): an admitted file must not be refused, and
+ * `WrappedPairB`'s compiled-out key must not refuse `WrappedPairA` (plan r2 A1).
  */
 export function assertBcWrappedRun(
   report: WrappedReport,
@@ -383,7 +383,7 @@ export function assertBcWrappedRun(
   problems.push(...diffRows(EXPECTED_WRAPPED_BC, wrappedRows(report)));
   problems.push(...twinDifferences(report));
   for (const w of warnings)
-    if (/coverage refused for (Codeunit|Table|Page):789\d\d/.test(w)) problems.push(`refusal: ${w}`);
+    if (/coverage refused for (codeunit|table|page):789\d\d/i.test(w)) problems.push(`refusal: ${w}`);
   for (const m of report.mutants)
     if (m.failureNote?.includes("coverage refused"))
       problems.push(`${m.mutantCode} carries a refusal: ${m.failureNote}`);

@@ -279,6 +279,16 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
         const at = await lineOf(file, `procedure ${name}(`);
         expect(at).toBeGreaterThan(0);
         expect(map.lookup(type, id, at)).toBe(name);
+        // The placement the live table rests on (as `Twice` inside `Grow`): the procedure's
+        // ORIGINAL-text lines lie inside the instrumented trigger above it, which names nobody, so a
+        // backend reading original lines against the instrumented text would turn the procedure's
+        // rows no-coverage. Moving the procedure above its trigger would lose this; this fails then.
+        const original = (await readFile(join(WRAPPED_PROJECT_DIR, "src", file), "utf8")).split("\n");
+        const origAt = original.findIndex((l) => l.includes(`procedure ${name}(`)) + 1;
+        expect(origAt).toBeGreaterThan(0);
+        expect(at).toBeGreaterThan(origAt + 3);
+        for (const line of [origAt, origAt + 1, origAt + 2])
+          expect(map.lookup(type, id, line)).toBeUndefined();
       }
     } finally {
       await rm(root, { recursive: true, force: true });
