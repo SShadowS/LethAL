@@ -3498,6 +3498,8 @@ export async function printDryRun(
     readonly backendKind?: "bcdev" | "al-runner";
     /** R392: the config's al-runner binary, probed once when `backendKind` is `al-runner`. */
     readonly alRunnerPath?: string;
+    /** R565: the dependency package folders the config names (`MutationSetOptions`). */
+    readonly dependencyPackageDirs?: readonly string[];
   },
   spawn: SpawnFn = defaultSpawn,
 ): Promise<void> {
@@ -3519,11 +3521,18 @@ export async function printDryRun(
     const changed = predefinedSymbolsChangedWarning(predefined);
     if (changed !== undefined) console.warn(changed);
     backend = { kind: "al-runner", predefined };
+    // R565: a real run provisions and searches al-runner's platform apps first; a dry run does not.
+    console.warn(
+      "[lethal] dry run on al-runner: no platform-apps folder is provisioned, so Microsoft reports the project calls are read only from alRunner.packagesDir, and the refused set can differ from a real run's (R565).",
+    );
   } else if (paths.backendKind === "bcdev") {
     backend = { kind: "bcdev" };
   }
   const { files, skipped, totalFiles, excludedByOnly, excludedByOperator, excludedByLines } =
     await generateMutationSet(projectDir, {
+      ...(paths.dependencyPackageDirs !== undefined
+        ? { dependencyPackageDirs: paths.dependencyPackageDirs }
+        : {}),
       ...(only !== undefined ? { only } : {}),
       ...(exclude !== undefined ? { exclude } : {}),
       ...(operators !== undefined ? { operators } : {}),
@@ -4211,6 +4220,15 @@ export async function runFromCli(
             ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
             ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
             ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
+            // R565: bcdev and envtool read dependency reports from the package cache alc compiles
+            // against; al-runner's folders come from the backend and its provisioning.
+            ...(parsed.backendKind === "bcdev"
+              ? {
+                  dependencyPackageDirs: [
+                    resolve(packageCachePathDefault(effectiveConfig.bcdev, parsed.projectDir)),
+                  ],
+                }
+              : {}),
             // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
             // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
             preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
@@ -5885,6 +5903,13 @@ async function main(): Promise<number> {
       ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
         ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
         : {}),
+      // R565: the folders a real run searches, less al-runner's provisioned platform apps.
+      dependencyPackageDirs:
+        parsed.backendKind === "al-runner"
+          ? dryRunConfig?.alRunner?.packagesDir !== undefined
+            ? [dryRunConfig.alRunner.packagesDir]
+            : []
+          : [resolve(packageCachePathDefault(dryRunConfig?.bcdev, parsed.projectDir))],
     });
     return 0;
   }

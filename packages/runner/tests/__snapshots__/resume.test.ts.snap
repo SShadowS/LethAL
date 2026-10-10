@@ -339,6 +339,8 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "tuples": [],
         },
         "declarativeSiteFiles": [],
+        "dependencyReportSources": [],
+        "dependencySourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "deployedCount": 6,
         "excludedByExclude": 0,
         "excludedByOnly": 0,

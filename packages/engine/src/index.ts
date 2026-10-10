@@ -107,7 +107,7 @@ export {
 export type { RecordScope } from "./semantic/receiver";
 export type { CallerIndex, CallSite } from "./semantic/callers";
 export { buildCallerIndex } from "./semantic/callers";
-export type { NodeArm, SemanticContext } from "./semantic/context";
+export type { DependencyReport, NodeArm, SemanticContext } from "./semantic/context";
 export { armOfNode, buildSemanticContext, rawArmOf } from "./semantic/context";
 export { normalizeAlName, resolveVarRef } from "./semantic/resolve-var-ref";
 export type { HarmlessTriggerKind, RunTriggerKind } from "./semantic/trigger-skip";

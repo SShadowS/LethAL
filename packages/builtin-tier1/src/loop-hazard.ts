@@ -335,12 +335,13 @@ function extendedBaseName(ext: ALSyntaxNode): string | null {
 const ANY_REPORT = "\u0000any";
 const extendedReports = new WeakMap<object, Set<string>>();
 /** Does any reportextension in the project extend the report holding `item`? Unknown (no file
- *  list on the context): yes, the safe direction. An item an extension adds is not extended. */
+ *  list on the context): yes, the safe direction. An item an extension adds is not extended.
+ *  R565: a dependency report's context (`allReportsExtended`) answers yes for every report. */
 function reportExtended(item: ALSyntaxNode, ctx: SemanticContext): boolean {
   const report = objectOf(item);
   if (report === null || report.rawKind !== "report_declaration") return false;
   const files = ctx.files;
-  if (files === undefined) return true;
+  if (files === undefined || ctx.allReportsExtended === true) return true;
   let names = extendedReports.get(ctx);
   if (names === undefined) {
     names = new Set();
@@ -2237,11 +2238,46 @@ function crossWriters(ctx: SemanticContext): CrossWriters {
     }
     for (const k of ws) s.add(k);
   };
+  // names and ids, so neither spelling of a project report is looked up outside
+  const projectReports = new Set<string>();
   for (const o of projectObjects(ctx)) {
-    if (o.rawKind === "report_declaration")
+    if (o.rawKind === "report_declaration") {
+      projectReports.add(objectNameOf(o));
+      const id = o.childForFieldName("object_id")?.text;
+      if (id !== undefined) projectReports.add(id);
       add(objectNameOf(o), presetWriters(o, presetExitNames(o, ctx), ctx).procs);
-    else if (o.rawKind === "reportextension_declaration")
+    } else if (o.rawKind === "reportextension_declaration")
       add(extendedBaseName(o), presetWriters(o, extensionPresetExitNames(o, ctx), ctx).procs);
+  }
+  // R565: every `Report X` type in the project whose X (a name or an id) is not a project report:
+  // X's source and its dependency reportextensions, read from the packages (`dependencyReport`),
+  // each object over its own names in X's own context. Their writers are keyed by X as spelled,
+  // which is what `declaredType` answers for the receiver.
+  const dep = ctx.dependencyReport;
+  if (dep !== undefined) {
+    const outside = new Set<string>();
+    for (const o of projectObjects(ctx))
+      visitAll(o, (n) => {
+        if (
+          n.rawKind === "object_reference_type" &&
+          normalizeAlName(n.childForFieldName("object_type")?.text ?? "") === "report"
+        ) {
+          const x = normalizeAlName(lastFieldChild(n, "reference")?.text ?? "");
+          if (x !== "" && !projectReports.has(x)) outside.add(x);
+        }
+      });
+    for (const x of [...outside].sort()) {
+      const got = dep(x);
+      if (got === null) continue;
+      for (const root of got.roots)
+        for (const r of objectDeclarationsOf(root)) {
+          if (r.rawKind === "report_declaration" && objectNameOf(r) === got.name)
+            add(x, presetWriters(r, presetExitNames(r, got.ctx), got.ctx).procs);
+          // the reader picked these files by their symbols' `Target`, whatever spelling the AL uses
+          else if (r.rawKind === "reportextension_declaration")
+            add(x, presetWriters(r, extensionPresetExitNames(r, got.ctx), got.ctx).procs);
+        }
+    }
   }
   const all = new Set<string>(anyReport);
   for (const s of byReport.values()) for (const k of s) all.add(k);

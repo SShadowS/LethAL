@@ -15,13 +15,16 @@ export function buildFakeApp(symbolReference: unknown): Buffer {
  * R139 check 2 reads a package the SERVER hands back, which carries a manifest and the app's own
  * AL source alongside `SymbolReference.json`, so its tests need more than one entry. Kept in one
  * builder rather than two so the single-entry helper above cannot drift from the multi-entry one.
+ * R565: a list of pairs may name one entry twice, which a record cannot.
  */
-export function buildFakeAppWithEntries(entries: Record<string, string | Buffer>): Buffer {
+export function buildFakeAppWithEntries(
+  entries: Record<string, string | Buffer> | readonly (readonly [string, string | Buffer])[],
+): Buffer {
   const localSections: Buffer[] = [];
   const centralHeaders: Buffer[] = [];
   let localOffset = 0;
 
-  for (const [entryName, content] of Object.entries(entries)) {
+  for (const [entryName, content] of Array.isArray(entries) ? entries : Object.entries(entries)) {
     const name = Buffer.from(entryName, "utf8");
     const data = typeof content === "string" ? Buffer.from(content, "utf8") : content;
 

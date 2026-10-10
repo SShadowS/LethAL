@@ -509,8 +509,8 @@ ${guard}        ${S}
     expect(
       carryRecord(
         m,
-        { hash: "old", twins: new Set() },
-        { hash: "new", twins: new Set(), refused },
+        { hash: "old", twins: new Set(), dependencyHash: "dep" },
+        { hash: "new", twins: new Set(), dependencyHash: "dep", refused },
         answer,
         answer,
       ),
@@ -521,8 +521,8 @@ ${guard}        ${S}
     expect(
       carryRecord(
         { ...m, memberHash: "x" },
-        { hash: "old", twins: new Set() },
-        { hash: "new", twins: new Set(), refused: new Set() },
+        { hash: "old", twins: new Set(), dependencyHash: "dep" },
+        { hash: "new", twins: new Set(), dependencyHash: "dep", refused: new Set() },
         () => undefined,
         (s) => (s === memberSiteOf(site, "x") ? "carried" : undefined),
       ),

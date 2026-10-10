@@ -1,5 +1,6 @@
 import { compareCodeUnits } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef } from "./backend";
+import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import {
@@ -188,6 +189,10 @@ export interface FoldedReport {
   readonly numbering?: FoldedNumbering;
   /** R274 — see `SessionReport.sourceSha256`. Absent for an older stream. */
   readonly sourceSha256?: string;
+  /** R565 — see `SessionReport.dependencyReportSources`. Absent for an older stream. */
+  readonly dependencyReportSources?: readonly DependencyReportSourceRecord[];
+  /** R565 — see `SessionReport.dependencySourceSha256`. Absent for an older stream. */
+  readonly dependencySourceSha256?: string;
   /** R206 — see `SessionReport.warmKills`. */
   readonly warmKills: number;
   /** R175 — see `SessionReport.unplaceableCount`. */
@@ -310,6 +315,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let excludedByLines = 0;
   let numbering: FoldedNumbering | undefined;
   let sourceSha256: string | undefined;
+  let dependencyReportSources: readonly DependencyReportSourceRecord[] | undefined;
+  let dependencySourceSha256: string | undefined;
 
   // AND across every baseline verdict across every `baseline-batch-finished` event — mirrors
   // `orchestrator.ts`'s `baselineGreenOverall`, which starts true and is never reset once false.
@@ -409,6 +416,13 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         excludedByOperator = e.excludedByOperator;
         excludedByLines = e.excludedByLines ?? 0;
         sourceSha256 = e.sourceSha256;
+        // R565: written together by the producer, so a stream with only one is corrupt.
+        if ((e.dependencyReportSources === undefined) !== (e.dependencySourceSha256 === undefined))
+          throw new Error(
+            "foldEvents: mutation-set-generated carries only one of dependencyReportSources and dependencySourceSha256 (R565). The producer writes both or neither.",
+          );
+        dependencyReportSources = e.dependencyReportSources;
+        dependencySourceSha256 = e.dependencySourceSha256;
         {
           // R443: written together by the producer, so a stream with only some is corrupt.
           const { numberingDigest, twinSites, carryHidden } = e;
@@ -801,6 +815,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(alRunnerTestSelector !== undefined ? { alRunnerTestSelector } : {}),
     ...(numbering !== undefined ? { numbering } : {}),
     ...(sourceSha256 !== undefined ? { sourceSha256 } : {}),
+    ...(dependencyReportSources !== undefined ? { dependencyReportSources } : {}),
+    ...(dependencySourceSha256 !== undefined ? { dependencySourceSha256 } : {}),
   };
 }
 

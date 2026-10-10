@@ -739,6 +739,28 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A call to a preset writer of a report OUTSIDE the project is hang-refused; identity scheme 40**
+  (R565, closes R561). R555 refused a call through `Report X` to a procedure that writes a name the
+  report's open-item exit guard reads, but only when X was a project report: LethAL had only the
+  dependency's symbols, which carry no procedure bodies. It now reads X's source from the dependency
+  packages: on al-runner the provisioned platform-apps folder, then `alRunner.packagesDir`; on bcdev
+  and envtool `bcdev.packageCachePath`. Per app id the first folder holding it wins, then its highest
+  version there. A ReadyToRun wrapper is read only in the measured shape. X's dependency
+  reportextensions are read beside it, and every outside report counts as extended (R487), since the
+  project or an installed app may extend it. Nothing is written to those folders. When the source
+  cannot be read (`not-found`, `no-source`, `ambiguous`, `unwrap-failed`, `no-symbols`, `unreadable`,
+  `parse-damaged`, `base-not-found`), the call is checked as before, with a `dependency-report-source-unavailable`
+  warning. The report gains `dependencyReportSources` and `dependencySourceSha256` (optional fields,
+  so it stays schema v3). The digest is also recorded on the run, and history and `--resume` carry a
+  verdict by key (rule 1) only when it is equal too. The refused set now depends on dependency bytes
+  and a refused site renumbers its same-tuple twins, so history, `--resume` and marks recorded under
+  scheme 39 are not carried. Measured with al-runner's 28.5 platform apps: Quality Management 7
+  removed (R561's 5 sites plus 2 of the same shape), Application Test Library 15 removed and 2
+  ordinals moved, 0 tuples moved; ten other projects unchanged. Limits: `--dry-run` on al-runner has
+  no provisioned platform folder, so its refused set can differ from a real run's (it warns); a
+  bcdev package cache can hold an older BaseApp than the server; a third-party package without
+  source is not read.
+
 - **A test temp folder that cannot be removed now names the file still locked** (R375). On Windows
   CI the full suite sometimes failed with `R358: could not remove ...: EBUSY`, and the R358 leak
   guard then failed too. The main fix was R449, which moved CI's temp folder off the runner's OS

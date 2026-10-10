@@ -295,6 +295,8 @@ export interface VerifySource {
   /** R443: the source run's numbering digest, which a mark's proof is checked against, and
    *  copied onto verify's run row with `twin_tuples`. `null` (before R443): no mark applies. */
   readonly numberingDigest: string | null;
+  /** R565: the source run's dependency source digest, copied with the generation hash. */
+  readonly dependencySourceSha256: string | null;
   readonly targets: ReadonlyArray<{
     readonly batchIndex: number;
     readonly mutantCode: string;
@@ -622,6 +624,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     generationSourceSha256: run.generationSourceSha256,
     twinTuples: run.twinTuples,
     numberingDigest: run.numberingDigest,
+    dependencySourceSha256: run.dependencySourceSha256,
     targets,
     rows: [...rows.values()].map((r) => ({
       mutantCode: r.mutantCode,
@@ -1836,6 +1839,7 @@ export async function runVerify(
         generationSourceSha256: source.generationSourceSha256,
         twinTuples: source.twinTuples,
         numberingDigest: source.numberingDigest,
+        dependencySourceSha256: source.dependencySourceSha256,
         // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
         coverageMode,
         // R247: the test app this run measures against, the one it is about to publish. The
