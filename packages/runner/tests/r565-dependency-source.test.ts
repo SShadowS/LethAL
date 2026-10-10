@@ -457,6 +457,47 @@ describe("R565 test 7: which package is read", () => {
   });
 });
 
+describe("R565 review r1 fixes", () => {
+  // Red: read the entry with no try (the corrupt entry throws out of generation).
+  test("an entry that is listed but cannot be read is unreadable; nothing throws", () => {
+    const pkg = depApp(BASE);
+    const at = pkg.indexOf(Buffer.from(`src/${REP_REF}`));
+    pkg.fill(0, at - 30, at - 26); // the entry's local header signature, its first occurrence
+    const p = project([folder({ "Base.app": pkg })]);
+    expect(p.refused(SET)).toBe(false);
+    expect(p.records().map(brief)).toEqual([`report dep rep unreadable ${BASE.version}`]);
+  });
+  // Red: let a later folder's copy stand in for a refused first copy.
+  test("a refused copy in the first folder blocks the same app id in a later folder", () => {
+    const bad = wrap(depApp(BASE), BASE, { embedded: { version: "28.5.2.0" } });
+    const p = project([folder({ "W.app": bad }), folder({ "Base.app": depApp(BASE) })]);
+    expect(p.refused(SET)).toBe(false);
+    const recs = p.records();
+    expect(recs.map(brief)).toEqual([
+      "package Base.app unwrap-failed",
+      "package W.app unwrap-failed",
+      "report dep rep not-found",
+    ]);
+    expect(recs[0]?.detail).toContain("copy in an earlier folder was refused");
+  });
+  test("control: a valid copy in the same first folder is still read", () => {
+    const bad = wrap(depApp(BASE), BASE, { embedded: { version: "28.5.2.0" } });
+    const p = project([folder({ "W.app": bad, "Base.app": depApp(BASE) })]);
+    expect(p.refused(SET)).toBe(true);
+  });
+  // Red: record `ok` when the file declares no report of the symbols' name.
+  test("a file that does not declare the report its symbols name is base-not-found, with a warning", async () => {
+    const renamed = depRep().replace('"Dep Rep"', '"Renamed Rep"');
+    const p = project([folder({ "Base.app": depApp(BASE, { report: renamed }) })]);
+    expect(p.refused(SET)).toBe(false);
+    expect(p.records().map(brief)).toEqual([`report dep rep base-not-found ${BASE.version}`]);
+    const got = await generate([folder({ "Base.app": depApp(BASE, { report: renamed }) })]);
+    expect(
+      got.warnings.filter((w) => w.code === "dependency-report-source-unavailable").length,
+    ).toBe(1);
+  });
+});
+
 describe("R565 test 8: the digest covers the dependency entry's bytes", () => {
   // Red: leave `entrySha256` out of `recordLine`.
   test("a changed entry gives another digest; the same bytes the same one", async () => {

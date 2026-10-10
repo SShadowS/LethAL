@@ -25,7 +25,9 @@ import {
   type ArmEvaluation,
   type DependencyReport,
   buildSemanticContext,
+  lastFieldChild,
   normalizeAlName,
+  objectDeclarationsOf,
   parseAL,
   wrapRoot,
 } from "@lethal/engine";
@@ -49,8 +51,12 @@ export type DependencySourceOutcome =
   | "unwrap-failed"
   /** a package with neither `SymbolReference.json` nor a wrapper manifest (a runtime package) */
   | "no-symbols"
-  /** a package that cannot be opened, or holds one entry name twice */
-  | "unreadable";
+  /** a package that cannot be opened, or holds one entry name twice; or an entry that cannot be
+   *  read; or (on a package record) a later folder's copy of an app whose first folder's copy was
+   *  refused, recorded with that refusal's reason instead */
+  | "unreadable"
+  /** the entry was read, but declares no report of the name its package's symbols give */
+  | "base-not-found";
 
 /** One lookup (`report`, `extension`) or one package that could not be used (`package`). */
 export interface DependencyReportSourceRecord {
@@ -93,7 +99,13 @@ interface Selected extends Candidate {
   readonly reports: readonly { name: string; id: number | undefined; ref: string }[];
   readonly exts: readonly { target: string; ref: string }[];
 }
-type Refused = { readonly outcome: DependencySourceOutcome; readonly detail: string };
+/** `id`: the refused package's app id when it can still be read, so a later folder's copy of that
+ *  app is not read in its place (the first folder holding an app wins, even when it fails). */
+type Refused = {
+  readonly outcome: DependencySourceOutcome;
+  readonly detail: string;
+  readonly id?: string;
+};
 
 const stripBom = (s: string): string => (s.charCodeAt(0) === 0xfeff ? s.slice(1) : s);
 
@@ -115,7 +127,19 @@ function openPackage(buf: Buffer): Opened | Refused {
   try {
     const top = entriesOf(buf);
     if (top.has(WRAPPER_MANIFEST)) return unwrap(buf, top);
-    if (!top.has(SYMBOLS)) return { outcome: "no-symbols", detail: `no ${SYMBOLS}` };
+    if (!top.has(SYMBOLS)) {
+      let id: string | undefined;
+      try {
+        id = readAppIdentity(buf).id.toLowerCase();
+      } catch {
+        id = undefined; // no manifest either: nothing to block
+      }
+      return {
+        outcome: "no-symbols",
+        detail: `no ${SYMBOLS}`,
+        ...(id !== undefined ? { id } : {}),
+      };
+    }
     const { id, version } = readAppIdentity(buf);
     compareAppVersions(version, version); // a version that does not parse is unreadable
     return { buf, entries: top, id: id.toLowerCase(), version };
@@ -125,12 +149,17 @@ function openPackage(buf: Buffer): Opened | Refused {
 }
 
 function unwrap(buf: Buffer, top: ReadonlySet<string>): Opened | Refused {
-  const fail = (detail: string): Refused => ({ outcome: "unwrap-failed", detail });
   const m = JSON.parse(stripBom(entry(buf, WRAPPER_MANIFEST).toString("utf8"))) as Record<
     string,
     unknown
   >;
   const want = (k: string): string | undefined => (typeof m[k] === "string" ? m[k] : undefined);
+  const embeddedId = want("EmbeddedAppId")?.toLowerCase();
+  const fail = (detail: string): Refused => ({
+    outcome: "unwrap-failed",
+    detail,
+    ...(embeddedId !== undefined ? { id: embeddedId } : {}),
+  });
   const fileName = want("EmbeddedAppFileName");
   const apps = [...top].filter((e) => !e.includes("/") && e.toLowerCase().endsWith(".app"));
   if (apps.length !== 1) return fail(`${apps.length} top-level .app entries, not 1`);
@@ -185,6 +214,8 @@ function symbolsOf(c: Candidate): Selected {
 /** The packages read: per app id, the first folder holding it, then its highest version there. */
 function index(dirs: readonly string[], refused: DependencyReportSourceRecord[]): Selected[] {
   const candidates: Candidate[] = [];
+  /** app id -> the first refused copy of it, by folder */
+  const refusedIds = new Map<string, { dirIndex: number; file: string; got: Refused }>();
   for (const [dirIndex, dir] of dirs.entries()) {
     let names: string[];
     try {
@@ -199,13 +230,36 @@ function index(dirs: readonly string[], refused: DependencyReportSourceRecord[])
       } catch (err) {
         got = { outcome: "unreadable", detail: err instanceof Error ? err.message : String(err) };
       }
-      if ("outcome" in got)
+      if ("outcome" in got) {
         refused.push({ kind: "package", package: file, outcome: got.outcome, detail: got.detail });
-      else candidates.push({ ...got, file, dirIndex });
+        if (got.id !== undefined && !refusedIds.has(got.id))
+          refusedIds.set(got.id, { dirIndex, file, got });
+      } else candidates.push({ ...got, file, dirIndex });
     }
   }
+  // The first folder holding an app wins even when its copy is refused: a later folder's copy is
+  // not read in its place (it may be another build). A folder holding a valid copy too still wins
+  // with it. An `unreadable` package has no readable id, so it cannot block anything.
+  const firstValid = new Map<string, number>();
+  for (const c of candidates)
+    firstValid.set(c.id, Math.min(firstValid.get(c.id) ?? c.dirIndex, c.dirIndex));
+  const blocked = (c: Candidate): Refused | undefined => {
+    const r = refusedIds.get(c.id);
+    const v = firstValid.get(c.id);
+    return r !== undefined && v !== undefined && r.dirIndex < v ? r.got : undefined;
+  };
   const best = new Map<string, Candidate>();
   for (const c of candidates) {
+    const why = blocked(c);
+    if (why !== undefined) {
+      refused.push({
+        kind: "package",
+        package: c.file,
+        outcome: why.outcome,
+        detail: `not read: app ${c.id}'s copy in an earlier folder was refused (${why.detail})`,
+      });
+      continue;
+    }
     const b = best.get(c.id);
     if (
       b === undefined ||
@@ -243,7 +297,12 @@ export function dependencyReportReader(dirs: readonly string[]): DependencyRepor
   ): { entry: string; root?: ALSyntaxNode; sha?: string; outcome: DependencySourceOutcome } => {
     const name = `src/${ref}`;
     if (ref === "" || !p.entries.has(name)) return { entry: name, outcome: "no-source" };
-    const bytes = entry(p.buf, name);
+    let bytes: Buffer;
+    try {
+      bytes = entry(p.buf, name);
+    } catch {
+      return { entry: name, outcome: "unreadable" }; // listed but corrupt: generation continues
+    }
     const root = wrapRoot(parseAL(decodeSource(bytes)));
     return {
       entry: name,
@@ -271,7 +330,21 @@ export function dependencyReportReader(dirs: readonly string[]): DependencyRepor
     }
     const { p, r } = first;
     const pkg = { package: p.file, appId: p.id, version: p.version };
-    const base = read(p, r.ref);
+    const read0 = read(p, r.ref);
+    // the file must declare the report the symbols name, or its writers are not X's
+    const base: ReturnType<typeof read> =
+      read0.root !== undefined &&
+      !objectDeclarationsOf(read0.root).some(
+        (o) =>
+          o.rawKind === "report_declaration" &&
+          normalizeAlName(lastFieldChild(o, "object_name")?.text ?? "") === r.name,
+      )
+        ? {
+            entry: read0.entry,
+            ...(read0.sha !== undefined ? { sha: read0.sha } : {}),
+            outcome: "base-not-found",
+          }
+        : read0;
     records.push({
       kind: "report",
       report: x,

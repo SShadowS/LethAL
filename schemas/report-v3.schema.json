@@ -1127,7 +1127,8 @@
               "no-source",
               "unwrap-failed",
               "no-symbols",
-              "unreadable"
+              "unreadable",
+              "base-not-found"
             ]
           },
           "package": {
