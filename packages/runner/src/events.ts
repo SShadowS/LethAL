@@ -366,6 +366,20 @@ export type RunEventInput =
       readonly dir: string;
     }
   | {
+      /**
+       * R558: the test selector R551's one-call probe chose for this session's one-shot al-runner
+       * runs: `exact` (`--test X --test-exact X`) or `substring-with-excludes` (R488's `--test X
+       * --exclude-test <sibling>...`), with the probe's `reason` on the latter.
+       *
+       * Emitted once, beside the `al-runner-test-selector` WARNING (kept for the console line), and
+       * only when the probe applied: never on `--server`, where it answers `not-applicable`, and never
+       * on bcdev, which has no probe. Folded into `ExecutionContext.testSelector`.
+       */
+      readonly type: "al-runner-test-selector";
+      readonly selector: "exact" | "substring-with-excludes";
+      readonly reason?: string;
+    }
+  | {
       readonly type: "mutant-scored";
       /**
        * The full manifest entry, not `mutantCode` plus a join. In-process it travels by

@@ -1003,6 +1003,25 @@ export interface ExecutionContext {
    * name a directory the run never searched.
    */
   readonly platformAppsDir?: string;
+  /**
+   * R558: the al-runner test selector THIS session's one-shot runs used, chosen once by R551's
+   * probe: `"exact"` (`--test X --test-exact X`) or `"substring-with-excludes"` (R488's `--test X
+   * --exclude-test <sibling>...`). Every worker is forced onto the same one, or the session refuses,
+   * so one value describes every directly-measured verdict of the session.
+   *
+   * Present on the same terms as `platformAppsDir`: the al-runner path only, directly-measured
+   * entries only, never a carried verdict (whose selector belongs to the run it came from). Absent
+   * on `--server`, where the probe is not-applicable (a one-shot run with `selectorMode: "resource"`
+   * DOES probe, and records it), on bcdev, and on the zero-count entry of a run that scored nothing.
+   *
+   * On `--resume`, a batch whose baseline was reused (`resume-baseline-reused`, R192) took its
+   * baseline verdicts and coverage from the earlier run that warning names, which may have used the
+   * other selector. Like `platformAppsDir`, this field states this session's own runs only.
+   */
+  readonly testSelector?: "exact" | "substring-with-excludes";
+  /** R558: the probe's reason, verbatim, when `testSelector` is `"substring-with-excludes"`. Absent
+   *  with `"exact"`, which has no reason to give. */
+  readonly testSelectorReason?: string;
 }
 
 /** R272: one discovered test method — see `SessionReport.testMethods`. */
@@ -2275,6 +2294,10 @@ function buildExecutionContexts(
   alRunnerBcBuild: { readonly build: string; readonly announcement: string } | undefined,
   // R147 — see `ExecutionContext.platformAppsDir`. Gated exactly as `alRunnerBcBuild` is.
   alRunnerPlatformAppsDir: string | undefined,
+  // R558 — see `ExecutionContext.testSelector`. Gated exactly as the two above.
+  alRunnerTestSelector:
+    | { readonly selector: "exact" | "substring-with-excludes"; readonly reason?: string }
+    | undefined,
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
   for (const o of outcomes) {
@@ -2299,6 +2322,15 @@ function buildExecutionContexts(
     // run it came from, and bcdev has no such concept at all.
     ...(alRunnerPlatformAppsDir !== undefined && !caps.authoritative
       ? { platformAppsDir: alRunnerPlatformAppsDir }
+      : {}),
+    // R558, same two gates: a carried verdict's selector belongs to the run it came from.
+    ...(alRunnerTestSelector !== undefined && !caps.authoritative
+      ? {
+          testSelector: alRunnerTestSelector.selector,
+          ...(alRunnerTestSelector.reason !== undefined
+            ? { testSelectorReason: alRunnerTestSelector.reason }
+            : {}),
+        }
       : {}),
   };
   return [...groups.values()].map((g) => {
@@ -2948,6 +2980,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.resumedFrom !== undefined ? { runId: input.resumedFrom.runId } : undefined,
     input.alRunnerBcBuild,
     input.alRunnerPlatformAppsDir,
+    input.alRunnerTestSelector,
   );
 
   return {
