@@ -739,6 +739,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A consuming loop whose filter is set through a call is hang-refused** (R562). Before an R531 loop
+  whose ending depends on a filter, a call that sets that filter one hop away is now followed: a table
+  procedure on the record (`SetTemplateFilter(xRec)`), a same-object procedure that sees it, or the
+  record passed to a `var` parameter of a same-object procedure or a project codeunit or table
+  procedure. The callee's qualifying `SetRange`/`SetFilter` (or `MarkedOnly`), their guards, the
+  callee's exits and `Error`s before them, and the call itself (its arguments, guards and feeds) are
+  refused. A by-value record is not followed: its filters are the copy's. A call that cannot be
+  followed is refused itself. Measured: CDO Cloud 15 deployed mutants removed (0.055%), DO Cloud 23
+  (0.079%; 8 of them an overload chosen by arity that the call never reaches, filed as R564), every
+  other corpus 0; 0 identity tuples and 0 ordinals moved, so IDENTITY_SCHEME stays 39.
 - **A loop that ends only by consuming its record set is hang-refused; identity scheme 39** (R531). A
   `while`/`repeat` whose condition is a cursor test on a record (`Find`, `FindFirst`, `FindLast`,
   `FindSet`, `IsEmpty`, `Count`; never `Next`) and whose body consumes that set (`Delete`, `DeleteAll`,
