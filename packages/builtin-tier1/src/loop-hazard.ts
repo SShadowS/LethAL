@@ -1772,7 +1772,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     }
     for (const t of targets) {
       const hop = r531CalleeHop(t.proc, t.key, ctx, t.byValue);
-      if (hop !== null) hops.push(hop);
+      if (hop !== null) hops.push(r574Seam.on ? (r574Hop(hop.proc, hop.consumers, ctx) ?? hop) : hop);
     }
   }
   // FEEDS: indirect feeds, and the guards around a pre-loop filter call
@@ -1802,6 +1802,40 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     preGuards,
     hops,
   };
+}
+
+/** R574 (prototype): R531's same-object HOP (a same-object callee, or a table procedure on R) also
+ *  refuses the callee's EARLY EXITS, as R571's cross-object hop does. */
+export const r574Seam = { on: true };
+
+/** R574: a COPY of R571's `r571Hop` (lethal/r571): share one function once R-571 lands. The hop
+ *  into `proc` for `consumers`, with their guards and every `exit` or raised `Error` that starts
+ *  before the last consumer, or sits in a loop whose body holds a consumer, plus their guards and
+ *  the callee-body assignments that feed those guards and exits (R531's FEEDS). */
+function r574Hop(
+  proc: ALSyntaxNode,
+  consumers: ALSyntaxNode[],
+  ctx: SemanticContext,
+): R531Hop | null {
+  const body = proc.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+  if (body === null || consumers.length === 0) return null;
+  const inside = (a: ALSyntaxNode, b: ALSyntaxNode): boolean =>
+    b.startIndex <= a.startIndex && a.endIndex <= b.endIndex;
+  const last = Math.max(...consumers.map((c) => c.startIndex));
+  const loops: ALSyntaxNode[] = [];
+  visitAll(body, (x) => {
+    if (BREAK_SCOPES.has(x.rawKind) && consumers.some((c) => inside(c, x))) loops.push(x);
+  });
+  const isExit = (x: ALSyntaxNode): boolean =>
+    (x.rawKind === "exit_statement" || isRaisedError(x, body)) &&
+    (x.startIndex < last || loops.some((l) => inside(x, l)));
+  const isC = (x: ALSyntaxNode): boolean => consumers.some((c) => samePos(c, x));
+  const guards = [...exitGuards(body, body, isC), ...exitGuards(body, body, isExit)];
+  visitAll(body, (x) => {
+    if (isExit(x)) guards.push(x);
+  });
+  guards.push(...r531Feeds(body, guards, ctx).filter((a) => !isC(a)));
+  return { proc, consumers, guards };
 }
 
 /** Every R-531 loop in a scope (FILTER and FEEDS sites can sit outside the loop). */
