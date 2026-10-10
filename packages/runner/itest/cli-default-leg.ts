@@ -259,7 +259,7 @@ export function testSelectorLineFailures(lines: readonly string[], oneShot: bool
 
 /**
  * R558: the report's `executionContexts[].testSelector` per leg. A one-shot leg records it on every
- * measured context (either value: the gate prints it, the pre-commitment pins it per run), with
+ * measured context (either value: the gate prints R551's warning line, from the same probe result), with
  * `testSelectorReason` exactly when it is `substring-with-excludes`. A `--server` leg (server,
  * resource, cli-default) records it on none. A one-shot leg with no measured context fails: an
  * absent field there would prove nothing.
