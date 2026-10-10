@@ -745,10 +745,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   record. It now also follows the call into another project object: a parameter that receives the
   record counts as it (a by-value one for Delete, Rename and Modify only), and a call on a codeunit
   variable the loop tests by name makes that codeunit's globals the set, together with its calls to
-  its own helpers that can see them. The callee's consumers, their guards and any `exit` or `Error`
-  that can skip them are refused. An alias made by `:=` whose `temporary` flag is known to differ
-  from the loop record's is not followed: assignment never shares the table (measured on BC,
-  `scripts/r571-assign-probe`). Price: `<cost: re-measured by lethal-code>`.
+  its own helpers that can see them. Refused in the callee: its consumers and their guards, every
+  `exit` or `Error` that comes before the last consumer or sits inside a callee loop that holds one,
+  the guards of those exits, and the assignments that feed those guards. An alias made by `:=` whose
+  `temporary` flag is known to differ from the loop record's is not followed: assignment never
+  shares the table (measured on BC, `scripts/r571-assign-probe`). Filed limits: a second
+  cross-object hop, the body of the callee's own helper, and a codeunit set matched by global name
+  only (R576); `this.P(R)` in the same object and two variables of one SingleInstance codeunit
+  (R575). Price: `<cost: re-measured by lethal-code>`.
 
 - **A call to a preset writer of a report OUTSIDE the project is hang-refused; identity scheme 40**
   (R565, closes R561). R555 refused a call through `Report X` to a procedure that writes a name the
