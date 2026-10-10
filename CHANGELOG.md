@@ -756,8 +756,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   filed as R568.
 - **An argument of a platform method in a preset write's right side is now a feed** (R568). R532
   stopped at the arguments of every `X.Proc(...)` call, so `Key := ...; Continue := Cust.Get(Key)`
-  left `Key := ...` deployed. Now the arguments feed unless the receiver is typed as an object
-  (codeunit, report, page, query, xmlport, testpage, interface) or is a record whose table or a
+  left `Key := ...` deployed. Now the arguments feed unless the receiver is typed as any object
+  other than a record (a codeunit, report, page, query and so on) or is a record whose table or a
   project tableextension declares the member. Measured: BaseApp -1 mutant, Withholding Tax,
   TestLibraries and the fixtures 0, no identity tuple or ordinal moved, and no scheme change. Not
   followed: a platform method on an object-typed variable (`Rpt.SaveAsPdf(F)`, `Cu.Run(Rec)`).
