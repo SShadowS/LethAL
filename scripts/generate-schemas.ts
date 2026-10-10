@@ -41,6 +41,7 @@ const FILES = [
   "operation-outcome.ts",
   "line-filter.ts",
   "campaign-subcommands.ts",
+  "dependency-report-source.ts",
 ].map((f) => join(SRC, f));
 
 /** Types the report references from OTHER packages. Listed explicitly for the same reason as above:

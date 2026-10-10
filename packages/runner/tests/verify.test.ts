@@ -475,6 +475,7 @@ describe("assertSourceUnchanged", () => {
       generationSourceSha256: null,
       twinTuples: null,
       numberingDigest: null,
+      dependencySourceSha256: null,
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
       rows: [],
     };
@@ -737,6 +738,7 @@ describe("planVerify", () => {
       generationSourceSha256: null,
       twinTuples: [],
       numberingDigest: SOURCE_DIGEST,
+      dependencySourceSha256: null,
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
       rows: [],
     };

@@ -689,6 +689,7 @@ describe("runSession", () => {
           generationSourceSha256: null,
           twinTuples: null,
           numberingDigest: null,
+          dependencySourceSha256: null,
           targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
           rows: [],
         },
@@ -848,6 +849,7 @@ describe("runSession", () => {
             generationSourceSha256: null,
             twinTuples: null,
             numberingDigest: null,
+            dependencySourceSha256: null,
             targets: [
               {
                 batchIndex: 0,
@@ -10510,6 +10512,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
               generationSourceSha256: null,
               twinTuples: null,
               numberingDigest: null,
+              dependencySourceSha256: null,
               targets: [
                 {
                   batchIndex: 0,

@@ -275,6 +275,9 @@ export interface RunRow {
   /** R443: the run's `numberingDigestOf` (selection.ts), written beside `twin_tuples`. `null` when
    *  not recorded (before R443, or the run died before generation). */
   readonly numberingDigest: string | null;
+  /** R565: the run's `dependencySourceSha256`, written after generation (`setDependencySourceSha256`).
+   *  `null` when not recorded (before R565, or the run died before generation): no rule-1 carry. */
+  readonly dependencySourceSha256: string | null;
 }
 
 /** R391: a stored `twin_tuples`, checked. NULL stays `null`; anything but a JSON string array
@@ -703,6 +706,8 @@ export class ResultsStore {
       ["runs", "twin_tuples TEXT", runCols],
       // R443: NULL on an older row, read as "not recorded".
       ["runs", "numbering_digest TEXT", runCols],
+      // R565: NULL on an older row, read as "not recorded": no rule-1 carry from it.
+      ["runs", "dependency_source_sha256 TEXT", runCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
       if (!known.some((c) => c.name === name)) {
@@ -761,6 +766,9 @@ export class ResultsStore {
     /** R443: the run's numbering digest. Absent or `null` writes NULL. `runSession` writes it
      *  after generation (`setNumberingDigest`); verify copies its source's here. */
     numberingDigest?: string | null;
+    /** R565: the run's dependency source digest. Absent or `null` writes NULL. `runSession` writes
+     *  it after generation (`setDependencySourceSha256`); verify copies its source's here. */
+    dependencySourceSha256?: string | null;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
@@ -771,8 +779,8 @@ export class ResultsStore {
       info.testAppDeps !== undefined;
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -792,6 +800,7 @@ export class ResultsStore {
         info.generationSourceSha256 ?? null,
         info.twinTuples != null ? JSON.stringify(info.twinTuples) : null,
         info.numberingDigest ?? null,
+        info.dependencySourceSha256 ?? null,
       ) as {
       id: number;
     };
@@ -874,6 +883,15 @@ export class ResultsStore {
       .query("UPDATE runs SET carry_hidden = ? WHERE id = ?")
       .run(JSON.stringify({ tuples: hidden.tuples, files: hidden.files }), runId).changes;
     if (changed !== 1) throw new Error(`store.ts: setCarryHidden: no run ${runId}`);
+  }
+
+  /** R565: records the run's dependency source digest once generation knows it, before any mutant
+   *  row, like `setCarryHidden`. A run that dies earlier keeps NULL and carries nothing by rule 1. */
+  setDependencySourceSha256(runId: number, digest: string): void {
+    const changed = this.db
+      .query("UPDATE runs SET dependency_source_sha256 = ? WHERE id = ?")
+      .run(digest, runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setDependencySourceSha256: no run ${runId}`);
   }
 
   /**
@@ -1033,9 +1051,10 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256 FROM runs WHERE id = ?",
       )
       .get(runId) as {
+      dependency_source_sha256: string | null;
       test_app_proven: number | null;
       test_app_deps: string | null;
       carry_hidden: string | null;
@@ -1069,6 +1088,7 @@ export class ResultsStore {
       generationSourceSha256: row.generation_source_sha256,
       twinTuples: parseTwinTuples(row.twin_tuples, row.id),
       numberingDigest: row.numbering_digest,
+      dependencySourceSha256: row.dependency_source_sha256,
     };
   }
 
@@ -2000,9 +2020,10 @@ export class ResultsStore {
     const none = NO_PRIOR_SURVIVORS;
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256 FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
+      dependency_source_sha256: string | null;
       test_app_proven: number | null;
       test_app_deps: string | null;
       carry_hidden: string | null;
@@ -2121,6 +2142,7 @@ export class ResultsStore {
       recorded: {
         hash: run.generation_source_sha256,
         twins: twins === null ? null : new Set(twins),
+        dependencyHash: run.dependency_source_sha256,
       },
     };
   }

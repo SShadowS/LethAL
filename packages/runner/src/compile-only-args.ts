@@ -57,7 +57,11 @@ export async function compileOnlyMutationSet(
   args: CompileOnlyArgs,
 ): Promise<{ readonly set: MutationSetResult; readonly configSymbols: readonly string[] }> {
   const configSymbols = await compileOnlyConfigSymbols(args.configPath);
-  const set = await generateMutationSet(args.projectDir, { preprocessorSymbols: configSymbols });
+  const set = await generateMutationSet(args.projectDir, {
+    preprocessorSymbols: configSymbols,
+    // R565: the package cache alc compiles against, as a bcdev run reads it.
+    dependencyPackageDirs: [args.packageCachePath],
+  });
   return { set, configSymbols };
 }
 

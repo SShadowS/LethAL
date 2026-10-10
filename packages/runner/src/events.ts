@@ -22,6 +22,7 @@
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
+import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
@@ -190,6 +191,11 @@ export type RunEventInput =
       readonly twinSites?: readonly string[];
       /** R443: what this run numbered no ordinal for, as `runs.carry_hidden` records it. */
       readonly carryHidden?: CarryHidden;
+      /** R565: see `SessionReport.dependencyReportSources`. Optional on the wire so a stream from
+       *  before R565 still folds; the producer always writes it, with the next one. */
+      readonly dependencyReportSources?: readonly DependencyReportSourceRecord[];
+      /** R565: see `SessionReport.dependencySourceSha256`. */
+      readonly dependencySourceSha256?: string;
     }
   | {
       /** Discovery returns the whole list in one parse — 1,000+ per-item events at one instant

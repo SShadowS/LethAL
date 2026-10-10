@@ -231,8 +231,9 @@ export function coarseIdentityTupleOf(
  * 37: R340, a trigger's header names (parameters, plain var locals, the named return) are typed, so typed operators gain sites in triggers and swap-call-arguments can choose a different pair under an unchanged identity key (measured: DC +59, DO +5, CDO +5 sites, 0 keys moved, but a pair change is invisible to keys); history, --resume and marks recorded under 36 are not carried.
  * 38: R555, a call to a procedure that writes a preset exit name (in the report, its extension's base, or through a typed `Report X` receiver in any object) is hang-refused like the write itself; a refused site renumbers its same-tuple twins (measured on BaseApp at 48d5534f: 483 deployed mutants removed, 0 tuples moved, five ordinals moved; every other corpus: none).
  * 39 R-531: 47 ordinals renumber (43 BaseApp, 4 System Application); no tuple moves. A loop whose cursor condition (`Find*`, `IsEmpty`, `Count`, never `Next`) ends only because its body consumes the record set is hang-refused (the consumers, their guards and feeds, a one-hop same-object callee's consumers, the pre-loop filters the ending depends on, and every operator in the condition but swap-find-direction), so a refused site renumbers its same-tuple twins.
+ * 40: R565, a call through `Report X` to a preset writer of a report OUTSIDE the project is hang-refused when X's source can be read from the dependency packages, so the refused set depends on dependency bytes and a refused site renumbers its same-tuple twins (measured with al-runner's 28.5 platform apps: Quality Management 7 removed, Application Test Library 15 removed and 2 ordinals moved, 0 tuples moved; ten other projects none).
  */
-export const IDENTITY_SCHEME = 39;
+export const IDENTITY_SCHEME = 40;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

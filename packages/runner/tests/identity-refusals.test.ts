@@ -178,8 +178,8 @@ function verdictRow(m: MutantManifestEntry, verdict: MutantVerdict): MutantVerdi
 /** R391: a carry rule under which the recorded run had the same source (rule 1: by key). */
 function sameSourceRule(): NonNullable<ResumeIndex["carryRule"]> {
   return {
-    recorded: { hash: "same", twins: null },
-    current: { hash: "same", twins: new Set(), refused: new Set() },
+    recorded: { hash: "same", twins: null, dependencyHash: "dep" },
+    current: { hash: "same", twins: new Set(), dependencyHash: "dep", refused: new Set() },
   };
 }
 
@@ -233,8 +233,8 @@ describe("R307 T6 (a): an exact refusal reserves its sites, so the twins keep th
     const edited = {
       ...index,
       carryRule: {
-        recorded: { hash: "run1", twins },
-        current: { hash: "run2", twins, refused: new Set<string>() },
+        recorded: { hash: "run1", twins, dependencyHash: "dep" },
+        current: { hash: "run2", twins, dependencyHash: "dep", refused: new Set<string>() },
       },
     };
     expect(run2.map((m) => carriedVerdictFor(edited, m))).toEqual([undefined, undefined]);

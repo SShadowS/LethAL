@@ -12,6 +12,7 @@ import {
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
 import type { BackendCapabilities, CoverageMode, TestMethodRef } from "./backend";
+import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import {
   EQUIVALENCE_MARKS_FILENAME,
   type EquivalenceMarkReport,
@@ -1511,6 +1512,22 @@ export interface SessionReport {
    * render source on any difference. Absent on a report from before R274.
    */
   readonly sourceSha256?: string;
+  /**
+   * R565: every report the project calls through `Report X` but does not declare, as looked up in
+   * the dependency packages for R555's preset-writer rule (`kind` "report"), each reportextension of
+   * it read beside it ("extension"), and each package that could not be used ("package"). An
+   * outcome other than `ok` was also named in a `dependency-report-source-unavailable` warning, and
+   * such a report is checked against what was read, as before R565. Names, paths and hashes, never
+   * source. Always written (`[]` when the project calls no outside report); absent on a report from
+   * before R565.
+   */
+  readonly dependencyReportSources?: readonly DependencyReportSourceRecord[];
+  /**
+   * R565: sha256 over `dependencyReportSources` (`dependencySourceDigest`). History and resume carry
+   * a verdict by identity key only when it equals the recorded run's (rule 1 of `carryRecord`).
+   * Absent on a report from before R565.
+   */
+  readonly dependencySourceSha256?: string;
   /**
    * R443: sha256 of this run's identity numbering OUTPUT (`numberingDigestOf`, selection.ts): every
    * numbered site with its ordinal. Two runs with equal digests give every key to the same mutant.
@@ -3064,6 +3081,12 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     buildSymbols: [...statics.buildSymbols],
     identityScheme: IDENTITY_SCHEME,
     ...(input.sourceSha256 !== undefined ? { sourceSha256: input.sourceSha256 } : {}),
+    ...(input.dependencyReportSources !== undefined
+      ? { dependencyReportSources: input.dependencyReportSources }
+      : {}),
+    ...(input.dependencySourceSha256 !== undefined
+      ? { dependencySourceSha256: input.dependencySourceSha256 }
+      : {}),
     // R443: the recorded numbering facts a mark's proof is made from (`lethal explain`).
     ...(input.numbering !== undefined
       ? {
@@ -3313,6 +3336,15 @@ export function renderConsole(r: SessionReport): string {
     lines.push(
       `HANG-REFUSED SITES: ${hangRefused.reduce((n, f) => n + f.sites, 0)} site(s) in ${hangRefused.length} file(s) could hang the run if mutated: each writes a variable an enclosing loop's condition reads (R196), or is code of an unbounded report data item or a bounded item's only bound (R487/R501). No mutant was made there. They are absent from every count above.`,
     );
+  }
+  // R565: every dependency report (or package) the hang refusal could not read in full.
+  const depUnread = (r.dependencyReportSources ?? []).filter((d) => d.outcome !== "ok");
+  if (depUnread.length > 0) {
+    lines.push(
+      `DEPENDENCY REPORT SOURCE UNAVAILABLE: ${depUnread.length} lookup(s) in the dependency packages did not read in full, so a call to such a report is checked against what was read (R565):`,
+    );
+    for (const d of depUnread)
+      lines.push(`  ${d.kind} ${d.report ?? d.package ?? ""}: ${d.outcome}`);
   }
   // R381: the build's symbols beyond the config's (app.json's, on al-runner its predefined ones).
   // The report cannot tell those two sources apart, so none is named. Not printed where they agree.
