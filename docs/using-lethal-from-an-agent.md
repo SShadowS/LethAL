@@ -182,7 +182,9 @@ has the complete set.
 optional there and changes the listing. With `--backend al-runner` a dry run runs al-runner ONCE
 to measure the preprocessor symbols it predefines (R392), needs `alRunner.alRunnerPath` in the
 config and refuses without it, and lists the `#if` arms for the MEASURED set (absent lists alc's
-build). The other
+build). A dry run on al-runner also has no provisioned platform-apps folder, so a Microsoft report
+the project calls through `Report X` is read only from `alRunner.packagesDir`, and the hang-refused
+set can differ from a real run's; it warns (R565). The other
 exception is `--out <file>`, which writes the dry-run listing as JSON:
 `{files, sites, deployed, perFile[{file, sites, deployed}], batches[{index, sites[{file, line,
 operator, deployed}]}], notInstrumented[{file, kinds, sites}]}`. `sites` counts raw mutation sites;
@@ -711,7 +713,9 @@ before R443, because such a report records no numbering facts.
 A marks file without `identityScheme` was written before the field existed and reads as scheme 1,
 and a mark made under a scheme other than the one the run keys under is reported stale and never
 applied, because a key can name a different mutant after an engine change renumbers its twins
-(R325). `markKey` (and a mark's `key`) is this key, built from the survivor's row in `report.json`:
+(R325). The current scheme is 40: since R565 the hang-refused set depends on the source of the
+dependency reports the project calls, read from its dependency packages, so a key also carries
+across runs (history, `--resume`) only when the report's `dependencySourceSha256` is unchanged. `markKey` (and a mark's `key`) is this key, built from the survivor's row in `report.json`:
 
 ```text
 key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>
