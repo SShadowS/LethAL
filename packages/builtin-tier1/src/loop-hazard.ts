@@ -1174,6 +1174,10 @@ function r531Arity(proc: ALSyntaxNode): number {
   return list?.namedChildren.filter((c) => c.rawKind === "parameter").length ?? 0;
 }
 
+/** A parameter's name keyed as `r531Key` keys a receiver: a parameter named `Rec` is `""`, which
+ *  is how its `Rec.M()` calls read (R570 build review, BLOCKING 1; the same fix for R531's HOP). */
+const r531ParamKey = (name: string): string => (name === "rec" ? "" : name);
+
 /** The i-th parameter of `proc` as [name, isVar], or null. */
 function r531Param(proc: ALSyntaxNode, i: number): [string, boolean] | null {
   const list = proc.namedChildren.find((c) => c.rawKind === "parameter_list");
@@ -1765,7 +1769,8 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
           for (const j of r531Positions(h.c, i, p)) {
             const prm = r531Param(p, j);
             // a by-value parameter copies the VARIABLE, not the table (see r531CalleeHop)
-            if (prm !== null) targets.push({ proc: p, key: prm[0], byValue: !prm[1] });
+            if (prm !== null)
+              targets.push({ proc: p, key: r531ParamKey(prm[0]), byValue: !prm[1] });
           }
         });
       }
@@ -3026,7 +3031,7 @@ function r570LoopCallees(
       if (k === null || !cursors.has(k)) return;
       for (const j of r531Positions(c, i, q)) {
         const p = r531Param(q, j);
-        if (p?.[1] === true) out.push(c.uncertain ? R570_UNKNOWN : p[0]);
+        if (p?.[1] === true) out.push(c.uncertain ? R570_UNKNOWN : r531ParamKey(p[0]));
       }
     });
     return out;
@@ -3044,9 +3049,11 @@ function r570LoopCallees(
         for (const q of r570Targets(n, c, ctx)) {
           if (guard && steps) {
             // option (b): a guard that shares the cursor counts only if it TOUCHES that record
-            const keys = shared(c, q);
-            if (!keys.some((k) => k === R570_UNKNOWN || r570Touches(q, k, false, 0, ctx))) continue;
-            if (!sameObject(q)) out.push(q);
+            const touched = shared(c, q).flatMap((k) =>
+              k === R570_UNKNOWN ? [q] : r570Touches(q, k, false, 0, ctx),
+            );
+            if (touched.length === 0) continue;
+            out.push(...touched.filter((t) => !sameObject(t)));
           }
           if (!sameObject(q)) {
             out.push(...r570Chain(q, 0, ctx));
@@ -3080,16 +3087,31 @@ const R570_CONSUME: ReadonlySet<string> = new Set(
   "delete deleteall rename modify modifyall insert truncate validate".split(" "),
 );
 
+/** Is the implicit Rec of `p`'s object a table the project declares (a table, or a tableextension
+ *  of a project table)? Otherwise a bare name there may be one of the base table's procedures. */
+function r570ProjectRec(p: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const o = objectOf(p);
+  if (o?.rawKind === "table_declaration") return true;
+  if (o?.rawKind !== "tableextension_declaration") return false;
+  const base = normalizeAlName(lastFieldChild(o, "base_object")?.text ?? "");
+  return objectsOfType({ kind: "table", name: base, temporary: false }, ctx).some(
+    (t) => t.rawKind === "table_declaration",
+  );
+}
+
 /**
- * Option (b): does procedure `p` TOUCH the record it knows as `key` (`""`: its implicit Rec)? A
- * `R570_TOUCH` method on it (`R570_CONSUME` only when `byValue`), an assignment to it, or handing
- * it to a same-object helper, a table procedure or a parameter that touches it in turn (up to
- * `R570_HOPS`). UNKNOWN COUNTS AS TOUCHING: an unresolved call that receives it, an uncertain call
- * (R567) that may, a method on it that is neither built in nor a project procedure, `Clear(R)`,
- * and anything past the hop cap. Two readings that do not touch: a read-only built-in (a field
- * read, `TestField`, `CalcFields`, `Copy`/`TransferFields` INTO another record, `GetTable`), and a
- * bare name in a table that is no procedure there (a global function such as `Message`, R531's
- * rule).
+ * Option (b): the procedures through which `p` TOUCHES the record it knows as `key` (`""`: its
+ * implicit Rec): `[p, ...]` when it does, `[]` when it does not. A `R570_TOUCH` method on it
+ * (`R570_CONSUME` only when `byValue`), an assignment to it or to one of its fields,
+ * `X.Copy(R, true)` (X then shares R's table), or handing it to a same-object helper, a table
+ * procedure or a parameter that touches it in turn (up to `R570_HOPS`); every procedure on such a
+ * path is returned, so it is refused too (build review IMPORTANT 2). UNKNOWN COUNTS AS TOUCHING:
+ * an unresolved call that receives it, an uncertain call (R567) that may, a method on it that is
+ * neither built in nor a project procedure, `Clear(R)`, a bare unknown name where the implicit
+ * Rec's table is not the project's, and anything past the hop cap. Two readings that do not
+ * touch: a read-only built-in (a field read, `TestField`, `CalcFields`, `Copy`/`TransferFields`
+ * INTO another record, `GetTable`), and a bare name in a PROJECT table that is no procedure there
+ * (a global function such as `Commit`, R531's rule).
  */
 function r570Touches(
   p: ALSyntaxNode,
@@ -3097,73 +3119,86 @@ function r570Touches(
   byValue: boolean,
   depth: number,
   ctx: SemanticContext,
-): boolean {
+): ALSyntaxNode[] {
   const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
-  if (body === null || depth > R570_HOPS) return true;
+  if (body === null || depth > R570_HOPS) return [p];
   const hits = byValue ? R570_CONSUME : R570_TOUCH;
   const own = r531ObjectProcs(p, ctx);
-  /** Does any of `ts` touch its implicit Rec? None resolved: unknown, so yes. */
-  const viaRec = (ts: ALSyntaxNode[]): boolean =>
-    ts.length === 0 || ts.some((t) => r570Touches(t, "", byValue, depth + 1, ctx));
-  let hit = false;
+  let direct = false;
+  const via: ALSyntaxNode[] = [];
+  const follow = (t: ALSyntaxNode, k: string, bv: boolean): void => {
+    via.push(...r570Touches(t, k, bv, depth + 1, ctx));
+  };
+  /** `ts` see the same implicit Rec; none resolved: unknown, so touching. */
+  const viaRec = (ts: ALSyntaxNode[]): void => {
+    if (ts.length === 0) direct = true;
+    for (const t of ts) follow(t, "", byValue);
+  };
   r531Walk(body, ctx, (n) => {
-    if (hit) return;
-    if (n.kind === ALNodeKind.assignment_statement && !byValue) {
+    if (n.kind === ALNodeKind.assignment_statement) {
+      if (byValue) return;
       const l = n.childForFieldName("left");
-      if (l !== null && isIdentifierLike(l) && r531Key(l) === key) hit = true;
+      if (l === null) return;
+      if (isIdentifierLike(l)) {
+        // `R := X`, or a bare field of the implicit Rec (`Qty := 0`)
+        if (r531Key(l) === key || (key === "" && r531Implicit(l, ctx))) direct = true;
+      } else if (r531Key(l.childForFieldName("object")) === key) direct = true; // `R.Field := X`
       return;
     }
     const c = r531Call(n);
     if (c === null) return;
     if (c.recv === key) {
       // `R.M(...)` (or `Rec.M(...)` for the implicit Rec)
-      if (hits.has(c.method)) hit = true;
+      if (hits.has(c.method) || (c.method === "transferfields" && !byValue)) direct = true;
       else if (!R531_BUILTIN.has(c.method)) {
         const ts = r570Targets(n, c, ctx);
         // a paren-less `R.X` that names no procedure is a field read
-        if (n.rawKind !== "member_expression" || ts.length > 0) hit = c.uncertain || viaRec(ts);
+        if (c.uncertain) direct = true;
+        else if (n.rawKind !== "member_expression" || ts.length > 0) viaRec(ts);
       }
-      if (hit) return;
     } else if (key === "" && c.recv === null && n.rawKind !== "member_expression") {
       if (own.has(c.method)) {
-        // a same-object helper sees the same implicit Rec
-        if (viaRec(r570Targets(n, c, ctx))) hit = true;
+        viaRec(r570Targets(n, c, ctx)); // a same-object helper sees the same implicit Rec
       } else if (r531Implicit(n, ctx)) {
-        if (hits.has(c.method)) hit = true;
+        if (hits.has(c.method)) direct = true;
         else if (!R531_BUILTIN.has(c.method)) {
           const ts = r570Targets(n, c, ctx);
-          if (ts.length > 0 && viaRec(ts)) hit = true; // unresolved: a global function
+          if (ts.length > 0) viaRec(ts);
+          else if (!r570ProjectRec(p, ctx)) direct = true; // maybe the base table's procedure
         }
       }
-      if (hit) return;
     }
     // the record handed on as an argument
     const at = c.args.flatMap((a, i) => (isIdentifierLike(a) && r531Key(a) === key ? [i] : []));
     if (at.length === 0) return;
     if (c.uncertain) {
-      hit = true;
+      direct = true;
       return;
     }
     if (c.recv === null && R531_PURE.has(c.method) && c.method !== "clear") return;
+    if (c.method === "copy" && c.recv !== key && c.args.length > 1 && !byValue) {
+      // `X.Copy(R, true)`: X shares R's table (`ShareTable`); any non-literal-false flag counts
+      if (normalizeAlName(c.args[1]?.text ?? "") !== "false") direct = true;
+      return;
+    }
     const ts = r570Targets(n, c, ctx);
     if (ts.length === 0) {
       const readOnly =
         c.recv !== null &&
         c.recv !== key &&
         (R531_BUILTIN.has(c.method) || c.method === "gettable");
-      if (!readOnly) hit = true;
+      if (!readOnly) direct = true;
       return;
     }
-    hit = ts.some((t) =>
-      at.some((i) =>
-        r531Positions(c, i, t).some((j) => {
+    for (const t of ts)
+      for (const i of at)
+        for (const j of r531Positions(c, i, t)) {
           const prm = r531Param(t, j);
-          return prm === null || r570Touches(t, prm[0], byValue || !prm[1], depth + 1, ctx);
-        }),
-      ),
-    );
+          if (prm === null) direct = true;
+          else follow(t, r531ParamKey(prm[0]), byValue || !prm[1]);
+        }
   });
-  return hit;
+  return direct || via.length > 0 ? [p, ...via] : [];
 }
 
 /** The project procedures (with a body) that call `n` names, in any object. */

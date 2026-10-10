@@ -89,6 +89,24 @@ const ITEM = `table 50700 "R570 Item"
         exit(true);
     end;
 
+    procedure FieldWrite(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'FIELDW';
+        Qty := 0;
+        exit(true);
+    end;
+
+    procedure GlobalFn(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'GLOBALFN';
+        Commit();
+        exit(Qty > 0);
+    end;
+
     procedure ViaHelper(): Boolean
     var
         Tag: Text;
@@ -243,6 +261,71 @@ const FEFO = `codeunit 50700 "R570 Fefo"
         exit(Ext.Unknown(R));
     end;
 
+    procedure NextRecNamed(var Rec: Record "R570 Item"): Boolean
+    begin
+        Tag := 'RECNAMED';
+        exit(Rec.Next() <> 0);
+    end;
+
+    procedure Passer(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'PASSER';
+        Adv.Advance(R);
+        exit(true);
+    end;
+
+    procedure FieldWriteVar(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'FIELDWV';
+        R.Qty := 0;
+        exit(true);
+    end;
+
+    procedure TfInto(var R: Record "R570 Item"): Boolean
+    var
+        Other: Record "R570 Item";
+    begin
+        Tag := 'TFINTO';
+        R.TransferFields(Other);
+        exit(true);
+    end;
+
+    procedure TfFrom(var R: Record "R570 Item"): Boolean
+    var
+        Other: Record "R570 Item";
+    begin
+        Tag := 'TFFROM';
+        Other.TransferFields(R);
+        exit(true);
+    end;
+
+    procedure CopyShare(var R: Record "R570 Item"): Boolean
+    var
+        Other: Record "R570 Item";
+    begin
+        Tag := 'COPYSHARE';
+        Other.Copy(R, true);
+        exit(true);
+    end;
+
+    procedure CopyInto(var R: Record "R570 Item"): Boolean
+    var
+        Other: Record "R570 Item";
+    begin
+        Tag := 'COPYINTO';
+        Other.Copy(R);
+        exit(true);
+    end;
+
+    procedure GetTab(var R: Record "R570 Item"): Boolean
+    var
+        RecRef: RecordRef;
+    begin
+        Tag := 'GETTABLE';
+        RecRef.GetTable(R);
+        exit(true);
+    end;
+
     procedure Pick(var R: Record "R570 Item"): Boolean
     begin
         Tag := 'OV1';
@@ -280,6 +363,7 @@ const FEFO = `codeunit 50700 "R570 Fefo"
         Tag: Text;
         Cnt: Integer;
         Ext: Codeunit "R570 Not In Project";
+        Adv: Codeunit "R570 Adv";
 }
 `;
 
@@ -392,7 +476,39 @@ const LOOPS = `codeunit 50701 "R570 Loops"
                 exit;
             if not Fefo.PassOn(Ent) then
                 exit;
+            if not Fefo.NextRecNamed(Ent) then
+                exit;
+            if not Fefo.Passer(Ent) then
+                exit;
+            if not Fefo.FieldWriteVar(Ent) then
+                exit;
+            if not Fefo.TfInto(Ent) then
+                exit;
+            if not Fefo.TfFrom(Ent) then
+                exit;
+            if not Fefo.CopyShare(Ent) then
+                exit;
+            if not Fefo.CopyInto(Ent) then
+                exit;
+            if not Fefo.GetTab(Ent) then
+                exit;
+            if not Ent.FieldWrite() then
+                exit;
+            if not Ent.GlobalFn() then
+                exit;
         until Ent.Next() = 0;
+    end;
+
+    procedure RunExt()
+    var
+        Cust: Record Customer;
+    begin
+        repeat
+            if not Cust.ExtBare() then
+                exit;
+            if not Cust.ExtRec() then
+                exit;
+        until Cust.Next() = 0;
     end;
 
     procedure RunOverload()
@@ -772,7 +888,72 @@ const REPORT = `report 50700 "R570 Report"
 }
 `;
 
+const ADV = `codeunit 50711 "R570 Adv"
+{
+    procedure Advance(var R: Record "R570 Item"): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'ADVANCE';
+        exit(R.Find('-'));
+    end;
+}
+`;
+
+const CUSTEXT = `tableextension 50700 "R570 CustExt" extends Customer
+{
+    procedure ExtBare(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'EXTBARE';
+        exit(CheckCredit());
+    end;
+
+    procedure ExtRec(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'EXTREC';
+        exit(Rec.CheckCredit());
+    end;
+}
+`;
+
+const R531_RECKEY = `codeunit 50720 "R570 R531 RecKey"
+{
+    procedure DrainA()
+    var
+        Ent: Record "R570 Item";
+    begin
+        while not Ent.IsEmpty() do
+            EatRec(Ent);
+    end;
+
+    procedure DrainB()
+    var
+        Ent: Record "R570 Item";
+    begin
+        while not Ent.IsEmpty() do
+            EatR(Ent);
+    end;
+
+    local procedure EatRec(var Rec: Record "R570 Item")
+    begin
+        Rec.Delete();
+    end;
+
+    local procedure EatR(var R: Record "R570 Item")
+    begin
+        R.Delete();
+    end;
+}
+`;
+
 const FILES: Record<string, string> = {
+  "Adv.Codeunit.al": ADV,
+  "CustExt.TableExt.al": CUSTEXT,
+  "R531RecKey.Codeunit.al": R531_RECKEY,
   "Item.Table.al": ITEM,
   "Other.Table.al": OTHER,
   "Fefo.Codeunit.al": FEFO,
@@ -882,6 +1063,73 @@ describe("R570 (orchestrator option b): a sharing guard callee is refused only i
   });
   it("the `var` parameter handed to an unresolved call: refused (unknown counts as touching)", () => {
     expect(project(FILES)(F, "UNRES")).toBe(true);
+  });
+});
+
+describe("R570 build review: touch fixes", () => {
+  const T = "Item.Table.al";
+  it("BLOCKING 1: a `var` parameter NAMED `Rec` that is stepped with Next: refused", () => {
+    expect(project(FILES)(F, "RECNAMED")).toBe(true);
+  });
+  it("IMPORTANT 2: the record handed on into another object's procedure that touches it: both refused", () => {
+    const at = project(FILES);
+    expect(at(F, "PASSER")).toBe(true);
+    expect(at("Adv.Codeunit.al", "ADVANCE")).toBe(true);
+  });
+  it("IMPORTANT 3: a bare unknown name in a tableextension of a table OUTSIDE the project: refused", () => {
+    expect(project(FILES)("CustExt.TableExt.al", "EXTBARE")).toBe(true);
+  });
+  it("IMPORTANT 3 control: `Rec.X()` on an outside table's procedure: refused", () => {
+    expect(project(FILES)("CustExt.TableExt.al", "EXTREC")).toBe(true);
+  });
+  it("a bare global function in a PROJECT table (`Commit`) does not touch: NOT refused", () => {
+    expect(project(FILES)(T, "GLOBALFN")).toBe(false);
+  });
+  it("IMPORTANT 4: a field write on the implicit Rec: refused", () => {
+    expect(project(FILES)(T, "FIELDW")).toBe(true);
+  });
+  it("IMPORTANT 4: a field write on the `var` parameter: refused", () => {
+    expect(project(FILES)(F, "FIELDWV")).toBe(true);
+  });
+  it("IMPORTANT 4: TransferFields INTO the shared record: refused", () => {
+    expect(project(FILES)(F, "TFINTO")).toBe(true);
+  });
+  it("IMPORTANT 4: `X.Copy(R, true)` (shares the table): refused", () => {
+    expect(project(FILES)(F, "COPYSHARE")).toBe(true);
+  });
+  it("TransferFields FROM the shared record into another: NOT refused", () => {
+    expect(project(FILES)(F, "TFFROM")).toBe(false);
+  });
+  it("`X.Copy(R)` into another record: NOT refused", () => {
+    expect(project(FILES)(F, "COPYINTO")).toBe(false);
+  });
+  it("`RecRef.GetTable(R)`: NOT refused", () => {
+    expect(project(FILES)(F, "GETTABLE")).toBe(false);
+  });
+});
+
+describe("R531: a HOP into a `var` parameter NAMED `Rec`", () => {
+  const C = "R531RecKey.Codeunit.al";
+  const at = (text: string): boolean => {
+    const parsed = Object.entries(FILES).map(([path, src]) => ({
+      path,
+      root: wrapRoot(parseAL(src)),
+    }));
+    const ctx = buildSemanticContext(parsed);
+    const f = parsed.find((p) => p.path === C);
+    let hit: ALSyntaxNode | undefined;
+    if (f !== undefined)
+      visit(f.root, (n: ALSyntaxNode) => {
+        if (hit === undefined && n.text === text) hit = n;
+      });
+    if (hit === undefined) throw new Error(`${text} not found`);
+    return openItemHangRefuses(hit, ctx, VMC);
+  };
+  it("the callee's `Rec.Delete()` is refused", () => {
+    expect(at("Rec.Delete()")).toBe(true);
+  });
+  it("control: the same callee with the parameter named `R`", () => {
+    expect(at("R.Delete()")).toBe(true);
   });
 });
 
