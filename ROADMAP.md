@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**69 of 569 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**68 of 570 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -260,13 +260,14 @@ that ordering is the priority.
 - **R557** · al-runner reports a quoted AL test name CLR-mangled (`"Stone Quoted"` → `Stone_Quoted`), so LethAL never runs that test on al-runner — a possible FALSE SURVIVE · [R557.md](docs/roadmap/R557.md) · open
 - **R561** · A call to a report's preset-exit-name writer through a receiver R555 cannot resolve to a project report is not refused · [R561.md](docs/roadmap/R561.md) · done (8fc29663): the outside-report row is closed by R565's loader (QM's 5 refused, plus 2 of R555's shape)…
 - **R562** · An OnRename consuming loop whose filter is set through a table procedure (`SetTemplateFilter(xRec)`) keeps its filter mutants: R531's FILTER sees only a direct `SetRange`/`SetFilter` · [R562.md](docs/roadmap/R562.md) · done (41ecfd3c): pre-loop filter-setting call followed one hop; CDO -15, DO -23; no scheme bump
-- **R563** · A consuming loop that refilters through a FieldRef (`FieldRef.SetRange(...)` then `until RecRef.IsEmpty()`) is not seen by R531; only LibraryUtility's GenerateRandomCode* loops have the shape, and LethAL mutates them only when that test library is the run's project · [R563.md](docs/roadmap/R563.md) · open, filed 2026-10-09
+- **R563** · A consuming loop that refilters through a FieldRef (`FieldRef.SetRange(...)` then `until RecRef.IsEmpty()`) is not seen by R531; only LibraryUtility's GenerateRandomCode* loops have the shape, and LethAL mutates them only when that test library is the run's project · [R563.md](docs/roadmap/R563.md) · closed 2026-10-11 — the FieldRef-refilter-until-IsEmpty shape exists only in Application Test Library's three…
 - **R564** · Loop-hazard HOPs choose a callee's overload by parameter count, not argument type, so an overload the call never reaches is refused too (DO: 8 keys under R562) · [R564.md](docs/roadmap/R564.md) · done (a79cb1f3): an overload is chosen by argument type only when that is certain; DO +8 keys, 0 moved; no…
 - **R567** · Loop-hazard HOPs count a comment inside an argument list as an argument, so `F(xRec /*c*/)` follows no overload and the callee's hang-capable sites are deployed · [R567.md](docs/roadmap/R567.md) · done (ca8e3dc3): one comment-aware argument reader for every positional consumer; 38 projects 0 keys moved…
 - **R568** · R532's preset feeds stop at a platform method's arguments: `Continue := Cust.Get(Key)` does not make `Key` a feed · [R568.md](docs/roadmap/R568.md) · done (3eb733a5): platform-method arguments feed preset names; another object's function still stops; BaseApp…
 - **R569** · Report-loop hang refusal does not follow a second object hop from a one-hop callee whose result feeds the item's exit: Export Item Budget to Excel's NextDate is deployed · [R569.md](docs/roadmap/R569.md) · done (3049afa3): exit-fed second hop by return value; BaseApp -86, PEPPOL -18, no scheme change; report-code…
 - **R570** · An ordinary (non-report) loop whose exit calls a cursor procedure in another object is not hang-refused: Create Pick's FEFO loop and GetNextGLAcc loops are deployed · [R570.md](docs/roadmap/R570.md) · done (f3889836)
 - **R571** · A record-consuming loop whose consumer lives in another object is not hang-refused: CDC Message Bus Socket.Pop deletes the row inside a page loop's body · [R571.md](docs/roadmap/R571.md) · open, filed 2026-10-10
+- **R577** · A `Next` loop whose body repositions its own cursor and then restores it (Find*, then Get/SetView back) is not hang-refused: deleting the restore can make Next revisit rows (DO and CDO `CDO E-Mail Handler`.RunReportID) · [R577.md](docs/roadmap/R577.md) · open, filed 2026-10-11
 - **R572** · A loop flag fed by a cursor procedure in another object (`More := X.GetNext(); while More do`) is not hang-refused · [R572.md](docs/roadmap/R572.md) · open, filed 2026-10-10
 
 ## Product gaps a real project hits
@@ -408,7 +409,7 @@ that ordering is the priority.
 - **R477** · Guarded bare fallback for the validate-to-assign sites R464 refuses (35: 29 previously mutated, 6 new) · [R477.md](docs/roadmap/R477.md) · done (467e2faf)
 - **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · closed 2026-10-05 — neither shape reaches the prefix proof today: no Tier-2 claim is made inside a…
 - **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files; correction: the extension's members ARE mutated…
-- **R489** · explain's covering tests are not ordered by duration: no measurement shows a per-test baseline duration is stable enough to rank by · [R489.md](docs/roadmap/R489.md) · open
+- **R489** · explain's covering tests are not ordered by duration: no measurement shows a per-test baseline duration is stable enough to rank by · [R489.md](docs/roadmap/R489.md) · closed 2026-10-11 — measured: on bcdev a test's baseline duration does not keep its rank between two runs of…
 - **R497** · BC paths score `#if`-wrapped objects (fenced under H1a, hub by name), and the line map's H1b rule is wrong for a bare object after a wrapper · [R497.md](docs/roadmap/R497.md) · done (e02c874b)
 - **R498** · A hook session whose test app carries no `.al` never proves its identity, so it never resumes, skips or reuses · [R498.md](docs/roadmap/R498.md) · done (e4907b30)
 - **R535** · A nested `#if` object wrapper is refused by name on every coverage path: BaseApp has 2 such files (70 sites), unmeasured · [R535.md](docs/roadmap/R535.md) · closed 2026-10-09 — 2 BaseApp files, 70 sites, refused by name on every coverage path; not worth an R-300b…
