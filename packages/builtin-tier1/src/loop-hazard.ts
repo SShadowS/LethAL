@@ -3232,7 +3232,7 @@ function r570Reach(ctx: SemanticContext): Map<string, Set<string>> {
   for (const o of projectObjects(ctx)) {
     r531Walk(o, ctx, (loop) => {
       if (!LOOP_KINDS.has(loop.kind)) return;
-      for (const p of r570LoopCallees(loop, o, ctx)) {
+      for (const p of [...r570LoopCallees(loop, o, ctx), ...r572LoopRefusals(loop, o, ctx)]) {
         const po = objectOf(p);
         if (po === null) continue;
         const set = out.get(objectKey(po)) ?? new Set<string>();
@@ -3314,33 +3314,195 @@ function r570LoopCallees(
   };
   take(cond, false);
   take(bodyExitGuards(loop), true);
-  // R572 (prototype): a loop flag fed by another object's STATEFUL cursor procedure
-  // (`Found := X.NextEntry(..); until not Found`): the calls in R480's feeds of the exit parts
-  for (const f of indirectFeeds(loop, steps ? cond : [...cond, ...bodyExitGuards(loop)], ctx))
-    r531Walk(f, ctx, (n) => {
-      const c = r531Call(n);
-      if (c === null) return;
-      for (const q of r570Targets(n, c, ctx)) {
-        if (sameObject(q)) continue;
-        const chain = r570Chain(q, 0, ctx);
-        if (chain.some((p) => r572Stateful(p, ctx))) out.push(...chain);
-      }
-    });
   return out;
 }
 
+/**
+ * R572 (prototype r2): a loop FLAG fed by another object's STATEFUL procedure (`Found :=
+ * X.NextEntry(..); until not Found`, or `X.Step(Buf, More)` writing `More` through a `var`
+ * argument). The calls: those in R480's feeds of the exit parts, and body calls that pass a name
+ * the exit reads (directly or through a feed) to a `var` parameter. A call into another object
+ * follows its `exit(<call>)` chain (`r572Chain`, no shape test); a same-object wrapper is followed
+ * through its `exit(<call>)` into another object (I3b). The chain is refused when a procedure on it
+ * is `r572Stateful`; then so is every procedure of a chain object that writes a global the chain
+ * uses (`r572Writers`). Decided by statefulness ALONE: a pure callee (result from its arguments and
+ * fresh local temporary records only) is not refused (the stated self-feed limit, `selfFeed`).
+ */
+export interface R572Row {
+  readonly loop: ALSyntaxNode;
+  readonly call: ALSyntaxNode;
+  /** the feed's target name (`""` for a var-out argument the call writes) */
+  readonly flag: string;
+  readonly varOut: boolean;
+  readonly wrapper: ALSyntaxNode | null;
+  readonly chain: ALSyntaxNode[];
+  readonly stateful: boolean;
+  /** the flag is also an argument of the call: a stepper fed its own result */
+  readonly selfFeed: boolean;
+  readonly writers: ALSyntaxNode[];
+}
+
+export const r572Seam = { on: true, writers: "all" as "all" | "reach" | "none" };
+
+export function r572LoopRows(
+  loop: ALSyntaxNode,
+  obj: ALSyntaxNode,
+  ctx: SemanticContext,
+): R572Row[] {
+  const cond = loopConditionParts(loop);
+  const steps = namesCursorMethod(cond, ctx);
+  const parts = steps ? cond : [...cond, ...bodyExitGuards(loop)];
+  const feeds = indirectFeeds(loop, parts, ctx);
+  const names = new Set<string>();
+  for (const p of [...parts, ...feeds])
+    r531Walk(p, ctx, (n) => {
+      if (isIdentifierLike(n)) names.add(normalizeAlName(n.text));
+    });
+  const sameObject = (q: ALSyntaxNode): boolean => {
+    const qo = objectOf(q);
+    return qo === null || (samePos(qo, obj) && sameFile(rootOf(qo), rootOf(obj)));
+  };
+  const calls: {
+    n: ALSyntaxNode;
+    c: R531Call;
+    flag: string;
+    varOut: boolean;
+    ts: ALSyntaxNode[];
+  }[] = [];
+  for (const f of feeds) {
+    const a = f.parent;
+    const l = a?.kind === ALNodeKind.assignment_statement ? a.childForFieldName("left") : null;
+    const ln =
+      l === null || l === undefined
+        ? null
+        : isIdentifierLike(l)
+          ? l
+          : l.childForFieldName("member");
+    const flag = ln === null ? "" : normalizeAlName(ln.text);
+    r531Walk(f, ctx, (n) => {
+      const c = r531Call(n);
+      if (c !== null) calls.push({ n, c, flag, varOut: false, ts: r570Targets(n, c, ctx) });
+    });
+  }
+  const body = loop.childForFieldName("body");
+  if (body !== null)
+    r531Walk(body, ctx, (n) => {
+      const c = r531Call(n);
+      if (c === null) return;
+      const ts = r570Targets(n, c, ctx);
+      c.args.forEach((a, i) => {
+        if (!isIdentifierLike(a) || !names.has(normalizeAlName(a.text))) return;
+        // a var-out FLAG is a simple value (Boolean, number, date, text): a record, codeunit or
+        // other object handed by var is the cursor or helper, not a flag (R570/R531 territory)
+        const decl = resolveVarRef(a, ctx)?.node ?? null;
+        const tn = decl?.childForFieldName("type")?.namedChildren[0] ?? null;
+        const tk = tn?.rawKind ?? null;
+        if (tk === null || !R572_SIMPLE_TYPES.has(tk)) return;
+        if (tk === "basic_type" && !R572_SIMPLE_BASIC.has(normalizeAlName(tn?.text ?? ""))) return;
+        const hit = ts.filter((t) =>
+          r531Positions(c, i, t).some((j) => r531Param(t, j)?.[1] === true),
+        );
+        if (hit.length > 0)
+          calls.push({ n, c, flag: normalizeAlName(a.text), varOut: true, ts: hit });
+      });
+    });
+  const rows: R572Row[] = [];
+  for (const { n, c, flag, varOut, ts } of calls) {
+    for (const q of ts) {
+      let wrapper: ALSyntaxNode | null = null;
+      let chain: ALSyntaxNode[];
+      if (!sameObject(q)) chain = r572Chain(q, 0, ctx);
+      else {
+        chain = r570ExitTargets(q, ctx)
+          .filter((t) => !sameObject(t))
+          .flatMap((t) => r572Chain(t, 1, ctx));
+        if (chain.length === 0) continue;
+        wrapper = q;
+      }
+      const stateful = chain.some((p) => r572Stateful(p, R572_STATE_HOPS, ctx));
+      const selfFeed =
+        flag !== "" &&
+        !varOut &&
+        c.args.some((a) => isIdentifierLike(a) && normalizeAlName(a.text) === flag);
+      const writers =
+        stateful && r572Seam.writers !== "none"
+          ? r572Writers(chain, r572Seam.writers === "reach", ctx)
+          : [];
+      rows.push({ loop, call: n, flag, varOut, wrapper, chain, stateful, selfFeed, writers });
+    }
+  }
+  return rows;
+}
+
+/** Census (scripts/r572-flag-census.ts): every R572 row of the project, and the procedures R572
+ *  adds to R570's own refusals (by procedure, not yet by name). */
+export function r572Census(ctx: SemanticContext): { rows: R572Row[]; extra: ALSyntaxNode[] } {
+  const base = new Map<string, Set<string>>();
+  const rows: R572Row[] = [];
+  for (const o of projectObjects(ctx))
+    r531Walk(o, ctx, (loop) => {
+      if (!LOOP_KINDS.has(loop.kind)) return;
+      for (const p of r570LoopCallees(loop, o, ctx)) {
+        const po = objectOf(p);
+        if (po === null) continue;
+        const set = base.get(objectKey(po)) ?? new Set<string>();
+        for (const k of procNames(p)) set.add(k);
+        base.set(objectKey(po), set);
+      }
+      rows.push(...r572LoopRows(loop, o, ctx));
+    });
+  const extra = new Map<string, ALSyntaxNode>();
+  for (const r of rows) {
+    if (!r.stateful) continue;
+    for (const p of [...(r.wrapper === null ? [] : [r.wrapper]), ...r.chain, ...r.writers]) {
+      const po = objectOf(p);
+      const b = po === null ? undefined : base.get(objectKey(po));
+      if (b !== undefined && procNames(p).some((k) => b.has(k))) continue;
+      extra.set(`${po === null ? "" : objectKey(po)}|${p.startIndex}`, p);
+    }
+  }
+  return { rows, extra: [...extra.values()] };
+}
+
+function r572LoopRefusals(
+  loop: ALSyntaxNode,
+  obj: ALSyntaxNode,
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  if (!r572Seam.on) return [];
+  return r572LoopRows(loop, obj, ctx)
+    .filter((r) => r.stateful)
+    .flatMap((r) => [...(r.wrapper === null ? [] : [r.wrapper]), ...r.chain, ...r.writers]);
+}
+
+/** `p` and the procedures its `exit(<call>)` chain reaches, no shape test (R570_HOPS deep). */
+function r572Chain(p: ALSyntaxNode, depth: number, ctx: SemanticContext): ALSyntaxNode[] {
+  return depth < R570_HOPS
+    ? [p, ...r570ExitTargets(p, ctx).flatMap((t) => r572Chain(t, depth + 1, ctx))]
+    : [p];
+}
+
+/** How deep `r572Stateful` follows the calls in a body; deeper is UNKNOWN, so stateful. */
+const R572_STATE_HOPS = 4;
 const R572_PERSIST: ReadonlySet<string> = new Set(
   "find findfirst findlast findset next delete deleteall".split(" "),
 );
-/** R572: does `p` keep state between calls, so its result can stay the same for ever? It reads or
- *  writes a global of its object (a stored cursor, a remaining quantity), or moves or deletes rows
- *  of its implicit Rec or a `var` record parameter. A procedure whose result depends only on its
- *  arguments and fresh local records is not (stated limit: a pure stepper fed its own result). */
-function r572Stateful(p: ALSyntaxNode, ctx: SemanticContext): boolean {
-  return cached(ctx, p, "r572state", () => {
-    const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+const R572_ROWS: ReadonlySet<string> = new Set(
+  "insert modify modifyall delete deleteall rename".split(" "),
+);
+const R572_SIMPLE_TYPES: ReadonlySet<string> = new Set(["basic_type", "text_type", "code_type"]);
+const R572_SIMPLE_BASIC: ReadonlySet<string> = new Set(
+  "boolean integer biginteger decimal date time datetime duration char byte option guid".split(" "),
+);
+const R572_UNKNOWN_KINDS: ReadonlySet<string> = new Set(["codeunit", "interface"]);
+
+/** The globals of `p`'s object that `p` names (not shadowed by a local or a parameter). */
+function r572Globals(p: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+  return cached(ctx, p, "r572globals", () => {
+    const out = new Set<string>();
     const o = objectOf(p);
-    if (body === null || o === null) return false;
+    const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+    if (o === null || body === null) return out;
     const globals = new Set<string>();
     for (const c of o.childForFieldName("body")?.namedChildren ?? [])
       if (c.rawKind === "var_section")
@@ -3348,6 +3510,39 @@ function r572Stateful(p: ALSyntaxNode, ctx: SemanticContext): boolean {
           if (v.rawKind === "variable_declaration")
             for (const nm of declaredNames(v)) globals.add(normalizeAlName(nm));
         });
+    if (globals.size === 0) return out;
+    r531Walk(body, ctx, (n) => {
+      if (!isIdentifierLike(n) || n.fieldName === "member") return;
+      const k = normalizeAlName(n.text);
+      if (globals.has(k) && !r531Declares(p, k, true)) out.add(k);
+    });
+    return out;
+  });
+}
+
+/** The receiver node of a member call, or null. */
+function r572Receiver(n: ALSyntaxNode): ALSyntaxNode | null {
+  const f = n.rawKind === "member_expression" ? n : n.childForFieldName("function");
+  if (f === null || f.rawKind !== "member_expression") return null;
+  const o = f.childForFieldName("object");
+  return o !== null && isIdentifierLike(o) ? o : null;
+}
+
+/**
+ * R572: can `p`'s result depend on state that outlives the call? STATEFUL when, within `hops`
+ * calls: it names a global of its object; it moves or deletes rows of its implicit Rec or a `var`
+ * record parameter; it inserts, modifies, deletes or renames rows of any record that is not a LOCAL
+ * TEMPORARY one; or it reaches UNKNOWN code: an event publisher, `Codeunit.Run`, a call into a
+ * codeunit or interface with no project body, a parenthesised call of a table procedure with no
+ * project body, a procedure with no body, or a call past the hop cap.
+ */
+function r572Stateful(p: ALSyntaxNode, hops: number, ctx: SemanticContext): boolean {
+  return cached(ctx, p, `r572state|${hops}`, () => {
+    if (hops < 0) return true;
+    if (attributeNamesOf(p).some((a) => PUBLISHERS.has(a))) return true;
+    const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+    if (body === null) return true;
+    if (r572Globals(p, ctx).size > 0) return true;
     const vars = new Set<string>();
     for (let i = 0; ; i++) {
       const prm = r531Param(p, i);
@@ -3355,21 +3550,142 @@ function r572Stateful(p: ALSyntaxNode, ctx: SemanticContext): boolean {
       if (prm[1]) vars.add(r531ParamKey(prm[0]));
     }
     const own = r531ObjectProcs(p, ctx);
+    // a revisit while in progress reads as not stateful (the cycle adds no state of its own)
+    r572InProgress.add(p);
     let hit = false;
     r531Walk(body, ctx, (n) => {
       if (hit) return;
-      if (isIdentifierLike(n) && n.fieldName !== "member") {
-        const k = normalizeAlName(n.text);
-        if (globals.has(k) && !r531Declares(p, k, true)) hit = true;
+      if (n.kind === ALNodeKind.assignment_statement) {
+        // writing a `var` parameter writes the CALLER's variable: state that outlives the call
+        // (CDO String Functions.CutAtSeperator consumes its `var` text a token at a time)
+        const l = n.childForFieldName("left");
+        const ln = l === null ? null : isIdentifierLike(l) ? l : l.childForFieldName("object");
+        if (ln !== null && vars.has(r531Key(ln) ?? "\u0003")) hit = true;
         return;
       }
       const c = r531Call(n);
-      if (c === null || !R572_PERSIST.has(c.method)) return;
-      if (c.recv === "" || (c.recv !== null && vars.has(c.recv))) hit = true;
-      else if (c.recv === null && r531Implicit(n, ctx) && !own.has(c.method)) hit = true;
+      if (c === null) return;
+      const paren = n.rawKind !== "member_expression";
+      if (c.recv === "codeunit" && c.method === "run") {
+        hit = true;
+        return;
+      }
+      const implicit = c.recv === null && r531Implicit(n, ctx) && !own.has(c.method);
+      if (
+        R572_PERSIST.has(c.method) &&
+        (c.recv === "" || implicit || (c.recv !== null && vars.has(c.recv)))
+      ) {
+        hit = true;
+        return;
+      }
+      const recv = r572Receiver(n);
+      const t = recv === null ? null : declaredType(recv, ctx);
+      if (paren && R572_ROWS.has(c.method)) {
+        if (c.recv === "" || implicit) hit = true;
+        else if (
+          t !== null &&
+          t.kind === "table" &&
+          !(t.temporary && r531Declares(p, c.recv ?? "", false))
+        )
+          hit = true;
+        if (hit) return;
+      }
+      const ts = r570Targets(n, c, ctx);
+      if (ts.length === 0) {
+        if (t !== null && R572_UNKNOWN_KINDS.has(t.kind)) hit = true;
+        else if (
+          paren &&
+          t !== null &&
+          t.kind === "table" &&
+          !R531_BUILTIN.has(c.method) &&
+          !R572_ROWS.has(c.method)
+        )
+          hit = true;
+        return;
+      }
+      for (const q of ts) {
+        if (r572InProgress.has(q)) continue;
+        if (r572Stateful(q, hops - 1, ctx)) {
+          hit = true;
+          return;
+        }
+      }
     });
+    r572InProgress.delete(p);
     return hit;
   });
+}
+const r572InProgress = new Set<ALSyntaxNode>();
+
+/** Item 3: the procedures of each chain object that WRITE a global the chain names: assign it, call
+ *  a method on it other than a read-only record built-in, or pass it to a call. `reach`: only those
+ *  reachable from the chain through same-object calls. */
+function r572Writers(chain: ALSyntaxNode[], reach: boolean, ctx: SemanticContext): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  for (const p of chain) {
+    const g = r572Globals(p, ctx);
+    const o = objectOf(p);
+    if (g.size === 0 || o === null) continue;
+    let procs: ALSyntaxNode[] = [];
+    if (reach) {
+      const seen = new Set<ALSyntaxNode>([p]);
+      const todo = [p];
+      for (let d = 0; d < R572_STATE_HOPS && todo.length > 0; d++) {
+        const next: ALSyntaxNode[] = [];
+        for (const x of todo)
+          r531Walk(x, ctx, (n) => {
+            const c = r531Call(n);
+            if (c === null || c.recv !== null) return;
+            for (const t of r570Targets(n, c, ctx)) {
+              const to = objectOf(t);
+              if (
+                to !== null &&
+                samePos(to, o) &&
+                sameFile(rootOf(to), rootOf(o)) &&
+                !seen.has(t)
+              ) {
+                seen.add(t);
+                next.push(t);
+              }
+            }
+          });
+        todo.splice(0, todo.length, ...next);
+      }
+      procs = [...seen];
+    } else {
+      visitAll(o, (n) => {
+        if (n.rawKind === "procedure" || isProcedureLike(n)) procs.push(n);
+      });
+    }
+    for (const w of procs) {
+      const wg = r572Globals(w, ctx);
+      if (![...wg].some((k) => g.has(k))) continue;
+      let writes = false;
+      r531Walk(w, ctx, (n) => {
+        if (writes) return;
+        if (n.kind === ALNodeKind.assignment_statement) {
+          const l = n.childForFieldName("left");
+          const ln = l === null ? null : isIdentifierLike(l) ? l : l.childForFieldName("object");
+          if (ln !== null && g.has(normalizeAlName(ln.text))) writes = true;
+          return;
+        }
+        const c = r531Call(n);
+        if (c === null) return;
+        if (c.recv !== null && g.has(c.recv) && n.rawKind !== "member_expression") {
+          const readOnly =
+            R531_BUILTIN.has(c.method) &&
+            !R570_TOUCH.has(c.method) &&
+            c.method !== "insert" &&
+            c.method !== "init";
+          if (!readOnly) writes = true;
+        }
+        if (c.args.some((a) => isIdentifierLike(a) && g.has(normalizeAlName(a.text))))
+          writes = true;
+      });
+      if (writes) out.push(w);
+    }
+  }
+  return out;
 }
 
 const R570_UNKNOWN = "\u0002";
