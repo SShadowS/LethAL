@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**70 of 567 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**69 of 567 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -610,7 +610,7 @@ that ordering is the priority.
 - **R553** · The assertion screen is vacuous on al-runner (every kill's text starts with an exception type), and its note then blames the suite's assertion style · [R553.md](docs/roadmap/R553.md) · open
 - **R558** · SessionReport does not record which al-runner test selector produced its verdicts (`--test-exact` or R488's substring-with-excludes) · [R558.md](docs/roadmap/R558.md) · done (b1f07ea6)
 - **R559** · Retire R488's exclude-and-learn path once every supported al-runner build carries `--test-exact` · [R559.md](docs/roadmap/R559.md) · open
-- **R565** · No dependency source loader: a rule that needs a DEPENDENCY's procedure bodies (R561's known preset writer) cannot run, though Microsoft's .app packages ship their source · [R565.md](docs/roadmap/R565.md) · open, filed 2026-10-10
+- **R565** · No dependency source loader: a rule that needs a DEPENDENCY's procedure bodies (R561's known preset writer) cannot run, though Microsoft's .app packages ship their source · [R565.md](docs/roadmap/R565.md) · done (8fc29663): dependency report source loader for known preset writers; QM -7, ATL -15…
 - **R566** · Host step: does the env tool's own publish serve a source-less test app back byte for byte? (R498's gain on that route is unmeasured) · [R566.md](docs/roadmap/R566.md) · open, filed 2026-10-10 — a HOST step for the owner (the env tool is host-only)
 
 ---
