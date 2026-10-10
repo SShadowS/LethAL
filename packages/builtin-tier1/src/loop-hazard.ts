@@ -74,8 +74,8 @@ import {
  *   an item that inserts into its own table (`altersSelfInsertFilter`, shape 3).
  * Two RULINGS: a reportextension outside the project cannot reach this project's open items (its
  * code is not in the run), and a `while`/`repeat` inside a BOUNDED item's code keeps
- * R196/R446/R480's loop rules only (shape 8; the loop that ends only by consuming its set is a
- * product-wide question, filed on its own).
+ * the product-wide loop rules only (shape 8): R196/R446/R480, R531's consuming loop, and R570's
+ * cursor-shaped callee in another object, which apply inside report items as anywhere else.
  *
  * R501 (closed): the same scope now refuses EVERY operator, not only the four, through ONE check
  * the orchestrator asks at dispatch (`openItemHangRefuses`, no operator list, no exemption): the

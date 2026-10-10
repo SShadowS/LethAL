@@ -739,6 +739,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A loop that ends through a cursor procedure in another object is hang-refused** (R570). A
+  `while`/`repeat` loop (any object kind) whose condition, or a body exit guard, calls a procedure
+  in another project object that steps a cursor (`Find*`, `Next`, `IsEmpty`, `Count`, or a loop)
+  now refuses every site in that procedure, and in every procedure its `exit(<call>)` chain reaches
+  (up to 4 hops). Create Pick's FEFO loop, Sales Tax Calculate, TempStack.Pop and the Power BI
+  report iterator are examples a sample showed can hang. A guard call is followed only when the
+  condition steps no cursor, or when it shares the condition's record. Measured: DC 134 mutants
+  removed (0.070%), BC.History 521 (0.023%), DO, CDO and fixtures 0; no identity moved. A loop flag
+  fed by such a callee (R572) and a record consumer in another object (R571) are filed, not built.
 - **The loop-hazard check reads every name of a multi-name declaration** (R521). A declaration that
   names two variables at once declares both, but four readers took only the first: the type lookup for a receiver the
   symbol table does not index (an XMLport's variable), the local-shadow check, a report's open-item
