@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**73 of 558 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**72 of 558 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -601,7 +601,7 @@ that ordering is the priority.
 - **R546** · al-runner vs BC verdict agreement has never been measured on a real project: the owner sees mutants survive on one backend and not the other · [R546.md](docs/roadmap/R546.md) · done (5c2d3a39)
 - **R552** · bcdev stages `lethal-control.app` INTO the configured `packageCachePath`, so pointing it at a project's own `.alpackages` changes that folder · [R552.md](docs/roadmap/R552.md) · open
 - **R553** · The assertion screen is vacuous on al-runner (every kill's text starts with an exception type), and its note then blames the suite's assertion style · [R553.md](docs/roadmap/R553.md) · open
-- **R558** · SessionReport does not record which al-runner test selector produced its verdicts (`--test-exact` or R488's substring-with-excludes) · [R558.md](docs/roadmap/R558.md) · open
+- **R558** · SessionReport does not record which al-runner test selector produced its verdicts (`--test-exact` or R488's substring-with-excludes) · [R558.md](docs/roadmap/R558.md) · done (b1f07ea6)
 - **R559** · Retire R488's exclude-and-learn path once every supported al-runner build carries `--test-exact` · [R559.md](docs/roadmap/R559.md) · open
 
 ---
