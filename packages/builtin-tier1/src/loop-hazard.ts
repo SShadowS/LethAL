@@ -1972,8 +1972,9 @@ export const r532FeedSeam = { on: true };
  * argument of a BARE call that is itself a preset write (`Evaluate(Continue, S)`), and from each
  * argument of a call to a same-object preset writer whose parameter that writer itself feeds
  * (`SetContinue(Tmp)` with `Continue := B`; `writerFedArgs`). Never from `Obj.Proc(Continue, H)`,
- * and never from an argument of `Obj.Proc(...)` in a right side (`Continue := Fmt.Bill(A, B)` feeds
- * `Fmt`, not `A` or `B`), nor from a parameter a writer only hands to `Obj.Proc(...)`: a value that
+ * and never from an argument of another object's function in a right side (`r568StopsAt`: an
+ * object-typed receiver or a project table procedure; `Continue := Fmt.Bill(A, B)` with `Fmt` a
+ * codeunit feeds `Fmt`, not `A` or `B`; a platform method's arguments do feed), nor from a parameter a writer only hands to `Obj.Proc(...)`: a value that
  * reaches the name through another object's function is the cross-object part R532 closed by ruling
  * (seeding there cost BaseApp 67 more mutants than the built rule). Shape 1 treats a feed as a write.
  * By name: a same-named variable written after the preset write is refused too (the safe direction).
