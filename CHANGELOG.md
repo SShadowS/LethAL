@@ -747,8 +747,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   report iterator are examples a sample showed can hang. A guard call is followed when the
   condition steps no cursor; when it does, only a guard call that shares the condition's record
   (its receiver, or a `var` argument) AND whose callee touches that record is refused. Touching
-  means it moves it, filters, marks or changes rows, writes a key field (or a field the loop
-  filters on, followed by `Modify`), or hands it on to code that does, followed up to 8 calls
+  means it moves it, filters, marks or changes rows, writes a key field or a field the loop
+  filters on, calls `Modify(true)`, or hands it on to code that does, followed up to 8 calls
   deep; unknown counts as touching. Measured against master 259a5eae: DC 31 mutants removed
   (0.016%), BC.History 407 (0.018%; BaseApp 259, 0.036%), DO, CDO and fixtures 0; no identity
   tuple or ordinal moved. The same change fixes R531's hop into a `var` parameter named `Rec`
