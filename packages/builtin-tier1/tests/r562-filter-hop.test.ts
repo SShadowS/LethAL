@@ -119,6 +119,60 @@ const LINE = `table 50110 "R562 Line"
     begin
         SetRange(Name, 'GLOBAL');
     end;
+
+    procedure ViaRec()
+    begin
+        Rec.SetB();
+        while FindFirst() do
+            Rename('Q');
+    end;
+
+    procedure SetB()
+    begin
+        SetRange(Tpl, 'B1');
+    end;
+
+    procedure SetForExt(Src: Record "R562 Line")
+    begin
+        SetRange(Tpl, 'EXT');
+    end;
+
+    procedure SetForPage()
+    begin
+        SetRange(Tpl, 'PAGE');
+    end;
+}`;
+
+const LINE_EXT = `tableextension 50114 "R562 Line Ext" extends "R562 Line"
+{
+    procedure ExtCall()
+    begin
+        SetForExt(xRec);
+        while FindFirst() do
+            Rename('E');
+    end;
+}`;
+
+const LINE_PAGE = `page 50115 "R562 Line Page"
+{
+    SourceTable = "R562 Line";
+
+    procedure PageCall()
+    begin
+        SetForPage();
+        while FindFirst() do
+            Rename('P');
+    end;
+}`;
+
+const TN = `codeunit 50116 "R562 TN"
+{
+    TableNo = "R562 Line";
+
+    trigger OnRun()
+    begin
+        Rec.SetRange(Name, 'TN');
+    end;
 }`;
 
 const OTHER = `table 50111 "R562 Other"
@@ -285,10 +339,41 @@ const CALLER = `codeunit 50113 "R562 Caller"
         while C.FindFirst() do
             C.Rename('C');
     end;
+
+    procedure RunTableNo()
+    var
+        N: Record "R562 Line";
+    begin
+        Codeunit.Run(Codeunit::"R562 TN", N);
+        while N.FindFirst() do
+            N.Rename('N');
+    end;
+
+    procedure SetTableRef()
+    var
+        Q: Record "R562 Line";
+        RR2: RecordRef;
+    begin
+        RR2.SetTable(Q);
+        while Q.FindFirst() do
+            Q.Rename('Q');
+    end;
+
+    procedure Ascending()
+    var
+        Z: Record "R562 Line";
+    begin
+        Z.SetAscending("No.", true);
+        while Z.FindFirst() do
+            Z.Rename('Z');
+    end;
 }`;
 
 const FILES = {
   "Line.Table.al": LINE,
+  "LineExt.TableExt.al": LINE_EXT,
+  "LinePage.Page.al": LINE_PAGE,
+  "TN.Codeunit.al": TN,
   "Other.Table.al": OTHER,
   "FilterMgt.Codeunit.al": FILTER_MGT,
   "Caller.Codeunit.al": CALLER,
@@ -365,5 +450,30 @@ describe("R562 FILTER HOP: a pre-loop call that sets the loop's filter", () => {
     const refused = project(FILES);
     expect(refused(M, "L.SetRange(Name, 'CU')", RSR)).toBe(true);
     expect(refused(C, "FM.SetFilters(C)")).toBe(true);
+  });
+});
+
+describe("R562 FILTER HOP: the implicit Rec's table, Codeunit.Run, SetTable, SetAscending (build review)", () => {
+  it("`Rec.SetB()` in a table: the callee's filter is refused", () => {
+    expect(project(FILES)(T, "SetRange(Tpl, 'B1')", RSR)).toBe(true);
+  });
+  it("a tableextension calling the base table's `SetForExt(xRec)`: the call and the filter are refused", () => {
+    const refused = project(FILES);
+    expect(refused(T, "SetRange(Tpl, 'EXT')", RSR)).toBe(true);
+    expect(refused("LineExt.TableExt.al", "SetForExt(xRec)")).toBe(true);
+  });
+  it("a page with SourceTable calling `SetForPage()`: the callee's filter is refused", () => {
+    expect(project(FILES)(T, "SetRange(Tpl, 'PAGE')", RSR)).toBe(true);
+  });
+  it("`Codeunit.Run` of a project TableNo codeunit: its OnRun filter and the call are refused", () => {
+    const refused = project(FILES);
+    expect(refused("TN.Codeunit.al", "Rec.SetRange(Name, 'TN')", RSR)).toBe(true);
+    expect(refused(C, `Codeunit.Run(Codeunit::"R562 TN", N)`)).toBe(true);
+  });
+  it("F3: `RecRef.SetTable(R)` (it writes R) is refused", () => {
+    expect(project(FILES)(C, "RR2.SetTable(Q)")).toBe(true);
+  });
+  it("control: `R.SetAscending(..)` is a built-in and is not refused", () => {
+    expect(project(FILES)(C, `Z.SetAscending("No.", true)`)).toBe(false);
   });
 });
