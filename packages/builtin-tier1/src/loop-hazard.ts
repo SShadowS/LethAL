@@ -3624,3 +3624,216 @@ export function hangCapableForMutatedNode(
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------------------------
+// R532 census (measurement only; `scripts/r532-preset-feed-census.ts`). Refuses nothing.
+// ---------------------------------------------------------------------------------------------
+
+/** One census row per preset write outside open-item code. Names and positions only. */
+export interface R532CensusRow {
+  readonly file: string;
+  readonly object: string;
+  readonly scope: string;
+  readonly name: string;
+  readonly kind: "assign" | "var-arg";
+  /** classes (see the script's header): A-*, A', A?-*, B, B-obj, P, F, L-unwritten, G-unwritten, C */
+  readonly tags: string[];
+  readonly callees: string[];
+  readonly feeds: number;
+  readonly feedA: number;
+  readonly line: number | undefined;
+}
+
+/** Procedures named `name` in `o` (any arity when `arity` < 0). */
+function r532Procs(o: ALSyntaxNode, name: string, arity: number): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  visitAll(o, (x) => {
+    if (
+      (isProcedureLike(x) || x.rawKind === "procedure") &&
+      procNames(x).includes(name) &&
+      (arity < 0 || r531Arity(x) === arity)
+    )
+      out.push(x);
+  });
+  return out;
+}
+
+/** The census class of a call (or a hidden paren-less call) and the project procedures it reaches. */
+function r532CallClass(
+  c: ALSyntaxNode,
+  obj: ALSyntaxNode,
+  ctx: SemanticContext,
+): { cls: string; procs: ALSyntaxNode[] } | null {
+  const known = procedureNamesOf(obj, ctx);
+  const own = bareCallee(c) ?? hiddenCallee(c, known, ctx);
+  const isCall = c.rawKind === "call_expression" || c.rawKind === "call_statement";
+  const arity = isCall ? (c.childForFieldName("arguments")?.namedChildren.length ?? 0) : 0;
+  if (own !== null && known.has(own)) {
+    const procs = r532Procs(obj, own, arity);
+    return {
+      cls: openReachable(obj, ctx).has(own) ? "A'open" : "A'",
+      procs: procs.length > 0 ? procs : r532Procs(obj, own, -1),
+    };
+  }
+  if (!isCall) return null;
+  const f = c.childForFieldName("function");
+  if (f === null) return { cls: "A?-unresolved", procs: [] };
+  const viaTargets = (): { cls: string; procs: ALSyntaxNode[] } | null => {
+    const t = callTargets(c, ctx);
+    if (t === null) return null;
+    const procs = t.objs.flatMap((o) => r532Procs(o, t.member, arity));
+    if (procs.length > 0) return { cls: `A-${t.kind}`, procs };
+    return {
+      cls: t.objs.length === 0 ? `A?-notproject-${t.kind}` : `A?-builtin-${t.kind}`,
+      procs: [],
+    };
+  };
+  if (f.rawKind === "member_expression") {
+    const recv = f.childForFieldName("object");
+    const member = normalizeAlName(f.childForFieldName("member")?.text ?? "");
+    const dt = recv !== null && isIdentifierLike(recv) ? declaredType(recv, ctx) : null;
+    if (dt !== null && dt.kind === "report") {
+      const procs = projectObjects(ctx)
+        .filter(
+          (o) =>
+            (o.rawKind === "report_declaration" && objectNameOf(o) === dt.name) ||
+            (o.rawKind === "reportextension_declaration" && extendedBaseName(o) === dt.name),
+        )
+        .flatMap((o) => r532Procs(o, member, arity));
+      return { cls: procs.length > 0 ? "A-report" : "A?-report", procs };
+    }
+    return (
+      viaTargets() ?? {
+        cls: dt !== null ? `A?-notproject-${dt.kind}` : "A?-unresolved",
+        procs: [],
+      }
+    );
+  }
+  const t = viaTargets();
+  if (t !== null && t.procs.length > 0) return t;
+  return { cls: normalizeAlName(f.text) === "clear" ? "C-clear" : "A?-system", procs: [] };
+}
+
+/** The calls inside `expr`, hidden paren-less same-object calls included. */
+function r532CallsIn(expr: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContext) {
+  const out: { node: ALSyntaxNode; cls: string; procs: ALSyntaxNode[] }[] = [];
+  const known = procedureNamesOf(obj, ctx);
+  visitAll(expr, (x) => {
+    if (armOfNode(ctx, x) === "inactive") return;
+    const isCall = x.rawKind === "call_expression" || x.rawKind === "call_statement";
+    if (!isCall && hiddenCallee(x, known, ctx) === null) return;
+    const r = r532CallClass(x, obj, ctx);
+    if (r !== null) out.push({ node: x, ...r });
+  });
+  return out;
+}
+
+/**
+ * R532's census: every preset write outside open-item code (an assignment to a preset exit name,
+ * or a call passing one to a written argument), classified by where its value comes from. Uses
+ * R-531's `r531Feeds` as measured (assignments only, targets as written), so the counts R532's
+ * ruling cites reproduce; the built rule (`presetFeeds`) is wider.
+ */
+export function r532PresetFeedCensus(ctx: SemanticContext): R532CensusRow[] {
+  const fileOf = new Map<string, string>();
+  for (const f of ctx.files ?? [])
+    for (const o of objectDeclarationsOf(f.root)) fileOf.set(objectKey(o), f.path);
+  const scopeName = (s: ALSyntaxNode | null): string =>
+    s === null
+      ? "?"
+      : isProcedureLike(s)
+        ? `procedure ${procNames(s)[0] ?? "?"}`
+        : s.rawKind === "trigger_declaration"
+          ? `trigger ${triggerName(s)}`
+          : s.rawKind;
+  const rows: R532CensusRow[] = [];
+  for (const o of projectObjects(ctx)) {
+    let names: Set<string> = new Set();
+    if (o.rawKind === "report_declaration") names = presetExitNames(o, ctx);
+    else if (o.rawKind === "reportextension_declaration") names = extensionPresetExitNames(o, ctx);
+    if (names.size === 0) continue;
+    visitAll(o, (n) => {
+      if (armOfNode(ctx, n) === "inactive" || inOpenItemCode(n, ctx)) return;
+      let name: string;
+      let rhs: ALSyntaxNode | null = null;
+      if (n.rawKind === "assignment_statement") {
+        const l = n.childForFieldName("left");
+        if (l === null || !names.has(rootName(l))) return;
+        name = rootName(l);
+        rhs = n.childForFieldName("right");
+      } else if (
+        (n.rawKind === "call_expression" || n.rawKind === "call_statement") &&
+        directWrite(n, names, ctx)
+      ) {
+        const a = (n.childForFieldName("arguments")?.namedChildren ?? []).find(
+          (x) => isIdentifierLike(x) && names.has(normalizeAlName(x.text)),
+        );
+        name = a === undefined ? "?" : normalizeAlName(a.text);
+      } else return;
+      const scope = codeScope(n);
+      const tags = new Set<string>();
+      const callees: string[] = [];
+      const calls = r532CallsIn(rhs ?? n, o, ctx);
+      for (const c of calls) {
+        tags.add(rhs === null ? `V:${c.cls}` : c.cls);
+        for (const p of c.procs) callees.push(`${objectKey(objectOf(p) ?? p)}.${procNames(p)[0]}`);
+      }
+      let feeds = 0;
+      let feedA = 0;
+      if (rhs !== null) {
+        const callAt = new Set(calls.map((c) => c.node.startIndex));
+        const fs = scope === null ? [] : r531Feeds(scope, [rhs], ctx).filter((a) => !samePos(a, n));
+        feeds = fs.length;
+        for (const f of fs) {
+          const r = f.childForFieldName("right");
+          if (r === null) continue;
+          for (const c of r532CallsIn(r, o, ctx)) {
+            tags.add(`B>${c.cls}`);
+            if (c.cls.startsWith("A-")) feedA++;
+          }
+        }
+        visitAll(rhs, (x) => {
+          if (!isIdentifierLike(x) || x.fieldName === "member" || x.fieldName === "function")
+            return;
+          if (x.parent?.rawKind === "qualified_enum_value" || callAt.has(x.startIndex)) return;
+          const nm = normalizeAlName(x.text);
+          if (nm === "rec" || nm === "xrec" || nm === "currreport") {
+            tags.add("F");
+            return;
+          }
+          if (scope !== null && r531Feeds(scope, [x], ctx).some((a) => !samePos(a, n))) {
+            tags.add("B");
+            return;
+          }
+          const d = resolveVarRef(x, ctx);
+          if (d === null) tags.add("F");
+          else if (d.node.rawKind === "parameter") tags.add("P");
+          else if (codeScope(d.node) !== null) tags.add("L-unwritten");
+          else {
+            let objWrite = false;
+            visitAll(o, (a) => {
+              if (objWrite || a.rawKind !== "assignment_statement") return;
+              const l = a.childForFieldName("left");
+              if (l !== null && rootName(l) === nm && !samePos(a, n)) objWrite = true;
+            });
+            tags.add(objWrite ? "B-obj" : "G-unwritten");
+          }
+        });
+        if (tags.size === 0) tags.add("C");
+      } else if (tags.size === 0) tags.add("V:none");
+      rows.push({
+        file: fileOf.get(objectKey(o)) ?? "?",
+        object: objectKey(o),
+        scope: scopeName(scope),
+        name,
+        kind: rhs === null ? "var-arg" : "assign",
+        tags: [...tags].sort(),
+        callees,
+        feeds,
+        feedA,
+        line: n.startPosition?.row,
+      });
+    });
+  }
+  return rows;
+}
