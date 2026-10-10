@@ -752,6 +752,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   followed: R532 closes that part by ruling. A BaseApp census and a 15-site sample found no hang, and
   following it would cost 321 mutants. Measured: BaseApp -60 mutants, Withholding Tax,
   TestLibraries and the fixtures 0, no identity tuple or ordinal moved, and no scheme change.
+- **A comment inside an argument list is no longer read as an argument by the loop-hazard check** (R567).
+  `F(xRec /*c*/)` counted two arguments, so the hang check followed no overload of `F` (or a wrong
+  one), and the callee's `SetRange` or `Delete` sites could be deployed. Every loop-hazard and engine
+  semantic reader of a call's or attribute's arguments now uses one shared reader that drops comments
+  (swap-call-arguments and testpage-scan keep their own filtering). When a `#pragma` or a parse error
+  sits among the arguments, positions cannot be trusted, and each reader refuses more instead of
+  guessing. A
+  comment between an `[EventSubscriber]` attribute and its procedure no longer hides the subscriber.
+  Measured on every corpus project with either shape: no mutant identity changed.
 - **A loop-hazard HOP no longer refuses an overload the call cannot reach** (R564). R531's HOP and
   R562's FILTER HOP followed every overload of the called name whose parameter count fit, so an
   overload taking a different table's record was refused too. Now, when every argument is a record

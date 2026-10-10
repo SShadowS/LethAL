@@ -784,34 +784,34 @@ table 50162 "R564 C"
   });
 });
 
-// `r531Call` counts a comment inside the argument list as an argument, so `F(xRec /*c*/)` fits no
-// one-parameter overload. These pin today's behaviour at each call site; the narrowing never sees
-// such a call (it needs two candidates). Where a site then follows nothing, see R567.
-describe("R564: a comment among the arguments keeps today's behaviour", () => {
-  it("R562 recv-proc (`r531TableProcs`): the call is refused, the callee's filters are not", () => {
+// R567 flipped these four pins: a comment inside the argument list is not an argument
+// (`argumentList`), so `F(xRec /*c*/)` is a one-argument call, the narrowing sees it, and only the
+// overload its argument type chooses is followed and refused.
+describe("R564/R567: a comment among the arguments is not an argument", () => {
+  it("R562 recv-proc (`r531TableProcs`): the call and the chosen callee's filter are refused", () => {
     const refused = project(FILES);
     expect(refused("Line.Table.al", "Att.SetCm(xRec /*c*/)")).toBe(true);
-    expect(both(["CmL", "CmO"])).toEqual([false, false]);
+    expect(both(["CmL", "CmO"])).toEqual([true, false]);
   });
-  it("R562 same-object: the call is refused, the callee's filters are not", () => {
+  it("R562 same-object: the call and the chosen callee's filter are refused", () => {
     const refused = project(FILES);
     expect(refused(C, "SetSameCm(S2, Src /*c*/)")).toBe(true);
-    expect(refused(C, "P.SetRange(Tpl, 'CmSL')", RSR)).toBe(false);
+    expect(refused(C, "P.SetRange(Tpl, 'CmSL')", RSR)).toBe(true);
     expect(refused(C, "P.SetRange(Tpl, 'CmSO')", RSR)).toBe(false);
   });
-  it("R562 table/codeunit: the call is refused, the callee's filters are not", () => {
+  it("R562 table/codeunit: the call and the chosen callee's filter are refused", () => {
     const refused = project(FILES);
     expect(refused(C, "FM.SetCuCm(C2, Src /*c*/)")).toBe(true);
-    expect(refused(M, "C.SetRange(Tpl, 'CmCL')", RSR)).toBe(false);
+    expect(refused(M, "C.SetRange(Tpl, 'CmCL')", RSR)).toBe(true);
     expect(refused(M, "C.SetRange(Tpl, 'CmCO')", RSR)).toBe(false);
   });
-  it("R531 HOP, recv-proc and same-object: the call is refused, the callees' consumers are not", () => {
+  it("R531 HOP, recv-proc and same-object: the call and the chosen callees' consumers are refused", () => {
     const refused = project(FILES);
     expect(refused("Line.Table.al", "Att.ConsumeCm(xRec /*c*/)")).toBe(true);
-    expect(refused(A, "DeleteAll(false)")).toBe(false);
+    expect(refused(A, "DeleteAll(false)")).toBe(true);
     expect(refused(A, "DeleteAll(true)")).toBe(false);
     expect(refused(C, "ConsumeCm(H2, Src /*c*/)")).toBe(true);
-    expect(refused(C, "W.DeleteAll(false)")).toBe(false);
+    expect(refused(C, "W.DeleteAll(false)")).toBe(true);
     expect(refused(C, "W.DeleteAll(true)")).toBe(false);
   });
 });
