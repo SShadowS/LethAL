@@ -1858,7 +1858,9 @@ function r571CrossTargets(
           if (k === null || !recvs.has(k)) return;
           for (const j of r531Positions(c, i, p)) {
             const prm = r531Param(p, j);
-            if (prm !== null) out.push({ proc: p, key: prm[0], byValue: !prm[1] });
+            // a parameter named `Rec` is keyed "" like a `Rec.M()` receiver (R570's r531ParamKey)
+            if (prm !== null)
+              out.push({ proc: p, key: prm[0] === "rec" ? "" : prm[0], byValue: !prm[1] });
           }
         });
       else if (kind === "recv-proc" && tg.kind !== "record")

@@ -105,6 +105,17 @@ describe("R571: a consumer in another object", () => {
     const files = { "c.al": PASS(""), "e.al": EATER("var ", "X.Delete();"), "b.al": BUF };
     expect(refusedIn(files, "e.al", "X.Delete()")).toBe(true);
   });
+  it("follows a var parameter named Rec", () => {
+    const eater = `codeunit 50104 Eater
+{
+    procedure Eat(var Rec: Record Buf)
+    begin
+        Rec.Delete();
+    end;
+}`;
+    const files = { "c.al": PASS(""), "e.al": eater, "b.al": BUF };
+    expect(refusedIn(files, "e.al", "Rec.Delete()")).toBe(true);
+  });
   it("by value: a Delete reaches the table, a SetRange does not", () => {
     const del = { "c.al": PASS(""), "e.al": EATER("", "X.Delete();"), "b.al": BUF };
     expect(refusedIn(del, "e.al", "X.Delete()")).toBe(true);
