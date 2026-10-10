@@ -45,7 +45,7 @@ stopped before deciding (not decided). Verify v8 bumped for an added field by th
 `results[].sameProcedure` is present on every row killed by a new test, so its absence there means
 "not measured" only from v8 on. `report`, `stream` and `campaign-compare` are generated; report v2 is frozen as the
 generator last wrote it.
-`SessionReport` walks out to 130 leaves and the stream is a union of 22 event shapes; at that size a
+`SessionReport` walks out to 130 leaves and the stream is a union of 23 event shapes; at that size a
 hand-written file stops being a guarantee and becomes a second copy of the type that someone
 forgets, so `bun scripts/generate-schemas.ts` emits them, and `--check` fails when a committed file
 no longer matches the type.

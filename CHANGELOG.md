@@ -13,6 +13,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **The report records which al-runner test selector produced its verdicts** (R558). R551 picks the
+  selector once per session by a probe: `--test-exact` when the build accepts it, otherwise R488's
+  substring with excludes. Until now only a warning line said which. The choice is now recorded on
+  `validity.executionContexts[].testSelector` (`"exact"` or `"substring-with-excludes"`), with
+  `testSelectorReason` (the probe's reason) on the latter. It is present only on directly-measured
+  al-runner contexts, and absent on bcdev, on `--server`, and on verdicts carried by `--resume`. It
+  is an optional field, so the report stays schema v3 (R157). The committed sample reports were
+  deliberately NOT regenerated. The samples `schemas.test.ts` reads are bcdev reports, where the
+  field can never appear. R546's two al-runner reports are records of a past measurement.
+
 - **al-runner coverage can admit multi-object files, per build, by a frame probe** (R407). Upstream
   #5249 fixed the frame defect R383 measured on v2.12.0-main.c39ad5de (later objects reported
   against the SOURCE file). When `"alRunner.coverage": "al-runner"` meets a project with a

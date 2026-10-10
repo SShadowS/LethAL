@@ -945,6 +945,33 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "selector",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "al-runner-test-selector"
+        },
+        "selector": {
+          "type": "string",
+          "enum": [
+            "exact",
+            "substring-with-excludes"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "mutant",
         "verdict",
         "batchIndex",

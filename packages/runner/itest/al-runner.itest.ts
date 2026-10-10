@@ -72,6 +72,7 @@ import {
   oneShotArgvSummary,
   platformAppsAgreement,
   recordSpawns,
+  reportTestSelectorFailures,
   testSelectorLineFailures,
   watchResourceSelector,
 } from "./cli-default-leg";
@@ -347,7 +348,11 @@ async function runOnce(
     // R551: printed, not asserted by value (that would need a build table; the pre-commitment pins
     // it per run). The COUNT is asserted.
     for (const line of selectorLines) console.log(`  ${line}`);
-    const selectorFailures = testSelectorLineFailures(selectorLines, !serverMode);
+    const selectorFailures = [
+      ...testSelectorLineFailures(selectorLines, !serverMode),
+      // R558: the same choice, recorded in the report on a one-shot leg and absent on --server.
+      ...reportTestSelectorFailures(report, !serverMode),
+    ];
     assert.deepEqual(selectorFailures, [], selectorFailures.join("; "));
     return report;
   } finally {
@@ -1017,6 +1022,13 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
         cliDefaultSelectorFailures(events),
         [],
         "R551: the --test-exact probe must not run under --server",
+      ),
+    );
+    check("cli-default report selector (R558)", () =>
+      assert.deepEqual(
+        reportTestSelectorFailures(report, false),
+        [],
+        "R558: a --server session's report must record no testSelector",
       ),
     );
     if (failures.length > 0) {
