@@ -75,6 +75,7 @@ export type {
 export {
   buildSymbolTable,
   collectVarDeclarations,
+  declaredNames,
   enclosingTrigger,
   extensionScopeKey,
   objectScopeKey,

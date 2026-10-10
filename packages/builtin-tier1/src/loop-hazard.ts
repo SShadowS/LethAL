@@ -8,6 +8,7 @@ import {
   argumentsReadable,
   armOfNode,
   declarationMembers,
+  declaredNames,
   enclosingTrigger,
   fieldSegments,
   identifierTokens,
@@ -1052,9 +1053,13 @@ function r531Declares(scope: ALSyntaxNode | null, name: string, params: boolean)
       if (hit) return;
       if (c.rawKind === "code_block" || (!params && c.rawKind === "parameter_list")) continue;
       if (c.rawKind === "variable_declaration" || c.rawKind === "parameter") {
-        const id =
-          c.childForFieldName("name") ?? c.namedChildren.find((x) => isIdentifierLike(x)) ?? null;
-        if (id !== null && normalizeAlName(id.text) === name) hit = true;
+        // R521: every name of a multi-name declaration (`A, B: Record X`), not only the first
+        const names = declaredNames(c).map(normalizeAlName);
+        if (names.length === 0) {
+          const id = c.namedChildren.find((x) => isIdentifierLike(x)) ?? null;
+          if (id !== null) names.push(normalizeAlName(id.text));
+        }
+        if (names.includes(name)) hit = true;
       } else walk(c);
     }
   };
@@ -2228,7 +2233,7 @@ export function presetExitNames(
       if (c.rawKind !== "var_section") continue;
       visitAll(c, (v) => {
         if (v.rawKind === "variable_declaration")
-          globals.add(normalizeAlName(v.childForFieldName("name")?.text ?? ""));
+          for (const nm of declaredNames(v)) globals.add(normalizeAlName(nm));
       });
     }
     const reads = new Set<string>();
@@ -2623,7 +2628,8 @@ function declaredType(recv: ALSyntaxNode, ctx: SemanticContext): DeclaredType | 
         for (const c of n.namedChildren) {
           if (t !== null) return;
           if (c.rawKind === "variable_declaration") {
-            if (normalizeAlName(c.childForFieldName("name")?.text ?? "") === name) t = c;
+            // R521: any name of a multi-name declaration (PEPPOL's `A, B: Interface X`)
+            if (declaredNames(c).some((nm) => normalizeAlName(nm) === name)) t = c;
           } else if (c.rawKind === "var_section" || c.rawKind === "var_body") {
             walk(c);
           }
@@ -2840,7 +2846,7 @@ function protectedVarNames(report: ALSyntaxNode): Set<string> {
       continue;
     visitAll(c, (v) => {
       if (v.rawKind === "variable_declaration")
-        out.add(normalizeAlName(v.childForFieldName("name")?.text ?? ""));
+        for (const nm of declaredNames(v)) out.add(normalizeAlName(nm));
     });
   }
   return out;
