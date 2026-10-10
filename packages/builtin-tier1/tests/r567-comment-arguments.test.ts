@@ -78,6 +78,43 @@ const T = `table 50140 "R567 T"
         field(1; "No."; Code[20]) { }
         field(2; Tpl; Code[20]) { }
     }
+
+    procedure TProc(A: Integer)
+    begin
+        DeleteAll(false);
+    end;
+
+    procedure TFilt(A: Integer)
+    begin
+        SetRange(Tpl, 'TF');
+    end;
+
+    procedure TFilt2(A: Integer)
+    begin
+        SetRange(Tpl, 'TF2');
+    end;
+}`;
+
+/** Bare calls on the implicit Rec to a procedure of the BASE table (the bare-consumer gate and
+ *  `bareRec`), each with a pragma among its arguments. */
+const T_EXT = `tableextension 50143 "R567 T Ext" extends "R567 T"
+{
+    procedure ExtLoop()
+    begin
+        while FindFirst() do
+            TProc(1,
+${PRAGMA}
+                2);
+    end;
+
+    procedure ExtFilter()
+    begin
+        TFilt(1,
+${PRAGMA}
+            2);
+        while FindFirst() do
+            Rename('EF');
+    end;
 }`;
 
 const MGT = `codeunit 50142 "R567 Mgt"
@@ -88,8 +125,45 @@ const MGT = `codeunit 50142 "R567 Mgt"
     end;
 }`;
 
+const RUNNERS = `codeunit 50144 "R567 Runner"
+{
+    TableNo = "R567 T";
+
+    trigger OnRun()
+    begin
+        SetRange(Tpl, 'RUN1');
+    end;
+}
+
+codeunit 50145 "R567 Runner2"
+{
+    TableNo = "R567 T";
+
+    trigger OnRun()
+    begin
+        SetRange(Tpl, 'RUN2');
+    end;
+}`;
+
 const CALLER = `codeunit 50141 "R567 C"
 {
+    procedure RunPragma()
+    var
+        RN: Record "R567 T";
+        RN2: Record "R567 T";
+    begin
+        Codeunit.Run(Codeunit::"R567 Runner",
+${PRAGMA}
+            RN);
+        while RN.FindFirst() do
+            RN.Rename('RN');
+        Codeunit.Run(
+${PRAGMA}
+            Codeunit::"R567 Runner2", RN2);
+        while RN2.FindFirst() do
+            RN2.Rename('RN2');
+    end;
+
     procedure HopVar()
     var
         R: Record "R567 T";
@@ -186,18 +260,106 @@ ${PRAGMA}
         H: Record "R567 T";
     begin
         while H.FindFirst() do
-            ConsUn(H,
+            ConsUn(1,
 ${PRAGMA}
-                1);
+                H);
     end;
 
-    local procedure ConsUn(var W: Record "R567 T"; Q: Integer)
+    local procedure ConsUn(Q: Integer; var W: Record "R567 T")
     begin
         W.SetRange(Tpl, 'CU');
     end;
+
+    procedure UnreadNoHop()
+    var
+        N: Record "R567 T";
+    begin
+        SetNo(N,
+${PRAGMA}
+            1);
+        while N.FindFirst() do
+            N.Rename('NO');
+    end;
+
+    local procedure SetNo(var P: Record "R567 T"; Q: Integer)
+    begin
+        P.Tpl := 'NO';
+    end;
+
+    procedure RecvProcPragma()
+    var
+        RP: Record "R567 T";
+    begin
+        RP.TFilt2(1,
+${PRAGMA}
+            2);
+        while RP.FindFirst() do
+            RP.Rename('RP');
+    end;
+
+    procedure DepPragma()
+    var
+        D: Record "R567 T";
+    begin
+        SetDep(D);
+        while D.FindFirst() do begin
+            D.Tpl := 'DP-NEW';
+            D.Modify();
+        end;
+    end;
+
+    local procedure SetDep(var P: Record "R567 T")
+    begin
+        P.SetRange(
+${PRAGMA}
+            "No.", 'DP');
+    end;
+
+    procedure ValidatePragma()
+    var
+        V: Record "R567 T";
+    begin
+        V.SetRange(Tpl, 'VV');
+        while V.FindFirst() do begin
+            V.Validate(
+${PRAGMA}
+                "No.", 'VV-NEW');
+            V.Modify();
+        end;
+    end;
+
+    procedure ModifyAllPragma()
+    var
+        MA: Record "R567 T";
+    begin
+        MA.SetRange(Tpl, 'MA');
+        while MA.FindFirst() do
+            MA.ModifyAll(
+${PRAGMA}
+                "No.", 'MA-NEW');
+    end;
+
+    procedure CopyPragma()
+    var
+        R2: Record "R567 T";
+        CP: Record "R567 T";
+    begin
+        while R2.FindFirst() do begin
+            CP.Copy(
+${PRAGMA}
+                R2, true);
+            CP.Delete();
+        end;
+    end;
 }`;
 
-const FILES = { "T.Table.al": T, "C.Codeunit.al": CALLER, "M.Codeunit.al": MGT };
+const FILES = {
+  "T.Table.al": T,
+  "TExt.TableExt.al": T_EXT,
+  "C.Codeunit.al": CALLER,
+  "M.Codeunit.al": MGT,
+  "Runners.Codeunit.al": RUNNERS,
+};
 const C = "C.Codeunit.al";
 
 describe("R567: a comment among a call's arguments is not an argument", () => {
@@ -236,6 +398,37 @@ describe("R567: a #pragma among a call's arguments (unreadable) refuses more", (
   });
   it("`.args[0]` is a pragma: the field reads as any field", () => {
     expect(project(FILES).at(C, "P0.Modify()")).toBe(true);
+  });
+  it("FILTER HOP `depends`: a callee's filter on a pragma-hidden field counts", () => {
+    const call = `P.SetRange(\n${PRAGMA}\n            "No.", 'DP')`;
+    expect(project(FILES).at(C, call, RSR)).toBe(true);
+  });
+  it("`Validate` with a pragma-hidden field writes any field: the loop's filter is refused", () => {
+    expect(project(FILES).at(C, "V.SetRange(Tpl, 'VV')", RSR)).toBe(true);
+  });
+  it("`ModifyAll` with a pragma-hidden field writes any field: the loop's filter is refused", () => {
+    expect(project(FILES).at(C, "MA.SetRange(Tpl, 'MA')", RSR)).toBe(true);
+  });
+  it("`Copy` with a pragma among its arguments aliases every argument", () => {
+    expect(project(FILES).at(C, "CP.Delete()")).toBe(true);
+  });
+  it("the uncertain call itself is refused, even where no callee filters", () => {
+    expect(project(FILES).at(C, `SetNo(N,\n${PRAGMA}\n            1)`)).toBe(true);
+  });
+  it("the bare-consumer gate takes any arity: the base table procedure's DeleteAll is refused", () => {
+    expect(project(FILES).at("T.Table.al", "DeleteAll(false)")).toBe(true);
+  });
+  it("FILTER HOP recv-proc (`RP.TFilt2(...)`) takes any arity: the table procedure's filter is refused", () => {
+    expect(project(FILES).at("T.Table.al", "SetRange(Tpl, 'TF2')", RSR)).toBe(true);
+  });
+  it("`Codeunit.Run(X, <pragma> R)`: R at any position reaches the TableNo codeunit's OnRun", () => {
+    expect(project(FILES).at("Runners.Codeunit.al", "SetRange(Tpl, 'RUN1')", RSR)).toBe(true);
+  });
+  it("`Codeunit.Run(<pragma> X, R)`: the codeunit id is unknown, so any TableNo codeunit", () => {
+    expect(project(FILES).at("Runners.Codeunit.al", "SetRange(Tpl, 'RUN2')", RSR)).toBe(true);
+  });
+  it("`bareRec` takes any arity: the base table procedure's filter is refused", () => {
+    expect(project(FILES).at("T.Table.al", "SetRange(Tpl, 'TF')", RSR)).toBe(true);
   });
 });
 
@@ -322,6 +515,11 @@ const BOUND = `report 50170 "R567 Bound"
             begin
                 SetRange(Number, 1, /*c*/ 4);
             end;
+
+            trigger OnAfterGetRecord()
+            begin
+                Seen := Seen + 1;
+            end;
         }
         dataitem(Rd; Integer)
         {
@@ -345,14 +543,15 @@ const BOUND = `report 50170 "R567 Bound"
 
     var
         Total: Integer;
+        Seen: Integer;
         Cap: Integer;
         Buf: Record Customer temporary;
 }`;
 
 describe("R567: SetRange bounds and reads past a comment", () => {
   const B = "Bound.al";
-  it("literal bounds: `SetRange(Number, 1, /*c*/ 4)` is the item's literal bound (its 4 is refused)", () => {
-    expect(project({ [B]: BOUND }).at(B, "4")).toBe(true);
+  it("literal bounds: `SetRange(Number, 1, /*c*/ 4)` bounds the item, so its body emits", () => {
+    expect(project({ [B]: BOUND }).at(B, "Seen := Seen + 1")).toBe(false);
   });
   it("the read scan: a comment before the field does not make the field a read name", () => {
     expect(project({ [B]: BOUND }).at(B, "Cap := 3")).toBe(false);

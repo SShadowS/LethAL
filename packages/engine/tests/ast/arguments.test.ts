@@ -55,6 +55,16 @@ describe("R567: argumentList", () => {
     expect(countArguments(c)).toBe(2);
     expect(argumentsReadable(c)).toBe(false);
   });
+  it("a pragma alone in the parentheses (count and length agree) is unreadable by its kind", () => {
+    const c = first("F(\n#pragma warning disable AA0001\n);", "call_expression");
+    expect(countArguments(c)).toBe(argumentList(c).length);
+    expect(argumentsReadable(c)).toBe(false);
+  });
+  it("an empty argument slot (`F(A, )`: two by commas, one node) is unreadable by its count", () => {
+    const c = first("F(A, );", "call_expression");
+    expect(countArguments(c)).not.toBe(argumentList(c).length);
+    expect(argumentsReadable(c)).toBe(false);
+  });
   it("a call with no argument list (a call_statement) is empty and readable", () => {
     const c = first("F;", "call_statement");
     expect(argumentList(c)).toEqual([]);

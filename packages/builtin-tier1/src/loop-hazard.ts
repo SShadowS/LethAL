@@ -1078,7 +1078,7 @@ function r531Walk(n: ALSyntaxNode, ctx: SemanticContext, f: (n: ALSyntaxNode) =>
  *  Otherwise every overload that fits by arity is followed: a wrongly dropped overload would
  *  re-deploy a hang, a kept one only over-refuses. AL has no conversion from Record A to a
  *  `Record B` parameter, by value, `var` or `temporary` (alc probe, R-564). Narrowed per object.
- *  `arity` null (an uncertain call, R567): every procedure of that name, never narrowed. */
+ *  `arity` null (an uncertain call, R567): every procedure of that name, never narrowed (2). */
 function r531ProcsIn(
   obj: ALSyntaxNode,
   name: string,
@@ -1095,7 +1095,7 @@ function r531ProcsIn(
     )
       out.push(x);
   });
-  if (out.length < 2 || arity === null) return out;
+  if (out.length < 2) return out;
   const args = (r531Call(call)?.args ?? []).map((a) =>
     isIdentifierLike(a) ? recordTableObjectOfName(a, call, ctx) : null,
   );
