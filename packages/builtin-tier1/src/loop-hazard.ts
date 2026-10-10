@@ -1772,7 +1772,8 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     }
     for (const t of targets) {
       const hop = r531CalleeHop(t.proc, t.key, ctx, t.byValue);
-      if (hop !== null) hops.push(r574Seam.on ? (r574Hop(hop.proc, hop.consumers, ctx) ?? hop) : hop);
+      if (hop !== null)
+        hops.push(r574Seam.on ? (r574Hop(hop.proc, hop.consumers, ctx) ?? hop) : hop);
     }
   }
   // FEEDS: indirect feeds, and the guards around a pre-loop filter call
