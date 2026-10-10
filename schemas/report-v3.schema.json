@@ -1096,6 +1096,64 @@
     "sourceSha256": {
       "type": "string"
     },
+    "dependencyReportSources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "outcome"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "report",
+              "extension",
+              "package"
+            ]
+          },
+          "report": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "parse-damaged",
+              "not-found",
+              "ambiguous",
+              "no-source",
+              "unwrap-failed",
+              "no-symbols",
+              "unreadable"
+            ]
+          },
+          "package": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "entry": {
+            "type": "string"
+          },
+          "entrySha256": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "dependencySourceSha256": {
+      "type": "string"
+    },
     "numberingDigest": {
       "type": "string"
     },

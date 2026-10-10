@@ -1,8 +1,7 @@
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { openItemHangRefuses, setR565DependencyReport, tier1Operators } from "@lethal/builtin-tier1";
-import { r565Provider } from "./r565-dep-source";
+import { openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
   ALNodeKind,
@@ -12,6 +11,7 @@ import {
   FileRefusedError,
   type MutationOperator,
   type MutationSpec,
+  type SemanticContext,
   buildSemanticContext,
   buildSpanIndex,
   evaluateArms,
@@ -97,6 +97,12 @@ import {
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
+import {
+  type DependencyReportSourceRecord,
+  dependencyReportReader,
+  dependencySourceDigest,
+  dependencySourceWarning,
+} from "./dependency-report-source";
 import type { PublishOutcome } from "./deployment-verifier";
 import {
   DependencyUnreadableError,
@@ -519,6 +525,10 @@ export interface MutationSetResult {
    * `--only`/`--exclude`, `preproc-undecided`, no selector var fits).
    */
   readonly carryHidden: CarryHidden;
+  /** R565: every dependency report lookup and every package that could not be used, sorted. */
+  readonly dependencyReportSources: readonly DependencyReportSourceRecord[];
+  /** R565: `dependencySourceDigest` over `dependencyReportSources`. */
+  readonly dependencySourceSha256: string;
 }
 
 export interface MutationSetOptions {
@@ -607,6 +617,13 @@ export interface MutationSetOptions {
    * `"win32"` to simulate a Windows readdir on any host.
    */
   readonly platform?: NodeJS.Platform;
+  /**
+   * R565: the folders whose `.app` packages are searched, in order, for a report the project calls
+   * through `Report X` but does not declare (`dependency-report-source.ts`). al-runner: the pinned
+   * platform-apps folder, then `packagesDir`; bcdev and envtool: `packageCachePath`. Absent or
+   * empty: nothing is found, and each such report is named in a warning.
+   */
+  readonly dependencyPackageDirs?: readonly string[];
 }
 
 /**
@@ -922,15 +939,16 @@ export async function generateMutationSet(
   const armsByRoot = new Map<ALSyntaxNode, ArmEvaluation>(
     parsed.map(({ source, root }) => [root, evaluateArms(root, source, buildSymbols)]),
   );
-  const ctx = buildSemanticContext(
-    parsed.map(({ path, root }) => ({ path, root })),
-    armsByRoot,
-  );
-  // R565 PROTOTYPE (uncommitted): LETHAL_R565_DEP_DIRS (":"-separated) holds dependency .app files.
-  const depDirs = process.env.LETHAL_R565_DEP_DIRS;
-  setR565DependencyReport(
-    depDirs === undefined ? undefined : await r565Provider(depDirs.split(":"), (m) => console.error(m)),
-  );
+  // R565: a report outside the project is read from the dependency packages, lazily, by the hang
+  // refusal (`crossWriters`); the reader keeps what it looked up for the report and the digest.
+  const depReader = dependencyReportReader(options.dependencyPackageDirs ?? []);
+  const ctx: SemanticContext = {
+    ...buildSemanticContext(
+      parsed.map(({ path, root }) => ({ path, root })),
+      armsByRoot,
+    ),
+    dependencyReport: depReader.lookup,
+  };
   const preprocExcluded: PreprocExcludedFile[] = [];
   const symbolsDetail = `symbols: ${buildSymbols.length > 0 ? buildSymbols.join(", ") : "none"}`;
 
@@ -1340,7 +1358,14 @@ export async function generateMutationSet(
       `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
     );
   }
+  // R565: read once every lookup this generation made is done.
+  const dependencyReportSources = depReader.records();
+  for (const r of dependencyReportSources)
+    if (r.outcome !== "ok")
+      warn("dependency-report-source-unavailable", dependencySourceWarning(r));
   return {
+    dependencyReportSources,
+    dependencySourceSha256: dependencySourceDigest(dependencyReportSources),
     files,
     duplicateObjects: duplicateObjectRefusals(
       parsed.map(({ path, root }) => {
@@ -1529,6 +1554,12 @@ export interface SessionConfig {
    * database instead, with no deploy and no baseline (R192). See `resume.ts`.
    */
   readonly resume?: "last" | number;
+  /**
+   * R565: dependency package folders the config names (bcdev and envtool: `packageCachePath`),
+   * searched after al-runner's provisioned platform apps and the backend's own
+   * (`ExecutionBackend.dependencyPackageDirs`). See `MutationSetOptions.dependencyPackageDirs`.
+   */
+  readonly dependencyPackageDirs?: readonly string[];
   /**
    * R53: re-run mutants a prior run stranded the tier on, instead of skipping them.
    *
@@ -4063,6 +4094,7 @@ function recordedCarrySideOf(row: RunRow | null): RecordedCarrySide {
   return {
     hash: row?.generationSourceSha256 ?? null,
     twins: twins === null ? null : new Set(twins),
+    dependencyHash: row?.dependencySourceSha256 ?? null,
   };
 }
 
@@ -5692,6 +5724,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     preprocExcluded,
     buildSymbols: generatedSymbols,
     carryHidden,
+    dependencyReportSources,
+    dependencySourceSha256,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
@@ -5701,9 +5735,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     preprocessorSymbols: sourceSymbols,
     backend: buildBackend,
     emit,
+    // R565: al-runner's provisioned platform apps first, then the backend's own package folders
+    // (al-runner's `packagesDir`), then the config's (bcdev and envtool: `packageCachePath`).
+    dependencyPackageDirs: [
+      ...(provisionedPlatformAppsDir !== undefined ? [provisionedPlatformAppsDir] : []),
+      ...(cfg.backend.dependencyPackageDirs?.() ?? []),
+      ...(cfg.dependencyPackageDirs ?? []),
+    ],
   });
   // R442: before any mutant row, so a run that dies earlier holds no verdict and stays NULL.
   cfg.store.setCarryHidden(runId, carryHidden);
+  // R565: likewise, so a run that dies before it carries nothing by rule 1.
+  cfg.store.setDependencySourceSha256(runId, dependencySourceSha256);
   // R374: numbered once over the whole run, here and not inside `generateMutationSet`'s file loop,
   // which then held one entry per mutant until its end (R400). Still inside the generate phase.
   // `identityOrdinalsOf`'s numbering, from entries kept long enough to read the twins below.
@@ -5721,6 +5764,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const carryCurrent: CurrentCarrySide = {
     hash: sourceHashAtGeneration,
     twins: new Set(twinTuples),
+    dependencyHash: dependencySourceSha256,
     refused: new Set(),
   };
   // R214: fail loudly if the set recorded on the run (above) and the set generation enumerated
@@ -5857,6 +5901,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     numberingDigest,
     twinSites: twinTuples,
     carryHidden: { tuples: [...carryHidden.tuples], files: [...carryHidden.files] },
+    // R565: what was read from the dependency packages, and the digest the carry rule compares.
+    dependencyReportSources,
+    dependencySourceSha256,
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
   // satisfy a presence check while being useless to the person it is for. Built-in operators now

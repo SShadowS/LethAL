@@ -170,6 +170,9 @@ export interface RecordedCarrySide {
   /** `runs.twin_tuples` as a set; null when not measured. Never derived from the run's rows: an
    *  interrupted run holds only the rows it got to, so its rows undercount a twin. */
   readonly twins: ReadonlySet<string> | null;
+  /** R565: `runs.dependency_source_sha256`; null when not recorded (a run from before R565, or one
+   *  that died before generation finished). */
+  readonly dependencyHash: string | null;
 }
 
 /** R391: the same facts for THIS session, plus the keys whose recorded verdict was refused. */
@@ -177,6 +180,9 @@ export interface CurrentCarrySide {
   /** `sourceHashAtGeneration`. */
   readonly hash: string;
   readonly twins: ReadonlySet<string>;
+  /** R565: `MutationSetResult.dependencySourceSha256`. A session always has one; null is allowed
+   *  only so the rule can be tested on it: null never equals anything, itself included. */
+  readonly dependencyHash: string | null;
   /** Keys of this session's mutants that matched a record by key and were NOT carried. Counted
    *  in one warning per session (`carry-refused-renumbered`). */
   readonly refused: Set<string>;
@@ -187,9 +193,12 @@ export interface CurrentCarrySide {
  * (`filterHistory`) and by resume (`carriedVerdictFor`). A key holds no file, and twins are told
  * apart by their run-wide ordinal alone, so after an edit a key can name another mutant.
  *
- * - Rule 1: the recorded run's generation hash is known and equals this session's. Identical
- *   source gives identical tuples, files and ordinals (every other input has its own gate), so the
- *   key names the same mutant: look it up by key.
+ * - Rule 1: the recorded run's generation hash is known and equals this session's, and so does its
+ *   dependency source digest (R565: a dependency report's source decides which sites the hang
+ *   refusal removes, so it moves ordinals too). Identical source and dependency reads give
+ *   identical tuples, files and ordinals (every other input has its own gate), so the key names the
+ *   same mutant: look it up by key. A null on either side is never equal, null against null
+ *   included.
  * - Rule 2: otherwise, when the recorded run measured its twins and `m`'s (file, tuple) is a
  *   singleton in its file on BOTH sides: look it up by (file, tuple) AND its enclosing member's
  *   hash (R474). No renumbering can move a verdict onto it: a twin in another file has another
@@ -211,7 +220,10 @@ export function carryRecord<T>(
   const key = serializeKey(identityKeyOf(m));
   const keyed = byKey(key);
   let carried: T | undefined;
-  if (recorded.hash !== null && recorded.hash === current.hash) {
+  if (
+    sameKnown(recorded.hash, current.hash) &&
+    sameKnown(recorded.dependencyHash, current.dependencyHash)
+  ) {
     carried = keyed;
   } else if (recorded.twins !== null) {
     const site = twinSiteOf(m.file, identityTupleOf(m));
@@ -221,6 +233,10 @@ export function carryRecord<T>(
   if (keyed !== undefined && carried === undefined) current.refused.add(key);
   return carried;
 }
+
+/** Rule 1's equality: both known and equal. */
+const sameKnown = (a: string | null, b: string | null): boolean =>
+  a !== null && b !== null && a === b;
 
 /** What `priorSurvivorKeys` (store.ts) reads from the latest finished run. */
 export interface PriorSurvivors {
@@ -235,7 +251,7 @@ export interface PriorSurvivors {
 export const NO_PRIOR_SURVIVORS: PriorSurvivors = {
   keys: new Set(),
   sites: new Set(),
-  recorded: { hash: null, twins: null },
+  recorded: { hash: null, twins: null, dependencyHash: null },
 };
 
 export function filterHistory(

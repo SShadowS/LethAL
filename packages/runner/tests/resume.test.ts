@@ -309,8 +309,8 @@ function sameSource(index: ResumeIndex): ResumeIndex {
   return {
     ...index,
     carryRule: {
-      recorded: { hash: "same", twins: null },
-      current: { hash: "same", twins: new Set(), refused: new Set() },
+      recorded: { hash: "same", twins: null, dependencyHash: "dep" },
+      current: { hash: "same", twins: new Set(), dependencyHash: "dep", refused: new Set() },
     },
   };
 }
@@ -529,8 +529,10 @@ describe("sessionFingerprint (R47)", () => {
   // It moved again for R340 (scheme 37, trigger header names typed); it was 7f7b02f9...181f under scheme 36.
   // It moved again for R555 (scheme 38, a preset-exit-name writer call is hang-refused); it was
   // 9d5d97b3...91ce under scheme 37. It moved again for R-531 (scheme 39, a loop that ends only by
-  // consuming its record set is hang-refused); it was 5ee5c7b6...3ec0 under scheme 38.
-  const PINNED = "f1086a6119bfef9ef8dd0379e96a2c2746a853222cda6c425932de6945ade634";
+  // consuming its record set is hang-refused); it was 5ee5c7b6...3ec0 under scheme 38. It moved
+  // again for R565 (scheme 40, an outside report's preset writers are read from the dependency
+  // packages); it was f1086a61...e634 under scheme 39.
+  const PINNED = "7abca7bc3b8e5c80b8f92b9f4694f4eaccd9d5ea7dd59124331e7c7e61696109";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2177,8 +2179,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // (Date items, one-hop callees, subscribers and the two stated limits are hang-refused). 36 is
     // R497 (#if-wrapped objects of the measured shapes are scored on the BC paths). 37 is R340 (trigger header names typed).
     // 38 is R555 (a call to a preset-exit-name writer is hang-refused). 39 is R-531 (a loop that
-    // ends only by consuming its record set: its consumers are hang-refused).
-    expect(IDENTITY_SCHEME).toBe(39);
+    // ends only by consuming its record set: its consumers are hang-refused). 40 is R565 (an
+    // outside report's preset writers are read from the dependency packages).
+    expect(IDENTITY_SCHEME).toBe(40);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
