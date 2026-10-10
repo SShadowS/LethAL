@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -30,6 +30,7 @@ import {
 } from "../src/report";
 import { numberingDigestOf, serializeKey, twinSiteOf } from "../src/selection";
 import { ResultsStore } from "../src/store";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R443 (widened under R-443): an equivalence mark names its mutant by identity key alone, and a key
@@ -141,8 +142,8 @@ class AllSurvive implements ExecutionBackend {
 }
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 beforeAll(async () => {
   await initParser();

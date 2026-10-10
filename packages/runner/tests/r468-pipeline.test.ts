@@ -9,14 +9,15 @@ import { afterAll, describe, expect, it } from "bun:test";
  * `OnModify`. `R.Modify(false)` staying `run-trigger-forced` is the unchanged positive control
  * (T has an `OnModify`, so it is tagged either way); the U assertion is what turns that test.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dedupeSpecs } from "@lethal/schemata";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 const dir = mkdtempSync(join(tmpdir(), "r468-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => removeScratchDir(dir));
 
 writeFileSync(
   join(dir, "app.json"),

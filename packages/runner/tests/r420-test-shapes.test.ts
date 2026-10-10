@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import * as engineModule from "@lethal/engine";
@@ -35,6 +35,7 @@ import {
   compiledMembershipOf,
 } from "../src/test-membership";
 import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
+import { removeScratchDirs } from "./helpers/scratch";
 
 /**
  * R420: discovery found tests with one regular expression, so a `[Test]` whose declaration it
@@ -323,8 +324,8 @@ beforeAll(async () => {
 });
 
 const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((r) => rm(r, { recursive: true, force: true })));
+afterEach(() => {
+  removeScratchDirs(roots.splice(0));
 });
 
 async function testDirWith(files: Record<string, string>): Promise<string> {

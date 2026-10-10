@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -22,6 +22,7 @@ import { readAlSources } from "../src/line-map";
 import { prepareBatchProject, runSession } from "../src/orchestrator";
 import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R219: two project `.al` files with the same basename in different directories (Continia Document
@@ -93,8 +94,8 @@ class SurviveBackend implements ExecutionBackend {
 }
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 let run: {

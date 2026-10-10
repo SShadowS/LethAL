@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**73 of 569 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**71 of 569 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -264,7 +264,7 @@ that ordering is the priority.
 - **R564** · Loop-hazard HOPs choose a callee's overload by parameter count, not argument type, so an overload the call never reaches is refused too (DO: 8 keys under R562) · [R564.md](docs/roadmap/R564.md) · done (a79cb1f3): an overload is chosen by argument type only when that is certain; DO +8 keys, 0 moved; no…
 - **R567** · Loop-hazard HOPs count a comment inside an argument list as an argument, so `F(xRec /*c*/)` follows no overload and the callee's hang-capable sites are deployed · [R567.md](docs/roadmap/R567.md) · done (ca8e3dc3): one comment-aware argument reader for every positional consumer; 38 projects 0 keys moved…
 - **R568** · R532's preset feeds stop at a platform method's arguments: `Continue := Cust.Get(Key)` does not make `Key` a feed · [R568.md](docs/roadmap/R568.md) · done (3eb733a5): platform-method arguments feed preset names; another object's function still stops; BaseApp…
-- **R569** · Report-loop hang refusal does not follow a second object hop from a one-hop callee whose result feeds the item's exit: Export Item Budget to Excel's NextDate is deployed · [R569.md](docs/roadmap/R569.md) · open, filed 2026-10-10
+- **R569** · Report-loop hang refusal does not follow a second object hop from a one-hop callee whose result feeds the item's exit: Export Item Budget to Excel's NextDate is deployed · [R569.md](docs/roadmap/R569.md) · done (3049afa3): exit-fed second hop by return value; BaseApp -86, PEPPOL -18, no scheme change; report-code…
 - **R570** · An ordinary (non-report) loop whose exit calls a cursor procedure in another object is not hang-refused: Create Pick's FEFO loop and GetNextGLAcc loops are deployed · [R570.md](docs/roadmap/R570.md) · done (4a304f93)
 - **R571** · A record-consuming loop whose consumer lives in another object is not hang-refused: CDC Message Bus Socket.Pop deletes the row inside a page loop's body · [R571.md](docs/roadmap/R571.md) · open, filed 2026-10-10
 - **R572** · A loop flag fed by a cursor procedure in another object (`More := X.GetNext(); while More do`) is not hang-refused · [R572.md](docs/roadmap/R572.md) · open, filed 2026-10-10
@@ -562,7 +562,7 @@ that ordering is the priority.
 - **R345** · The R149 contract re-probe failed once with al-runner exit 82 (no readable --output-json) while another session was running al-runner probes; cause not measured · [R345.md](docs/roadmap/R345.md) · closed 2026-10-02: the lanes and gates run a pinned source build of upstream main (c39ad5de) that carries the…
 - **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · done (32b814da)
 - **R348** · Docs state the CURRENT control-app version as a literal, so every bump leaves them stale (CLAUDE.md says 1.0.0.19 while the code requires 1.0.0.20) · [R348.md](docs/roadmap/R348.md) · done (3d756626)
-- **R375** · The full unit suite fails intermittently on Windows: `cli.test.ts`'s scratch cleanup cannot remove a `lethal-run-verify-*` folder (EBUSY), and the R358 guard then fails too · [R375.md](docs/roadmap/R375.md) · open, filed 2026-10-01
+- **R375** · The full unit suite fails intermittently on Windows: `cli.test.ts`'s scratch cleanup cannot remove a `lethal-run-verify-*` folder (EBUSY), and the R358 guard then fails too · [R375.md](docs/roadmap/R375.md) · done (543c6302)
 - **R393** · A unit test that times out can still finish later and write its snapshot under the NEXT test's name, so a plain `bun test` rewrites a tracked .snap file with a bogus entry · [R393.md](docs/roadmap/R393.md) · done (427a8e85): verify.ts runs bun test with CI=true and a .snap belt; CLAUDE.md names it as the unit-suite…
 - **R350** · `redact-campaign-report.ts --check` ignores the first-party allowlist, so the check CLAUDE.md mandates before committing a report exits 1 on both first-party sample reports · [R350.md](docs/roadmap/R350.md) · done (512715b1)
 - **R377** · al-runner predefines `CLEANSCHEMA1` to `CLEANSCHEMA25` and alc does not, so a `#if not CLEANSCHEMA<n>` arm is still generated and compiled out on al-runner · [R377.md](docs/roadmap/R377.md) · done (0a9ba1d7)

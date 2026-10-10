@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -25,6 +25,7 @@ import {
 import { runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R274: `lethal explain --project <dir>` renders each gap's source with its survivors marked, and
@@ -116,8 +117,8 @@ class AllSurvive implements ExecutionBackend {
 }
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 beforeAll(async () => {
   await initParser();

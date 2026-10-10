@@ -50,6 +50,7 @@ import {
 import { REACH_FILTER_OFF_REASONS, REACH_FILTER_STATES } from "../src/verify-reach";
 import { bundleFor } from "./helpers/bundle";
 import { makeGitRepo } from "./helpers/git-repo";
+import { removeScratchDir } from "./helpers/scratch";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
 
 /**
@@ -1786,8 +1787,8 @@ describe("published JSON Schema - campaign compare (R357)", () => {
   }, 60_000);
 
   afterAll(() => {
-    rmSync(repo, { recursive: true, force: true });
-    rmSync(out, { recursive: true, force: true });
+    removeScratchDir(repo);
+    removeScratchDir(out);
   });
 
   test("a matching stage validates, and an UNVERIFIED old stage validates with its statement", async () => {

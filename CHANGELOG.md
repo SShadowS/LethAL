@@ -751,6 +751,30 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused. Measured: DC 43 mutants removed (0.022%), BC.History 409 (0.018%; BaseApp 272,
   0.038%), DO, CDO and fixtures 0; no identity moved. A loop flag
   fed by such a callee (R572) and a record consumer in another object (R571) are filed, not built.
+
+- **A test temp folder that cannot be removed now names the file still locked** (R375). On Windows
+  CI the full suite sometimes failed with `R358: could not remove ...: EBUSY`, and the R358 leak
+  guard then failed too. The main fix was R449, which moved CI's temp folder off the runner's OS
+  disk: 11 such failures in about 390 runs before it, 1 in 290 after, and none in the last 214.
+  The test cleanup helper (`removeScratchDir`) passes `rmSync` the same retry options and fails
+  the same way, but its message now ends with the files still locked and their error code, e.g.
+  `still locked: lethal.sqlite-wal (EBUSY)`. The 56 `afterAll`/`afterEach` temp-folder cleanups
+  in the test files now use it, or `removeScratchDirs`, which tries every folder in a list before
+  failing.
+
+- **A third-object procedure whose value decides when a report item stops is hang-refused** (R569).
+  R500 refused a procedure of another object that open report-item code calls (hop 1), but not
+  that callee's own calls into a third object (hop 2). `Export Item Budget to Excel` loops until
+  `Item Budget Management`.NextRecord returns 0, and NextRecord's value comes from
+  `PeriodPageManagement`.NextDate, whose 28 mutants were deployed; one keeps the step at 1 for ever.
+  Now a hop-2 procedure is refused when its value reaches an open item's exit (a loop condition or
+  a `CurrReport.Break`/`Quit` guard) through the hop-1 callee's RETURN value: its result, or a `var`
+  argument the callee writes and returns. A `var` argument passed into another object from the
+  exit's own trigger or procedure is not followed (a stated residual, measured at 906 in one report,
+  0 hangs in the sample); one passed from a report procedure reached through its return value is,
+  nor are events, globals set in another trigger, or a third hop. An `OnPreDataItem` Break guard
+  counts too, a named over-refusal of 12. Measured: BaseApp -86 and PEPPOL -18
+  mutants, the other seed projects 0, no identity tuple or ordinal moved, and no scheme change.
 - **The loop-hazard check reads every name of a multi-name declaration** (R521). A declaration that
   names two variables at once declares both, but four readers took only the first: the type lookup for a receiver the
   symbol table does not index (an XMLport's variable), the local-shadow check, a report's open-item

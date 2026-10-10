@@ -22,6 +22,7 @@ import {
 import { mutatedTextSha256 } from "../itest/mutant-equality";
 import { REDACTION_MARKER } from "../src/explain";
 import type { MutantOutcome, SessionReport } from "../src/report";
+import { removeScratchDir } from "./helpers/scratch";
 
 function outcome(
   overrides: Partial<MutantOutcome> & Pick<MutantOutcome, "mutantCode">,
@@ -107,8 +108,8 @@ let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "lethal-baseline-guard-"));
 });
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+afterEach(() => {
+  removeScratchDir(dir);
 });
 
 describe("assertMatchesBaseline", () => {

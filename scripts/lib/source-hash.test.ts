@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeScratchDir } from "../../packages/runner/tests/helpers/scratch";
 import { sourceFiles, sourceHash } from "./source-hash.ts";
 
 let dir = "";
@@ -11,8 +12,8 @@ beforeEach(async () => {
   await mkdir(join(dir, "src"), { recursive: true });
   await writeFile(join(dir, "src", "A.Codeunit.al"), "codeunit 1 A { }");
 });
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+afterEach(() => {
+  removeScratchDir(dir);
 });
 
 describe("what goes in", () => {

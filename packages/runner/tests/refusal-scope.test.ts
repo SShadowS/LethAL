@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -23,6 +23,7 @@ import {
   takeLateRefusal,
 } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R307 Task 8: what a run says about a refused file (plan sections 2 and 5).
@@ -126,8 +127,8 @@ const roots: string[] = [];
 beforeAll(async () => {
   await initParser();
 });
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 async function project(files: Readonly<Record<string, string>>) {

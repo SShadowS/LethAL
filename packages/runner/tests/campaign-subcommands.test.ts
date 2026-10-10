@@ -18,7 +18,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -38,6 +38,7 @@ import {
 import { REDACTION_MARKER } from "../src/explain";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { git, makeGitRepo } from "./helpers/git-repo";
+import { removeScratchDir } from "./helpers/scratch";
 
 /** R556: a stage frozen before R556 records no mutated-text hash; seed the legacy rows that way. */
 function legacyRows(r: SessionReport): object[] {
@@ -308,8 +309,8 @@ describe("assertCampaignPathsCommitted — the wiring assertCommitted trusts", (
     deps = { git: createRepoGitRunner(repo), repoRoot: repo };
   }, HOOK_TIMEOUT_MS);
 
-  afterAll(async () => {
-    await rm(repo, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(repo);
   });
 
   test(
@@ -715,9 +716,9 @@ describe("lethal campaign freeze | anchors | compare", () => {
     );
   }, HOOK_TIMEOUT_MS);
 
-  afterAll(async () => {
-    await rm(repo, { recursive: true, force: true });
-    await rm(dirname(reportPath), { recursive: true, force: true }); // R358: beforeAll's outDir
+  afterAll(() => {
+    removeScratchDir(repo);
+    removeScratchDir(dirname(reportPath)); // R358: beforeAll's outDir
   });
 
   // ---- freeze -------------------------------------------------------------------------------
@@ -1383,8 +1384,8 @@ describe("lethal campaign — the manifest itself must be committed", () => {
     );
   }, HOOK_TIMEOUT_MS);
 
-  afterAll(async () => {
-    await rm(repo, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(repo);
   });
 
   test(
@@ -1491,8 +1492,8 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
     await writeFile(reconReport, JSON.stringify(RECON_REPORT), "utf8");
   }, HOOK_TIMEOUT_MS);
 
-  afterAll(async () => {
-    await rm(repo, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(repo);
   });
 
   async function run(

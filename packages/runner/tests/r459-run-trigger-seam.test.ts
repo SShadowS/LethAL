@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
  * Then the identity consequence: a two-argument Insert's literals are new flips, so a later
  * same-tuple `true` twin in the procedure moves ordinal (IDENTITY_SCHEME 21).
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import { initParser } from "@lethal/engine";
 import { IDENTITY_SCHEME, dedupeSpecs, writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
+import { removeScratchDir } from "./helpers/scratch";
 
 const FLIP = "lethal.flip-boolean-literal";
 const SWAP = "lethal.swap-modify-flag";
@@ -80,7 +81,7 @@ const seamDir = project("r459-seam-", {
   "W.Codeunit.al":
     "#if not CLEANX\ncodeunit 50595 Wrapped\n{\n    Bogus\n    procedure P()\n    var\n        Par: Record Par;\n    begin\n        Par.Modify(true);\n    end;\n}\n#endif\n",
 });
-afterAll(() => rmSync(seamDir, { recursive: true, force: true }));
+afterAll(() => removeScratchDir(seamDir));
 
 /** Per literal of `line` in `file`: its owners, as `<op> <after> <tag>`. */
 async function ownersOf(file: string, line: string): Promise<string[][]> {
