@@ -6116,16 +6116,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // R373: the env-tool run's digests, from the read-back, recorded only with proof it is what
     // runs; otherwise exactly one `test-digests-unavailable` warning, and the row stays NULL.
     if (envPublishes !== undefined && readBack !== undefined && readBackProof !== undefined) {
-      // A proof implies a readable read-back; the second test only narrows the type.
+      // A proof implies a readable read-back, so `unavailable` only narrows the type. R498: a lost
+      // dependency fingerprint is named BEFORE a proven source-less read-back's "no AL source".
       const got =
         "why" in readBackProof
           ? readBackProof
-          : readBack.kind === "unavailable"
-            ? { why: readBack.why }
-            : readBackDeps !== undefined && "why" in readBackDeps
-              ? {
-                  why: `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${readBackDeps.why}`,
-                }
+          : readBackDeps !== undefined && "why" in readBackDeps
+            ? {
+                why: `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${readBackDeps.why}`,
+              }
+            : readBack.kind === "unavailable" || readBack.kind === "source-less"
+              ? { why: readBack.why }
               : await digestsOf(
                   cfg,
                   readBack,
@@ -8635,7 +8636,8 @@ async function reportPublishedTestApp(
       files.length > 0
         ? { kind: "published", files, pkg: bytes }
         : {
-            kind: "unavailable",
+            kind: "source-less",
+            pkg: bytes,
             why: `the published test app "${name}" carries no AL source, so the body the server runs cannot be digested. Build the test app so its .app includes its source`,
           },
   };
@@ -8651,6 +8653,9 @@ type PublishedTestSources =
       readonly files: ReadonlyArray<{ path: string; text: string }>;
       readonly pkg: Uint8Array;
     }
+  /** R498: a readable package with no `.al` entries. Nothing to digest (`why`), but its bytes can
+   *  still prove an env-tool read-back (`proveReadBack`). */
+  | { readonly kind: "source-less"; readonly pkg: Uint8Array; readonly why: string }
   | { readonly kind: "unavailable"; readonly why: string };
 
 const NO_PUBLISHED_READ =
@@ -8706,7 +8711,7 @@ async function testAppIdentity(
       "this run publishes its test apps itself (envTool.publishApps, prebuilt .app files) after the published test app is read, so neither that read nor the source on disk is known to be the body the server runs",
     );
   }
-  if (sources.kind === "unavailable") return none(sources.why);
+  if (sources.kind === "unavailable" || sources.kind === "source-less") return none(sources.why);
   const got = await digestsOf(cfg, sources, tests, diskModel, source);
   if ("why" in got) return none(got.why);
   return {
@@ -8791,7 +8796,10 @@ function warnTestAppDependenciesUnproven(emit: RunEmitter, why: string): void {
  */
 async function digestsOf(
   cfg: SessionConfig,
-  sources: Exclude<PublishedTestSources, { readonly kind: "unavailable" }>,
+  sources: Exclude<
+    PublishedTestSources,
+    { readonly kind: "unavailable" } | { readonly kind: "source-less" }
+  >,
   tests: readonly TestMethodRef[],
   diskModel: TestAppModel,
   source: ReadonlyMap<string, Buffer>,
@@ -8807,6 +8815,13 @@ async function digestsOf(
     }
   | { readonly why: string }
 > {
+  // `not-published` digests the disk, `published` the package; nothing else has a body to digest.
+  if (sources.kind !== "published" && sources.kind !== "not-published") {
+    const unknown: never = sources;
+    throw new Error(
+      `digestsOf was handed test sources of kind ${String((unknown as { kind: unknown }).kind)}`,
+    );
+  }
   try {
     const published = sources.kind === "published";
     const inputs = published
@@ -8891,7 +8906,8 @@ async function provenWithoutHook(
  * `publishApps` (`sources`) is what runs: exactly one INSTALLED row at the served version for the
  * test app and for every app the hook published (R-385 D2: `dev/packages` serves a version that
  * may be published but not installed), and, when a `publishApps` file is the test app, the
- * read-back's identity, version and `.al` source set equal that file's. Anything else is `why`.
+ * read-back's identity, version and `.al` source set equal that file's (R498: a read-back with no
+ * `.al` must equal the file byte for byte instead). Anything else is `why`.
  * The run's test-app identity, its history hash and its digests are recorded only with this proof.
  * It assumes BC holds one package per app id and version, so the bytes served at the installed
  * version are the installed bytes.
@@ -8906,6 +8922,8 @@ async function proveReadBack(
     return { why: `this backend cannot read the published test app back ${AFTER}` };
   }
   if (sources.kind === "unavailable") return { why: `${AFTER}: ${sources.why}` };
+  // R498: `source-less` takes the same identity and installed checks as `published`; only the
+  // final comparison with the publishApps file differs (bytes, as it has no `.al` set).
   // bcdev's `microsoftMode` throws `DependencyUnreadableError` with no harness verifier: that is a
   // run without digests, never a session abort.
   let mode: MicrosoftMode | undefined;
@@ -8977,6 +8995,18 @@ async function proveReadBack(
       return {
         why: `the test app read back ${AFTER} is ${describe(got)}, but the publishApps file ${file.path} is ${describe(want)}, so that file is not known to be what runs`,
       };
+    }
+    if (sources.kind === "source-less") {
+      // R498: nothing to compare by source, so the served package must BE the file: measured, the
+      // dev endpoint serves back exactly the bytes published, with or without `.al`.
+      const served = hashPackage(sources.pkg);
+      const published = hashPackage(local);
+      if (served !== published) {
+        return {
+          why: `the test app read back ${AFTER} carries no AL source and its bytes differ from the publishApps file ${file.path} (sha256 ${served}, file ${published}), so that file is not known to be what runs (a publish that skipped an already-installed version, say)`,
+        };
+      }
+      return { proven: true };
     }
     const sourceSet = (files: ReadonlyArray<{ path: string; text: string }>) =>
       JSON.stringify(files.map((f) => [f.path, f.text]).sort());
