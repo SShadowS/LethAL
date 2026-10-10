@@ -751,7 +751,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   through another object's function (`Obj.Proc(...)`), or comes from another procedure, is NOT
   followed: R532 closes that part by ruling. A BaseApp census and a 15-site sample found no hang, and
   following it would cost 321 mutants. Measured: BaseApp -60 mutants, Withholding Tax,
-  TestLibraries and the fixtures 0, no identity tuple or ordinal moved, and no scheme change.
+  TestLibraries and the fixtures 0, no identity tuple or ordinal moved, and no scheme change. Not
+  yet followed: a name read only as an argument of a platform method (`Continue := Cust.Get(Key)`),
+  filed as R568.
 - **A comment inside an argument list is no longer read as an argument by the loop-hazard check** (R567).
   `F(xRec /*c*/)` counted two arguments, so the hang check followed no overload of `F` (or a wrong
   one), and the callee's `SetRange` or `Delete` sites could be deployed. Every loop-hazard and engine
