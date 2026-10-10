@@ -51,6 +51,14 @@ const ITEM = `table 50700 "R570 Item"
     {
         field(1; "No."; Code[20]) { }
         field(2; Qty; Integer) { }
+        field(3; Note; Text[50]) { }
+        field(4; Grp; Code[10]) { }
+    }
+
+    keys
+    {
+        key(PK; "No.") { Clustered = true; }
+        key(ByQty; Qty) { }
     }
 
     procedure CheckValid(): Boolean
@@ -86,6 +94,53 @@ const ITEM = `table 50700 "R570 Item"
     begin
         Tag := 'DELTAB';
         Delete();
+        exit(true);
+    end;
+
+    procedure WriteNote(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'NONKEYW';
+        Note := 'x';
+        exit(true);
+    end;
+
+    procedure WriteKey(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'KEYW';
+        "No." := 'X';
+        exit(true);
+    end;
+
+    procedure WriteGrpModify(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'FILTMOD';
+        Grp := 'B';
+        Modify();
+        exit(true);
+    end;
+
+    procedure WriteGrpNoModify(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'FILTNOMOD';
+        Grp := 'B';
+        exit(true);
+    end;
+
+    procedure WriteNoteModify(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'NOTEMOD';
+        Note := 'z';
+        Modify();
         exit(true);
     end;
 
@@ -508,7 +563,29 @@ const LOOPS = `codeunit 50701 "R570 Loops"
                 exit;
             if not Cust.ExtRec() then
                 exit;
+            if not Cust.ExtWrite() then
+                exit;
         until Cust.Next() = 0;
+    end;
+
+    procedure RunFiltered()
+    var
+        L: Record "R570 Item";
+    begin
+        L.SetRange(Grp, 'A');
+        if L.FindSet() then
+            repeat
+                if not L.WriteNote() then
+                    exit;
+                if not L.WriteKey() then
+                    exit;
+                if not L.WriteGrpModify() then
+                    exit;
+                if not L.WriteGrpNoModify() then
+                    exit;
+                if not L.WriteNoteModify() then
+                    exit;
+            until L.Next() = 0;
     end;
 
     procedure RunOverload()
@@ -917,6 +994,15 @@ const CUSTEXT = `tableextension 50700 "R570 CustExt" extends Customer
         Tag := 'EXTREC';
         exit(Rec.CheckCredit());
     end;
+
+    procedure ExtWrite(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'EXTWRITE';
+        "Name 2" := 'x';
+        exit(true);
+    end;
 }
 `;
 
@@ -1085,7 +1171,25 @@ describe("R570 build review: touch fixes", () => {
   it("a bare global function in a PROJECT table (`Commit`) does not touch: NOT refused", () => {
     expect(project(FILES)(T, "GLOBALFN")).toBe(false);
   });
-  it("IMPORTANT 4: a field write on the implicit Rec: refused", () => {
+  it("field-write rule: a non-key, non-filtered field write is NOT touching", () => {
+    expect(project(FILES)(T, "NONKEYW")).toBe(false);
+  });
+  it("field-write rule: a primary-key field write IS touching", () => {
+    expect(project(FILES)(T, "KEYW")).toBe(true);
+  });
+  it("field-write rule: a write of the loop's filtered field, then Modify, IS touching", () => {
+    expect(project(FILES)(T, "FILTMOD")).toBe(true);
+  });
+  it("field-write rule: the filtered field written WITHOUT Modify is NOT touching", () => {
+    expect(project(FILES)(T, "FILTNOMOD")).toBe(false);
+  });
+  it("field-write rule: a non-key, non-filtered field written then Modify is NOT touching", () => {
+    expect(project(FILES)(T, "NOTEMOD")).toBe(false);
+  });
+  it("field-write rule: a field write on a table outside the project IS touching", () => {
+    expect(project(FILES)("CustExt.TableExt.al", "EXTWRITE")).toBe(true);
+  });
+  it("IMPORTANT 4: a write of a secondary-key field on the implicit Rec: refused", () => {
     expect(project(FILES)(T, "FIELDW")).toBe(true);
   });
   it("IMPORTANT 4: a field write on the `var` parameter: refused", () => {

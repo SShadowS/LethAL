@@ -3051,6 +3051,7 @@ function r570LoopCallees(
       const c = r531Call(n);
       if (c !== null && CURSOR_METHODS.has(c.method)) cursors.add(c.recv ?? "");
     });
+  const filtered = r570LoopFilters(loop, cursors, ctx);
   /** The names under which guard call `c` hands the condition's cursor to callee `q`: `""` (its
    *  implicit Rec) when that record is the receiver and `q` is a table procedure, a `var`
    *  parameter's name when it is passed there, `R570_UNKNOWN` when the binding cannot be read
@@ -3086,7 +3087,7 @@ function r570LoopCallees(
           if (guard && steps) {
             // option (b): a guard that shares the cursor counts only if it TOUCHES that record
             const touched = shared(c, q).flatMap((k) =>
-              k === R570_UNKNOWN ? [q] : r570Touches(q, k, false, 0, ctx),
+              k === R570_UNKNOWN ? [q] : r570Touches(q, k, false, 0, filtered, ctx),
             );
             if (touched.length === 0) continue;
             out.push(...touched.filter((t) => !sameObject(t)));
@@ -3110,18 +3111,115 @@ function r570LoopCallees(
 
 const R570_UNKNOWN = "\u0002";
 /** Record methods that move the cursor, change filters, marks, keys or rows, or run trigger code
- *  (`Validate`, `Insert`): a call of one on the shared record TOUCHES it. */
+ *  (`Validate`, `Insert`): a call of one on the shared record TOUCHES it. `Modify` and `ModifyAll`
+ *  are not here: they touch under the field-write rule (`r570Touches`). */
 const R570_TOUCH: ReadonlySet<string> = new Set(
   (
     "find findfirst findlast findset next get getbysystemid setposition reset setrange setfilter " +
-    "setview setrecfilter copyfilters copy delete deleteall rename modify modifyall mark markedonly " +
+    "setview setrecfilter copyfilters copy delete deleteall rename mark markedonly " +
     "clearmarks validate insert truncate setcurrentkey setascending changecompany"
   ).split(" "),
 );
 /** What still reaches the loop through a BY-VALUE copy: row changes (R531's by-value rule). */
 const R570_CONSUME: ReadonlySet<string> = new Set(
-  "delete deleteall rename modify modifyall insert truncate validate".split(" "),
+  "delete deleteall rename insert truncate validate".split(" "),
 );
+
+/**
+ * The fields the loop's cursor is filtered on in the loop's own procedure or trigger (`SetRange`/
+ * `SetFilter` on it), `"*"` (any field) when that cannot be read: the cursor is the implicit Rec,
+ * a parameter or a global (filtered elsewhere), a filter call's field is unreadable (R567), or the
+ * cursor goes to a call that may set filters (a table procedure on it, a filter- or mark-changing
+ * built-in, or any call it is passed to other than a pure function or another record's built-in).
+ */
+function r570LoopFilters(
+  loop: ALSyntaxNode,
+  cursors: ReadonlySet<string>,
+  ctx: SemanticContext,
+): ReadonlySet<string> {
+  const out = new Set<string>();
+  const scope = codeScope(loop);
+  for (const k of cursors) {
+    if (k === "" || scope === null || !r531Declares(scope, k, false)) {
+      out.add("*");
+      continue;
+    }
+    r531Walk(scope, ctx, (n) => {
+      const c = r531Call(n);
+      if (c === null) return;
+      if (c.recv === k) {
+        if (R531_FILTER.has(c.method)) out.add(r531Field(c) ?? "*");
+        else if (R531_MARKS.has(c.method)) out.add("*");
+        else if (!R531_BUILTIN.has(c.method)) {
+          // a table procedure on the cursor: the filters it sets on its implicit Rec, one level
+          // (ponytail: a deeper call, or none resolved, reads as any field)
+          const ts = r570Targets(n, c, ctx);
+          if (ts.length === 0) out.add("*");
+          for (const t of ts) {
+            const own = r531ObjectProcs(t, ctx);
+            r531Walk(t, ctx, (m) => {
+              const d = r531Call(m);
+              if (d === null || (d.recv !== "" && d.recv !== null)) return;
+              if (d.recv === null && own.has(d.method)) out.add("*");
+              else if (R531_FILTER.has(d.method)) out.add(r531Field(d) ?? "*");
+              else if (R531_MARKS.has(d.method)) out.add("*");
+            });
+          }
+        }
+        return;
+      }
+      if (!c.args.some((a) => isIdentifierLike(a) && r531Key(a) === k)) return;
+      const pure = c.recv === null && R531_PURE.has(c.method) && c.method !== "clear";
+      const otherBuiltin = c.recv !== null && R531_BUILTIN.has(c.method);
+      if (!pure && !otherBuiltin) out.add("*");
+    });
+  }
+  return out;
+}
+
+/** The shared record's table, for the field-write rule: its fields and every field of any of its
+ *  keys (the table's and its project tableextensions'), or null when unknown (not a project table,
+ *  no readable key). `key` `""` is `p`'s implicit Rec, else a parameter of `p`. */
+function r570TableOf(
+  p: ALSyntaxNode,
+  key: string,
+  ctx: SemanticContext,
+): { fields: Set<string>; keys: Set<string> } | null {
+  return cached(ctx, p, `r570table|${key}`, () => {
+    let name: string | null = null;
+    const o = objectOf(p);
+    if (key === "" && o?.rawKind === "table_declaration") name = objectNameOf(o);
+    else if (key === "" && o?.rawKind === "tableextension_declaration")
+      name = normalizeAlName(lastFieldChild(o, "base_object")?.text ?? "");
+    else {
+      // a parameter of `p` (one named `Rec` is keyed `""`, `r531ParamKey`)
+      const list = p.namedChildren.find((c) => c.rawKind === "parameter_list");
+      const prms = list?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [];
+      prms.forEach((prm, i) => {
+        const nm = r531Param(p, i)?.[0];
+        if (nm === undefined || r531ParamKey(nm) !== key) return;
+        const rec =
+          prm.childForFieldName("type")?.namedChildren.find((c) => c.rawKind === "record_type") ??
+          null;
+        if (rec !== null) name = normalizeAlName(lastFieldChild(rec, "reference")?.text ?? "");
+      });
+    }
+    if (name === null || name === "") return null;
+    const objs = objectsOfType({ kind: "table", name, temporary: false }, ctx);
+    if (!objs.some((o) => o.rawKind === "table_declaration")) return null;
+    const keys = new Set<string>();
+    for (const o of objs)
+      visitAll(o, (k) => {
+        if (k.rawKind !== "key_declaration") return;
+        const fl = k.namedChildren.find((c) => c.rawKind === "field_list");
+        for (const f of fl?.namedChildren ?? [])
+          if (isIdentifierLike(f)) keys.add(normalizeAlName(f.text));
+      });
+    if (keys.size === 0) return null;
+    const fields = new Set(ctx.symbols.fieldsOf(name).map((f) => normalizeAlName(f.name)));
+    return { fields, keys };
+  });
+}
 
 /** Is the implicit Rec of `p`'s object a table the project declares (a table, or a tableextension
  *  of a project table)? Otherwise a bare name there may be one of the base table's procedures. */
@@ -3138,7 +3236,9 @@ function r570ProjectRec(p: ALSyntaxNode, ctx: SemanticContext): boolean {
 /**
  * Option (b): the procedures through which `p` TOUCHES the record it knows as `key` (`""`: its
  * implicit Rec): `[p, ...]` when it does, `[]` when it does not. A `R570_TOUCH` method on it
- * (`R570_CONSUME` only when `byValue`), an assignment to it or to one of its fields,
+ * (`R570_CONSUME` only when `byValue`), an assignment to it, a FIELD write under the field-write
+ * rule (a field in any key of its table, or one that cannot be resolved; a field the loop filters
+ * on, `r570LoopFilters`, only when a `Modify` follows; `ModifyAll` of such a field),
  * `X.Copy(R, true)` (X then shares R's table), or handing it to a same-object helper, a table
  * procedure or a parameter that touches it in turn (up to `R570_HOPS`); every procedure on such a
  * path is returned, so it is refused too (build review IMPORTANT 2). UNKNOWN COUNTS AS TOUCHING:
@@ -3154,6 +3254,7 @@ function r570Touches(
   key: string,
   byValue: boolean,
   depth: number,
+  filtered: ReadonlySet<string>,
   ctx: SemanticContext,
 ): ALSyntaxNode[] {
   const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
@@ -3161,32 +3262,57 @@ function r570Touches(
   const hits = byValue ? R570_CONSUME : R570_TOUCH;
   const own = r531ObjectProcs(p, ctx);
   let direct = false;
+  // a field write that touches only once a `Modify` follows (a filtered field; through a by-value
+  // copy, any field write that would touch)
+  let pending = false;
   const via: ALSyntaxNode[] = [];
   const follow = (t: ALSyntaxNode, k: string, bv: boolean): void => {
-    via.push(...r570Touches(t, k, bv, depth + 1, ctx));
+    via.push(...r570Touches(t, k, bv, depth + 1, filtered, ctx));
   };
   /** `ts` see the same implicit Rec; none resolved: unknown, so touching. */
   const viaRec = (ts: ALSyntaxNode[]): void => {
     if (ts.length === 0) direct = true;
     for (const t of ts) follow(t, "", byValue);
   };
+  /** The field-write rule: "touch" for a field in any key of the table, or one that cannot be
+   *  resolved (a table outside the project, unreadable keys, an unknown field); "filtered" for a
+   *  field the loop filters on; "none" otherwise. */
+  const fieldClass = (f: string | null): "touch" | "filtered" | "none" => {
+    const t = r570TableOf(p, key, ctx);
+    if (f === null || f === "*" || t === null || !t.fields.has(f) || t.keys.has(f)) return "touch";
+    return filtered.has("*") || filtered.has(f) ? "filtered" : "none";
+  };
+  const fieldWrite = (f: string | null): void => {
+    const k = fieldClass(f);
+    if (k === "touch" && !byValue) direct = true;
+    else if (k !== "none") pending = true;
+  };
+  /** Does a call of `c`'s method on the shared record touch it? */
+  const recMethod = (c: R531Call): boolean => {
+    if (c.method === "modify") return pending;
+    if (c.method === "modifyall") return fieldClass(r531Field(c)) !== "none";
+    return hits.has(c.method) || (c.method === "transferfields" && !byValue);
+  };
   r531Walk(body, ctx, (n) => {
     if (n.kind === ALNodeKind.assignment_statement) {
-      if (byValue) return;
       const l = n.childForFieldName("left");
       if (l === null) return;
       if (isIdentifierLike(l)) {
-        // `R := X`, or a bare field of the implicit Rec (`Qty := 0`)
-        if (r531Key(l) === key || (key === "" && r531Implicit(l, ctx))) direct = true;
-      } else if (r531Key(l.childForFieldName("object")) === key) direct = true; // `R.Field := X`
+        if (r531Key(l) === key) {
+          if (!byValue) direct = true; // `R := X`
+        } else if (key === "" && r531Implicit(l, ctx)) fieldWrite(normalizeAlName(l.text)); // `Qty := 0`
+      } else if (r531Key(l.childForFieldName("object")) === key) {
+        // `R.Field := X`
+        fieldWrite(normalizeAlName(l.childForFieldName("member")?.text ?? "") || null);
+      }
       return;
     }
     const c = r531Call(n);
     if (c === null) return;
     if (c.recv === key) {
       // `R.M(...)` (or `Rec.M(...)` for the implicit Rec)
-      if (hits.has(c.method) || (c.method === "transferfields" && !byValue)) direct = true;
-      else if (!R531_BUILTIN.has(c.method)) {
+      if (recMethod(c)) direct = true;
+      else if (c.method !== "modify" && c.method !== "modifyall" && !R531_BUILTIN.has(c.method)) {
         const ts = r570Targets(n, c, ctx);
         // a paren-less `R.X` that names no procedure is a field read
         if (c.uncertain) direct = true;
@@ -3196,8 +3322,8 @@ function r570Touches(
       if (own.has(c.method)) {
         viaRec(r570Targets(n, c, ctx)); // a same-object helper sees the same implicit Rec
       } else if (r531Implicit(n, ctx)) {
-        if (hits.has(c.method)) direct = true;
-        else if (!R531_BUILTIN.has(c.method)) {
+        if (recMethod(c)) direct = true;
+        else if (c.method !== "modify" && c.method !== "modifyall" && !R531_BUILTIN.has(c.method)) {
           const ts = r570Targets(n, c, ctx);
           if (ts.length > 0) viaRec(ts);
           else if (!r570ProjectRec(p, ctx)) direct = true; // maybe the base table's procedure
