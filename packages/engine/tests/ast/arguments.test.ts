@@ -65,6 +65,12 @@ describe("R567: argumentList", () => {
     expect(countArguments(c)).not.toBe(argumentList(c).length);
     expect(argumentsReadable(c)).toBe(false);
   });
+  it("an ERROR node among the arguments (`F(@)`: count and length agree) is unreadable", () => {
+    const c = first("F(@);", "call_expression");
+    expect(argumentList(c).map((n) => n.rawKind)).toEqual(["ERROR"]);
+    expect(countArguments(c)).toBe(1);
+    expect(argumentsReadable(c)).toBe(false);
+  });
   it("a call with no argument list (a call_statement) is empty and readable", () => {
     const c = first("F;", "call_statement");
     expect(argumentList(c)).toEqual([]);

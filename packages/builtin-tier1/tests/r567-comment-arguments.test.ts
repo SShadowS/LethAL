@@ -606,6 +606,12 @@ const SUBS = `codeunit 50151 "R567 Subs"
         IsDone := true;
     end;
 
+    [EventSubscriber(/*c*/ ObjectType::Report, Report::"R567 Walk", OnStep, '', false, false)]
+    local procedure LeadCommentSub(var IsDone: Boolean)
+    begin
+        IsDone := true;
+    end;
+
     [EventSubscriber(ObjectType::Report,
 ${PRAGMA}
         Report::"R567 Walk", OnStep, '', false, false)]
@@ -642,6 +648,9 @@ describe("R567: event subscribers read their attribute past a comment", () => {
   });
   it("`subscriberKey`: a comment before the object reference still finds the edge", () => {
     expect(p().proc("Subs.al", "CommentSub")).toBe(true);
+  });
+  it("`subscriberKey`: a comment before the FIRST argument (a sibling of the list, not in it)", () => {
+    expect(p().proc("Subs.al", "LeadCommentSub")).toBe(true);
   });
   it("`subscriberKey` unreadable: the subscriber is reached by any raised event", () => {
     expect(p().proc("Subs.al", "PragmaSub")).toBe(true);

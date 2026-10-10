@@ -2866,7 +2866,11 @@ function subscriberKey(a: ALSyntaxNode, objects: readonly ALSyntaxNode[]): strin
   const content = a.childForFieldName("attribute");
   if (normalizeAlName(content?.childForFieldName("name")?.text ?? "") !== "eventsubscriber")
     return null;
-  const list = content?.childForFieldName("arguments")?.namedChildren[0];
+  // the list node, not the wrapper's first child: a comment before the first argument is a wrapper
+  // child BEFORE the list (measured), as trigger-skip's `subscribesToTable` reads it
+  const list = content
+    ?.childForFieldName("arguments")
+    ?.namedChildren.find((c) => c.rawKind === "attribute_argument_list");
   if (list === undefined) return null;
   // R567: comments are not arguments; a pragma among them hides the event, so any event (`*`)
   if (!argumentsReadable(list)) return "*";

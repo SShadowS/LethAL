@@ -51,15 +51,18 @@ export function argumentList(node: ALSyntaxNode): readonly ALSyntaxNode[] {
 
 /**
  * R567: can `argumentList(node)` be read by position? True when no OTHER trivia (a `#pragma`, a
- * preprocessor node) sits among the arguments, so the i-th entry is the i-th argument. Checked from
- * both directions, as `exactArguments` is: the list is as long as the top-level comma count, and
- * holds no trivia kind.
+ * preprocessor node) and no parse `ERROR` sits among the arguments, so the i-th entry is the i-th
+ * argument. Checked from both directions, as `exactArguments` is: the list is as long as the
+ * top-level comma count, and holds none of those kinds (`F(@)` parses as one `ERROR` and one comma
+ * slot, so the count alone agrees).
  */
 export function argumentsReadable(node: ALSyntaxNode): boolean {
   const nodes = argumentList(node);
   return (
     nodes.length === countArguments(node) &&
-    !nodes.some((n) => n.rawKind === "pragma" || n.rawKind.startsWith("preproc"))
+    !nodes.some(
+      (n) => n.rawKind === "pragma" || n.rawKind === "ERROR" || n.rawKind.startsWith("preproc"),
+    )
   );
 }
 
