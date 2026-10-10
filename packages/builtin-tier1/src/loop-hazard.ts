@@ -3314,7 +3314,62 @@ function r570LoopCallees(
   };
   take(cond, false);
   take(bodyExitGuards(loop), true);
+  // R572 (prototype): a loop flag fed by another object's STATEFUL cursor procedure
+  // (`Found := X.NextEntry(..); until not Found`): the calls in R480's feeds of the exit parts
+  for (const f of indirectFeeds(loop, steps ? cond : [...cond, ...bodyExitGuards(loop)], ctx))
+    r531Walk(f, ctx, (n) => {
+      const c = r531Call(n);
+      if (c === null) return;
+      for (const q of r570Targets(n, c, ctx)) {
+        if (sameObject(q)) continue;
+        const chain = r570Chain(q, 0, ctx);
+        if (chain.some((p) => r572Stateful(p, ctx))) out.push(...chain);
+      }
+    });
   return out;
+}
+
+const R572_PERSIST: ReadonlySet<string> = new Set(
+  "find findfirst findlast findset next delete deleteall".split(" "),
+);
+/** R572: does `p` keep state between calls, so its result can stay the same for ever? It reads or
+ *  writes a global of its object (a stored cursor, a remaining quantity), or moves or deletes rows
+ *  of its implicit Rec or a `var` record parameter. A procedure whose result depends only on its
+ *  arguments and fresh local records is not (stated limit: a pure stepper fed its own result). */
+function r572Stateful(p: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return cached(ctx, p, "r572state", () => {
+    const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+    const o = objectOf(p);
+    if (body === null || o === null) return false;
+    const globals = new Set<string>();
+    for (const c of o.childForFieldName("body")?.namedChildren ?? [])
+      if (c.rawKind === "var_section")
+        visitAll(c, (v) => {
+          if (v.rawKind === "variable_declaration")
+            for (const nm of declaredNames(v)) globals.add(normalizeAlName(nm));
+        });
+    const vars = new Set<string>();
+    for (let i = 0; ; i++) {
+      const prm = r531Param(p, i);
+      if (prm === null) break;
+      if (prm[1]) vars.add(r531ParamKey(prm[0]));
+    }
+    const own = r531ObjectProcs(p, ctx);
+    let hit = false;
+    r531Walk(body, ctx, (n) => {
+      if (hit) return;
+      if (isIdentifierLike(n) && n.fieldName !== "member") {
+        const k = normalizeAlName(n.text);
+        if (globals.has(k) && !r531Declares(p, k, true)) hit = true;
+        return;
+      }
+      const c = r531Call(n);
+      if (c === null || !R572_PERSIST.has(c.method)) return;
+      if (c.recv === "" || (c.recv !== null && vars.has(c.recv))) hit = true;
+      else if (c.recv === null && r531Implicit(n, ctx) && !own.has(c.method)) hit = true;
+    });
+    return hit;
+  });
 }
 
 const R570_UNKNOWN = "\u0002";
