@@ -747,7 +747,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   variable the loop tests by name makes that codeunit's globals the set, together with its calls to
   its own helpers that can see them. Refused in the callee: its consumers and their guards, every
   `exit` or `Error` that comes before the last consumer or sits inside a callee loop that holds one,
-  the guards of those exits, and the assignments that feed those guards. An alias made by `:=` whose
+  every `break` that leaves such a loop, the guards of those exits, and the assignments that feed those guards. An alias made by `:=` whose
   `temporary` flag is known to differ from the loop record's is not followed: assignment never
   shares the table (measured on BC, `scripts/r571-assign-probe`). Filed limits: a second
   cross-object hop, the body of the callee's own helper, and a codeunit set matched by global name
