@@ -865,8 +865,15 @@ version) leaves the run unproven, with a `test-app-dependencies-unproven` or
 `test-digests-unavailable` warning naming the app. A resume refused for this reason says "the test
 app's dependencies changed (A, now B)" or "it recorded no dependency fingerprint". Not covered: an
 installed app outside the dependency closure, a dependency changed during the batches, and the
-control app's own bytes (only its version and its dependencies count). A hook session whose test app
-has no `.al` source is never proven (R498).
+control app's own bytes (only its version and its dependencies count).
+
+**A hook session whose test app has no `.al` source (R498)** is proven when the package read back
+after the hook is byte for byte the `publishApps` test-app file (same SHA-256), on top of the usual
+installed checks. If no `publishApps` file is the test app, the installed checks alone prove it. It
+records its identity and dependency fingerprint, but no test digests (one `test-digests-unavailable`
+warning: "carries no AL source"). Byte equality was measured on the dev-endpoint (`altool`) publish
+route only. The hook publishes through the env tool's own publish command; if that command
+repackages the file, the bytes differ and the run stays unproven (safe, but no resume, skip or reuse).
 
 **Second one-time cost on upgrade.** Runs recorded before R496, R495's included, carry no
 fingerprint, so the first run after this upgrade carries nothing on `--resume`, skips nothing on

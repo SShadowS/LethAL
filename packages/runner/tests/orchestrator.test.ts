@@ -8739,6 +8739,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       dep?: boolean;
       /** R496: false builds a package without `.al` source (its manifest still declares `dep`). */
       source?: boolean;
+      /** R498: more entries, none of them `.al`, so the bytes differ and the source set does not. */
+      extra?: Readonly<Record<string, string>>;
     }) =>
       new Uint8Array(
         buildFakeAppWithEntries({
@@ -8758,6 +8760,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             ],
           }),
           ...(o.source === false ? {} : { "src/SandboxTests.Codeunit.al": o.body }),
+          ...o.extra,
         }),
       );
     const depPkg = (build: string) =>
@@ -10134,6 +10137,136 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           expect(r2.store.getRun(id)?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
         }
         r2.store.close();
+      });
+
+      // R498: a HOOK session whose test app carries no `.al` is proven when the served package's
+      // bytes equal the publishApps file's (measured: the dev endpoint serves back the bytes it was
+      // given, with or without `.al`).
+      describe("R498: a source-less read-back after the hook is proven by byte equality", () => {
+        /** The same identity and version as P2DS, other bytes (one more non-`.al` entry). */
+        const P2DSX = testPkg({
+          version: "1.0.0.2",
+          body: BODY_B,
+          dep: true,
+          source: false,
+          extra: { "Translations/x.xlf": "<xliff/>" },
+        });
+        /** A hook session that serves P2DS and publishes it as the publishApps test-app file. */
+        const hookSL = (more: Partial<EnvRun> = {}) =>
+          session("H", "one", { pre: P2DS, post: P2DS, testAppInPublishApps: true, ...more });
+
+        test("H1: served bytes equal the publishApps file: proven, deps recorded, and it lends", async () => {
+          const r = await hookSL()({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          const row = r.store.getRun(r.runId);
+          expect(row?.testAppProven).toBe(true);
+          expect(row?.testAppHash).toBe(`package:${hashPackage(P2DS)}`);
+          expect(row?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+          r.store.close();
+          lendsAll(await consumers(hookSL(), hookSL()));
+        });
+
+        test("H2: same identity and version, other bytes: unproven, named, and it lends nothing", async () => {
+          const r = await hookSL({ file: P2DSX })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("bytes differ from the publishApps file");
+          r.store.close();
+          lendsNothing(await consumers(hookSL({ file: P2DSX }), hookSL()));
+        });
+
+        test("H3: an identity or version that differs from the file is named as such", async () => {
+          const r = await hookSL({
+            file: testPkg({ version: "1.0.0.3", body: BODY_B, dep: true, source: false }),
+          })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("version 1.0.0.2");
+          expect(r.digestWarning[0]).toContain("version 1.0.0.3");
+          r.store.close();
+        });
+
+        test("H4: the served version not installed: unproven", async () => {
+          const r = await hookSL({ installed: { [APP_ID]: ["1.0.0.1"], [DEP.id]: ["1.0.0.0"] } })(
+            {},
+          );
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("not proven installed");
+          expect(r.digestWarning[0]).toContain(APP_ID);
+          r.store.close();
+        });
+
+        test("H5: no publishApps file is the test app: proven by the installed checks alone", async () => {
+          const r = await hookSL({ testAppInPublishApps: false })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          r.store.close();
+        });
+
+        test("H6: a proven source-less hook run records no digests and one named warning", async () => {
+          const r = await hookSL()({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          expect(r.store.testDigests(r.runId)).toBeNull();
+          expect(r.store.testDigestParts(r.runId)).toBeNull();
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("carries no AL source");
+          r.store.close();
+        });
+
+        test("H7: a read-back WITH source, other bytes but the same .al set, stays proven", async () => {
+          const P2DX = testPkg({
+            version: "1.0.0.2",
+            body: BODY_B,
+            dep: true,
+            extra: { "Translations/x.xlf": "<xliff/>" },
+          });
+          const r = await session("H", "one", {
+            pre: P2D,
+            post: P2D,
+            file: P2DX,
+            testAppInPublishApps: true,
+          })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          expect(r.store.testDigests(r.runId)).not.toBeNull();
+          expect(r.digestWarning).toEqual([]);
+          r.store.close();
+        });
+
+        test("H8: proven, but the dependencies are unreadable: the dependency reason is named", async () => {
+          // No dependency is served, so its fingerprint cannot be taken.
+          const r = await envRun({
+            pre: P2DS,
+            post: P2DS,
+            installed: INSTALLED,
+            testAppInPublishApps: true,
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("dependencies could not be fingerprinted");
+          expect(r.digestWarning[0]).not.toContain("carries no AL source");
+          r.store.close();
+        });
+
+        test("H9: served WITH source against a source-less publishApps file stays unproven", async () => {
+          const r = await session("H", "one", {
+            pre: P2D,
+            post: P2D,
+            file: P2DS,
+            testAppInPublishApps: true,
+          })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("other .al sources");
+          r.store.close();
+        });
       });
     });
 

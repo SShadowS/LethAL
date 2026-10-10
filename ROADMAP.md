@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**74 of 562 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**74 of 563 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -404,14 +404,14 @@ that ordering is the priority.
 - **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files; correction: the extension's members ARE mutated…
 - **R489** · explain's covering tests are not ordered by duration: no measurement shows a per-test baseline duration is stable enough to rank by · [R489.md](docs/roadmap/R489.md) · open
 - **R497** · BC paths score `#if`-wrapped objects (fenced under H1a, hub by name), and the line map's H1b rule is wrong for a bare object after a wrapper · [R497.md](docs/roadmap/R497.md) · done (e02c874b)
-- **R498** · A hook session whose test app carries no `.al` never proves its identity, so it never resumes, skips or reuses · [R498.md](docs/roadmap/R498.md) · open, filed 2026-10-07
+- **R498** · A hook session whose test app carries no `.al` never proves its identity, so it never resumes, skips or reuses · [R498.md](docs/roadmap/R498.md) · done (e4907b30)
 - **R535** · A nested `#if` object wrapper is refused by name on every coverage path: BaseApp has 2 such files (70 sites), unmeasured · [R535.md](docs/roadmap/R535.md) · closed 2026-10-09 — 2 BaseApp files, 70 sites, refused by name on every coverage path; not worth an R-300b…
 
 ## Backends and tooling
 
 - **R7** · al-runner's `asserterror` never fails a test · [R007.md](docs/roadmap/R007.md) · done (Wave 1 Stream D — startup canary measures the real binary each session)
 - **R9** · `itest:tables` runs its session once · [R009.md](docs/roadmap/R009.md) · done (86fb417 — runs twice, asserts verdict-identical; live-verified)
-- **R14** · Stay on the newest tree-sitter-al · [R014.md](docs/roadmap/R014.md) · recurring — RE-CHECKED 2026-08-31 (and 2026-08-28): newest upstream tag is still `v4.0.1` (`58c236f`), which…
+- **R14** · Stay on the newest tree-sitter-al · [R014.md](docs/roadmap/R014.md) · recurring — RE-CHECKED 2026-10-10: newest upstream tag is `v4.4.1` (`7819df5`), which IS the pin…
 - **R17** · The env-tool crash-recovery record has a writer and no reader · [R017.md](docs/roadmap/R017.md) · done (f616885)
 - **R18** · `envTool` + `--backend al-runner` is silently ignored · [R018.md](docs/roadmap/R018.md) · done (f616885)
 - **R19** · The prepublish step and the control-app republish both happen BEFORE the lease is acquired · [R019.md](docs/roadmap/R019.md) · done for the half that is possible; the other half is impossible by construction. The entry says "move both…
@@ -607,6 +607,7 @@ that ordering is the priority.
 - **R558** · SessionReport does not record which al-runner test selector produced its verdicts (`--test-exact` or R488's substring-with-excludes) · [R558.md](docs/roadmap/R558.md) · done (b1f07ea6)
 - **R559** · Retire R488's exclude-and-learn path once every supported al-runner build carries `--test-exact` · [R559.md](docs/roadmap/R559.md) · open
 - **R565** · No dependency source loader: a rule that needs a DEPENDENCY's procedure bodies (R561's known preset writer) cannot run, though Microsoft's .app packages ship their source · [R565.md](docs/roadmap/R565.md) · open, filed 2026-10-10
+- **R566** · Host step: does the env tool's own publish serve a source-less test app back byte for byte? (R498's gain on that route is unmeasured) · [R566.md](docs/roadmap/R566.md) · open, filed 2026-10-10 — a HOST step for the owner (the env tool is host-only)
 
 ---
 
