@@ -1922,7 +1922,7 @@ function r571CrossHops(
         for (const g of globals) if (!r531Declares(p, g, true)) take(g, false);
         consumers.push(...r571HelperCalls(p, o, globals, ctx));
       }
-      const hop = r571Hop(p, consumers);
+      const hop = r571Hop(p, consumers, ctx);
       if (hop !== null) out.push(hop);
     }
   }
@@ -1955,8 +1955,13 @@ function r571HelperCalls(
 /** R571: the hop into `proc` for `consumers`, with their guards and the callee's EARLY EXITS: every
  *  `exit` or raised `Error` that starts before the last consumer, or that sits in a loop whose body
  *  holds a consumer (the next pass can reach it first), plus their guards (`if not Buf.FindLast()
- *  then exit` negated returns without deleting while the set is not empty). */
-function r571Hop(proc: ALSyntaxNode, consumers: ALSyntaxNode[]): R531Hop | null {
+ *  then exit` negated returns without deleting while the set is not empty), and the assignments in
+ *  the callee body that feed those guards and exits (R531's FEEDS). */
+function r571Hop(
+  proc: ALSyntaxNode,
+  consumers: ALSyntaxNode[],
+  ctx: SemanticContext,
+): R531Hop | null {
   const body = proc.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
   if (body === null || consumers.length === 0) return null;
   const inside = (a: ALSyntaxNode, b: ALSyntaxNode): boolean =>
@@ -1974,6 +1979,8 @@ function r571Hop(proc: ALSyntaxNode, consumers: ALSyntaxNode[]): R531Hop | null 
   visitAll(body, (x) => {
     if (isExit(x)) guards.push(x);
   });
+  // FEEDS over the callee body: `Found := Buf.FindLast(); if not Found then exit;`
+  guards.push(...r531Feeds(body, guards, ctx).filter((a) => !isC(a)));
   return { proc, consumers, guards };
 }
 

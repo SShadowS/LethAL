@@ -348,4 +348,20 @@ describe("R571: a consumer in another object", () => {
     expect(bothWays(files, "s.al", "Buf.IsEmpty()", NEG)).toEqual([false, true]);
     expect(bothWays(files, "s.al", "exit")).toEqual([false, true]);
   });
+
+  it("T16: the assignment feeding an early-exit guard is refused", () => {
+    const pop = `    var
+        Found: Boolean;
+    begin
+        Found := Buf.FindLast();
+        if not Found then
+            exit;
+        Buf.Delete();
+    end;`;
+    const files = { "s.al": SOCKET(pop), "c.al": CARD(), "b.al": BUF };
+    expect(bothWays(files, "s.al", "Found := Buf.FindLast()", "lethal.remove-assignment")).toEqual([
+      false,
+      true,
+    ]);
+  });
 });
