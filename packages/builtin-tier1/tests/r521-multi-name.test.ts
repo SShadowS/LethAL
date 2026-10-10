@@ -8,6 +8,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import { openItemHangRefuses } from "../src/index";
+import { r531Analyze } from "../src/loop-hazard";
 
 /**
  * R521 (coord task R-521): a multi-name declaration (`A, B: Interface X`) declares EVERY name, not
@@ -216,5 +217,70 @@ describe("R521 (1): r531Declares reads the second name of a multi-name local", (
   // Red: `r531Declares` takes only `childForFieldName("name")`.
   it("a callee's local declared second (`Other, GA`) shadows the global: its Delete emits", () => {
     expect(at()("s.al", "call_expression", "GA.Delete()", 2)).toBe(false);
+  });
+});
+
+// (1), the other direction: the LOOP's own scope declares `Other, GA` / `Other2, GB`, so R is a local
+// there. A local R with a filter on another field is not `modify-all`, and a bare call cannot see a
+// local R (`global-call`).
+const LOCALR = `table 50528 "R521 Row"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Qty; Integer) { }
+    }
+}
+
+codeunit 50529 "R521 Local R"
+{
+    var
+        GA: Record "R521 Row";
+        GB: Record "R521 Row";
+
+    procedure LocalModify()
+    var
+        Other, GA: Record "R521 Row";
+    begin
+        GA.SetRange("No.", 'A');
+        while GA.FindFirst() do begin
+            GA.Qty := 2;
+            GA.Modify();
+        end;
+    end;
+
+    procedure LocalCall()
+    var
+        Other2, GB: Record "R521 Row";
+    begin
+        while GB.FindFirst() do
+            DropGB();
+    end;
+
+    local procedure DropGB()
+    begin
+        GB.Delete();
+    end;
+}
+`;
+
+describe("R521 (1): a loop's own multi-name local R is a local, not a global", () => {
+  const kinds = (head: string): string[] => {
+    const root = wrapRoot(parseAL(LOCALR));
+    const ctx = buildSemanticContext([{ path: "l.al", root }]);
+    let loop: ALSyntaxNode | null = null;
+    visit(root, (n: ALSyntaxNode) => {
+      if (loop === null && n.rawKind === "while_statement" && n.text.startsWith(head)) loop = n;
+    });
+    if (loop === null) throw new Error(`loop ${head} not found`);
+    return r531Analyze(loop, ctx)?.kinds ?? [];
+  };
+  // Red: `r531Declares` takes only the first name, so `GA` reads as the global (`modify-all`).
+  it("modify-all: a local R filtered on another field is not a modify-all consumer", () => {
+    expect(kinds("while GA.FindFirst()")).toEqual([]);
+  });
+  // Red: same revert, so the bare `DropGB()` reads as seeing R (`global-call`).
+  it("global-call: a bare call cannot see the loop's local R", () => {
+    expect(kinds("while GB.FindFirst()")).toEqual([]);
   });
 });
