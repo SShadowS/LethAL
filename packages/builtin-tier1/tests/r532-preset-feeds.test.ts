@@ -172,6 +172,21 @@ const REP = `report 50532 "Feed Rep"
         Continue := Tmp;
     end;
 
+    procedure CaseCommentArg()
+    var
+        X: Integer;
+        Tmp: Boolean;
+    begin
+        X := Limit + 59;
+        Tmp := Limit > 58;
+        SetSecond(/* note */ X, Tmp);
+    end;
+
+    local procedure SetSecond(N: Integer; B: Boolean)
+    begin
+        Continue := B;
+    end;
+
     procedure CaseCrossObjectArg()
     var
         H: Integer;
@@ -471,6 +486,13 @@ describe("R532: same-scope feeds of a preset exit name", () => {
       expect(on.has("lethal.remove-assignment @ Tmp := Limit > 56")).toBe(false);
       expect(on.has("lethal.conditional-boundary @ Limit > 56")).toBe(false);
     }
+  });
+
+  // red: read the writer call's arguments as raw named children (a comment then shifts positions)
+  it("a comment in a setter call's arguments does not shift which argument is fed (R567)", () => {
+    refusedByFeeds("lethal.remove-assignment @ Tmp := Limit > 58");
+    for (const on of [false, true])
+      expect(emitted(on).has("lethal.remove-assignment @ X := Limit + 59")).toBe(true);
   });
 
   it("CONTROL: a variable that never flows into a preset write is not refused", () => {

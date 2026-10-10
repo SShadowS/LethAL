@@ -1997,10 +1997,11 @@ function presetFeedsOnce(
   visitAll(scope, (n) => {
     if (armOfNode(ctx, n) === "inactive") return;
     if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
-      const args = n.childForFieldName("arguments")?.namedChildren ?? [];
+      // R567: comments are not arguments; unreadable positions seed every argument (the safe side)
+      const args = argumentList(n);
       if (bareCallee(n) !== null && directWrite(n, names, ctx)) rights.push(...args);
       else if (callsPresetWriter(n, w, ctx, names.size > 0)) {
-        const fedAt = writerFedArgs(n, names, w, ctx);
+        const fedAt = argumentsReadable(n) ? writerFedArgs(n, names, w, ctx) : () => true;
         rights.push(...args.filter((_, i) => fedAt(i)));
       }
       return;
@@ -3857,7 +3858,7 @@ function r532CallClass(
   const known = procedureNamesOf(obj, ctx);
   const own = bareCallee(c) ?? hiddenCallee(c, known, ctx);
   const isCall = c.rawKind === "call_expression" || c.rawKind === "call_statement";
-  const arity = isCall ? (c.childForFieldName("arguments")?.namedChildren.length ?? 0) : 0;
+  const arity = isCall ? argumentList(c).length : 0;
   if (own !== null && known.has(own)) {
     const procs = r532Procs(obj, own, arity);
     return {
@@ -3955,7 +3956,7 @@ export function r532PresetFeedCensus(ctx: SemanticContext): R532CensusRow[] {
         (n.rawKind === "call_expression" || n.rawKind === "call_statement") &&
         directWrite(n, names, ctx)
       ) {
-        const a = (n.childForFieldName("arguments")?.namedChildren ?? []).find(
+        const a = argumentList(n).find(
           (x) => isIdentifierLike(x) && names.has(normalizeAlName(x.text)),
         );
         name = a === undefined ? "?" : normalizeAlName(a.text);
