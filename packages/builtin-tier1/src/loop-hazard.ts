@@ -1402,10 +1402,13 @@ function r562FilterHop(
   return { hops, refuse: unresolved || hops.length > 0 || c.uncertain };
 }
 
-/** R568 (prototype): does the feed search stop at the arguments of non-bare call `c`? Yes for another
- *  object's function: a receiver declared as a codeunit, report, page or other object, or a record
- *  whose table declares the member as a procedure. No for a platform method (`Cust.Get(Key)`,
- *  `Txt.Contains(T)`, `CurrReport.X(T)`) or a receiver nothing resolves (the safe direction). */
+/** R568: does R532's feed search stop at the arguments of non-bare call `c`? The arguments feed
+ *  unless the receiver is typed as an object (codeunit, report, page, query, xmlport, testpage,
+ *  interface; in the project or not) or is a record whose table or a project tableextension declares
+ *  the member as a procedure: that is another object's function, closed by ruling in R532. So
+ *  `Cust.Get(Key)`, `Txt.Contains(T)`, `CurrReport.X(T)` and a receiver nothing resolves feed their
+ *  arguments (the safe direction for a refusal). Residual: a platform method on an object-typed
+ *  variable (`Rpt.SaveAsPdf(F)`, `Cu.Run(Rec)`) still stops. */
 function r568StopsAt(c: ALSyntaxNode, ctx: SemanticContext): boolean {
   const f = c.childForFieldName("function");
   const recv = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
@@ -1413,16 +1416,17 @@ function r568StopsAt(c: ALSyntaxNode, ctx: SemanticContext): boolean {
   const t = declaredType(recv, ctx);
   if (t !== null && t.kind !== "table") return true;
   const tg = callTargets(c, ctx);
-  return tg !== null && tg.objs.some((o) => procedureNamesOf(o, ctx).has(tg.member));
+  return tg?.objs.some((o) => procedureNamesOf(o, ctx).has(tg.member)) === true;
 }
 
 /** FEEDS: assignments in `scope` whose target name `parts` read, to a fixpoint (R480
  *  `indirectFeeds`'s by-name rule, over the whole scope instead of one loop body). R532 passes
  *  `fed`, which receives every name read on the way, and also matches a target's ROOT name
  *  (`Arr[1] := X` feeds `Arr`, `R.X := Y` feeds `R` as well as `X`) and follows the `#if`
- *  expression tails `indirectFeeds` follows. Under `fed` it reads only the receiver of a non-bare
- *  call (`Obj.Proc(A)` feeds `Obj`, not `A`): a value that reaches the name through another
- *  object's function is closed by ruling in R532. R-531 passes nothing and is unchanged. */
+ *  expression tails `indirectFeeds` follows. Under `fed`, at a non-bare call that is another
+ *  object's function (`r568StopsAt`) it reads only the receiver (`Obj.Proc(A)` feeds `Obj`, not
+ *  `A`): a value that reaches the name through another object's function is closed by ruling in
+ *  R532. A platform method's arguments feed (R568). R-531 passes nothing and is unchanged. */
 function r531Feeds(
   scope: ALSyntaxNode,
   parts: ALSyntaxNode[],
