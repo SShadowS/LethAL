@@ -1837,9 +1837,8 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
  * record) and R564's `r531ProcsIn`. Only procedures in another object are taken.
  * - `pass-rec`: the callee's parameter that receives R counts as R. A `var` parameter counts every
  *   R531 consumer kind; a by-value one only Delete, DeleteAll, Rename and Modify (R531's by-value
- *   rule). A parameter named `Rec` is keyed "" like a `Rec.M()` receiver (R570's `r531ParamKey`,
- *   copied inline until R570 merges). An argument the caller-side temp-flag skip names is not
- *   followed (`r571TempSkip`).
+ *   rule). A parameter named `Rec` is keyed "" like a `Rec.M()` receiver (R570's `r531ParamKey`).
+ *   An argument the caller-side temp-flag skip names is not followed (`r571TempSkip`).
  * - `recv-proc` on a receiver that is NOT a record (a codeunit or interface variable the loop's
  *   condition tests by name, `while not Socket.IsEmpty() do Socket.Pop()`): the callee's object holds
  *   the set itself, so every GLOBAL of that object that the callee does not shadow with a local or
@@ -1921,7 +1920,7 @@ function r571CrossHops(
           if (k === null || !recvs.has(k) || skip(a, k)) return;
           for (const j of r531Positions(c, i, p)) {
             const prm = r531Param(p, j);
-            if (prm !== null) take(prm[0] === "rec" ? "" : prm[0], !prm[1]);
+            if (prm !== null) take(r531ParamKey(prm[0]), !prm[1]);
           }
         });
       else if (kind === "recv-proc" && tg.kind !== "record") {
