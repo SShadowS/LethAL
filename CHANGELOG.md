@@ -746,8 +746,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `PeriodPageManagement`.NextDate, whose 28 mutants were deployed; one keeps the step at 1 for ever.
   Now a hop-2 procedure is refused when its value reaches an open item's exit (a loop condition or
   a `CurrReport.Break`/`Quit` guard) through the hop-1 callee's RETURN value: its result, or a `var`
-  argument the callee writes and returns. A `var` argument passed from report code into another
-  object is not followed (a stated residual, measured at 906 in one report, 0 hangs in the sample),
+  argument the callee writes and returns. A `var` argument passed into another object from the
+  exit's own trigger or procedure is not followed (a stated residual, measured at 906 in one report,
+  0 hangs in the sample); one passed from a report procedure reached through its return value is,
   nor are events, globals set in another trigger, or a third hop. An `OnPreDataItem` Break guard
   counts too, a named over-refusal of 12. Price: `<cost: re-measured by lethal-code>`; the prototype
   moved no identity, so no scheme change.
