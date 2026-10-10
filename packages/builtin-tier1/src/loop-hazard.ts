@@ -2733,8 +2733,10 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
  * - EXIT CALLS: the calls in the loop's condition, and the calls in a body exit guard (`exit`, a
  *   `break` of THIS loop, `Error` outside `asserterror`: R446's `bodyExitGuards`) when the condition
  *   names no cursor method (R480 `namesCursorMethod`), or when the guard call shares the
- *   condition's cursor: that receiver is the call's own receiver, or is passed to a `var`
- *   parameter. Otherwise a guard callee can only end the loop EARLIER (measured: no hang).
+ *   condition's cursor (that receiver is the call's own receiver, or is passed to a `var`
+ *   parameter) AND the callee TOUCHES that record (`r570Touches`, orchestrator option b; such a
+ *   callee is refused even when it is not cursor-shaped). Otherwise a guard callee can only end
+ *   the loop EARLIER (measured: no hang).
  * - RESOLVED through `callTargets`, `objectsOfType` (tableextensions, interface implementers),
  *   `r531TableProcs` and R564's `r531ProcsIn`; an uncertain call (R567) follows every candidate.
  * - CURSOR-SHAPED: the callee calls `Find*`, `Next`, `IsEmpty` or `Count` on anything, by NAME (a
@@ -2810,18 +2812,27 @@ function r570LoopCallees(
       const c = r531Call(n);
       if (c !== null && CURSOR_METHODS.has(c.method)) cursors.add(c.recv ?? "");
     });
-  /** Does guard call `c` share the condition's cursor with callee `q`: its receiver, or an
-   *  argument bound to a `var` parameter of `q`? */
-  const shares = (c: R531Call, q: ALSyntaxNode): boolean =>
-    cursors.has(c.recv ?? "") ||
-    c.args.some((a, i) => {
+  /** The names under which guard call `c` hands the condition's cursor to callee `q`: `""` (its
+   *  implicit Rec) when that record is the receiver and `q` is a table procedure, a `var`
+   *  parameter's name when it is passed there, `R570_UNKNOWN` when the binding cannot be read
+   *  (another receiver kind, an uncertain call). Empty: `c` does not share the cursor. */
+  const shared = (c: R531Call, q: ALSyntaxNode): string[] => {
+    const out: string[] = [];
+    if (cursors.has(c.recv ?? "")) {
+      const kind = objectOf(q)?.rawKind;
+      const table = kind === "table_declaration" || kind === "tableextension_declaration";
+      out.push(table ? "" : R570_UNKNOWN);
+    }
+    c.args.forEach((a, i) => {
       const k = isIdentifierLike(a) ? r531Key(a) : null;
-      return (
-        k !== null &&
-        cursors.has(k) &&
-        r531Positions(c, i, q).some((j) => r531Param(q, j)?.[1] === true)
-      );
+      if (k === null || !cursors.has(k)) return;
+      for (const j of r531Positions(c, i, q)) {
+        const p = r531Param(q, j);
+        if (p?.[1] === true) out.push(c.uncertain ? R570_UNKNOWN : p[0]);
+      }
     });
+    return out;
+  };
   const sameObject = (q: ALSyntaxNode): boolean => {
     const qo = objectOf(q);
     return qo === null || (samePos(qo, obj) && sameFile(rootOf(qo), rootOf(obj)));
@@ -2833,7 +2844,12 @@ function r570LoopCallees(
         const c = r531Call(n);
         if (c === null) return;
         for (const q of r570Targets(n, c, ctx)) {
-          if (guard && steps && !shares(c, q)) continue;
+          if (guard && steps) {
+            // option (b): a guard that shares the cursor counts only if it TOUCHES that record
+            const keys = shared(c, q);
+            if (!keys.some((k) => k === R570_UNKNOWN || r570Touches(q, k, false, 0, ctx))) continue;
+            if (!sameObject(q)) out.push(q);
+          }
           if (!sameObject(q)) {
             out.push(...r570Chain(q, 0, ctx));
             continue;
@@ -2849,6 +2865,107 @@ function r570LoopCallees(
   take(cond, false);
   take(bodyExitGuards(loop), true);
   return out;
+}
+
+const R570_UNKNOWN = "\u0002";
+/** Record methods that move the cursor, change filters, marks, keys or rows, or run trigger code
+ *  (`Validate`, `Insert`): a call of one on the shared record TOUCHES it. */
+const R570_TOUCH: ReadonlySet<string> = new Set(
+  (
+    "find findfirst findlast findset next get getbysystemid setposition reset setrange setfilter " +
+    "setview setrecfilter copyfilters copy delete deleteall rename modify modifyall mark markedonly " +
+    "clearmarks validate insert truncate setcurrentkey setascending changecompany"
+  ).split(" "),
+);
+/** What still reaches the loop through a BY-VALUE copy: row changes (R531's by-value rule). */
+const R570_CONSUME: ReadonlySet<string> = new Set(
+  "delete deleteall rename modify modifyall insert truncate validate".split(" "),
+);
+
+/**
+ * Option (b): does procedure `p` TOUCH the record it knows as `key` (`""`: its implicit Rec)? A
+ * `R570_TOUCH` method on it (`R570_CONSUME` only when `byValue`), an assignment to it, or handing
+ * it to a same-object helper, a table procedure or a parameter that touches it in turn (up to
+ * `R570_HOPS`). UNKNOWN COUNTS AS TOUCHING: an unresolved call that receives it, an uncertain call
+ * (R567) that may, a method on it that is neither built in nor a project procedure, `Clear(R)`,
+ * and anything past the hop cap. Two readings that do not touch: a read-only built-in (a field
+ * read, `TestField`, `CalcFields`, `Copy`/`TransferFields` INTO another record, `GetTable`), and a
+ * bare name in a table that is no procedure there (a global function such as `Message`, R531's
+ * rule).
+ */
+function r570Touches(
+  p: ALSyntaxNode,
+  key: string,
+  byValue: boolean,
+  depth: number,
+  ctx: SemanticContext,
+): boolean {
+  const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+  if (body === null || depth > R570_HOPS) return true;
+  const hits = byValue ? R570_CONSUME : R570_TOUCH;
+  const own = r531ObjectProcs(p, ctx);
+  /** Does any of `ts` touch its implicit Rec? None resolved: unknown, so yes. */
+  const viaRec = (ts: ALSyntaxNode[]): boolean =>
+    ts.length === 0 || ts.some((t) => r570Touches(t, "", byValue, depth + 1, ctx));
+  let hit = false;
+  r531Walk(body, ctx, (n) => {
+    if (hit) return;
+    if (n.kind === ALNodeKind.assignment_statement && !byValue) {
+      const l = n.childForFieldName("left");
+      if (l !== null && isIdentifierLike(l) && r531Key(l) === key) hit = true;
+      return;
+    }
+    const c = r531Call(n);
+    if (c === null) return;
+    if (c.recv === key) {
+      // `R.M(...)` (or `Rec.M(...)` for the implicit Rec)
+      if (hits.has(c.method)) hit = true;
+      else if (!R531_BUILTIN.has(c.method)) {
+        const ts = r570Targets(n, c, ctx);
+        // a paren-less `R.X` that names no procedure is a field read
+        if (n.rawKind !== "member_expression" || ts.length > 0) hit = c.uncertain || viaRec(ts);
+      }
+      if (hit) return;
+    } else if (key === "" && c.recv === null && n.rawKind !== "member_expression") {
+      if (own.has(c.method)) {
+        // a same-object helper sees the same implicit Rec
+        if (viaRec(r570Targets(n, c, ctx))) hit = true;
+      } else if (r531Implicit(n, ctx)) {
+        if (hits.has(c.method)) hit = true;
+        else if (!R531_BUILTIN.has(c.method)) {
+          const ts = r570Targets(n, c, ctx);
+          if (ts.length > 0 && viaRec(ts)) hit = true; // unresolved: a global function
+        }
+      }
+      if (hit) return;
+    }
+    // the record handed on as an argument
+    const at = c.args.flatMap((a, i) => (isIdentifierLike(a) && r531Key(a) === key ? [i] : []));
+    if (at.length === 0) return;
+    if (c.uncertain) {
+      hit = true;
+      return;
+    }
+    if (c.recv === null && R531_PURE.has(c.method) && c.method !== "clear") return;
+    const ts = r570Targets(n, c, ctx);
+    if (ts.length === 0) {
+      const readOnly =
+        c.recv !== null &&
+        c.recv !== key &&
+        (R531_BUILTIN.has(c.method) || c.method === "gettable");
+      if (!readOnly) hit = true;
+      return;
+    }
+    hit = ts.some((t) =>
+      at.some((i) =>
+        r531Positions(c, i, t).some((j) => {
+          const prm = r531Param(t, j);
+          return prm === null || r570Touches(t, prm[0], byValue || !prm[1], depth + 1, ctx);
+        }),
+      ),
+    );
+  });
+  return hit;
 }
 
 /** The project procedures (with a body) that call `n` names, in any object. */

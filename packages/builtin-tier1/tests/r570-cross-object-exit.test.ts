@@ -63,6 +63,45 @@ const ITEM = `table 50700 "R570 Item"
         exit(Other.IsEmpty());
     end;
 
+    procedure ReadOnly(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'ROTAB';
+        TestField(Qty);
+        exit(Qty > 0);
+    end;
+
+    procedure StepNext(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'NEXTTAB';
+        exit(Next() <> 0);
+    end;
+
+    procedure DropIt(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'DELTAB';
+        Delete();
+        exit(true);
+    end;
+
+    procedure ViaHelper(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'HELPTAB';
+        exit(InnerStep());
+    end;
+
+    local procedure InnerStep(): Boolean
+    begin
+        exit(Rec.Next() <> 0);
+    end;
+
     procedure NextBare(): Boolean
     var
         Other: Record "R570 Item";
@@ -175,6 +214,35 @@ const FEFO = `codeunit 50700 "R570 Fefo"
         exit(R.FindFirst());
     end;
 
+    procedure ReadVar(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'ROVAR';
+        exit(R.Qty > 0);
+    end;
+
+    procedure NextVar(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'NEXTVAR';
+        exit(R.Next() <> 0);
+    end;
+
+    procedure NextVarHelp(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'VARHELP';
+        exit(StepIt(R));
+    end;
+
+    local procedure StepIt(var R2: Record "R570 Item"): Boolean
+    begin
+        exit(R2.Next() <> 0);
+    end;
+
+    procedure PassOn(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'UNRES';
+        exit(Ext.Unknown(R));
+    end;
+
     procedure Pick(var R: Record "R570 Item"): Boolean
     begin
         Tag := 'OV1';
@@ -211,6 +279,7 @@ const FEFO = `codeunit 50700 "R570 Fefo"
         Buf: Record "R570 Item";
         Tag: Text;
         Cnt: Integer;
+        Ext: Codeunit "R570 Not In Project";
 }
 `;
 
@@ -306,6 +375,22 @@ const LOOPS = `codeunit 50701 "R570 Loops"
     begin
         repeat
             if not Ent.CheckValid() then
+                exit;
+            if not Ent.ReadOnly() then
+                exit;
+            if not Ent.StepNext() then
+                exit;
+            if not Ent.DropIt() then
+                exit;
+            if not Ent.ViaHelper() then
+                exit;
+            if not Fefo.ReadVar(Ent) then
+                exit;
+            if not Fefo.NextVar(Ent) then
+                exit;
+            if not Fefo.NextVarHelp(Ent) then
+                exit;
+            if not Fefo.PassOn(Ent) then
                 exit;
         until Ent.Next() = 0;
     end;
@@ -764,11 +849,39 @@ describe("R570: a guard while the condition steps its own cursor", () => {
   it("the cursor record passed BY VALUE: NOT refused (the callee can only end the loop earlier)", () => {
     expect(project(FILES)(F, "BYVALUE")).toBe(false);
   });
-  it("the cursor record passed to a `var` parameter: refused", () => {
+  it("the cursor record passed to a `var` parameter whose callee Finds on it: refused", () => {
     expect(project(FILES)(F, "BYVAR")).toBe(true);
   });
-  it("a table procedure ON the cursor record (`Ent.CheckValid()`): refused", () => {
-    expect(project(FILES)("Item.Table.al", "TABLEPROC")).toBe(true);
+});
+
+describe("R570 (orchestrator option b): a sharing guard callee is refused only if it TOUCHES the record", () => {
+  const T = "Item.Table.al";
+  it("a table procedure on the cursor record that uses only ANOTHER record: NOT refused", () => {
+    expect(project(FILES)(T, "TABLEPROC")).toBe(false);
+  });
+  it("a table procedure on the cursor record that only reads fields: NOT refused", () => {
+    expect(project(FILES)(T, "ROTAB")).toBe(false);
+  });
+  it("a table procedure that calls Next on its implicit Rec: refused", () => {
+    expect(project(FILES)(T, "NEXTTAB")).toBe(true);
+  });
+  it("a table procedure that Deletes its implicit Rec: refused", () => {
+    expect(project(FILES)(T, "DELTAB")).toBe(true);
+  });
+  it("a table procedure whose same-object helper steps Rec: refused", () => {
+    expect(project(FILES)(T, "HELPTAB")).toBe(true);
+  });
+  it("the record passed to a `var` parameter that is only read: NOT refused", () => {
+    expect(project(FILES)(F, "ROVAR")).toBe(false);
+  });
+  it("the record passed to a `var` parameter that is stepped with Next: refused", () => {
+    expect(project(FILES)(F, "NEXTVAR")).toBe(true);
+  });
+  it("the `var` parameter handed to a same-object helper that steps it: refused", () => {
+    expect(project(FILES)(F, "VARHELP")).toBe(true);
+  });
+  it("the `var` parameter handed to an unresolved call: refused (unknown counts as touching)", () => {
+    expect(project(FILES)(F, "UNRES")).toBe(true);
   });
 });
 
