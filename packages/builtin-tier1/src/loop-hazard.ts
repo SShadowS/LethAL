@@ -2592,7 +2592,8 @@ function selfInserts(item: ALSyntaxNode, ctx: SemanticContext): boolean {
  * every project codeunit that implements X), or through a record the engine binds (`resolveReceiverTable`:
  * a data item's name, an implicit record). Event subscribers count too: of an event open-item code
  * raises, and of an event a refused callee raises. ONE object hop, a stated cap: a callee's own calls
- * into a third object are not followed. Not seen: a receiver this cannot type (a RecordRef, a
+ * into a third object are not followed, except those whose value feeds an exit (R569,
+ * `exitFedHop2`). Not seen: a receiver this cannot type (a RecordRef, a
  * parameter of another procedure, an object in a `#if` wrapper), table triggers, events raised deeper,
  * cross-app objects, `interface B extends A`, `Codeunit.Run`/`Report.Run` targets and
  * tableextension-published events.
@@ -2707,7 +2708,7 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
       if (t !== null) for (const obj of t.objs) add(obj, t.member);
     }
     for (const c of openCalls) for (const s of raised(c, o)) add(s.obj, s.proc);
-    exitFedHop2(o, ctx, add);
+    if (r569Seam.on) exitFedHop2(o, ctx, (obj, proc) => add(obj, proc));
   }
   // events raised from the refused callee procedures themselves (PEPPOL Management's OnFindNext*)
   for (const [k, procs] of [...out]) {
@@ -2725,31 +2726,67 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
   return out;
 }
 
-/** R569 PROTOTYPE (measurement only): every hop-2 procedure the exit-fed rule adds, with how. */
-export const r569Debug: {
+/** R569: a test-only seam. Tests switch `on` off to get master's behaviour (no second hop). */
+export const r569Seam = { on: true };
+
+/** One procedure the R569 second hop refuses: the report it starts from, the hop-1 callee it came
+ *  through (`Object.Procedure`), the hop-2 object's name and procedure, and how its value feeds
+ *  the hop-1 callee's return: `exit` (its result) or `ret-var` (it writes a `var` argument). */
+export interface R569Target {
   report: string;
   hop1: string;
-  obj: ALSyntaxNode;
+  obj: string;
   proc: string;
-  tag: string;
-}[] = [];
+  tag: "exit" | "ret-var";
+}
+
+/** R569, for measurement scripts: every hop-2 target the rule finds in the project of `ctx`, one
+ *  record per find (repeats are possible). Computed fresh on each call; no module state. */
+export function r569HopTargets(ctx: SemanticContext): R569Target[] {
+  const out: R569Target[] = [];
+  for (const o of projectObjects(ctx)) {
+    if (!LOOP_OBJECTS.has(o.rawKind)) continue;
+    exitFedHop2(o, ctx, (obj, proc, tag, hop1) =>
+      out.push({ report: objectNameOf(o), hop1, obj: objectNameOf(obj), proc, tag }),
+    );
+  }
+  return out;
+}
 
 /**
- * R569 PROTOTYPE: the exit-fed second hop. From the exits of open-item code in `report` (every
- * open-item loop's `loopExitParts`, and the guards of every `CurrReport.Break`/`Quit` there), follow
- * what FEEDS them (`r531Feeds` with `fed`, R532's boundary: another object's function feeds only
- * its receiver) through same-object procedures (their returned value: `exit(...)` values, the
- * named return, and the guards of those exits) to the calls into another object: the hop-1 callees.
- * In a hop-1 callee (and its same-object closure, the same way) the calls into a THIRD object whose
- * result feeds the callee's returned value, or that write (a `var` parameter) a name feeding it,
- * are the hop-2 targets: each is refused like a hop-1 callee (`add`: the procedure + its
- * same-object closure). A hop-1 callee reached only through a `var` argument the exit reads is
- * followed the same way from that parameter.
+ * R569: the exit-fed second hop. R500 refuses a procedure of another object that open-item code
+ * calls (hop 1), but not that callee's own calls into a third object (hop 2). This adds the hop-2
+ * procedures whose value decides when an open item stops, and no others.
+ *
+ * 1. EXITS. Start from the exit parts of every `while`/`repeat` loop in open-item code
+ *    (`loopExitParts`) and from the guard of every `CurrReport.Break`/`Quit` (and XMLport twins)
+ *    there. An `OnPreDataItem` Break counts too, although it can only shorten a run: a stated
+ *    over-refusal (Whse.-Source - Create Document's AsmExistsForJobPlanningLine).
+ * 2. FEEDS. In the exit's own scope, `r531Feeds` with `fed` finds the assignments whose value flows
+ *    by name into the exit, under R532/R568's boundary (another object's function feeds only its
+ *    receiver, so `Fmt.Wrap(PPM.NextDate(D))` follows `Fmt.Wrap` and not `PPM.NextDate`). The calls
+ *    followed are those in the exit parts and in the right sides of those assignments.
+ * 3. RETURN VALUE. A followed call into a procedure is followed through what it RETURNS: its
+ *    `exit(...)` values, its named return variable and the guards of its `exit`s; step 2 runs again
+ *    from there. A procedure of the same object stays on the same hop; one of another project
+ *    object is the hop-1 callee; from a hop-1 callee (or its same-object procedures) a call into a
+ *    third object is the hop-2 target, refused exactly like a hop-1 callee (`add`: the whole
+ *    procedure, its same-object closure, and the event subscribers the closing pass follows).
+ * 4. VAR WRITES. Inside a procedure reached through its return value at hop 1 (the hop-1 callee and
+ *    its same-object procedures), a call that writes a fed name through a `var` parameter is
+ *    followed too (`Helper.Calc(Result); exit(Result)`), since it feeds the returned value. In report
+ *    code (hop 0) a `var` call into a procedure of the SAME object is followed; a `var` call into
+ *    ANOTHER object's procedure is NOT (the entry-var path).
+ *
+ * Not followed (residuals in R569): a hop-1 callee entered through a `var` argument from report
+ * code (measured 906 in Fixed Asset - Projected Value, each loop sampled with a second exit that
+ * progresses on its own); a `var` write made by an event subscriber; events raised on the way;
+ * globals written in another trigger; hop 3.
  */
 function exitFedHop2(
   report: ALSyntaxNode,
   ctx: SemanticContext,
-  add: (o: ALSyntaxNode, name: string) => void,
+  add: (o: ALSyntaxNode, name: string, tag: R569Target["tag"], hop1: string) => void,
 ): void {
   const seen = new Set<string>();
   const arityOf = (c: ALSyntaxNode): number | null =>
@@ -2775,7 +2812,7 @@ function exitFedHop2(
     hop: 0 | 1,
     names: string[],
     ret: boolean,
-    tag: string,
+    tag: R569Target["tag"],
     hop1: string,
   ): void => {
     const obj = objectOf(proc);
@@ -2790,14 +2827,14 @@ function exitFedHop2(
     const { values, guards } = exitParts(proc);
     const rv = proc.childForFieldName("return_value");
     site(proc, values, rv === null ? names : [...names, normalizeAlName(rv.text)], hop, tag, hop1);
-    if (guards.length > 0) site(proc, guards, names, hop, tag === "ret" ? "guard" : tag, hop1);
+    if (guards.length > 0) site(proc, guards, names, hop, tag, hop1);
   };
   const site = (
     scope: ALSyntaxNode,
     parts: ALSyntaxNode[],
     names: string[],
     hop: 0 | 1,
-    tag: string,
+    tag: R569Target["tag"],
     hop1: string,
   ): void => {
     const obj = objectOf(scope);
@@ -2811,7 +2848,7 @@ function exitFedHop2(
       if (r !== null) exprs.push(r);
       exprs.push(...exprTails(a));
     }
-    const onCall = (c: ALSyntaxNode, argIdx: number | null, t: string): void => {
+    const onCall = (c: ALSyntaxNode, argIdx: number | null, t: R569Target["tag"]): void => {
       const bare = bareCallee(c) ?? hiddenCallee(c, own, ctx);
       let targets: { o: ALSyntaxNode; member: string }[];
       if (bare !== null && own.has(bare)) targets = [{ o: obj, member: bare }];
@@ -2831,10 +2868,11 @@ function exitFedHop2(
             pnames = [prm[0]];
           }
           const same = objectKey(o) === objectKey(obj);
+          // the entry-var path: report code passing a fed name to another object's `var` parameter
+          if (argIdx !== null && hop === 0 && !same) continue;
           const nextHop: 0 | 1 = same ? hop : 1;
           if (!same && hop === 1) {
-            add(o, member);
-            r569Debug.push({ report: objectNameOf(report), hop1, obj: o, proc: member, tag: t });
+            add(o, member, t, hop1);
             continue;
           }
           const h1 = !same ? `${objectNameOf(o)}.${member}` : hop1;
@@ -2854,12 +2892,12 @@ function exitFedHop2(
       for (const ch of n.namedChildren) scan(ch);
     };
     for (const e of exprs) scan(e);
-    // a call that writes a fed name through a `var` parameter
+    // a call that writes a fed name through a `var` parameter (step 4; `onCall` drops the entry)
     visitAll(scope, (n) => {
       if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return;
       if (armOfNode(ctx, n) === "inactive") return;
       argumentList(n).forEach((a, i) => {
-        if (fed.has(rootName(a))) onCall(n, i, tag === "ret" || tag === "exit" ? "var" : tag);
+        if (fed.has(rootName(a))) onCall(n, i, hop === 1 ? "ret-var" : tag);
       });
     });
   };
