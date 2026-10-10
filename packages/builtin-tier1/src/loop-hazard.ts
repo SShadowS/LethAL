@@ -1403,15 +1403,30 @@ function r562FilterHop(
 }
 
 /** FEEDS: assignments in `scope` whose target name `parts` read, to a fixpoint (R480
- *  `indirectFeeds`'s by-name rule, over the whole scope instead of one loop body). */
+ *  `indirectFeeds`'s by-name rule, over the whole scope instead of one loop body). R532 passes
+ *  `fed`, which receives every name read on the way, and also matches a target's ROOT name
+ *  (`Arr[1] := X` feeds `Arr`, `R.X := Y` feeds `R` as well as `X`) and follows the `#if`
+ *  expression tails `indirectFeeds` follows. Under `fed` it reads only the receiver of a non-bare
+ *  call (`Obj.Proc(A)` feeds `Obj`, not `A`): a value that reaches the name through another
+ *  object's function is closed by ruling in R532. R-531 passes nothing and is unchanged. */
 function r531Feeds(
   scope: ALSyntaxNode,
   parts: ALSyntaxNode[],
   ctx: SemanticContext,
+  fed?: Set<string>,
 ): ALSyntaxNode[] {
-  const names = new Set<string>();
+  const names = fed ?? new Set<string>();
   const collect = (n: ALSyntaxNode): void => {
     if (DIRECTIVE_MARKERS.has(n.rawKind) || armOfNode(ctx, n) === "inactive") return;
+    if (
+      fed !== undefined &&
+      (n.rawKind === "call_expression" || n.rawKind === "call_statement") &&
+      bareCallee(n) === null
+    ) {
+      const f = n.childForFieldName("function");
+      if (f !== null) collect(f);
+      return;
+    }
     if (isIdentifierLike(n)) names.add(normalizeAlName(n.text));
     for (const c of n.namedChildren) collect(c);
   };
@@ -1433,11 +1448,12 @@ function r531Feeds(
         left.rawKind === "member_expression" || left.kind === ALNodeKind.field_access
           ? left.childForFieldName("member")
           : left;
-      if (name === null || !isIdentifierLike(name) || !names.has(normalizeAlName(name.text)))
-        continue;
+      const hit = name !== null && isIdentifierLike(name) && names.has(normalizeAlName(name.text));
+      if (!hit && (fed === undefined || !names.has(rootName(left)))) continue;
       used.add(a.startIndex);
       out.push(a);
       collect(right);
+      if (fed !== undefined) for (const t of exprTails(a)) collect(t);
       changed = true;
     }
   }
@@ -1845,7 +1861,10 @@ function consumingLoopRefuses(
  * an early exit (`exit`, Break/Quit/Skip, `Error`, or a guard holding one) that comes before such a
  * write in its scope. Not seen: a write in another object other than a call to a report's writer
  * through a typed `Report X` receiver (R555, below; the unresolvable receivers are filed), and a value
- * that reaches the name through another variable.
+ * that reaches the name from another procedure or object (closed by ruling in R532). A value that
+ * reaches it through another variable in the same scope (an argument of a same-object writer call
+ * whose parameter the writer feeds included) is a FEED (R532, `presetFeeds`), refused like a write;
+ * an argument of another object's function (`Obj.Proc(A)`) is not one.
  *
  * R548: inside a reportextension the names are the extension's own (`presetExitNames` over its
  * blocks, its globals seeded with the base's protected names) plus every base candidate's preset
@@ -1875,10 +1894,20 @@ function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean
   const cross = crossWriters(ctx).all.size > 0;
   // open-item code is refused by `openItemHangRefuses`' first part already, cross-object or not
   if ((!local && !cross) || inOpenItemCode(node, ctx)) return false;
+  const scope = codeScope(node);
+  const feeds =
+    local && w !== null && scope !== null && r532FeedSeam.on
+      ? presetFeeds(scope, names, w, ctx)
+      : null;
+  const isFeed = (n: ALSyntaxNode): boolean =>
+    feeds !== null &&
+    feeds.names.size > 0 &&
+    ((n.rawKind === "assignment_statement" && feeds.assigns.has(n.startIndex)) ||
+      directWrite(n, feeds.names, ctx));
   const writes = (n: ALSyntaxNode): boolean =>
     (local &&
       w !== null &&
-      (directWrite(n, names, ctx) || callsPresetWriter(n, w, ctx, names.size > 0))) ||
+      (directWrite(n, names, ctx) || callsPresetWriter(n, w, ctx, names.size > 0) || isFeed(n))) ||
     (cross && crossWriterCall(n, ctx));
   const containsWrite = (n: ALSyntaxNode, after = -1): boolean => {
     let found = false;
@@ -1887,7 +1916,6 @@ function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean
     });
     return found;
   };
-  const scope = codeScope(node);
   for (
     let a: ALSyntaxNode | null = node;
     a !== null && (scope === null || !samePos(a, scope));
@@ -1912,6 +1940,115 @@ function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean
   }
   return containsWrite(node);
 }
+
+/** R532: a test-only seam. Tests switch `on` off to show a mutant IS emitted without the feeds. */
+export const r532FeedSeam = { on: true };
+
+/**
+ * R532: the FEEDS of shape 1's preset writes in `scope` (a procedure or trigger outside open-item
+ * code; a feed in open-item code is R-501's already). A feed is an assignment whose value flows by
+ * name, to a fixpoint, into the right side (or `#if` tails) of an assignment to a preset exit name
+ * (`r531Feeds` with `fed`), or a `directWrite` of a name read on the way: a `var` argument
+ * (`Compute(Tmp)`), `Clear`/`Evaluate`, or an unknown callee. The search also starts from every
+ * argument of a BARE call that is itself a preset write (`Evaluate(Continue, S)`), and from each
+ * argument of a call to a same-object preset writer whose parameter that writer itself feeds
+ * (`SetContinue(Tmp)` with `Continue := B`; `writerFedArgs`). Never from `Obj.Proc(Continue, H)`,
+ * and never from an argument of `Obj.Proc(...)` in a right side (`Continue := Fmt.Bill(A, B)` feeds
+ * `Fmt`, not `A` or `B`), nor from a parameter a writer only hands to `Obj.Proc(...)`: a value that
+ * reaches the name through another object's function is the cross-object part R532 closed by ruling
+ * (seeding there cost BaseApp 67 more mutants than the built rule). Shape 1 treats a feed as a write.
+ * By name: a same-named variable written after the preset write is refused too (the safe direction).
+ * Not seen (R532's residuals): a record method that changes what the write reads (`Buf.Insert`
+ * before `Continue := not Buf.IsEmpty()`), the other arguments of a feeding call, and every value
+ * that comes from another procedure or object (closed by ruling in R532).
+ */
+function presetFeeds(
+  scope: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  w: PresetWriters,
+  ctx: SemanticContext,
+): { readonly assigns: ReadonlySet<number>; readonly names: ReadonlySet<string> } {
+  const key = `${scope.startIndex}|${scope.endIndex}`;
+  // a writer already being read (recursion, or a cycle of writers) feeds nothing
+  if (r532Reading.has(key)) return { assigns: new Set<number>(), names: new Set<string>() };
+  // Only the outermost call caches: a result computed while another writer is in progress saw that
+  // writer as feeding nothing, so caching it would make the answer depend on visit order.
+  // ponytail: nested writers are recomputed per outermost call; memoize per object if chains get deep
+  const outermost = r532Reading.size === 0;
+  r532Reading.add(key);
+  try {
+    return outermost
+      ? cached(ctx, scope, "r532feeds", () => presetFeedsOnce(scope, names, w, ctx))
+      : presetFeedsOnce(scope, names, w, ctx);
+  } finally {
+    r532Reading.delete(key);
+  }
+}
+
+const r532Reading = new Set<string>();
+
+function presetFeedsOnce(
+  scope: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  w: PresetWriters,
+  ctx: SemanticContext,
+): { readonly assigns: ReadonlySet<number>; readonly names: ReadonlySet<string> } {
+  const rights: ALSyntaxNode[] = [];
+  visitAll(scope, (n) => {
+    if (armOfNode(ctx, n) === "inactive") return;
+    if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
+      // R567: comments are not arguments; unreadable positions seed every argument (the safe side)
+      const args = argumentList(n);
+      if (bareCallee(n) !== null && directWrite(n, names, ctx)) rights.push(...args);
+      else if (callsPresetWriter(n, w, ctx, names.size > 0)) {
+        const fedAt = argumentsReadable(n) ? writerFedArgs(n, names, w, ctx) : () => true;
+        rights.push(...args.filter((_, i) => fedAt(i)));
+      }
+      return;
+    }
+    if (n.rawKind !== "assignment_statement") return;
+    const l = n.childForFieldName("left");
+    const r = n.childForFieldName("right");
+    if (l !== null && r !== null && names.has(rootName(l))) rights.push(r, ...exprTails(n));
+  });
+  const fed = new Set<string>();
+  if (rights.length === 0) return { assigns: new Set<number>(), names: fed };
+  const assigns = new Set(r531Feeds(scope, rights, ctx, fed).map((a) => a.startIndex));
+  return { assigns, names: fed };
+}
+
+/**
+ * R532: which arguments of `n`, a call to a same-object preset writer, seed the feed search: those
+ * whose parameter the writer itself feeds into a preset write (its own `presetFeeds` names), so a
+ * `Hdr` the writer only hands to another object's function is not one. Every argument when the
+ * callee does not resolve to exactly one procedure of this object (the safe direction).
+ */
+function writerFedArgs(
+  n: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  w: PresetWriters,
+  ctx: SemanticContext,
+): (i: number) => boolean {
+  const c = bareCallee(n) ?? hiddenCallee(n, w.known, ctx);
+  const obj = objectOf(n);
+  const procs: ALSyntaxNode[] = [];
+  if (c !== null && obj !== null)
+    visitAll(obj, (p) => {
+      if ((isProcedureLike(p) || p.rawKind === "procedure") && procNames(p).includes(c))
+        procs.push(p);
+    });
+  const [p] = procs;
+  if (procs.length !== 1 || p === undefined) return () => true;
+  const fed = presetFeeds(p, names, w, ctx).names;
+  return (i) => {
+    const q = r531Param(p, i);
+    return q !== null && fed.has(q[0]);
+  };
+}
+
+/** An assignment's `#if` expression tails (R480 `indirectFeeds` follows them). */
+const exprTails = (a: ALSyntaxNode): ALSyntaxNode[] =>
+  a.namedChildren.filter((c) => c.rawKind === "preproc_conditional_expression_tail");
 
 /** R500 shape 1's direct write of a name in `names`: an assignment to it, or a call that passes it
  *  to a `var` parameter (an unresolved callee counts as writing, the safe direction on this side). */
@@ -3677,4 +3814,218 @@ export function hangCapableForMutatedNode(
     cur = cur.parent;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------------------------
+// R532 census (measurement only; `scripts/r532-preset-feed-census.ts`). Refuses nothing.
+// ---------------------------------------------------------------------------------------------
+
+/** One census row per preset write outside open-item code. Names and positions only. */
+export interface R532CensusRow {
+  readonly file: string;
+  readonly object: string;
+  readonly scope: string;
+  readonly name: string;
+  readonly kind: "assign" | "var-arg";
+  /** classes (see the script's header): A-*, A', A?-*, B, B-obj-preset, B-obj-other, P, F, L-unwritten, G-unwritten, C */
+  readonly tags: string[];
+  readonly callees: string[];
+  readonly feeds: number;
+  readonly feedA: number;
+  readonly line: number | undefined;
+}
+
+/** Procedures named `name` in `o` (any arity when `arity` < 0). */
+function r532Procs(o: ALSyntaxNode, name: string, arity: number): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  visitAll(o, (x) => {
+    if (
+      (isProcedureLike(x) || x.rawKind === "procedure") &&
+      procNames(x).includes(name) &&
+      (arity < 0 || r531Arity(x) === arity)
+    )
+      out.push(x);
+  });
+  return out;
+}
+
+/** The census class of a call (or a hidden paren-less call) and the project procedures it reaches. */
+function r532CallClass(
+  c: ALSyntaxNode,
+  obj: ALSyntaxNode,
+  ctx: SemanticContext,
+): { cls: string; procs: ALSyntaxNode[] } | null {
+  const known = procedureNamesOf(obj, ctx);
+  const own = bareCallee(c) ?? hiddenCallee(c, known, ctx);
+  const isCall = c.rawKind === "call_expression" || c.rawKind === "call_statement";
+  const arity = isCall ? argumentList(c).length : 0;
+  if (own !== null && known.has(own)) {
+    const procs = r532Procs(obj, own, arity);
+    return {
+      cls: openReachable(obj, ctx).has(own) ? "A'open" : "A'",
+      procs: procs.length > 0 ? procs : r532Procs(obj, own, -1),
+    };
+  }
+  if (!isCall) return null;
+  const f = c.childForFieldName("function");
+  if (f === null) return { cls: "A?-unresolved", procs: [] };
+  const viaTargets = (): { cls: string; procs: ALSyntaxNode[] } | null => {
+    const t = callTargets(c, ctx);
+    if (t === null) return null;
+    const procs = t.objs.flatMap((o) => r532Procs(o, t.member, arity));
+    if (procs.length > 0) return { cls: `A-${t.kind}`, procs };
+    return {
+      cls: t.objs.length === 0 ? `A?-notproject-${t.kind}` : `A?-builtin-${t.kind}`,
+      procs: [],
+    };
+  };
+  if (f.rawKind === "member_expression") {
+    const recv = f.childForFieldName("object");
+    const member = normalizeAlName(f.childForFieldName("member")?.text ?? "");
+    const dt = recv !== null && isIdentifierLike(recv) ? declaredType(recv, ctx) : null;
+    if (dt !== null && dt.kind === "report") {
+      const procs = projectObjects(ctx)
+        .filter(
+          (o) =>
+            (o.rawKind === "report_declaration" && objectNameOf(o) === dt.name) ||
+            (o.rawKind === "reportextension_declaration" && extendedBaseName(o) === dt.name),
+        )
+        .flatMap((o) => r532Procs(o, member, arity));
+      return { cls: procs.length > 0 ? "A-report" : "A?-report", procs };
+    }
+    return (
+      viaTargets() ?? {
+        cls: dt !== null ? `A?-notproject-${dt.kind}` : "A?-unresolved",
+        procs: [],
+      }
+    );
+  }
+  const t = viaTargets();
+  if (t !== null && t.procs.length > 0) return t;
+  return { cls: normalizeAlName(f.text) === "clear" ? "C-clear" : "A?-system", procs: [] };
+}
+
+/** The calls inside `expr`, hidden paren-less same-object calls included. */
+function r532CallsIn(expr: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContext) {
+  const out: { node: ALSyntaxNode; cls: string; procs: ALSyntaxNode[] }[] = [];
+  const known = procedureNamesOf(obj, ctx);
+  visitAll(expr, (x) => {
+    if (armOfNode(ctx, x) === "inactive") return;
+    const isCall = x.rawKind === "call_expression" || x.rawKind === "call_statement";
+    if (!isCall && hiddenCallee(x, known, ctx) === null) return;
+    const r = r532CallClass(x, obj, ctx);
+    if (r !== null) out.push({ node: x, ...r });
+  });
+  return out;
+}
+
+/**
+ * R532's census: every preset write outside open-item code (an assignment to a preset exit name,
+ * or a call passing one to a written argument), classified by where its value comes from. Uses
+ * R-531's `r531Feeds` as measured (assignments only, targets as written), so the counts R532's
+ * ruling cites reproduce; the built rule (`presetFeeds`) is wider.
+ */
+export function r532PresetFeedCensus(ctx: SemanticContext): R532CensusRow[] {
+  const fileOf = new Map<string, string>();
+  for (const f of ctx.files ?? [])
+    for (const o of objectDeclarationsOf(f.root)) fileOf.set(objectKey(o), f.path);
+  const scopeName = (s: ALSyntaxNode | null): string =>
+    s === null
+      ? "?"
+      : isProcedureLike(s)
+        ? `procedure ${procNames(s)[0] ?? "?"}`
+        : s.rawKind === "trigger_declaration"
+          ? `trigger ${triggerName(s)}`
+          : s.rawKind;
+  const rows: R532CensusRow[] = [];
+  for (const o of projectObjects(ctx)) {
+    let names: Set<string> = new Set();
+    if (o.rawKind === "report_declaration") names = presetExitNames(o, ctx);
+    else if (o.rawKind === "reportextension_declaration") names = extensionPresetExitNames(o, ctx);
+    if (names.size === 0) continue;
+    visitAll(o, (n) => {
+      if (armOfNode(ctx, n) === "inactive" || inOpenItemCode(n, ctx)) return;
+      let name: string;
+      let rhs: ALSyntaxNode | null = null;
+      if (n.rawKind === "assignment_statement") {
+        const l = n.childForFieldName("left");
+        if (l === null || !names.has(rootName(l))) return;
+        name = rootName(l);
+        rhs = n.childForFieldName("right");
+      } else if (
+        (n.rawKind === "call_expression" || n.rawKind === "call_statement") &&
+        directWrite(n, names, ctx)
+      ) {
+        const a = argumentList(n).find(
+          (x) => isIdentifierLike(x) && names.has(normalizeAlName(x.text)),
+        );
+        name = a === undefined ? "?" : normalizeAlName(a.text);
+      } else return;
+      const scope = codeScope(n);
+      const tags = new Set<string>();
+      const callees: string[] = [];
+      const calls = r532CallsIn(rhs ?? n, o, ctx);
+      for (const c of calls) {
+        tags.add(rhs === null ? `V:${c.cls}` : c.cls);
+        for (const p of c.procs) callees.push(`${objectKey(objectOf(p) ?? p)}.${procNames(p)[0]}`);
+      }
+      let feeds = 0;
+      let feedA = 0;
+      if (rhs !== null) {
+        const callAt = new Set(calls.map((c) => c.node.startIndex));
+        const fs = scope === null ? [] : r531Feeds(scope, [rhs], ctx).filter((a) => !samePos(a, n));
+        feeds = fs.length;
+        for (const f of fs) {
+          const r = f.childForFieldName("right");
+          if (r === null) continue;
+          for (const c of r532CallsIn(r, o, ctx)) {
+            tags.add(`B>${c.cls}`);
+            if (c.cls.startsWith("A-")) feedA++;
+          }
+        }
+        visitAll(rhs, (x) => {
+          if (!isIdentifierLike(x) || x.fieldName === "member" || x.fieldName === "function")
+            return;
+          if (x.parent?.rawKind === "qualified_enum_value" || callAt.has(x.startIndex)) return;
+          const nm = normalizeAlName(x.text);
+          if (nm === "rec" || nm === "xrec" || nm === "currreport") {
+            tags.add("F");
+            return;
+          }
+          if (scope !== null && r531Feeds(scope, [x], ctx).some((a) => !samePos(a, n))) {
+            tags.add("B");
+            return;
+          }
+          const d = resolveVarRef(x, ctx);
+          if (d === null) tags.add("F");
+          else if (d.node.rawKind === "parameter") tags.add("P");
+          else if (codeScope(d.node) !== null) tags.add("L-unwritten");
+          else {
+            let objWrite = false;
+            visitAll(o, (a) => {
+              if (objWrite || a.rawKind !== "assignment_statement") return;
+              const l = a.childForFieldName("left");
+              if (l !== null && rootName(l) === nm && !samePos(a, n)) objWrite = true;
+            });
+            // B-obj-preset: the global is itself a preset exit name, so shape 1 refuses its write
+            tags.add(objWrite ? (names.has(nm) ? "B-obj-preset" : "B-obj-other") : "G-unwritten");
+          }
+        });
+        if (tags.size === 0) tags.add("C");
+      } else if (tags.size === 0) tags.add("V:none");
+      rows.push({
+        file: fileOf.get(objectKey(o)) ?? "?",
+        object: objectKey(o),
+        scope: scopeName(scope),
+        name,
+        kind: rhs === null ? "var-arg" : "assign",
+        tags: [...tags].sort(),
+        callees,
+        feeds,
+        feedA,
+        line: n.startPosition?.row,
+      });
+    });
+  }
+  return rows;
 }
