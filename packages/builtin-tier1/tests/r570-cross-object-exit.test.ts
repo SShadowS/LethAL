@@ -110,6 +110,12 @@ const FEFO = `codeunit 50700 "R570 Fefo"
         exit(Ent.Qty > 1);
     end;
 
+    procedure NextHop(): Boolean
+    begin
+        Tag := 'NEXTHOP';
+        exit(Buf.Next() <> 0);
+    end;
+
     procedure IsBig(Q: Integer): Boolean
     begin
         Tag := 'PLAIN';
@@ -354,6 +360,31 @@ ${PRAGMA}
     begin
         while It.MoveNext() do
             Q += 1;
+    end;
+
+    procedure RunLocalHop()
+    begin
+        repeat
+            Q += 1;
+        until not LocalNext();
+        while not LocalPlain() do
+            Q += 1;
+    end;
+
+    local procedure LocalNext(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'LOCALHOP';
+        exit(Fefo.NextHop());
+    end;
+
+    local procedure LocalPlain(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'LOCALPLAIN';
+        exit(Fefo.IsBig(Q));
     end;
 
     var
@@ -698,6 +729,19 @@ describe("R570: the loop's own condition calls a cursor procedure in another obj
   });
   it("a same-object callee is NOT refused (another object only)", () => {
     expect(project(FILES)(F, "SELF")).toBe(false);
+  });
+});
+
+describe("R570 I3b: a same-object first hop that exits an other-object cursor call", () => {
+  it("the same-object hop and the other-object cursor callee are both refused", () => {
+    const at = project(FILES);
+    expect(at("Loops.Codeunit.al", "LOCALHOP")).toBe(true);
+    expect(at(F, "NEXTHOP")).toBe(true);
+  });
+  it("a same-object hop that exits a NON-cursor other-object call is not refused", () => {
+    const at = project(FILES);
+    expect(at("Loops.Codeunit.al", "LOCALPLAIN")).toBe(false);
+    expect(at(F, "PLAIN")).toBe(false);
   });
 });
 

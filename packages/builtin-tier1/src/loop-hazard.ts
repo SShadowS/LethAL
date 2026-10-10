@@ -2743,13 +2743,15 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
  *   same-object or not, is followed, up to `R570_HOPS` hops (which also ends a cycle). Every
  *   procedure on a chain that reaches a cursor-shaped one is refused. Only built-in record and list
  *   methods end a chain, so a wrapper over a `Next`-named project procedure reaches the real one.
+ * - SAME-OBJECT FIRST HOP (I3b): an exit call to a procedure of the loop's OWN object whose
+ *   `exit(<call>)` reaches such a chain in another object refuses that procedure and the chain.
  * - BY NAME: every overload of a refused name in that object is refused (R564 narrowing finds the
  *   callee but does not narrow the refusal).
  * NOT DONE, stated (each errs toward deploying, none can false-kill): the callee's other
  * same-object helpers (DC 31 -> 737 deployed, over the bar); `Codeunit.Run` targets; delegation
  * through a named return value; event subscribers of an exit callee; non-cursor callees (a "has
- * next page" Boolean read from JSON); a loop flag fed by a callee's result; a same-object first hop
- * that exits an other-object cursor call; a record consumer in another object on R531's side.
+ * next page" Boolean read from JSON); a loop flag fed by a callee's result (I3a, R572: CDO 0.075%,
+ * over the bar); a record consumer in another object on R531's side (R571).
  */
 const R570_CURSOR: ReadonlySet<string> = new Set([
   "find",
@@ -2820,6 +2822,10 @@ function r570LoopCallees(
         r531Positions(c, i, q).some((j) => r531Param(q, j)?.[1] === true)
       );
     });
+  const sameObject = (q: ALSyntaxNode): boolean => {
+    const qo = objectOf(q);
+    return qo === null || (samePos(qo, obj) && sameFile(rootOf(qo), rootOf(obj)));
+  };
   const out: ALSyntaxNode[] = [];
   const take = (parts: ALSyntaxNode[], guard: boolean): void => {
     for (const part of parts)
@@ -2827,10 +2833,16 @@ function r570LoopCallees(
         const c = r531Call(n);
         if (c === null) return;
         for (const q of r570Targets(n, c, ctx)) {
-          const qo = objectOf(q);
-          if (qo === null || (samePos(qo, obj) && sameFile(rootOf(qo), rootOf(obj)))) continue;
           if (guard && steps && !shares(c, q)) continue;
-          out.push(...r570Chain(q, 0, ctx));
+          if (!sameObject(q)) {
+            out.push(...r570Chain(q, 0, ctx));
+            continue;
+          }
+          // I3b: a same-object first hop whose `exit(<call>)` reaches another object's chain
+          const hop = r570ExitTargets(q, ctx)
+            .filter((t) => !sameObject(t))
+            .flatMap((t) => r570Chain(t, 1, ctx));
+          if (hop.length > 0) out.push(q, ...hop);
         }
       });
   };
@@ -2882,18 +2894,24 @@ function r570Shaped(p: ALSyntaxNode, ctx: SemanticContext): boolean {
 /** `p` and every procedure its `exit(<call>)` chain reaches from hop `depth`, when `p` or a
  *  procedure on the chain is cursor-shaped; else []. The hop cap also ends a cycle. */
 function r570Chain(p: ALSyntaxNode, depth: number, ctx: SemanticContext): ALSyntaxNode[] {
+  const out =
+    depth < R570_HOPS ? r570ExitTargets(p, ctx).flatMap((t) => r570Chain(t, depth + 1, ctx)) : [];
+  return out.length > 0 || r570Shaped(p, ctx) ? [p, ...out] : [];
+}
+
+/** The project procedures the calls inside `p`'s `exit(...)` statements name. */
+function r570ExitTargets(p: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
   const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
   const out: ALSyntaxNode[] = [];
-  if (body !== null && depth < R570_HOPS)
+  if (body !== null)
     r531Walk(body, ctx, (e) => {
       if (e.rawKind !== "exit_statement") return;
       r531Walk(e, ctx, (n) => {
         const c = r531Call(n);
-        if (c === null) return;
-        for (const t of r570Targets(n, c, ctx)) out.push(...r570Chain(t, depth + 1, ctx));
+        if (c !== null) out.push(...r570Targets(n, c, ctx));
       });
     });
-  return out.length > 0 || r570Shaped(p, ctx) ? [p, ...out] : [];
+  return out;
 }
 
 const LOOP_OBJECTS: ReadonlySet<string> = new Set([
