@@ -551,6 +551,18 @@ const LOOPS = `codeunit 50701 "R570 Loops"
                 exit;
             if not Ent.GlobalFn() then
                 exit;
+            if not Deep.RoSix(Ent) then
+                exit;
+            if not Deep.NextSix(Ent) then
+                exit;
+            if not Deep.DelSix(Ent) then
+                exit;
+            if not Deep.RoNine(Ent) then
+                exit;
+            if not Deep.CycRo(Ent) then
+                exit;
+            if not Deep.CycTouch(Ent) then
+                exit;
         until Ent.Next() = 0;
     end;
 
@@ -667,6 +679,7 @@ ${PRAGMA}
 
     var
         Fefo: Codeunit "R570 Fefo";
+        Deep: Codeunit "R570 Deep";
         Wrap: Codeunit "R570 Wrap";
         PW: Codeunit "R570 PriceWrap";
         Hops: Codeunit "R570 Hops";
@@ -1036,7 +1049,85 @@ const R531_RECKEY = `codeunit 50720 "R570 R531 RecKey"
 }
 `;
 
+/** A same-object chain `<p> -> <p>1 -> ... -> <p><n>` handing the record on by `var`; `<p><n>`
+ *  runs `last` on it. The entry procedure carries the marker `tag`. */
+const chain = (p: string, n: number, tag: string, last: string): string => {
+  const procs = [
+    `    procedure ${p}(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := '${tag}';
+        ${p}1(R);
+        exit(true);
+    end;
+`,
+  ];
+  for (let i = 1; i < n; i++)
+    procs.push(`    local procedure ${p}${i}(var R: Record "R570 Item")
+    begin
+        ${p}${i + 1}(R);
+    end;
+`);
+  procs.push(`    local procedure ${p}${n}(var R: Record "R570 Item")
+    begin
+        ${last}
+    end;
+`);
+  return procs.join("\n");
+};
+
+const DEEP = `codeunit 50712 "R570 Deep"
+{
+${chain("RoSix", 6, "RO6", "X := R.Qty;")}
+${chain("NextSix", 6, "NEXT6", "R.Next();")}
+${chain("DelSix", 6, "DEL6", "R.Delete();")}
+${chain("RoNine", 9, "RO9", "X := R.Qty;")}
+    procedure CycRo(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'CYCRO';
+        CycRoA(R);
+        exit(true);
+    end;
+
+    local procedure CycRoA(var R: Record "R570 Item")
+    begin
+        X := R.Qty;
+        CycRoB(R);
+    end;
+
+    local procedure CycRoB(var R: Record "R570 Item")
+    begin
+        CycRoA(R);
+    end;
+
+    procedure CycTouch(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'CYCTOUCH';
+        CycTA(R);
+        exit(true);
+    end;
+
+    local procedure CycTA(var R: Record "R570 Item")
+    begin
+        CycTB(R);
+    end;
+
+    local procedure CycTB(var R: Record "R570 Item")
+    var
+        Tag2: Text;
+    begin
+        Tag2 := 'CYCTB';
+        CycTA(R);
+        R.Next();
+    end;
+
+    var
+        Tag: Text;
+        X: Integer;
+}
+`;
+
 const FILES: Record<string, string> = {
+  "Deep.Codeunit.al": DEEP,
   "Adv.Codeunit.al": ADV,
   "CustExt.TableExt.al": CUSTEXT,
   "R531RecKey.Codeunit.al": R531_RECKEY,
@@ -1209,6 +1300,30 @@ describe("R570 build review: touch fixes", () => {
   });
   it("`RecRef.GetTable(R)`: NOT refused", () => {
     expect(project(FILES)(F, "GETTABLE")).toBe(false);
+  });
+});
+
+describe("R570 option (d): the record is followed 8 hops, with a visited set", () => {
+  const D = "Deep.Codeunit.al";
+  it("a 6-hop read-only path does NOT touch", () => {
+    expect(project(FILES)(D, "RO6")).toBe(false);
+  });
+  it("a 6-hop path ending in Next touches", () => {
+    expect(project(FILES)(D, "NEXT6")).toBe(true);
+  });
+  it("a 6-hop path ending in Delete touches", () => {
+    expect(project(FILES)(D, "DEL6")).toBe(true);
+  });
+  it("a 9-hop path touches (past the cap: unknown)", () => {
+    expect(project(FILES)(D, "RO9")).toBe(true);
+  });
+  it("a cycle with no toucher ends and does NOT touch", () => {
+    expect(project(FILES)(D, "CYCRO")).toBe(false);
+  });
+  it("a cycle where one member touches DOES touch, and that member is refused", () => {
+    const at = project(FILES);
+    expect(at(D, "CYCTOUCH")).toBe(true);
+    expect(at(D, "CYCTB")).toBe(true);
   });
 });
 

@@ -3004,6 +3004,8 @@ const R570_CURSOR: ReadonlySet<string> = new Set([
   "count",
 ]);
 const R570_HOPS = 4;
+/** How far `r570Touches` follows the shared record (option d; the delegation chain keeps 4). */
+const R570_TOUCH_HOPS = 8;
 
 function inR570Callee(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const s = codeScope(node);
@@ -3240,7 +3242,8 @@ function r570ProjectRec(p: ALSyntaxNode, ctx: SemanticContext): boolean {
  * rule (a field in any key of its table, or one that cannot be resolved; a field the loop filters
  * on, `r570LoopFilters`, only when a `Modify` follows; `ModifyAll` of such a field),
  * `X.Copy(R, true)` (X then shares R's table), or handing it to a same-object helper, a table
- * procedure or a parameter that touches it in turn (up to `R570_HOPS`); every procedure on such a
+ * procedure or a parameter that touches it in turn (up to `R570_TOUCH_HOPS`, with a visited set so
+ * a cycle ends; orchestrator option d); every procedure on such a
  * path is returned, so it is refused too (build review IMPORTANT 2). UNKNOWN COUNTS AS TOUCHING:
  * an unresolved call that receives it, an uncertain call (R567) that may, a method on it that is
  * neither built in nor a project procedure, `Clear(R)`, a bare unknown name where the implicit
@@ -3256,9 +3259,29 @@ function r570Touches(
   depth: number,
   filtered: ReadonlySet<string>,
   ctx: SemanticContext,
+  seen: Map<string, ALSyntaxNode[] | null> = new Map(),
+): ALSyntaxNode[] {
+  // option (d): VISITED, by procedure and the parameter the record is in. A revisit is no touch
+  // (a cycle touches only through a member that does); a finished visit gives its answer again.
+  const id = `${objectKey(objectOf(p) ?? p)}|${p.startIndex}|${key}|${byValue}`;
+  if (seen.has(id)) return seen.get(id) ?? [];
+  seen.set(id, null);
+  const result = r570TouchesOnce(p, key, byValue, depth, filtered, ctx, seen);
+  seen.set(id, result);
+  return result;
+}
+
+function r570TouchesOnce(
+  p: ALSyntaxNode,
+  key: string,
+  byValue: boolean,
+  depth: number,
+  filtered: ReadonlySet<string>,
+  ctx: SemanticContext,
+  seen: Map<string, ALSyntaxNode[] | null>,
 ): ALSyntaxNode[] {
   const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
-  if (body === null || depth > R570_HOPS) return [p];
+  if (body === null || depth > R570_TOUCH_HOPS) return [p];
   const hits = byValue ? R570_CONSUME : R570_TOUCH;
   const own = r531ObjectProcs(p, ctx);
   let direct = false;
@@ -3267,7 +3290,7 @@ function r570Touches(
   let pending = false;
   const via: ALSyntaxNode[] = [];
   const follow = (t: ALSyntaxNode, k: string, bv: boolean): void => {
-    via.push(...r570Touches(t, k, bv, depth + 1, filtered, ctx));
+    via.push(...r570Touches(t, k, bv, depth + 1, filtered, ctx, seen));
   };
   /** `ts` see the same implicit Rec; none resolved: unknown, so touching. */
   const viaRec = (ts: ALSyntaxNode[]): void => {
