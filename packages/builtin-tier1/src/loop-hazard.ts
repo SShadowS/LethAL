@@ -334,13 +334,16 @@ function extendedBaseName(ext: ALSyntaxNode): string | null {
 
 const ANY_REPORT = "\u0000any";
 const extendedReports = new WeakMap<object, Set<string>>();
+/** R565 PROTOTYPE (adversary-r1 F1): a dependency report's own context. Every report there counts as
+ *  extended: the project or any installed app may extend it, and that cannot be known. */
+const r565AllExtended = new WeakSet<object>();
 /** Does any reportextension in the project extend the report holding `item`? Unknown (no file
  *  list on the context): yes, the safe direction. An item an extension adds is not extended. */
 function reportExtended(item: ALSyntaxNode, ctx: SemanticContext): boolean {
   const report = objectOf(item);
   if (report === null || report.rawKind !== "report_declaration") return false;
   const files = ctx.files;
-  if (files === undefined) return true;
+  if (files === undefined || r565AllExtended.has(ctx)) return true;
   let names = extendedReports.get(ctx);
   if (names === undefined) {
     names = new Set();
@@ -2206,6 +2209,14 @@ function declaredProcedureNames(text: string): Set<string> {
   return out;
 }
 
+/** R565 PROTOTYPE: report name (normalized) -> that report's parsed dependency file and its own context. */
+let r565DependencyReport:
+  | ((name: string) => { roots: ALSyntaxNode[]; ctx: SemanticContext } | null)
+  | undefined;
+export function setR565DependencyReport(f: typeof r565DependencyReport): void {
+  r565DependencyReport = f;
+}
+
 const crossWritersMemo = new WeakMap<object, CrossWriters>();
 interface CrossWriters {
   /** report name -> the writers callable through `Report <name>` */
@@ -2237,11 +2248,41 @@ function crossWriters(ctx: SemanticContext): CrossWriters {
     }
     for (const k of ws) s.add(k);
   };
+  const projectReports = new Set<string>();
   for (const o of projectObjects(ctx)) {
-    if (o.rawKind === "report_declaration")
+    if (o.rawKind === "report_declaration") {
+      projectReports.add(objectNameOf(o));
       add(objectNameOf(o), presetWriters(o, presetExitNames(o, ctx), ctx).procs);
-    else if (o.rawKind === "reportextension_declaration")
+    } else if (o.rawKind === "reportextension_declaration")
       add(extendedBaseName(o), presetWriters(o, extensionPresetExitNames(o, ctx), ctx).procs);
+  }
+  // R565 PROTOTYPE: every `Report X` type in the project whose X is not a project report: read X's
+  // one source file from the dependency packages and run `presetWriters` on it.
+  const dep = r565DependencyReport;
+  if (dep !== undefined) {
+    const outside = new Set<string>();
+    for (const o of projectObjects(ctx))
+      visitAll(o, (n) => {
+        if (
+          n.rawKind === "object_reference_type" &&
+          normalizeAlName(n.childForFieldName("object_type")?.text ?? "") === "report"
+        ) {
+          const x = normalizeAlName(lastFieldChild(n, "reference")?.text ?? "");
+          if (x !== "" && !projectReports.has(x)) outside.add(x);
+        }
+      });
+    for (const x of [...outside].sort()) {
+      const got = dep(x);
+      if (got === null) continue;
+      r565AllExtended.add(got.ctx);
+      for (const root of got.roots)
+        for (const r of objectDeclarationsOf(root)) {
+          if (r.rawKind === "report_declaration" && objectNameOf(r) === x)
+            add(x, presetWriters(r, presetExitNames(r, got.ctx), got.ctx).procs);
+          else if (r.rawKind === "reportextension_declaration" && extendedBaseName(r) === x)
+            add(x, presetWriters(r, extensionPresetExitNames(r, got.ctx), got.ctx).procs);
+        }
+    }
   }
   const all = new Set<string>(anyReport);
   for (const s of byReport.values()) for (const k of s) all.add(k);

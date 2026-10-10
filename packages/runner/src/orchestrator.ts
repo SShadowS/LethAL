@@ -1,7 +1,8 @@
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
+import { openItemHangRefuses, setR565DependencyReport, tier1Operators } from "@lethal/builtin-tier1";
+import { r565Provider } from "./r565-dep-source";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
   ALNodeKind,
@@ -924,6 +925,11 @@ export async function generateMutationSet(
   const ctx = buildSemanticContext(
     parsed.map(({ path, root }) => ({ path, root })),
     armsByRoot,
+  );
+  // R565 PROTOTYPE (uncommitted): LETHAL_R565_DEP_DIRS (":"-separated) holds dependency .app files.
+  const depDirs = process.env.LETHAL_R565_DEP_DIRS;
+  setR565DependencyReport(
+    depDirs === undefined ? undefined : await r565Provider(depDirs.split(":"), (m) => console.error(m)),
   );
   const preprocExcluded: PreprocExcludedFile[] = [];
   const symbolsDetail = `symbols: ${buildSymbols.length > 0 ? buildSymbols.join(", ") : "none"}`;

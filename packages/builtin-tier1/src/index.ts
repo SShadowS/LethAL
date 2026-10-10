@@ -33,7 +33,7 @@ export { toggleBlankString } from "./toggle-blank-string";
 export { toggleBlankTemporal } from "./toggle-blank-temporal";
 export { voidMethodCall } from "./void-method-call";
 export { synthesizeAfter } from "./mutate-helpers";
-export { openItemHangRefuses } from "./loop-hazard";
+export { openItemHangRefuses, setR565DependencyReport } from "./loop-hazard";
 
 /** Convenience bundle for registering all Tier 1 operators at once. */
 export const tier1Operators: readonly MutationOperator[] = [
