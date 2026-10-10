@@ -619,3 +619,20 @@ describe("R531 MARK alias through Copy (R-531 build review finding 4)", () => {
     expect(p.refused("ShareFlag.Codeunit.al", "S2.Delete()")).toBe(true);
   });
 });
+
+/** HOP on the implicit Rec outside the declaring table (R-562 build review, shared resolver). */
+const LINE_EXT = `tableextension 50110 "R531 Line Ext" extends "R531 Line"
+{
+    procedure ExtLoop()
+    begin
+        while FindFirst() do
+            Consume();
+    end;
+}`;
+
+describe("R531 HOP through the implicit Rec's table (`r531TableProcs`)", () => {
+  it("a tableextension's bare `Consume()` reaches the base table's `Delete()`", () => {
+    const p = project({ "Line.Table.al": LINE, "LineExt.TableExt.al": LINE_EXT });
+    expect(p.refused("Line.Table.al", "Delete()")).toBe(true);
+  });
+});
