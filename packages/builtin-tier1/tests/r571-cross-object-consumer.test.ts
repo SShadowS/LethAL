@@ -364,4 +364,17 @@ describe("R571: a consumer in another object", () => {
       true,
     ]);
   });
+
+  it("T17: a break that leaves the callee's consumer loop is refused, with its guard", () => {
+    const pop = `    begin
+        if Buf.FindSet() then
+            repeat
+                if Buf.Blocked then
+                    break;
+                Buf.Delete();
+            until Buf.Next() = 0;
+    end;`;
+    const files = { "s.al": SOCKET(pop), "c.al": CARD(), "b.al": BUF };
+    expect(bothWays(files, "s.al", "Buf.Blocked", NEG)).toEqual([false, true]);
+  });
 });

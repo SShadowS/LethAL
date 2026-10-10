@@ -1954,7 +1954,8 @@ function r571HelperCalls(
 
 /** R571: the hop into `proc` for `consumers`, with their guards and the callee's EARLY EXITS: every
  *  `exit` or raised `Error` that starts before the last consumer, or that sits in a loop whose body
- *  holds a consumer (the next pass can reach it first), plus their guards (`if not Buf.FindLast()
+ *  holds a consumer (the next pass can reach it first), every `break` that leaves such a loop,
+ *  plus their guards (`if not Buf.FindLast()
  *  then exit` negated returns without deleting while the set is not empty), and the assignments in
  *  the callee body that feed those guards and exits (R531's FEEDS). */
 function r571Hop(
@@ -1971,9 +1972,22 @@ function r571Hop(
   visitAll(body, (x) => {
     if (BREAK_SCOPES.has(x.rawKind) && consumers.some((c) => inside(c, x))) loops.push(x);
   });
-  const isExit = (x: ALSyntaxNode): boolean =>
-    (x.rawKind === "exit_statement" || isRaisedError(x, body)) &&
-    (x.startIndex < last || loops.some((l) => inside(x, l)));
+  // the loop a `break` leaves: its nearest enclosing loop
+  const breaks = (x: ALSyntaxNode): ALSyntaxNode | null => {
+    for (let a = x.parent; a !== null && !samePos(a, body); a = a.parent)
+      if (BREAK_SCOPES.has(a.rawKind)) return a;
+    return null;
+  };
+  const isExit = (x: ALSyntaxNode): boolean => {
+    if (x.rawKind === "break_statement") {
+      const l = breaks(x);
+      return l !== null && loops.some((c) => samePos(c, l));
+    }
+    return (
+      (x.rawKind === "exit_statement" || isRaisedError(x, body)) &&
+      (x.startIndex < last || loops.some((l) => inside(x, l)))
+    );
+  };
   const isC = (x: ALSyntaxNode): boolean => consumers.some((c) => samePos(c, x));
   const guards = [...exitGuards(body, body, isC), ...exitGuards(body, body, isExit)];
   visitAll(body, (x) => {
