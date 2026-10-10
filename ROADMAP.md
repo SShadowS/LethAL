@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**67 of 569 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**72 of 574 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -268,6 +268,7 @@ that ordering is the priority.
 - **R570** · An ordinary (non-report) loop whose exit calls a cursor procedure in another object is not hang-refused: Create Pick's FEFO loop and GetNextGLAcc loops are deployed · [R570.md](docs/roadmap/R570.md) · done (f3889836)
 - **R571** · A record-consuming loop whose consumer lives in another object is not hang-refused: CDC Message Bus Socket.Pop deletes the row inside a page loop's body · [R571.md](docs/roadmap/R571.md) · open, filed 2026-10-10
 - **R572** · A loop flag fed by a cursor procedure in another object (`More := X.GetNext(); while More do`) is not hang-refused · [R572.md](docs/roadmap/R572.md) · open, filed 2026-10-10
+- **R577** · A non-deterministic KILL on al-runner: one --server run scored a mutant killed through a failure it did not cause (Simplified Bank Statement Import M0035); a false kill · [R577.md](docs/roadmap/R577.md) · open, filed 2026-10-11
 
 ## Product gaps a real project hits
 
@@ -614,6 +615,10 @@ that ordering is the priority.
 - **R559** · Retire R488's exclude-and-learn path once every supported al-runner build carries `--test-exact` · [R559.md](docs/roadmap/R559.md) · open
 - **R565** · No dependency source loader: a rule that needs a DEPENDENCY's procedure bodies (R561's known preset writer) cannot run, though Microsoft's .app packages ship their source · [R565.md](docs/roadmap/R565.md) · done (8fc29663): dependency report source loader for known preset writers; QM -7, ATL -15…
 - **R566** · Host step: does the env tool's own publish serve a source-less test app back byte for byte? (R498's gain on that route is unmeasured) · [R566.md](docs/roadmap/R566.md) · open, filed 2026-10-10 — a HOST step for the owner (the env tool is host-only)
+- **R578** · al-runner fails Report.RunModal with a request page shown to a [RequestPageHandler] ("An error occurred and the transaction is stopped"); not yet checked on BC · [R578.md](docs/roadmap/R578.md) · open, filed 2026-10-11
+- **R579** · A #if block holding only #pragma lines counts as an object wrapper, so 21 Power BI Report embeddings files turn al-runner coverage off (wrapperHoldsObject vs isTopLevelObject) · [R579.md](docs/roadmap/R579.md) · open, filed 2026-10-11
+- **R580** · A #if-wrapped CODE-FREE object (enum, interface, permission set, control add-in, dotnet, enumextension) turns al-runner coverage off for its whole project, though it has no coverage identity: 42 files in 12 BC.History projects · [R580.md](docs/roadmap/R580.md) · open, filed 2026-10-11
+- **R581** · An al-runner --server baseline that fails before running any test reports "returned: <no tests>" and hides al-runner's own reason ("BC version selection failed ... minimum 28.6") · [R581.md](docs/roadmap/R581.md) · open, filed 2026-10-11
 
 ---
 
