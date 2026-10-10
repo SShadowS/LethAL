@@ -1402,6 +1402,20 @@ function r562FilterHop(
   return { hops, refuse: unresolved || hops.length > 0 || c.uncertain };
 }
 
+/** R568 (prototype): does the feed search stop at the arguments of non-bare call `c`? Yes for another
+ *  object's function: a receiver declared as a codeunit, report, page or other object, or a record
+ *  whose table declares the member as a procedure. No for a platform method (`Cust.Get(Key)`,
+ *  `Txt.Contains(T)`, `CurrReport.X(T)`) or a receiver nothing resolves (the safe direction). */
+function r568StopsAt(c: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const f = c.childForFieldName("function");
+  const recv = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
+  if (recv === null || recv === undefined || !isIdentifierLike(recv)) return false;
+  const t = declaredType(recv, ctx);
+  if (t !== null && t.kind !== "table") return true;
+  const tg = callTargets(c, ctx);
+  return tg !== null && tg.objs.some((o) => procedureNamesOf(o, ctx).has(tg.member));
+}
+
 /** FEEDS: assignments in `scope` whose target name `parts` read, to a fixpoint (R480
  *  `indirectFeeds`'s by-name rule, over the whole scope instead of one loop body). R532 passes
  *  `fed`, which receives every name read on the way, and also matches a target's ROOT name
@@ -1421,7 +1435,8 @@ function r531Feeds(
     if (
       fed !== undefined &&
       (n.rawKind === "call_expression" || n.rawKind === "call_statement") &&
-      bareCallee(n) === null
+      bareCallee(n) === null &&
+      r568StopsAt(n, ctx)
     ) {
       const f = n.childForFieldName("function");
       if (f !== null) collect(f);
