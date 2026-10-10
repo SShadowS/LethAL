@@ -834,13 +834,15 @@ function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean
   // an extension with no names of its own can still call a base writer (the bypass of R548's return)
   const local = w !== null && (names.size > 0 || w.procs.size > 0 || w.unreadProcs.size > 0);
   const cross = crossWriters(ctx).all.size > 0;
+  const outside = r561Mode() !== null;
   // open-item code is refused by `openItemHangRefuses`' first part already, cross-object or not
-  if ((!local && !cross) || inOpenItemCode(node, ctx)) return false;
+  if ((!local && !cross && !outside) || inOpenItemCode(node, ctx)) return false;
   const writes = (n: ALSyntaxNode): boolean =>
     (local &&
       w !== null &&
       (directWrite(n, names, ctx) || callsPresetWriter(n, w, ctx, names.size > 0))) ||
-    (cross && crossWriterCall(n, ctx));
+    (cross && crossWriterCall(n, ctx)) ||
+    (outside && r561OutsideReportCall(n, ctx));
   const containsWrite = (n: ALSyntaxNode, after = -1): boolean => {
     let found = false;
     visitAll(n, (x) => {
@@ -1064,6 +1066,50 @@ function crossWriterCall(n: ALSyntaxNode, ctx: SemanticContext): boolean {
   const t = declaredType(recv, ctx);
   if (t === null || t.kind !== "report") return false;
   return cw.byReport.get(t.name)?.has(m) === true || cw.anyReport.has(m);
+}
+
+// R561 PROTOTYPE (measuring only): R561_MODE=all refuses every member call through a `Report X`
+// receiver whose X is not a project report (nor extended by a project reportextension);
+// R561_MODE=nonbuiltin skips the Report data type's built-in methods.
+function r561Mode(): "all" | "nonbuiltin" | null {
+  const m = process.env.R561_MODE;
+  return m === "all" || m === "nonbuiltin" ? m : null;
+}
+const R561_REPORT_BUILTINS: ReadonlySet<string> = new Set([
+  "break", "createtotals", "defaultlayout", "excellayout", "execute", "formatregion", "language",
+  "newpage", "newpageperrecord", "objectid", "pageno", "papersource", "preview", "print",
+  "printonlyifdetail", "quit", "rdlclayout", "run", "runmodal", "runrequestpage", "saveas",
+  "saveasexcel", "saveashtml", "saveaspdf", "saveasword", "saveasxml", "settableview", "showoutput",
+  "skip", "targetformat", "totalscausedby", "userequestpage", "validateandpreparelayout",
+  "wordlayout", "wordxmlpart", "isreadonly",
+]);
+const r561NamesMemo = new WeakMap<object, Set<string>>();
+function r561ProjectReportNames(ctx: SemanticContext): Set<string> {
+  const hit = r561NamesMemo.get(ctx);
+  if (hit !== undefined) return hit;
+  const s = new Set<string>();
+  for (const o of projectObjects(ctx)) {
+    if (o.rawKind === "report_declaration") s.add(objectNameOf(o));
+    else if (o.rawKind === "reportextension_declaration") {
+      const b = extendedBaseName(o);
+      if (b !== null) s.add(b);
+    }
+  }
+  r561NamesMemo.set(ctx, s);
+  return s;
+}
+function r561OutsideReportCall(n: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const mode = r561Mode();
+  if (mode === null) return false;
+  if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return false;
+  const f = n.childForFieldName("function");
+  if (f === null || f.rawKind !== "member_expression") return false;
+  const recv = f.childForFieldName("object");
+  if (recv === null || !isIdentifierLike(recv)) return false;
+  const t = declaredType(recv, ctx);
+  if (t === null || t.kind !== "report" || r561ProjectReportNames(ctx).has(t.name)) return false;
+  const m = normalizeAlName(f.childForFieldName("member")?.text ?? "");
+  return mode === "all" || !R561_REPORT_BUILTINS.has(m);
 }
 
 /** An exit that can stop the rest of `scope`: `exit`, `CurrReport.Break/Quit/Skip` (and the XMLport
