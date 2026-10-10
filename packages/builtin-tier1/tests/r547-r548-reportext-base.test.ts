@@ -48,7 +48,7 @@ function project(files: Record<string, string>, undecided = false) {
           return;
         seen = true;
         for (const s of n.childForFieldName("body")?.childForFieldName("body")?.namedChildren ?? [])
-          out.push(openItemHangRefuses(s, ctx));
+          out.push(openItemHangRefuses(s, ctx, undefined));
       });
       if (out.length === 0) throw new Error(`procedure ${proc}: no statement in ${path}`);
       return out;
@@ -59,7 +59,7 @@ function project(files: Record<string, string>, undecided = false) {
         if (hit === null && n.rawKind === kind && n.text === text) hit = n;
       });
       if (hit === null) throw new Error(`${kind} ${text} not found in ${path}`);
-      return openItemHangRefuses(hit, ctx);
+      return openItemHangRefuses(hit, ctx, undefined);
     },
   };
 }

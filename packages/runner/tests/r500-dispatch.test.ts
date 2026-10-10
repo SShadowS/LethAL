@@ -228,8 +228,8 @@ describe("R500 step 7: an XMLport is not a carrier, so its own refusal is dorman
       if (hit === null) throw new Error(`no Calls write in ${path}`);
       return hit;
     };
-    expect(openItemHangRefuses(callsWrite(XP), ctx)).toBe(true);
-    expect(openItemHangRefuses(callsWrite(XP_BOUNDED), ctx)).toBe(false);
+    expect(openItemHangRefuses(callsWrite(XP), ctx, undefined)).toBe(true);
+    expect(openItemHangRefuses(callsWrite(XP_BOUNDED), ctx, undefined)).toBe(false);
   });
 
   test("so the open XMLport's `skipped` sites equal its bounded twin's: nothing moved out of `skipped`", () => {
@@ -238,8 +238,8 @@ describe("R500 step 7: an XMLport is not a carrier, so its own refusal is dorman
 });
 
 describe("R500: the identity scheme twin (a Date item refused, a MaxIteration twin renumbered)", () => {
-  test("the identity scheme is 38 (34 R343, 35 for R500, 36 R497, 37 R340, 38 R555)", () => {
-    expect(IDENTITY_SCHEME).toBe(38);
+  test("the identity scheme is 39 (34 R343, 35 for R500, 36 R497, 37 R340, 38 R555, 39 R-531)", () => {
+    expect(IDENTITY_SCHEME).toBe(39);
   });
 
   test("the Date item's `Total := 0` emits nothing and is hang-refused", () => {

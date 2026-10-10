@@ -66,12 +66,13 @@ function project(files: Record<string, string>): Project {
       );
       const first = p.childForFieldName("body")?.childForFieldName("body")?.namedChildren[0];
       if (first === undefined) throw new Error(`procedure ${proc} has no statement`);
-      return openItemHangRefuses(first, ctx);
+      return openItemHangRefuses(first, ctx, undefined);
     },
     at: (path, kind, text, nth = 1) =>
       openItemHangRefuses(
         find(path, (n) => n.rawKind === kind && n.text === text, nth, `${kind} ${text}`),
         ctx,
+        undefined,
       ),
   };
 }

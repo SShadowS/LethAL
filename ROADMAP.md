@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**72 of 558 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**73 of 560 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -251,7 +251,7 @@ that ordering is the priority.
 - **R528** · Report-loop hang refusal does not match events published by a tableextension (keyed to the extension, raised on the base table) · [R528.md](docs/roadmap/R528.md) · open, filed 2026-10-08
 - **R529** · Self-inserting report items: an insert made from another object is not seen, so the item's own filter is not protected · [R529.md](docs/roadmap/R529.md) · open, filed 2026-10-08
 - **R530** · Self-inserting report items: a bound set in a callee or in OnPreReport is not protected · [R530.md](docs/roadmap/R530.md) · open, filed 2026-10-08
-- **R531** · A loop that ends only by consuming its record set (`while Rec.FindFirst() do ... Rec.Delete()`) is not hang-refused anywhere · [R531.md](docs/roadmap/R531.md) · open, filed 2026-10-08
+- **R531** · A loop that ends only by consuming its record set (`while Rec.FindFirst() do ... Rec.Delete()`) is not hang-refused anywhere · [R531.md](docs/roadmap/R531.md) · done (129295cf): record-consuming loops hang-refused; BC.History 984, CDO 9, DC 39, DO 9; scheme 39
 - **R532** · Preset report exit names: a value computed in another object, or passed through another variable, is not refused · [R532.md](docs/roadmap/R532.md) · open, filed 2026-10-08
 - **R547** · A base-report procedure called bare from an open `reportextension` block is looked up on the data item's table, never on the base report, so its hang-capable mutants stay deployed · [R547.md](docs/roadmap/R547.md) · done (6ec70aac): bare and this. calls followed into the base report; 0 BaseApp sites today
 - **R548** · A base report's `protected var` written by a `reportextension` is not seen by loop-hazard's `writesPresetExitName` · [R548.md](docs/roadmap/R548.md) · done (6ec70aac): BaseApp 2 more hang-refused (MfgWhseSourceCreateDocument SetProdOrder); 0 keys moved
@@ -259,6 +259,8 @@ that ordering is the priority.
 - **R555** · Deleting a call to a procedure that writes a preset exit name without a `var` argument is not refused, in a report or a reportextension · [R555.md](docs/roadmap/R555.md) · done (2d14d2f9): preset-writer calls refused in-report and cross-object; BaseApp +487 hang-refused, scheme 38
 - **R557** · al-runner reports a quoted AL test name CLR-mangled (`"Stone Quoted"` → `Stone_Quoted`), so LethAL never runs that test on al-runner — a possible FALSE SURVIVE · [R557.md](docs/roadmap/R557.md) · open
 - **R561** · A call to a report's preset-exit-name writer through a receiver R555 cannot resolve to a project report is not refused · [R561.md](docs/roadmap/R561.md) · open, filed 2026-10-09
+- **R562** · An OnRename consuming loop whose filter is set through a table procedure (`SetTemplateFilter(xRec)`) keeps its filter mutants: R531's FILTER sees only a direct `SetRange`/`SetFilter` · [R562.md](docs/roadmap/R562.md) · open, filed 2026-10-09
+- **R563** · A consuming loop that refilters through a FieldRef (`FieldRef.SetRange(...)` then `until RecRef.IsEmpty()`) is not seen by R531; only LibraryUtility's GenerateRandomCode* loops have the shape, and LethAL mutates them only when that test library is the run's project · [R563.md](docs/roadmap/R563.md) · open, filed 2026-10-09
 
 ## Product gaps a real project hits
 
