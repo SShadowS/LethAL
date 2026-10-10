@@ -172,6 +172,15 @@ const REP = `report 50532 "Feed Rep"
         Continue := Tmp;
     end;
 
+    procedure CaseCrossObjectArg()
+    var
+        H: Integer;
+        Ext: Codeunit "Not In Project";
+    begin
+        H := Limit + 95;
+        Ext.Fill(Continue, H);
+    end;
+
     local procedure SetContinue(B: Boolean)
     begin
         Continue := B;
@@ -295,6 +304,18 @@ describe("R532: same-scope feeds of a preset exit name", () => {
   // red: same revert as `Clear` (an unresolved callee counts as writing its arguments)
   it("an unknown-callee feed (`Ext.Decide(Tmp)`) and its guard are refused", () => {
     refusedByFeeds("lethal.conditional-boundary @ Limit > 85");
+  });
+
+  // red: seed every argument of a preset-writing call, `Obj.Proc(...)` included (drop the
+  // `bareCallee` condition in `presetFeeds`). This is the ruling's boundary: a value that reaches
+  // the name through another object's function is the cross-object part R532 closed.
+  it("BOUNDARY: the other arguments of a cross-object preset-writing call are not feeds", () => {
+    expect(emitted(true).has("lethal.void-method-call @ Ext.Fill(Continue, H)")).toBe(false);
+    for (const on of [false, true]) {
+      const e = emitted(on);
+      expect(e.has("lethal.remove-assignment @ H := Limit + 95")).toBe(true);
+      expect(e.has("lethal.swap-additive @ Limit + 95")).toBe(true);
+    }
   });
 
   // red: treat every same-scope assignment as a feed

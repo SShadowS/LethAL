@@ -1906,8 +1906,10 @@ export const r532FeedSeam = { on: true };
  * name, to a fixpoint, into the right side (or `#if` tails) of an assignment to a preset exit name
  * (`r531Feeds` with `fed`), or a `directWrite` of a name read on the way: a `var` argument
  * (`Compute(Tmp)`), `Clear`/`Evaluate`, or an unknown callee. The search also starts from every
- * argument of a call that is itself a preset write (`Evaluate(Continue, S)`) or calls a same-object
- * preset writer (`SetContinue(Tmp)`). Shape 1 treats a feed as a write.
+ * argument of a BARE call that is itself a preset write (`Evaluate(Continue, S)`) or of a call to a
+ * same-object preset writer (`SetContinue(Tmp)`). Never from `Obj.Proc(Continue, H)`: a value that
+ * reaches the name through another object's function is the cross-object part R532 closed by ruling
+ * (seeding there cost 109 BaseApp mutants). Shape 1 treats a feed as a write.
  * By name: a same-named variable written after the preset write is refused too (the safe direction).
  * Not seen (R532's residuals): a record method that changes what the write reads (`Buf.Insert`
  * before `Continue := not Buf.IsEmpty()`), the other arguments of a feeding call, and every value
@@ -1924,7 +1926,10 @@ function presetFeeds(
     visitAll(scope, (n) => {
       if (armOfNode(ctx, n) === "inactive") return;
       if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
-        if (directWrite(n, names, ctx) || callsPresetWriter(n, w, ctx, names.size > 0))
+        if (
+          (bareCallee(n) !== null && directWrite(n, names, ctx)) ||
+          callsPresetWriter(n, w, ctx, names.size > 0)
+        )
           rights.push(...(n.childForFieldName("arguments")?.namedChildren ?? []));
         return;
       }
