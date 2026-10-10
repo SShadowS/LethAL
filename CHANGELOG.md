@@ -746,11 +746,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   (up to 4 hops). Create Pick's FEFO loop, Sales Tax Calculate, TempStack.Pop and the Power BI
   report iterator are examples a sample showed can hang. A guard call is followed when the
   condition steps no cursor; when it does, only a guard call that shares the condition's record
-  (its receiver, or a `var` argument) AND whose callee touches that record (moves it, filters,
-  marks or changes rows, or hands it on to code that does; unknown counts as touching) is
-  refused. Measured: DC 43 mutants removed (0.022%), BC.History 409 (0.018%; BaseApp 272,
-  0.038%), DO, CDO and fixtures 0; no identity moved. A loop flag
-  fed by such a callee (R572) and a record consumer in another object (R571) are filed, not built.
+  (its receiver, or a `var` argument) AND whose callee touches that record is refused. Touching
+  means it moves it, filters, marks or changes rows, writes a key field (or a field the loop
+  filters on, followed by `Modify`), or hands it on to code that does, followed up to 8 calls
+  deep; unknown counts as touching. Measured against master 259a5eae: DC 31 mutants removed
+  (0.016%), BC.History 407 (0.018%; BaseApp 259, 0.036%), DO, CDO and fixtures 0; no identity
+  tuple or ordinal moved. The same change fixes R531's hop into a `var` parameter named `Rec`
+  (it never matched that parameter's consumers); measured on all 565 corpus projects it removes
+  nothing. A loop flag fed by such a callee (R572) and a record consumer in another object (R571)
+  are filed, not built.
 
 - **A call to a preset writer of a report OUTSIDE the project is hang-refused; identity scheme 40**
   (R565, closes R561). R555 refused a call through `Report X` to a procedure that writes a name the
