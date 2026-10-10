@@ -408,10 +408,12 @@ describe("R562 FILTER HOP: a pre-loop call that sets the loop's filter", () => {
     expect(refused(C, "A.SetAfter()")).toBe(false);
     expect(refused(T, "SetRange(Name, 'AFTER')", RSR)).toBe(false);
   });
-  it("overloads by arity: both 1-parameter overloads are refused (the stated over-refusal)", () => {
+  // R564 closed this test's former over-refusal: `Src` is a "R562 Line", so the call can only reach
+  // the "R562 Line" overload, and the "R562 Other" one is no longer followed.
+  it("overloads by argument type: only the overload `Src`'s table picks is refused (R564)", () => {
     const refused = project(FILES);
     expect(refused(T, "SetRange(Tpl, Src.Name)", RSR)).toBe(true);
-    expect(refused(T, "SetRange(Tpl, Other.Code)", RSR)).toBe(true);
+    expect(refused(T, "SetRange(Tpl, Other.Code)", RSR)).toBe(false);
   });
   it("Mark: a callee's `MarkedOnly(true)` before a `Mark(false)` loop is refused", () => {
     expect(project(FILES)(T, "MarkedOnly(true)")).toBe(true);

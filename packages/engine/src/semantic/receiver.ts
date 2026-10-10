@@ -377,6 +377,69 @@ export function resolveReceiverTable(node: ALSyntaxNode, ctx: SemanticContext): 
 }
 
 /**
+ * R564: the PROJECT table object a bare-name argument (`xRec`, a `Record X` variable or parameter)
+ * binds to at `at`, or `null` unless that is certain. Loop-hazard narrows a callee's overloads with
+ * it, and a wrong answer there re-deploys a hang, so every doubt is `null`:
+ *   - the name's declaration is "unknown" (`lookupDeclaredState`: an ambiguous `#if` local, an
+ *     unindexed member, a `#if` trigger-header name). `lookupVar` would answer `null` there and the
+ *     resolver would fall through to the implicit record (opus R-564 plan review, I1);
+ *   - a record field shadows the declaration (`fieldShadows`), or the declared type is not a Record;
+ *   - an undeclared name: not exactly one implicit record spelled that way, or inside a `with`;
+ *   - the table does not resolve to exactly one project table (`tableObjectOfRef`).
+ */
+export function recordTableObjectOfName(
+  name: ALSyntaxNode,
+  at: ALSyntaxNode,
+  ctx: SemanticContext,
+): ObjectSymbol | null {
+  const symbols = ctx.symbols;
+  const text = identifierText(name);
+  const objectNode = enclosingObject(at);
+  const objectName = objectNode === null ? null : objectNameOf(objectNode);
+  if (text === null || objectNode === null || objectName === null) return null;
+  const scopeOwner = scopeOwnerOf(objectNode, objectName);
+  if (scopeOwner === null) return null;
+  const found = lookupDeclaredState(text, at, scopeOwner, symbols);
+  if (found === "unknown") return null;
+  let ref: string | null;
+  if (found !== null) {
+    if (fieldShadows(text, at, symbols, symbols.globalsOf(scopeOwner).includes(found))) return null;
+    const r = classifyDeclaredType(found, symbols);
+    if (r.kind !== "record") return null;
+    ref = r.tableRef;
+  } else {
+    const scopes = recordScopesAt(at, symbols);
+    const want = lower(text);
+    const hits = scopes.filter((s) => {
+      const own = lower(stripQuotes(s.receiver));
+      return s.kind !== "with" && (own === want || (want === "xrec" && own === "rec" && s.xRec));
+    });
+    const [only] = hits;
+    if (scopes.some((s) => s.kind === "with") || hits.length !== 1 || only === undefined)
+      return null;
+    // A qualified `extends Ns."X"` parses as an ERROR node plus `base_object` "X", so the
+    // extension's table reads as a project table that may not be the one it extends.
+    if (objectNode.namedChildren.some((c) => c.rawKind === "ERROR")) return null;
+    ref = only.table;
+  }
+  return ref === null ? null : tableObjectOfRef(ref, ctx);
+}
+
+/**
+ * R564: the ONE project table a `Record` reference names, by id or by name (quotes stripped), or
+ * `null`. Stricter than `resolveTable`, which returns the first of several same-named tables: two
+ * tables sharing a name or an id make the reference unresolved, never a guess.
+ */
+export function tableObjectOfRef(idOrName: string, ctx: SemanticContext): ObjectSymbol | null {
+  const ref = stripQuotes(idOrName.trim());
+  const hits = ctx.symbols.objects.filter(
+    (o) => o.kind === "table" && (equalsIgnoreCase(o.name, ref) || String(o.id) === ref),
+  );
+  const [only] = hits;
+  return hits.length === 1 && only !== undefined ? only : null;
+}
+
+/**
  * R33: does `node` call the AL SYSTEM function `name` — the receiverless kind, of which `Commit()`
  * is the case Phase 2 needs — rather than a procedure this project declares under the same name?
  *
