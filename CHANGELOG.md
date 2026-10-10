@@ -745,12 +745,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `Tmp := ...; Continue := Tmp`. Now, in the same procedure or trigger, every FEED of such a write is
   refused like the write itself: an assignment whose value flows into it by name (to any depth, an
   array element `Arr[1]` included), and a `var` argument, `Evaluate`, `Clear` or unknown call that
-  writes such a name (`Compute(Tmp)`), plus every argument of a call that writes the preset name
-  itself (`Evaluate(Continue, S)`, or a same-object setter `SetContinue(Tmp)`). Matching is by name,
-  so it can over-refuse. A value from another procedure or object is NOT followed: R532 closes that
-  part by ruling (a BaseApp census and a 15-site sample found no hang, and following it would cost
-  321 mutants). No identity scheme change. The prototype's BaseApp cost was 18 mutants; the built
-  rule's is re-measured.
+  writes such a name (`Compute(Tmp)`). It also covers an argument of a bare call that writes the
+  preset name itself (`Evaluate(Continue, S)`), and an argument of a same-object setter whose parameter
+  feeds it (`SetContinue(Tmp)`). Matching is by name, so it can over-refuse. A value that passes
+  through another object's function (`Obj.Proc(...)`), or comes from another procedure, is NOT
+  followed: R532 closes that part by ruling. A BaseApp census and a 15-site sample found no hang, and
+  following it would cost 321 mutants. Measured: BaseApp -60 mutants, Withholding Tax,
+  TestLibraries and the fixtures 0, no identity tuple or ordinal moved, and no scheme change.
 - **A loop-hazard HOP no longer refuses an overload the call cannot reach** (R564). R531's HOP and
   R562's FILTER HOP followed every overload of the called name whose parameter count fit, so an
   overload taking a different table's record was refused too. Now, when every argument is a record

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**74 of 564 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**73 of 564 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -252,7 +252,7 @@ that ordering is the priority.
 - **R529** · Self-inserting report items: an insert made from another object is not seen, so the item's own filter is not protected · [R529.md](docs/roadmap/R529.md) · open, filed 2026-10-08
 - **R530** · Self-inserting report items: a bound set in a callee or in OnPreReport is not protected · [R530.md](docs/roadmap/R530.md) · open, filed 2026-10-08
 - **R531** · A loop that ends only by consuming its record set (`while Rec.FindFirst() do ... Rec.Delete()`) is not hang-refused anywhere · [R531.md](docs/roadmap/R531.md) · done (129295cf): record-consuming loops hang-refused; BC.History 984, CDO 9, DC 39, DO 9; scheme 39
-- **R532** · Preset report exit names: a value computed in another object, or passed through another variable, is not refused · [R532.md](docs/roadmap/R532.md) · open, filed 2026-10-08
+- **R532** · Preset report exit names: a value computed in another object, or passed through another variable, is not refused · [R532.md](docs/roadmap/R532.md) · done (7475e09b): same-scope feeds refused, BaseApp -60, no scheme change; the cross-object part closed…
 - **R547** · A base-report procedure called bare from an open `reportextension` block is looked up on the data item's table, never on the base report, so its hang-capable mutants stay deployed · [R547.md](docs/roadmap/R547.md) · done (6ec70aac): bare and this. calls followed into the base report; 0 BaseApp sites today
 - **R548** · A base report's `protected var` written by a `reportextension` is not seen by loop-hazard's `writesPresetExitName` · [R548.md](docs/roadmap/R548.md) · done (6ec70aac): BaseApp 2 more hang-refused (MfgWhseSourceCreateDocument SetProdOrder); 0 keys moved
 - **R549** · `claimsSystemCall` inside a `pageextension` can claim a bare `Commit()` that binds a procedure of the BASE page · [R549.md](docs/roadmap/R549.md) · done (8ebc888c): in-project base page checked exactly; dependency base keeps the claim (named residual)
