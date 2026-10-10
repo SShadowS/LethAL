@@ -739,8 +739,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
-- **The loop-hazard check reads every name of a multi-name declaration** (R521). `A, B: Interface X`
-  declares both names, but four readers took only the first: the type lookup for a receiver the
+- **The loop-hazard check reads every name of a multi-name declaration** (R521). A declaration that
+  names two variables at once declares both, but four readers took only the first: the type lookup for a receiver the
   symbol table does not index (an XMLport's variable), the local-shadow check, a report's open-item
   globals, and a base report's `protected var` names. PEPPOL's two XMLports declare their line
   iterator second, so the iterator implementations that end the line loop were deployed: 2 real
