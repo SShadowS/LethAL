@@ -751,10 +751,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   followed: its filters are the copy's. A call that cannot be followed, and `RecordRef.SetTable` of
   the record, is refused itself. R531's consumer HOP now resolves the implicit Rec's table the same
   way (`Rec.P()`, and a bare base-table procedure called from a tableextension or SourceTable page),
-  which it missed before; `SetAscending` is now a built-in. Measured on the prototype: CDO Cloud 15
-  deployed mutants removed (0.055%), DO Cloud 23 (0.079%; 8 of them an overload chosen by arity that
-  the call never reaches, filed as R564), every other corpus 0; 0 identity tuples and 0 ordinals
-  moved, so IDENTITY_SCHEME stays 39. The build-review additions are re-measured separately.
+  which it missed before; `SetAscending` is now a built-in. Measured on the built branch: CDO Cloud
+  15 deployed mutants removed (0.055%), DO Cloud 23 (0.079%; 8 of them an overload chosen by arity
+  that the call never reaches, filed as R564), every other corpus project and every fixture 0, the
+  shared resolver's effect on R531 0; 0 identity tuples and 0 ordinals moved, so IDENTITY_SCHEME
+  stays 39.
 - **A loop that ends only by consuming its record set is hang-refused; identity scheme 39** (R531). A
   `while`/`repeat` whose condition is a cursor test on a record (`Find`, `FindFirst`, `FindLast`,
   `FindSet`, `IsEmpty`, `Count`; never `Next`) and whose body consumes that set (`Delete`, `DeleteAll`,
