@@ -41,7 +41,7 @@ function project(files: Record<string, string>) {
     ctx,
     find,
     at: (path: string, kind: string, text: string): boolean =>
-      openItemHangRefuses(find(path, kind, text), ctx),
+      openItemHangRefuses(find(path, kind, text), ctx, undefined),
   };
 }
 

@@ -77,29 +77,29 @@ function setup() {
 describe("R501: openItemHangRefuses", () => {
   it("INSIDE the only bound: an argument of the unqualified and the qualified certified call", () => {
     const { ctx, literal } = setup();
-    expect(openItemHangRefuses(literal("3"), ctx)).toBe(true);
-    expect(openItemHangRefuses(literal("4"), ctx)).toBe(true);
+    expect(openItemHangRefuses(literal("3"), ctx, undefined)).toBe(true);
+    expect(openItemHangRefuses(literal("4"), ctx, undefined)).toBe(true);
   });
 
   it("CONTAINS the only bound: the call itself", () => {
     const { ctx, literal } = setup();
     const call3 = literal("3").parent?.parent ?? null;
     expect(call3?.rawKind).toBe("call_expression");
-    if (call3 !== null) expect(openItemHangRefuses(call3, ctx)).toBe(true);
+    if (call3 !== null) expect(openItemHangRefuses(call3, ctx, undefined)).toBe(true);
   });
 
   it("twins: a MaxIteration item's SetRange argument, and another record's SetRange argument", () => {
     const { ctx, literal, stringLit } = setup();
-    expect(openItemHangRefuses(literal("6"), ctx)).toBe(false);
-    expect(openItemHangRefuses(stringLit(), ctx)).toBe(false);
+    expect(openItemHangRefuses(literal("6"), ctx, undefined)).toBe(false);
+    expect(openItemHangRefuses(stringLit(), ctx, undefined)).toBe(false);
   });
 
   it("a context without `files` throws (R500: the one-hop callee rule needs every object), whatever the site", () => {
     const { ctx, stringLit, literal } = setup();
     const { files: _files, ...noFiles } = ctx;
-    expect(() => openItemHangRefuses(stringLit(), noFiles)).toThrow(/R500: .*`files`/);
+    expect(() => openItemHangRefuses(stringLit(), noFiles, undefined)).toThrow(/R500: .*`files`/);
     // a MaxIteration item's site throws too: no answer is read from a context missing objects
-    expect(() => openItemHangRefuses(literal("6"), noFiles)).toThrow(/R500: .*`files`/);
-    expect(openItemHangRefuses(literal("6"), ctx)).toBe(false);
+    expect(() => openItemHangRefuses(literal("6"), noFiles, undefined)).toThrow(/R500: .*`files`/);
+    expect(openItemHangRefuses(literal("6"), ctx, undefined)).toBe(false);
   });
 });
