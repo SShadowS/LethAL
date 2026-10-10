@@ -943,7 +943,7 @@ export function collectVarDeclarations(varSection: ALSyntaxNode): VarSymbol[] {
  * declaration (`collectVarDeclarations`, `triggerLocalNames`, `conditionallyDeclared`,
  * `parseSplitProcedure`) all go through this, so they cannot drift apart.
  */
-function declaredNames(decl: ALSyntaxNode): string[] {
+export function declaredNames(decl: ALSyntaxNode): string[] {
   return decl.children
     .filter((c) => c.fieldName === "name" && c.text !== "")
     .map((c) => stripQuotes(c.text));
