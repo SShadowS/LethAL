@@ -428,10 +428,19 @@ export function recordTableObjectOfName(
 /**
  * R564: the ONE project table a `Record` reference names, by id or by name (quotes stripped), or
  * `null`. Stricter than `resolveTable`, which returns the first of several same-named tables: two
- * tables sharing a name or an id make the reference unresolved, never a guess.
+ * tables sharing a name or an id make the reference unresolved, never a guess. So does any object the
+ * symbol table does not index (`#if`-split header, `#if`-wrapped, unparsed) whose text MENTIONS the
+ * reference: it may declare a second table of that name. Over-broad on purpose (it only keeps all).
  */
 export function tableObjectOfRef(idOrName: string, ctx: SemanticContext): ObjectSymbol | null {
   const ref = stripQuotes(idOrName.trim());
+  const { splitObjects, unindexedObjects, unparsedObjects } = ctx.symbols;
+  if (
+    [...splitObjects, ...unindexedObjects, ...unparsedObjects].some((o) =>
+      lower(o.text).includes(lower(ref)),
+    )
+  )
+    return null;
   const hits = ctx.symbols.objects.filter(
     (o) => o.kind === "table" && (equalsIgnoreCase(o.name, ref) || String(o.id) === ref),
   );

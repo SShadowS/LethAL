@@ -85,7 +85,6 @@ const LINE = `table 50120 "R564 Line"
         Att.SetF4(xRec);
         Att.SetF7(xRec, 5);
         Att.SetF9(xRec);
-        Att.SetF9b(xRec);
         Att.SetF10(xRec);
         Att.SetF12(xRec);
         while Att.FindFirst() do
@@ -313,24 +312,6 @@ const ATT = `table 50122 "R564 Att"
     procedure SetF9(L: Record "R564 Line")
     begin
         SetRange(Tpl, 'T9P');
-    end;
-#endif
-
-    procedure SetF9b(
-#if A
-        O: Record "R564 Other"
-#else
-        L: Record "R564 Line"
-#endif
-    )
-    begin
-        SetRange(Tpl, 'T9bS');
-    end;
-
-#if A
-    procedure SetF9b(L: Record "R564 Line")
-    begin
-        SetRange(Tpl, 'T9bP');
     end;
 #endif
 
@@ -638,8 +619,58 @@ describe("R564: every overload is kept unless the choice is certain", () => {
   it("T9, a `#if`-split candidate keeps all", () => {
     expect(both(["T9S", "T9P"])).toEqual([true, true]);
   });
+  // Its own project, because `tableObjectOfRef` refuses a table any parse ERROR mentions. The
+  // `#else` arm is a Variant, so the ERROR names no table and only the header scan keeps the
+  // candidates. Without it, the split one (read as `Record "R564 O9"`) would be dropped, yet it is
+  // the one a build without A reaches.
   it("T9, a `#if` inside a candidate's parentheses (ERROR siblings in the parse) keeps all", () => {
-    expect(both(["T9bS", "T9bP"])).toEqual([true, true]);
+    const refused = project({
+      "L9.Table.al": `table 50150 "R564 L9"
+{
+    fields { field(1; K; Code[20]) { } }
+
+    procedure Caller()
+    var
+        H: Record "R564 H9";
+    begin
+        H.SetF9b(xRec);
+        while H.FindFirst() do
+            H.Rename('T9b');
+    end;
+}`,
+      "O9.Table.al": `table 50151 "R564 O9"
+{
+    fields { field(1; K; Code[20]) { } }
+}`,
+      "H9.Table.al": `table 50152 "R564 H9"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Tpl; Code[20]) { }
+    }
+
+    procedure SetF9b(
+#if A
+        O: Record "R564 O9"
+#else
+        V: Variant
+#endif
+    )
+    begin
+        SetRange(Tpl, 'T9bS');
+    end;
+
+#if A
+    procedure SetF9b(L: Record "R564 L9")
+    begin
+        SetRange(Tpl, 'T9bP');
+    end;
+#endif
+}`,
+    });
+    expect(refused("H9.Table.al", "SetRange(Tpl, 'T9bS')", RSR)).toBe(true);
+    expect(refused("H9.Table.al", "SetRange(Tpl, 'T9bP')", RSR)).toBe(true);
   });
   it("T10, RecordRef and Variant beside a matching Record: all kept", () => {
     expect(both(["T10R", "T10V", "T10L"])).toEqual([true, true, true]);
@@ -698,6 +729,58 @@ table 50131 "R564 Dup"
     });
     expect(refused("Holder.Table.al", "SetRange(Tpl, 'DA')", RSR)).toBe(true);
     expect(refused("Holder.Table.al", "SetRange(Tpl, 'DB')", RSR)).toBe(true);
+  });
+  it("a `#if`-split table header (not indexed) naming `R564 A` makes `R564 A` unresolved: both kept", () => {
+    const refused = project({
+      "A.Table.al": `table 50160 "R564 A"
+{
+    fields { field(1; K; Code[20]) { } }
+}`,
+      "B.Table.al": `table 50161 "R564 B"
+{
+    fields { field(1; K; Code[20]) { } }
+}`,
+      "Split.Table.al": `#if X
+table 50162 "R564 A"
+#else
+table 50162 "R564 C"
+#endif
+{
+    fields { field(1; K; Code[20]) { } }
+}`,
+      "Holder2.Table.al": `table 50163 "R564 Holder2"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Tpl; Code[20]) { }
+    }
+
+    procedure F(R: Record "R564 A")
+    begin
+        SetRange(Tpl, 'SA');
+    end;
+
+    procedure F(R: Record "R564 B")
+    begin
+        SetRange(Tpl, 'SB');
+    end;
+}`,
+      "SplitCaller.Codeunit.al": `codeunit 50164 "R564 Split Caller"
+{
+    procedure Run()
+    var
+        V: Record "R564 B";
+        H: Record "R564 Holder2";
+    begin
+        H.F(V);
+        while H.FindFirst() do
+            H.Rename('S');
+    end;
+}`,
+    });
+    expect(refused("Holder2.Table.al", "SetRange(Tpl, 'SA')", RSR)).toBe(true);
+    expect(refused("Holder2.Table.al", "SetRange(Tpl, 'SB')", RSR)).toBe(true);
   });
 });
 
