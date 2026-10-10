@@ -739,6 +739,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A hook session whose test app has no `.al` source can now prove its identity** (R498). Before,
+  the read-back after the env-tool hook was refused as `unavailable`, so such a run never resumed,
+  skipped known survivors or reused a baseline. It is now proven when the served package's SHA-256
+  equals the `publishApps` test-app file's (or, with no such file, by the installed checks alone),
+  on top of the existing identity, version and installed checks. It still records no test digests,
+  with the same one warning. Measured on Cronus28: the dev endpoint serves back exactly the bytes
+  published, with or without `.al`. The env tool's own publish route is not measured; if it
+  repackages, the run stays unproven.
+
 - **A loop that ends only by consuming its record set is hang-refused; identity scheme 39** (R531). A
   `while`/`repeat` whose condition is a cursor test on a record (`Find`, `FindFirst`, `FindLast`,
   `FindSet`, `IsEmpty`, `Count`; never `Next`) and whose body consumes that set (`Delete`, `DeleteAll`,
