@@ -154,6 +154,36 @@ const ITEM = `table 50700 "R570 Item"
         exit(true);
     end;
 
+    procedure BvKeySplit(): Boolean
+    var
+        Bv: Codeunit "R570 Bv";
+        Tag: Text;
+    begin
+        Tag := 'BVSPLIT1';
+        Bv.WriteThenPass(Rec);
+        exit(true);
+    end;
+
+    procedure BvKeySplitRev(): Boolean
+    var
+        Bv: Codeunit "R570 Bv";
+        Tag: Text;
+    begin
+        Tag := 'BVSPLIT2';
+        Bv.PassThenModify(Rec);
+        exit(true);
+    end;
+
+    procedure BvNote(): Boolean
+    var
+        Bv: Codeunit "R570 Bv";
+        Tag: Text;
+    begin
+        Tag := 'BVNOTE';
+        Bv.NoteModify(Rec);
+        exit(true);
+    end;
+
     procedure SplitDone(): Boolean
     var
         Tag: Text;
@@ -667,6 +697,22 @@ const LOOPS = `codeunit 50701 "R570 Loops"
                 if not L2.SplitSave() then
                     exit;
             until L2.Next() = 0;
+    end;
+
+    procedure RunByValueCopy()
+    var
+        L3: Record "R570 Item";
+    begin
+        L3.SetRange(Grp, 'A');
+        if L3.FindSet() then
+            repeat
+                if not L3.BvKeySplit() then
+                    exit;
+                if not L3.BvKeySplitRev() then
+                    exit;
+                if not L3.BvNote() then
+                    exit;
+            until L3.Next() = 0;
     end;
 
     procedure RunOverload()
@@ -1197,6 +1243,37 @@ ${chain("RoNine", 9, "RO9", "X := R.Qty;")}
 
 const FILES: Record<string, string> = {
   "Deep.Codeunit.al": DEEP,
+  "Bv.Codeunit.al": `codeunit 50713 "R570 Bv"
+{
+    procedure WriteThenPass(R2: Record "R570 Item")
+    begin
+        R2."No." := 'X';
+        DoModify(R2);
+    end;
+
+    procedure PassThenModify(R2: Record "R570 Item")
+    begin
+        DoKeyWrite(R2);
+        R2.Modify();
+    end;
+
+    procedure NoteModify(R2: Record "R570 Item")
+    begin
+        R2.Note := 'n';
+        R2.Modify();
+    end;
+
+    local procedure DoModify(var R3: Record "R570 Item")
+    begin
+        R3.Modify();
+    end;
+
+    local procedure DoKeyWrite(var R3: Record "R570 Item")
+    begin
+        R3."No." := 'Y';
+    end;
+}
+`,
   "Adv.Codeunit.al": ADV,
   "CustExt.TableExt.al": CUSTEXT,
   "R531RecKey.Codeunit.al": R531_RECKEY,
@@ -1353,6 +1430,15 @@ describe("R570 build review: touch fixes", () => {
   });
   it("review fix 3: `Modify(true)` runs OnModify, so it touches even after a non-key, non-filtered write", () => {
     expect(project(FILES)(T, "MODTRUE")).toBe(true);
+  });
+  it("by-value fix: a key write on a by-value copy, the Modify in a helper it is passed to: touching", () => {
+    expect(project(FILES)(T, "BVSPLIT1")).toBe(true);
+  });
+  it("by-value fix: the reverse split (helper writes the key, the copy's owner modifies): touching", () => {
+    expect(project(FILES)(T, "BVSPLIT2")).toBe(true);
+  });
+  it("by-value fix: a non-key, non-filtered write plus Modify on a by-value copy: NOT touching", () => {
+    expect(project(FILES)(T, "BVNOTE")).toBe(false);
   });
   it("field-write rule: a non-key, non-filtered field written then Modify is NOT touching", () => {
     expect(project(FILES)(T, "NOTEMOD")).toBe(false);

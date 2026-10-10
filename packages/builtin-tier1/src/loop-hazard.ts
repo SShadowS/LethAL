@@ -3240,8 +3240,8 @@ function r570ProjectRec(p: ALSyntaxNode, ctx: SemanticContext): boolean {
  * implicit Rec): `[p, ...]` when it does, `[]` when it does not. A `R570_TOUCH` method on it
  * (`R570_CONSUME` only when `byValue`), an assignment to it, a FIELD write under the field-write
  * rule (a field in any key of its table, one that cannot be resolved, or a field the loop filters
- * on, `r570LoopFilters`; `ModifyAll` of such a field; through a by-value copy only when a `Modify`
- * follows), `Modify(true)` (it runs OnModify),
+ * on, `r570LoopFilters`; `ModifyAll` of such a field; the same through a by-value copy, whose
+ * `Modify` writes the row), `Modify(true)` (it runs OnModify),
  * `X.Copy(R, true)` (X then shares R's table), or handing it to a same-object helper, a table
  * procedure or a parameter that touches it in turn (up to `R570_TOUCH_HOPS`, with a visited set so
  * a cycle ends; orchestrator option d); every procedure on such a
@@ -3309,8 +3309,6 @@ function r570Scan(
   const hits = byValue ? R570_CONSUME : R570_TOUCH;
   const own = r531ObjectProcs(p, ctx);
   let direct = false;
-  // through a by-value copy, a field write that would touch counts only once a `Modify` follows
-  let pending = false;
   const follow = (t: ALSyntaxNode, k: string, bv: boolean): void => {
     next.push([t, k, bv]);
   };
@@ -3329,17 +3327,16 @@ function r570Scan(
   };
   const fieldWrite = (f: string | null): void => {
     // review fix 1: a filtered field touches by itself, like a key field; waiting for a `Modify`
-    // in the same body let a write in one procedure and the Modify in another escape
-    if (fieldClass(f) === "none") return;
-    if (byValue) pending = true;
-    else direct = true;
+    // in the same body let a write in one procedure and the Modify in another escape. The same on
+    // a BY-VALUE copy (its `Modify` writes the row): no `Modify` is awaited there either.
+    if (fieldClass(f) !== "none") direct = true;
   };
   /** Does a call of `c`'s method on the shared record touch it? */
   const recMethod = (c: R531Call): boolean => {
     if (c.method === "modify") {
       // review fix 3: `Modify(true)` (any argument but the literal false) runs OnModify
       const a = c.args[0];
-      return pending || c.uncertain || (a !== undefined && normalizeAlName(a.text) !== "false");
+      return c.uncertain || (a !== undefined && normalizeAlName(a.text) !== "false");
     }
     if (c.method === "modifyall") return fieldClass(r531Field(c)) !== "none";
     return hits.has(c.method) || (c.method === "transferfields" && !byValue);
