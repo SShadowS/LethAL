@@ -853,14 +853,41 @@ export function openItemHangRefuses(
  * - HOP, one hop into a same-object callee, EVERY overload whose parameter count fits the call: for
  *   `pass-rec`, the callee's parameter at R's argument position; for `global-call`, the same global
  *   R (unless the callee declares a local of that name) or the implicit Rec; for `recv-proc`, the
- *   table procedure on R (`declaredType` + `objectsOfType`), where R is the implicit Rec. The callee's
+ *   table procedure on R (`r531TableProcs`: `declaredType` + `objectsOfType`, else the table the
+ *   engine binds: `Rec.P()`, or a bare `P()` that names no same-object procedure but a project table
+ *   procedure of the implicit Rec in a table, tableextension or SourceTable page; R-562 build
+ *   review), where R is the implicit Rec. The callee's
  *   consumers, the sites containing them and their guards are refused. A BY-VALUE Record parameter
  *   copies the variable, not the table: its Delete, DeleteAll, Rename and Modify (with its writes)
  *   are followed, its refilter, mark and unknown consumers are not (they change only the copy). A
  *   temporary record passed by value is treated the same way (its table sharing is unmeasured).
+ * - FILTER HOP (R562), for a loop whose ending depends on a filter: every call in the scope that ENDS
+ *   before the loop and is a table procedure on R (`R.SetFilters()`, `Rec.SetFilters()`, or a bare
+ *   `SetTemplateFilter(xRec)` on the implicit Rec in a tableextension or SourceTable page, through
+ *   `r531TableProcs`), a same-object procedure that sees R (global-call), passes R to a VAR parameter
+ *   of a same-object procedure, or passes R to a VAR parameter of a project codeunit or table
+ *   procedure, is followed one hop (every overload that fits by arity); so is `Codeunit.Run(X, R)` or
+ *   `CU.Run(R)` into a project codeunit with a `TableNo`, whose OnRun's Rec is taken to BE R (ASSUMED:
+ *   that Codeunit.Run passes its record by reference is not measured). A by-value Record is not
+ *   followed: its filters are the copy's. In the
+ *   callee, a `SetRange`/`SetFilter` on R passing FILTER's dependency test (and `MarkedOnly` for a
+ *   `Mark` consumer) is refused with its containing sites and its guards, and so are the callee's
+ *   `exit`s and raised `Error`s that start before its last such filter, with their guards (taking one
+ *   skips the filter). The call itself joins the pre-loop filters (its sites, guards and FEEDS). A
+ *   call that CANNOT be followed (a procedure on R not in the project, a same-object name with no
+ *   overload of that arity taking R, R passed into an object outside the project) is refused the
+ *   same way, the call only; `RecordRef.SetTable(R)` (it writes R) is refused that way too. Not calls:
+ *   built-in record methods, `GetTable`, `Codeunit.Run` of anything but a project TableNo codeunit,
+ *   `Page`/`Report`/`XmlPort`/`Query` runs and the pure functions above.
  *
- * LIMITS (stated): cross-object and DotNet callees, more than one hop, a filter set through a
- * procedure (`SetTemplateFilter(xRec)`), and a refilter through a FieldRef (`FieldRef.SetRange`).
+ * LIMITS (stated): cross-object callees outside FILTER HOP, DotNet callees, more than one hop, event
+ * subscribers (an empty publisher reads as setting no filter), a filter set on another variable then
+ * moved with `CopyFilters`/`SetView`, a call between nested loops, the FILTER HOP callee's own FEEDS,
+ * overloads chosen by arity rather than argument type, and a refilter through a FieldRef. A bare name
+ * that resolves to no project table procedure is neither followed nor refused (it cannot be told
+ * from a global function such as `Commit`), nor is one in a pageextension (its Rec's table is not
+ * resolved). The implicit Rec of a `with` subject or a report data item binds through the same
+ * resolver (`resolveReceiverTable`).
  */
 const R531_COND: ReadonlySet<string> = new Set([
   "find",
@@ -890,7 +917,7 @@ const R531_BUILTIN: ReadonlySet<string> = new Set(
     "setposition recordid setrecfilter readisolation istemporary setpermissionfilter fieldactive " +
     "fielderror relation readpermission writepermission consistent changecompany currentcompany " +
     "systemid recordlevellocking securityfiltering getview setview haslinks copylinks " +
-    "deletelinks addlink deletelink truncate isdirty"
+    "deletelinks addlink deletelink truncate isdirty setascending"
   ).split(" "),
 );
 /** Global functions that take a record but cannot consume it. */
@@ -1027,6 +1054,29 @@ function r531ProcsIn(obj: ALSyntaxNode, name: string, arity: number): ALSyntaxNo
   return out;
 }
 
+/** HOP and FILTER HOP (shared): the project table procedures named `method` with `arity` parameters
+ *  that call `n` on a record reaches: through the receiver's declared type, else through the record
+ *  the engine binds (`resolveReceiverTable`): `Rec.P()`, or a bare `P()` on the implicit Rec of a
+ *  table, a tableextension (the base table) or a page with a `SourceTable`. The table's
+ *  tableextensions are included (`objectsOfType`). [] when the table is not in the project. */
+function r531TableProcs(
+  n: ALSyntaxNode,
+  method: string,
+  arity: number,
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  if (n.rawKind !== "call_expression") return [];
+  const fn = n.childForFieldName("function");
+  const recv = fn?.rawKind === "member_expression" ? fn.childForFieldName("object") : null;
+  let t = recv !== null && recv !== undefined ? declaredType(recv, ctx) : null;
+  if (t === null) {
+    const table = resolveReceiverTable(n, ctx);
+    if (table !== null) t = { kind: "table", name: normalizeAlName(table), temporary: false };
+  }
+  if (t === null || t.kind !== "table") return [];
+  return objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, method, arity));
+}
+
 function r531Arity(proc: ALSyntaxNode): number {
   const list = proc.namedChildren.find((c) => c.rawKind === "parameter_list");
   return list?.namedChildren.filter((c) => c.rawKind === "parameter").length ?? 0;
@@ -1102,6 +1152,164 @@ function r531CalleeHop(
   if (consumers.length === 0) return null;
   const isC = (n: ALSyntaxNode): boolean => consumers.some((c) => samePos(c, n));
   return { proc, consumers, guards: exitGuards(body, body, isC) };
+}
+
+/** Methods that set no filter on a record they are called on or passed (R562 FILTER HOP). */
+const r562NotAProc = (m: string): boolean =>
+  R531_BUILTIN.has(m) || R531_DEL.has(m) || R531_MOD.has(m) || m === "insert";
+
+/** The conditions around `n`, up to `stop` (exclusive). */
+function guardsUpTo(n: ALSyntaxNode, stop: ALSyntaxNode): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  for (let a = n.parent; a !== null && !samePos(a, stop); a = a.parent) {
+    let g: ALSyntaxNode | null = null;
+    if (
+      a.rawKind === "if_statement" ||
+      a.rawKind === "while_statement" ||
+      a.rawKind === "repeat_statement"
+    )
+      g = a.childForFieldName("condition");
+    else if (a.rawKind === "case_statement") g = a.childForFieldName("expression");
+    else if (a.rawKind === "case_branch") g = a.childForFieldName("pattern");
+    if (g !== null) out.push(g);
+  }
+  return out;
+}
+
+/** R562 FILTER HOP (see the block comment above `R531_COND`): a pre-loop call `n` on R or passing
+ *  R. Returns the hops into its callees that filter R as the loop's ending depends on, and whether
+ *  the call itself is refused (a callee qualifies, or the call cannot be followed). */
+function r562FilterHop(
+  n: ALSyntaxNode,
+  ctx: SemanticContext,
+  recvs: Set<string>,
+  scope: ALSyntaxNode,
+  depends: Map<string, Set<string>>,
+  markRecvs: Set<string>,
+): { hops: R531Hop[]; refuse: boolean } {
+  const none = { hops: [], refuse: false };
+  const c = r531Call(n);
+  const obj = objectOf(n);
+  if (c === null || n.rawKind === "member_expression" || obj === null) return none;
+  const arity = c.args.length;
+  const passed: [string, number][] = [];
+  c.args.forEach((a, i) => {
+    const k = r531Key(a);
+    if (k !== null && recvs.has(k) && (k !== "" || normalizeAlName(a.text) === "rec"))
+      passed.push([k, i]);
+  });
+  const targets: { proc: ALSyntaxNode; key: string; r: string }[] = [];
+  // R passed into these overloads: a BY-VALUE copy's filters never reach the caller's R
+  const passInto = (ps: ALSyntaxNode[]): void => {
+    for (const p of ps)
+      for (const [k, i] of passed) {
+        const prm = r531Param(p, i);
+        if (prm?.[1]) targets.push({ proc: p, key: prm[0], r: k });
+      }
+  };
+  const bodyOf = (p: ALSyntaxNode): ALSyntaxNode | null =>
+    p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+  const fn = n.rawKind === "call_expression" ? n.childForFieldName("function") : null;
+  const recvNode = fn?.rawKind === "member_expression" ? fn.childForFieldName("object") : null;
+  let unresolved = false;
+  // a bare name that is not a same-object procedure, on the implicit Rec of a table, tableextension
+  // or SourceTable page: a table procedure on R when the project declares one
+  const bareRec =
+    c.recv === null &&
+    recvs.has("") &&
+    !r531ObjectProcs(n, ctx).has(c.method) &&
+    !r562NotAProc(c.method) &&
+    r531Implicit(n, ctx)
+      ? r531TableProcs(n, c.method, arity, ctx)
+      : [];
+  if (c.recv !== null && recvs.has(c.recv)) {
+    // recv-proc: a table procedure on R, where R is the implicit Rec
+    if (r562NotAProc(c.method) || n.rawKind !== "call_expression") return none;
+    for (const p of r531TableProcs(n, c.method, arity, ctx))
+      targets.push({ proc: p, key: "", r: c.recv });
+    unresolved = !targets.some((t) => bodyOf(t.proc) !== null);
+  } else if (bareRec.length > 0) {
+    for (const p of bareRec) targets.push({ proc: p, key: "", r: "" });
+  } else if (c.recv === null && r531ObjectProcs(n, ctx).has(c.method)) {
+    // global-call (R a global the callee does not shadow, or the implicit Rec) and pass-rec
+    const ps = r531ProcsIn(obj, c.method, arity);
+    for (const p of ps)
+      for (const r of recvs)
+        if (r === "" || (!r531Declares(scope, r, true) && !r531Declares(p, r, true)))
+          targets.push({ proc: p, key: r, r });
+    passInto(ps);
+    unresolved = passed.length > 0 && ps.length === 0;
+  } else {
+    // R passed into another object
+    if (passed.length === 0 || R531_PURE.has(c.method) || r562NotAProc(c.method)) return none;
+    if (c.method === "gettable") return none;
+    const rt = normalizeAlName(recvNode?.text ?? "");
+    if (/^(page|report|xmlport|query)$/.test(rt)) return none;
+    const t = recvNode !== null && isIdentifierLike(recvNode) ? declaredType(recvNode, ctx) : null;
+    if (c.method === "run" && (rt === "codeunit" || t?.kind === "codeunit")) {
+      // `Codeunit.Run(X, R)` / `CU.Run(R)`: followed into a project TableNo codeunit's OnRun, whose
+      // Rec is R (assumed passed by reference, not measured); anything else runs on a copy
+      const at = rt === "codeunit" ? 1 : 0;
+      const id = c.args[0]?.text.replace(/^codeunit\s*::\s*/i, "") ?? "";
+      const cus =
+        rt === "codeunit"
+          ? projectObjects(ctx).filter(
+              (o) =>
+                o.rawKind === "codeunit_declaration" &&
+                (objectNameOf(o) === normalizeAlName(id) ||
+                  o.childForFieldName("object_id")?.text === id),
+            )
+          : t !== null
+            ? objectsOfType(t, ctx)
+            : [];
+      for (const o of cus) {
+        if (!hasProperty(o, "TableNo", ctx)) continue;
+        visitAll(o, (x) => {
+          if (x.rawKind === "trigger_declaration" && triggerName(x) === "onrun")
+            for (const [k, i] of passed) if (i === at) targets.push({ proc: x, key: "", r: k });
+        });
+      }
+    } else {
+      const ps =
+        t !== null && (t.kind === "codeunit" || t.kind === "table")
+          ? objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, c.method, arity))
+          : [];
+      unresolved = ps.length === 0;
+      passInto(ps);
+    }
+  }
+  const hops: R531Hop[] = [];
+  for (const t of targets) {
+    const body = bodyOf(t.proc);
+    if (body === null) continue;
+    const cprocs = r531ObjectProcs(t.proc, ctx);
+    const filters: ALSyntaxNode[] = [];
+    r531Walk(body, ctx, (m) => {
+      const cc = r531Call(m);
+      if (cc === null || m.rawKind === "member_expression") return;
+      const r = cc.recv ?? (r531Implicit(m, ctx) && !cprocs.has(cc.method) ? "" : null);
+      if (r !== t.key) return;
+      if (R531_FILTER.has(cc.method)) {
+        // FILTER's dependency test
+        const d = depends.get(t.r);
+        const f = cc.args[0];
+        if (d !== undefined && f !== undefined && (d.has("*") || d.has(normalizeAlName(f.text))))
+          filters.push(m);
+      } else if (cc.method === "markedonly" && markRecvs.has(t.r)) filters.push(m);
+    });
+    if (filters.length === 0) continue;
+    const guards = filters.flatMap((f) => guardsUpTo(f, body));
+    // an exit or a raised Error before the last such filter skips it
+    const last = Math.max(...filters.map((f) => f.startIndex));
+    const isExit = (x: ALSyntaxNode): boolean =>
+      x.startIndex < last && (x.rawKind === "exit_statement" || isRaisedError(x, body));
+    visitAll(body, (x) => {
+      if (isExit(x)) guards.push(x);
+    });
+    guards.push(...exitGuards(body, body, isExit));
+    hops.push({ proc: t.proc, consumers: filters, guards });
+  }
+  return { hops, refuse: unresolved || hops.length > 0 };
 }
 
 /** FEEDS: assignments in `scope` whose target name `parts` read, to a fixpoint (R480
@@ -1304,7 +1512,12 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
       } else if (c.method === "validate") {
         const f = c.args[0];
         if (f !== undefined) writes.push({ n, r, field: normalizeAlName(f.text) });
-      } else if (!R531_BUILTIN.has(c.method) && !bare && n.rawKind === "call_expression") {
+      } else if (
+        !R531_BUILTIN.has(c.method) &&
+        n.rawKind === "call_expression" &&
+        // a bare name: only a table procedure the implicit Rec's table declares in the project
+        (!bare || r531TableProcs(n, c.method, c.args.length, ctx).length > 0)
+      ) {
         consume(n, "recv-proc", r);
         hopCands.push({ n, kind: "recv-proc", c });
       }
@@ -1348,7 +1561,11 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     if (f === undefined) {
       // no filter on R in the procedure: it is set elsewhere, so every written field counts
       consume(m.n, "modify-unseen", m.r);
-      for (const w of ws) consumers.push(w.n);
+      for (const w of ws) {
+        consumers.push(w.n);
+        dep(m.r, w.field); // R562: the filter may come from a pre-loop call
+      }
+      if (m.all !== null) dep(m.r, m.all);
     } else if (!r531Declares(scope, m.r, false)) {
       // R a global, a parameter or the implicit Rec: filters can be set elsewhere too
       if (ws.length === 0 && m.all === null) continue;
@@ -1381,6 +1598,15 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   ]
     .filter((c) => c.n.endIndex <= loop.startIndex)
     .map((c) => c.n);
+  const hops: R531Hop[] = [];
+  // FILTER HOP (R562): a pre-loop call whose callee sets such a filter, or that cannot be followed
+  if (scope !== null && depends.size + markRecvs.size > 0)
+    r531Walk(scope, ctx, (n) => {
+      if (n.endIndex > loop.startIndex) return;
+      const h = r562FilterHop(n, ctx, recvs, scope, depends, markRecvs);
+      hops.push(...h.hops);
+      if (h.refuse) preFilters.push(n);
+    });
   const isConsumer = (n: ALSyntaxNode): boolean => consumers.some((c) => samePos(c, n));
   const isContinue = (n: ALSyntaxNode): boolean => {
     if (n.rawKind !== "continue_statement") return false;
@@ -1391,19 +1617,13 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   };
   const guards = [...exitGuards(body, loop, isConsumer), ...exitGuards(body, loop, isContinue)];
   // HOP: one hop into same-object callees and table procedures on R
-  const hops: R531Hop[] = [];
   const obj = objectOf(loop);
   for (const h of hopCands) {
     const targets: { proc: ALSyntaxNode; key: string; byValue: boolean }[] = [];
     const arity = h.c.args.length;
     if (h.kind === "recv-proc") {
-      const fn = h.n.childForFieldName("function");
-      const recvNode = fn?.rawKind === "member_expression" ? fn.childForFieldName("object") : null;
-      const t = recvNode !== null && recvNode !== undefined ? declaredType(recvNode, ctx) : null;
-      if (t !== null && t.kind === "table")
-        for (const o of objectsOfType(t, ctx))
-          for (const p of r531ProcsIn(o, h.c.method, arity))
-            targets.push({ proc: p, key: "", byValue: false });
+      for (const p of r531TableProcs(h.n, h.c.method, arity, ctx))
+        targets.push({ proc: p, key: "", byValue: false });
     } else if (h.c.recv === null && obj !== null) {
       for (const p of r531ProcsIn(obj, h.c.method, arity)) {
         if (h.kind === "global-call")
@@ -1430,20 +1650,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   let feeds: ALSyntaxNode[] = [];
   const preGuards: ALSyntaxNode[] = [];
   if (scope !== null) {
-    for (const f of preFilters) {
-      for (let a = f.parent; a !== null && !samePos(a, scope); a = a.parent) {
-        let g: ALSyntaxNode | null = null;
-        if (
-          a.rawKind === "if_statement" ||
-          a.rawKind === "while_statement" ||
-          a.rawKind === "repeat_statement"
-        )
-          g = a.childForFieldName("condition");
-        else if (a.rawKind === "case_statement") g = a.childForFieldName("expression");
-        else if (a.rawKind === "case_branch") g = a.childForFieldName("pattern");
-        if (g !== null) preGuards.push(g);
-      }
-    }
+    for (const f of preFilters) preGuards.push(...guardsUpTo(f, scope));
     const parts: ALSyntaxNode[] = [...guards, ...preGuards];
     for (const c of [...consumers, ...preFilters]) {
       if (c.kind === ALNodeKind.assignment_statement) {
