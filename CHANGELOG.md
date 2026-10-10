@@ -739,6 +739,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A loop that consumes its record through a procedure in ANOTHER project object is hang-refused**
+  (R571). R531 refused the consumers of a cursor loop's record (`while R.FindFirst()`, `while not
+  Socket.IsEmpty()`), but followed a call only into the same object or a table procedure on the
+  record. It now also follows the call into another project object: a parameter that receives the
+  record counts as it (a by-value one for Delete, Rename and Modify only), and a call on a codeunit
+  variable the loop tests by name makes that codeunit's globals the set, together with its calls to
+  its own helpers that can see them. The callee's consumers, their guards and any `exit` or `Error`
+  that can skip them are refused. An alias made by `:=` whose `temporary` flag is known to differ
+  from the loop record's is not followed: assignment never shares the table (measured on BC,
+  `scripts/r571-assign-probe`). Price: `<cost: re-measured by lethal-code>`.
+
 - **A call to a preset writer of a report OUTSIDE the project is hang-refused; identity scheme 40**
   (R565, closes R561). R555 refused a call through `Report X` to a procedure that writes a name the
   report's open-item exit guard reads, but only when X was a project report: LethAL had only the
