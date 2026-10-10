@@ -19,7 +19,10 @@ beforeAll(async () => {
 const VMC = "lethal.void-method-call";
 
 function refusedIn(files: Record<string, string>, path: string, text: string): boolean {
-  const parsed = Object.entries(files).map(([p, src]) => ({ path: p, root: wrapRoot(parseAL(src)) }));
+  const parsed = Object.entries(files).map(([p, src]) => ({
+    path: p,
+    root: wrapRoot(parseAL(src)),
+  }));
   const ctx = buildSemanticContext(parsed);
   const f = parsed.find((p) => p.path === path);
   if (f === undefined) throw new Error(`no file ${path}`);
