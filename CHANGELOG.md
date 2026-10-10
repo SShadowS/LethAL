@@ -739,6 +739,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A comment inside an argument list is no longer read as an argument by the loop-hazard check** (R567).
+  `F(xRec /*c*/)` counted two arguments, so the hang check followed no overload of `F` (or a wrong
+  one), and the callee's `SetRange` or `Delete` sites could be deployed. Every reader of a call's or an
+  attribute's arguments now uses one shared reader that drops comments. When a `#pragma` sits among
+  the arguments, positions cannot be trusted, and each reader refuses more instead of guessing. A
+  comment between an `[EventSubscriber]` attribute and its procedure no longer hides the subscriber.
+  Measured on every corpus project with either shape: no mutant identity changed.
 - **A loop-hazard HOP no longer refuses an overload the call cannot reach** (R564). R531's HOP and
   R562's FILTER HOP followed every overload of the called name whose parameter count fit, so an
   overload taking a different table's record was refused too. Now, when every argument is a record
