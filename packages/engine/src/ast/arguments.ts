@@ -38,12 +38,35 @@ const COMMENT_KINDS: ReadonlySet<string> = new Set(["comment", "multiline_commen
  * `preproc_region`,
  * `preproc_endregion`, all measured as named children — is deliberately left in: it inflates this
  * list, and every consumer below treats a longer-than-expected list as "refuse", which is the safe
- * direction.
+ * direction. A consumer that reads by POSITION asks `argumentsReadable` first (R567).
+ *
+ * `node` is a call (its `arguments` field), or the list node itself: an `argument_list`, or an
+ * attribute's `attribute_argument_list` (R567: attribute arguments are read through that node).
  */
-function argumentNodes(call: ALSyntaxNode): readonly ALSyntaxNode[] {
-  const argumentList = call.childForFieldName(ARGUMENTS_FIELD);
-  if (argumentList === null) return [];
-  return argumentList.namedChildren.filter((n) => !COMMENT_KINDS.has(n.rawKind));
+export function argumentList(node: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const list = listNode(node);
+  if (list === null) return [];
+  return list.namedChildren.filter((n) => !COMMENT_KINDS.has(n.rawKind));
+}
+
+/**
+ * R567: can `argumentList(node)` be read by position? True when no OTHER trivia (a `#pragma`, a
+ * preprocessor node) sits among the arguments, so the i-th entry is the i-th argument. Checked from
+ * both directions, as `exactArguments` is: the list is as long as the top-level comma count, and
+ * holds no trivia kind.
+ */
+export function argumentsReadable(node: ALSyntaxNode): boolean {
+  const nodes = argumentList(node);
+  return (
+    nodes.length === countArguments(node) &&
+    !nodes.some((n) => n.rawKind === "pragma" || n.rawKind.startsWith("preproc"))
+  );
+}
+
+const LIST_KINDS: ReadonlySet<string> = new Set(["argument_list", "attribute_argument_list"]);
+
+function listNode(node: ALSyntaxNode): ALSyntaxNode | null {
+  return LIST_KINDS.has(node.rawKind) ? node : node.childForFieldName(ARGUMENTS_FIELD);
 }
 
 /**
@@ -60,10 +83,10 @@ function argumentNodes(call: ALSyntaxNode): readonly ALSyntaxNode[] {
  * contract to police.
  */
 export function countArguments(call: ALSyntaxNode): number {
-  const argumentList = call.childForFieldName(ARGUMENTS_FIELD);
-  if (argumentList === null) return 0;
-  if (argumentNodes(call).length === 0) return 0;
-  const separators = argumentList.children.filter((c) => c.rawKind === ARGUMENT_SEPARATOR).length;
+  const list = listNode(call);
+  if (list === null) return 0;
+  if (argumentList(call).length === 0) return 0;
+  const separators = list.children.filter((c) => c.rawKind === ARGUMENT_SEPARATOR).length;
   return separators + 1;
 }
 
@@ -73,7 +96,7 @@ export function countArguments(call: ALSyntaxNode): number {
  *
  * Checked from both directions at once, the same way `soleArgument` always has: the top-level
  * comma count (`countArguments`) must equal `count`, AND the comment-filtered named-child count
- * (`argumentNodes`) must also equal `count`. Neither check alone is enough. Docs/superpowers/specs/
+ * (`argumentList`) must also equal `count`. Neither check alone is enough. Docs/superpowers/specs/
  * 2026-08-12-r136-tier2-trio-design.md §2.3 amendment 1 is why this is an EXACT-COUNT accessor
  * rather than an indexed one: an indexed `argumentAt(call, 0)` would return whatever sits first
  * among the named children, and this file deliberately leaves non-comment trivia (a pragma, a
@@ -83,7 +106,7 @@ export function countArguments(call: ALSyntaxNode): number {
  */
 export function exactArguments(call: ALSyntaxNode, count: number): readonly ALSyntaxNode[] | null {
   if (countArguments(call) !== count) return null;
-  const nodes = argumentNodes(call);
+  const nodes = argumentList(call);
   return nodes.length === count ? nodes : null;
 }
 

@@ -4,6 +4,8 @@ import {
   type HangCapableReason,
   type ObjectSymbol,
   type SemanticContext,
+  argumentList,
+  argumentsReadable,
   armOfNode,
   declarationMembers,
   enclosingTrigger,
@@ -960,8 +962,25 @@ export interface R531Loop {
 interface R531Call {
   readonly recv: string | null; // null: bare (the implicit record, or a procedure)
   readonly method: string;
-  readonly args: ALSyntaxNode[];
+  /** `argumentList`: comments are not arguments (R567) */
+  readonly args: readonly ALSyntaxNode[];
+  /** R567: a `#pragma` (or other non-comment trivia) sits among the arguments, so a position is
+   *  not an argument's position. Every reader then takes the direction that refuses MORE: any
+   *  arity, every parameter, any field (`r531Field`). */
+  readonly uncertain: boolean;
 }
+
+/** The field a filter/`Validate`/`ModifyAll` call names in its first argument; `"*"` (any field)
+ *  when the arguments cannot be read by position (R567). */
+const r531Field = (c: R531Call): string | null => {
+  if (c.uncertain) return "*";
+  const f = c.args[0];
+  return f === undefined ? null : normalizeAlName(f.text);
+};
+
+/** Does a field set hold `field`, either side being `"*"` (any field)? */
+const r531Has = (s: ReadonlySet<string>, field: string): boolean =>
+  s.has("*") || field === "*" || s.has(field);
 
 /** A receiver's key: its normalized name (`Rec` is ""), or its whitespace-free text when it is not
  *  a plain name (`Buf[1]`). */
@@ -973,32 +992,34 @@ const r531Key = (n: ALSyntaxNode | null): string | null => {
 };
 
 function r531Call(n: ALSyntaxNode): R531Call | null {
-  const argsOf = (c: ALSyntaxNode): ALSyntaxNode[] => [
-    ...(c.namedChildren.find((x) => x.rawKind === "argument_list")?.namedChildren ?? []),
-  ];
+  const argsOf = (recv: string | null, method: string): R531Call => ({
+    recv,
+    method,
+    args: argumentList(n),
+    uncertain: !argumentsReadable(n),
+  });
   if (n.rawKind === "call_expression") {
     const f = n.childForFieldName("function") ?? n.namedChildren[0] ?? null;
     if (f === null) return null;
-    if (isIdentifierLike(f))
-      return { recv: null, method: normalizeAlName(f.text), args: argsOf(n) };
+    if (isIdentifierLike(f)) return argsOf(null, normalizeAlName(f.text));
     if (f.rawKind === "member_expression") {
       const m = f.childForFieldName("member");
       if (m === null) return null;
       const o = f.childForFieldName("object");
-      return { recv: r531Key(o) ?? "\u0000", method: normalizeAlName(m.text), args: argsOf(n) };
+      return argsOf(r531Key(o) ?? "\u0000", normalizeAlName(m.text));
     }
     return null;
   }
   if (n.rawKind === "call_statement") {
     const f = n.namedChildren[0] ?? null;
     if (f === null || !isIdentifierLike(f)) return null;
-    return { recv: null, method: normalizeAlName(f.text), args: argsOf(n) };
+    return argsOf(null, normalizeAlName(f.text));
   }
   if (n.rawKind === "member_expression" && n.parent?.rawKind !== "call_expression") {
     const m = n.childForFieldName("member");
     const o = r531Key(n.childForFieldName("object"));
     if (m === null || o === null) return null;
-    return { recv: o, method: normalizeAlName(m.text), args: [] };
+    return { recv: o, method: normalizeAlName(m.text), args: [], uncertain: false };
   }
   return null;
 }
@@ -1056,11 +1077,12 @@ function r531Walk(n: ALSyntaxNode, ctx: SemanticContext, f: (n: ALSyntaxNode) =>
  *     IDENTITY, never by spelling), so every other one differs at some position.
  *  Otherwise every overload that fits by arity is followed: a wrongly dropped overload would
  *  re-deploy a hang, a kept one only over-refuses. AL has no conversion from Record A to a
- *  `Record B` parameter, by value, `var` or `temporary` (alc probe, R-564). Narrowed per object. */
+ *  `Record B` parameter, by value, `var` or `temporary` (alc probe, R-564). Narrowed per object.
+ *  `arity` null (an uncertain call, R567): every procedure of that name, never narrowed. */
 function r531ProcsIn(
   obj: ALSyntaxNode,
   name: string,
-  arity: number,
+  arity: number | null,
   call: ALSyntaxNode,
   ctx: SemanticContext,
 ): ALSyntaxNode[] {
@@ -1069,11 +1091,11 @@ function r531ProcsIn(
     if (
       (isProcedureLike(x) || x.rawKind === "procedure") &&
       procNames(x).includes(name) &&
-      r531Arity(x) === arity
+      (arity === null || r531Arity(x) === arity)
     )
       out.push(x);
   });
-  if (out.length < 2) return out;
+  if (out.length < 2 || arity === null) return out;
   const args = (r531Call(call)?.args ?? []).map((a) =>
     isIdentifierLike(a) ? recordTableObjectOfName(a, call, ctx) : null,
   );
@@ -1118,7 +1140,7 @@ function r564ParamTables(proc: ALSyntaxNode, ctx: SemanticContext): (ObjectSymbo
 function r531TableProcs(
   n: ALSyntaxNode,
   method: string,
-  arity: number,
+  arity: number | null,
   ctx: SemanticContext,
 ): ALSyntaxNode[] {
   if (n.rawKind !== "call_expression") return [];
@@ -1132,6 +1154,14 @@ function r531TableProcs(
   if (t === null || t.kind !== "table") return [];
   return objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, method, arity, n, ctx));
 }
+
+/** The arity a call's candidates must have: null (any) for an uncertain call (R567). */
+const r531CallArity = (c: R531Call): number | null => (c.uncertain ? null : c.args.length);
+
+/** The parameter positions of `proc` that argument `i` of `c` may bind: `[i]`, or every one for an
+ *  uncertain call (R567), so a pass-rec is never lost. */
+const r531Positions = (c: R531Call, i: number, proc: ALSyntaxNode): number[] =>
+  c.uncertain ? Array.from({ length: r531Arity(proc) }, (_, j) => j) : [i];
 
 function r531Arity(proc: ALSyntaxNode): number {
   const list = proc.namedChildren.find((c) => c.rawKind === "parameter_list");
@@ -1247,7 +1277,7 @@ function r562FilterHop(
   const c = r531Call(n);
   const obj = objectOf(n);
   if (c === null || n.rawKind === "member_expression" || obj === null) return none;
-  const arity = c.args.length;
+  const arity = r531CallArity(c);
   const passed: [string, number][] = [];
   c.args.forEach((a, i) => {
     const k = r531Key(a);
@@ -1258,10 +1288,11 @@ function r562FilterHop(
   // R passed into these overloads: a BY-VALUE copy's filters never reach the caller's R
   const passInto = (ps: ALSyntaxNode[]): void => {
     for (const p of ps)
-      for (const [k, i] of passed) {
-        const prm = r531Param(p, i);
-        if (prm?.[1]) targets.push({ proc: p, key: prm[0], r: k });
-      }
+      for (const [k, i] of passed)
+        for (const j of r531Positions(c, i, p)) {
+          const prm = r531Param(p, j);
+          if (prm?.[1]) targets.push({ proc: p, key: prm[0], r: k });
+        }
   };
   const bodyOf = (p: ALSyntaxNode): ALSyntaxNode | null =>
     p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
@@ -1305,6 +1336,7 @@ function r562FilterHop(
     if (c.method === "run" && (rt === "codeunit" || t?.kind === "codeunit")) {
       // `Codeunit.Run(X, R)` / `CU.Run(R)`: followed into a project TableNo codeunit's OnRun, whose
       // Rec is R (assumed passed by reference, not measured); anything else runs on a copy
+      // an uncertain call (R567): any project codeunit, R at any position
       const at = rt === "codeunit" ? 1 : 0;
       const id = c.args[0]?.text.replace(/^codeunit\s*::\s*/i, "") ?? "";
       const cus =
@@ -1312,7 +1344,8 @@ function r562FilterHop(
           ? projectObjects(ctx).filter(
               (o) =>
                 o.rawKind === "codeunit_declaration" &&
-                (objectNameOf(o) === normalizeAlName(id) ||
+                (c.uncertain ||
+                  objectNameOf(o) === normalizeAlName(id) ||
                   o.childForFieldName("object_id")?.text === id),
             )
           : t !== null
@@ -1322,7 +1355,8 @@ function r562FilterHop(
         if (!hasProperty(o, "TableNo", ctx)) continue;
         visitAll(o, (x) => {
           if (x.rawKind === "trigger_declaration" && triggerName(x) === "onrun")
-            for (const [k, i] of passed) if (i === at) targets.push({ proc: x, key: "", r: k });
+            for (const [k, i] of passed)
+              if (i === at || c.uncertain) targets.push({ proc: x, key: "", r: k });
         });
       }
     } else {
@@ -1348,9 +1382,8 @@ function r562FilterHop(
       if (R531_FILTER.has(cc.method)) {
         // FILTER's dependency test
         const d = depends.get(t.r);
-        const f = cc.args[0];
-        if (d !== undefined && f !== undefined && (d.has("*") || d.has(normalizeAlName(f.text))))
-          filters.push(m);
+        const f = r531Field(cc);
+        if (d !== undefined && f !== null && r531Has(d, f)) filters.push(m);
       } else if (cc.method === "markedonly" && markRecvs.has(t.r)) filters.push(m);
     });
     if (filters.length === 0) continue;
@@ -1365,7 +1398,8 @@ function r562FilterHop(
     guards.push(...exitGuards(body, body, isExit));
     hops.push({ proc: t.proc, consumers: filters, guards });
   }
-  return { hops, refuse: unresolved || hops.length > 0 };
+  // an uncertain call is refused itself (R567): it may pass R where this could not see
+  return { hops, refuse: unresolved || hops.length > 0 || c.uncertain };
 }
 
 /** FEEDS: assignments in `scope` whose target name `parts` read, to a fixpoint (R480
@@ -1424,7 +1458,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     r531Walk(p, ctx, (n) => {
       let c = r531Call(n);
       if (c === null && isIdentifierLike(n) && n.parent?.rawKind !== "member_expression") {
-        c = { recv: null, method: normalizeAlName(n.text), args: [] };
+        c = { recv: null, method: normalizeAlName(n.text), args: [], uncertain: false };
       }
       if (c === null) return;
       if (c.recv === null && !r531Implicit(n, ctx)) return;
@@ -1443,41 +1477,37 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     for (let changed = true; changed; ) {
       changed = false;
       r531Walk(scope, ctx, (n) => {
-        let pair: [string | null, string | null] | null = null;
+        const pairs: [string | null, string | null][] = [];
         if (n.kind === ALNodeKind.assignment_statement) {
           const l = n.childForFieldName("left");
           const rt = n.childForFieldName("right");
           if (l !== null && rt !== null && isIdentifierLike(l) && isIdentifierLike(rt))
-            pair = [r531Key(l), r531Key(rt)];
+            pairs.push([r531Key(l), r531Key(rt)]);
         } else {
           const c = r531Call(n);
           const a0 = c?.args[0];
           const a1 = c?.args[1];
           // `Copy(X, true)` shares the table; a non-literal second argument may be true too. A
           // bare `Copy` is the implicit Rec's (unless the object declares a procedure `Copy`).
-          if (
-            c !== null &&
-            c.method === "copy" &&
-            a0 !== undefined &&
-            a1 !== undefined &&
-            normalizeAlName(a1.text) !== "false"
-          )
-            pair = [
-              c.recv ?? (r531Implicit(n, ctx) && !procs.has("copy") ? "" : null),
-              r531Key(a0),
-            ];
+          // An uncertain `Copy` (R567) aliases every argument.
+          if (c !== null && c.method === "copy") {
+            const self = c.recv ?? (r531Implicit(n, ctx) && !procs.has("copy") ? "" : null);
+            if (c.uncertain) for (const a of c.args) pairs.push([self, r531Key(a)]);
+            else if (a0 !== undefined && a1 !== undefined && normalizeAlName(a1.text) !== "false")
+              pairs.push([self, r531Key(a0)]);
+          }
         }
-        if (pair === null) return;
-        const [x, y] = pair;
-        if (x === null || y === null) return;
-        for (const [p, q] of [
-          [x, y],
-          [y, x],
-        ] as const) {
-          if (recvs.has(q) && !recvs.has(p)) {
-            recvs.add(p);
-            aliases.add(p);
-            changed = true;
+        for (const [x, y] of pairs) {
+          if (x === null || y === null) continue;
+          for (const [p, q] of [
+            [x, y],
+            [y, x],
+          ] as const) {
+            if (recvs.has(q) && !recvs.has(p)) {
+              recvs.add(p);
+              aliases.add(p);
+              changed = true;
+            }
           }
         }
       });
@@ -1499,12 +1529,12 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
         markedOnly.push({ n, r });
         return;
       }
-      const f = c.args[0];
-      if (f === undefined) return;
+      const field = r531Field(c);
+      if (field === null) return;
       const s = filtered.get(r) ?? new Set<string>();
-      s.add(normalizeAlName(f.text));
+      s.add(field);
       filtered.set(r, s);
-      filterCalls.push({ n, r, field: normalizeAlName(f.text) });
+      filterCalls.push({ n, r, field });
     });
   }
   // the fields whose filter the loop's ending depends on ("*": any filter, for Rename)
@@ -1556,7 +1586,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
         modifies.push({
           n,
           r,
-          all: c.method === "modifyall" ? normalizeAlName(c.args[0]?.text ?? "") : null,
+          all: c.method === "modifyall" ? (r531Field(c) ?? "") : null,
         });
       } else if (R531_FILTER.has(c.method)) {
         consume(n, "refilter", r);
@@ -1566,13 +1596,13 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
       } else if (c.method === "insert") {
         inserts.add(r);
       } else if (c.method === "validate") {
-        const f = c.args[0];
-        if (f !== undefined) writes.push({ n, r, field: normalizeAlName(f.text) });
+        const field = r531Field(c);
+        if (field !== null) writes.push({ n, r, field });
       } else if (
         !R531_BUILTIN.has(c.method) &&
         n.rawKind === "call_expression" &&
         // a bare name: only a table procedure the implicit Rec's table declares in the project
-        (!bare || r531TableProcs(n, c.method, c.args.length, ctx).length > 0)
+        (!bare || r531TableProcs(n, c.method, r531CallArity(c), ctx).length > 0)
       ) {
         consume(n, "recv-proc", r);
         hopCands.push({ n, kind: "recv-proc", c });
@@ -1602,7 +1632,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   // a consumer plus a re-Insert under a changed filtered field is a rename by hand
   for (const r of inserts) {
     const f = filtered.get(r);
-    const ws = writes.filter((w) => w.r === r && (f === undefined || f.has(w.field)));
+    const ws = writes.filter((w) => w.r === r && (f === undefined || r531Has(f, w.field)));
     if (ws.length > 0 && consumers.length > 0) {
       kinds.push("delete-reinsert");
       for (const w of ws) {
@@ -1632,8 +1662,8 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
       }
       if (m.all !== null) dep(m.r, m.all);
     } else {
-      const hit = ws.filter((w) => f.has(w.field));
-      const all = m.all !== null && f.has(m.all) ? m.all : null;
+      const hit = ws.filter((w) => r531Has(f, w.field));
+      const all = m.all !== null && r531Has(f, m.all) ? m.all : null;
       if (hit.length === 0 && all === null) continue;
       consume(m.n, "modify-filtered", m.r);
       for (const w of hit) {
@@ -1648,7 +1678,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   const preFilters = [
     ...filterCalls.filter((c) => {
       const d = depends.get(c.r);
-      return d !== undefined && (d.has("*") || d.has(c.field));
+      return d !== undefined && r531Has(d, c.field);
     }),
     ...markedOnly.filter((c) => markRecvs.has(c.r)),
   ]
@@ -1676,7 +1706,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   const obj = objectOf(loop);
   for (const h of hopCands) {
     const targets: { proc: ALSyntaxNode; key: string; byValue: boolean }[] = [];
-    const arity = h.c.args.length;
+    const arity = r531CallArity(h.c);
     if (h.kind === "recv-proc") {
       for (const p of r531TableProcs(h.n, h.c.method, arity, ctx))
         targets.push({ proc: p, key: "", byValue: false });
@@ -1691,9 +1721,11 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
         h.c.args.forEach((a, i) => {
           const k = r531Key(a);
           if (k === null || !recvs.has(k)) return;
-          const prm = r531Param(p, i);
-          // a by-value parameter copies the VARIABLE, not the table (see r531CalleeHop)
-          if (prm !== null) targets.push({ proc: p, key: prm[0], byValue: !prm[1] });
+          for (const j of r531Positions(h.c, i, p)) {
+            const prm = r531Param(p, j);
+            // a by-value parameter copies the VARIABLE, not the table (see r531CalleeHop)
+            if (prm !== null) targets.push({ proc: p, key: prm[0], byValue: !prm[1] });
+          }
         });
       }
     }
@@ -1889,10 +1921,13 @@ function directWrite(n: ALSyntaxNode, names: ReadonlySet<string>, ctx: SemanticC
     return l !== null && names.has(rootName(l));
   }
   if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
-    const args = n.childForFieldName("arguments")?.namedChildren ?? [];
-    return args.some(
+    // unreadable positions (R567): a passed name counts as written, the safe direction here
+    const readable = argumentsReadable(n);
+    return argumentList(n).some(
       (a, i) =>
-        isIdentifierLike(a) && names.has(normalizeAlName(a.text)) && argWritten(n, i, ctx, true),
+        isIdentifierLike(a) &&
+        names.has(normalizeAlName(a.text)) &&
+        (!readable || argWritten(n, i, ctx, true)),
     );
   }
   return false;
@@ -2219,8 +2254,7 @@ export function presetExitNames(
         const f = g.childForFieldName("function");
         const m = normalizeAlName(f?.childForFieldName("member")?.text ?? f?.text ?? "");
         if (m !== "setrange" && m !== "setfilter") return;
-        for (const a of (g.childForFieldName("arguments")?.namedChildren ?? []).slice(1))
-          readAll(a);
+        for (const a of argumentList(g).slice(1)) readAll(a);
       });
     });
     visitAll(obj, (n) => {
@@ -2232,12 +2266,13 @@ export function presetExitNames(
         (n.rawKind === "call_expression" || n.rawKind === "call_statement") &&
         inOpenItemCode(n, ctx)
       ) {
-        // an argument is a write only for a var parameter or a writing built-in (unknown: no, which
-        // keeps the name preset: the safe direction on this side)
-        (n.childForFieldName("arguments")?.namedChildren ?? []).forEach((a, i) => {
-          if (isIdentifierLike(a) && argWritten(n, i, ctx, false))
-            written.add(normalizeAlName(a.text));
-        });
+        // an argument is a write only for a var parameter or a writing built-in (unknown, or
+        // unreadable positions (R567): no, which keeps the name preset: the safe direction here)
+        if (argumentsReadable(n))
+          argumentList(n).forEach((a, i) => {
+            if (isIdentifierLike(a) && argWritten(n, i, ctx, false))
+              written.add(normalizeAlName(a.text));
+          });
         const f = n.childForFieldName("function");
         const o = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
         if (o !== null && o !== undefined && isIdentifierLike(o))
@@ -2473,6 +2508,8 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
         if (!attributeNamesOf(p).some((a) => PUBLISHERS.has(a))) return;
         const kind = po.rawKind.replace("_declaration", "");
         found.push(...(subscribers.get(`${kind}|${objectNameOf(po)}|${name}`) ?? []));
+        // an unreadable subscriber (`subscriberKey` "*", R567) may subscribe to this one
+        found.push(...(subscribers.get("*") ?? []));
       });
     }
     return found;
@@ -2537,7 +2574,8 @@ const PUBLISHERS: ReadonlySet<string> = new Set([
   "internalevent",
 ]);
 
-/** The attribute items written directly before a procedure. */
+/** The attribute items written directly before a procedure. A comment or a `#pragma` between
+ *  them is skipped (R567). */
 function attributesOf(p: ALSyntaxNode): ALSyntaxNode[] {
   const par = p.parent;
   if (par === null) return [];
@@ -2546,11 +2584,14 @@ function attributesOf(p: ALSyntaxNode): ALSyntaxNode[] {
   const out: ALSyntaxNode[] = [];
   for (let j = i - 1; j >= 0; j--) {
     const s = sibs[j];
+    if (s !== undefined && ATTRIBUTE_TRIVIA.has(s.rawKind)) continue;
     if (s === undefined || s.rawKind !== "attribute_item") break;
     out.push(s);
   }
   return out;
 }
+
+const ATTRIBUTE_TRIVIA: ReadonlySet<string> = new Set(["comment", "multiline_comment", "pragma"]);
 
 export interface DeclaredType {
   /** `table` for a Record, else the object keyword: `codeunit`, `interface`, `report`, ... */
@@ -2818,14 +2859,18 @@ function attributeNamesOf(p: ALSyntaxNode): string[] {
  * reference (`Codeunit::Microsoft.Sales."Sales-Post"`, a `member_expression`) by its last `member`;
  * an integer object id (`ObjectType::Codeunit, 80`) through the project object of that kind and
  * `object_id` (none: not followed). The event: a quoted string or a bare identifier. Key
- * "<kind>|<object name>|<event>", normalized.
+ * "<kind>|<object name>|<event>", normalized; `"*"` when a pragma sits among the arguments (R567:
+ * the subscriber is then reached by EVERY event a refused scope raises, an over-reach).
  */
 function subscriberKey(a: ALSyntaxNode, objects: readonly ALSyntaxNode[]): string | null {
   const content = a.childForFieldName("attribute");
   if (normalizeAlName(content?.childForFieldName("name")?.text ?? "") !== "eventsubscriber")
     return null;
   const list = content?.childForFieldName("arguments")?.namedChildren[0];
-  const [kindArg, ref, event] = list?.namedChildren ?? [];
+  if (list === undefined) return null;
+  // R567: comments are not arguments; a pragma among them hides the event, so any event (`*`)
+  if (!argumentsReadable(list)) return "*";
+  const [kindArg, ref, event] = argumentList(list);
   if (kindArg === undefined || ref === undefined || event === undefined) return null;
   const k = normalizeAlName(kindArg.childForFieldName("value")?.text ?? "");
   const kind = k === "database" ? "table" : k;
@@ -2898,8 +2943,8 @@ function rangeCallOf(n: ALSyntaxNode, item: string): { readonly literal: boolean
     method = normalizeAlName(mem.text);
   } else return null;
   if (method !== "setrange" && method !== "setfilter") return null;
-  const al = n.childForFieldName("arguments");
-  const rest = (al === null ? [] : al.namedChildren).slice(1);
+  // a pragma among the arguments (R567) reads as no integer: not a literal bound
+  const rest = argumentList(n).slice(1);
   const [lo, hi, ...more] = rest.map(intValue);
   const literal =
     method === "setrange" &&

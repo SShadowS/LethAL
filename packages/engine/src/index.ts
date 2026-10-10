@@ -53,7 +53,13 @@ export {
 } from "./ast/tree-walks";
 export type { MemberPlace, PlacedMember } from "./ast/tree-walks";
 export { evaluateArms, hasDirectiveLine, startsInInactiveArm } from "./ast/preproc-arms";
-export { countArguments, exactArguments, soleArgument } from "./ast/arguments";
+export {
+  argumentList,
+  argumentsReadable,
+  countArguments,
+  exactArguments,
+  soleArgument,
+} from "./ast/arguments";
 export { fieldSegments, lastFieldChild, nameSegments } from "./ast/qualified-name";
 export type { ArmEvaluation } from "./ast/preproc-arms";
 
