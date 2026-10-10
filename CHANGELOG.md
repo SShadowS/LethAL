@@ -739,6 +739,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The loop-hazard check reads every name of a multi-name declaration** (R521). `A, B: Interface X`
+  declares both names, but four readers took only the first: the type lookup for a receiver the
+  symbol table does not index (an XMLport's variable), the local-shadow check, a report's open-item
+  globals, and a base report's `protected var` names. PEPPOL's two XMLports declare their line
+  iterator second, so the iterator implementations that end the line loop were deployed: 2 real
+  hangs. Measured on all 138 corpus projects with a multi-name declaration: 26 mutants removed, all
+  in PEPPOL's iterator implementations, none added, no identity moved. R521's other receiver
+  classes and R520's general second hop are closed by ruling; R569 and R570 file the two hang
+  shapes the measurement found.
 - **A comment inside an argument list is no longer read as an argument by the loop-hazard check** (R567).
   `F(xRec /*c*/)` counted two arguments, so the hang check followed no overload of `F` (or a wrong
   one), and the callee's `SetRange` or `Delete` sites could be deployed. Every loop-hazard and engine
