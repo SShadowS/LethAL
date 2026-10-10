@@ -17,7 +17,7 @@ import {
   symbolPackageId,
 } from "../src/test-app-publish";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
-import { removeScratchDir } from "./helpers/scratch";
+import { removeScratchDirs } from "./helpers/scratch";
 
 const TARGET_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a"; // fixtures/sandbox-app
 const TESTS_ID = "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7"; // fixtures/sandbox-tests
@@ -30,7 +30,7 @@ const pkg = (id: string, name: string, version: string, extra: Record<string, st
 
 const tempDirs: string[] = [];
 afterAll(() => {
-  for (const d of tempDirs) removeScratchDir(d);
+  removeScratchDirs(tempDirs);
 });
 async function temp(prefix: string): Promise<string> {
   const d = await mkdtemp(join(tmpdir(), prefix));

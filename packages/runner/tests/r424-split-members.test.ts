@@ -43,7 +43,7 @@ import {
   sha256,
 } from "../src/testpage-scan";
 import { buildFakeApp } from "./helpers/fake-app";
-import { removeScratchDir } from "./helpers/scratch";
+import { removeScratchDirs } from "./helpers/scratch";
 
 /**
  * R424: a procedure whose HEADER is split by `#if` (one header per arm, one shared body) is one
@@ -57,7 +57,7 @@ beforeAll(async () => {
 
 const roots: string[] = [];
 afterEach(() => {
-  for (const r of roots.splice(0)) removeScratchDir(r);
+  removeScratchDirs(roots.splice(0));
 });
 
 // ————————————————————————————————————————————————————————————————————————

@@ -6,7 +6,7 @@ import { initParser } from "@lethal/engine";
 import { discoverTests, testsInAlSource } from "../src/discovery";
 import { DiscoveredPathError } from "../src/line-filter";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
-import { removeScratchDir } from "./helpers/scratch";
+import { removeScratchDirs } from "./helpers/scratch";
 
 // Get the fixtures path (account for running from dist/tests vs source tests)
 const fixturesDir = import.meta.dir.includes("dist")
@@ -144,7 +144,7 @@ async function discoverSource(name: string, source: string) {
 }
 
 afterAll(() => {
-  for (const root of tempRoots) removeScratchDir(root);
+  removeScratchDirs(tempRoots);
 });
 
 describe("discoverTests — a codeunit header shape in prose (R79)", () => {

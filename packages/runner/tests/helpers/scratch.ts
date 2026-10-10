@@ -28,7 +28,8 @@ export function removeScratchDir(dir: string, rm: typeof rmSync = rmSync): void 
           if (lstatSync(p).isDirectory()) continue;
           rm(p, { force: true });
         } catch (fileErr) {
-          locked.push(`${rel} (${errCode(fileErr)})`);
+          // Gone between the listing and the delete: not locked.
+          if (errCode(fileErr) !== "ENOENT") locked.push(`${rel} (${errCode(fileErr)})`);
         }
       }
     } catch {
@@ -40,6 +41,22 @@ export function removeScratchDir(dir: string, rm: typeof rmSync = rmSync): void 
 }
 
 /**
+ * R375: `removeScratchDir` for each folder. Every folder is tried even when an earlier one fails;
+ * then ONE error lists every failure, one `R358: could not remove` line each.
+ */
+export function removeScratchDirs(dirs: Iterable<string>, rm: typeof rmSync = rmSync): void {
+  const failed: string[] = [];
+  for (const d of dirs) {
+    try {
+      removeScratchDir(d, rm);
+    } catch (err) {
+      failed.push(errText(err));
+    }
+  }
+  if (failed.length > 0) throw new Error(failed.join("\n"));
+}
+
+/**
  * R358: a fresh temp directory per call, removed after the calling file's last test. Call it ONCE
  * at the top level of a test file (it registers that file's `afterAll`); the root test preload
  * fails the run if a file leaves a `lethal-*` temp entry behind. A directory that cannot be
@@ -48,17 +65,7 @@ export function removeScratchDir(dir: string, rm: typeof rmSync = rmSync): void 
  */
 export function scratchDirs(): (prefix: string) => string {
   const made: string[] = [];
-  afterAll(() => {
-    const failed: string[] = [];
-    for (const d of made) {
-      try {
-        removeScratchDir(d);
-      } catch (err) {
-        failed.push(errText(err));
-      }
-    }
-    if (failed.length > 0) throw new Error(failed.join("\n"));
-  });
+  afterAll(() => removeScratchDirs(made));
   return (prefix) => {
     const d = mkdtempSync(join(tmpdir(), prefix));
     made.push(d);

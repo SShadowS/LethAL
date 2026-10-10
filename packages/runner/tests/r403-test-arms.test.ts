@@ -29,7 +29,7 @@ import {
 } from "../src/test-membership";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { servesTestApp } from "./helpers/proven-test-app";
-import { removeScratchDir } from "./helpers/scratch";
+import { removeScratchDirs } from "./helpers/scratch";
 
 /**
  * R403 phase A, through `runSession`: discovery evaluates the TEST app's `#if` arms under the test
@@ -127,7 +127,7 @@ beforeAll(async () => {
 
 const roots: string[] = [];
 afterEach(() => {
-  for (const r of roots.splice(0)) removeScratchDir(r);
+  removeScratchDirs(roots.splice(0));
 });
 
 /** A target `app/` and a test project `tests/`, each with its own `app.json` symbols. */

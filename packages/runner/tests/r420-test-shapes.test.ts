@@ -35,7 +35,7 @@ import {
   compiledMembershipOf,
 } from "../src/test-membership";
 import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
-import { removeScratchDir } from "./helpers/scratch";
+import { removeScratchDirs } from "./helpers/scratch";
 
 /**
  * R420: discovery found tests with one regular expression, so a `[Test]` whose declaration it
@@ -325,7 +325,7 @@ beforeAll(async () => {
 
 const roots: string[] = [];
 afterEach(() => {
-  for (const r of roots.splice(0)) removeScratchDir(r);
+  removeScratchDirs(roots.splice(0));
 });
 
 async function testDirWith(files: Record<string, string>): Promise<string> {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { removeScratchDir, scratchDirs } from "./helpers/scratch";
+import { removeScratchDir, removeScratchDirs, scratchDirs } from "./helpers/scratch";
 
 const tmp = scratchDirs();
 
@@ -49,5 +49,48 @@ describe("R375: removeScratchDir", () => {
     const dir = runFolder();
     removeScratchDir(dir);
     expect(existsSync(dir)).toBe(false);
+  });
+
+  test("a path that does not exist is not an error", () => {
+    expect(() => removeScratchDir(join(tmp("lethal-r375-"), "never-made"))).not.toThrow();
+  });
+
+  test("a file that vanishes during the walk is not reported as locked", () => {
+    const dir = runFolder();
+    const rm = ((p: string, opts?: Parameters<typeof rmSync>[1]) => {
+      if (p.endsWith("report.json")) {
+        throw Object.assign(new Error(`ENOENT: no such file, rm '${p}'`), { code: "ENOENT" });
+      }
+      lockedRm("lethal.sqlite-wal")(p, opts);
+    }) as typeof rmSync;
+    let message = "";
+    try {
+      removeScratchDir(dir, rm);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain(`still locked: ${join("store", "lethal.sqlite-wal")} (EBUSY)`);
+    expect(message).not.toContain("report.json");
+  });
+});
+
+describe("R375: removeScratchDirs", () => {
+  test("tries every folder when the first fails, then throws one error naming it", () => {
+    const first = runFolder();
+    const second = runFolder();
+    const rm = ((p: string, opts?: Parameters<typeof rmSync>[1]) => {
+      if (p.startsWith(first)) lockedRm("lethal.sqlite-wal")(p, opts);
+      else rmSync(p, opts);
+    }) as typeof rmSync;
+    let message = "";
+    try {
+      removeScratchDirs([first, second], rm);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(existsSync(second)).toBe(false);
+    expect(message.split("\n")).toEqual([
+      expect.stringContaining(`R358: could not remove ${first}: EBUSY`),
+    ]);
   });
 });

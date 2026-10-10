@@ -13,7 +13,7 @@ import {
   scanTestPageSources,
   scanTestPageTests,
 } from "../src/testpage-scan";
-import { removeScratchDir } from "./helpers/scratch";
+import { removeScratchDirs } from "./helpers/scratch";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ref = (codeunitId: number, method: string, file = "t.al"): TestMethodRef => ({
@@ -1871,7 +1871,7 @@ describe("readTestAppSources — discovered paths use `/` (R421)", () => {
 `;
   const roots: string[] = [];
   afterAll(() => {
-    for (const r of roots) removeScratchDir(r);
+    removeScratchDirs(roots);
   });
   const testDirWith = async (rel: string): Promise<string> => {
     const root = await mkdtemp(join(tmpdir(), "lethal-testpage-r421-"));
