@@ -804,6 +804,7 @@ export function openItemHangRefuses(
     inOpenItemCode(node, ctx) ||
     altersBoundCall(node, ctx) ||
     inOneHopCallee(node, ctx) ||
+    inR570Callee(node, ctx) ||
     altersSelfInsertFilter(node, ctx) ||
     altersOpenItemFilter(node, ctx) ||
     writesPresetExitName(node, ctx) ||
@@ -2722,6 +2723,177 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
     });
   }
   return out;
+}
+
+/*
+ * R570: a `while`/`repeat` loop of ANY object kind (a report item's own trigger included) whose exit
+ * calls a cursor-shaped procedure in ANOTHER project object. Every site in that procedure is
+ * refused, for every operator: the measured hangs are flipped final returns, negated end-of-set
+ * tests, removed index increments, row deletes and "first done" flags, not only return sites.
+ * - EXIT CALLS: the calls in the loop's condition, and the calls in a body exit guard (`exit`, a
+ *   `break` of THIS loop, `Error` outside `asserterror`: R446's `bodyExitGuards`) when the condition
+ *   names no cursor method (R480 `namesCursorMethod`), or when the guard call shares the
+ *   condition's cursor: that receiver is the call's own receiver, or is passed to a `var`
+ *   parameter. Otherwise a guard callee can only end the loop EARLIER (measured: no hang).
+ * - RESOLVED through `callTargets`, `objectsOfType` (tableextensions, interface implementers),
+ *   `r531TableProcs` and R564's `r531ProcsIn`; an uncertain call (R567) follows every candidate.
+ * - CURSOR-SHAPED: the callee calls `Find*`, `Next`, `IsEmpty` or `Count` on anything, by NAME (a
+ *   List or Dictionary `Count` too: the index iterators the sample found hanging), or holds a loop.
+ * - DELEGATION: every call inside an `exit(...)` of the callee that resolves to a project procedure,
+ *   same-object or not, is followed, up to `R570_HOPS` hops (which also ends a cycle). Every
+ *   procedure on a chain that reaches a cursor-shaped one is refused. Only built-in record and list
+ *   methods end a chain, so a wrapper over a `Next`-named project procedure reaches the real one.
+ * - BY NAME: every overload of a refused name in that object is refused (R564 narrowing finds the
+ *   callee but does not narrow the refusal).
+ * NOT DONE, stated (each errs toward deploying, none can false-kill): the callee's other
+ * same-object helpers (DC 31 -> 737 deployed, over the bar); `Codeunit.Run` targets; delegation
+ * through a named return value; event subscribers of an exit callee; non-cursor callees (a "has
+ * next page" Boolean read from JSON); a loop flag fed by a callee's result; a same-object first hop
+ * that exits an other-object cursor call; a record consumer in another object on R531's side.
+ */
+const R570_CURSOR: ReadonlySet<string> = new Set([
+  "find",
+  "findfirst",
+  "findlast",
+  "findset",
+  "next",
+  "isempty",
+  "count",
+]);
+const R570_HOPS = 4;
+
+function inR570Callee(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const s = codeScope(node);
+  if (s === null || !isProcedureLike(s)) return false;
+  const obj = objectOf(s);
+  if (obj === null) return false;
+  const reach = r570Reach(ctx).get(objectKey(obj));
+  return reach !== undefined && procNames(s).some((k) => reach.has(k));
+}
+
+const r570Reaches = new WeakMap<object, Map<string, Set<string>>>();
+/** object key -> the procedure names R570 refuses in it. */
+function r570Reach(ctx: SemanticContext): Map<string, Set<string>> {
+  const hit = r570Reaches.get(ctx);
+  if (hit !== undefined) return hit;
+  const out = new Map<string, Set<string>>();
+  r570Reaches.set(ctx, out);
+  for (const o of projectObjects(ctx)) {
+    r531Walk(o, ctx, (loop) => {
+      if (!LOOP_KINDS.has(loop.kind)) return;
+      for (const p of r570LoopCallees(loop, o, ctx)) {
+        const po = objectOf(p);
+        if (po === null) continue;
+        const set = out.get(objectKey(po)) ?? new Set<string>();
+        for (const k of procNames(p)) set.add(k);
+        out.set(objectKey(po), set);
+      }
+    });
+  }
+  return out;
+}
+
+/** The procedures R570 refuses for one loop of object `obj`: its exit callees and their chains. */
+function r570LoopCallees(
+  loop: ALSyntaxNode,
+  obj: ALSyntaxNode,
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  const cond = loopConditionParts(loop);
+  const steps = namesCursorMethod(cond, ctx);
+  // the receivers the condition steps (`""` is the implicit Rec, as for a bare call)
+  const cursors = new Set<string>();
+  for (const part of cond)
+    r531Walk(part, ctx, (n) => {
+      const c = r531Call(n);
+      if (c !== null && CURSOR_METHODS.has(c.method)) cursors.add(c.recv ?? "");
+    });
+  /** Does guard call `c` share the condition's cursor with callee `q`: its receiver, or an
+   *  argument bound to a `var` parameter of `q`? */
+  const shares = (c: R531Call, q: ALSyntaxNode): boolean =>
+    cursors.has(c.recv ?? "") ||
+    c.args.some((a, i) => {
+      const k = isIdentifierLike(a) ? r531Key(a) : null;
+      return (
+        k !== null &&
+        cursors.has(k) &&
+        r531Positions(c, i, q).some((j) => r531Param(q, j)?.[1] === true)
+      );
+    });
+  const out: ALSyntaxNode[] = [];
+  const take = (parts: ALSyntaxNode[], guard: boolean): void => {
+    for (const part of parts)
+      r531Walk(part, ctx, (n) => {
+        const c = r531Call(n);
+        if (c === null) return;
+        for (const q of r570Targets(n, c, ctx)) {
+          const qo = objectOf(q);
+          if (qo === null || (samePos(qo, obj) && sameFile(rootOf(qo), rootOf(obj)))) continue;
+          if (guard && steps && !shares(c, q)) continue;
+          out.push(...r570Chain(q, 0, ctx));
+        }
+      });
+  };
+  take(cond, false);
+  take(bodyExitGuards(loop), true);
+  return out;
+}
+
+/** The project procedures (with a body) that call `n` names, in any object. */
+function r570Targets(n: ALSyntaxNode, c: R531Call, ctx: SemanticContext): ALSyntaxNode[] {
+  const arity = r531CallArity(c);
+  const own = objectOf(n);
+  const same = bareCallee(n);
+  let procs: ALSyntaxNode[];
+  if (same !== null && own !== null && procedureNamesOf(own, ctx).has(same)) {
+    procs = r531ProcsIn(own, same, arity, n, ctx);
+  } else if (n.rawKind === "member_expression") {
+    // a paren-less member call `CU.P`
+    const recv = n.childForFieldName("object");
+    const t = recv !== null && isIdentifierLike(recv) ? declaredType(recv, ctx) : null;
+    procs =
+      t === null ? [] : objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, c.method, 0, n, ctx));
+  } else {
+    const t = n.rawKind === "call_expression" ? callTargets(n, ctx) : null;
+    procs = t === null ? [] : t.objs.flatMap((o) => r531ProcsIn(o, t.member, arity, n, ctx));
+    if (c.recv === null) procs.push(...r531TableProcs(n, c.method, arity, ctx));
+  }
+  return procs.filter((p) => p.namedChildren.some((x) => x.rawKind === "code_block"));
+}
+
+/** Does `p` call a cursor method (by name, on a receiver or its implicit Rec) or hold a loop? */
+function r570Shaped(p: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return cached(ctx, p, "r570shape", () => {
+    const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+    if (body === null) return false;
+    const own = r531ObjectProcs(p, ctx);
+    let hit = false;
+    r531Walk(body, ctx, (n) => {
+      if (hit) return;
+      if (LOOP_KINDS.has(n.kind)) hit = true;
+      const c = r531Call(n);
+      if (c === null || !R570_CURSOR.has(c.method)) return;
+      if (c.recv !== null || (r531Implicit(n, ctx) && !own.has(c.method))) hit = true;
+    });
+    return hit;
+  });
+}
+
+/** `p` and every procedure its `exit(<call>)` chain reaches from hop `depth`, when `p` or a
+ *  procedure on the chain is cursor-shaped; else []. The hop cap also ends a cycle. */
+function r570Chain(p: ALSyntaxNode, depth: number, ctx: SemanticContext): ALSyntaxNode[] {
+  const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+  const out: ALSyntaxNode[] = [];
+  if (body !== null && depth < R570_HOPS)
+    r531Walk(body, ctx, (e) => {
+      if (e.rawKind !== "exit_statement") return;
+      r531Walk(e, ctx, (n) => {
+        const c = r531Call(n);
+        if (c === null) return;
+        for (const t of r570Targets(n, c, ctx)) out.push(...r570Chain(t, depth + 1, ctx));
+      });
+    });
+  return out.length > 0 || r570Shaped(p, ctx) ? [p, ...out] : [];
 }
 
 const LOOP_OBJECTS: ReadonlySet<string> = new Set([
