@@ -744,9 +744,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   in another project object that steps a cursor (`Find*`, `Next`, `IsEmpty`, `Count`, or a loop)
   now refuses every site in that procedure, and in every procedure its `exit(<call>)` chain reaches
   (up to 4 hops). Create Pick's FEFO loop, Sales Tax Calculate, TempStack.Pop and the Power BI
-  report iterator are examples a sample showed can hang. A guard call is followed only when the
-  condition steps no cursor, or when it shares the condition's record. Measured: DC 134 mutants
-  removed (0.070%), BC.History 521 (0.023%), DO, CDO and fixtures 0; no identity moved. A loop flag
+  report iterator are examples a sample showed can hang. A guard call is followed when the
+  condition steps no cursor; when it does, only a guard call that shares the condition's record
+  (its receiver, or a `var` argument) AND whose callee touches that record (moves it, filters,
+  marks or changes rows, or hands it on to code that does; unknown counts as touching) is
+  refused. Measured: DC 43 mutants removed (0.022%), BC.History 409 (0.018%; BaseApp 272,
+  0.038%), DO, CDO and fixtures 0; no identity moved. A loop flag
   fed by such a callee (R572) and a record consumer in another object (R571) are filed, not built.
 - **The loop-hazard check reads every name of a multi-name declaration** (R521). A declaration that
   names two variables at once declares both, but four readers took only the first: the type lookup for a receiver the
