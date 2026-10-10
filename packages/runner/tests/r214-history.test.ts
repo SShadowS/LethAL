@@ -1,5 +1,5 @@
 import { afterAll, test as bunTest, describe, expect } from "bun:test";
-import { cp, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -17,6 +17,7 @@ import type { SessionReport } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import { servesTestApp } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 // R214 Task 8: history, resume and marks apply only between runs built under the IDENTICAL
 // effective symbol set (C1), and the scheme N-1 to N transition on the same-text key (I4).
@@ -101,10 +102,10 @@ afterAll(async () => {
   // path was never recorded. The sweep is safe: scripts/test-preload.ts points tmpdir() at a
   // folder private to this bun process, so it cannot touch another session's files.
   await Promise.allSettled(inflight);
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+  for (const r of roots) removeScratchDir(r);
   const tmp = tmpdir();
   for (const e of await readdir(tmp))
-    if (e.startsWith("lethal-r214-hist-")) await rm(join(tmp, e), { recursive: true, force: true });
+    if (e.startsWith("lethal-r214-hist-")) removeScratchDir(join(tmp, e));
   // 30 s: must outlast the 15 s per-test guard. Bun gives a hook only 5 s by default, and the wait
   // above can last as long as a starved test body still has to run; if the hook timed out, the rm
   // and the sweep would never run and the folders would leak.

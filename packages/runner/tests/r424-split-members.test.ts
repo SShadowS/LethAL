@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -43,6 +43,7 @@ import {
   sha256,
 } from "../src/testpage-scan";
 import { buildFakeApp } from "./helpers/fake-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R424: a procedure whose HEADER is split by `#if` (one header per arm, one shared body) is one
@@ -55,8 +56,8 @@ beforeAll(async () => {
 });
 
 const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((r) => rm(r, { recursive: true, force: true })));
+afterEach(() => {
+  for (const r of roots.splice(0)) removeScratchDir(r);
 });
 
 // ————————————————————————————————————————————————————————————————————————

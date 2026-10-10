@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { discoverTests, testsInAlSource } from "../src/discovery";
 import { DiscoveredPathError } from "../src/line-filter";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
+import { removeScratchDir } from "./helpers/scratch";
 
 // Get the fixtures path (account for running from dist/tests vs source tests)
 const fixturesDir = import.meta.dir.includes("dist")
@@ -142,8 +143,8 @@ async function discoverSource(name: string, source: string) {
   return discoverTests(root);
 }
 
-afterAll(async () => {
-  await Promise.all(tempRoots.map((root) => rm(root, { recursive: true, force: true })));
+afterAll(() => {
+  for (const root of tempRoots) removeScratchDir(root);
 });
 
 describe("discoverTests — a codeunit header shape in prose (R79)", () => {

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { initParser, liveParseResults, parsesSinceStart } from "@lethal/engine";
@@ -13,6 +13,7 @@ import {
   scanTestPageSources,
   scanTestPageTests,
 } from "../src/testpage-scan";
+import { removeScratchDir } from "./helpers/scratch";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ref = (codeunitId: number, method: string, file = "t.al"): TestMethodRef => ({
@@ -1869,8 +1870,8 @@ describe("readTestAppSources — discovered paths use `/` (R421)", () => {
 }
 `;
   const roots: string[] = [];
-  afterAll(async () => {
-    await Promise.all(roots.map((r) => rm(r, { recursive: true, force: true })));
+  afterAll(() => {
+    for (const r of roots) removeScratchDir(r);
   });
   const testDirWith = async (rel: string): Promise<string> => {
     const root = await mkdtemp(join(tmpdir(), "lethal-testpage-r421-"));

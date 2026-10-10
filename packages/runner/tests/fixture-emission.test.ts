@@ -1,11 +1,12 @@
 import { afterAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { readTargetSource } from "../src/baseline-snapshot";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R-297 review r1 (minor): the fixture byte-identity claim was a scratch comparison. RUST-03 S1.5
@@ -181,8 +182,8 @@ const PINNED: Record<
 };
 
 const dirs: string[] = [];
-afterAll(async () => {
-  for (const d of dirs) await rm(d, { recursive: true, force: true });
+afterAll(() => {
+  for (const d of dirs) removeScratchDir(d);
 });
 
 for (const [fixture, { selectorIds, hashes }] of Object.entries(PINNED)) {

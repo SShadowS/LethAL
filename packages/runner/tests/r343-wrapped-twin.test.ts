@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R343, end to end through generation: a codeunit wrapped whole in `#if` (an arm the build
@@ -118,8 +119,8 @@ beforeAll(async () => {
     rows.sort((a, b) => a.line - b.line || a.op.localeCompare(b.op));
 });
 
-afterAll(async () => {
-  if (dir !== "") await rm(dir, { recursive: true, force: true });
+afterAll(() => {
+  if (dir !== "") removeScratchDir(dir);
 });
 
 describe("R343: a live wrapped codeunit mutates exactly like its unwrapped twin", () => {

@@ -7,6 +7,7 @@ import { initParser } from "@lethal/engine";
 import * as schemata from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R307 Task 3: `generateMutationSet` runs the writer's own per-file steps (`instrumentOneFile`) as
@@ -231,8 +232,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "lethal-r307-pin-"));
   });
-  afterAll(async () => {
-    await rm(dir, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(dir);
   });
   test("manifest and instrumented files", async () => {
     const REPO = join(import.meta.dir, "../../..");

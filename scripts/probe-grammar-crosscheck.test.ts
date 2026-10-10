@@ -13,9 +13,10 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeScratchDir } from "../packages/runner/tests/helpers/scratch";
 
 const alcBin = process.env.LETHAL_ALC_BIN;
 const harness = join(import.meta.dir, "probe-grammar-crosscheck.ts");
@@ -106,7 +107,7 @@ describe.skipIf(alcBin === undefined)(
       );
       if (build.status !== 0) throw new Error(`fake parser build failed: ${build.stderr}`);
     });
-    afterAll(() => rmSync(root, { recursive: true, force: true }));
+    afterAll(() => removeScratchDir(root));
 
     test("real compiler: an unhealthy file is excluded with a warning and the run finishes", () => {
       const r = runHarness("real", { "A.al": HEALTHY, "B.al": UNHEALTHY }, alcBin ?? "");

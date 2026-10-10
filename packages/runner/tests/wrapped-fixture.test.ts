@@ -29,6 +29,7 @@ import {
 } from "../src/orchestrator";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 import { AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0 } from "../src/preprocessor-symbols";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R-300b, offline guard for `fixtures/sandbox-wrapped`'s PURPOSE and for the live leg's checker.
@@ -88,8 +89,8 @@ describe("R-300b: sandbox-wrapped", () => {
     root = await mkdtemp(join(tmpdir(), "lethal-r300b-fixture-"));
     built = await build(root);
   });
-  afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(root);
   });
   const get = (): Built => {
     if (built === undefined) throw new Error("beforeAll did not build the batch");
@@ -304,7 +305,9 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
         // ORIGINAL-text lines lie inside the instrumented trigger above it, which names nobody, so a
         // backend reading original lines against the instrumented text would turn the procedure's
         // rows no-coverage. Moving the procedure above its trigger would lose this; this fails then.
-        const original = (await readFile(join(WRAPPED_PROJECT_DIR, "src", file), "utf8")).split("\n");
+        const original = (await readFile(join(WRAPPED_PROJECT_DIR, "src", file), "utf8")).split(
+          "\n",
+        );
         const origAt = original.findIndex((l) => l.includes(`procedure ${name}(`)) + 1;
         expect(origAt).toBeGreaterThan(0);
         expect(at).toBeGreaterThan(origAt + 3);

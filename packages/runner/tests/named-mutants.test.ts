@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -19,6 +19,7 @@ import {
 import { ResultsStore } from "../src/store";
 import { verifyRefusalOf } from "../src/verify";
 import { bundleFor } from "./helpers/bundle";
+import { removeScratchDir } from "./helpers/scratch";
 
 const ARTIFACT_ID = "0123456789abcdef0123456789abcdef";
 const APP_ID = "11111111-1111-1111-1111-111111111111";
@@ -86,9 +87,9 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     ref = { fromRunId: runId, batchIndex: 0, appPath, instrumentedDir };
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     store.close();
-    await rm(dir, { recursive: true, force: true });
+    removeScratchDir(dir);
   });
 
   /** R360: records a fresh run whose stored bundle holds these parts, with `over` on the row. */

@@ -1,6 +1,5 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
@@ -50,7 +49,7 @@ import {
   testAppJson,
   testAppPackage,
 } from "./helpers/proven-test-app";
-import { scratchDirs } from "./helpers/scratch";
+import { removeScratchDir, scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
 
@@ -2900,8 +2899,8 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       .map((m) => `${m.line}:${m.verdict}${m.carried === true ? ":carried" : ""}`);
 
   const roots: string[] = [];
-  afterEach(async () => {
-    for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  afterEach(() => {
+    for (const root of roots.splice(0)) removeScratchDir(root);
   });
 
   // R214: the code under test sits in #if R318A; the build defines R318A, so its arm is live (orchestrator ruling q-20260930T055856).

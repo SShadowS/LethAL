@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -30,6 +30,7 @@ import { sessionFingerprint } from "../src/resume";
 import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R374: identity ordinals are numbered once over the whole RUN, never per batch. Before, twins in
@@ -108,8 +109,8 @@ const selectorIds = { selectorId: 50290, controlId: 50291, tableId: 50292 };
 const OP = "lethal.remove-assignment";
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 async function makeProject(codeunit: string) {

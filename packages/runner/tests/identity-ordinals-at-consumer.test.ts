@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -20,6 +20,7 @@ import type {
 import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R400: identity ordinals are numbered where they are consumed (`runSession`, through
@@ -113,8 +114,8 @@ class NoCoverageBackend implements ExecutionBackend {
 }
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 beforeAll(async () => {
   await initParser();

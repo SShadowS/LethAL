@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openItemHangRefuses } from "@lethal/builtin-tier1";
@@ -17,6 +17,7 @@ import {
   generateMutationSet,
   identityOrdinalsOf,
 } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R500 at the orchestrator: what only `generateMutationSet` shows. (1) The real r1 hang, pinned:
@@ -171,8 +172,8 @@ beforeAll(async () => {
   for (const [rel, content] of Object.entries(FILES)) await Bun.write(join(dir, rel), content);
   set = await generateMutationSet(dir, { emit: () => {} });
 });
-afterAll(async () => {
-  if (dir !== "") await rm(dir, { recursive: true, force: true });
+afterAll(() => {
+  if (dir !== "") removeScratchDir(dir);
 });
 
 const specsOf = (file: string) => set.files.filter((f) => f.path === file).flatMap((f) => f.specs);

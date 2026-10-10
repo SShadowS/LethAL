@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -18,6 +18,7 @@ import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R391: an identity key carries no file. Twins (one identity tuple: here a table and a codeunit
@@ -94,8 +95,8 @@ const A = "A_Twin.Table.al";
 const B = "B_Twin.Codeunit.al";
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 type Outcome = "pass" | "fail" | "abort";

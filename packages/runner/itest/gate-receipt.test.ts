@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeScratchDir } from "../tests/helpers/scratch";
 import { GateChallengeError, readChallenge, writeReceipt } from "./gate-receipt";
 
 let dir = "";
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "lethal-receipt-"));
 });
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+afterEach(() => {
+  removeScratchDir(dir);
 });
 
 function env(over: Record<string, string> = {}): NodeJS.ProcessEnv {
