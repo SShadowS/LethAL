@@ -1770,9 +1770,12 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
         });
       }
     }
+    const cross =
+      r571Seam.on && targets.length === 0 && obj !== null && h.n.rawKind === "call_expression";
+    if (cross) targets.push(...r571CrossTargets(h.n, h.c, h.kind, recvs, obj, ctx));
     for (const t of targets) {
       const hop = r531CalleeHop(t.proc, t.key, ctx, t.byValue);
-      if (hop !== null) hops.push(hop);
+      if (hop !== null) hops.push(cross && r571Seam.exits ? r571EarlyExits(hop) : hop);
     }
   }
   // FEEDS: indirect feeds, and the guards around a pre-loop filter call
@@ -1802,6 +1805,81 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     preGuards,
     hops,
   };
+}
+
+/**
+ * R571 HOP into ANOTHER project object (prototype). For a `pass-rec` or `recv-proc` consumer that the
+ * same-object HOP above did not resolve, the callee is resolved through `callTargets` (declared type,
+ * `objectsOfType`: tableextensions and interface implementers; else the bound record) and R564's
+ * `r531ProcsIn`; only procedures in another object are taken:
+ * - `pass-rec`: R handed to a parameter of the callee (by `var`, or by value: R531's by-value rule);
+ * - `recv-proc` on a receiver that is NOT a record (a codeunit or interface the loop's condition
+ *   tests through `R.IsEmpty()`/`R.Count()`/`R.Find..()` by name): the callee's object holds the set
+ *   itself, so every GLOBAL of that object the callee does not shadow is taken as R.
+ * Then `r531CalleeHop` as for a same-object hop: the callee's consumers, the sites containing them
+ * and their guards are refused.
+ */
+export const r571Seam = { on: true, exits: true };
+
+/** R571 (as R562's FILTER HOP): an `exit` or raised `Error` of the callee that starts before its
+ *  last consumer skips that consumer, so it is refused with its guards (`if not Buf.FindLast()
+ *  then exit` negated returns without deleting while the set is not empty). */
+function r571EarlyExits(hop: R531Hop): R531Hop {
+  const body = hop.proc.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+  if (body === null) return hop;
+  const last = Math.max(...hop.consumers.map((c) => c.startIndex));
+  const isExit = (x: ALSyntaxNode): boolean =>
+    x.startIndex < last && (x.rawKind === "exit_statement" || isRaisedError(x, body));
+  const guards = [...hop.guards];
+  visitAll(body, (x) => {
+    if (isExit(x)) guards.push(x);
+  });
+  guards.push(...exitGuards(body, body, isExit));
+  return { ...hop, guards };
+}
+function r571CrossTargets(
+  n: ALSyntaxNode,
+  c: R531Call,
+  kind: string,
+  recvs: ReadonlySet<string>,
+  obj: ALSyntaxNode,
+  ctx: SemanticContext,
+): { proc: ALSyntaxNode; key: string; byValue: boolean }[] {
+  const tg = callTargets(n, ctx);
+  if (tg === null) return [];
+  const arity = r531CallArity(c);
+  const out: { proc: ALSyntaxNode; key: string; byValue: boolean }[] = [];
+  for (const o of tg.objs) {
+    if (samePos(o, obj) && sameFile(rootOf(o), rootOf(obj))) continue;
+    for (const p of r531ProcsIn(o, tg.member, arity, n, ctx)) {
+      if (kind === "pass-rec")
+        c.args.forEach((a, i) => {
+          const k = r531Key(a);
+          if (k === null || !recvs.has(k)) return;
+          for (const j of r531Positions(c, i, p)) {
+            const prm = r531Param(p, j);
+            if (prm !== null) out.push({ proc: p, key: prm[0], byValue: !prm[1] });
+          }
+        });
+      else if (kind === "recv-proc" && tg.kind !== "record")
+        for (const g of objectGlobalNames(o))
+          if (!r531Declares(p, g, true)) out.push({ proc: p, key: g, byValue: false });
+    }
+  }
+  return out;
+}
+
+/** The names an object declares in its own `var` sections (its globals). */
+function objectGlobalNames(o: ALSyntaxNode): Set<string> {
+  const out = new Set<string>();
+  for (const c of o.childForFieldName("body")?.namedChildren ?? []) {
+    if (c.rawKind !== "var_section") continue;
+    visitAll(c, (v) => {
+      if (v.rawKind === "variable_declaration")
+        for (const nm of declaredNames(v)) out.add(normalizeAlName(nm));
+    });
+  }
+  return out;
 }
 
 /** Every R-531 loop in a scope (FILTER and FEEDS sites can sit outside the loop). */
