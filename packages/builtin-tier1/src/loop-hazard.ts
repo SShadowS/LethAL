@@ -1372,7 +1372,9 @@ function r562FilterHop(
  *  `indirectFeeds`'s by-name rule, over the whole scope instead of one loop body). R532 passes
  *  `fed`, which receives every name read on the way, and also matches a target's ROOT name
  *  (`Arr[1] := X` feeds `Arr`, `R.X := Y` feeds `R` as well as `X`) and follows the `#if`
- *  expression tails `indirectFeeds` follows. R-531 passes nothing and is unchanged. */
+ *  expression tails `indirectFeeds` follows. Under `fed` it reads only the receiver of a non-bare
+ *  call (`Obj.Proc(A)` feeds `Obj`, not `A`): a value that reaches the name through another
+ *  object's function is closed by ruling in R532. R-531 passes nothing and is unchanged. */
 function r531Feeds(
   scope: ALSyntaxNode,
   parts: ALSyntaxNode[],
@@ -1382,6 +1384,15 @@ function r531Feeds(
   const names = fed ?? new Set<string>();
   const collect = (n: ALSyntaxNode): void => {
     if (DIRECTIVE_MARKERS.has(n.rawKind) || armOfNode(ctx, n) === "inactive") return;
+    if (
+      fed !== undefined &&
+      (n.rawKind === "call_expression" || n.rawKind === "call_statement") &&
+      bareCallee(n) === null
+    ) {
+      const f = n.childForFieldName("function");
+      if (f !== null) collect(f);
+      return;
+    }
     if (isIdentifierLike(n)) names.add(normalizeAlName(n.text));
     for (const c of n.namedChildren) collect(c);
   };
@@ -1820,7 +1831,8 @@ function consumingLoopRefuses(
  * through a typed `Report X` receiver (R555, below; the unresolvable receivers are filed), and a value
  * that reaches the name from another procedure or object (closed by ruling in R532). A value that
  * reaches it through another variable in the same scope (an argument of a same-object writer call
- * included) is a FEED (R532, `presetFeeds`), refused like a write.
+ * whose parameter the writer feeds included) is a FEED (R532, `presetFeeds`), refused like a write;
+ * an argument of another object's function (`Obj.Proc(A)`) is not one.
  *
  * R548: inside a reportextension the names are the extension's own (`presetExitNames` over its
  * blocks, its globals seeded with the base's protected names) plus every base candidate's preset
@@ -1906,8 +1918,11 @@ export const r532FeedSeam = { on: true };
  * name, to a fixpoint, into the right side (or `#if` tails) of an assignment to a preset exit name
  * (`r531Feeds` with `fed`), or a `directWrite` of a name read on the way: a `var` argument
  * (`Compute(Tmp)`), `Clear`/`Evaluate`, or an unknown callee. The search also starts from every
- * argument of a BARE call that is itself a preset write (`Evaluate(Continue, S)`) or of a call to a
- * same-object preset writer (`SetContinue(Tmp)`). Never from `Obj.Proc(Continue, H)`: a value that
+ * argument of a BARE call that is itself a preset write (`Evaluate(Continue, S)`), and from each
+ * argument of a call to a same-object preset writer whose parameter that writer itself feeds
+ * (`SetContinue(Tmp)` with `Continue := B`; `writerFedArgs`). Never from `Obj.Proc(Continue, H)`,
+ * and never from an argument of `Obj.Proc(...)` in a right side (`Continue := Fmt.Bill(A, B)` feeds
+ * `Fmt`, not `A` or `B`), nor from a parameter a writer only hands to `Obj.Proc(...)`: a value that
  * reaches the name through another object's function is the cross-object part R532 closed by ruling
  * (seeding there cost 109 BaseApp mutants). Shape 1 treats a feed as a write.
  * By name: a same-named variable written after the preset write is refused too (the safe direction).
@@ -1921,28 +1936,75 @@ function presetFeeds(
   w: PresetWriters,
   ctx: SemanticContext,
 ): { readonly assigns: ReadonlySet<number>; readonly names: ReadonlySet<string> } {
-  return cached(ctx, scope, "r532feeds", () => {
-    const rights: ALSyntaxNode[] = [];
-    visitAll(scope, (n) => {
-      if (armOfNode(ctx, n) === "inactive") return;
-      if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
-        if (
-          (bareCallee(n) !== null && directWrite(n, names, ctx)) ||
-          callsPresetWriter(n, w, ctx, names.size > 0)
-        )
-          rights.push(...(n.childForFieldName("arguments")?.namedChildren ?? []));
-        return;
+  const key = `${scope.startIndex}|${scope.endIndex}`;
+  // a writer already being read (recursion, or a cycle of writers) feeds nothing
+  if (r532Reading.has(key)) return { assigns: new Set<number>(), names: new Set<string>() };
+  r532Reading.add(key);
+  try {
+    return cached(ctx, scope, "r532feeds", () => presetFeedsOnce(scope, names, w, ctx));
+  } finally {
+    r532Reading.delete(key);
+  }
+}
+
+const r532Reading = new Set<string>();
+
+function presetFeedsOnce(
+  scope: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  w: PresetWriters,
+  ctx: SemanticContext,
+): { readonly assigns: ReadonlySet<number>; readonly names: ReadonlySet<string> } {
+  const rights: ALSyntaxNode[] = [];
+  visitAll(scope, (n) => {
+    if (armOfNode(ctx, n) === "inactive") return;
+    if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
+      const args = n.childForFieldName("arguments")?.namedChildren ?? [];
+      if (bareCallee(n) !== null && directWrite(n, names, ctx)) rights.push(...args);
+      else if (callsPresetWriter(n, w, ctx, names.size > 0)) {
+        const fedAt = writerFedArgs(n, names, w, ctx);
+        rights.push(...args.filter((_, i) => fedAt(i)));
       }
-      if (n.rawKind !== "assignment_statement") return;
-      const l = n.childForFieldName("left");
-      const r = n.childForFieldName("right");
-      if (l !== null && r !== null && names.has(rootName(l))) rights.push(r, ...exprTails(n));
-    });
-    const fed = new Set<string>();
-    if (rights.length === 0) return { assigns: new Set<number>(), names: fed };
-    const assigns = new Set(r531Feeds(scope, rights, ctx, fed).map((a) => a.startIndex));
-    return { assigns, names: fed };
+      return;
+    }
+    if (n.rawKind !== "assignment_statement") return;
+    const l = n.childForFieldName("left");
+    const r = n.childForFieldName("right");
+    if (l !== null && r !== null && names.has(rootName(l))) rights.push(r, ...exprTails(n));
   });
+  const fed = new Set<string>();
+  if (rights.length === 0) return { assigns: new Set<number>(), names: fed };
+  const assigns = new Set(r531Feeds(scope, rights, ctx, fed).map((a) => a.startIndex));
+  return { assigns, names: fed };
+}
+
+/**
+ * R532: which arguments of `n`, a call to a same-object preset writer, seed the feed search: those
+ * whose parameter the writer itself feeds into a preset write (its own `presetFeeds` names), so a
+ * `Hdr` the writer only hands to another object's function is not one. Every argument when the
+ * callee does not resolve to exactly one procedure of this object (the safe direction).
+ */
+function writerFedArgs(
+  n: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  w: PresetWriters,
+  ctx: SemanticContext,
+): (i: number) => boolean {
+  const c = bareCallee(n) ?? hiddenCallee(n, w.known, ctx);
+  const obj = objectOf(n);
+  const procs: ALSyntaxNode[] = [];
+  if (c !== null && obj !== null)
+    visitAll(obj, (p) => {
+      if ((isProcedureLike(p) || p.rawKind === "procedure") && procNames(p).includes(c))
+        procs.push(p);
+    });
+  const [p] = procs;
+  if (procs.length !== 1 || p === undefined) return () => true;
+  const fed = presetFeeds(p, names, w, ctx).names;
+  return (i) => {
+    const q = r531Param(p, i);
+    return q !== null && fed.has(q[0]);
+  };
 }
 
 /** An assignment's `#if` expression tails (R480 `indirectFeeds` follows them). */

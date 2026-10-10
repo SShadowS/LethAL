@@ -181,6 +181,71 @@ const REP = `report 50532 "Feed Rep"
         Ext.Fill(Continue, H);
     end;
 
+    procedure CaseRhsBoundary()
+    var
+        CustAddr: Integer;
+        ShipAddr: Integer;
+        Hdr: Integer;
+        FormatAddr: Codeunit "Not In Project";
+    begin
+        FormatAddr.ShipTo(ShipAddr, Hdr);
+        Continue := FormatAddr.BillTo(CustAddr, ShipAddr, Hdr);
+    end;
+
+    procedure CaseSetterBoundary()
+    var
+        Hdr: Integer;
+        Y: Integer;
+        Archive: Codeunit "Not In Project";
+    begin
+        FillFields(Hdr);
+        if Limit > 97 then
+            Archive.Store(Hdr, Y);
+    end;
+
+    procedure CaseBareRhs()
+    var
+        Tmp: Boolean;
+    begin
+        Tmp := Limit > 57;
+        Continue := Decide(Tmp);
+    end;
+
+    procedure CaseReceiver()
+    var
+        Probe: Text;
+    begin
+        Probe := Txt + 'x';
+        Continue := Probe.Contains('y');
+    end;
+
+    local procedure FillFields(Header: Integer)
+    var
+        FormatAddr: Codeunit "Not In Project";
+    begin
+        FormatAddr.Fill(Continue, Header);
+    end;
+
+    procedure CaseRecursiveWriter()
+    var
+        Start: Integer;
+    begin
+        Start := Limit + 99;
+        Bump(Start);
+    end;
+
+    local procedure Bump(N: Integer)
+    begin
+        if N > 0 then
+            Bump(N - 1);
+        Continue := N > 98;
+    end;
+
+    local procedure Decide(B: Boolean): Boolean
+    begin
+        exit(B);
+    end;
+
     local procedure SetContinue(B: Boolean)
     begin
         Continue := B;
@@ -316,6 +381,43 @@ describe("R532: same-scope feeds of a preset exit name", () => {
       expect(e.has("lethal.remove-assignment @ H := Limit + 95")).toBe(true);
       expect(e.has("lethal.swap-additive @ Limit + 95")).toBe(true);
     }
+  });
+
+  // red: drop the non-bare-call branch from `r531Feeds`' `collect` (leak 1: `ShipAddr` and `Hdr`,
+  // read only as arguments of `FormatAddr.BillTo`, become fed and the `ShipTo` call is refused)
+  it("BOUNDARY-RHS: an argument of `Obj.Proc(...)` in a preset write's right side is not a feed", () => {
+    for (const on of [false, true]) {
+      const e = emitted(on);
+      expect(e.has("lethal.void-method-call @ FormatAddr.ShipTo(ShipAddr, Hdr)")).toBe(true);
+    }
+  });
+
+  // red: seed every argument of a same-object preset-writer call (`writerFedArgs` answers true;
+  // leak 2: `Hdr` becomes fed and `Archive.Store(Hdr, Y)` is a var-arg feed of an unknown callee)
+  it("BOUNDARY-SETTER: a parameter a writer only hands to `Obj.Proc(...)` is not a feed", () => {
+    for (const on of [false, true]) {
+      const e = emitted(on);
+      expect(e.has("lethal.void-method-call @ Archive.Store(Hdr, Y)")).toBe(true);
+      expect(e.has("lethal.conditional-boundary @ Limit > 97")).toBe(true);
+      // the setter's own preset write stays refused (a write, not a feed)
+      expect(e.has("lethal.void-method-call @ FormatAddr.Fill(Continue, Header)")).toBe(false);
+    }
+  });
+
+  // red: skip the arguments of EVERY call in `r531Feeds`' `collect`, bare ones included
+  it("a bare same-object call in the right side still feeds (`Continue := Decide(Tmp)`)", () => {
+    refusedByFeeds("lethal.remove-assignment @ Tmp := Limit > 57");
+    refusedByFeeds("lethal.conditional-boundary @ Limit > 57");
+  });
+
+  // red: drop the receiver (`collect(f)`) from the non-bare-call branch of `r531Feeds`' `collect`
+  it("the receiver of a non-bare call in the right side still feeds (`Probe.Contains`)", () => {
+    refusedByFeeds("lethal.remove-assignment @ Probe := Txt + 'x'");
+  });
+
+  // red: drop the `r532Reading` check in `presetFeeds` (the writer reads itself without end)
+  it("a self-recursive writer's parameter feed (`Bump(Start)`) is refused without looping", () => {
+    refusedByFeeds("lethal.remove-assignment @ Start := Limit + 99");
   });
 
   // red: treat every same-scope assignment as a feed
