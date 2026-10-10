@@ -450,3 +450,55 @@ describe("R569 T8: an OnPreDataItem Break guard (the stated over-refusal)", () =
     );
   });
 });
+
+// T9: a report helper reached through its RETURN VALUE passes a fed name to another object's
+// `var` parameter; that callee is a hop-1 callee feeding the return, so its third-object call is
+// hop 2 (build review r1, finding 1).
+const ADV = `codeunit 50708 "R569 Adv"
+{
+    procedure Advance(var Found: Boolean)
+    begin
+        Found := Period.NextDate(1) <> 0;
+    end;
+
+    var
+        Period: Codeunit "R569 Period";
+}
+`;
+
+describe("R569 T9: a var call in a report helper reached through its return value", () => {
+  const loop = `                repeat
+                    Lines += 1;
+                until not GetNext();`;
+  // Red: drop every hop-0 cross-object `var` call, also in a helper reached by return value.
+  it("NextDate's step is refused (exit(Found))", () => {
+    const r = report(
+      loop,
+      `
+    local procedure GetNext(): Boolean
+    var
+        Adv: Codeunit "R569 Adv";
+        Found: Boolean;
+    begin
+        Adv.Advance(Found);
+        exit(Found);
+    end;
+`,
+    );
+    refusedByRule({ "r.al": r, "a.al": ADV, "p.al": PERIOD }, "p.al", "Moved := Steps - 1");
+  });
+  it("T9b: NextDate's step is refused (named return)", () => {
+    const r = report(
+      loop,
+      `
+    local procedure GetNext() Found: Boolean
+    var
+        Adv: Codeunit "R569 Adv";
+    begin
+        Adv.Advance(Found);
+    end;
+`,
+    );
+    refusedByRule({ "r.al": r, "a.al": ADV, "p.al": PERIOD }, "p.al", "Moved := Steps - 1");
+  });
+});

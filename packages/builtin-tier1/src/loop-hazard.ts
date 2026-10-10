@@ -2772,15 +2772,17 @@ export function r569HopTargets(ctx: SemanticContext): R569Target[] {
  *    object is the hop-1 callee; from a hop-1 callee (or its same-object procedures) a call into a
  *    third object is the hop-2 target, refused exactly like a hop-1 callee (`add`: the whole
  *    procedure, its same-object closure, and the event subscribers the closing pass follows).
- * 4. VAR WRITES. Inside a procedure reached through its return value at hop 1 (the hop-1 callee and
- *    its same-object procedures), a call that writes a fed name through a `var` parameter is
- *    followed too (`Helper.Calc(Result); exit(Result)`), since it feeds the returned value. In report
- *    code (hop 0) a `var` call into a procedure of the SAME object is followed; a `var` call into
- *    ANOTHER object's procedure is NOT (the entry-var path).
+ * 4. VAR WRITES. Inside a procedure reached through its return value (a report helper, the hop-1
+ *    callee, their same-object procedures), a call that writes a fed name through a `var` parameter
+ *    is followed too (`Helper.Calc(Result); exit(Result)`), since it feeds the returned value; from
+ *    a report helper such a call into another object enters the hop-1 callee. In the exit's own
+ *    trigger or procedure, and in procedures it reaches only through `var` arguments, a `var` call
+ *    into a procedure of the SAME object is followed; a `var` call into ANOTHER object's procedure
+ *    is NOT (the entry-var path).
  *
- * Not followed (residuals in R569): a hop-1 callee entered through a `var` argument from report
- * code (measured 906 in Fixed Asset - Projected Value, each loop sampled with a second exit that
- * progresses on its own); a `var` write made by an event subscriber; events raised on the way;
+ * Not followed (residuals in R569): a hop-1 callee entered through a `var` argument from the
+ * exit's own scope (measured 906 in Fixed Asset - Projected Value, each loop sampled with a second
+ * exit that progresses on its own); a `var` write made by an event subscriber; events raised on the way;
  * globals written in another trigger; hop 3.
  */
 function exitFedHop2(
@@ -2814,21 +2816,27 @@ function exitFedHop2(
     ret: boolean,
     tag: R569Target["tag"],
     hop1: string,
+    viaRet: boolean,
   ): void => {
     const obj = objectOf(proc);
     if (obj === null) return;
-    const key = `${objectKey(obj)}|${proc.startIndex}|${hop}|${ret}|${tag}|${[...names].sort().join(",")}`;
+    const vr = viaRet || ret;
+    const key = `${objectKey(obj)}|${proc.startIndex}|${hop}|${ret}|${vr}|${tag}|${[...names].sort().join(",")}`;
     if (seen.has(key)) return;
     seen.add(key);
     if (!ret) {
-      site(proc, [], names, hop, tag, hop1);
+      site(proc, [], names, hop, tag, hop1, vr);
       return;
     }
     const { values, guards } = exitParts(proc);
     const rv = proc.childForFieldName("return_value");
-    site(proc, values, rv === null ? names : [...names, normalizeAlName(rv.text)], hop, tag, hop1);
-    if (guards.length > 0) site(proc, guards, names, hop, tag, hop1);
+    const rnames = rv === null ? names : [...names, normalizeAlName(rv.text)];
+    site(proc, values, rnames, hop, tag, hop1, vr);
+    if (guards.length > 0) site(proc, guards, names, hop, tag, hop1, vr);
   };
+  /** `viaRet`: the scope was reached through a procedure's return value (step 3), not only from
+   *  the exit's own scope and `var` arguments; there a hop-0 `var` call into another object is
+   *  followed (step 4). */
   const site = (
     scope: ALSyntaxNode,
     parts: ALSyntaxNode[],
@@ -2836,6 +2844,7 @@ function exitFedHop2(
     hop: 0 | 1,
     tag: R569Target["tag"],
     hop1: string,
+    viaRet: boolean,
   ): void => {
     const obj = objectOf(scope);
     if (obj === null) return;
@@ -2868,15 +2877,16 @@ function exitFedHop2(
             pnames = [prm[0]];
           }
           const same = objectKey(o) === objectKey(obj);
-          // the entry-var path: report code passing a fed name to another object's `var` parameter
-          if (argIdx !== null && hop === 0 && !same) continue;
+          // the entry-var path: the exit's own scope (or code it reaches by `var`) passing a fed
+          // name to another object's `var` parameter
+          if (argIdx !== null && hop === 0 && !same && !viaRet) continue;
           const nextHop: 0 | 1 = same ? hop : 1;
           if (!same && hop === 1) {
             add(o, member, t, hop1);
             continue;
           }
           const h1 = !same ? `${objectNameOf(o)}.${member}` : hop1;
-          visitProc(p, nextHop, pnames, argIdx === null, t, h1);
+          visitProc(p, nextHop, pnames, argIdx === null, t, h1, viaRet);
         }
       }
     };
@@ -2897,7 +2907,7 @@ function exitFedHop2(
       if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return;
       if (armOfNode(ctx, n) === "inactive") return;
       argumentList(n).forEach((a, i) => {
-        if (fed.has(rootName(a))) onCall(n, i, hop === 1 ? "ret-var" : tag);
+        if (fed.has(rootName(a))) onCall(n, i, hop === 1 || viaRet ? "ret-var" : tag);
       });
     });
   };
@@ -2908,7 +2918,7 @@ function exitFedHop2(
     if (LOOP_KINDS.has(n.kind) && inOpenItemCode(n, ctx)) parts = loopExitParts(n, ctx);
     else if (n.rawKind === "member_expression" && isReportExit(n) && inOpenItemCode(n, ctx))
       parts = exitGuards(s, s, (x) => samePos(x, n));
-    if (parts !== null && parts.length > 0) site(s, parts, [], 0, "exit", "");
+    if (parts !== null && parts.length > 0) site(s, parts, [], 0, "exit", "", false);
   });
 }
 
