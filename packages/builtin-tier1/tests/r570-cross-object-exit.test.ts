@@ -144,6 +144,59 @@ const ITEM = `table 50700 "R570 Item"
         exit(true);
     end;
 
+    procedure WriteNoteModifyTrue(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'MODTRUE';
+        Note := 'q';
+        Modify(true);
+        exit(true);
+    end;
+
+    procedure SplitDone(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'SPLIT1';
+        MarkDone();
+        Close();
+        exit(true);
+    end;
+
+    local procedure MarkDone()
+    var
+        Tag: Text;
+    begin
+        Tag := 'MARKDONE';
+        Grp := 'D';
+    end;
+
+    local procedure Close()
+    begin
+        Modify();
+    end;
+
+    procedure SplitSave(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'SPLIT2';
+        CloseGrp();
+        Save();
+        exit(true);
+    end;
+
+    local procedure CloseGrp()
+    begin
+        Grp := 'C';
+    end;
+
+    local procedure Save()
+    begin
+        Modify();
+    end;
+
     procedure FieldWrite(): Boolean
     var
         Tag: Text;
@@ -597,7 +650,23 @@ const LOOPS = `codeunit 50701 "R570 Loops"
                     exit;
                 if not L.WriteNoteModify() then
                     exit;
+                if not L.WriteNoteModifyTrue() then
+                    exit;
             until L.Next() = 0;
+    end;
+
+    procedure RunSplit()
+    var
+        L2: Record "R570 Item";
+    begin
+        L2.SetRange(Grp, 'A');
+        if L2.FindSet() then
+            repeat
+                if not L2.SplitDone() then
+                    exit;
+                if not L2.SplitSave() then
+                    exit;
+            until L2.Next() = 0;
     end;
 
     procedure RunOverload()
@@ -1271,8 +1340,19 @@ describe("R570 build review: touch fixes", () => {
   it("field-write rule: a write of the loop's filtered field, then Modify, IS touching", () => {
     expect(project(FILES)(T, "FILTMOD")).toBe(true);
   });
-  it("field-write rule: the filtered field written WITHOUT Modify is NOT touching", () => {
-    expect(project(FILES)(T, "FILTNOMOD")).toBe(false);
+  it("field-write rule (review fix 1): the filtered field written WITHOUT Modify IS touching", () => {
+    expect(project(FILES)(T, "FILTNOMOD")).toBe(true);
+  });
+  it("review fix 1: a filtered write in one helper (MarkDone), the Modify in another (Close): touching", () => {
+    const at = project(FILES);
+    expect(at(T, "SPLIT1")).toBe(true);
+    expect(at(T, "MARKDONE")).toBe(true);
+  });
+  it("review fix 1: the reverse split (write in Close, Modify in Save): touching", () => {
+    expect(project(FILES)(T, "SPLIT2")).toBe(true);
+  });
+  it("review fix 3: `Modify(true)` runs OnModify, so it touches even after a non-key, non-filtered write", () => {
+    expect(project(FILES)(T, "MODTRUE")).toBe(true);
   });
   it("field-write rule: a non-key, non-filtered field written then Modify is NOT touching", () => {
     expect(project(FILES)(T, "NOTEMOD")).toBe(false);
@@ -1325,6 +1405,101 @@ describe("R570 option (d): the record is followed 8 hops, with a visited set", (
     expect(at(D, "CYCTOUCH")).toBe(true);
     expect(at(D, "CYCTB")).toBe(true);
   });
+});
+
+/** A loop whose guard hands the cursor record to `Ring.<entry>` by `var`, and nothing else. */
+const ringLoop = (entry: string) => `codeunit 50730 "R570 Ring Loop"
+{
+    procedure Run()
+    var
+        Ent: Record "R570 Item";
+        Ring: Codeunit "R570 Ring";
+    begin
+        repeat
+            if not Ring.${entry}(Ent) then
+                exit;
+        until Ent.Next() = 0;
+    end;
+}
+`;
+
+const RING = `codeunit 50731 "R570 Ring"
+{
+    procedure Q(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'QAB';
+        if X > 0 then
+            A(R)
+        else
+            B(R);
+        exit(true);
+    end;
+
+    procedure A(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'AAB';
+        R.Next();
+        if X > 1 then
+            B(R);
+        exit(true);
+    end;
+
+    procedure B(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'BAB';
+        A(R);
+        exit(true);
+    end;
+
+    procedure RingA(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'RINGA';
+        RingB(R);
+        exit(true);
+    end;
+
+    procedure RingB(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'RINGB';
+        R.Next();
+        RingC(R);
+        exit(true);
+    end;
+
+    procedure RingC(var R: Record "R570 Item"): Boolean
+    begin
+        Tag := 'RINGC';
+        RingA(R);
+        exit(true);
+    end;
+
+    var
+        Tag: Text;
+        X: Integer;
+}
+`;
+
+describe("R570 review fix 2: the visited set never caches a half-finished answer", () => {
+  const ring = (entry: string) =>
+    project({
+      "Item.Table.al": ITEM,
+      "Ring.Codeunit.al": RING,
+      "Loop.Codeunit.al": ringLoop(entry),
+    });
+  const R = "Ring.Codeunit.al";
+  it("the review's Q/A/B shape: B (reached first while A is still being checked) is refused", () => {
+    const at = ring("Q");
+    expect(at(R, "QAB")).toBe(true);
+    expect(at(R, "AAB")).toBe(true);
+    expect(at(R, "BAB")).toBe(true);
+  });
+  for (const entry of ["RingA", "RingB", "RingC"])
+    it(`a ring A -> B -> C -> A whose member B touches: entered at ${entry}, every member is refused`, () => {
+      const at = ring(entry);
+      expect(at(R, "RINGA")).toBe(true);
+      expect(at(R, "RINGB")).toBe(true);
+      expect(at(R, "RINGC")).toBe(true);
+    });
 });
 
 describe("R531: a HOP into a `var` parameter NAMED `Rec`", () => {

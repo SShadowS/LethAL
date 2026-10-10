@@ -3239,8 +3239,9 @@ function r570ProjectRec(p: ALSyntaxNode, ctx: SemanticContext): boolean {
  * Option (b): the procedures through which `p` TOUCHES the record it knows as `key` (`""`: its
  * implicit Rec): `[p, ...]` when it does, `[]` when it does not. A `R570_TOUCH` method on it
  * (`R570_CONSUME` only when `byValue`), an assignment to it, a FIELD write under the field-write
- * rule (a field in any key of its table, or one that cannot be resolved; a field the loop filters
- * on, `r570LoopFilters`, only when a `Modify` follows; `ModifyAll` of such a field),
+ * rule (a field in any key of its table, one that cannot be resolved, or a field the loop filters
+ * on, `r570LoopFilters`; `ModifyAll` of such a field; through a by-value copy only when a `Modify`
+ * follows), `Modify(true)` (it runs OnModify),
  * `X.Copy(R, true)` (X then shares R's table), or handing it to a same-object helper, a table
  * procedure or a parameter that touches it in turn (up to `R570_TOUCH_HOPS`, with a visited set so
  * a cycle ends; orchestrator option d); every procedure on such a
@@ -3259,38 +3260,59 @@ function r570Touches(
   depth: number,
   filtered: ReadonlySet<string>,
   ctx: SemanticContext,
-  seen: Map<string, ALSyntaxNode[] | null> = new Map(),
 ): ALSyntaxNode[] {
-  // option (d): VISITED, by procedure and the parameter the record is in. A revisit is no touch
-  // (a cycle touches only through a member that does); a finished visit gives its answer again.
-  const id = `${objectKey(objectOf(p) ?? p)}|${p.startIndex}|${key}|${byValue}`;
-  if (seen.has(id)) return seen.get(id) ?? [];
-  seen.set(id, null);
-  const result = r570TouchesOnce(p, key, byValue, depth, filtered, ctx, seen);
-  seen.set(id, result);
-  return result;
+  // option (d): VISITED, by procedure and the parameter the record is in: each is scanned once, a
+  // revisit only adds an edge. Review fix 2: whether a node touches is settled on the whole graph
+  // afterwards (it touches itself, or reaches one that does), never from a half-finished visit, so
+  // every member of a touching cycle is refused from whichever member the walk entered at.
+  const graph = new Map<string, { node: ALSyntaxNode; direct: boolean; kids: string[] }>();
+  const visit = (n: ALSyntaxNode, k: string, bv: boolean, d: number): string => {
+    const id = `${objectKey(objectOf(n) ?? n)}|${n.startIndex}|${k}|${bv}`;
+    if (graph.has(id)) return id;
+    const entry = { node: n, direct: false, kids: [] as string[] };
+    graph.set(id, entry);
+    const scan = r570Scan(n, k, bv, d, filtered, ctx);
+    entry.direct = scan.direct;
+    for (const [t, k2, bv2] of scan.next) entry.kids.push(visit(t, k2, bv2, d + 1));
+    return id;
+  };
+  const root = visit(p, key, byValue, depth);
+  const touching = new Set([...graph].filter(([, e]) => e.direct).map(([id]) => id));
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [id, e] of graph)
+      if (!touching.has(id) && e.kids.some((k) => touching.has(k))) {
+        touching.add(id);
+        changed = true;
+      }
+  }
+  if (!touching.has(root)) return [];
+  return [...touching].flatMap((id) => {
+    const e = graph.get(id);
+    return e === undefined ? [] : [e.node];
+  });
 }
 
-function r570TouchesOnce(
+/** One procedure of `r570Touches`' walk: does it touch the record directly, and where does it hand
+ *  the record on (procedure, the record's key there, by value)? */
+function r570Scan(
   p: ALSyntaxNode,
   key: string,
   byValue: boolean,
   depth: number,
   filtered: ReadonlySet<string>,
   ctx: SemanticContext,
-  seen: Map<string, ALSyntaxNode[] | null>,
-): ALSyntaxNode[] {
+): { direct: boolean; next: [ALSyntaxNode, string, boolean][] } {
+  const next: [ALSyntaxNode, string, boolean][] = [];
   const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
-  if (body === null || depth > R570_TOUCH_HOPS) return [p];
+  if (body === null || depth > R570_TOUCH_HOPS) return { direct: true, next };
   const hits = byValue ? R570_CONSUME : R570_TOUCH;
   const own = r531ObjectProcs(p, ctx);
   let direct = false;
-  // a field write that touches only once a `Modify` follows (a filtered field; through a by-value
-  // copy, any field write that would touch)
+  // through a by-value copy, a field write that would touch counts only once a `Modify` follows
   let pending = false;
-  const via: ALSyntaxNode[] = [];
   const follow = (t: ALSyntaxNode, k: string, bv: boolean): void => {
-    via.push(...r570Touches(t, k, bv, depth + 1, filtered, ctx, seen));
+    next.push([t, k, bv]);
   };
   /** `ts` see the same implicit Rec; none resolved: unknown, so touching. */
   const viaRec = (ts: ALSyntaxNode[]): void => {
@@ -3306,13 +3328,19 @@ function r570TouchesOnce(
     return filtered.has("*") || filtered.has(f) ? "filtered" : "none";
   };
   const fieldWrite = (f: string | null): void => {
-    const k = fieldClass(f);
-    if (k === "touch" && !byValue) direct = true;
-    else if (k !== "none") pending = true;
+    // review fix 1: a filtered field touches by itself, like a key field; waiting for a `Modify`
+    // in the same body let a write in one procedure and the Modify in another escape
+    if (fieldClass(f) === "none") return;
+    if (byValue) pending = true;
+    else direct = true;
   };
   /** Does a call of `c`'s method on the shared record touch it? */
   const recMethod = (c: R531Call): boolean => {
-    if (c.method === "modify") return pending;
+    if (c.method === "modify") {
+      // review fix 3: `Modify(true)` (any argument but the literal false) runs OnModify
+      const a = c.args[0];
+      return pending || c.uncertain || (a !== undefined && normalizeAlName(a.text) !== "false");
+    }
     if (c.method === "modifyall") return fieldClass(r531Field(c)) !== "none";
     return hits.has(c.method) || (c.method === "transferfields" && !byValue);
   };
@@ -3383,7 +3411,7 @@ function r570TouchesOnce(
           else follow(t, r531ParamKey(prm[0]), byValue || !prm[1]);
         }
   });
-  return direct || via.length > 0 ? [p, ...via] : [];
+  return { direct, next };
 }
 
 /** The project procedures (with a body) that call `n` names, in any object. */
