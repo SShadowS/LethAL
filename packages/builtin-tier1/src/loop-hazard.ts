@@ -2,10 +2,12 @@ import {
   ALNodeKind,
   type ALSyntaxNode,
   type HangCapableReason,
+  type ObjectSymbol,
   type SemanticContext,
   armOfNode,
   declarationMembers,
   enclosingTrigger,
+  fieldSegments,
   identifierTokens,
   isObjectContainer,
   isProcedureLike,
@@ -14,8 +16,11 @@ import {
   normalizeAlName,
   objectDeclarationsOf,
   procedureLikeArmNames,
+  qualifiedObjectName,
+  recordTableObjectOfName,
   resolveReceiverTable,
   resolveVarRef,
+  tableObjectOfRef,
   triggerLocalNames,
 } from "@lethal/engine";
 
@@ -850,7 +855,8 @@ export function openItemHangRefuses(
  *   arguments, a consumer write's right side, a consumer's guard, a pre-loop filter's arguments or a
  *   guard around a pre-loop filter call (R480's by-name `indirectFeeds` rule over the scope); and
  *   those guards around a pre-loop filter call.
- * - HOP, one hop into a same-object callee, EVERY overload whose parameter count fits the call: for
+ * - HOP, one hop into a same-object callee, EVERY overload whose parameter count fits the call
+ *   (R564: only the one the argument types choose, when that is certain, see `r531ProcsIn`): for
  *   `pass-rec`, the callee's parameter at R's argument position; for `global-call`, the same global
  *   R (unless the callee declares a local of that name) or the implicit Rec; for `recv-proc`, the
  *   table procedure on R (`r531TableProcs`: `declaredType` + `objectsOfType`, else the table the
@@ -866,7 +872,8 @@ export function openItemHangRefuses(
  *   `SetTemplateFilter(xRec)` on the implicit Rec in a tableextension or SourceTable page, through
  *   `r531TableProcs`), a same-object procedure that sees R (global-call), passes R to a VAR parameter
  *   of a same-object procedure, or passes R to a VAR parameter of a project codeunit or table
- *   procedure, is followed one hop (every overload that fits by arity); so is `Codeunit.Run(X, R)` or
+ *   procedure, is followed one hop (every overload that fits by arity, narrowed by argument type as
+ *   in HOP); so is `Codeunit.Run(X, R)` or
  *   `CU.Run(R)` into a project codeunit with a `TableNo`, whose OnRun's Rec is taken to BE R (ASSUMED:
  *   that Codeunit.Run passes its record by reference is not measured). A by-value Record is not
  *   followed: its filters are the copy's. In the
@@ -883,7 +890,8 @@ export function openItemHangRefuses(
  * LIMITS (stated): cross-object callees outside FILTER HOP, DotNet callees, more than one hop, event
  * subscribers (an empty publisher reads as setting no filter), a filter set on another variable then
  * moved with `CopyFilters`/`SetView`, a call between nested loops, the FILTER HOP callee's own FEEDS,
- * overloads chosen by arity rather than argument type, and a refilter through a FieldRef. A bare name
+ * overloads chosen by arity wherever their argument types do not settle the choice (R564), comment
+ * nodes counted as arguments (R567), and a refilter through a FieldRef. A bare name
  * that resolves to no project table procedure is neither followed nor refused (it cannot be told
  * from a global function such as `Commit`), nor is one in a pageextension (its Rec's table is not
  * resolved). The implicit Rec of a `with` subject or a report data item binds through the same
@@ -1039,9 +1047,23 @@ function r531Walk(n: ALSyntaxNode, ctx: SemanticContext, f: (n: ALSyntaxNode) =>
   for (const c of n.namedChildren) r531Walk(c, ctx, f);
 }
 
-/** Every procedure-like node named `name` in object `obj` that takes `arity` parameters: an
- *  overload is chosen by its arguments, so every one that fits the call is followed. */
-function r531ProcsIn(obj: ALSyntaxNode, name: string, arity: number): ALSyntaxNode[] {
+/** Every procedure-like node named `name` in object `obj` that takes `arity` parameters, narrowed
+ *  by `call`'s argument types (R564) only when the choice is certain:
+ *  1. no candidate is `#if`-split (one `parameter_list`, no preprocessor node in it);
+ *  2. every argument resolves to a project table (`recordTableObjectOfName`);
+ *  3. every parameter of every candidate is a `Record` of a resolved project table;
+ *  4. exactly one candidate has the argument's table at every position (tables compared by
+ *     IDENTITY, never by spelling), so every other one differs at some position.
+ *  Otherwise every overload that fits by arity is followed: a wrongly dropped overload would
+ *  re-deploy a hang, a kept one only over-refuses. AL has no conversion from Record A to a
+ *  `Record B` parameter, by value, `var` or `temporary` (alc probe, R-564). Narrowed per object. */
+function r531ProcsIn(
+  obj: ALSyntaxNode,
+  name: string,
+  arity: number,
+  call: ALSyntaxNode,
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
   const out: ALSyntaxNode[] = [];
   visitAll(obj, (x) => {
     if (
@@ -1051,7 +1073,41 @@ function r531ProcsIn(obj: ALSyntaxNode, name: string, arity: number): ALSyntaxNo
     )
       out.push(x);
   });
-  return out;
+  if (out.length < 2) return out;
+  const args = (r531Call(call)?.args ?? []).map((a) =>
+    isIdentifierLike(a) ? recordTableObjectOfName(a, call, ctx) : null,
+  );
+  if (args.length !== arity || args.some((t) => t === null)) return out; // (2)
+  const params = out.map((p) => r564ParamTables(p, ctx));
+  if (params.some((ts) => ts === null || ts.some((t) => t === null))) return out; // (1), (3)
+  const hits = out.filter((_, i) => params[i]?.every((t, j) => t === args[j]) === true);
+  return hits.length === 1 ? hits : out; // (4)
+}
+
+/** R564: the project table object of each parameter of `proc`, `null` for a parameter that is not
+ *  a `Record` of exactly one project table; `null` for the whole when `proc` is `#if`-split (more
+ *  than one `parameter_list`, or a preprocessor or error node anywhere outside its body). */
+function r564ParamTables(proc: ALSyntaxNode, ctx: SemanticContext): (ObjectSymbol | null)[] | null {
+  const lists = proc.namedChildren.filter((c) => c.rawKind === "parameter_list");
+  const [list] = lists;
+  if (lists.length !== 1 || list === undefined) return null;
+  // `#if` inside the parentheses parses as ERROR siblings of the first arm's parameter_list
+  let split = false;
+  for (const c of proc.namedChildren)
+    if (c.rawKind !== "code_block")
+      visitAll(c, (x) => {
+        if (x.rawKind.startsWith("preproc") || x.rawKind === "ERROR") split = true;
+      });
+  if (split) return null;
+  return list.namedChildren
+    .filter((c) => c.rawKind === "parameter")
+    .map((p) => {
+      const rec =
+        p.childForFieldName("type")?.namedChildren.find((c) => c.rawKind === "record_type") ?? null;
+      if (rec === null) return null;
+      const ref = qualifiedObjectName(fieldSegments(rec, "reference"), "table", ctx.symbols);
+      return ref === null ? null : tableObjectOfRef(ref, ctx);
+    });
 }
 
 /** HOP and FILTER HOP (shared): the project table procedures named `method` with `arity` parameters
@@ -1074,7 +1130,7 @@ function r531TableProcs(
     if (table !== null) t = { kind: "table", name: normalizeAlName(table), temporary: false };
   }
   if (t === null || t.kind !== "table") return [];
-  return objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, method, arity));
+  return objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, method, arity, n, ctx));
 }
 
 function r531Arity(proc: ALSyntaxNode): number {
@@ -1232,7 +1288,7 @@ function r562FilterHop(
     for (const p of bareRec) targets.push({ proc: p, key: "", r: "" });
   } else if (c.recv === null && r531ObjectProcs(n, ctx).has(c.method)) {
     // global-call (R a global the callee does not shadow, or the implicit Rec) and pass-rec
-    const ps = r531ProcsIn(obj, c.method, arity);
+    const ps = r531ProcsIn(obj, c.method, arity, n, ctx);
     for (const p of ps)
       for (const r of recvs)
         if (r === "" || (!r531Declares(scope, r, true) && !r531Declares(p, r, true)))
@@ -1272,7 +1328,7 @@ function r562FilterHop(
     } else {
       const ps =
         t !== null && (t.kind === "codeunit" || t.kind === "table")
-          ? objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, c.method, arity))
+          ? objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, c.method, arity, n, ctx))
           : [];
       unresolved = ps.length === 0;
       passInto(ps);
@@ -1630,7 +1686,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
       for (const p of r531TableProcs(h.n, h.c.method, arity, ctx))
         targets.push({ proc: p, key: "", byValue: false });
     } else if (h.c.recv === null && obj !== null) {
-      for (const p of r531ProcsIn(obj, h.c.method, arity)) {
+      for (const p of r531ProcsIn(obj, h.c.method, arity, h.n, ctx)) {
         if (h.kind === "global-call")
           for (const r of recvs) {
             // only R the callee can see: a global it does not shadow, or the implicit Rec

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**74 of 563 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**74 of 564 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -261,7 +261,8 @@ that ordering is the priority.
 - **R561** · A call to a report's preset-exit-name writer through a receiver R555 cannot resolve to a project report is not refused · [R561.md](docs/roadmap/R561.md) · open, blocked on R565
 - **R562** · An OnRename consuming loop whose filter is set through a table procedure (`SetTemplateFilter(xRec)`) keeps its filter mutants: R531's FILTER sees only a direct `SetRange`/`SetFilter` · [R562.md](docs/roadmap/R562.md) · done (41ecfd3c): pre-loop filter-setting call followed one hop; CDO -15, DO -23; no scheme bump
 - **R563** · A consuming loop that refilters through a FieldRef (`FieldRef.SetRange(...)` then `until RecRef.IsEmpty()`) is not seen by R531; only LibraryUtility's GenerateRandomCode* loops have the shape, and LethAL mutates them only when that test library is the run's project · [R563.md](docs/roadmap/R563.md) · open, filed 2026-10-09
-- **R564** · Loop-hazard HOPs choose a callee's overload by parameter count, not argument type, so an overload the call never reaches is refused too (DO: 8 keys under R562) · [R564.md](docs/roadmap/R564.md) · open, filed 2026-10-10
+- **R564** · Loop-hazard HOPs choose a callee's overload by parameter count, not argument type, so an overload the call never reaches is refused too (DO: 8 keys under R562) · [R564.md](docs/roadmap/R564.md) · done (a79cb1f3): an overload is chosen by argument type only when that is certain; DO +8 keys, 0 moved; no…
+- **R567** · Loop-hazard HOPs count a comment inside an argument list as an argument, so `F(xRec /*c*/)` follows no overload and the callee's hang-capable sites are deployed · [R567.md](docs/roadmap/R567.md) · open, filed 2026-10-10
 
 ## Product gaps a real project hits
 

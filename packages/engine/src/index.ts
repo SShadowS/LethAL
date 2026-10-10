@@ -94,6 +94,8 @@ export {
   bareReceiverText,
   bareFieldAssignable,
   identifierTokens,
+  recordTableObjectOfName,
+  tableObjectOfRef,
 } from "./semantic/receiver";
 export type { RecordScope } from "./semantic/receiver";
 export type { CallerIndex, CallSite } from "./semantic/callers";

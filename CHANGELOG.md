@@ -745,10 +745,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `Tmp := ...; Continue := Tmp`. Now, in the same procedure or trigger, every FEED of such a write is
   refused like the write itself: an assignment whose value flows into it by name (to any depth, an
   array element `Arr[1]` included), and a `var` argument, `Evaluate`, `Clear` or unknown call that
-  writes such a name (`Compute(Tmp)`). Matching is by name, so it can over-refuse. A value from
-  another procedure or object is NOT followed: R532 closes that part by ruling (a BaseApp census and
-  a 15-site sample found no hang, and following it would cost 321 mutants). No identity scheme
-  change. The prototype's BaseApp cost was 18 mutants; the built rule's is re-measured.
+  writes such a name (`Compute(Tmp)`), plus every argument of a call that writes the preset name
+  itself (`Evaluate(Continue, S)`, or a same-object setter `SetContinue(Tmp)`). Matching is by name,
+  so it can over-refuse. A value from another procedure or object is NOT followed: R532 closes that
+  part by ruling (a BaseApp census and a 15-site sample found no hang, and following it would cost
+  321 mutants). No identity scheme change. The prototype's BaseApp cost was 18 mutants; the built
+  rule's is re-measured.
+- **A loop-hazard HOP no longer refuses an overload the call cannot reach** (R564). R531's HOP and
+  R562's FILTER HOP followed every overload of the called name whose parameter count fit, so an
+  overload taking a different table's record was refused too. Now, when every argument is a record
+  of a known project table, every parameter of every candidate is a `Record` of a known project
+  table, no candidate is split by `#if`, and exactly one candidate matches the arguments' tables
+  (compared as objects, not by spelling), only that one is followed. Anything less certain keeps
+  every candidate, as before. alc confirms a `Record A` argument cannot bind to a `Record B`
+  parameter, by value, `var` or `temporary` (AL0133). Measured: DO Cloud gains the 8 keys predicted,
+  no key moves anywhere in DO, and the identity scheme stays 39.
 - **A hook session whose test app has no `.al` source can now prove its identity** (R498). Before,
   the read-back after the env-tool hook was refused as `unavailable`, so such a run never resumed,
   skipped known survivors or reused a baseline. It is now proven when the served package's SHA-256
