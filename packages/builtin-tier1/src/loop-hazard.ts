@@ -858,9 +858,24 @@ export function openItemHangRefuses(
  *   copies the variable, not the table: its Delete, DeleteAll, Rename and Modify (with its writes)
  *   are followed, its refilter, mark and unknown consumers are not (they change only the copy). A
  *   temporary record passed by value is treated the same way (its table sharing is unmeasured).
+ * - FILTER HOP (R562), for a loop whose ending depends on a filter: every call in the scope that ENDS
+ *   before the loop and is a table procedure on R (`R.SetTemplateFilter(xRec)`), a same-object
+ *   procedure that sees R (global-call), passes R to a VAR parameter of a same-object procedure, or
+ *   passes R to a VAR parameter of a project codeunit or table procedure, is followed one hop (every
+ *   overload that fits by arity). A by-value Record is not followed: its filters are the copy's. In the
+ *   callee, a `SetRange`/`SetFilter` on R passing FILTER's dependency test (and `MarkedOnly` for a
+ *   `Mark` consumer) is refused with its containing sites and its guards, and so are the callee's
+ *   `exit`s and raised `Error`s that start before its last such filter, with their guards (taking one
+ *   skips the filter). The call itself joins the pre-loop filters (its sites, guards and FEEDS). A
+ *   call that CANNOT be followed (a procedure on R not in the project, a same-object name with no
+ *   overload of that arity taking R, R passed into an object outside the project) is refused the
+ *   same way, the call only. Not calls: built-in record methods, `GetTable`/`SetTable`,
+ *   `Codeunit.Run`, `Page`/`Report`/`XmlPort`/`Query` runs and the pure functions above.
  *
- * LIMITS (stated): cross-object and DotNet callees, more than one hop, a filter set through a
- * procedure (`SetTemplateFilter(xRec)`), and a refilter through a FieldRef (`FieldRef.SetRange`).
+ * LIMITS (stated): cross-object callees outside FILTER HOP, DotNet callees, more than one hop, event
+ * subscribers (an empty publisher reads as setting no filter), a filter set on another variable then
+ * moved with `CopyFilters`/`SetView`, a call between nested loops, the FILTER HOP callee's own FEEDS,
+ * overloads chosen by arity rather than argument type, and a refilter through a FieldRef.
  */
 const R531_COND: ReadonlySet<string> = new Set([
   "find",
@@ -1102,6 +1117,132 @@ function r531CalleeHop(
   if (consumers.length === 0) return null;
   const isC = (n: ALSyntaxNode): boolean => consumers.some((c) => samePos(c, n));
   return { proc, consumers, guards: exitGuards(body, body, isC) };
+}
+
+/** Methods that set no filter on a record they are called on or passed (R562 FILTER HOP). */
+const r562NotAProc = (m: string): boolean =>
+  R531_BUILTIN.has(m) || R531_DEL.has(m) || R531_MOD.has(m) || m === "insert";
+
+/** The conditions around `n`, up to `stop` (exclusive). */
+function guardsUpTo(n: ALSyntaxNode, stop: ALSyntaxNode): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  for (let a = n.parent; a !== null && !samePos(a, stop); a = a.parent) {
+    let g: ALSyntaxNode | null = null;
+    if (
+      a.rawKind === "if_statement" ||
+      a.rawKind === "while_statement" ||
+      a.rawKind === "repeat_statement"
+    )
+      g = a.childForFieldName("condition");
+    else if (a.rawKind === "case_statement") g = a.childForFieldName("expression");
+    else if (a.rawKind === "case_branch") g = a.childForFieldName("pattern");
+    if (g !== null) out.push(g);
+  }
+  return out;
+}
+
+/** R562 FILTER HOP (see the block comment above `R531_COND`): a pre-loop call `n` on R or passing
+ *  R. Returns the hops into its callees that filter R as the loop's ending depends on, and whether
+ *  the call itself is refused (a callee qualifies, or the call cannot be followed). */
+function r562FilterHop(
+  n: ALSyntaxNode,
+  ctx: SemanticContext,
+  recvs: Set<string>,
+  scope: ALSyntaxNode,
+  depends: Map<string, Set<string>>,
+  markRecvs: Set<string>,
+): { hops: R531Hop[]; refuse: boolean } {
+  const none = { hops: [], refuse: false };
+  const c = r531Call(n);
+  const obj = objectOf(n);
+  if (c === null || n.rawKind === "member_expression" || obj === null) return none;
+  const arity = c.args.length;
+  const passed: [string, number][] = [];
+  c.args.forEach((a, i) => {
+    const k = r531Key(a);
+    if (k !== null && recvs.has(k) && (k !== "" || normalizeAlName(a.text) === "rec"))
+      passed.push([k, i]);
+  });
+  const targets: { proc: ALSyntaxNode; key: string; r: string }[] = [];
+  // R passed into these overloads: a BY-VALUE copy's filters never reach the caller's R
+  const passInto = (ps: ALSyntaxNode[]): void => {
+    for (const p of ps)
+      for (const [k, i] of passed) {
+        const prm = r531Param(p, i);
+        if (prm?.[1]) targets.push({ proc: p, key: prm[0], r: k });
+      }
+  };
+  const bodyOf = (p: ALSyntaxNode): ALSyntaxNode | null =>
+    p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+  const fn = n.rawKind === "call_expression" ? n.childForFieldName("function") : null;
+  const recvNode = fn?.rawKind === "member_expression" ? fn.childForFieldName("object") : null;
+  let unresolved = false;
+  if (c.recv !== null && recvs.has(c.recv)) {
+    // recv-proc: a table procedure on R, where R is the implicit Rec
+    if (r562NotAProc(c.method) || n.rawKind !== "call_expression") return none;
+    const t = recvNode !== null ? declaredType(recvNode, ctx) : null;
+    if (t !== null && t.kind === "table")
+      for (const o of objectsOfType(t, ctx))
+        for (const p of r531ProcsIn(o, c.method, arity))
+          targets.push({ proc: p, key: "", r: c.recv });
+    unresolved = !targets.some((t) => bodyOf(t.proc) !== null);
+  } else if (c.recv === null && r531ObjectProcs(n, ctx).has(c.method)) {
+    // global-call (R a global the callee does not shadow, or the implicit Rec) and pass-rec
+    const ps = r531ProcsIn(obj, c.method, arity);
+    for (const p of ps)
+      for (const r of recvs)
+        if (r === "" || (!r531Declares(scope, r, true) && !r531Declares(p, r, true)))
+          targets.push({ proc: p, key: r, r });
+    passInto(ps);
+    unresolved = passed.length > 0 && ps.length === 0;
+  } else {
+    // R passed into another object
+    if (passed.length === 0 || R531_PURE.has(c.method) || r562NotAProc(c.method)) return none;
+    if (c.method === "gettable" || c.method === "settable") return none;
+    const rt = normalizeAlName(recvNode?.text ?? "");
+    if (/^(page|report|xmlport|query)$/.test(rt) || (rt === "codeunit" && c.method === "run"))
+      return none;
+    const t = recvNode !== null && isIdentifierLike(recvNode) ? declaredType(recvNode, ctx) : null;
+    if (t !== null && t.kind === "codeunit" && c.method === "run") return none;
+    const ps =
+      t !== null && (t.kind === "codeunit" || t.kind === "table")
+        ? objectsOfType(t, ctx).flatMap((o) => r531ProcsIn(o, c.method, arity))
+        : [];
+    unresolved = ps.length === 0;
+    passInto(ps);
+  }
+  const hops: R531Hop[] = [];
+  for (const t of targets) {
+    const body = bodyOf(t.proc);
+    if (body === null) continue;
+    const cprocs = r531ObjectProcs(t.proc, ctx);
+    const filters: ALSyntaxNode[] = [];
+    r531Walk(body, ctx, (m) => {
+      const cc = r531Call(m);
+      if (cc === null || m.rawKind === "member_expression") return;
+      const r = cc.recv ?? (r531Implicit(m, ctx) && !cprocs.has(cc.method) ? "" : null);
+      if (r !== t.key) return;
+      if (R531_FILTER.has(cc.method)) {
+        // FILTER's dependency test
+        const d = depends.get(t.r);
+        const f = cc.args[0];
+        if (d !== undefined && f !== undefined && (d.has("*") || d.has(normalizeAlName(f.text))))
+          filters.push(m);
+      } else if (cc.method === "markedonly" && markRecvs.has(t.r)) filters.push(m);
+    });
+    if (filters.length === 0) continue;
+    const guards = filters.flatMap((f) => guardsUpTo(f, body));
+    // an exit or a raised Error before the last such filter skips it
+    const last = Math.max(...filters.map((f) => f.startIndex));
+    const isExit = (x: ALSyntaxNode): boolean =>
+      x.startIndex < last && (x.rawKind === "exit_statement" || isRaisedError(x, body));
+    visitAll(body, (x) => {
+      if (isExit(x)) guards.push(x);
+    });
+    guards.push(...exitGuards(body, body, isExit));
+    hops.push({ proc: t.proc, consumers: filters, guards });
+  }
+  return { hops, refuse: unresolved || hops.length > 0 };
 }
 
 /** FEEDS: assignments in `scope` whose target name `parts` read, to a fixpoint (R480
@@ -1348,7 +1489,11 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     if (f === undefined) {
       // no filter on R in the procedure: it is set elsewhere, so every written field counts
       consume(m.n, "modify-unseen", m.r);
-      for (const w of ws) consumers.push(w.n);
+      for (const w of ws) {
+        consumers.push(w.n);
+        dep(m.r, w.field); // R562: the filter may come from a pre-loop call
+      }
+      if (m.all !== null) dep(m.r, m.all);
     } else if (!r531Declares(scope, m.r, false)) {
       // R a global, a parameter or the implicit Rec: filters can be set elsewhere too
       if (ws.length === 0 && m.all === null) continue;
@@ -1381,6 +1526,15 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   ]
     .filter((c) => c.n.endIndex <= loop.startIndex)
     .map((c) => c.n);
+  const hops: R531Hop[] = [];
+  // FILTER HOP (R562): a pre-loop call whose callee sets such a filter, or that cannot be followed
+  if (scope !== null && depends.size + markRecvs.size > 0)
+    r531Walk(scope, ctx, (n) => {
+      if (n.endIndex > loop.startIndex) return;
+      const h = r562FilterHop(n, ctx, recvs, scope, depends, markRecvs);
+      hops.push(...h.hops);
+      if (h.refuse) preFilters.push(n);
+    });
   const isConsumer = (n: ALSyntaxNode): boolean => consumers.some((c) => samePos(c, n));
   const isContinue = (n: ALSyntaxNode): boolean => {
     if (n.rawKind !== "continue_statement") return false;
@@ -1391,7 +1545,6 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   };
   const guards = [...exitGuards(body, loop, isConsumer), ...exitGuards(body, loop, isContinue)];
   // HOP: one hop into same-object callees and table procedures on R
-  const hops: R531Hop[] = [];
   const obj = objectOf(loop);
   for (const h of hopCands) {
     const targets: { proc: ALSyntaxNode; key: string; byValue: boolean }[] = [];
@@ -1430,20 +1583,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   let feeds: ALSyntaxNode[] = [];
   const preGuards: ALSyntaxNode[] = [];
   if (scope !== null) {
-    for (const f of preFilters) {
-      for (let a = f.parent; a !== null && !samePos(a, scope); a = a.parent) {
-        let g: ALSyntaxNode | null = null;
-        if (
-          a.rawKind === "if_statement" ||
-          a.rawKind === "while_statement" ||
-          a.rawKind === "repeat_statement"
-        )
-          g = a.childForFieldName("condition");
-        else if (a.rawKind === "case_statement") g = a.childForFieldName("expression");
-        else if (a.rawKind === "case_branch") g = a.childForFieldName("pattern");
-        if (g !== null) preGuards.push(g);
-      }
-    }
+    for (const f of preFilters) preGuards.push(...guardsUpTo(f, scope));
     const parts: ALSyntaxNode[] = [...guards, ...preGuards];
     for (const c of [...consumers, ...preFilters]) {
       if (c.kind === ALNodeKind.assignment_statement) {
