@@ -13,8 +13,9 @@
  *
  * Classes: `A-<kind>` a call into another project object; `A'` a same-object call (`A'open` when
  * open-item code reaches it); `A?-*` a call that does not resolve to project code; `B` a name fed
- * by assignments in the same scope; `B-obj` a global written in another procedure of the object;
- * `P` a parameter; `C` a constant or literal (`C-clear` a Clear); `F`, `L-unwritten`,
+ * by assignments in the same scope; `B-obj-preset` a global written in another procedure of the
+ * object that is itself a preset exit name (shape 1 refuses that write); `B-obj-other` such a global
+ * that is not (a cross-procedure feed, not refused); `P` a parameter; `C` a constant or literal (`C-clear` a Clear); `F`, `L-unwritten`,
  * `G-unwritten` a field, or a local or global nothing in the object writes. `V:` prefixes the class
  * of a `var`-argument write, `B>` that of a call inside a feed.
  *

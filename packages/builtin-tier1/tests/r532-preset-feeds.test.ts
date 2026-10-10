@@ -107,6 +107,76 @@ const REP = `report 50532 "Feed Rep"
         Continue := Limit > 75;
     end;
 
+    procedure CaseParamFeed()
+    var
+        Tmp: Boolean;
+    begin
+        Tmp := Limit > 55;
+        SetContinue(Tmp);
+    end;
+
+    procedure CaseEvaluateArg()
+    var
+        S: Text;
+    begin
+        S := 'go';
+        Evaluate(Continue, S);
+    end;
+
+    procedure CaseWriteTail()
+    var
+        T: Boolean;
+        U: Boolean;
+    begin
+        T := Limit > 91;
+        U := Limit > 92;
+        Continue := T
+#if not CLEAN25
+            or U
+#endif
+        ;
+    end;
+
+    procedure CaseFeedTail()
+    var
+        V: Boolean;
+        W: Boolean;
+        X: Boolean;
+    begin
+        X := Limit > 93;
+        V := W
+#if not CLEAN25
+            or X
+#endif
+        ;
+        Continue := V;
+    end;
+
+    procedure CaseClear()
+    var
+        Tmp: Boolean;
+    begin
+        Tmp := true;
+        if Limit > 80 then
+            Clear(Tmp);
+        Continue := Tmp;
+    end;
+
+    procedure CaseUnknownCallee()
+    var
+        Tmp: Boolean;
+        Ext: Codeunit "Not In Project";
+    begin
+        if Limit > 85 then
+            Ext.Decide(Tmp);
+        Continue := Tmp;
+    end;
+
+    local procedure SetContinue(B: Boolean)
+    begin
+        Continue := B;
+    end;
+
     local procedure Compute(var B: Boolean)
     begin
         B := Limit > 40;
@@ -192,6 +262,39 @@ describe("R532: same-scope feeds of a preset exit name", () => {
     refusedByFeeds("lethal.remove-assignment @ Arr[1] := Y");
     refusedByFeeds("lethal.remove-assignment @ Y := Limit > 60");
     refusedByFeeds("lethal.conditional-boundary @ Limit > 60");
+  });
+
+  // red: drop the call-argument seeding from `presetFeeds` (review r1 finding 2)
+  it("a same-object parameter feed (`Tmp := ...; SetContinue(Tmp)`) is refused", () => {
+    refusedByFeeds("lethal.remove-assignment @ Tmp := Limit > 55");
+    refusedByFeeds("lethal.conditional-boundary @ Limit > 55");
+  });
+
+  // red: same revert as the parameter feed
+  it("an argument feed of a preset write (`S := ...; Evaluate(Continue, S)`) is refused", () => {
+    refusedByFeeds("lethal.remove-assignment @ S := 'go'");
+  });
+
+  // red: drop `exprTails(n)` from `presetFeeds`' preset-write seeds
+  it("a feed read only in an `#if` tail of the preset write is refused", () => {
+    refusedByFeeds("lethal.remove-assignment @ U := Limit > 92");
+    refusedByFeeds("lethal.conditional-boundary @ Limit > 92");
+  });
+
+  // red: drop the `exprTails(a)` collection under `fed` in `r531Feeds`
+  it("a feed read only in an `#if` tail of another feed is refused", () => {
+    refusedByFeeds("lethal.remove-assignment @ X := Limit > 93");
+    refusedByFeeds("lethal.conditional-boundary @ Limit > 93");
+  });
+
+  // red: drop the `directWrite(n, feeds.names, ctx)` half of `isFeed`
+  it("a `Clear(Tmp)` feed and its guard are refused", () => {
+    refusedByFeeds("lethal.conditional-boundary @ Limit > 80");
+  });
+
+  // red: same revert as `Clear` (an unresolved callee counts as writing its arguments)
+  it("an unknown-callee feed (`Ext.Decide(Tmp)`) and its guard are refused", () => {
+    refusedByFeeds("lethal.conditional-boundary @ Limit > 85");
   });
 
   // red: treat every same-scope assignment as a feed

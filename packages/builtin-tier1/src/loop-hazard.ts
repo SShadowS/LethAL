@@ -1763,8 +1763,8 @@ function consumingLoopRefuses(
  * write in its scope. Not seen: a write in another object other than a call to a report's writer
  * through a typed `Report X` receiver (R555, below; the unresolvable receivers are filed), and a value
  * that reaches the name from another procedure or object (closed by ruling in R532). A value that
- * reaches it through another variable in the same scope is a FEED (R532, `presetFeeds`), refused
- * like a write.
+ * reaches it through another variable in the same scope (an argument of a same-object writer call
+ * included) is a FEED (R532, `presetFeeds`), refused like a write.
  *
  * R548: inside a reportextension the names are the extension's own (`presetExitNames` over its
  * blocks, its globals seeded with the base's protected names) plus every base candidate's preset
@@ -1795,7 +1795,10 @@ function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean
   // open-item code is refused by `openItemHangRefuses`' first part already, cross-object or not
   if ((!local && !cross) || inOpenItemCode(node, ctx)) return false;
   const scope = codeScope(node);
-  const feeds = local && scope !== null && r532FeedSeam.on ? presetFeeds(scope, names, ctx) : null;
+  const feeds =
+    local && w !== null && scope !== null && r532FeedSeam.on
+      ? presetFeeds(scope, names, w, ctx)
+      : null;
   const isFeed = (n: ALSyntaxNode): boolean =>
     feeds !== null &&
     feeds.names.size > 0 &&
@@ -1846,7 +1849,9 @@ export const r532FeedSeam = { on: true };
  * code; a feed in open-item code is R-501's already). A feed is an assignment whose value flows by
  * name, to a fixpoint, into the right side (or `#if` tails) of an assignment to a preset exit name
  * (`r531Feeds` with `fed`), or a `directWrite` of a name read on the way: a `var` argument
- * (`Compute(Tmp)`), `Clear`/`Evaluate`, or an unknown callee. Shape 1 treats a feed as a write.
+ * (`Compute(Tmp)`), `Clear`/`Evaluate`, or an unknown callee. The search also starts from every
+ * argument of a call that is itself a preset write (`Evaluate(Continue, S)`) or calls a same-object
+ * preset writer (`SetContinue(Tmp)`). Shape 1 treats a feed as a write.
  * By name: a same-named variable written after the preset write is refused too (the safe direction).
  * Not seen (R532's residuals): a record method that changes what the write reads (`Buf.Insert`
  * before `Continue := not Buf.IsEmpty()`), the other arguments of a feeding call, and every value
@@ -1855,12 +1860,19 @@ export const r532FeedSeam = { on: true };
 function presetFeeds(
   scope: ALSyntaxNode,
   names: ReadonlySet<string>,
+  w: PresetWriters,
   ctx: SemanticContext,
 ): { readonly assigns: ReadonlySet<number>; readonly names: ReadonlySet<string> } {
   return cached(ctx, scope, "r532feeds", () => {
     const rights: ALSyntaxNode[] = [];
     visitAll(scope, (n) => {
-      if (n.rawKind !== "assignment_statement" || armOfNode(ctx, n) === "inactive") return;
+      if (armOfNode(ctx, n) === "inactive") return;
+      if (n.rawKind === "call_expression" || n.rawKind === "call_statement") {
+        if (directWrite(n, names, ctx) || callsPresetWriter(n, w, ctx, names.size > 0))
+          rights.push(...(n.childForFieldName("arguments")?.namedChildren ?? []));
+        return;
+      }
+      if (n.rawKind !== "assignment_statement") return;
       const l = n.childForFieldName("left");
       const r = n.childForFieldName("right");
       if (l !== null && r !== null && names.has(rootName(l))) rights.push(r, ...exprTails(n));
@@ -3636,7 +3648,7 @@ export interface R532CensusRow {
   readonly scope: string;
   readonly name: string;
   readonly kind: "assign" | "var-arg";
-  /** classes (see the script's header): A-*, A', A?-*, B, B-obj, P, F, L-unwritten, G-unwritten, C */
+  /** classes (see the script's header): A-*, A', A?-*, B, B-obj-preset, B-obj-other, P, F, L-unwritten, G-unwritten, C */
   readonly tags: string[];
   readonly callees: string[];
   readonly feeds: number;
@@ -3816,7 +3828,8 @@ export function r532PresetFeedCensus(ctx: SemanticContext): R532CensusRow[] {
               const l = a.childForFieldName("left");
               if (l !== null && rootName(l) === nm && !samePos(a, n)) objWrite = true;
             });
-            tags.add(objWrite ? "B-obj" : "G-unwritten");
+            // B-obj-preset: the global is itself a preset exit name, so shape 1 refuses its write
+            tags.add(objWrite ? (names.has(nm) ? "B-obj-preset" : "B-obj-other") : "G-unwritten");
           }
         });
         if (tags.size === 0) tags.add("C");
