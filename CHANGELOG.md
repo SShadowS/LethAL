@@ -750,8 +750,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   exit's own trigger or procedure is not followed (a stated residual, measured at 906 in one report,
   0 hangs in the sample); one passed from a report procedure reached through its return value is,
   nor are events, globals set in another trigger, or a third hop. An `OnPreDataItem` Break guard
-  counts too, a named over-refusal of 12. Price: `<cost: re-measured by lethal-code>`; the prototype
-  moved no identity, so no scheme change.
+  counts too, a named over-refusal of 12. Measured: BaseApp -86 and PEPPOL -18
+  mutants, the other seed projects 0, no identity tuple or ordinal moved, and no scheme change.
 - **The loop-hazard check reads every name of a multi-name declaration** (R521). A declaration that
   names two variables at once declares both, but four readers took only the first: the type lookup for a receiver the
   symbol table does not index (an XMLport's variable), the local-shadow check, a report's open-item
