@@ -1924,7 +1924,7 @@ export const r532FeedSeam = { on: true };
  * and never from an argument of `Obj.Proc(...)` in a right side (`Continue := Fmt.Bill(A, B)` feeds
  * `Fmt`, not `A` or `B`), nor from a parameter a writer only hands to `Obj.Proc(...)`: a value that
  * reaches the name through another object's function is the cross-object part R532 closed by ruling
- * (seeding there cost 109 BaseApp mutants). Shape 1 treats a feed as a write.
+ * (seeding there cost BaseApp 67 more mutants than the built rule). Shape 1 treats a feed as a write.
  * By name: a same-named variable written after the preset write is refused too (the safe direction).
  * Not seen (R532's residuals): a record method that changes what the write reads (`Buf.Insert`
  * before `Continue := not Buf.IsEmpty()`), the other arguments of a feeding call, and every value
@@ -1939,9 +1939,15 @@ function presetFeeds(
   const key = `${scope.startIndex}|${scope.endIndex}`;
   // a writer already being read (recursion, or a cycle of writers) feeds nothing
   if (r532Reading.has(key)) return { assigns: new Set<number>(), names: new Set<string>() };
+  // Only the outermost call caches: a result computed while another writer is in progress saw that
+  // writer as feeding nothing, so caching it would make the answer depend on visit order.
+  // ponytail: nested writers are recomputed per outermost call; memoize per object if chains get deep
+  const outermost = r532Reading.size === 0;
   r532Reading.add(key);
   try {
-    return cached(ctx, scope, "r532feeds", () => presetFeedsOnce(scope, names, w, ctx));
+    return outermost
+      ? cached(ctx, scope, "r532feeds", () => presetFeedsOnce(scope, names, w, ctx))
+      : presetFeedsOnce(scope, names, w, ctx);
   } finally {
     r532Reading.delete(key);
   }

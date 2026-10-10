@@ -264,9 +264,9 @@ const REP = `report 50532 "Feed Rep"
 `;
 
 /** Every `<operator> @ <node text>` the dispatch would emit for REP, with the feeds on or off. */
-function emitted(on: boolean): Set<string> {
+function emitted(on: boolean, src = REP): Set<string> {
   r532FeedSeam.on = on;
-  const root = wrapRoot(parseAL(REP));
+  const root = wrapRoot(parseAL(src));
   const ctx = buildSemanticContext([{ path: "FeedRep.Report.al", root }]);
   const out = new Set<string>();
   const walk = (n: ALSyntaxNode): void => {
@@ -284,6 +284,45 @@ function emitted(on: boolean): Set<string> {
   walk(root);
   return out;
 }
+
+/** Two writers that call each other (build review r2, finding 1), declared in the given order. */
+const cycleRep = (first: "x" | "y"): string => {
+  const x = `    procedure SetX(P: Boolean)
+    var
+        Tmp: Boolean;
+    begin
+        Tmp := Limit > 56;
+        SetY(Tmp);
+    end;
+`;
+  const y = `    procedure SetY(Q: Boolean)
+    begin
+        Continue := Q;
+        if Limit > 0 then
+            SetX(Q);
+    end;
+`;
+  return `report 50533 "Cycle Rep"
+{
+    dataset
+    {
+        dataitem(Loop; Integer)
+        {
+            trigger OnAfterGetRecord()
+            begin
+                if not Continue then
+                    CurrReport.Break();
+            end;
+        }
+    }
+
+${first === "x" ? x + y : y + x}
+    var
+        Continue: Boolean;
+        Limit: Integer;
+}
+`;
+};
 
 /** The mutant is emitted with the feeds off and refused with them on. */
 function refusedByFeeds(key: string): void {
@@ -421,6 +460,19 @@ describe("R532: same-scope feeds of a preset exit name", () => {
   });
 
   // red: treat every same-scope assignment as a feed
+  // red: cache every `presetFeeds` result, nested ones included (drop the `outermost` condition).
+  // With SetY declared first, SetX is then cached while SetY is in progress, without `Tmp`.
+  it("two writers that call each other refuse the same feed in either declaration order", () => {
+    for (const first of ["x", "y"] as const) {
+      expect(
+        emitted(false, cycleRep(first)).has("lethal.remove-assignment @ Tmp := Limit > 56"),
+      ).toBe(true);
+      const on = emitted(true, cycleRep(first));
+      expect(on.has("lethal.remove-assignment @ Tmp := Limit > 56")).toBe(false);
+      expect(on.has("lethal.conditional-boundary @ Limit > 56")).toBe(false);
+    }
+  });
+
   it("CONTROL: a variable that never flows into a preset write is not refused", () => {
     for (const on of [false, true]) {
       const e = emitted(on);
