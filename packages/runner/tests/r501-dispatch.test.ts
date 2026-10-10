@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { type MutationSetResult, generateMutationSet } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R501: ONE dispatch-level hang refusal in `generateMutationSet`, asked for EVERY operator. A site
@@ -250,8 +251,8 @@ beforeAll(async () => {
   await Bun.write(join(dir, "app.json"), APP_JSON);
   for (const [rel, content] of Object.entries(FILES)) await Bun.write(join(dir, rel), content);
 });
-afterAll(async () => {
-  if (dir !== "") await rm(dir, { recursive: true, force: true });
+afterAll(() => {
+  if (dir !== "") removeScratchDir(dir);
 });
 
 const gen = (op: string) =>

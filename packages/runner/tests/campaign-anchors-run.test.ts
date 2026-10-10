@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 // The EXIT CODE, which only `main()` owns, is covered by spawning `lethal campaign anchors` in
@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 // gate has exactly one entry point and therefore no entry point that skips the git check.
 import { parseAnchorConfig, runAnchorCheck } from "../src/campaign-anchors-run";
 import type { SessionReport } from "../src/report";
+import { removeScratchDir } from "./helpers/scratch";
 
 const CONFIG = {
   expectedMutantCount: 2,
@@ -58,8 +59,8 @@ beforeEach(async () => {
   configPath = join(dir, "anchors.json");
   await writeFile(configPath, JSON.stringify(CONFIG), "utf8");
 });
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+afterEach(() => {
+  removeScratchDir(dir);
 });
 
 // `parseAnchorArgs` and its two tests were deleted with `scripts/campaign/anchors.ts`, its only

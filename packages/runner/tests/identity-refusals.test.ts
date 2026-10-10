@@ -35,6 +35,7 @@ import { identityKeyOf, serializeKey, twinSiteOf } from "../src/selection";
 import type { MutantVerdict, MutantVerdictRow } from "../src/store";
 import { ResultsStore } from "../src/store";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R307 Task 6: identity when a file is refused (plan section 3).
@@ -47,8 +48,8 @@ import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
  */
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 beforeAll(async () => {
   await initParser();

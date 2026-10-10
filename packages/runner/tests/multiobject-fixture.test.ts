@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
@@ -19,6 +19,7 @@ import {
   planArtifacts,
   prepareBatchProject,
 } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R383, offline guard for `fixtures/sandbox-multiobject`'s PURPOSE. The live legs in
@@ -103,8 +104,8 @@ describe("R383: sandbox-multiobject", () => {
     root = await mkdtemp(join(tmpdir(), "lethal-r383-"));
     built = await build(root);
   });
-  afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(root);
   });
   const get = (): Built => {
     if (built === undefined) throw new Error("beforeAll did not build the batch");

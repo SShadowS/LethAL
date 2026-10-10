@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "../../packages/engine/src";
 import { generateMutationSet } from "../../packages/runner/src/orchestrator";
+import { removeScratchDir } from "../../packages/runner/tests/helpers/scratch";
 import { flatNamesFor } from "../../packages/schemata/src";
 import { stageCompileOnlyBatch } from "./compile-only";
 
@@ -39,8 +40,8 @@ beforeAll(async () => {
   await initParser();
   root = await mkdtemp(join(tmpdir(), "lethal-r219-compile-only-"));
 });
-afterAll(async () => {
-  await rm(root, { recursive: true, force: true });
+afterAll(() => {
+  removeScratchDir(root);
 });
 
 describe("stageCompileOnlyBatch (R219)", () => {

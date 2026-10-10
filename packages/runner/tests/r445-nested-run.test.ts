@@ -1,11 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import { type RunCliConfig, runFromCli } from "../src/cli";
 import { TestProjectNestedError } from "../src/verify";
-import { removeRunScratchAfterAll } from "./helpers/scratch";
+import { removeRunScratchAfterAll, removeScratchDir } from "./helpers/scratch";
 
 // The sibling run reaches `runSession`, so runFromCli has made its scratch folder (R358).
 removeRunScratchAfterAll();
@@ -17,8 +17,8 @@ removeRunScratchAfterAll();
  * project still runs. Campaign stages run through `runFromCli` too; `--dry-run` takes no --tests.
  */
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 const APP = (name: string) =>

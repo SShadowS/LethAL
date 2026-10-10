@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeScratchDir } from "../../packages/runner/tests/helpers/scratch";
 import { readSymbolSets } from "./symbol-sets.ts";
 
 const made: string[] = [];
@@ -12,7 +13,7 @@ function project(json?: string): string {
   return dir;
 }
 afterEach(() => {
-  for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+  for (const d of made.splice(0)) removeScratchDir(d);
 });
 
 describe("readSymbolSets (R321)", () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // `freezeStageTo` is the pure archive-and-freeze half, tested here directly. Its production caller
@@ -13,6 +13,7 @@ import { join } from "node:path";
 // that those records still resolve.
 import { freezeStageTo } from "../src/campaign-freeze";
 import type { MutantOutcome, SessionReport } from "../src/report";
+import { removeScratchDir } from "./helpers/scratch";
 
 function outcome(
   overrides: Partial<MutantOutcome> & Pick<MutantOutcome, "mutantCode">,
@@ -104,8 +105,8 @@ beforeEach(async () => {
   reportPath = join(dir, "report.json");
   recordsDir = join(dir, "records");
 });
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+afterEach(() => {
+  removeScratchDir(dir);
 });
 
 describe("freezeStageTo", () => {

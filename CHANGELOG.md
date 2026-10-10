@@ -739,6 +739,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A test temp folder that cannot be removed now names the file still locked** (R375). On Windows
+  CI the full suite sometimes failed with `R358: could not remove ...: EBUSY`, and the R358 leak
+  guard then failed too. The main fix was R449, which moved CI's temp folder off the runner's OS
+  disk: 11 such failures in about 390 runs before it, 1 in 290 after, and none in the last 214.
+  The test cleanup helper (`removeScratchDir`) passes `rmSync` the same retry options and fails
+  the same way, but its message now ends with the files still locked and their error code, e.g.
+  `still locked: lethal.sqlite-wal (EBUSY)`. The 56 `afterAll`/`afterEach` temp-folder cleanups
+  in the test files now use it, or `removeScratchDirs`, which tries every folder in a list before
+  failing.
+
 - **A third-object procedure whose value decides when a report item stops is hang-refused** (R569).
   R500 refused a procedure of another object that open report-item code calls (hop 1), but not
   that callee's own calls into a third object (hop 2). `Export Item Budget to Excel` loops until

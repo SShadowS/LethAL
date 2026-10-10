@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as engineModule from "@lethal/engine";
@@ -29,6 +29,7 @@ import {
 } from "../src/test-membership";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { servesTestApp } from "./helpers/proven-test-app";
+import { removeScratchDirs } from "./helpers/scratch";
 
 /**
  * R403 phase A, through `runSession`: discovery evaluates the TEST app's `#if` arms under the test
@@ -125,8 +126,8 @@ beforeAll(async () => {
 });
 
 const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((r) => rm(r, { recursive: true, force: true })));
+afterEach(() => {
+  removeScratchDirs(roots.splice(0));
 });
 
 /** A target `app/` and a test project `tests/`, each with its own `app.json` symbols. */

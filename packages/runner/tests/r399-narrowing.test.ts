@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { generateMutationSet } from "../src/orchestrator";
 import { buildReport, renderConsole } from "../src/report";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R399: a left-out `preproc-undecided` or `not-instrumentable` row with sites makes `reliability`
@@ -184,8 +185,8 @@ const roots: string[] = [];
 beforeAll(async () => {
   await initParser();
 });
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 async function project(files: Readonly<Record<string, string>>): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "lethal-r399-"));
