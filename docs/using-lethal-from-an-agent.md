@@ -714,8 +714,11 @@ A marks file without `identityScheme` was written before the field existed and r
 and a mark made under a scheme other than the one the run keys under is reported stale and never
 applied, because a key can name a different mutant after an engine change renumbers its twins
 (R325). The current scheme is 40: since R565 the hang-refused set depends on the source of the
-dependency reports the project calls, read from its dependency packages, so a key also carries
-across runs (history, `--resume`) only when the report's `dependencySourceSha256` is unchanged. `markKey` (and a mark's `key`) is this key, built from the survivor's row in `report.json`:
+dependency reports the project calls, read from its dependency packages. So history and `--resume`
+carry a verdict by its key (rule 1) only when both the source hash and the report's
+`dependencySourceSha256` equal the recorded run's. A mutant that is a singleton in its file can
+still carry under rule 2, by its file and its member's hash, whatever the digests say; that is by
+design (R391, R474). `markKey` (and a mark's `key`) is this key, built from the survivor's row in `report.json`:
 
 ```text
 key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>

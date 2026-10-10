@@ -749,7 +749,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   reportextensions are read beside it, and every outside report counts as extended (R487), since the
   project or an installed app may extend it. Nothing is written to those folders. When the source
   cannot be read (`not-found`, `no-source`, `ambiguous`, `unwrap-failed`, `no-symbols`, `unreadable`,
-  `parse-damaged`), the call is checked as before, with a `dependency-report-source-unavailable`
+  `parse-damaged`, `base-not-found`), the call is checked as before, with a `dependency-report-source-unavailable`
   warning. The report gains `dependencyReportSources` and `dependencySourceSha256` (optional fields,
   so it stays schema v3). The digest is also recorded on the run, and history and `--resume` carry a
   verdict by key (rule 1) only when it is equal too. The refused set now depends on dependency bytes
