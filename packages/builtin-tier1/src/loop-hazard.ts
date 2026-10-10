@@ -1313,13 +1313,17 @@ function r562FilterHop(
 }
 
 /** FEEDS: assignments in `scope` whose target name `parts` read, to a fixpoint (R480
- *  `indirectFeeds`'s by-name rule, over the whole scope instead of one loop body). */
+ *  `indirectFeeds`'s by-name rule, over the whole scope instead of one loop body). R532 passes
+ *  `fed`, which receives every name read on the way, and also matches a target's ROOT name
+ *  (`Arr[1] := X` feeds `Arr`, `R.X := Y` feeds `R` as well as `X`) and follows the `#if`
+ *  expression tails `indirectFeeds` follows. R-531 passes nothing and is unchanged. */
 function r531Feeds(
   scope: ALSyntaxNode,
   parts: ALSyntaxNode[],
   ctx: SemanticContext,
+  fed?: Set<string>,
 ): ALSyntaxNode[] {
-  const names = new Set<string>();
+  const names = fed ?? new Set<string>();
   const collect = (n: ALSyntaxNode): void => {
     if (DIRECTIVE_MARKERS.has(n.rawKind) || armOfNode(ctx, n) === "inactive") return;
     if (isIdentifierLike(n)) names.add(normalizeAlName(n.text));
@@ -1343,11 +1347,12 @@ function r531Feeds(
         left.rawKind === "member_expression" || left.kind === ALNodeKind.field_access
           ? left.childForFieldName("member")
           : left;
-      if (name === null || !isIdentifierLike(name) || !names.has(normalizeAlName(name.text)))
-        continue;
+      const hit = name !== null && isIdentifierLike(name) && names.has(normalizeAlName(name.text));
+      if (!hit && (fed === undefined || !names.has(rootName(left)))) continue;
       used.add(a.startIndex);
       out.push(a);
       collect(right);
+      if (fed !== undefined) for (const t of exprTails(a)) collect(t);
       changed = true;
     }
   }
@@ -1757,7 +1762,9 @@ function consumingLoopRefuses(
  * an early exit (`exit`, Break/Quit/Skip, `Error`, or a guard holding one) that comes before such a
  * write in its scope. Not seen: a write in another object other than a call to a report's writer
  * through a typed `Report X` receiver (R555, below; the unresolvable receivers are filed), and a value
- * that reaches the name through another variable.
+ * that reaches the name from another procedure or object (closed by ruling in R532). A value that
+ * reaches it through another variable in the same scope is a FEED (R532, `presetFeeds`), refused
+ * like a write.
  *
  * R548: inside a reportextension the names are the extension's own (`presetExitNames` over its
  * blocks, its globals seeded with the base's protected names) plus every base candidate's preset
@@ -1787,10 +1794,17 @@ function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean
   const cross = crossWriters(ctx).all.size > 0;
   // open-item code is refused by `openItemHangRefuses`' first part already, cross-object or not
   if ((!local && !cross) || inOpenItemCode(node, ctx)) return false;
+  const scope = codeScope(node);
+  const feeds = local && scope !== null && r532FeedSeam.on ? presetFeeds(scope, names, ctx) : null;
+  const isFeed = (n: ALSyntaxNode): boolean =>
+    feeds !== null &&
+    feeds.names.size > 0 &&
+    ((n.rawKind === "assignment_statement" && feeds.assigns.has(n.startIndex)) ||
+      directWrite(n, feeds.names, ctx));
   const writes = (n: ALSyntaxNode): boolean =>
     (local &&
       w !== null &&
-      (directWrite(n, names, ctx) || callsPresetWriter(n, w, ctx, names.size > 0))) ||
+      (directWrite(n, names, ctx) || callsPresetWriter(n, w, ctx, names.size > 0) || isFeed(n))) ||
     (cross && crossWriterCall(n, ctx));
   const containsWrite = (n: ALSyntaxNode, after = -1): boolean => {
     let found = false;
@@ -1799,7 +1813,6 @@ function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean
     });
     return found;
   };
-  const scope = codeScope(node);
   for (
     let a: ALSyntaxNode | null = node;
     a !== null && (scope === null || !samePos(a, scope));
@@ -1824,6 +1837,44 @@ function writesPresetExitName(node: ALSyntaxNode, ctx: SemanticContext): boolean
   }
   return containsWrite(node);
 }
+
+/** R532: a test-only seam. Tests switch `on` off to show a mutant IS emitted without the feeds. */
+export const r532FeedSeam = { on: true };
+
+/**
+ * R532: the FEEDS of shape 1's preset writes in `scope` (a procedure or trigger outside open-item
+ * code; a feed in open-item code is R-501's already). A feed is an assignment whose value flows by
+ * name, to a fixpoint, into the right side (or `#if` tails) of an assignment to a preset exit name
+ * (`r531Feeds` with `fed`), or a `directWrite` of a name read on the way: a `var` argument
+ * (`Compute(Tmp)`), `Clear`/`Evaluate`, or an unknown callee. Shape 1 treats a feed as a write.
+ * By name: a same-named variable written after the preset write is refused too (the safe direction).
+ * Not seen (R532's residuals): a record method that changes what the write reads (`Buf.Insert`
+ * before `Continue := not Buf.IsEmpty()`), the other arguments of a feeding call, and every value
+ * that comes from another procedure or object (closed by ruling in R532).
+ */
+function presetFeeds(
+  scope: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  ctx: SemanticContext,
+): { readonly assigns: ReadonlySet<number>; readonly names: ReadonlySet<string> } {
+  return cached(ctx, scope, "r532feeds", () => {
+    const rights: ALSyntaxNode[] = [];
+    visitAll(scope, (n) => {
+      if (n.rawKind !== "assignment_statement" || armOfNode(ctx, n) === "inactive") return;
+      const l = n.childForFieldName("left");
+      const r = n.childForFieldName("right");
+      if (l !== null && r !== null && names.has(rootName(l))) rights.push(r, ...exprTails(n));
+    });
+    const fed = new Set<string>();
+    if (rights.length === 0) return { assigns: new Set<number>(), names: fed };
+    const assigns = new Set(r531Feeds(scope, rights, ctx, fed).map((a) => a.startIndex));
+    return { assigns, names: fed };
+  });
+}
+
+/** An assignment's `#if` expression tails (R480 `indirectFeeds` follows them). */
+const exprTails = (a: ALSyntaxNode): ALSyntaxNode[] =>
+  a.namedChildren.filter((c) => c.rawKind === "preproc_conditional_expression_tail");
 
 /** R500 shape 1's direct write of a name in `names`: an assignment to it, or a call that passes it
  *  to a `var` parameter (an unresolved callee counts as writing, the safe direction on this side). */
