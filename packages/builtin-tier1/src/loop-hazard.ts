@@ -2702,6 +2702,7 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
       if (t !== null) for (const obj of t.objs) add(obj, t.member);
     }
     for (const c of openCalls) for (const s of raised(c, o)) add(s.obj, s.proc);
+    exitFedHop2(o, ctx, add);
   }
   // events raised from the refused callee procedures themselves (PEPPOL Management's OnFindNext*)
   for (const [k, procs] of [...out]) {
@@ -2717,6 +2718,155 @@ function oneHopReach(ctx: SemanticContext): Map<string, Set<string>> {
     });
   }
   return out;
+}
+
+/** R569 PROTOTYPE (measurement only): every hop-2 procedure the exit-fed rule adds, with how. */
+export const r569Debug: {
+  report: string;
+  hop1: string;
+  obj: ALSyntaxNode;
+  proc: string;
+  tag: string;
+}[] = [];
+
+/**
+ * R569 PROTOTYPE: the exit-fed second hop. From the exits of open-item code in `report` (every
+ * open-item loop's `loopExitParts`, and the guards of every `CurrReport.Break`/`Quit` there), follow
+ * what FEEDS them (`r531Feeds` with `fed`, R532's boundary: another object's function feeds only
+ * its receiver) through same-object procedures (their returned value: `exit(...)` values, the
+ * named return, and the guards of those exits) to the calls into another object: the hop-1 callees.
+ * In a hop-1 callee (and its same-object closure, the same way) the calls into a THIRD object whose
+ * result feeds the callee's returned value, or that write (a `var` parameter) a name feeding it,
+ * are the hop-2 targets: each is refused like a hop-1 callee (`add`: the procedure + its
+ * same-object closure). A hop-1 callee reached only through a `var` argument the exit reads is
+ * followed the same way from that parameter.
+ */
+function exitFedHop2(
+  report: ALSyntaxNode,
+  ctx: SemanticContext,
+  add: (o: ALSyntaxNode, name: string) => void,
+): void {
+  const seen = new Set<string>();
+  const arityOf = (c: ALSyntaxNode): number | null =>
+    c.rawKind === "call_expression" || c.rawKind === "call_statement"
+      ? argumentsReadable(c)
+        ? argumentList(c).length
+        : null
+      : null;
+  const exitParts = (proc: ALSyntaxNode): { values: ALSyntaxNode[]; guards: ALSyntaxNode[] } => {
+    const values: ALSyntaxNode[] = [];
+    visitAll(proc, (x) => {
+      if (x.rawKind !== "exit_statement") return;
+      const v = x.childForFieldName("return_value");
+      if (v !== null) values.push(v);
+    });
+    const body = proc.childForFieldName("body");
+    const guards =
+      body === null ? [] : exitGuards(body, body, (x) => x.rawKind === "exit_statement");
+    return { values, guards };
+  };
+  const visitProc = (
+    proc: ALSyntaxNode,
+    hop: 0 | 1,
+    names: string[],
+    ret: boolean,
+    tag: string,
+    hop1: string,
+  ): void => {
+    const obj = objectOf(proc);
+    if (obj === null) return;
+    const key = `${objectKey(obj)}|${proc.startIndex}|${hop}|${ret}|${tag}|${[...names].sort().join(",")}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (!ret) {
+      site(proc, [], names, hop, tag, hop1);
+      return;
+    }
+    const { values, guards } = exitParts(proc);
+    const rv = proc.childForFieldName("return_value");
+    site(proc, values, rv === null ? names : [...names, normalizeAlName(rv.text)], hop, tag, hop1);
+    if (guards.length > 0) site(proc, guards, names, hop, tag === "ret" ? "guard" : tag, hop1);
+  };
+  const site = (
+    scope: ALSyntaxNode,
+    parts: ALSyntaxNode[],
+    names: string[],
+    hop: 0 | 1,
+    tag: string,
+    hop1: string,
+  ): void => {
+    const obj = objectOf(scope);
+    if (obj === null) return;
+    const own = procedureNamesOf(obj, ctx);
+    const fed = new Set(names);
+    const assigns = r531Feeds(scope, parts, ctx, fed);
+    const exprs = [...parts];
+    for (const a of assigns) {
+      const r = a.childForFieldName("right");
+      if (r !== null) exprs.push(r);
+      exprs.push(...exprTails(a));
+    }
+    const onCall = (c: ALSyntaxNode, argIdx: number | null, t: string): void => {
+      const bare = bareCallee(c) ?? hiddenCallee(c, own, ctx);
+      let targets: { o: ALSyntaxNode; member: string }[];
+      if (bare !== null && own.has(bare)) targets = [{ o: obj, member: bare }];
+      else {
+        if (c.rawKind !== "call_expression" && c.rawKind !== "call_statement") return;
+        const tg = callTargets(c, ctx);
+        if (tg === null) return;
+        targets = tg.objs.map((o) => ({ o, member: tg.member }));
+      }
+      for (const { o, member } of targets) {
+        const procs = r531ProcsIn(o, member, arityOf(c), c, ctx);
+        for (const p of procs) {
+          let pnames: string[] = [];
+          if (argIdx !== null) {
+            const prm = r531Param(p, argIdx);
+            if (prm === null || !prm[1]) continue;
+            pnames = [prm[0]];
+          }
+          const same = objectKey(o) === objectKey(obj);
+          const nextHop: 0 | 1 = same ? hop : 1;
+          if (!same && hop === 1) {
+            add(o, member);
+            r569Debug.push({ report: objectNameOf(report), hop1, obj: o, proc: member, tag: t });
+            continue;
+          }
+          const h1 = !same ? `${objectNameOf(o)}.${member}` : hop1;
+          visitProc(p, nextHop, pnames, argIdx === null, t, h1);
+        }
+      }
+    };
+    const scan = (n: ALSyntaxNode): void => {
+      if (DIRECTIVE_MARKERS.has(n.rawKind) || armOfNode(ctx, n) === "inactive") return;
+      const isCall = n.rawKind === "call_expression" || n.rawKind === "call_statement";
+      if (isCall || hiddenCallee(n, own, ctx) !== null) onCall(n, null, tag);
+      if (isCall && bareCallee(n) === null && r568StopsAt(n, ctx)) {
+        const f = n.childForFieldName("function");
+        if (f !== null) scan(f);
+        return;
+      }
+      for (const ch of n.namedChildren) scan(ch);
+    };
+    for (const e of exprs) scan(e);
+    // a call that writes a fed name through a `var` parameter
+    visitAll(scope, (n) => {
+      if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return;
+      if (armOfNode(ctx, n) === "inactive") return;
+      argumentList(n).forEach((a, i) => {
+        if (fed.has(rootName(a))) onCall(n, i, tag === "ret" || tag === "exit" ? "var" : tag);
+      });
+    });
+  };
+  visitAll(report, (n) => {
+    const s = codeScope(n);
+    if (s === null) return;
+    let parts: ALSyntaxNode[] | null = null;
+    if (LOOP_KINDS.has(n.kind) && inOpenItemCode(n, ctx)) parts = loopExitParts(n, ctx);
+    else if (n.rawKind === "member_expression" && isReportExit(n) && inOpenItemCode(n, ctx))
+      parts = exitGuards(s, s, (x) => samePos(x, n));
+    if (parts !== null && parts.length > 0) site(s, parts, [], 0, "exit", "");
+  });
 }
 
 const LOOP_OBJECTS: ReadonlySet<string> = new Set([
