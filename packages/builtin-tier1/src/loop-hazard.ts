@@ -1402,13 +1402,31 @@ function r562FilterHop(
   return { hops, refuse: unresolved || hops.length > 0 || c.uncertain };
 }
 
+/** R568: does R532's feed search stop at the arguments of non-bare call `c`? The arguments feed
+ *  unless the receiver is typed as an object (codeunit, report, page, query, xmlport, testpage,
+ *  interface; in the project or not) or is a record whose table or a project tableextension declares
+ *  the member as a procedure: that is another object's function, closed by ruling in R532. So
+ *  `Cust.Get(Key)`, `Txt.Contains(T)`, `CurrReport.X(T)` and a receiver nothing resolves feed their
+ *  arguments (the safe direction for a refusal). Residual: a platform method on an object-typed
+ *  variable (`Rpt.SaveAsPdf(F)`, `Cu.Run(Rec)`) still stops. */
+function r568StopsAt(c: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const f = c.childForFieldName("function");
+  const recv = f?.rawKind === "member_expression" ? f.childForFieldName("object") : null;
+  if (recv === null || recv === undefined || !isIdentifierLike(recv)) return false;
+  const t = declaredType(recv, ctx);
+  if (t !== null && t.kind !== "table") return true;
+  const tg = callTargets(c, ctx);
+  return tg?.objs.some((o) => procedureNamesOf(o, ctx).has(tg.member)) === true;
+}
+
 /** FEEDS: assignments in `scope` whose target name `parts` read, to a fixpoint (R480
  *  `indirectFeeds`'s by-name rule, over the whole scope instead of one loop body). R532 passes
  *  `fed`, which receives every name read on the way, and also matches a target's ROOT name
  *  (`Arr[1] := X` feeds `Arr`, `R.X := Y` feeds `R` as well as `X`) and follows the `#if`
- *  expression tails `indirectFeeds` follows. Under `fed` it reads only the receiver of a non-bare
- *  call (`Obj.Proc(A)` feeds `Obj`, not `A`): a value that reaches the name through another
- *  object's function is closed by ruling in R532. R-531 passes nothing and is unchanged. */
+ *  expression tails `indirectFeeds` follows. Under `fed`, at a non-bare call that is another
+ *  object's function (`r568StopsAt`) it reads only the receiver (`Obj.Proc(A)` feeds `Obj`, not
+ *  `A`): a value that reaches the name through another object's function is closed by ruling in
+ *  R532. A platform method's arguments feed (R568). R-531 passes nothing and is unchanged. */
 function r531Feeds(
   scope: ALSyntaxNode,
   parts: ALSyntaxNode[],
@@ -1421,7 +1439,8 @@ function r531Feeds(
     if (
       fed !== undefined &&
       (n.rawKind === "call_expression" || n.rawKind === "call_statement") &&
-      bareCallee(n) === null
+      bareCallee(n) === null &&
+      r568StopsAt(n, ctx)
     ) {
       const f = n.childForFieldName("function");
       if (f !== null) collect(f);
@@ -1953,8 +1972,9 @@ export const r532FeedSeam = { on: true };
  * argument of a BARE call that is itself a preset write (`Evaluate(Continue, S)`), and from each
  * argument of a call to a same-object preset writer whose parameter that writer itself feeds
  * (`SetContinue(Tmp)` with `Continue := B`; `writerFedArgs`). Never from `Obj.Proc(Continue, H)`,
- * and never from an argument of `Obj.Proc(...)` in a right side (`Continue := Fmt.Bill(A, B)` feeds
- * `Fmt`, not `A` or `B`), nor from a parameter a writer only hands to `Obj.Proc(...)`: a value that
+ * and never from an argument of another object's function in a right side (`r568StopsAt`: an
+ * object-typed receiver or a project table procedure; `Continue := Fmt.Bill(A, B)` with `Fmt` a
+ * codeunit feeds `Fmt`, not `A` or `B`; a platform method's arguments do feed), nor from a parameter a writer only hands to `Obj.Proc(...)`: a value that
  * reaches the name through another object's function is the cross-object part R532 closed by ruling
  * (seeding there cost BaseApp 67 more mutants than the built rule). Shape 1 treats a feed as a write.
  * By name: a same-named variable written after the preset write is refused too (the safe direction).

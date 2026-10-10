@@ -234,6 +234,49 @@ const REP = `report 50532 "Feed Rep"
         Continue := Probe.Contains('y');
     end;
 
+    procedure CaseRecordBuiltin()
+    var
+        KeyVal: Text;
+        Cust: Record Customer;
+    begin
+        KeyVal := Txt + 'k';
+        Continue := Cust.Get(KeyVal);
+    end;
+
+    procedure CaseTextMethodArg()
+    var
+        Tmp: Text;
+    begin
+        Tmp := Txt + 'q';
+        Continue := Txt.Contains(Tmp);
+    end;
+
+    procedure CaseTableProc()
+    var
+        Tmp: Text;
+        Buf: Record "Feed Buf";
+    begin
+        Tmp := Txt + 'b';
+        Continue := Buf.Check(Tmp);
+    end;
+
+    procedure CaseUndeclaredRecv()
+    var
+        Tmp: Text;
+    begin
+        Tmp := Txt + 'u';
+        Continue := Unknown.M(Tmp);
+    end;
+
+    procedure CaseTableExtProc()
+    var
+        Tmp: Text;
+        Buf2: Record "Feed Buf2";
+    begin
+        Tmp := Txt + 'e';
+        Continue := Buf2.ExtCheck(Tmp);
+    end;
+
     local procedure FillFields(Header: Integer)
     var
         FormatAddr: Codeunit "Not In Project";
@@ -278,11 +321,49 @@ const REP = `report 50532 "Feed Rep"
 }
 `;
 
-/** Every `<operator> @ <node text>` the dispatch would emit for REP, with the feeds on or off. */
-function emitted(on: boolean, src = REP): Set<string> {
+/** R568: project tables for REP's record receivers. `Feed Buf` declares `Check`; `Feed Buf2` gets
+ *  `ExtCheck` only from a project tableextension. */
+const TABLES = [
+  `table 50534 "Feed Buf"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+    }
+
+    procedure Check(T: Text): Boolean
+    begin
+        exit(T <> '');
+    end;
+}
+`,
+  `table 50535 "Feed Buf2"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+    }
+}
+`,
+  `tableextension 50536 "Feed Buf2 Ext" extends "Feed Buf2"
+{
+    procedure ExtCheck(T: Text): Boolean
+    begin
+        exit(T <> '');
+    end;
+}
+`,
+];
+
+/** Every `<operator> @ <node text>` the dispatch would emit for REP, with the feeds on or off.
+ *  `extra` files join the context; only `src`'s mutants are listed. */
+function emitted(on: boolean, src = REP, extra: string[] = []): Set<string> {
   r532FeedSeam.on = on;
   const root = wrapRoot(parseAL(src));
-  const ctx = buildSemanticContext([{ path: "FeedRep.Report.al", root }]);
+  const ctx = buildSemanticContext([
+    { path: "FeedRep.Report.al", root },
+    ...extra.map((s, i) => ({ path: `Extra${i}.al`, root: wrapRoot(parseAL(s)) })),
+  ]);
   const out = new Set<string>();
   const walk = (n: ALSyntaxNode): void => {
     for (const op of tier1Operators) {
@@ -438,7 +519,8 @@ describe("R532: same-scope feeds of a preset exit name", () => {
   });
 
   // red: drop the non-bare-call branch from `r531Feeds`' `collect` (leak 1: `ShipAddr` and `Hdr`,
-  // read only as arguments of `FormatAddr.BillTo`, become fed and the `ShipTo` call is refused)
+  // read only as arguments of `FormatAddr.BillTo`, become fed and the `ShipTo` call is refused).
+  // R568 red: drop the object-typed-receiver half of `r568StopsAt`.
   it("BOUNDARY-RHS: an argument of `Obj.Proc(...)` in a preset write's right side is not a feed", () => {
     for (const on of [false, true]) {
       const e = emitted(on);
@@ -493,6 +575,38 @@ describe("R532: same-scope feeds of a preset exit name", () => {
     refusedByFeeds("lethal.remove-assignment @ Tmp := Limit > 58");
     for (const on of [false, true])
       expect(emitted(on).has("lethal.remove-assignment @ X := Limit + 59")).toBe(true);
+  });
+
+  // R568 red: in `r568StopsAt`, `t.kind !== "table"` -> `t !== null` (a record receiver stops)
+  it("R568: a record built-in's argument feeds (`Continue := Cust.Get(KeyVal)`)", () => {
+    refusedByFeeds("lethal.remove-assignment @ KeyVal := Txt + 'k'");
+  });
+
+  // R568 red (one branch, shared with the undeclared receiver: `declaredType` null): a receiver
+  // with no declared object or record type stops
+  it("R568: a text method's argument feeds (`Continue := Txt.Contains(Tmp)`)", () => {
+    refusedByFeeds("lethal.remove-assignment @ Tmp := Txt + 'q'");
+  });
+
+  // R568 red: same as the text method (the same branch)
+  it("R568: an undeclared receiver's argument feeds (`Continue := Unknown.M(Tmp)`)", () => {
+    refusedByFeeds("lethal.remove-assignment @ Tmp := Txt + 'u'");
+  });
+
+  // R568 red: drop the table-procedure half of `r568StopsAt`
+  it("R568: a project table procedure's argument is not a feed (`Buf.Check(Tmp)`)", () => {
+    for (const on of [false, true])
+      expect(emitted(on, REP, TABLES).has("lethal.remove-assignment @ Tmp := Txt + 'b'")).toBe(
+        true,
+      );
+  });
+
+  // R568 red: restrict `objectsOfType`'s table branch to `table_declaration`
+  it("R568: a project tableextension procedure's argument is not a feed (`Buf2.ExtCheck(Tmp)`)", () => {
+    for (const on of [false, true])
+      expect(emitted(on, REP, TABLES).has("lethal.remove-assignment @ Tmp := Txt + 'e'")).toBe(
+        true,
+      );
   });
 
   it("CONTROL: a variable that never flows into a preset write is not refused", () => {
