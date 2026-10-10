@@ -739,6 +739,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A loop-hazard HOP no longer refuses an overload the call cannot reach** (R564). R531's HOP and
+  R562's FILTER HOP followed every overload of the called name whose parameter count fit, so an
+  overload taking a different table's record was refused too. Now, when every argument is a record
+  of a known project table, every parameter of every candidate is a `Record` of a known project
+  table, no candidate is split by `#if`, and exactly one candidate matches the arguments' tables
+  (compared as objects, not by spelling), only that one is followed. Anything less certain keeps
+  every candidate, as before. alc confirms a `Record A` argument cannot bind to a `Record B`
+  parameter, by value, `var` or `temporary` (AL0133). Measured: DO Cloud gains the 8 keys predicted,
+  no key moves anywhere in DO, and the identity scheme stays 39.
 - **A hook session whose test app has no `.al` source can now prove its identity** (R498). Before,
   the read-back after the env-tool hook was refused as `unavailable`, so such a run never resumed,
   skipped known survivors or reused a baseline. It is now proven when the served package's SHA-256
