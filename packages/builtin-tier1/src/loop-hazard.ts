@@ -3342,7 +3342,11 @@ export interface R572Row {
   readonly writers: ALSyntaxNode[];
 }
 
-export const r572Seam = { on: true, writers: "all" as "all" | "reach" | "none" };
+export const r572Seam = {
+  on: true,
+  writers: "all" as "all" | "reach" | "none",
+  skipOwnCursor: false,
+};
 
 export function r572LoopRows(
   loop: ALSyntaxNode,
@@ -3406,8 +3410,21 @@ export function r572LoopRows(
           calls.push({ n, c, flag: normalizeAlName(a.text), varOut: true, ts: hit });
       });
     });
+  // the receivers the condition steps (`""`: the implicit Rec), as `r570LoopCallees`
+  const cursors = new Set<string>();
+  for (const part of cond)
+    r531Walk(part, ctx, (n) => {
+      const c = r531Call(n);
+      if (c !== null && CURSOR_METHODS.has(c.method)) cursors.add(c.recv ?? "");
+    });
+  const shares = (c: R531Call): boolean =>
+    cursors.has(c.recv ?? "") ||
+    c.args.some((a) => isIdentifierLike(a) && cursors.has(r531Key(a) ?? "\u0003"));
   const rows: R572Row[] = [];
   for (const { n, c, flag, varOut, ts } of calls) {
+    // option D: the condition steps its own cursor and the call does not get it, so the callee
+    // can only end the loop sooner (R570's guard-cursor exclusion)
+    if (r572Seam.skipOwnCursor && steps && !shares(c)) continue;
     for (const q of ts) {
       let wrapper: ALSyntaxNode | null = null;
       let chain: ALSyntaxNode[];
