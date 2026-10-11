@@ -124,12 +124,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **`alRunner.selectorMode` and `alRunner.coverage` config keys** (R387). `selectorMode`
   (`"static"` or `"resource"`) picks R222's selector channel and `coverage` (`"al-runner"` or
   `"none"`) turns on R220's `--coverage`; neither was reachable from `lethal run` before. Coverage
-  stays off by default. When it is on, a project holding a multi-object file or a `#if`-wrapped
+  stays off by default (R394, under Changed, turns it on). When it is on, a project holding a multi-object file or a `#if`-wrapped
   object runs with coverage `"none"` instead, with one `al-runner-coverage-unsupported` warning
   naming the files and the reason (see R383 below).
 - **One advisory line on an al-runner run** (R387): `[lethal] al-runner settings: ...` names each
   slow or unmeasured setting and the key that changes it. Until coverage is on by default it always
-  names `coverage`.
+  names `coverage` (since R394 it names it only when the config sets `"none"`).
 - **A file whose instrumentation throws is refused whole, and the rest of the project still runs**
   (R307). Before, one such file (an object mix, no object header, a statement the injector cannot
   place) aborted the whole run. Now LethAL tries each file on its own, skips the one that fails,
@@ -150,6 +150,27 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **al-runner coverage is ON by default** (R394). With no `alRunner.coverage` key, `lethal run
+  --backend al-runner` now reads al-runner's own `--coverage` (R220): a mutant no green test
+  reaches reads `no-coverage` instead of `survived`, and each mutant runs only its covering tests.
+  This moves verdicts. On `fixtures/sandbox-app` the CLI default goes from 3 / 16 / 0 to 3 / 12 / 4
+  (`SandboxPricing`'s four mutants, which no test calls), equal per mutant to the gate's coverage
+  leg. `"alRunner.coverage": "none"` restores the old behaviour, and the advisory line then names
+  it and what it costs. The coverage guard now runs on the effective setting, so a run that sets no
+  key still gets the R407 frame probe and the R298 `#if`-wrapped refusal: a project they refuse
+  runs with coverage `"none"` and one `al-runner-coverage-unsupported` warning, which now says
+  coverage was "on by default" or "set by" the key and is turned OFF for the run (it no longer
+  says a key the user never set is IGNORED). With the default, the advisory prints no coverage
+  note. Measured prevalence of the guard: it keeps coverage on in every project of the three
+  Continia corpora measured (27 projects), and turns it off in 15 of 519 BC.History projects
+  (R579, R580). **`campaign compare` refuses an al-runner stage frozen under the old default** when
+  that stage records its coverage mode (frozen since R355): the frozen side records `"none"`, a
+  new run records `"al-runner"`, and R355 refuses the mismatch by name. A stage frozen before R355
+  records no mode; it is not refused, but the result says "coverage mode UNVERIFIED" and lists the
+  moved mutants as differences. Set `"alRunner.coverage": "none"` to compare against such a stage,
+  or re-freeze it. The same setting keeps `--resume` of a run started before the upgrade working
+  (otherwise R354 refuses it), and keeps `--skip-known-survivors` carrying survivors from an older
+  store (otherwise the first run after the upgrade carries none).
 - **Baseline and campaign comparisons see a mutant that changed under an unchanged key** (R556).
   A newly recorded itest baseline or frozen campaign stage records the identity scheme and a
   sha256 of each mutant's mutated text (never the text). Comparing then reports "mutated text
