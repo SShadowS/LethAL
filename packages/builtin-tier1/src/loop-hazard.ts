@@ -3436,7 +3436,13 @@ function r572ForcedSteps(loop: ALSyntaxNode, ctx: SemanticContext): Map<string, 
     if (!forces) continue;
     const recv = r572Receiver(l);
     const t = recv === null ? null : declaredType(recv, ctx);
-    if (key !== "" && (t === null || t.kind !== "table")) continue;
+    // a Record, or a RecordRef (whose `Next` steps a record set the same way)
+    const isRecRef =
+      recv !== null &&
+      normalizeAlName(
+        resolveVarRef(recv, ctx)?.node.childForFieldName("type")?.namedChildren[0]?.text ?? "",
+      ) === "recordref";
+    if (key !== "" && !isRecRef && (t === null || t.kind !== "table")) continue;
     out.set(key, l);
   }
   return out;
