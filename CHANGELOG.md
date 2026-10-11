@@ -760,6 +760,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A same-object callee's early exits are hang-refused** (R574). When R531 follows a loop's call into a
+  procedure of the same object, or a table procedure on the record, it now builds that hop with R571's rule:
+  an `exit` or `Error` before the callee's last consumer, or inside a callee loop that holds one, a `break`
+  that leaves such a loop, their guards, and the assignments feeding the hop's guards are refused too. Before,
+  `remove-not` on `if not Buf.FindLast() then exit;` was deployed and could hang the loop. No mutant key moves.
+
 - **A loop that consumes its record through a procedure in ANOTHER project object is hang-refused**
   (R571). R531 refused the consumers of a cursor loop's record (`while R.FindFirst()`, `while not
   Socket.IsEmpty()`), but followed a call only into the same object or a table procedure on the
