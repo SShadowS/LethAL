@@ -3845,8 +3845,10 @@ function r572StatefulOnce(p: ALSyntaxNode, hops: number, ctx: SemanticContext): 
       if (ts.length === 0) {
         // UNKNOWN (plan r2 review 7): no target and no resolved built-in
         if (c.recv === null) {
-          // a bare name: a global function, unless it is the implicit Rec's base-table procedure
+          // a bare name: a global function (CopyStr, CalcDate, ...), unless it is a procedure of a
+          // base (non-project) table that a tableextension extends
           if (
+            objectOf(p)?.rawKind === "tableextension_declaration" &&
             implicit &&
             !R531_BUILTIN.has(c.method) &&
             !R572_ROWS.has(c.method) &&
