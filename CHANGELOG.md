@@ -752,8 +752,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   record's is not followed: assignment never shares the table (measured on BC,
   `scripts/r571-assign-probe`). Filed limits: a second cross-object hop, the body of the callee's
   own helper, and a codeunit set matched by global name only (R576); `this.P(R)` in the same object
-  and two variables of one SingleInstance codeunit (R575). Price: `<cost: re-measured by
-  lethal-code>`.
+  and two variables of one SingleInstance codeunit (R575). Measured: DC Cloud -4, E-Document
+  Core -24 and BaseApp -37 mutants, no identity tuple or ordinal moved, and no scheme change.
 
 - **A loop that ends through a cursor procedure in another object is hang-refused** (R570). A
   `while`/`repeat` loop (any object kind) whose condition, or a body exit guard, calls a procedure
