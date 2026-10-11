@@ -99,9 +99,9 @@ killing test and its mutant is reported survived. `--only` and `--exclude` give 
 caveat, `--operator` gives `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
 and `--tests-only` gives `tests-narrowed`.
 
-**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is OFF by
-default and CONDITIONAL when on. `lethal run` reads al-runner's own coverage output (R220) only with
-`"alRunner": { "coverage": "al-runner" }`. One file holding a `#if`-wrapped object turns it off for
+**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is
+CONDITIONAL. `lethal run` reads al-runner's own coverage output (R220) by default since R394;
+`"alRunner": { "coverage": "none" }` turns it off. One file holding a `#if`-wrapped object turns it off for
 the whole run, with a warning naming the file. One file declaring more than one object keeps it only
 when a once-per-session frame probe admits the installed al-runner build, and turns it off
 otherwise; either way one warning line names the probe's answer and the build. (Multi-object:
@@ -128,10 +128,11 @@ the compiled batch, so there the check can only refuse. The host still pins `c39
 
 **al-runner settings (R387).** The `alRunner` section accepts `alRunnerPath`, `packagesDir`,
 `serverMode`, `selectorMode` and `coverage`, and refuses any other key by name. With none of the last
-three set, `lethal run` uses `--server` (one daemon per worker) and the resource selector (one compile
-per batch). `"serverMode": false` gives one process per test with the `"static"` selector (a recompile
+three set, `lethal run` uses `--server` (one daemon per worker), the resource selector (one compile
+per batch) and al-runner's coverage (R394). `"serverMode": false` gives one process per test with the `"static"` selector (a recompile
 per mutant), which is much slower. The run prints one `[lethal] al-runner settings:` line naming any
-slow or unmeasured setting; until coverage is on by default it always names `coverage`. `lethal
+slow or unmeasured setting; it names `coverage` only when the config sets `"none"` (an unreached
+mutant then reads survived, not no-coverage) or when the coverage guard turned it off. `lethal
 doctor` checks the binary's version only, not the transport. Under `--server` a hung test becomes an
 error after one suite deadline of at least 10 minutes, not a per-test timeout.
 

@@ -621,8 +621,9 @@ the startup canary below runs `asserterror I := 1;` through the installed binary
 `asserterror: defect-not-reproduced` (the runner raises `NavNCLAssertErrorException: An error was
 expected inside an ASSERTERROR statement.`, as BC does). What still separates the two backends is
 coverage (since R220 `itest:alrunner` runs with al-runner's `--coverage` and matches bcdev at
-3 / 12 / 4 per mutant; `lethal run` still defaults to `coverage: "none"`, under which bcdev's 4
-no-coverage mutants are run and survive, 3 / 16 / 0, R387). The other measured difference was, on
+3 / 12 / 4 per mutant; since R394 `lethal run` reads it by default too and matches at 3 / 12 / 4;
+under an explicit `coverage: "none"` bcdev's 4 no-coverage mutants are run and survive,
+3 / 16 / 0, which was the default under R387). The other measured difference was, on
 `sandbox-data`, `Codeunit.Run` not scoping a write transaction (R183): the canary's third probe,
 `transactionRollback`, reported `defect-confirmed` up to 2.10.0.0. Re-measured 2026-10-05 against
 the pinned build `v2.12.0-main.c39ad5de`, all three canary probes report `defect-not-reproduced`
@@ -806,8 +807,8 @@ Tier 1 operator (`packages/builtin-tier1`) and reasoning through
 `fixtures/sandbox-tests/src/SandboxTests.Codeunit.al`. Its verdict columns are now copied from the
 committed frozen baselines (R243): `packages/runner/itest/bcdev.baseline.json`,
 `al-runner.baseline.json` (the gate's legs, which read al-runner's `--coverage`, R220) and
-`al-runner.cli-default.baseline.json` (`lethal run --backend al-runner` with its default
-`coverage: "none"`, R387). Those files are the per-mutant truth; this table is their readable
+`al-runner.cli-default.baseline.json` (`lethal run --backend al-runner` with no config keys:
+coverage `"none"` under R387, al-runner's `--coverage` since R394). Those files are the per-mutant truth; this table is their readable
 copy. If the fixture AL, its tests or an operator change, re-read the baselines and update this
 table and both itest scripts' `EXPECTED` in the same commit.
 
@@ -815,7 +816,7 @@ table and both itest scripts' `EXPECTED` in the same commit.
 trigger, or control-flow statement — including a procedure's own top-level body, not just
 nested `if`/`while` blocks (confirmed by `packages/builtin-tier1/tests/empty-block.test.ts`).
 
-| Procedure | Operator | Mutation | bcdev | al-runner (gate, `--coverage`) | al-runner (CLI default, `coverage:"none"`) | Why |
+| Procedure | Operator | Mutation | bcdev | al-runner (gate, `--coverage`; the CLI default since R394) | al-runner (`coverage:"none"`; the CLI default under R387) | Why |
 |---|---|---|---|---|---|---|
 | `IsOverBudget` | conditional-boundary | `>` → `>=` | **killed** | **killed** | **killed** | `OverBudgetDetected`'s equal-amounts case (100 vs 100) distinguishes `>` from `>=`. |
 | `IsOverBudget` | return-value | `exit(Amount>Budget)` → `exit(not(...))` | **killed** | **killed** | **killed** | Negates every case; the 101-vs-100 assertion catches it. |
@@ -841,8 +842,8 @@ nested `if`/`while` blocks (confirmed by `packages/builtin-tier1/tests/empty-blo
 | Backend | killed | survived | no-coverage | mutation score |
 |---|---|---|---|---|
 | bcdev (`itest:bcdev`) | 3 | 12 | 4 | 3/15 = 20.0% |
-| al-runner, gate legs with `--coverage` (`itest:alrunner`) | 3 | 12 | 4 | 3/15 = 20.0% |
-| al-runner, CLI default `coverage:"none"` (the gate's CLI-default leg) | 3 | 16 | 0 | 3/19 = 15.8% |
+| al-runner, gate legs with `--coverage` (`itest:alrunner`), and the CLI default since R394 (the gate's CLI-default leg) | 3 | 12 | 4 | 3/15 = 20.0% |
+| al-runner, `coverage:"none"` (the CLI default under R387) | 3 | 16 | 0 | 3/19 = 15.8% |
 
 The first two rows agree PER MUTANT, not only in their totals. Two consecutive runs against the
 same backend must be 100% verdict-identical (the determinism exit criterion — design.md §13).
@@ -851,7 +852,9 @@ History: this table listed 16 sites until R243. R159's operators added the three
 `DiscountedPrice` rows above (`shift-integer`, `remove-assignment`, `swap-additive`), and R220 gave
 the al-runner gate legs coverage, which moved `DiscountedPrice`'s four from survived to
 no-coverage there; the CLI-default leg (R387,
-`docs/superpowers/specs/2026-10-01-r387-cli-default-leg-precommitment.md`) pins the old behaviour.
+`docs/superpowers/specs/2026-10-01-r387-cli-default-leg-precommitment.md`) pinned the old behaviour
+until R394 turned coverage on by default and re-froze it equal to leg A per mutant
+(`docs/superpowers/specs/2026-10-11-r394-coverage-default-precommitment.md`).
 
 Verify with `bun packages/runner/src/cli.ts run --project fixtures/sandbox-app --dry-run` — it prints `19 mutant site(s)` and, per
 file/line, exactly two `lethal.negate-conditional` sites (`SandboxLogic.Codeunit.al`, in
@@ -1585,9 +1588,10 @@ CLI flags:
     // serverMode false gives one process per test, and then selectorMode defaults to "static".
     "serverMode": true,
     "selectorMode": "resource",
-    // "al-runner" reads al-runner's --coverage; turned off, with a warning, for a project holding
-    // a multi-object file or an #if-wrapped object.
-    "coverage": "none"
+    // "al-runner" (the default since R394) reads al-runner's --coverage; turned off, with a
+    // warning, for a project holding a multi-object file the frame probe refuses or an #if-wrapped
+    // object. "none" turns it off.
+    "coverage": "al-runner"
   },
   // R101(c): AL preprocessor symbols, TOP-LEVEL because they are a property of the PROJECT rather
   // than of a backend. The same list reaches LethAL's own `alc` step (`/define:A,B`) and al-runner
@@ -1688,7 +1692,7 @@ are correct, not just plausible:
 | 4 | 0m59.0s | 3 | 13 | 0 | 18.8% |
 
 **These 2026-07-19 measurements are history: 16 sites and 3 / 13 / 0 then, 19 sites and
-3 / 16 / 0 now (coverage off), and since R387 `serverMode` absent means `true`, the CLI's default.**
+3 / 16 / 0 with coverage off (3 / 12 / 4 with coverage, the default since R394), and since R387 `serverMode` absent means `true`, the CLI's default.**
 At the time, a reader reproducing these numbers with `serverMode` absent (or `false`), then the
 CLI's default transport, would see roughly 3x slower wall clocks; that was expected, not a
 discrepancy. `serverMode: true` keeps one al-runner process warm across every test in the

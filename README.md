@@ -706,8 +706,8 @@ a LethAL feature or a mode.
   a startup canary re-measures it against the installed binary every session (`defect-not-reproduced`
   on v2.10.0.0). Both later reasons have moved too (R220): LethAL can read al-runner's own
   `--coverage`, and on 2.11.0 the canary reports that a row written inside `Codeunit.Run` IS
-  discarded by the error. What remains is that coverage is OFF by default and CONDITIONAL when on:
-  `lethal run` uses it only with `"alRunner": { "coverage": "al-runner" }`, and a file holding a
+  discarded by the error. What remains is that coverage is CONDITIONAL: `lethal run` uses it by
+  default since R394 (`"alRunner": { "coverage": "none" }` turns it off), and a file holding a
   `#if`-wrapped object turns it off for the whole run, with a warning naming the file. A file
   declaring more than one object turns it off too, unless a once-per-session frame probe admits the
   installed al-runner build (R407): al-runner v2.12.0-main.c39ad5de reports those objects' lines in
@@ -720,7 +720,8 @@ a LethAL feature or a mode.
 - **`al-runner` settings (R387).** The `alRunner` config section takes `alRunnerPath`, `packagesDir`,
   `serverMode`, `selectorMode` and `coverage`; any other key is refused by name. By default `lethal run`
   uses al-runner's warm `--server` daemon (one per worker under `--workers`) and the resource selector,
-  which compiles each batch once instead of once per mutant. `"serverMode": false` goes back to one
+  which compiles each batch once instead of once per mutant, and reads al-runner's coverage (R394;
+  `"coverage": "none"` turns it off). `"serverMode": false` goes back to one
   process per test, and then the selector defaults to `"static"`. A run with a slow setting prints one
   `[lethal] al-runner settings:` line naming it. Verdicts are the same per mutant on the fixtures the
   gate measures; under `--server` a hung test becomes an error after one long suite deadline (at least
