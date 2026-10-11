@@ -2411,7 +2411,7 @@ async function runFrameProbe(
   if (!serverMode) {
     if (opts.testDir === undefined) {
       throw new Error(
-        "the al-runner coverage guard needs the test project for a one-shot probe (R407)",
+        'the al-runner coverage guard needs the test project for a one-shot probe (R407); set "alRunner.coverage": "none" to run without coverage',
       );
     }
     const cfg: AlRunnerConfig = {

@@ -163,10 +163,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   says a key the user never set is IGNORED). With the default, the advisory prints no coverage
   note. Measured prevalence of the guard: it keeps coverage on in every project of the three
   Continia corpora measured (27 projects), and turns it off in 15 of 519 BC.History projects
-  (R579, R580). **`campaign compare` refuses an al-runner stage frozen under the old default**: the
-  frozen side records coverage mode `"none"`, a new run records `"al-runner"`, and R355 refuses a
-  mode mismatch by name. Set `"alRunner.coverage": "none"` to compare against it, or re-freeze the
-  stage.
+  (R579, R580). **`campaign compare` refuses an al-runner stage frozen under the old default** when
+  that stage records its coverage mode (frozen since R355): the frozen side records `"none"`, a
+  new run records `"al-runner"`, and R355 refuses the mismatch by name. A stage frozen before R355
+  records no mode; it is not refused, but the result says "coverage mode UNVERIFIED" and lists the
+  moved mutants as differences. Set `"alRunner.coverage": "none"` to compare against such a stage,
+  or re-freeze it. The same setting keeps `--resume` of a run started before the upgrade working
+  (otherwise R354 refuses it), and keeps `--skip-known-survivors` carrying survivors from an older
+  store (otherwise the first run after the upgrade carries none).
 - **Baseline and campaign comparisons see a mutant that changed under an unchanged key** (R556).
   A newly recorded itest baseline or frozen campaign stage records the identity scheme and a
   sha256 of each mutant's mutated text (never the text). Comparing then reports "mutated text
