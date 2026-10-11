@@ -3,7 +3,8 @@
  *
  * The leg builds its backend through `buildBackend` (cli.ts) with an `alRunner` section that sets
  * no transport key, so it measures what a CLI user gets with no config. Its verdict table cannot
- * tell the fast path from the one-shot static path (both reach 3 / 16 / 0), so the leg also records,
+ * tell the fast path from the one-shot static path (both reach 3 / 12 / 4 since R394 turned
+ * coverage on by default; 3 / 16 / 0 before), so the leg also records,
  * independently of the config:
  * - every al-runner spawn, through `buildBackend`'s injectable `deps` spawns: exactly one `--server`
  *   daemon per backend, and no one-shot call except the exact argvs `expectedOneShotArgvs` allows;
@@ -40,8 +41,9 @@ import type { SessionReport } from "../src/report";
 export const CLI_DEFAULT_SPEC =
   "docs/superpowers/specs/2026-10-01-r387-cli-default-leg-precommitment.md";
 
-/** The file whose mutants are `no-coverage` in leg A and `survived` here (coverage is off). */
-const PRICING_FILE = "SandboxPricing.Codeunit.al";
+/** R394: the pre-commitment that moved the leg's verdict table when coverage went on by default. */
+export const CLI_DEFAULT_COVERAGE_SPEC =
+  "docs/superpowers/specs/2026-10-11-r394-coverage-default-precommitment.md";
 
 export interface SpawnRecord {
   readonly oneShotArgv: string[][];
@@ -304,21 +306,13 @@ export function legShape(r: SessionReport): LegRow[] {
     .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode));
 }
 
-/** The pre-committed table, derived from leg A: only `SandboxPricing`'s rows change. */
+/**
+ * The pre-committed table: leg A's, per mutant (CLI_DEFAULT_COVERAGE_SPEC). Under R387 coverage was
+ * off by default and `SandboxPricing`'s four rows read `survived` here; since R394 the default is
+ * on, so they are `no-coverage` as in leg A and every row equals leg A's.
+ */
 export function expectedCliDefaultShape(legA: SessionReport): LegRow[] {
-  const pricing = new Set(
-    legA.mutants.filter((m) => m.file.endsWith(PRICING_FILE)).map((m) => m.mutantCode),
-  );
-  if (pricing.size !== 4) {
-    throw new Error(
-      `R387: leg A holds ${pricing.size} ${PRICING_FILE} mutants; ${CLI_DEFAULT_SPEC} pre-committed 4`,
-    );
-  }
-  return legShape(legA).map((row) =>
-    pricing.has(row.mutantCode)
-      ? { mutantCode: row.mutantCode, verdict: "survived", killingTest: undefined }
-      : row,
-  );
+  return legShape(legA);
 }
 
 /**

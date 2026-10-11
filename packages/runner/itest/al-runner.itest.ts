@@ -12,6 +12,7 @@
  * (wrapped-fixture.ts).
  * R387: LAST, runs sandbox-app through the CLI's own `buildBackend` with no transport key, and
  * checks that its defaults (`--server`, the resource selector) actually ran (cli-default-leg.ts).
+ * Since R394 coverage is on by default too, so its verdict table equals leg A's per mutant.
  *
  * Skips cleanly (exit 0) when LETHAL_ITEST_ALRUNNER is unset, so CI/local
  * `bun test` runs are unaffected and a developer without al-runner installed
@@ -62,6 +63,7 @@ import {
   preflightGateBaseline,
 } from "./baseline-guard";
 import {
+  CLI_DEFAULT_COVERAGE_SPEC,
   CLI_DEFAULT_SPEC,
   cliDefaultMechanismFailures,
   cliDefaultSelectorFailures,
@@ -899,8 +901,9 @@ function provenance(report: SessionReport): { bcBuild: string; platformAppsDir: 
  * so the leg measures what `lethal run --backend al-runner` does with no config. Runs after every
  * other leg (R345: one al-runner session at a time).
  *
- * Its table is pre-committed against leg A (`expectedCliDefaultShape`, CLI_DEFAULT_SPEC): equal per
- * mutant except `SandboxPricing`'s four, which are `survived` because coverage is off by default.
+ * Its table is pre-committed against leg A (`expectedCliDefaultShape`, CLI_DEFAULT_COVERAGE_SPEC):
+ * equal per mutant, since R394 turned coverage on by default (under R387 `SandboxPricing`'s four
+ * read `survived` here, because coverage was off by default).
  * The table cannot tell the fast path from the one-shot static path, so the mechanism is checked
  * independently (`cliDefaultMechanismFailures`). Checks are collected and thrown once; the frozen
  * baseline is compared by `main()` AFTER they pass, so a record run never records a wrong leg.
@@ -993,15 +996,15 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
           survived: report.counts.survived,
           noCoverage: report.counts.noCoverage,
         },
-        { killed: 3, survived: 16, noCoverage: 0 },
-        `R387: the cli-default leg must be 3 / 16 / 0 (${CLI_DEFAULT_SPEC})`,
+        { killed: 3, survived: 12, noCoverage: 4 },
+        `R394: the cli-default leg must be 3 / 12 / 4 (${CLI_DEFAULT_COVERAGE_SPEC})`,
       );
     });
     check("cli-default table", () =>
       assert.deepEqual(
         legShape(report),
         expectedCliDefaultShape(legA),
-        `R387: per-mutant verdicts differ from the pre-committed table (${CLI_DEFAULT_SPEC})`,
+        `R394: per-mutant verdicts differ from the pre-committed table (${CLI_DEFAULT_COVERAGE_SPEC})`,
       ),
     );
     check("cli-default mechanism", () =>

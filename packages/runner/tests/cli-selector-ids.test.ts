@@ -244,6 +244,8 @@ describe("buildBackend — R3/R4 selector id validation wiring", () => {
       JSON.stringify({ artifactId: "c".repeat(32), mutants: [] }),
       "utf8",
     );
+    // R394: coverage is on by default, and `runSession` hands the build symbols over before deploy.
+    backend.useBuildSymbols([]);
     await backend.deploy(batch);
     await backend.activate("M0001");
     const active = join(dir, "al-runner-active", "active");

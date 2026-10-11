@@ -1,5 +1,5 @@
 {
-  "identityScheme": 38,
+  "identityScheme": 40,
   "entries": [
     {
       "key": "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.negate-conditional|1",
@@ -35,9 +35,9 @@
     },
     {
       "key": "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.conditional-boundary|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "e2044e09ea965439ed7106d12862acd01a0778c8a59a451efa21de86fe428fc6"
     },
@@ -99,9 +99,9 @@
     },
     {
       "key": "98656555452a91ccc91c88a8a0bc3f58192db5f5153792b959447d06cff62cf1|Sandbox Pricing|DiscountedPrice|lethal.return-value|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "03c41bb4749c464d7556b8ddb24f5e8f773e6968cfa173f563be77011bf9ba00"
     },
@@ -123,9 +123,9 @@
     },
     {
       "key": "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.swap-additive|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "269411da6aa6339205bee35a61d08438dd81c49cf7a464e7c351c3224c33538b"
     },
@@ -139,9 +139,9 @@
     },
     {
       "key": "e7216a276891ae7f02f66d83d4fad98fdc3ca56552d617d1f70fa371f7cfc667|Sandbox Pricing|DiscountedPrice|lethal.empty-block|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },

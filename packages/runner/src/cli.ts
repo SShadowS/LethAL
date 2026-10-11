@@ -2225,9 +2225,10 @@ export interface AlRunnerConfigSection {
    */
   readonly selectorMode?: "static" | "resource";
   /**
-   * R387: R220's `--coverage`. OFF by default in this release (plan section 2b). When set to
-   * `"al-runner"`, `runFromCli` first asks `alRunnerCoverageSupport` and falls back to `"none"`,
-   * with one named warning, for a project holding a multi-object or `#if`-wrapped object file.
+   * R387: R220's `--coverage`. ON (`"al-runner"`) by default since R394 (`effectiveAlRunnerTransport`);
+   * R387 shipped it off. Whether set or defaulted, `runFromCli` first asks `alRunnerCoverageSupport`
+   * and falls back to `"none"`, with one named warning, for a project holding a multi-object file
+   * the R407 frame probe refuses or an `#if`-wrapped object file R298 refuses. `"none"` turns it off.
    */
   readonly coverage?: "al-runner" | "none";
 }
@@ -2254,7 +2255,8 @@ export function effectiveAlRunnerTransport(c: Partial<AlRunnerConfigSection>): {
   return {
     serverMode,
     selectorMode: c.selectorMode ?? (serverMode ? "resource" : "static"),
-    coverage: c.coverage ?? "none",
+    // R394: on by default (R387 shipped "none"). The coverage guard still runs on it.
+    coverage: c.coverage ?? "al-runner",
   };
 }
 
@@ -2265,8 +2267,8 @@ export function effectiveAlRunnerTransport(c: Partial<AlRunnerConfigSection>): {
  */
 export function alRunnerAdvisory(
   c: Partial<AlRunnerConfigSection>,
-  /** The files the coverage guard named when it turned a requested coverage off. The user already
-   *  set the coverage key, so the line then says why it is off instead of advising to set it. */
+  /** The files the coverage guard named when it turned coverage off (set or on by default). The
+   *  line then says why it is off instead of advising a key. */
   coverageTurnedOffFor: readonly string[] = [],
 ): string | undefined {
   const t = effectiveAlRunnerTransport(c);
@@ -2289,8 +2291,9 @@ export function alRunnerAdvisory(
       `coverage is "none" (turned off for this run because al-runner's coverage lines cannot be placed in ${coverageTurnedOffFor.join(", ")}; the warning above says why)`,
     );
   } else if (t.coverage === "none") {
+    // R394: reached only when the config sets "none"; the default is "al-runner" and prints nothing.
     notes.push(
-      'coverage is "none" (every mutant runs every green test; "alRunner.coverage": "al-runner" runs only the covering tests, and reports an unreached mutant no-coverage instead of survived)',
+      'coverage is "none", set by "alRunner.coverage": "none" (an unreached mutant reads survived instead of no-coverage, and every mutant runs every green test; remove the key to turn coverage back on)',
     );
   }
   if (notes.length === 0) return undefined;
@@ -2298,8 +2301,8 @@ export function alRunnerAdvisory(
 }
 
 /**
- * R387: an `alRunner.coverage: "al-runner"` request, checked against the project before anything
- * is built. The index drops a file holding a `#if`-wrapped object of a shape it does not admit
+ * R387: al-runner coverage (set by `alRunner.coverage: "al-runner"`, or on by default since R394),
+ * checked against the project before anything is built. The index drops a file holding a `#if`-wrapped object of a shape it does not admit
  * (`alRunnerAdmitsWrappedFile`, R298, R-300b), which would turn real coverage into wrong coverage,
  * so such a run falls back to `"none"` with ONE warning naming the files. Called once per session,
  * so the warning is not repeated per worker.
@@ -2344,8 +2347,9 @@ export async function applyAlRunnerCoverageGuard(
   readonly named: readonly string[];
   readonly admitMultiObjectFiles: boolean;
 }> {
-  const section = configFile.alRunner;
-  if (section?.coverage !== "al-runner") {
+  const section = configFile.alRunner ?? {};
+  // R394: the EFFECTIVE coverage, so a config with no coverage key (on by default) is guarded too.
+  if (effectiveAlRunnerTransport(section).coverage !== "al-runner") {
     return { config: configFile, named: [], admitMultiObjectFiles: false };
   }
   const support = await alRunnerCoverageSupport(projectDir, opts.snapshot);
@@ -2377,7 +2381,7 @@ export async function applyAlRunnerCoverageGuard(
       : []),
   ];
   warn(
-    `[lethal] al-runner-coverage-unsupported: "alRunner.coverage": "al-runner" is IGNORED for this run, which runs with coverage "none" instead. al-runner's coverage cannot be placed in ${named.join(", ")}: ${why.join("; ")}. Trusting it would credit those objects' mutants to the wrong tests, or report them no-coverage while tests do reach them.`,
+    `[lethal] al-runner-coverage-unsupported: al-runner coverage (${section.coverage === "al-runner" ? 'set by "alRunner.coverage": "al-runner"' : "on by default"}) is turned OFF for this run, which runs with coverage "none" instead. al-runner's coverage cannot be placed in ${named.join(", ")}: ${why.join("; ")}. Trusting it would credit those objects' mutants to the wrong tests, or report them no-coverage while tests do reach them.`,
   );
   return {
     config: { ...configFile, alRunner: { ...section, coverage: "none" } },
