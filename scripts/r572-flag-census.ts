@@ -5,8 +5,9 @@
  * argument the call writes), and how R572 decides each one (`r572LoopRows` in loop-hazard.ts, the
  * same code production runs, so this cannot drift from the rule).
  *
- * The RE-OPEN shape is printed on its own: a `selfFeed` row that is NOT stateful, i.e. a pure
- * stepper fed its own result (`D := X.Next(D)`). R572 deploys those on purpose (measured: every such
+ * The RE-OPEN shape is printed on its own: a `selfFeed` or `additive` row that is NOT stateful, i.e.
+ * a pure stepper fed its own result (`D := X.Next(D)`) or a pure delta accumulated into the flag
+ * (`T := T + X.Delta()`). R572 deploys those on purpose (measured: every such
  * loop in DC, DO, CDO, BC.History and the fixtures was safe for a loop-specific reason). Re-open
  * R572 if a project shows one that can hang.
  *
@@ -67,13 +68,16 @@ const nameOf = (p: ALSyntaxNode): string => {
 const { rows, extra } = r572Census(ctx);
 const loops = new Set(rows.map((r) => where(r.loop)));
 const statefulLoops = new Set(rows.filter((r) => r.stateful).map((r) => where(r.loop)));
-const reopen = rows.filter((r) => r.selfFeed && !r.stateful);
+// the stated limit: a PURE callee fed its own result, or whose result is accumulated into the flag
+// (`T := T + X.Delta()`, the CalcTimeDelta shape without its event)
+const reopen = rows.filter((r) => (r.selfFeed || r.additive) && !r.stateful);
 const line = (r: R572Row): string =>
   [
     where(r.loop),
     r.chain.map(nameOf).join(" > "),
     r.stateful ? "stateful" : "pure",
     r.selfFeed ? "self-feed" : "",
+    r.additive ? "additive" : "",
     r.varOut ? "var-out" : "",
     r.wrapper === null ? "" : `via ${nameOf(r.wrapper)}`,
     r.writers.length > 0 ? `writers ${r.writers.map(nameOf).join(", ")}` : "",
