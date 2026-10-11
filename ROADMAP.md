@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**71 of 574 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**74 of 578 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -266,9 +266,13 @@ that ordering is the priority.
 - **R568** · R532's preset feeds stop at a platform method's arguments: `Continue := Cust.Get(Key)` does not make `Key` a feed · [R568.md](docs/roadmap/R568.md) · done (3eb733a5): platform-method arguments feed preset names; another object's function still stops; BaseApp…
 - **R569** · Report-loop hang refusal does not follow a second object hop from a one-hop callee whose result feeds the item's exit: Export Item Budget to Excel's NextDate is deployed · [R569.md](docs/roadmap/R569.md) · done (3049afa3): exit-fed second hop by return value; BaseApp -86, PEPPOL -18, no scheme change; report-code…
 - **R570** · An ordinary (non-report) loop whose exit calls a cursor procedure in another object is not hang-refused: Create Pick's FEFO loop and GetNextGLAcc loops are deployed · [R570.md](docs/roadmap/R570.md) · done (f3889836)
-- **R571** · A record-consuming loop whose consumer lives in another object is not hang-refused: CDC Message Bus Socket.Pop deletes the row inside a page loop's body · [R571.md](docs/roadmap/R571.md) · open, filed 2026-10-10
+- **R571** · A record-consuming loop whose consumer lives in another object is not hang-refused: CDC Message Bus Socket.Pop deletes the row inside a page loop's body · [R571.md](docs/roadmap/R571.md) · done (df45d5de): R531's hop reads a consumer in another project object; DC -4, E-Document Core -24, BaseApp…
 - **R572** · A loop flag fed by a cursor procedure in another object (`More := X.GetNext(); while More do`) is not hang-refused · [R572.md](docs/roadmap/R572.md) · open, filed 2026-10-10
+- **R573** · R531's same-object hop treats a record with a different temporary flag as the loop's record: an over-refusal · [R573.md](docs/roadmap/R573.md) · open, filed 2026-10-10
 - **R577** · A non-deterministic KILL on al-runner: one --server run scored a mutant killed through a failure it did not cause (Simplified Bank Statement Import M0035); a false kill · [R577.md](docs/roadmap/R577.md) · open, filed 2026-10-11
+- **R574** · R531's same-object hop does not refuse an early exit or Error that comes before the callee's last consumer · [R574.md](docs/roadmap/R574.md) · open, filed 2026-10-10
+- **R575** · R531 misses two ways the loop's set can be consumed: `this.P(R)` in the same object, and a second variable of the same SingleInstance codeunit · [R575.md](docs/roadmap/R575.md) · open, filed 2026-10-10
+- **R576** · R571's cross-object hop limits: a helper's body is not followed, and the codeunit's set is matched by global name only · [R576.md](docs/roadmap/R576.md) · open, filed 2026-10-10
 
 ## Product gaps a real project hits
 

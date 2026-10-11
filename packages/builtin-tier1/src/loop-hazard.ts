@@ -1499,6 +1499,8 @@ export function r531Analyze(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop 
 
 function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | null {
   const recvs = new Set<string>();
+  // the condition receivers by key, with a receiver node (null: the implicit Rec, flag unknown)
+  const roots = new Map<string, ALSyntaxNode | null>();
   let next = false;
   for (const p of loopConditionParts(loop)) {
     r531Walk(p, ctx, (n) => {
@@ -1508,7 +1510,12 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
       }
       if (c === null) return;
       if (c.recv === null && !r531Implicit(n, ctx)) return;
-      if (R531_COND.has(c.method)) recvs.add(c.recv ?? "");
+      if (R531_COND.has(c.method)) {
+        recvs.add(c.recv ?? "");
+        const m = n.rawKind === "call_expression" ? n.childForFieldName("function") : n;
+        const o = m?.rawKind === "member_expression" ? m.childForFieldName("object") : null;
+        roots.set(c.recv ?? "", c.recv === null ? null : o);
+      }
       if (c.method === "next") next = true;
     });
   }
@@ -1519,6 +1526,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
   const procs = r531ObjectProcs(loop, ctx);
   // same-procedure aliases of R count as R
   const aliases = new Set<string>();
+  const copyLinked = new Set<string>(); // every name a `Copy` call names (R571: never temp-skipped)
   if (scope !== null) {
     for (let changed = true; changed; ) {
       changed = false;
@@ -1538,6 +1546,7 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
           // An uncertain `Copy` (R567) aliases every argument.
           if (c !== null && c.method === "copy") {
             const self = c.recv ?? (r531Implicit(n, ctx) && !procs.has("copy") ? "" : null);
+            for (const k of [self, ...c.args.map(r531Key)]) if (k !== null) copyLinked.add(k);
             if (c.uncertain) for (const a of c.args) pairs.push([self, r531Key(a)]);
             else if (a0 !== undefined && a1 !== undefined && normalizeAlName(a1.text) !== "false")
               pairs.push([self, r531Key(a0)]);
@@ -1731,6 +1740,15 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     .filter((c) => c.n.endIndex <= loop.startIndex)
     .map((c) => c.n);
   const hops: R531Hop[] = [];
+  // R571's caller-side temp-flag skip: an assignment alias of R (never one named in a `Copy`)
+  // whose temporary flag is KNOWN and differs from every condition receiver's known flag
+  const rootFlags = [...roots.values()].map((id) => (id === null ? null : r571KnownTemp(id, ctx)));
+  const skipArg = (a: ALSyntaxNode, k: string): boolean => {
+    if (!r571TempSkip.on || !aliases.has(k) || copyLinked.has(k) || rootFlags.length === 0)
+      return false;
+    const f = r571KnownTemp(a, ctx);
+    return f !== null && rootFlags.every((r) => r !== null && r !== f);
+  };
   // FILTER HOP (R562): a pre-loop call whose callee sets such a filter, or that cannot be followed
   if (scope !== null && depends.size + markRecvs.size > 0)
     r531Walk(scope, ctx, (n) => {
@@ -1780,6 +1798,8 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
       const hop = r531CalleeHop(t.proc, t.key, ctx, t.byValue);
       if (hop !== null) hops.push(hop);
     }
+    if (r571Seam.on && targets.length === 0 && obj !== null && h.n.rawKind === "call_expression")
+      hops.push(...r571CrossHops(h.n, h.c, h.kind, recvs, obj, ctx, skipArg));
   }
   // FEEDS: indirect feeds, and the guards around a pre-loop filter call
   let feeds: ALSyntaxNode[] = [];
@@ -1808,6 +1828,192 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     preGuards,
     hops,
   };
+}
+
+/**
+ * R571: R531's HOP into a consumer in ANOTHER project object. When the same-object HOP above finds
+ * no target for a `pass-rec` or `recv-proc` consumer, the call is resolved through `callTargets`
+ * (declared type; `objectsOfType` adds tableextensions and interface implementers; else the bound
+ * record) and R564's `r531ProcsIn`. Only procedures in another object are taken.
+ * - `pass-rec`: the callee's parameter that receives R counts as R. A `var` parameter counts every
+ *   R531 consumer kind; a by-value one only Delete, DeleteAll, Rename and Modify (R531's by-value
+ *   rule). A parameter named `Rec` is keyed "" like a `Rec.M()` receiver (R570's `r531ParamKey`).
+ *   An argument the caller-side temp-flag skip names is not followed (`r571TempSkip`).
+ * - `recv-proc` on a receiver that is NOT a record (a codeunit or interface variable the loop's
+ *   condition tests by name, `while not Socket.IsEmpty() do Socket.Pop()`): the callee's object holds
+ *   the set itself, so every GLOBAL of that object that the callee does not shadow with a local or
+ *   parameter counts as R. These globals are never temp-skipped: they ARE the set. A bare call in
+ *   the callee to a procedure of its own object that can see one of those globals counts as a
+ *   consumer too (`r571HelperCalls`).
+ * What is refused: the callee's consumers, the sites containing them, their guards, and its early
+ * exits (`r571Hop`).
+ * Not followed (each errs toward deploying): a second cross-object hop, the body of a callee's
+ * own same-object helper, `Codeunit.Run` targets, event subscribers, and objects outside the
+ * project.
+ */
+export const r571Seam = { on: true };
+
+/**
+ * R571's caller-side temp-flag skip, behind its own seam. An argument passed into the cross-object
+ * callee is not followed when it is an alias of R made by ASSIGNMENT (`:=`), it is named in no `Copy`
+ * call of the scope (`Copy(X, true)` shares the table), and its temporary flag and every loop
+ * condition receiver's flag are KNOWN (`r571KnownTemp`) and differ. An assignment copies the record,
+ * never a temporary table: measured on BC (scripts/r571-assign-probe).
+ */
+export const r571TempSkip = { on: true };
+
+/**
+ * A record variable's temporary flag when it is KNOWN, else null. Known true: the declaration says
+ * `temporary`. Known false: a `Record X` local or global (never a parameter, which can bind a
+ * temporary record) without the keyword, whose table X is a project table not declared
+ * `TableType = Temporary`. Anything else (a parameter, a table outside the project, the implicit
+ * Rec, a codeunit variable) is unknown.
+ */
+function r571KnownTemp(id: ALSyntaxNode, ctx: SemanticContext): boolean | null {
+  if (!isIdentifierLike(id)) return null;
+  const decl = resolveVarRef(id, ctx)?.node ?? null;
+  const rec =
+    decl?.childForFieldName("type")?.namedChildren.find((c) => c.rawKind === "record_type") ?? null;
+  if (decl === null || rec === null) return null;
+  if (rec.namedChildren.some((x) => x.rawKind === "temporary_keyword")) return true;
+  if (decl.rawKind !== "variable_declaration") return null;
+  const ref = qualifiedObjectName(fieldSegments(rec, "reference"), "table", ctx.symbols);
+  const table = ref === null ? null : tableObjectOfRef(ref, ctx);
+  if (table === null) return null;
+  let tempType = false;
+  visitAll(table.node, (x) => {
+    if (
+      x.kind === ALNodeKind.property &&
+      normalizeAlName(x.childForFieldName("name")?.text ?? "") === "tabletype" &&
+      normalizeAlName(x.childForFieldName("value")?.text ?? "") === "temporary"
+    )
+      tempType = true;
+  });
+  return tempType ? null : false;
+}
+
+/** R571: the hops into another project object for consumer call `n` (see `r571Seam`). */
+function r571CrossHops(
+  n: ALSyntaxNode,
+  c: R531Call,
+  kind: string,
+  recvs: ReadonlySet<string>,
+  obj: ALSyntaxNode,
+  ctx: SemanticContext,
+  skip: (a: ALSyntaxNode, k: string) => boolean,
+): R531Hop[] {
+  const tg = callTargets(n, ctx);
+  if (tg === null) return [];
+  const arity = r531CallArity(c);
+  const out: R531Hop[] = [];
+  for (const o of tg.objs) {
+    if (samePos(o, obj) && sameFile(rootOf(o), rootOf(obj))) continue;
+    const globals = objectGlobalNames(o);
+    for (const p of r531ProcsIn(o, tg.member, arity, n, ctx)) {
+      const consumers: ALSyntaxNode[] = [];
+      const take = (key: string, byValue: boolean): void => {
+        consumers.push(...(r531CalleeHop(p, key, ctx, byValue)?.consumers ?? []));
+      };
+      if (kind === "pass-rec")
+        c.args.forEach((a, i) => {
+          const k = r531Key(a);
+          if (k === null || !recvs.has(k) || skip(a, k)) return;
+          for (const j of r531Positions(c, i, p)) {
+            const prm = r531Param(p, j);
+            if (prm !== null) take(r531ParamKey(prm[0]), !prm[1]);
+          }
+        });
+      else if (kind === "recv-proc" && tg.kind !== "record") {
+        for (const g of globals) if (!r531Declares(p, g, true)) take(g, false);
+        consumers.push(...r571HelperCalls(p, o, globals, ctx));
+      }
+      const hop = r571Hop(p, consumers, ctx);
+      if (hop !== null) out.push(hop);
+    }
+  }
+  return out;
+}
+
+/** R571 (plan r2 item 2): the bare calls in `proc` to a procedure of its own object `o` that can see
+ *  one of `globals` (declares no local or parameter of that name), as R531's `global-call` in a loop
+ *  body. The helper's own body is not followed. */
+function r571HelperCalls(
+  proc: ALSyntaxNode,
+  o: ALSyntaxNode,
+  globals: ReadonlySet<string>,
+  ctx: SemanticContext,
+): ALSyntaxNode[] {
+  const body = proc.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+  if (body === null || globals.size === 0) return [];
+  const procs = r531ObjectProcs(proc, ctx);
+  const out: ALSyntaxNode[] = [];
+  r531Walk(body, ctx, (n) => {
+    if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return;
+    const c = r531Call(n);
+    if (c === null || c.recv !== null || !procs.has(c.method) || !r531Implicit(n, ctx)) return;
+    const helpers = r531ProcsIn(o, c.method, r531CallArity(c), n, ctx);
+    if (helpers.some((h) => [...globals].some((g) => !r531Declares(h, g, true)))) out.push(n);
+  });
+  return out;
+}
+
+/** R571: the hop into `proc` for `consumers`, with their guards and the callee's EARLY EXITS: every
+ *  `exit` or raised `Error` that starts before the last consumer, or that sits in a loop whose body
+ *  holds a consumer (the next pass can reach it first), every `break` that leaves such a loop,
+ *  plus their guards (`if not Buf.FindLast() then exit` negated returns without deleting while the
+ *  set is not empty), and the assignments in
+ *  the callee body that feed those guards and exits (R531's FEEDS). */
+function r571Hop(
+  proc: ALSyntaxNode,
+  consumers: ALSyntaxNode[],
+  ctx: SemanticContext,
+): R531Hop | null {
+  const body = proc.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+  if (body === null || consumers.length === 0) return null;
+  const inside = (a: ALSyntaxNode, b: ALSyntaxNode): boolean =>
+    b.startIndex <= a.startIndex && a.endIndex <= b.endIndex;
+  const last = Math.max(...consumers.map((c) => c.startIndex));
+  const loops: ALSyntaxNode[] = [];
+  visitAll(body, (x) => {
+    if (BREAK_SCOPES.has(x.rawKind) && consumers.some((c) => inside(c, x))) loops.push(x);
+  });
+  // the loop a `break` leaves: its nearest enclosing loop
+  const breaks = (x: ALSyntaxNode): ALSyntaxNode | null => {
+    for (let a = x.parent; a !== null && !samePos(a, body); a = a.parent)
+      if (BREAK_SCOPES.has(a.rawKind)) return a;
+    return null;
+  };
+  const isExit = (x: ALSyntaxNode): boolean => {
+    if (x.rawKind === "break_statement") {
+      const l = breaks(x);
+      return l !== null && loops.some((c) => samePos(c, l));
+    }
+    return (
+      (x.rawKind === "exit_statement" || isRaisedError(x, body)) &&
+      (x.startIndex < last || loops.some((l) => inside(x, l)))
+    );
+  };
+  const isC = (x: ALSyntaxNode): boolean => consumers.some((c) => samePos(c, x));
+  const guards = [...exitGuards(body, body, isC), ...exitGuards(body, body, isExit)];
+  visitAll(body, (x) => {
+    if (isExit(x)) guards.push(x);
+  });
+  // FEEDS over the callee body: `Found := Buf.FindLast(); if not Found then exit;`
+  guards.push(...r531Feeds(body, guards, ctx).filter((a) => !isC(a)));
+  return { proc, consumers, guards };
+}
+
+/** The names an object declares in its own `var` sections (its globals). */
+function objectGlobalNames(o: ALSyntaxNode): Set<string> {
+  const out = new Set<string>();
+  for (const c of o.childForFieldName("body")?.namedChildren ?? []) {
+    if (c.rawKind !== "var_section") continue;
+    visitAll(c, (v) => {
+      if (v.rawKind === "variable_declaration")
+        for (const nm of declaredNames(v)) out.add(normalizeAlName(nm));
+    });
+  }
+  return out;
 }
 
 /** Every R-531 loop in a scope (FILTER and FEEDS sites can sit outside the loop). */

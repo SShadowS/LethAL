@@ -760,6 +760,22 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A loop that consumes its record through a procedure in ANOTHER project object is hang-refused**
+  (R571). R531 refused the consumers of a cursor loop's record (`while R.FindFirst()`, `while not
+  Socket.IsEmpty()`), but followed a call only into the same object or a table procedure on the
+  record. It now also follows the call into another project object: a parameter that receives the
+  record counts as it (a by-value one for Delete, Rename and Modify only), and a call on a codeunit
+  variable the loop tests by name makes that codeunit's globals the set, together with its calls to
+  its own helpers that can see them. Refused in the callee: its consumers and their guards, every
+  `exit` or `Error` that comes before the last consumer or sits inside a callee loop that holds one,
+  every `break` that leaves such a loop, the guards of those exits, and the assignments that feed
+  those guards. An alias made by `:=` whose `temporary` flag is known to differ from the loop
+  record's is not followed: assignment never shares the table (measured on BC,
+  `scripts/r571-assign-probe`). Filed limits: a second cross-object hop, the body of the callee's
+  own helper, and a codeunit set matched by global name only (R576); `this.P(R)` in the same object
+  and two variables of one SingleInstance codeunit (R575). Measured: DC Cloud -4, E-Document
+  Core -24 and BaseApp -37 mutants, no identity tuple or ordinal moved, and no scheme change.
+
 - **A loop that ends through a cursor procedure in another object is hang-refused** (R570). A
   `while`/`repeat` loop (any object kind) whose condition, or a body exit guard, calls a procedure
   in another project object that steps a cursor (`Find*`, `Next`, `IsEmpty`, `Count`, or a loop)
