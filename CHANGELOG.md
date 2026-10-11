@@ -124,12 +124,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **`alRunner.selectorMode` and `alRunner.coverage` config keys** (R387). `selectorMode`
   (`"static"` or `"resource"`) picks R222's selector channel and `coverage` (`"al-runner"` or
   `"none"`) turns on R220's `--coverage`; neither was reachable from `lethal run` before. Coverage
-  stays off by default. When it is on, a project holding a multi-object file or a `#if`-wrapped
+  stays off by default (R394, under Changed, turns it on). When it is on, a project holding a multi-object file or a `#if`-wrapped
   object runs with coverage `"none"` instead, with one `al-runner-coverage-unsupported` warning
   naming the files and the reason (see R383 below).
 - **One advisory line on an al-runner run** (R387): `[lethal] al-runner settings: ...` names each
   slow or unmeasured setting and the key that changes it. Until coverage is on by default it always
-  names `coverage`.
+  names `coverage` (since R394 it names it only when the config sets `"none"`).
 - **A file whose instrumentation throws is refused whole, and the rest of the project still runs**
   (R307). Before, one such file (an object mix, no object header, a statement the injector cannot
   place) aborted the whole run. Now LethAL tries each file on its own, skips the one that fails,
@@ -150,6 +150,27 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **al-runner coverage is ON by default** (R394). With no `alRunner.coverage` key, `lethal run
+  --backend al-runner` now reads al-runner's own `--coverage` (R220): a mutant no green test
+  reaches reads `no-coverage` instead of `survived`, and each mutant runs only its covering tests.
+  This moves verdicts. On `fixtures/sandbox-app` the CLI default goes from 3 / 16 / 0 to 3 / 12 / 4
+  (`SandboxPricing`'s four mutants, which no test calls), equal per mutant to the gate's coverage
+  leg. `"alRunner.coverage": "none"` restores the old behaviour, and the advisory line then names
+  it and what it costs. The coverage guard now runs on the effective setting, so a run that sets no
+  key still gets the R407 frame probe and the R298 `#if`-wrapped refusal: a project they refuse
+  runs with coverage `"none"` and one `al-runner-coverage-unsupported` warning, which now says
+  coverage was "on by default" or "set by" the key and is turned OFF for the run (it no longer
+  says a key the user never set is IGNORED). With the default, the advisory prints no coverage
+  note. Measured prevalence of the guard: it keeps coverage on in every project of the three
+  Continia corpora measured (27 projects), and turns it off in 15 of 519 BC.History projects
+  (R579, R580). **`campaign compare` refuses an al-runner stage frozen under the old default** when
+  that stage records its coverage mode (frozen since R355): the frozen side records `"none"`, a
+  new run records `"al-runner"`, and R355 refuses the mismatch by name. A stage frozen before R355
+  records no mode; it is not refused, but the result says "coverage mode UNVERIFIED" and lists the
+  moved mutants as differences. Set `"alRunner.coverage": "none"` to compare against such a stage,
+  or re-freeze it. The same setting keeps `--resume` of a run started before the upgrade working
+  (otherwise R354 refuses it), and keeps `--skip-known-survivors` carrying survivors from an older
+  store (otherwise the first run after the upgrade carries none).
 - **Baseline and campaign comparisons see a mutant that changed under an unchanged key** (R556).
   A newly recorded itest baseline or frozen campaign stage records the identity scheme and a
   sha256 of each mutant's mutated text (never the text). Comparing then reports "mutated text
@@ -738,6 +759,39 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   extension (R506).
 
 ### Fixed
+
+- **A loop that consumes its record through a procedure in ANOTHER project object is hang-refused**
+  (R571). R531 refused the consumers of a cursor loop's record (`while R.FindFirst()`, `while not
+  Socket.IsEmpty()`), but followed a call only into the same object or a table procedure on the
+  record. It now also follows the call into another project object: a parameter that receives the
+  record counts as it (a by-value one for Delete, Rename and Modify only), and a call on a codeunit
+  variable the loop tests by name makes that codeunit's globals the set, together with its calls to
+  its own helpers that can see them. Refused in the callee: its consumers and their guards, every
+  `exit` or `Error` that comes before the last consumer or sits inside a callee loop that holds one,
+  every `break` that leaves such a loop, the guards of those exits, and the assignments that feed
+  those guards. An alias made by `:=` whose `temporary` flag is known to differ from the loop
+  record's is not followed: assignment never shares the table (measured on BC,
+  `scripts/r571-assign-probe`). Filed limits: a second cross-object hop, the body of the callee's
+  own helper, and a codeunit set matched by global name only (R576); `this.P(R)` in the same object
+  and two variables of one SingleInstance codeunit (R575). Measured: DC Cloud -4, E-Document
+  Core -24 and BaseApp -37 mutants, no identity tuple or ordinal moved, and no scheme change.
+
+- **A loop that ends through a cursor procedure in another object is hang-refused** (R570). A
+  `while`/`repeat` loop (any object kind) whose condition, or a body exit guard, calls a procedure
+  in another project object that steps a cursor (`Find*`, `Next`, `IsEmpty`, `Count`, or a loop)
+  now refuses every site in that procedure, and in every procedure its `exit(<call>)` chain reaches
+  (up to 4 hops). Create Pick's FEFO loop, Sales Tax Calculate, TempStack.Pop and the Power BI
+  report iterator are examples a sample showed can hang. A guard call is followed when the
+  condition steps no cursor; when it does, only a guard call that shares the condition's record
+  (its receiver, or a `var` argument) AND whose callee touches that record is refused. Touching
+  means it moves it, filters, marks or changes rows, writes a key field or a field the loop
+  filters on, calls `Modify(true)`, or hands it on to code that does, followed up to 8 calls
+  deep; unknown counts as touching. Measured against master 259a5eae: DC 31 mutants removed
+  (0.016%), BC.History 407 (0.018%; BaseApp 259, 0.036%), DO, CDO and fixtures 0; no identity
+  tuple or ordinal moved. The same change fixes R531's hop into a `var` parameter named `Rec`
+  (it never matched that parameter's consumers); measured on all 565 corpus projects it removes
+  nothing. A loop flag fed by such a callee (R572) and a record consumer in another object (R571)
+  are filed, not built.
 
 - **A call to a preset writer of a report OUTSIDE the project is hang-refused; identity scheme 40**
   (R565, closes R561). R555 refused a call through `Report X` to a procedure that writes a name the

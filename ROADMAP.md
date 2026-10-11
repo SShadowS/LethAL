@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**68 of 567 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**74 of 578 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -260,12 +260,19 @@ that ordering is the priority.
 - **R557** · al-runner reports a quoted AL test name CLR-mangled (`"Stone Quoted"` → `Stone_Quoted`), so LethAL never runs that test on al-runner — a possible FALSE SURVIVE · [R557.md](docs/roadmap/R557.md) · open
 - **R561** · A call to a report's preset-exit-name writer through a receiver R555 cannot resolve to a project report is not refused · [R561.md](docs/roadmap/R561.md) · done (8fc29663): the outside-report row is closed by R565's loader (QM's 5 refused, plus 2 of R555's shape)…
 - **R562** · An OnRename consuming loop whose filter is set through a table procedure (`SetTemplateFilter(xRec)`) keeps its filter mutants: R531's FILTER sees only a direct `SetRange`/`SetFilter` · [R562.md](docs/roadmap/R562.md) · done (41ecfd3c): pre-loop filter-setting call followed one hop; CDO -15, DO -23; no scheme bump
-- **R563** · A consuming loop that refilters through a FieldRef (`FieldRef.SetRange(...)` then `until RecRef.IsEmpty()`) is not seen by R531; only LibraryUtility's GenerateRandomCode* loops have the shape, and LethAL mutates them only when that test library is the run's project · [R563.md](docs/roadmap/R563.md) · open, filed 2026-10-09
+- **R563** · A consuming loop that refilters through a FieldRef (`FieldRef.SetRange(...)` then `until RecRef.IsEmpty()`) is not seen by R531; only LibraryUtility's GenerateRandomCode* loops have the shape, and LethAL mutates them only when that test library is the run's project · [R563.md](docs/roadmap/R563.md) · closed 2026-10-11 — the FieldRef-refilter-until-IsEmpty shape exists only in Application Test Library's three…
 - **R564** · Loop-hazard HOPs choose a callee's overload by parameter count, not argument type, so an overload the call never reaches is refused too (DO: 8 keys under R562) · [R564.md](docs/roadmap/R564.md) · done (a79cb1f3): an overload is chosen by argument type only when that is certain; DO +8 keys, 0 moved; no…
 - **R567** · Loop-hazard HOPs count a comment inside an argument list as an argument, so `F(xRec /*c*/)` follows no overload and the callee's hang-capable sites are deployed · [R567.md](docs/roadmap/R567.md) · done (ca8e3dc3): one comment-aware argument reader for every positional consumer; 38 projects 0 keys moved…
 - **R568** · R532's preset feeds stop at a platform method's arguments: `Continue := Cust.Get(Key)` does not make `Key` a feed · [R568.md](docs/roadmap/R568.md) · done (3eb733a5): platform-method arguments feed preset names; another object's function still stops; BaseApp…
 - **R569** · Report-loop hang refusal does not follow a second object hop from a one-hop callee whose result feeds the item's exit: Export Item Budget to Excel's NextDate is deployed · [R569.md](docs/roadmap/R569.md) · done (3049afa3): exit-fed second hop by return value; BaseApp -86, PEPPOL -18, no scheme change; report-code…
-- **R570** · An ordinary (non-report) loop whose exit calls a cursor procedure in another object is not hang-refused: Create Pick's FEFO loop and GetNextGLAcc loops are deployed · [R570.md](docs/roadmap/R570.md) · open, filed 2026-10-10
+- **R570** · An ordinary (non-report) loop whose exit calls a cursor procedure in another object is not hang-refused: Create Pick's FEFO loop and GetNextGLAcc loops are deployed · [R570.md](docs/roadmap/R570.md) · done (f3889836)
+- **R571** · A record-consuming loop whose consumer lives in another object is not hang-refused: CDC Message Bus Socket.Pop deletes the row inside a page loop's body · [R571.md](docs/roadmap/R571.md) · done (df45d5de): R531's hop reads a consumer in another project object; DC -4, E-Document Core -24, BaseApp…
+- **R572** · A loop flag fed by a cursor procedure in another object (`More := X.GetNext(); while More do`) is not hang-refused · [R572.md](docs/roadmap/R572.md) · open, filed 2026-10-10
+- **R573** · R531's same-object hop treats a record with a different temporary flag as the loop's record: an over-refusal · [R573.md](docs/roadmap/R573.md) · open, filed 2026-10-10
+- **R577** · A non-deterministic KILL on al-runner: one --server run scored a mutant killed through a failure it did not cause (Simplified Bank Statement Import M0035); a false kill · [R577.md](docs/roadmap/R577.md) · open, filed 2026-10-11
+- **R574** · R531's same-object hop does not refuse an early exit or Error that comes before the callee's last consumer · [R574.md](docs/roadmap/R574.md) · open, filed 2026-10-10
+- **R575** · R531 misses two ways the loop's set can be consumed: `this.P(R)` in the same object, and a second variable of the same SingleInstance codeunit · [R575.md](docs/roadmap/R575.md) · open, filed 2026-10-10
+- **R576** · R571's cross-object hop limits: a helper's body is not followed, and the codeunit's set is matched by global name only · [R576.md](docs/roadmap/R576.md) · open, filed 2026-10-10
 
 ## Product gaps a real project hits
 
@@ -385,7 +392,7 @@ that ordering is the priority.
 - **R386** · A test-app object passed as an argument to external code puts that test on the whole-source digest; narrowing it would keep verify's new-test count down · [R386.md](docs/roadmap/R386.md) · open, filed 2026-10-01
 - **R387** · `lethal run --backend al-runner` defaults to its slowest path (one-shot, recompile per mutant, no coverage), and two of the three fast switches have no CLI or config surface · [R387.md](docs/roadmap/R387.md) · done (b3928cb9, 7a84c70e); coverage default is R394
 - **R388** · No way to run Microsoft's own tests against the code an app customizes (the base objects it extends and the events it subscribes to) · [R388.md](docs/roadmap/R388.md) · closed 2026-10-01: out of scope (owner ruling). Selecting and running Microsoft's tests belongs to al-runner…
-- **R394** · Turn al-runner coverage on by default in `lethal run` (R387 left it off): needs R383 re-measured on 2.12.0 and a pre-commitment · [R394.md](docs/roadmap/R394.md) · open, filed 2026-10-01
+- **R394** · Turn al-runner coverage on by default in `lethal run` (R387 left it off): needs R383 re-measured on 2.12.0 and a pre-commitment · [R394.md](docs/roadmap/R394.md) · done (3659db57)
 - **R405** · The symbol table, receiver checks and structural readers read #if declarations without arms, so they refuse sites the build has · [R405.md](docs/roadmap/R405.md) · closed 2026-10-05 — part (a) done (bd5ce769, scheme bump e91b94b6); part (b) no change: the latch reader…
 - **R408** · tree-sitter-al misparses a #if tail on a repeat-until condition as a separate statement; LethAL refuses the file (directive-continues-statement) until the grammar owns the tail · [R408.md](docs/roadmap/R408.md) · open, filed 2026-10-02
 - **R420** · Test discovery silently drops a [Test] whose attributes are split by a #if line (e.g. around [HandlerFunctions]); the R79 net does not fire · [R420.md](docs/roadmap/R420.md) · done (aba9278b)
@@ -406,7 +413,7 @@ that ordering is the priority.
 - **R477** · Guarded bare fallback for the validate-to-assign sites R464 refuses (35: 29 previously mutated, 6 new) · [R477.md](docs/roadmap/R477.md) · done (467e2faf)
 - **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · closed 2026-10-05 — neither shape reaches the prefix proof today: no Tier-2 claim is made inside a…
 - **R483** · The grammar does not parse a namespace-qualified tableextension base (`extends R478.Ns."Customer"`), so the extension becomes an ERROR node · [R483.md](docs/roadmap/R483.md) · closed 2026-10-06 — stated limit: 0 in 20,598 corpus files; correction: the extension's members ARE mutated…
-- **R489** · explain's covering tests are not ordered by duration: no measurement shows a per-test baseline duration is stable enough to rank by · [R489.md](docs/roadmap/R489.md) · open
+- **R489** · explain's covering tests are not ordered by duration: no measurement shows a per-test baseline duration is stable enough to rank by · [R489.md](docs/roadmap/R489.md) · closed 2026-10-11 — measured: on bcdev a test's baseline duration does not keep its rank between two runs of…
 - **R497** · BC paths score `#if`-wrapped objects (fenced under H1a, hub by name), and the line map's H1b rule is wrong for a bare object after a wrapper · [R497.md](docs/roadmap/R497.md) · done (e02c874b)
 - **R498** · A hook session whose test app carries no `.al` never proves its identity, so it never resumes, skips or reuses · [R498.md](docs/roadmap/R498.md) · done (e4907b30)
 - **R535** · A nested `#if` object wrapper is refused by name on every coverage path: BaseApp has 2 such files (70 sites), unmeasured · [R535.md](docs/roadmap/R535.md) · closed 2026-10-09 — 2 BaseApp files, 70 sites, refused by name on every coverage path; not worth an R-300b…
@@ -612,6 +619,10 @@ that ordering is the priority.
 - **R559** · Retire R488's exclude-and-learn path once every supported al-runner build carries `--test-exact` · [R559.md](docs/roadmap/R559.md) · open
 - **R565** · No dependency source loader: a rule that needs a DEPENDENCY's procedure bodies (R561's known preset writer) cannot run, though Microsoft's .app packages ship their source · [R565.md](docs/roadmap/R565.md) · done (8fc29663): dependency report source loader for known preset writers; QM -7, ATL -15…
 - **R566** · Host step: does the env tool's own publish serve a source-less test app back byte for byte? (R498's gain on that route is unmeasured) · [R566.md](docs/roadmap/R566.md) · open, filed 2026-10-10 — a HOST step for the owner (the env tool is host-only)
+- **R578** · al-runner fails Report.RunModal with a request page shown to a [RequestPageHandler] ("An error occurred and the transaction is stopped"); not yet checked on BC · [R578.md](docs/roadmap/R578.md) · open, filed 2026-10-11
+- **R579** · A #if block holding only #pragma lines counts as an object wrapper, so 21 Power BI Report embeddings files turn al-runner coverage off (wrapperHoldsObject vs isTopLevelObject) · [R579.md](docs/roadmap/R579.md) · open, filed 2026-10-11
+- **R580** · A #if-wrapped CODE-FREE object (enum, interface, permission set, control add-in, dotnet, enumextension) turns al-runner coverage off for its whole project, though it has no coverage identity: 42 files in 12 BC.History projects · [R580.md](docs/roadmap/R580.md) · open, filed 2026-10-11
+- **R581** · An al-runner --server baseline that fails before running any test reports "returned: <no tests>" and hides al-runner's own reason ("BC version selection failed ... minimum 28.6") · [R581.md](docs/roadmap/R581.md) · open, filed 2026-10-11
 
 ---
 
