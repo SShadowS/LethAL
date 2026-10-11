@@ -377,4 +377,38 @@ describe("R571: a consumer in another object", () => {
     const files = { "s.al": SOCKET(pop), "c.al": CARD(), "b.al": BUF };
     expect(bothWays(files, "s.al", "Buf.Blocked", NEG)).toEqual([false, true]);
   });
+
+  // red: add case_statement to BREAK_SCOPES (a break inside a case would stop counting for its loop)
+  it("T18: a break inside a case statement still leaves the consumer loop, so its guard is refused", () => {
+    const pop = `    begin
+        if Buf.FindSet() then
+            repeat
+                if Buf.Blocked then
+                    case 1 of
+                        1:
+                            break;
+                    end;
+                Buf.Delete();
+            until Buf.Next() = 0;
+    end;`;
+    const files = { "s.al": SOCKET(pop), "c.al": CARD(), "b.al": BUF };
+    expect(bothWays(files, "s.al", "Buf.Blocked", NEG)).toEqual([false, true]);
+  });
+
+  // red: drop for_statement from BREAK_SCOPES (the break would then count for the consumer loop around it)
+  it("T19: a break that leaves only an inner loop holding no consumer is not refused", () => {
+    const pop = `    var
+        I: Integer;
+    begin
+        if Buf.FindSet() then
+            repeat
+                for I := 1 to 2 do
+                    if Buf.Blocked then
+                        break;
+                Buf.Delete();
+            until Buf.Next() = 0;
+    end;`;
+    const files = { "s.al": SOCKET(pop), "c.al": CARD(), "b.al": BUF };
+    expect(bothWays(files, "s.al", "Buf.Blocked", NEG)).toEqual([false, false]);
+  });
 });

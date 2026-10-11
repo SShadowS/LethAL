@@ -1960,8 +1960,8 @@ function r571HelperCalls(
 /** R571: the hop into `proc` for `consumers`, with their guards and the callee's EARLY EXITS: every
  *  `exit` or raised `Error` that starts before the last consumer, or that sits in a loop whose body
  *  holds a consumer (the next pass can reach it first), every `break` that leaves such a loop,
- *  plus their guards (`if not Buf.FindLast()
- *  then exit` negated returns without deleting while the set is not empty), and the assignments in
+ *  plus their guards (`if not Buf.FindLast() then exit` negated returns without deleting while the
+ *  set is not empty), and the assignments in
  *  the callee body that feed those guards and exits (R531's FEEDS). */
 function r571Hop(
   proc: ALSyntaxNode,
