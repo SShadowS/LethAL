@@ -23,6 +23,6 @@
     "allowDownloadingSource": true,
     "includeSourceInSymbolFile": true
   },
-  "runtime": "14.0",
+  "runtime": "17.0",
   "features": []
 }
