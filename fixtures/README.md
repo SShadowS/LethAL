@@ -29,6 +29,8 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Wrapped Pair` | 78905 | `sandbox-wrapped` | R-300b C1: one object in two files, `WrappedPairA` (`#if WRAPDEF and WRAPAPP`) and `WrappedPairB` (the opposite). |
 | `Wrapped Arms` | 78906 | `sandbox-wrapped` | R-300b refusal control: a two-arm wrapper. |
 | `Wrapped Tests` | 78950 | `sandbox-wrapped-tests` | One test per procedure, `Grow*`/`Twice*` per file and twin, `PairPick`, `ArmsPick`. Asserts via `Error()`. |
+| `Names Calc` | 78800 | `sandbox-names` | R557 target: twelve identical `exit(x + 1)` procedures, each reached and killed by exactly one test. See "sandbox-names (R557)" below. |
+| `Names Tests` | 78850 | `sandbox-names-tests` | One test per procedure, under AL names al-runner renames (`"Space Step"`, `"Dash-Step"`, `"Paren(Step)"`, `"Dot.Step"`, `"Slash/Step"`, `"Amp&Step"`, `"7Digit Step"`, unquoted `Default`, `"Blåbær Step"`, `"Twin Pair"`) and two unrenamed controls (`Twin_PairLong`, `PlainControl`). UTF-8. Asserts via `Error()`. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on
 `sandbox-app` only (id `df1aa9ff-6539-4c86-a9d0-ad702b61ac9a`) and declares the same
@@ -43,7 +45,7 @@ The injected Mutation Selector/Control/Active object ids (`79197`–`79199`, see
 the project already declares. Every fixture here follows it against its own ranges (`sandbox-app`
 79197-79199, `sandbox-data` 79397-79399, `sandbox-hang` 79447-79449, `sandbox-harden` 79547-79549,
 `gift-card` 90197-90199, `sandbox-symbols` 79647-79649, `sandbox-layout` 79747-79749,
-`sandbox-multiobject` 79847-79849, `sandbox-wrapped` 78947-78949), and two fixtures must never share the three
+`sandbox-multiobject` 79847-79849, `sandbox-wrapped` 78947-78949, `sandbox-names` 78847-78849), and two fixtures must never share the three
 ids, which is R169.
 They didn't always: the original ids (`50000`–`50002`) compiled fine against al-runner but
 fail real `alc.exe` with `AL0297` ("object identifier is not valid ... allowed ranges") —
@@ -484,6 +486,43 @@ twelve mutants or their owners move, or if the guard stops refusing the fixture.
 `.alpackages` is gitignored. Create an empty `.alpackages` directory in `sandbox-multiobject`, and
 `alc` the target into `sandbox-multiobject-tests/.alpackages` from current source before compiling.
 al-runner compiles both from source and needs neither.
+
+## sandbox-names (R557)
+
+A target, `Names Calc` (78800), with twelve identical procedures, each `exit(x + 1)`, and a test
+codeunit, `Names Tests` (78850, UTF-8), with one test per procedure, each the ONLY test that reaches
+and kills its procedure (`if C.<P>(5) <> 6 then Error('<P>(5) must be 6')`). al-runner names a test
+row by BC's C# identifier for the AL method, and ten of the twelve AL names are renamed by it
+(`"Dash-Step"` is `Codeunit78850.Dasha45Step`, unquoted `Default` is `_Default`, `"Blåbær Step"` is
+`Blåbær_Step`); `Twin_PairLong` and `PlainControl` are controls. `"Twin Pair"` and `Twin_PairLong`
+are the R488 look-alike pair, a unit-only trap (T5 in the plan): no live verdict depends on it.
+
+36 mutants, M0001-M0036, one batch: per procedure `empty-block`, `return-value`, `swap-additive`.
+Both apps declare runtime 17.0 (owner ruling, R-583). Pre-committed per mutant in
+`docs/superpowers/specs/2026-10-09-r557-names-precommitment.md` (table A); the checks are
+`packages/runner/itest/names-fixture.ts`, and `packages/runner/tests/names-fixture.test.ts` fails
+offline if the table stops describing the fixture.
+
+**Frozen figures** (their home, with the spec, until the owner approves the CLAUDE.md sentence):
+- `itest:alrunner`, four legs at one batch: A1 one-shot coverage `al-runner`, A2 one-shot `none`, A3
+  `--server` `al-runner`, A4 `--server` `none`. Each: killed **36** / survived **0** / no-coverage
+  **0**, every kill by its row's test with its row's text, a green baseline (12 of 12), no
+  `al-runner-undecided-test-missing` warning. A1 and A3 cover each mutant by its one test; A2 and A4
+  by all twelve. A2-A4 equal A1 per mutant. The one-shot legs carry the R123 `test-name-mangling`
+  fact, `matches`; the `--server` legs print no contract line. Baseline
+  `al-runner.names.baseline.json` (A1).
+- RED-CHECKED, pre-commitment section B: on the pre-R557 name builder the same legs read 6 / 30 / 0
+  (coverage `none`) and 6 / 0 / 30 (coverage `al-runner`), M0001-M0030 moving.
+- `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-names`: the same table on Cronus28, fenced, 36 / 0 / 0,
+  baseline `bcdev.names.baseline.json`. Kept out of `itest:bcdev`, so its 3 / 12 / 4 cannot move.
+- Both baselines are registered and wait for their one R332 record run (`PENDING_FIRST_RECORD`).
+
+A2 costs about 115 one-shot invocations (10-11 min), so the names legs add about 16-18 min to
+`itest:alrunner`.
+
+`.alpackages` is gitignored. Create an empty `.alpackages` directory in `sandbox-names`, and `alc`
+the target into `sandbox-names-tests/.alpackages` from current source before compiling. For bcdev,
+publish the target, then the tests app (`altool publishapp`), as for every bcdev fixture.
 
 ## Tier-2 Phase 0 — the `sandbox-data` table fixture
 
