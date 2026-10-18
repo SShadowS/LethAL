@@ -1796,7 +1796,8 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     }
     for (const t of targets) {
       const hop = r531CalleeHop(t.proc, t.key, ctx, t.byValue);
-      if (hop !== null) hops.push(hop);
+      if (hop !== null)
+        hops.push(r574Seam.on ? (r571Hop(hop.proc, hop.consumers, ctx) ?? hop) : hop);
     }
     if (r571Seam.on && targets.length === 0 && obj !== null && h.n.rawKind === "call_expression")
       hops.push(...r571CrossHops(h.n, h.c, h.kind, recvs, obj, ctx, skipArg));
@@ -1829,6 +1830,11 @@ function r531AnalyzeOnce(loop: ALSyntaxNode, ctx: SemanticContext): R531Loop | n
     hops,
   };
 }
+
+/** R574: R531's same-object HOP (a same-object callee, or a table procedure on R) is built by
+ *  R571's `r571Hop`, so it also refuses the callee's EARLY EXITS (exits, raised Errors and breaks),
+ *  their guards and the feeds of every hop guard, as the cross-object hop does. */
+export const r574Seam = { on: true };
 
 /**
  * R571: R531's HOP into a consumer in ANOTHER project object. When the same-object HOP above finds
