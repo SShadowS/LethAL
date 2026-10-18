@@ -73,6 +73,12 @@ export type AlRunnerResult =
       readonly abortProven?: readonly string[];
     }
   | { readonly kind: "deadline" }
+  /**
+   * R557: al-runner's own exit 6 with an envelope of `tests: []` and `exitCode: 6`
+   * (`isNoneSelectedExit`): the name sent selected no test. Kept apart from `error`, which is a
+   * runner or compile failure, because the backend refuses this one by name.
+   */
+  | { readonly kind: "none-selected"; readonly detail: string }
   | { readonly kind: "error"; readonly detail: string };
 
 export interface AlRunnerTransport {
@@ -466,6 +472,21 @@ export function parseAlRunnerPlatformAppsDir(output: string): AlRunnerPlatformAp
  */
 export function qualifiedTestName(codeunitId: number, method: string): string {
   return `Codeunit${codeunitId}.${method}`;
+}
+
+/** R557 stub. */
+export function alRunnerMethodName(method: string): string {
+  return method;
+}
+
+/** R557 stub. */
+export function alRunnerRenamed(methods: readonly string[]): string[] {
+  return [...new Set(methods)].filter((m) => alRunnerMethodName(m) !== m);
+}
+
+/** R557 stub. */
+export function isNoneSelectedExit(_exitCode: number, _stdout: string): boolean {
+  return false;
 }
 
 /** Enough stdout to recognise what the runner actually said, without dumping a whole suite. */

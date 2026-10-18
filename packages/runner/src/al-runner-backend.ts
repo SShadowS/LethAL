@@ -144,6 +144,19 @@ export class AlRunnerServerStopUnsetError extends Error {
   }
 }
 
+/** R557 stub. */
+export class AlRunnerTestNameError extends Error {
+  constructor(
+    readonly missing: ReadonlyArray<{ readonly alName: string; readonly sent: string }>,
+    readonly build?: string,
+  ) {
+    super("stub");
+  }
+}
+
+/** R557 stub. */
+export const AL_RUNNER_UNDECIDED_ARM_MISSING = "al-runner has no row for this test (R557, R403)";
+
 /**
  * Prefix on the `failureMessage` of an al-runner `status: "error"` this build could not classify.
  *
@@ -613,6 +626,9 @@ export class AlRunnerBackend implements ExecutionBackend {
   useDiscoveredTests(tests: readonly TestMethodRef[]): void {
     this.discoveredTests = tests.map((t) => qualifiedTestName(t.codeunitId, t.method));
   }
+
+  /** R557 stub. */
+  useSessionTests(_suite: readonly TestMethodRef[], _undecidedKept: readonly TestMethodRef[]): void {}
 
   /**
    * R551 — whether one-shot calls send `--test X --test-exact X` (and no excludes) instead of R488's
@@ -1441,7 +1457,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     const { res, coverageOut } = sent;
     const durationMs = Date.now() - started;
     if (res.kind === "deadline") return { ref, outcome: "deadline-exceeded", durationMs };
-    if (res.kind === "error")
+    if (res.kind === "error" || res.kind === "none-selected")
       return {
         ref,
         outcome: "error",

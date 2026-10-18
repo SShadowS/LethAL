@@ -3,7 +3,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
-import { oneShotLimits, verdictFromRunnerTest } from "../src/al-runner-backend";
+import {
+  AL_RUNNER_UNDECIDED_ARM_MISSING,
+  AlRunnerTestNameError,
+  oneShotLimits,
+  verdictFromRunnerTest,
+} from "../src/al-runner-backend";
 import { reserveAppVersion } from "../src/app-version";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
@@ -5316,6 +5321,259 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     for (const w of workers) {
       expect(w.sent.length).toBeGreaterThan(0);
       expect(w.floorCalls).toEqual([pair]);
+    }
+  });
+});
+
+/**
+ * R557 C1. Before R557 al-runner was sent the AL name of a test like `"Space Step"`, selected
+ * nothing, and the run recorded that test as a baseline `error` and its only-kills as survivors. A
+ * prior run like that must not come back through `--skip-known-survivors`, `--resume` or a reused
+ * baseline snapshot, or the fixed name is never sent and the false survivor stands.
+ */
+describe("R557: a pre-fix al-runner run's false misses never come back (C1)", () => {
+  const NAMES_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+
+    [Test]
+    procedure "Space Step"()
+    begin
+    end;
+
+    [Test]
+    procedure Pond()
+    begin
+    end;
+}
+`;
+  async function project() {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.testDir, "SandboxTests.Codeunit.al"), NAMES_TESTS_AL);
+    return dirs;
+  }
+  const base = (store: ResultsStore, dirs: Awaited<ReturnType<typeof project>>) => ({
+    store,
+    ...dirs,
+    selectorIds,
+    stopHungSessions: true,
+    mutantTimeoutMs: 2_000,
+  });
+  /** The al-runner shape: non-authoritative, so the session's backend kind is `al-runner`. */
+  const alRunner = (abortAfter?: number) =>
+    new ClockBackend(100, {
+      authoritative: false,
+      ...(abortAfter !== undefined ? { abort: { after: abortAfter } } : {}),
+    });
+  /** Rewrites one BASELINE row of `runId`, as a pre-fix al-runner run recorded it. */
+  const markBaseline = (store: ResultsStore, runId: number, method: string, outcome: string) =>
+    store.db.run(
+      "UPDATE test_results SET outcome = ?, failure_message = 'selected no test in this run' WHERE run_id = ? AND mutant_row_id IS NULL AND method = ?",
+      [outcome, runId, method],
+    );
+  const warned = (events: readonly RunEvent[], code: string) =>
+    events.flatMap((e) => (e.type === "warning" && e.code === code ? [e.message] : []));
+  const known = (r: SessionReport) => r.mutants.filter((m) => m.verdict === "known-survivor");
+
+  async function history(
+    recordedBackend: "al-runner" | "bcdev",
+    method: string,
+    outcome: string,
+  ): Promise<{ survived: number; report: SessionReport; events: RunEvent[]; runId: number }> {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    const r1 = await runSession({ ...base(store, dirs), backend: alRunner() });
+    const runId = lastRun(store);
+    markBaseline(store, runId, method, outcome);
+    // A bcdev run, as the store records one; everything else (test app, symbols) stays equal, so
+    // only the backend can decide.
+    if (recordedBackend === "bcdev") {
+      store.db.run("UPDATE runs SET backend = 'bcdev' WHERE id = ?", [runId]);
+    }
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      ...base(store, dirs),
+      backend: alRunner(),
+      skipKnownSurvivors: true,
+      emit: [(e) => events.push(e)],
+    });
+    return { survived: r1.counts.survived, report, events, runId };
+  }
+
+  test("T8a: history: a latest al-runner run with `Space Step` as a baseline error skips nothing, and warns once by name", async () => {
+    const h = await history("al-runner", "Space Step", "error");
+    expect(h.survived).toBeGreaterThan(0);
+    expect(known(h.report)).toEqual([]);
+    const w = warned(h.events, "history-al-runner-test-names");
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain(`run ${h.runId}`);
+    expect(w[0]).toContain("Space Step");
+    expect(w[0]).toContain("R557");
+  });
+
+  test("T8b: history: a plain-name error, a renamed test that FAILED, or a bcdev run does not taint", async () => {
+    for (const [recorded, method, outcome] of [
+      ["al-runner", "Pond", "error"],
+      ["al-runner", "Space Step", "fail"],
+      ["bcdev", "Space Step", "error"],
+    ] as const) {
+      const h = await history(recorded, method, outcome);
+      expect(known(h.report).length, `${method} ${outcome}`).toBe(h.survived);
+      expect(warned(h.events, "history-al-runner-test-names")).toEqual([]);
+    }
+  });
+
+  async function resumed(method: string) {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    // Three covering tests: the first mutant finishes (carryable), the next one hangs.
+    await runSession({ ...base(store, dirs), backend: alRunner(3) });
+    const runId = lastRun(store);
+    markBaseline(store, runId, method, "error");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      ...base(store, dirs),
+      backend: alRunner(),
+      resume: "last",
+      retryStranded: true,
+      emit: [(e) => events.push(e)],
+    });
+    return { report, events, runId };
+  }
+
+  test("T9a: --resume of an unfinished al-runner run with `Space Step` as a baseline error carries nothing, and warns", async () => {
+    const r = await resumed("Space Step");
+    expect(r.report.mutants.filter((m) => m.carried === true)).toEqual([]);
+    const w = warned(r.events, "resume-al-runner-test-names");
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain(`run ${r.runId}`);
+    expect(w[0]).toContain("Space Step");
+  });
+
+  test("T9b: --resume of a run whose only error is a plain name carries as before", async () => {
+    const r = await resumed("Pond");
+    expect(r.report.mutants.filter((m) => m.carried === true).length).toBeGreaterThan(0);
+    expect(warned(r.events, "resume-al-runner-test-names")).toEqual([]);
+  });
+
+  /** Run 1 records batch 0's baseline snapshot and aborts; the snapshot then holds `method` as an
+   *  `error`; run 2 resumes, where it would reuse that snapshot. */
+  async function snapshotted(method: string) {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    await runSession({ ...base(store, dirs), backend: alRunner(3) });
+    const runId = lastRun(store);
+    const row = store.db
+      .query("SELECT id, payload FROM baseline_snapshots WHERE run_id = ?")
+      .get(runId) as { id: number; payload: string };
+    const payload = (JSON.parse(row.payload) as BaselineObservationLike[]).map((o) =>
+      o.ref.method === method ? { ...o, verdict: { ...o.verdict, outcome: "error" } } : o,
+    );
+    store.db.run("UPDATE baseline_snapshots SET payload = ? WHERE id = ?", [
+      JSON.stringify(payload),
+      row.id,
+    ]);
+    const today = alRunner();
+    const events: RunEvent[] = [];
+    await runSession({
+      ...base(store, dirs),
+      backend: today,
+      resume: "last",
+      retryStranded: true,
+      emit: [(e) => events.push(e)],
+    });
+    return { events, runId, today };
+  }
+  interface BaselineObservationLike {
+    readonly ref: TestMethodRef;
+    readonly verdict: TestVerdict;
+  }
+
+  test("T10a: a snapshot with `Space Step` as an error is not reused: the baseline re-runs, and a warning names the snapshot", async () => {
+    const s = await snapshotted("Space Step");
+    expect(reusedOf(s.events)).toEqual([]);
+    expect(s.today.baselineRuns).toBeGreaterThan(0);
+    const w = warned(s.events, "resume-al-runner-test-names");
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain(`run ${s.runId}`);
+    expect(w[0]).toContain("batch 0");
+    expect(w[0]).toContain("Space Step");
+  });
+
+  test("T10b: a snapshot whose only error is a plain name is reused", async () => {
+    const s = await snapshotted("Pond");
+    expect(reusedOf(s.events)).toHaveLength(1);
+    expect(warned(s.events, "resume-al-runner-test-names")).toEqual([]);
+  });
+
+  /** T11's backend: the al-runner shape whose baseline answers `Space Step` with `text`. */
+  class UndecidedBackend extends ClockBackend {
+    constructor(private readonly text: string) {
+      super(100, { authoritative: false });
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      if (this.active === null && ref.method === "Space Step") {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: this.text,
+          operation: "pre-dispatch-rejected",
+        };
+      }
+      return super.run(ref, opts);
+    }
+  }
+
+  test("the stop: AlRunnerTestNameError out of a baseline run stops the session before any mutant is scored", async () => {
+    class Stops extends ClockBackend {
+      constructor() {
+        super(100, { authoritative: false });
+      }
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        if (ref.method === "Space Step") {
+          throw new AlRunnerTestNameError([
+            { alName: "Sandbox Tests.Space Step", sent: "Codeunit79100.Space_Step" },
+          ]);
+        }
+        return super.run(ref, opts);
+      }
+    }
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    const backend = new Stops();
+    const p = runSession({ ...base(store, dirs), backend });
+    await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+    expect(backend.mutantRuns).toBe(0);
+    expect(
+      store.db.query("SELECT COUNT(*) AS n FROM mutants WHERE verdict != 'known-survivor'").get(),
+    ).toEqual({ n: 0 });
+  });
+
+  test("T11: a baseline holding an AL_RUNNER_UNDECIDED_ARM_MISSING error warns once, naming it; a plain error does not", async () => {
+    for (const [text, expected] of [
+      [`${AL_RUNNER_UNDECIDED_ARM_MISSING}: al-runner selected no test`, 1],
+      ["al-runner exited 2", 0],
+    ] as const) {
+      const dirs = await project();
+      const events: RunEvent[] = [];
+      await runSession({
+        ...base(new ResultsStore(":memory:"), dirs),
+        backend: new UndecidedBackend(text),
+        emit: [(e) => events.push(e)],
+      });
+      const w = warned(events, "al-runner-undecided-test-missing");
+      expect(w, text).toHaveLength(expected);
+      if (expected === 1) {
+        expect(w[0]).toContain("Sandbox Tests.Space Step");
+        expect(w[0]).not.toContain("Pond");
+        expect(w[0]).toContain("R403");
+      }
     }
   });
 });

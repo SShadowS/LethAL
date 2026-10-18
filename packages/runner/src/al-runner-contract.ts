@@ -92,7 +92,8 @@ export type ContractFactName =
   | "qualified-test-name"
   | "timeout-classified"
   | "timeout-exit-readable"
-  | "compile-failure-not-scorable";
+  | "compile-failure-not-scorable"
+  | "test-name-mangling";
 
 /**
  * What this adapter gets wrong if each fact has moved. Written once, here, so a refusal message and
@@ -131,6 +132,10 @@ export const CONTRACT_FACT_CONSEQUENCES: Record<ContractFactName, string> = {
     "purpose: measured 2026-08-07, al-runner answers this shape with exit 1 and completely EMPTY " +
     "stdout, not the exit 3 an all-bundles-broken invocation gives, so pinning `exit 3` would have " +
     "pinned a case a real run never meets.",
+  "test-name-mangling":
+    "al-runner names a test by BC's C# identifier for the AL method. If that rule moved, an " +
+    "affected test selects nothing and the session refuses at baseline (R557); fix " +
+    "`alRunnerMethodName` against the measured rows.",
 };
 
 export interface AlRunnerContractResult {

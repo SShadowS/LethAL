@@ -1957,6 +1957,11 @@ export class ResultsStore {
     return r;
   }
 
+  /** R557 stub. */
+  baselineErrorMethods(_runId: number): string[] {
+    return [];
+  }
+
   /** A prior "known-survivor" verdict counts exactly like "survived" here (I4) — it means the
    *  identity key was skipped rather than re-tested, so it must remain skippable/filterable in
    *  the run after that, not silently fall out of history after one `--skip-known-survivors` pass.
