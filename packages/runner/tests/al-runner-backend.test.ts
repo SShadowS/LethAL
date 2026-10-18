@@ -987,15 +987,17 @@ describe("AlRunnerBackend serverMode (R220)", () => {
     await backend.close();
   });
 
-  test("a test the suite never reported is an error naming both sides, not a silent pass", async () => {
+  test("a test the suite never reported is a refusal naming both sides, not a silent pass", async () => {
+    // R557: on a CLEAN answer (exit 0, every row a pass run row) a missing test stops the session
+    // (`AlRunnerTestNameError`) rather than reading as a per-test `error`; it still names both sides.
     const { backend } = await serverBackend([{ name: "Codeunit79100.A", status: "pass" }]);
-    const v = await backend.run(
+    const p = backend.run(
       { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "Missing" },
       { coverage: "none", timeoutMs: 1000 },
     );
-    expect(v.outcome).toBe("error");
-    expect(v.failureMessage).toContain("Codeunit79100.Missing");
-    expect(v.failureMessage).toContain("Codeunit79100.A");
+    await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+    await expect(p).rejects.toThrow(/Codeunit79100\.Missing/);
+    await expect(p).rejects.toThrow(/Codeunit79100\.A\b/);
     await backend.close();
   });
 
@@ -1065,7 +1067,8 @@ describe("AlRunnerBackend serverMode (R220)", () => {
       await server.run(ref, { coverage: "none", timeoutMs: 1000 });
       await server.close();
 
-      const oneShotSpawn = okSpawn({ tests: [] });
+      // R557: the one-shot fake answers with A's row: a run with no row for A now stops by name.
+      const oneShotSpawn = okSpawn({ tests: [{ name: "Codeunit79100.A", status: "pass" }] });
       const oneShot = new AlRunnerBackend(
         {
           alRunnerPath: "al-runner",
@@ -1876,7 +1879,9 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       expect(c.runs()).toBe(1);
       await backend.close();
 
-      // Control: the same missing row with no hung test in the suite.
+      // Control: the same missing row with no hung test in the suite. Before R557 that was a
+      // per-test `error`, retried once. R557 (I1): the answer is CLEAN (exit 1, every row a pass
+      // run row), so a missing row stops the session by name, sent once and never retried.
       const plain = daemons((_d, _r, emit) => {
         emit({ type: "test", name: "Codeunit79100.A", status: "pass", durationMs: 5 });
         emit(summary(1));
@@ -1885,13 +1890,10 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       const other = serverOn(plain.spawn);
       await other.activate("M0001");
       const o = counted(other);
-      const missing = await runOnce(other, new SessionSafety(), t("Later"), run);
-      expect([missing.outcome, missing.operation, missing.runnerRow]).toEqual([
-        "error",
-        "pre-dispatch-rejected",
-        undefined,
-      ]);
-      expect(o.runs()).toBe(2);
+      await expect(runOnce(other, new SessionSafety(), t("Later"), run)).rejects.toBeInstanceOf(
+        AlRunnerTestNameError,
+      );
+      expect(o.runs()).toBe(1);
       await other.close();
     });
 

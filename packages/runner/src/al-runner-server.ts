@@ -121,8 +121,12 @@ export interface ServerPerTestCoverage {
 }
 
 export interface ServerRunResult {
+  /** Each row's `name` is `Codeunit<id>.<CLR method>`: BC's C# name for the AL method
+   *  (`alRunnerMethodName`, R557), the same name `qualifiedTestName` builds. */
   readonly tests: readonly ServerTestLine[];
   readonly perTestCoverage: readonly ServerPerTestCoverage[];
+  /** The summary's own exit code, -1 when it carried none. R557 (I1): a missing row stops the
+   *  session only when this is 0 or 1 and every row is a pass or fail run row. */
   readonly exitCode: number;
   readonly total: number;
 }

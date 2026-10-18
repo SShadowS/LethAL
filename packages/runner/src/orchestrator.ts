@@ -54,9 +54,11 @@ import {
   varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
+import { AL_RUNNER_UNDECIDED_ARM_MISSING } from "./al-runner-backend";
 import type { AlRunnerProvisionResult, TestSelectorProbe } from "./al-runner-backend";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { predefinedSymbolsChangedWarning } from "./al-runner-predefined-probe";
+import { alRunnerRenamed } from "./al-runner-transport";
 import type { AlRunnerBcBuild } from "./al-runner-transport";
 import {
   confirmedDowngradeRefusal,
@@ -4042,8 +4044,24 @@ function resolveResume(
   // (`findBaselineSnapshot`) keys on the CURRENT batch dir's hash and the test app. A batch with
   // work left is rebuilt and republished. `lethal verify` keeps its refusal.
 
+  // R557 C1: a pre-fix al-runner run sent a renamed test under its AL name, al-runner ran nothing,
+  // and its only-kills read survived. Such a run's verdicts are not carried: the resume goes on
+  // with an EMPTY carry, so every mutant is executed (a warning, by ruling; still a resume, so the
+  // report says which run it came from, R89).
+  const taintedTests =
+    backendName === "al-runner" ? alRunnerRenamed(cfg.store.baselineErrorMethods(priorRunId)) : [];
+  if (taintedTests.length > 0) {
+    emit({
+      type: "warning",
+      code: "resume-al-runner-test-names",
+      message: `[lethal] --resume: run ${priorRunId} ran on al-runner before R557 and recorded ${taintedTests.length} test(s) as errors that al-runner never ran (${namesSample(taintedTests)}); its verdicts are not carried: every mutant is executed (R557).`,
+    });
+  }
   const { index, dropped: refusedDropped } = withoutRefusedTests(
-    buildResumeIndex(cfg.store.mutantVerdicts(priorRunId), cfg.stopHungSessions === true),
+    buildResumeIndex(
+      taintedTests.length > 0 ? [] : cfg.store.mutantVerdicts(priorRunId),
+      cfg.stopHungSessions === true,
+    ),
     refusedTests,
   );
   if (refusedDropped > 0) {
@@ -4086,6 +4104,11 @@ function resolveResume(
     retryStranded: cfg.retryStranded ?? false,
   });
   return { runId: priorRunId, index, carryHidden: priorHidden, recorded };
+}
+
+/** R557 C1: up to five test names for a warning, `, ...` when there are more. */
+function namesSample(tests: readonly string[]): string {
+  return `${tests.slice(0, 5).join(", ")}${tests.length > 5 ? ", ..." : ""}`;
 }
 
 /** R391: a run row's side of `carryRecord`. A missing row, like a NULL column, carries nothing. */
@@ -4842,6 +4865,22 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
+    // R557 C1: checked on the snapshot itself, since `findBaselineSnapshot` can lend one from ANY
+    // run. A pre-fix al-runner snapshot holds a renamed test as an `error` al-runner never ran; it
+    // is not reused, and this batch re-runs its baseline under the name al-runner has.
+    if (reused !== undefined && store.getRun(reused.runId)?.backend === "al-runner") {
+      const tainted = alRunnerRenamed(
+        reused.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
+      );
+      if (tainted.length > 0) {
+        emit({
+          type: "warning",
+          code: "resume-al-runner-test-names",
+          message: `[lethal] --resume: run ${reused.runId}'s batch ${reused.batchIndex} baseline snapshot ran on al-runner before R557 and recorded ${tainted.length} test(s) as errors that al-runner never ran (${namesSample(tainted)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
+        });
+        reused = undefined;
+      }
+    }
     // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
     // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
     // tests, so a saved row for any other test is DROPPED: it must not come back green and be
@@ -4919,6 +4958,19 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       batchHash: snapshotKey.batchHash,
       testAppHash,
       baseline: baseline as BaselineObservation[],
+    });
+  }
+  // R557 (I3): one warning per batch naming every test al-runner had no row for that sits in an
+  // `#if` arm discovery could not decide; it is not run, so a mutant only it would kill may read
+  // survived.
+  const undecidedMissing = baseline
+    .filter((b) => b.verdict.failureMessage?.startsWith(AL_RUNNER_UNDECIDED_ARM_MISSING) === true)
+    .map((b) => qualifiedTestName(b.ref));
+  if (undecidedMissing.length > 0) {
+    emit({
+      type: "warning",
+      code: "al-runner-undecided-test-missing",
+      message: `[lethal] batch ${batchIdx}: al-runner has no row for these tests, which sit in an \`#if\` arm LethAL could not decide (R403); they are not run, so a mutant only they would kill may read survived. Pass the build's symbols to decide the arm (R557): ${undecidedMissing.join(", ")}`,
     });
   }
   // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
@@ -5472,6 +5524,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R488: the UNFILTERED list, every arm read: a look-alike al-runner would also select must be
   // excluded whether or not this session runs it. Given again to every worker below.
   cfg.backend.useDiscoveredTests?.(discovery.unfiltered);
+  // R557 (I3): the suite this session runs, and the tests kept in an `#if` arm discovery could not
+  // decide: al-runner stops on a session-suite test it has no row for, except one of those. Given
+  // again to every worker below.
+  const undecidedKeptTests = discovery.excluded
+    .filter((x) => x.reason === "preproc-undecided-kept")
+    .map((x) => x.test);
+  cfg.backend.useSessionTests?.(tests, undecidedKeptTests);
   // Discovery returns the whole list in one parse — 1,000+ per-item events at one instant would
   // be false granularity, not liveness (see events.ts's doc comment on `tests-discovered`).
   // R403 phase C. With no compiled evidence the unfiltered suite runs, so a `compiled-out` record
@@ -6013,6 +6072,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let historyTestApp: TestAppIdentity | undefined;
   // R442: likewise for its untrusted-run and hidden-files warnings.
   let historyCarryWarned = false;
+  // R557 C1: likewise for its pre-fix al-runner test-names warning.
+  let historyAlRunnerNamesWarned = false;
 
   // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
@@ -6312,6 +6373,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         }
         // R488: each worker starts with an empty sibling cache, so it needs the list too.
         worker.useDiscoveredTests?.(discovery.unfiltered);
+        // R557 (I3): and the session suite, so a worker stops (or carves out) exactly as the
+        // session backend does.
+        worker.useSessionTests?.(tests, undecidedKeptTests);
         worker.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
         workerBackends.push(worker);
       }
@@ -6599,6 +6663,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               code: "history-hidden-files-changed",
               message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, hid ${describeHiddenFiles(old.before)} whole from identity numbering, and this run hides ${describeHiddenFiles(old.now)} (--only/--exclude scope, a preprocessor directive that could not be evaluated, or a file no selector var fits). A file hidden in one run and not the other moves its twins' ordinals, so a recorded key can name another mutant: no survivor from it is skipped, every mutant is executed (R442).`,
             });
+          },
+          alRunnerTestNames: {
+            renamed: alRunnerRenamed,
+            refused: (old) => {
+              if (historyAlRunnerNamesWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+              historyAlRunnerNamesWarned = true;
+              emit({
+                type: "warning",
+                code: "history-al-runner-test-names",
+                message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ran on al-runner before R557 and recorded ${old.tests.length} test(s) as errors that al-runner never ran (${namesSample(old.tests)}); its survivors may be false, so none is skipped: every mutant is executed (R557).`,
+              });
+            },
           },
         },
       );

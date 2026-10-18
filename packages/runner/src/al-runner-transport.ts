@@ -469,24 +469,117 @@ export function parseAlRunnerPlatformAppsDir(output: string): AlRunnerPlatformAp
  * exactly that one test, and the JSON rows carry the same qualified `name`. This is the ONE
  * place that name is built, so the `--test` filter and the result lookup can never disagree;
  * two independent spellings would mean the runner ran one thing and the caller scored another.
+ *
+ * R557: the method half is al-runner's name for the AL method (`alRunnerMethodName`), not the AL
+ * name: a row is `Codeunit<id>.<CLR method>`, so `"Dash-Step"` is `Codeunit78850.Dasha45Step`.
  */
 export function qualifiedTestName(codeunitId: number, method: string): string {
-  return `Codeunit${codeunitId}.${method}`;
+  return `Codeunit${codeunitId}.${alRunnerMethodName(method)}`;
 }
 
-/** R557 stub. */
+/** R557: a C# identifier-START unit (Roslyn `SyntaxFacts.IsIdentifierStartCharacter`). */
+const CS_ID_START = /^[\p{L}\p{Nl}_]$/u;
+/** R557: a C# identifier-PART unit (Roslyn `SyntaxFacts.IsIdentifierPartCharacter`). */
+const CS_ID_PART = /^[\p{L}\p{Nl}\p{Nd}\p{Mn}\p{Mc}\p{Pc}\p{Cf}]$/u;
+/** R557: Unicode format characters, deleted from the emitted name (step e). */
+const CS_FORMAT = /\p{Cf}/gu;
+/**
+ * R557: BC's `StringExtensions.ReservedKeywords`, upper case: Roslyn's 77 reserved keyword texts
+ * plus `__arglist`, `__makeref`, `__reftype`, `__refvalue` (`SyntaxFacts.GetReservedKeywordKinds()`),
+ * plus `FINALIZE`. Contextual keywords (`record`, `var`, `async`) are not reserved.
+ */
+const CS_RESERVED = new Set(
+  (
+    "ABSTRACT AS BASE BOOL BREAK BYTE CASE CATCH CHAR CHECKED CLASS CONST CONTINUE DECIMAL DEFAULT " +
+    "DELEGATE DO DOUBLE ELSE ENUM EVENT EXPLICIT EXTERN FALSE FINALLY FIXED FLOAT FOR FOREACH GOTO " +
+    "IF IMPLICIT IN INT INTERFACE INTERNAL IS LOCK LONG NAMESPACE NEW NULL OBJECT OPERATOR OUT " +
+    "OVERRIDE PARAMS PRIVATE PROTECTED PUBLIC READONLY REF RETURN SBYTE SEALED SHORT SIZEOF " +
+    "STACKALLOC STATIC STRING STRUCT SWITCH THIS THROW TRUE TRY TYPEOF UINT ULONG UNCHECKED UNSAFE " +
+    "USHORT USING VIRTUAL VOID VOLATILE WHILE __ARGLIST __MAKEREF __REFTYPE __REFVALUE FINALIZE"
+  ).split(" "),
+);
+
+/**
+ * R557: the C# method name BC's compiler gives an AL test method, which is the name al-runner
+ * reports a row under and selects by. `"Stone Quoted"` -> `Stone_Quoted`, `"Dot.Name"` ->
+ * `Dota46Name`, `"2Lead"` -> `_2Lead`, unquoted `Default` -> `_Default`.
+ *
+ * Ported from al-runner's own port of the rule, `RunnerPageInstance.EmittedIdentifier` in
+ * `AlRunner/Patches/RunnerPageInstance.cs` at `c5bbaf89` (unchanged since `d694c40`), itself
+ * decompiled from BC's `Utilities.StringExtensions.MangleIdentifierName` (`MangleUnquotedIdentifierName`
+ * plus `GetSafeCSharpIdentifierName`). It walks UTF-16 code units, as the C# loop does:
+ * a. a space or `"` becomes `_`;
+ * b. an identifier-PART unit (Unicode L, Nl, Nd, Mn, Mc, Pc, Cf) is kept; when it is the FIRST unit
+ *    and not an identifier START (L, Nl, `_`), a `_` is put before it;
+ * c. any other unit becomes `a` + its decimal code. A lone surrogate is in neither class, so a
+ *    surrogate pair gives two codes (`a55357a56832`);
+ * d. the keyword prefix: replace every `ſ` with `s`; if, and only if, the result is then ASCII,
+ *    upper-case it (ASCII upper-casing is .NET's invariant simple upper-casing on ASCII) and look
+ *    it up in `CS_RESERVED`; on a hit put `_` before the result of a-c. JS `toUpperCase` is NOT
+ *    used: it gives `CLASS` for `Claß`, `FIXED` for `ﬁxed` and `INT` for `ınt`, none of which
+ *    .NET's invariant upper-casing produces, and al-runner prefixes none of them (measured);
+ * e. delete every Cf unit. This step is NOT in al-runner's port; it is what BC's emitter does
+ *    (measured in R557's review, u1 and u2: `"Soft<U+00AD>Hyphen"` -> `SoftHyphen`, a leading
+ *    ZWJ -> `_Lead`, the `_` from b kept).
+ * The measured names, all 58, are pinned in `al-runner-transport.test.ts`.
+ *
+ * Unicode drift (R557 M6): the JS `\p{...}` classes follow the JS engine's Unicode version, and
+ * .NET's `char` categories follow .NET's. A code point added or reclassified in one and not the
+ * other can map differently. The R123 `test-name-mangling` fact sees only the names it probes; a
+ * miss anywhere else selects nothing, and the session refuses at baseline (`AlRunnerTestNameError`)
+ * rather than mis-scoring.
+ */
 export function alRunnerMethodName(method: string): string {
-  return method;
+  let out = "";
+  for (let i = 0; i < method.length; i++) {
+    const unit = method.charAt(i);
+    if (unit === " " || unit === '"') out += "_";
+    else if (CS_ID_PART.test(unit)) out += (i === 0 && !CS_ID_START.test(unit) ? "_" : "") + unit;
+    else out += `a${method.charCodeAt(i)}`;
+  }
+  const folded = out.replace(/ſ/g, "s");
+  if (isAscii(folded) && CS_RESERVED.has(folded.toUpperCase())) out = `_${out}`;
+  return out.replace(CS_FORMAT, "");
 }
 
-/** R557 stub. */
+function isAscii(s: string): boolean {
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) > 0x7f) return false;
+  return true;
+}
+
+/**
+ * R557 C1: the distinct methods of `methods` whose al-runner name differs from the AL name, i.e.
+ * the tests a pre-R557 al-runner run sent under a name al-runner never had.
+ */
 export function alRunnerRenamed(methods: readonly string[]): string[] {
   return [...new Set(methods)].filter((m) => alRunnerMethodName(m) !== m);
 }
 
-/** R557 stub. */
-export function isNoneSelectedExit(_exitCode: number, _stdout: string): boolean {
-  return false;
+/**
+ * R557 (and R551's probe): why an exit is NOT al-runner's own "selected no test" answer, or
+ * `undefined` when it is: the process's own exit 6, with an `--output-json` envelope whose `tests`
+ * is an empty array and whose `exitCode` is 6. A signal exit, another code, no readable envelope,
+ * rows, or another envelope code is not.
+ */
+export function noneSelectedRefusal(exitCode: number, stdout: string): string | undefined {
+  if (!isChildChosenExit(exitCode)) return `signal exit ${exitCode}`;
+  if (exitCode !== 6) return `exit ${exitCode}`;
+  let env: unknown;
+  try {
+    env = readAlRunnerEnvelope(stdout);
+  } catch {
+    return "exit 6 but no readable envelope";
+  }
+  const e = typeof env === "object" && env !== null ? (env as Record<string, unknown>) : {};
+  if (!Array.isArray(e.tests)) return "exit 6 but no readable envelope";
+  if (e.tests.length > 0) return `exit 6 but ${e.tests.length} test row(s)`;
+  if (e.exitCode !== 6) return `exit 6 but envelope exitCode ${String(e.exitCode)}`;
+  return undefined;
+}
+
+/** R557: al-runner's own exit 6 with an empty envelope, `noneSelectedRefusal`'s one acceptance. */
+export function isNoneSelectedExit(exitCode: number, stdout: string): boolean {
+  return noneSelectedRefusal(exitCode, stdout) === undefined;
 }
 
 /** Enough stdout to recognise what the runner actually said, without dumping a whole suite. */
@@ -854,6 +947,13 @@ export class OneShotTransport implements AlRunnerTransport {
       // it (`timeoutAbortTests`); every other exit 3 stays an error.
       if (res.exitCode === 0 || res.exitCode === 1)
         return { kind: "tests", tests: parseAlRunnerPayload(res.stdout) };
+      // R557: the name sent selected nothing. The backend decides what that means for the test.
+      if (isNoneSelectedExit(res.exitCode, res.stdout)) {
+        return {
+          kind: "none-selected",
+          detail: res.stderr || `al-runner exited 6: --test ${req.qualifiedTest} selected no test`,
+        };
+      }
       if (res.exitCode === 3) {
         const abort = readTimeoutAbort(res.stdout);
         if (abort !== undefined)

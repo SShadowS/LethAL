@@ -1957,9 +1957,18 @@ export class ResultsStore {
     return r;
   }
 
-  /** R557 stub. */
-  baselineErrorMethods(_runId: number): string[] {
-    return [];
+  /**
+   * R557 C1: the distinct `method` of `runId`'s BASELINE rows (`mutant_row_id IS NULL`) whose
+   * outcome is `error`. Read-only, existing columns. The caller decides which of them a pre-R557
+   * al-runner run sent under a name al-runner never had (`alRunnerRenamed`).
+   */
+  baselineErrorMethods(runId: number): string[] {
+    const rows = this.db
+      .query(
+        "SELECT DISTINCT method FROM test_results WHERE run_id = ? AND mutant_row_id IS NULL AND outcome = 'error' ORDER BY method",
+      )
+      .all(runId) as Array<{ method: string }>;
+    return rows.map((r) => r.method);
   }
 
   /** A prior "known-survivor" verdict counts exactly like "survived" here (I4) — it means the
@@ -2020,14 +2029,25 @@ export class ResultsStore {
         proven: boolean;
         deps: string | null;
       }) => void;
+      /**
+       * R557 C1: the latest finished run ran on al-runner and recorded, as baseline errors, tests
+       * whose al-runner name differs from the AL name (`renamed` picks them from the run's
+       * baseline error methods). Before R557 such a test was never run, so its only-kills read
+       * survived: no key is returned. Checked last. Absent: no check.
+       */
+      readonly alRunnerTestNames?: {
+        readonly renamed: (methods: readonly string[]) => readonly string[];
+        readonly refused: (info: { runId: number; tests: readonly string[] }) => void;
+      };
     } = {},
   ): PriorSurvivors {
     const none = NO_PRIOR_SURVIVORS;
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256 FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, backend, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256 FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
+      backend: string;
       dependency_source_sha256: string | null;
       test_app_proven: number | null;
       test_app_deps: string | null;
@@ -2084,6 +2104,15 @@ export class ResultsStore {
     if (!sameHiddenFiles(hidden.files, hiddenFiles)) {
       on.hiddenFilesChanged?.({ runId: run.id, before: hidden.files, now: hiddenFiles });
       return none;
+    }
+    // R557 C1: a pre-fix al-runner run never ran a renamed test; its only-kills read survived.
+    const names = on.alRunnerTestNames;
+    if (names !== undefined && run.backend === "al-runner") {
+      const tests = names.renamed(this.baselineErrorMethods(run.id));
+      if (tests.length > 0) {
+        names.refused({ runId: run.id, tests });
+        return none;
+      }
     }
     const hiddenTuples = new Set(hidden.tuples);
     const rows = this.db

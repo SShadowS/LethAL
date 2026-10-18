@@ -30,6 +30,7 @@ import {
   alRunnerEnv,
   buildAlRunnerArgv,
   isChildChosenExit,
+  noneSelectedRefusal,
   parseAlRunnerBcBuild,
   parseAlRunnerPlatformAppsDir,
   qualifiedTestName,
@@ -144,18 +145,46 @@ export class AlRunnerServerStopUnsetError extends Error {
   }
 }
 
-/** R557 stub. */
+/**
+ * R557: al-runner has no row for a session-suite test under the name LethAL sent it
+ * (`alRunnerMethodName`). Thrown out of `run()`, so the session stops before any mutant is scored,
+ * as `AlRunnerServerStopUnsetError` does. Before R557 such a test read as a baseline `error`, left
+ * every covering set, and each mutant only it would kill read `survived` or `no-coverage`.
+ *
+ * Thrown only where a missing row can mean nothing else: a one-shot "selected no test" (exit 6) or
+ * a result with no row equal to the name sent, and a `--server` suite answer that is otherwise clean
+ * (I1). A test kept in an `#if` arm discovery could not decide keeps its per-test `error` (I3,
+ * `AL_RUNNER_UNDECIDED_ARM_MISSING`).
+ */
 export class AlRunnerTestNameError extends Error {
   constructor(
+    /** Each missing test: its AL name `<Codeunit Name>.<method>`, and the name al-runner was sent. */
     readonly missing: ReadonlyArray<{ readonly alName: string; readonly sent: string }>,
+    /** The BC build al-runner announced, when known. */
     readonly build?: string,
+    /** The rows al-runner did return, when it returned any. */
+    readonly returned?: readonly string[],
   ) {
-    super("stub");
+    super(
+      `al-runner has no row for ${missing.length === 1 ? "the test" : `${missing.length} tests`} ${missing
+        .map((m) => `${m.alName} (sent as ${m.sent})`)
+        .join(", ")}${build !== undefined ? ` on al-runner's BC ${build}` : ""}${
+        returned !== undefined
+          ? ` (it returned: ${returned.length > 0 ? returned.slice(0, 20).join(", ") : "<no tests>"}${returned.length > 20 ? `, and ${returned.length - 20} more` : ""})`
+          : ""
+      }. LethAL sends a test under BC's C# name for the AL method (alRunnerMethodName); al-runner's naming rule moved, or this build does not compile that test. A test LethAL cannot run cannot kill a mutant, so the session stops rather than scoring its only-kills as survivors (R557).`,
+    );
+    this.name = "AlRunnerTestNameError";
   }
 }
 
-/** R557 stub. */
-export const AL_RUNNER_UNDECIDED_ARM_MISSING = "al-runner has no row for this test (R557, R403)";
+/**
+ * R557 (I3): prefix on the `error` of a test kept in an `#if` arm LethAL could not decide (R403,
+ * `preproc-undecided-kept`) when al-runner has no row for it: al-runner may simply have compiled it
+ * out, so it is not a stop. The orchestrator names every such test in one warning per batch.
+ */
+export const AL_RUNNER_UNDECIDED_ARM_MISSING =
+  "al-runner has no row for this test, which sits in an #if arm LethAL could not decide (R403, R557)";
 
 /**
  * Prefix on the `failureMessage` of an al-runner `status: "error"` this build could not classify.
@@ -321,6 +350,27 @@ interface ServerSuiteResults {
   readonly wallMs: number;
   /** R517 (M3): the test whose timeout row ended the run; tests after it have no row. */
   readonly hungTest?: string;
+  /** R557 (I1): `runTests`' own `exitCode` (-1 when the summary carried none). */
+  readonly exitCode: number;
+}
+
+/** R557 (I1): an al-runner run row name, `Codeunit<id>.<CLR method>`. An emit-excluded row is
+ *  `<AL object>.<AL method>` instead, and a constructor failure is `Codeunit<id>.<ctor>`. */
+const RUN_ROW_NAME = /^Codeunit\d+\./;
+
+/**
+ * R557 (I1): the rows that make a `--server` answer unclean: a status other than `pass`/`fail`, or
+ * a name that is not a run row's. An answer is CLEAN when its exit code is 0 or 1 and this is empty.
+ */
+function uncleanRows(suite: ServerSuiteResults): string[] {
+  return [...suite.byName.values()]
+    .filter(
+      (t) =>
+        (t.status !== "pass" && t.status !== "fail") ||
+        !RUN_ROW_NAME.test(t.name) ||
+        t.name.endsWith(".<ctor>"),
+    )
+    .map((t) => `${t.name} (${t.status})`);
 }
 
 /**
@@ -505,7 +555,8 @@ export function classifyTestExactProbe(
   if (raw.kind === "spawn-failed") {
     return { kind: "substring", reason: `spawn failed: ${raw.message}` };
   }
-  const code = testExactProbeCode(raw.exitCode, raw.stdout);
+  // R557: the same predicate the transport reads a "selected no test" answer with.
+  const code = noneSelectedRefusal(raw.exitCode, raw.stdout);
   if (code === undefined) return { kind: "exact" };
   const line = raw.stderr
     .split("\n")
@@ -515,23 +566,6 @@ export function classifyTestExactProbe(
     kind: "substring",
     reason: line === undefined ? code : `${code}; stderr: ${line.slice(0, 200)}`,
   };
-}
-
-/** R551: why an exited probe is not accepted, or `undefined` when it is. */
-function testExactProbeCode(exitCode: number, stdout: string): string | undefined {
-  if (!isChildChosenExit(exitCode)) return `signal exit ${exitCode}`;
-  if (exitCode !== 6) return `exit ${exitCode}`;
-  let env: unknown;
-  try {
-    env = readAlRunnerEnvelope(stdout);
-  } catch {
-    return "exit 6 but no readable envelope";
-  }
-  const e = typeof env === "object" && env !== null ? (env as Record<string, unknown>) : {};
-  if (!Array.isArray(e.tests)) return "exit 6 but no readable envelope";
-  if (e.tests.length > 0) return `exit 6 but ${e.tests.length} test row(s)`;
-  if (e.exitCode !== 6) return `exit 6 but envelope exitCode ${String(e.exitCode)}`;
-  return undefined;
 }
 
 export class AlRunnerBackend implements ExecutionBackend {
@@ -627,8 +661,47 @@ export class AlRunnerBackend implements ExecutionBackend {
     this.discoveredTests = tests.map((t) => qualifiedTestName(t.codeunitId, t.method));
   }
 
-  /** R557 stub. */
-  useSessionTests(_suite: readonly TestMethodRef[], _undecidedKept: readonly TestMethodRef[]): void {}
+  /** R557 (I3): the session suite, by al-runner name, with each test's ref. */
+  private sessionSuite: ReadonlyArray<{ readonly ref: TestMethodRef; readonly sent: string }> = [];
+  /** R557 (I3): the `preproc-undecided-kept` tests, by al-runner name. */
+  private undecidedKept: ReadonlySet<string> = new Set();
+
+  /** R557 (I3): see `ExecutionBackend.useSessionTests`. */
+  useSessionTests(suite: readonly TestMethodRef[], undecidedKept: readonly TestMethodRef[]): void {
+    this.sessionSuite = suite.map((ref) => ({
+      ref,
+      sent: qualifiedTestName(ref.codeunitId, ref.method),
+    }));
+    this.undecidedKept = new Set(undecidedKept.map((r) => qualifiedTestName(r.codeunitId, r.method)));
+  }
+
+  /**
+   * R557: a row missing for `wanted`. An undecided-kept test keeps a per-test `error` (I3) and the
+   * caller returns it; any other test stops the session. `missing` lists every test to name.
+   */
+  private undecidedOrStop(
+    ref: TestMethodRef,
+    wanted: string,
+    detail: string,
+    durationMs: number,
+    missing: ReadonlyArray<{ readonly ref: TestMethodRef; readonly sent: string }>,
+    returned: readonly string[] | undefined,
+  ): TestVerdict {
+    if (this.undecidedKept.has(wanted)) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: `${AL_RUNNER_UNDECIDED_ARM_MISSING}: ${detail}`,
+        operation: "pre-dispatch-rejected",
+      };
+    }
+    throw new AlRunnerTestNameError(
+      missing.map((m) => ({ alName: `${m.ref.codeunitName}.${m.ref.method}`, sent: m.sent })),
+      this.observedBcBuild()?.build,
+      returned,
+    );
+  }
 
   /**
    * R551 — whether one-shot calls send `--test X --test-exact X` (and no excludes) instead of R488's
@@ -1457,7 +1530,18 @@ export class AlRunnerBackend implements ExecutionBackend {
     const { res, coverageOut } = sent;
     const durationMs = Date.now() - started;
     if (res.kind === "deadline") return { ref, outcome: "deadline-exceeded", durationMs };
-    if (res.kind === "error" || res.kind === "none-selected")
+    // R557: the name sent selected nothing: a stop, or an undecided-kept test's `error` (I3).
+    if (res.kind === "none-selected") {
+      return this.undecidedOrStop(
+        ref,
+        wanted,
+        res.detail,
+        durationMs,
+        [{ ref, sent: wanted }],
+        undefined,
+      );
+    }
+    if (res.kind === "error")
       return {
         ref,
         outcome: "error",
@@ -1471,18 +1555,21 @@ export class AlRunnerBackend implements ExecutionBackend {
       found !== undefined && res.abortProven?.includes(found.name) === true
         ? { ...found, abortProven: true }
         : found;
-    if (!t)
-      return {
+    // R557: rows came back and none is the name sent (43f76177's exit 0 with zero rows included):
+    // a stop, or an undecided-kept test's `error` (I3). Naming both sides: a mismatch here means
+    // the runner ran something other than what we asked for.
+    if (!t) {
+      return this.undecidedOrStop(
         ref,
-        outcome: "error",
-        durationMs,
-        // Naming both sides: a mismatch here means the runner ran something other than what
-        // we asked for, and "missing the requested test" alone left nobody able to see which.
-        failureMessage: `al-runner output has no test named "${wanted}" (it returned: ${
+        wanted,
+        `al-runner output has no test named "${wanted}" (it returned: ${
           res.tests.map((x) => x.name).join(", ") || "<no tests>"
         })`,
-        operation: "pre-dispatch-rejected",
-      };
+        durationMs,
+        [{ ref, sent: wanted }],
+        res.tests.map((x) => x.name),
+      );
+    }
     return this.oneShotVerdict(ref, wanted, t, durationMs, coverageOut);
   }
 
@@ -1619,11 +1706,34 @@ export class AlRunnerBackend implements ExecutionBackend {
           runnerRow: "runner-test-error",
         };
       }
+      // R557 (I3): an undecided-kept test may simply be compiled out: today's `error`, prefixed.
+      // (I1): only a CLEAN answer stops (exit 0 or 1, every row a pass or fail run row); anything
+      // else is a compile or runner failure, not a naming one, so today's `error`, naming the rows
+      // that made it unclean.
+      const unclean = uncleanRows(suite);
+      const clean = (suite.exitCode === 0 || suite.exitCode === 1) && unclean.length === 0;
+      if (this.undecidedKept.has(wanted) || clean) {
+        // The stop lists every SESSION-SUITE test with no row, never the unfiltered discovery,
+        // which holds tests a decided `#if` arm compiled out.
+        const absent = this.sessionSuite.filter(
+          (s) => !suite.byName.has(s.sent) && !this.undecidedKept.has(s.sent),
+        );
+        return this.undecidedOrStop(
+          ref,
+          wanted,
+          missing,
+          Date.now() - started,
+          absent.some((s) => s.sent === wanted) ? absent : [{ ref, sent: wanted }, ...absent],
+          [...suite.byName.keys()],
+        );
+      }
       return {
         ref,
         outcome: "error",
         durationMs: Date.now() - started,
-        failureMessage: missing,
+        failureMessage: `${missing}; al-runner's answer is not a clean run (exit ${suite.exitCode}${
+          unclean.length > 0 ? `, rows ${unclean.join(", ")}` : ""
+        }), so this is read as a compile or runner failure, not a naming one (R557)`,
         operation: "pre-dispatch-rejected",
       };
     }
@@ -1719,6 +1829,7 @@ export class AlRunnerBackend implements ExecutionBackend {
       // which only over-states (the safe direction, see `runViaServer`).
       wallMs: Date.now() - t0,
       ...(hungTest !== undefined ? { hungTest } : {}),
+      exitCode: res.exitCode,
     };
     this.serverSuite = suite;
     return suite;
