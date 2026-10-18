@@ -1,8 +1,8 @@
 import { describe, expect, jest, test } from "bun:test";
 import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
 import { initParser } from "@lethal/engine";
+import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
 import {
   AL_RUNNER_UNCLASSIFIED_ERROR,
   AL_RUNNER_UNDECIDED_ARM_MISSING,
@@ -13,7 +13,6 @@ import {
   verdictFromRunnerTest,
 } from "../src/al-runner-backend";
 import type { ServerSpawnFn } from "../src/al-runner-server";
-import { fakeAlRunnerServer } from "./helpers/fake-al-runner-server";
 import type { TestVerdict } from "../src/backend";
 import { refusalLine } from "../src/cli";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
@@ -22,6 +21,7 @@ import { runOnce } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
 import { SessionSafety } from "../src/session-safety";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
+import { fakeAlRunnerServer } from "./helpers/fake-al-runner-server";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -2236,7 +2236,14 @@ describe("AlRunnerBackend: al-runner's test names (R557)", () => {
       calls.push([...argv]);
       return {
         exitCode: 6,
-        stdout: alRunnerStdout({ tests: [], passed: 0, failed: 0, errors: 0, total: 0, exitCode: 6 }),
+        stdout: alRunnerStdout({
+          tests: [],
+          passed: 0,
+          failed: 0,
+          errors: 0,
+          total: 0,
+          exitCode: 6,
+        }),
         stderr: `--test ${argv[argv.indexOf("--test") + 1]} selected no test in this run\n`,
       };
     };
@@ -2254,7 +2261,9 @@ describe("AlRunnerBackend: al-runner's test names (R557)", () => {
     for (const s of ["Names Tests.Dash-Step", DASH, "28.5.54151.55132", "R557"]) {
       expect(line).toContain(s);
     }
-    expect(line).toContain("al-runner's naming rule moved, or this build does not compile that test");
+    expect(line).toContain(
+      "al-runner's naming rule moved, or this build does not compile that test",
+    );
   });
 
   test("T2: the exact path sends --test and --test-exact with the mangled name, and credits the caller's ref", async () => {
@@ -2299,7 +2308,8 @@ describe("AlRunnerBackend: al-runner's test names (R557)", () => {
     const v = await b1.backend.run(dash, opts);
     expect(v.outcome).toBe("error");
     const b2 = await makeBackend(
-      okSpawn({ tests: [{ name: DASH, status: "fail", message: "DashStep(5) must be 6" }] }, 1).spawn,
+      okSpawn({ tests: [{ name: DASH, status: "fail", message: "DashStep(5) must be 6" }] }, 1)
+        .spawn,
     );
     b2.backend.useSessionTests([dash], []);
     expect((await b2.backend.run(dash, opts)).outcome).toBe("fail");

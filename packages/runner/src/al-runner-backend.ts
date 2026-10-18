@@ -34,7 +34,6 @@ import {
   parseAlRunnerBcBuild,
   parseAlRunnerPlatformAppsDir,
   qualifiedTestName,
-  readAlRunnerEnvelope,
 } from "./al-runner-transport";
 import type {
   AlRunnerBcBuild,
@@ -672,7 +671,9 @@ export class AlRunnerBackend implements ExecutionBackend {
       ref,
       sent: qualifiedTestName(ref.codeunitId, ref.method),
     }));
-    this.undecidedKept = new Set(undecidedKept.map((r) => qualifiedTestName(r.codeunitId, r.method)));
+    this.undecidedKept = new Set(
+      undecidedKept.map((r) => qualifiedTestName(r.codeunitId, r.method)),
+    );
   }
 
   /**

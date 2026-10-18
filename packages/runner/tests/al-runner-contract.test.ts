@@ -348,7 +348,10 @@ describe("runAlRunnerContractProbe — test-name-mangling (R557)", () => {
     const drifted = NAMES_ROWS.map((n) =>
       n === "Codeunit50012.Dasha45Name" ? "Codeunit50012.Dash_Name" : n,
     );
-    const result = await runAlRunnerContractProbe("al-runner", fakeSpawn({ namesRows: drifted }).spawn);
+    const result = await runAlRunnerContractProbe(
+      "al-runner",
+      fakeSpawn({ namesRows: drifted }).spawn,
+    );
     expect(refusalNames(result)).toEqual(["test-name-mangling"]);
     const [refusal] = contractRefusals(result);
     expect(refusal).toContain("Codeunit50012.Dasha45Name");

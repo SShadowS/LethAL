@@ -189,11 +189,20 @@ export function assertNamesRun(
     if (seen.warningCodes.includes("al-runner-undecided-test-missing"))
       problems.push("an al-runner-undecided-test-missing warning was emitted");
     if (o.transport === "one-shot" && seen.nameFact !== "matches")
-      problems.push(`the R123 test-name-mangling fact is ${seen.nameFact ?? "absent"}, not matches`);
-    if (o.transport === "one-shot" && !seen.contractLines.some((l) => l.includes("test-name-mangling=matches")))
-      problems.push(`no contract line with test-name-mangling=matches: ${JSON.stringify(seen.contractLines)}`);
+      problems.push(
+        `the R123 test-name-mangling fact is ${seen.nameFact ?? "absent"}, not matches`,
+      );
+    if (
+      o.transport === "one-shot" &&
+      !seen.contractLines.some((l) => l.includes("test-name-mangling=matches"))
+    )
+      problems.push(
+        `no contract line with test-name-mangling=matches: ${JSON.stringify(seen.contractLines)}`,
+      );
     if (o.transport === "server" && seen.contractLines.length > 0)
-      problems.push(`a --server leg printed a contract line: ${JSON.stringify(seen.contractLines)}`);
+      problems.push(
+        `a --server leg printed a contract line: ${JSON.stringify(seen.contractLines)}`,
+      );
   }
   if (problems.length > 0) {
     throw new Error(
@@ -216,7 +225,9 @@ export function assertNamesLegsEqual(
     const t = other.mutants.find((x) => x.mutantCode === m.mutantCode);
     const text = NAMES_TABLE.find((r) => m.killingTest === `${SUITE}.${r.killer}`)?.killText;
     if (t !== undefined && text !== undefined && !(t.killingTestFailure ?? "").includes(text))
-      problems.push(`${m.mutantCode}: kill text ${JSON.stringify(t.killingTestFailure)} lacks ${text}`);
+      problems.push(
+        `${m.mutantCode}: kill text ${JSON.stringify(t.killingTestFailure)} lacks ${text}`,
+      );
   }
   if (problems.length > 0) {
     throw new Error(

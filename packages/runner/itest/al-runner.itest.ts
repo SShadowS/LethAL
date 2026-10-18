@@ -360,7 +360,8 @@ async function runOnce(
         // R557 (M1): the names legs assert this fact on the one-shot legs.
         const names = result.facts.find((x) => x.fact === "test-name-mangling");
         observer?.nameFacts.push(names === undefined ? "<fact missing>" : names.verdict);
-        if (names !== undefined) console.log(`  R557 test-name-mangling: ${names.verdict}: ${names.measured}`);
+        if (names !== undefined)
+          console.log(`  R557 test-name-mangling: ${names.verdict}: ${names.measured}`);
         return result;
       },
     });
