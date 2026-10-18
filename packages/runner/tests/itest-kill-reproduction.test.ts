@@ -92,6 +92,22 @@ describe("R577: the al-runner gate's kill-reproduction check", () => {
     ]);
   });
 
+  test("the cli-default leg's activations and runTests requests are held to the table too", () => {
+    const { report, store } = fixture([
+      { code: "M0001", verdict: "killed", reproduced: true, rows: 2 },
+    ]);
+    const cli = { cli: { killerRowsPerKill: 2, activations: 5, serverSuiteRuns: 4 } };
+    expect(
+      killReproductionFailures("cli", report, store, { activations: 5, serverSuiteRuns: 4 }, cli),
+    ).toEqual([]);
+    expect(
+      killReproductionFailures("cli", report, store, { activations: 6, serverSuiteRuns: 3 }, cli),
+    ).toEqual([
+      "R577 cli: activations expected 5, measured 6",
+      "R577 cli: serverSuiteRuns expected 4, measured 3",
+    ]);
+  });
+
   test("a null figure is not checked but recorded as unmeasured, so the gate cannot pass on it", () => {
     const { report, store } = fixture([
       { code: "M0001", verdict: "killed", reproduced: true, rows: 3 },
