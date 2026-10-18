@@ -1,0 +1,28 @@
+{
+  "id": "46788c97-2b68-4b89-8b1b-c23141cbd8ac",
+  "name": "LethAL Sandbox Names",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R557 fixture: twelve procedures, each killed only by one test whose AL name al-runner renames (or a control).",
+  "description": "One codeunit, Names Calc, with twelve identical exit(x + 1) procedures. Each is reached and killed by exactly one test in fixtures/sandbox-names-tests, whose AL names exercise al-runner's C# identifier rule. Deliberately its OWN app and id range so no other frozen baseline moves. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 78800,
+      "to": 78849
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}

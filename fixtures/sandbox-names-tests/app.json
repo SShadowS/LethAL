@@ -1,0 +1,35 @@
+{
+  "id": "b9c876b5-8c82-4ed9-879d-90b799667dfe",
+  "name": "LethAL Sandbox Names Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R557 fixture: one test per procedure of the names target, under names al-runner renames.",
+  "description": "One test per procedure of fixtures/sandbox-names. Ten AL names are renamed by al-runner's C# identifier rule (space, -, (), ., /, &, a leading digit, the keyword Default, Danish letters) and two are unrenamed controls. Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "46788c97-2b68-4b89-8b1b-c23141cbd8ac",
+      "name": "LethAL Sandbox Names",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 78850,
+      "to": 78899
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
