@@ -19992,6 +19992,530 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
   });
 });
 
+/**
+ * R577: "a kill must reproduce". A stub with the rule ON (`killsMustReproduce`), which counts the
+ * mutated runs per mutant (`nth`, read by the script), logs every activation and run in one shared
+ * `trace` (so order is asserted by sequence, never by clock), and records what each run was SENT.
+ * `answer` replaces a run's verdict outright (a lost or stranded reproduction).
+ */
+class ReproStub extends StubBackend {
+  readonly killsMustReproduce = true;
+  readonly nth = new Map<string, number>();
+  readonly trace: string[] = [];
+  readonly sent: Array<{ mutant: string | null; method: string; timeoutMs: number }> = [];
+  answer?: (mutant: string | null, n: number, v: TestVerdict) => TestVerdict | undefined;
+  override async activate(id: string | null) {
+    this.trace.push(`activate ${id ?? "null"}`);
+    await super.activate(id);
+  }
+  override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    const active = this.activations.at(-1) ?? null;
+    const n = active === null ? 0 : (this.nth.get(active) ?? 0) + 1;
+    if (active !== null) this.nth.set(active, n);
+    this.sent.push({ mutant: active, method: ref.method, timeoutMs: opts.timeoutMs });
+    const base = await super.run(ref, opts);
+    const v = this.answer?.(active, n, base) ?? base;
+    this.trace.push(`run ${active ?? "null"} ${ref.method} ${v.outcome}`);
+    return v;
+  }
+}
+
+/** R577: the group path's stub (R206's) with the rule on. */
+class ReproWarmStub extends WarmStubBackend {
+  readonly killsMustReproduce = true;
+}
+
+describe("R577: a kill must reproduce under the mutant", () => {
+  const rowOf = (r: SessionReport, id: string) => r.mutants.find((m) => m.mutantCode === id);
+  const run = async (
+    backend: ExecutionBackend,
+    extra: { testAl?: string; mutantTimeoutMs?: number; onEvent?: (e: RunEvent) => void } = {},
+  ) => {
+    const dirs = await makeProject(extra.testAl);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      ...(extra.mutantTimeoutMs !== undefined ? { mutantTimeoutMs: extra.mutantTimeoutMs } : {}),
+      ...(extra.onEvent !== undefined ? { emit: [createEmitter([extra.onEvent])] } : {}),
+    });
+    return { report, store };
+  };
+  /** Fails under a mutant on its FIRST mutated run only: the measured flaky shape (R577). */
+  const flaky = () => {
+    const backend: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : backend.nth.get(mutant) === 1 ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    backend.failureMessageFor = (mutant) =>
+      mutant === null ? undefined : `text ${backend.nth.get(mutant)}`;
+    return backend;
+  };
+  /** Fails under every mutant on every run: a deterministic kill. */
+  const deterministic = () => {
+    const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    backend.failureMessageFor = (mutant) => (mutant === null ? undefined : "Assert failed");
+    return backend;
+  };
+  /** The activations from mutant `id`'s first one, `len` long. */
+  const activationsOf = (b: StubBackend, id: string, len: number) => {
+    const at = b.activations.indexOf(id);
+    return b.activations.slice(at, at + len);
+  };
+
+  test("T1: fail under m, pass with no mutant, pass under m again is error kill-not-reproduced, never killed, and the banner names it", async () => {
+    const backend = flaky();
+    const { report, store } = await run(backend);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.killingTest).toBeUndefined();
+      expect(m.killingTestFailure).toBeUndefined();
+      expect(m.killReproduced).toBeUndefined();
+      expect(m.failureNote).toContain(
+        "kill-not-reproduced OverBudgetDetected: failed under the mutant (text 1), passed with no mutant active, then passed when LethAL re-ran it under the mutant;",
+      );
+      expect(m.failureNote).toContain("Re-run with --resume");
+    }
+    expect(activationsOf(backend, "M0001", 4)).toEqual(["M0001", null, "M0001", "M0002"]);
+    expect(report.counts.killed).toBe(0);
+    expect(report.counts.unstable).toBe(0);
+    expect(renderConsole(report)).toContain(`, kill-not-reproduced ${report.mutants.length}`);
+    store.close();
+  });
+
+  test("T1b: an unreproduced kill never feeds R197's ledger, a reproduced one does (the next mutant's first test says which)", async () => {
+    // T3 is the killer; on a cold ledger the order is by name (T1 first), and a recorded kill in
+    // the procedure moves T3 to the front for the next mutant.
+    const firstFor = async (repeats: boolean) => {
+      const backend: ReproStub = new ReproStub(
+        CAPS_NST,
+        (mutant, ref) => {
+          if (mutant !== "M0001" || ref.method !== "T3") return "pass";
+          const t3Runs = backend.sent.filter((s) => s.mutant === "M0001" && s.method === "T3");
+          return repeats || t3Runs.length === 1 ? "fail" : "pass";
+        },
+        ["IsOverBudget"],
+      );
+      const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+      store.close();
+      return {
+        m1: rowOf(report, "M0001"),
+        first: backend.sent.find((s) => s.mutant === "M0002")?.method,
+      };
+    };
+    const flakyRun = await firstFor(false);
+    expect(flakyRun.m1?.cause).toBe("kill-not-reproduced");
+    expect(flakyRun.first).toBe("T1");
+    const realRun = await firstFor(true);
+    expect(realRun.m1?.verdict).toBe("killed");
+    expect(realRun.first).toBe("T3");
+  });
+
+  test("T2: fail, pass, fail with the same text is killed, with killReproduced and reproducedFailure taken from the reproduction", async () => {
+    const backend = deterministic();
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killReproduced).toBe(true);
+      expect(m.killingTestFailure).toBe("Assert failed");
+      expect(m.reproducedFailure).toBe("Assert failed");
+      expect(m.killPosition).toBe(1);
+    }
+    // The marker reaches the store, where --resume reads it (B1).
+    const rows = store.mutantVerdicts(1);
+    expect(rows.length).toBe(report.mutants.length);
+    expect(rows.every((r) => r.killReproduced === true)).toBe(true);
+    store.close();
+  });
+
+  test("T3: a second failure with a DIFFERENT text still reproduces; both texts are kept", async () => {
+    // Every mutated run fails, with its own text: "text 1", then "text 2".
+    const always = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    always.failureMessageFor = (mutant) =>
+      mutant === null ? undefined : `text ${always.nth.get(mutant)}`;
+    const { report, store } = await run(always);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killingTestFailure).toBe("text 1");
+      expect(m.reproducedFailure).toBe("text 2");
+    }
+    store.close();
+  });
+
+  test("T4: with the flag unset, T1's script is a kill exactly as before: [m, null], no third run, no marker", async () => {
+    // The flaky script per mutant: fail on the first mutated run, pass after.
+    const seen = new Map<string, number>();
+    const offBackend = new StubBackend(
+      CAPS_NST,
+      (mutant) => {
+        if (mutant === null) return "pass";
+        const k = (seen.get(mutant) ?? 0) + 1;
+        seen.set(mutant, k);
+        return k === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    expect("killsMustReproduce" in offBackend).toBe(false);
+    const { report, store } = await run(offBackend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect("killReproduced" in m).toBe(false);
+      expect("reproducedFailure" in m).toBe(false);
+    }
+    expect(activationsOf(offBackend, "M0001", 3)).toEqual(["M0001", null, "M0002"]);
+    // No third run: one mutated run per mutant.
+    expect([...seen.values()].every((k) => k === 1)).toBe(true);
+    store.close();
+  });
+
+  test("T5: a warm kill at k = 2 is reproduced by replaying [T1, T2] under the mutant, with no confirmation flag; two mutated `many` rows for the killer", async () => {
+    const backend: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+        if (mutant === "M0002" && ref.method === "T2" && backend.session.get("cache") !== undefined)
+          return "fail";
+        if (mutant === "M0001" && ref.method === "T1") return "fail";
+        return "pass";
+      },
+      ["IsOverBudget"],
+    );
+    backend.failureMessageFor = (mutant, ref) => `stale cache in ${ref.method} under ${mutant}`;
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.verdict).toBe("killed");
+    expect(k?.killPosition).toBe(2);
+    expect(k?.killReproduced).toBe(true);
+    expect(k?.reproducedFailure).toBe("stale cache in T2 under M0002");
+    expect(report.warmKills).toBe(1);
+    const pairs = backend.manyCalls
+      .filter((c) => c.methods.map((x) => x.ref.method).join(",") === "T1,T2")
+      .map((c) => c.confirmation === true);
+    expect(pairs).toEqual([true, false]);
+    const killerRows = store.db
+      .query(
+        "SELECT op_kind FROM test_results WHERE mutant_code = 'M0002' AND method = 'T2' ORDER BY id",
+      )
+      .all() as Array<{ op_kind: string | null }>;
+    expect(killerRows.map((r) => r.op_kind)).toEqual(["many", "many"]);
+    store.close();
+  });
+
+  /** T5's backend, with M0002's warm failure on its first warm T2 only. */
+  const warmFlaky = () => {
+    let warmT2 = 0;
+    const backend: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+        if (
+          mutant === "M0002" &&
+          ref.method === "T2" &&
+          backend.session.get("cache") !== undefined
+        ) {
+          warmT2 += 1;
+          return warmT2 === 1 ? "fail" : "pass";
+        }
+        if (mutant === "M0001" && ref.method === "T1") return "fail";
+        return "pass";
+      },
+      ["IsOverBudget"],
+    );
+    return backend;
+  };
+
+  test("T5b: a replay under the mutant that passes all k is kill-not-reproduced, with the replay clause", async () => {
+    const backend = warmFlaky();
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.verdict).toBe("error");
+    expect(k?.cause).toBe("kill-not-reproduced");
+    expect(k?.failureNote).toContain(
+      "then passed when LethAL re-ran it under the mutant by replaying the same 2 method(s) of its call;",
+    );
+    store.close();
+  });
+
+  test("T5c: a prefix method failing first in the replay under the mutant is kill-not-reproduced naming it", async () => {
+    const backend = warmFlaky();
+    backend.manyOverride = (_call, opts, composed) => {
+      const names = opts.methods.map((x) => x.ref.method).join(",");
+      if (opts.confirmation === true || names !== "T1,T2" || composed.kind !== "verdicts")
+        return composed;
+      const first = composed.verdicts[0];
+      if (first === undefined) return composed;
+      return {
+        ...composed,
+        endedBy: "failure",
+        ranCount: 1,
+        verdicts: [{ ...first, outcome: "fail", failureMessage: "T1 is order-sensitive" }],
+      };
+    };
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.cause).toBe("kill-not-reproduced");
+    expect(k?.failureNote).toContain(
+      "then 1. T1 failed first when LethAL replayed the same 2 method(s) of its call under the mutant;",
+    );
+    store.close();
+  });
+
+  test("T5d: a replay under the mutant that stops at the server's cap is warm-confirmation-incomplete (I5), never a kill", async () => {
+    const backend = warmFlaky();
+    backend.manyOverride = (_call, opts, composed) => {
+      const names = opts.methods.map((x) => x.ref.method).join(",");
+      if (opts.confirmation === true || names !== "T1,T2" || composed.kind !== "verdicts")
+        return composed;
+      const first = composed.verdicts[0];
+      if (first === undefined) return composed;
+      return { ...composed, endedBy: "cap", ranCount: 1, verdicts: [first] };
+    };
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.verdict).toBe("error");
+    expect(k?.cause).toBe("warm-confirmation-incomplete");
+    expect(k?.failureNote).toContain("stopped at the server's cap after 1 of 2 method(s)");
+    store.close();
+  });
+
+  test("T6: the order is activate(m), fail, activate(null), pass, activate(m), fail, and only then is the mutant scored", async () => {
+    const backend = deterministic();
+    const { store } = await run(backend, {
+      onEvent: (e) => {
+        if (e.type === "mutant-scored")
+          backend.trace.push(`scored ${e.mutant.mutantId} ${e.verdict}`);
+      },
+    });
+    const at = backend.trace.indexOf("activate M0001");
+    expect(backend.trace.slice(at, at + 7)).toEqual([
+      "activate M0001",
+      "run M0001 OverBudgetDetected fail",
+      "activate null",
+      "run null OverBudgetDetected pass",
+      "activate M0001",
+      "run M0001 OverBudgetDetected fail",
+      "scored M0001 killed",
+    ]);
+    store.close();
+  });
+
+  test("T7: a backend that caches its suite per activation (al-runner --server) still reproduces a deterministic kill, because the mutant is re-activated", async () => {
+    // `activate` drops the cached answer; `run` answers from the cache while it holds one.
+    class CachingStub extends ReproStub {
+      cached: TestVerdict | undefined;
+      override async activate(id: string | null) {
+        this.cached = undefined;
+        await super.activate(id);
+      }
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        if (this.cached !== undefined) return this.cached;
+        const v = await super.run(ref, opts);
+        this.cached = v;
+        return v;
+      }
+    }
+    const backend = new CachingStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killReproduced).toBe(true);
+    }
+    store.close();
+  });
+
+  test("T8a: a reproduction our own deadline cut keeps deadline-exceeded, never a kill", async () => {
+    const backend = deterministic();
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 2 ? { ...v, outcome: "deadline-exceeded" } : undefined;
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("deadline-exceeded");
+      expect(m.failureNote).toContain("reproducing OverBudgetDetected under the mutant");
+    }
+    store.close();
+  });
+
+  test("T8b: a reproduction whose answer is unreadable and unresolved is stranded, quarantined, never a kill", async () => {
+    const backend = deterministic();
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 2
+        ? {
+            ref: v.ref,
+            outcome: "deadline-exceeded",
+            durationMs: 1,
+            operation: "in-flight-unknown",
+          }
+        : undefined;
+    const { report, store } = await run(backend);
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("stranded");
+    expect(isStrandedNote(m1?.failureNote)).toBe(true);
+    expect(report.counts.killed).toBe(0);
+    store.close();
+  });
+
+  test("T8c: a reproduction that ran in a reused session is session-reused, never a kill", async () => {
+    const backend: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T1" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    // Only single-method calls under a mutant report a used session: here, the reproduction.
+    backend.singleTestRunsBefore = (mutant) => (mutant !== null ? 3 : 0);
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("session-reused");
+    expect(m1?.failureNote).toContain("reproducing T1 under the mutant");
+    store.close();
+  });
+
+  test("T8d: an al-runner row the reproduction answered keeps its cause, and its note says it came from the reproduction (I5)", async () => {
+    const backend = deterministic();
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 2
+        ? {
+            ref: v.ref,
+            outcome: "error",
+            durationMs: 1,
+            runnerRow: "runner-test-error",
+            failureMessage: "handler not executed",
+          }
+        : undefined;
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("runner-test-error");
+      expect(m.failureNote).toBe(
+        "reproducing OverBudgetDetected under the mutant (first run failed: Assert failed): handler not executed",
+      );
+    }
+    store.close();
+  });
+
+  test("T9: timeout, a fast confirm, timeout again is timeout-killed with the marker", async () => {
+    const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
+      "IsOverBudget",
+    ]);
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.killReproduced).toBe(true);
+    }
+    expect(activationsOf(backend, "M0001", 3)).toEqual(["M0001", null, "M0001"]);
+    store.close();
+  });
+
+  test("T9b: timeout, a fast confirm, then a pass under the mutant is kill-not-reproduced, saying it passed", async () => {
+    const backend: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : backend.nth.get(mutant) === 1 ? "timeout" : "pass"),
+      ["IsOverBudget"],
+    );
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.failureNote).toContain("timed out under the mutant at its");
+      expect(m.failureNote).toContain("then passed when LethAL re-ran it under the mutant;");
+      expect(m.failureNote).toContain("the timeout did not repeat");
+    }
+    store.close();
+  });
+
+  test("T9c: the reproduction is sent the budget the timed-out run was sent, not the confirm's longer deadline", async () => {
+    const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
+      "IsOverBudget",
+    ]);
+    const { store } = await run(backend, { mutantTimeoutMs: 1000 });
+    const at = backend.sent.findIndex((s) => s.mutant === "M0001");
+    expect(backend.sent.slice(at, at + 3).map((s) => [s.mutant, s.timeoutMs])).toEqual([
+      ["M0001", 1000],
+      [null, 120_000],
+      ["M0001", 1000],
+    ]);
+    store.close();
+  });
+
+  test("T10: a flaky test ordered before a deterministic killer does not lose the kill: the loop goes on and the later test kills, reproduced", async () => {
+    const t1Runs = new Map<string, number>();
+    const backend = new ReproStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (mutant !== "M0001") return "pass";
+        if (ref.method === "T3") return "fail";
+        if (ref.method !== "T1") return "pass";
+        const k = (t1Runs.get(mutant) ?? 0) + 1;
+        t1Runs.set(mutant, k);
+        return k === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("killed");
+    expect(m1?.killingTest).toBe("T3");
+    expect(m1?.killReproduced).toBe(true);
+    expect(m1?.cause).toBeUndefined();
+    store.close();
+  });
+
+  test("T10b: on the group path too, a flaky failure at position 1 does not end the walk: the call after it runs and its kill stands", async () => {
+    let t1 = 0;
+    const backend = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (mutant !== "M0001") return "pass";
+        if (ref.method === "T4") return "fail";
+        if (ref.method !== "T1") return "pass";
+        t1 += 1;
+        return t1 === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("killed");
+    expect(m1?.killingTest).toBe("T4");
+    expect(m1?.killReproduced).toBe(true);
+    store.close();
+  });
+
+  test("T10c: on the group path, a warm timeout that does not reproduce does not end the walk either: the next call's kill stands", async () => {
+    let stopped = 0;
+    const backend = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T4" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    // T2 is stopped under M0001 the first time only: a chance overrun at k = 2.
+    backend.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0001" || ref.method !== "T2") return undefined;
+      stopped += 1;
+      return stopped === 1 ? 999_999 : undefined;
+    };
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("killed");
+    expect(m1?.killingTest).toBe("T4");
+    expect(m1?.killReproduced).toBe(true);
+    store.close();
+  });
+});
+
 /** R360: replaces a run's stored bundle with what its batch dir holds now, digest included. */
 async function restoreBundleFromDisk(
   store: ResultsStore,

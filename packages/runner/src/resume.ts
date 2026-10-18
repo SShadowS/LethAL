@@ -108,6 +108,10 @@ export interface CarriedVerdict {
   readonly killingTestFailure?: string;
   /** R206 — see `MutantRow.killPosition`. Carried for the same reason. */
   readonly killPosition?: number;
+  /** R577 — see `MutantRow.killReproduced`. Carried for the same reason. */
+  readonly killReproduced?: true;
+  /** R577 — see `MutantRow.reproducedFailure`. Carried for the same reason. */
+  readonly reproducedFailure?: string;
   readonly durationMs: number;
   /**
    * R69 Phase 2 Task 5 — the runner that actually produced this verdict, carried through from
@@ -187,6 +191,14 @@ export function buildResumeIndex(
    * run and must keep working. Only the OFF direction drops those verdicts, and they are re-run.
    */
   stopHungSessions = false,
+  /**
+   * R577 (B1): whether THIS session's backend has the kill-reproduction rule on
+   * (`ExecutionBackend.killsMustReproduce`). A `killed`/`timeout-killed` row without
+   * `killReproduced` was scored before the rule (or with it off), so it may be a flaky test's
+   * chance failure; carrying it would put a false kill in a report that says the rule is on. It is
+   * re-run instead. Directional, like `stopHungSessions`, and not in the fingerprint.
+   */
+  killsMustReproduce = false,
 ): ResumeIndex {
   const seen = new Map<string, MutantVerdictRow[]>();
   // R391: the same rows grouped by (file, tuple), for rule 2.
@@ -218,8 +230,13 @@ export function buildResumeIndex(
 
   // R53: a `timeout-killed` is only obtainable by stopping a session. A run forbidden to do that
   // must re-measure rather than inherit one — counted, never silent, like every other drop here.
+  // R577 (B1): under the reproduction rule a kill carries only with its marker.
   const carryableRow = (row: MutantVerdictRow): boolean =>
-    CARRYABLE_VERDICTS.has(row.verdict) && (row.verdict !== "timeout-killed" || stopHungSessions);
+    CARRYABLE_VERDICTS.has(row.verdict) &&
+    (row.verdict !== "timeout-killed" || stopHungSessions) &&
+    (!killsMustReproduce ||
+      (row.verdict !== "killed" && row.verdict !== "timeout-killed") ||
+      row.killReproduced === true);
 
   const carryable = new Map<string, CarriedVerdict>();
   const strandedKeys = new Set<string>();
@@ -263,6 +280,8 @@ function carriedOf(row: MutantVerdictRow): CarriedVerdict {
     ...(row.failureNote !== undefined ? { failureNote: row.failureNote } : {}),
     ...(row.killingTestFailure !== undefined ? { killingTestFailure: row.killingTestFailure } : {}),
     ...(row.killPosition !== undefined ? { killPosition: row.killPosition } : {}),
+    ...(row.killReproduced === true ? { killReproduced: true as const } : {}),
+    ...(row.reproducedFailure !== undefined ? { reproducedFailure: row.reproducedFailure } : {}),
     ...(row.runner !== undefined ? { runner: row.runner } : {}),
     ...(row.coveringTests !== undefined ? { coveringTests: row.coveringTests } : {}),
     ...(row.coverageAttribution !== undefined

@@ -210,7 +210,7 @@ import {
   wasStranded,
   withoutRefusedTests,
 } from "./resume";
-import type { ResumeIndex } from "./resume";
+import type { CarriedVerdict, ResumeIndex } from "./resume";
 import { CONTROL_DRAIN_MS } from "./run-mutant-transport";
 import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
 import {
@@ -2798,6 +2798,59 @@ interface GroupRunSettings {
 }
 
 /**
+ * R198: one single-method covering run as a `CoveringStep`, at `budget`. R577: a module function so
+ * the kill reproduction runs the killer exactly as the covering loop did, at the budget the
+ * killing run was SENT (never a recomputed one).
+ */
+async function singleStep(
+  ctx: {
+    readonly backend: ExecutionBackend;
+    readonly safety: SessionSafety;
+    readonly leaseSession: LeaseSession | undefined;
+    readonly emit: RunEmitter;
+    readonly resyncOpSeq: (() => Promise<void>) | undefined;
+  },
+  ref: TestMethodRef,
+  budget: TestBudget,
+): Promise<CoveringStep> {
+  const { ms, source } = budget;
+  const out = await runFenced(
+    ctx.backend,
+    ctx.safety,
+    ref,
+    { coverage: "none", timeoutMs: ms },
+    ctx.leaseSession,
+    ctx.emit,
+    ctx.resyncOpSeq,
+  );
+  return {
+    ref,
+    verdict: out.verdict,
+    lostAck: out.lostAck,
+    retried: out.retried,
+    ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
+    ...(out.original !== undefined ? { original: out.original } : {}),
+    // R-204b: the single path's two causes, carried exactly as the grouped call's are. R534:
+    // al-runner's answered row, keyed on `runnerRow` ONLY (never on `completed-accepted`, which
+    // R488/R491's refusals also carry and which must still abort).
+    ...(out.cause !== undefined
+      ? { cause: out.cause }
+      : out.verdict.stopRefusal !== undefined
+        ? { cause: out.verdict.stopRefusal }
+        : out.verdict.runnerRow !== undefined
+          ? { cause: out.verdict.runnerRow }
+          : {}),
+    testBudgetMs: ms,
+    testBudgetSource: source,
+    groupBudgetMs: ms,
+    opKind: "single",
+    groupPosition: 1,
+    chunkPrefix: [{ ref, budgetMs: ms }],
+    callSettings: { requestCeilingMs: ms, stopGraceMs: 0 },
+  };
+}
+
+/**
  * R198: the covering loop's dispatcher. On a backend WITHOUT `runMany` (or with group runs
  * disabled) it is today's loop: one `runFenced` per test in R197's order. On a backend WITH it, it
  * walks `ordered` with a cursor, IN ORDER, never skipping: a chunk is a CONTIGUOUS run of fittable
@@ -2821,43 +2874,8 @@ async function* coveringRuns(args: {
   readonly group: GroupRunSettings | undefined;
   readonly mutantId: string;
 }): AsyncGenerator<CoveringStep, void, undefined> {
-  const single = async (ref: TestMethodRef): Promise<CoveringStep> => {
-    const { ms: budget, source } = args.budgetOf(ref);
-    const out = await runFenced(
-      args.backend,
-      args.safety,
-      ref,
-      { coverage: "none", timeoutMs: budget },
-      args.leaseSession,
-      args.emit,
-      args.resyncOpSeq,
-    );
-    return {
-      ref,
-      verdict: out.verdict,
-      lostAck: out.lostAck,
-      retried: out.retried,
-      ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
-      ...(out.original !== undefined ? { original: out.original } : {}),
-      // R-204b: the single path's two causes, carried exactly as the grouped call's are. R534:
-      // al-runner's answered row, keyed on `runnerRow` ONLY (never on `completed-accepted`, which
-      // R488/R491's refusals also carry and which must still abort).
-      ...(out.cause !== undefined
-        ? { cause: out.cause }
-        : out.verdict.stopRefusal !== undefined
-          ? { cause: out.verdict.stopRefusal }
-          : out.verdict.runnerRow !== undefined
-            ? { cause: out.verdict.runnerRow }
-            : {}),
-      testBudgetMs: budget,
-      testBudgetSource: source,
-      groupBudgetMs: budget,
-      opKind: "single",
-      groupPosition: 1,
-      chunkPrefix: [{ ref, budgetMs: budget }],
-      callSettings: { requestCeilingMs: budget, stopGraceMs: 0 },
-    };
-  };
+  const single = (ref: TestMethodRef): Promise<CoveringStep> =>
+    singleStep(args, ref, args.budgetOf(ref));
   const group = args.group;
   if (group === undefined || args.backend.runMany === undefined) {
     for (const ref of args.ordered) yield await single(ref);
@@ -2949,7 +2967,11 @@ async function* coveringRuns(args: {
         chunkPrefix: methods.slice(0, position),
         callSettings,
       };
-      return;
+      // R577 (I4): the consumer pulls again after a timeout only when its kill did not reproduce;
+      // the walk then goes on after it. Every other call-level ending ends the walk, as before.
+      if (verdict.outcome !== "timeout" || cause !== undefined) return;
+      cursor += position;
+      continue;
     }
     for (const [i, verdict] of out.result.verdicts.entries()) {
       yield {
@@ -2964,11 +2986,12 @@ async function* coveringRuns(args: {
         callSettings,
       };
     }
-    // A `failure` ends the walk. `complete` means every method of THIS call ran (the transport
-    // refuses a `complete` with fewer entries than the call asked for) and `cap` a prefix of it;
-    // either way the cursor advances by what ran and the next call, if any, takes the rest. The
-    // loop's attempted-set guard is what catches an answer whose `ranCount` outran its entries.
-    if (out.result.endedBy === "failure") return;
+    // `complete` means every method of THIS call ran (the transport refuses a `complete` with
+    // fewer entries than the call asked for) and `cap` a prefix of it; either way the cursor
+    // advances by what ran and the next call, if any, takes the rest. The loop's attempted-set
+    // guard is what catches an answer whose `ranCount` outran its entries. A `failure` advances
+    // the same way: the consumer breaks at a failure, so the walk ends there, except (R577, I4)
+    // after a kill that did not reproduce, when the walk goes on after the failed method.
     cursor += out.result.ranCount;
   }
 }
@@ -4043,7 +4066,11 @@ function resolveResume(
   // work left is rebuilt and republished. `lethal verify` keeps its refusal.
 
   const { index, dropped: refusedDropped } = withoutRefusedTests(
-    buildResumeIndex(cfg.store.mutantVerdicts(priorRunId), cfg.stopHungSessions === true),
+    buildResumeIndex(
+      cfg.store.mutantVerdicts(priorRunId),
+      cfg.stopHungSessions === true,
+      cfg.backend.killsMustReproduce === true,
+    ),
     refusedTests,
   );
   if (refusedDropped > 0) {
@@ -7144,6 +7171,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               carried.killingTestFailure,
               undefined, // unplaceable
               carried.killPosition,
+              undefined, // reach
+              undefined, // killingTestRef
+              carriedReproduction(carried),
             );
           }
         }
@@ -9429,6 +9459,222 @@ async function confirmWarm(p: {
   return { kind: "confirmed", killPosition: k };
 }
 
+/** R577: a kill decision that is not a kill: `WarmDecision`'s error shape, its cause optional as a
+ *  covering step's is (a lease loss and a transport error carry none). */
+interface KillErrorDecision {
+  readonly kind: "error";
+  readonly cause: MutantErrorCause | undefined;
+  readonly failureNote: string;
+  readonly transportError: boolean;
+}
+
+type ReproDecision =
+  | {
+      readonly kind: "reproduced";
+      /** `record()`'s `reproduction` argument: the reproduction's own text, when it had one. */
+      readonly reproduction: { readonly reproducedFailure?: string };
+    }
+  | KillErrorDecision;
+
+/**
+ * R577: "a kill must reproduce". Called after a kill's unmutated confirmation passed (cold at
+ * position 1, `confirmWarm` at k > 1), on a backend with `killsMustReproduce`. It re-activates the
+ * mutant (MANDATORY: al-runner `--server` caches its suite per activation and `activate` clears
+ * it, so without it the run would read the confirm's null suite), then re-runs the kill in its
+ * own context at the budget the killing run was SENT: at k = 1 one single run (`op_kind` single);
+ * at k > 1 the call's prefix 1..k through one `runMany` with no `confirmation` flag.
+ *
+ * Reproduced: the killer itself answers `fail` again (any text) for a fail kill, or `timeout` again
+ * for a timeout kill; at k > 1 only as method k of a replay that ran all k. Everything else that
+ * is an outcome is `kill-not-reproduced`, and the note says how the reproduction ended. A
+ * non-verdict ending (lost, deadline, stranded, a lease answer, a transport error) keeps its own
+ * cause through `classifyNonVerdictStep`, side effects included; a reused session is
+ * `session-reused`; a cap is `warm-confirmation-incomplete`. Never `survived`. The rows are
+ * MUTATED rows (`mutantCode` set) and their durations are not added to `spent`.
+ */
+async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<ReproDecision> {
+  const { args, m, step, leaseSession, resyncOpSeq, testResultBuffer } = p;
+  const k = step.groupPosition;
+  const killer = step.ref;
+  const timedOut = step.verdict.outcome === "timeout";
+  const firstLine = step.verdict.failureMessage?.split("\n")[0];
+  const what = `reproducing ${killer.method} under the mutant (first run ${
+    timedOut
+      ? `timed out at its ${step.testBudgetMs} ms budget`
+      : `failed: ${firstLine ?? "no text"}`
+  })`;
+  const error = (
+    cause: MutantErrorCause | undefined,
+    failureNote: string,
+    transportError = false,
+  ) => ({ kind: "error", cause, failureNote, transportError }) as const;
+  const replay = k > 1 ? ` by replaying the same ${k} method(s) of its call` : "";
+  const notReproduced = (how: string) =>
+    error(
+      "kill-not-reproduced",
+      `kill-not-reproduced ${killer.method}: ${
+        timedOut
+          ? `timed out under the mutant at its ${step.testBudgetMs} ms budget`
+          : `failed under the mutant${firstLine !== undefined ? ` (${firstLine})` : ""}`
+      }, passed with no mutant active, then ${how}; the ${
+        timedOut ? "timeout" : "failure"
+      } did not repeat, so it is not attributed to the mutant (R577). Re-run with --resume to measure it again.`,
+    );
+  // `how` for the killer's own answer in the reproduction, when it was not the reproducing one.
+  const answered = (outcome: TestVerdict["outcome"]) =>
+    outcome === "pass"
+      ? `passed when LethAL re-ran it under the mutant${replay}`
+      : outcome === "fail"
+        ? `failed instead of timing out when LethAL re-ran it under the mutant at the same budget${replay}`
+        : outcome === "timeout"
+          ? `timed out instead of failing when LethAL re-ran it under the mutant${replay}`
+          : `answered ${outcome} when LethAL re-ran it under the mutant${replay}`;
+  const reproduced = (v: TestVerdict): ReproDecision => ({
+    kind: "reproduced",
+    reproduction: v.failureMessage !== undefined ? { reproducedFailure: v.failureMessage } : {},
+  });
+  const fromNonVerdict = (nv: NonVerdictDecision): ReproDecision => {
+    const note = nv.failureNote ?? "the reproduction ended without a readable answer";
+    // I5: say the row came from the reproduction. Never in front of a strand's note, whose prefix
+    // `--resume` reads (`isStrandedNote`).
+    return error(
+      nv.cause,
+      nv.cause === "stranded" || note.includes(what) ? note : `${what}: ${note}`,
+      nv.transportError,
+    );
+  };
+  const push = (v: TestVerdict, opKind: "single" | "many", ref = v.ref) => {
+    testResultBuffer.push({
+      mutantCode: m.mutantId,
+      ref,
+      outcome: v.outcome,
+      durationMs: v.durationMs,
+      failureMessage: v.failureMessage,
+      opKind,
+      ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+    });
+    feedAttestation(args.attestation, v.attestation);
+  };
+  const classifyCtx = {
+    m,
+    leaseSession,
+    safety: args.safety,
+    quarantineStore: args.quarantineStore,
+    resourceKey: args.resourceKey,
+    nowIso: args.nowIso,
+    what,
+  };
+  const reusedNote = (v: TestVerdict) =>
+    `session-reused ${what}: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the reproduction started, so it did not run in the kill's context; the kill is unconfirmed (R577)`;
+
+  await activateOnce(args.backend, args.safety, m.mutantId);
+
+  if (k === 1) {
+    const r = await singleStep(
+      { backend: args.backend, safety: args.safety, leaseSession, emit: args.emit, resyncOpSeq },
+      killer,
+      { ms: step.testBudgetMs, source: step.testBudgetSource },
+    );
+    push(r.verdict, "single", killer);
+    const nonVerdict = await classifyNonVerdictStep(r, classifyCtx);
+    if (nonVerdict !== null) return fromNonVerdict(nonVerdict);
+    if (sessionWasReused(r.verdict)) return error("session-reused", reusedNote(r.verdict));
+    const want = timedOut ? "timeout" : "fail";
+    return r.verdict.outcome === want
+      ? reproduced(r.verdict)
+      : notReproduced(answered(r.verdict.outcome));
+  }
+
+  const out = await runFencedMany(
+    args.backend,
+    args.safety,
+    {
+      methods: step.chunkPrefix,
+      requestCeilingMs: step.callSettings.requestCeilingMs,
+      stopGraceMs: step.callSettings.stopGraceMs,
+    },
+    leaseSession,
+    args.emit,
+    resyncOpSeq,
+    m.mutantId,
+  );
+  const provenance = {
+    lostAck: out.lostAck,
+    retried: out.retried,
+    ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
+    ...(out.original !== undefined ? { original: out.original } : {}),
+  };
+  const prefix = step.chunkPrefix;
+  if (out.result.kind === "call") {
+    const { verdict, cause, abortSession, methodIndex } = out.result;
+    const j = Math.min(Math.max(methodIndex, 1), k);
+    push(verdict, "many");
+    const nonVerdict = await classifyNonVerdictStep(
+      {
+        ...provenance,
+        ref: verdict.ref,
+        verdict,
+        testBudgetMs: prefix[j - 1]?.budgetMs ?? 0,
+        testBudgetSource: step.testBudgetSource,
+        groupBudgetMs: step.callSettings.requestCeilingMs + step.callSettings.stopGraceMs,
+        opKind: "many",
+        ...(cause !== undefined ? { cause } : {}),
+        ...(abortSession !== undefined ? { abortSession } : {}),
+        groupPosition: j,
+        chunkPrefix: prefix.slice(0, j),
+        callSettings: step.callSettings,
+      },
+      classifyCtx,
+    );
+    if (nonVerdict !== null) return fromNonVerdict(nonVerdict);
+    if (verdict.outcome === "timeout") {
+      if (j < k) {
+        return notReproduced(
+          `${j}. ${verdict.ref.method} timed out first when LethAL replayed the same ${k} method(s) of its call under the mutant`,
+        );
+      }
+      return timedOut ? reproduced(verdict) : notReproduced(answered("timeout"));
+    }
+    return error(
+      "warm-confirmation-incomplete",
+      `warm-confirmation-incomplete ${what}: the replay answered at call level with outcome ${verdict.outcome}${verdict.failureMessage !== undefined ? ` (${verdict.failureMessage})` : ""}, which reproduces nothing (R577)`,
+    );
+  }
+  const { endedBy, ranCount, verdicts } = out.result;
+  for (const rv of verdicts) push(rv, "many");
+  const reusedIn = verdicts.find(sessionWasReused);
+  if (reusedIn !== undefined) return error("session-reused", reusedNote(reusedIn));
+  if (endedBy === "failure") {
+    const failed = verdicts[ranCount - 1];
+    if (ranCount < k) {
+      return notReproduced(
+        `${ranCount}. ${failed?.ref.method ?? "?"} failed first when LethAL replayed the same ${k} method(s) of its call under the mutant`,
+      );
+    }
+    if (failed !== undefined && ranCount === k && failed.outcome === "fail") {
+      return timedOut ? notReproduced(answered("fail")) : reproduced(failed);
+    }
+  }
+  if (endedBy === "cap") {
+    return error(
+      "warm-confirmation-incomplete",
+      `warm-confirmation-incomplete ${what}: the replay stopped at the server's cap after ${ranCount} of ${k} method(s), before reaching ${killer.method}; the kill is unconfirmed (R577)`,
+    );
+  }
+  if (
+    endedBy === "complete" &&
+    ranCount === k &&
+    verdicts.length === k &&
+    verdicts.every((rv) => rv.outcome === "pass")
+  ) {
+    return notReproduced(answered("pass"));
+  }
+  return error(
+    "warm-confirmation-incomplete",
+    `warm-confirmation-incomplete ${what}: the replay answered ${endedBy} with ${ranCount} of ${k} method(s), which reproduces nothing (R577)`,
+  );
+}
+
 /**
  * R206: what the covering loop and the warm confirmation's replay do with a step that carries NO
  * verdict (a lease answer, a lost ack, the group call's own per-mutant causes, our own deadline,
@@ -9796,6 +10042,12 @@ async function runMutantsOnBackend(args: {
      */
     let failureNote: string | undefined;
     let cause: MutantErrorCause | undefined;
+    // R577: set at a kill site when the kill reproduced (`record()`'s `reproduction`).
+    let reproduction: { readonly reproducedFailure?: string } | undefined;
+    // R577 (I4): the FIRST kill that did not reproduce. The covering loop goes on with the mutant
+    // active; a later test that kills and reproduces makes it `killed`, a later error keeps that
+    // error, and a loop that ends with no other verdict records this one.
+    let notReproduced: KillErrorDecision | undefined;
     // Fix round 2, residual 1 (events.ts doc comment): the exact instant the kill-confirmation
     // loop below decides `cause: "unstable"` because a HUB-green test failed on the FENCE is also
     // the exact instant it knows WHICH test disagreed — captured here so the eventual `record()`
@@ -9902,6 +10154,24 @@ async function runMutantsOnBackend(args: {
           message: `[lethal] alrunner-timeout-wording-unrecognised: al-runner stopped ${ref.method} (mutant ${m.mutantId}) at its timeout but the row's message is neither known timeout wording (${v.failureMessage ?? "no message"}); such hangs are scored runner-test-error, not timeout-killed, until RUNNER_TIMEOUT_MESSAGE / RUNNER_ONRUN_TIMEOUT_MESSAGE learn it (R534)`,
         });
       }
+      // R577: the reproduction, after a kill's confirmation passed; `undefined` with the rule off,
+      // which leaves every kill site exactly as it was.
+      const reproduce = (): Promise<ReproDecision | undefined> =>
+        args.backend.killsMustReproduce === true
+          ? reproduceKill({ args, m, step, leaseSession, resyncOpSeq, testResultBuffer })
+          : Promise.resolve(undefined);
+      // R577: a kill that did not reproduce. `true`: the covering loop goes on (I4).
+      const notKilled = (r: KillErrorDecision): boolean => {
+        if (r.cause === "kill-not-reproduced") {
+          notReproduced ??= r;
+          return true;
+        }
+        verdict = "error";
+        cause = r.cause;
+        failureNote = r.failureNote;
+        if (r.transportError) transportErrorRef = ref;
+        return false;
+      };
       // R206: every non-verdict ending (a lease answer, a lost ack, a group cause, our own
       // deadline, a transport error) is classified by `classifyNonVerdictStep`, the same branches
       // the warm confirmation's replay is classified by. `null` means a real outcome, decided below.
@@ -9968,6 +10238,12 @@ async function runMutantsOnBackend(args: {
             testResultBuffer,
           });
           if (warm.kind === "confirmed") {
+            const repro = await reproduce();
+            if (repro?.kind === "error") {
+              if (notKilled(repro)) continue;
+              break;
+            }
+            reproduction = repro?.reproduction;
             verdict = "timeout-killed";
             killingTest = ref.method;
             killingTestRef = ref;
@@ -9999,6 +10275,12 @@ async function runMutantsOnBackend(args: {
           testResultBuffer,
         });
         if (warm.kind === "confirmed") {
+          const repro = await reproduce();
+          if (repro?.kind === "error") {
+            if (notKilled(repro)) continue;
+            break;
+          }
+          reproduction = repro?.reproduction;
           verdict = "killed";
           killingTest = ref.method;
           killingTestRef = ref;
@@ -10199,6 +10481,14 @@ async function runMutantsOnBackend(args: {
             }
             break;
           }
+          // R577: the kill must reproduce under the mutant, at the budget `v` was sent, before it
+          // is a kill and before R197's ledger learns from it.
+          const repro = await reproduce();
+          if (repro?.kind === "error") {
+            if (notKilled(repro)) continue;
+            break;
+          }
+          reproduction = repro?.reproduction;
           verdict = timedOut ? "timeout-killed" : "killed";
           killingTest = ref.method;
           killingTestRef = ref;
@@ -10250,6 +10540,14 @@ async function runMutantsOnBackend(args: {
         break;
       }
     }
+    // R577 (I4): the loop ended with no other verdict after a kill that did not reproduce, so the
+    // mutant is that error, never `survived`. Before R198's check below, which guards survivors
+    // only: a group timeout's earlier methods are never in `attempted`, and this is no survivor.
+    if (verdict === "survived" && notReproduced !== undefined) {
+      verdict = "error";
+      cause = notReproduced.cause;
+      failureNote = notReproduced.failureNote;
+    }
     // R198: a survivor is a mutant EVERY covering test ran against. On the group path a chunking
     // bug could skip tests and still answer all-pass; on the sequential path the set is complete
     // by construction. Checked here, before anything is recorded.
@@ -10300,6 +10598,7 @@ async function runMutantsOnBackend(args: {
       killPosition,
       reach,
       killingTestRef,
+      reproduction,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -10996,6 +11295,9 @@ function replayCarriedBatch(
       prior.killingTestFailure,
       prior.unplaceable,
       prior.killPosition,
+      undefined, // reach
+      undefined, // killingTestRef
+      carriedReproduction(prior),
     );
   }
   emit({
@@ -11012,6 +11314,14 @@ function replayCarriedBatch(
     unplaceableCount: unplaceable.length,
     unplaceableMutants: unplaceable.sort(),
   });
+}
+
+/** R577: `record()`'s `reproduction` argument for a carried verdict: its prior row's, unchanged. */
+function carriedReproduction(
+  c: CarriedVerdict,
+): { readonly reproducedFailure?: string } | undefined {
+  if (c.killReproduced !== true) return undefined;
+  return c.reproducedFailure !== undefined ? { reproducedFailure: c.reproducedFailure } : {};
 }
 
 export function record(
@@ -11092,8 +11402,21 @@ export function record(
   // `--resume`'s replays, which carry no ref. `SessionOutcome`-only: NOT written to the store and
   // NOT put on `mutant-scored`/`mutant-carried`, so no event or report field moves.
   killingTestRef?: TestMethodRef,
+  // R577: present iff the kill REPRODUCED under the mutant (`MutantOutcome.killReproduced`), with
+  // the reproduction's own text when it had one. Passed by the covering loop's kill sites when the
+  // backend has the rule on, and by the two resume replays, which carry a prior row's unchanged.
+  reproduction?: { readonly reproducedFailure?: string },
 ): number {
   const key = identityKeyOf(m);
+  const reproduced =
+    reproduction !== undefined
+      ? {
+          killReproduced: true as const,
+          ...(reproduction.reproducedFailure !== undefined
+            ? { reproducedFailure: reproduction.reproducedFailure }
+            : {}),
+        }
+      : {};
   const mutantRowId = store.recordMutant(runId, {
     mutantCode: m.mutantId,
     astHash: key.astHash,
@@ -11111,6 +11434,7 @@ export function record(
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(killPosition !== undefined ? { killPosition } : {}),
+    ...reproduced,
     ...(runner !== undefined ? { runner } : {}),
     // R192: always written, `[]` included — an explicit empty list is "no test ran this", while
     // NULL (a pre-R192 row) is "unknown", and `batchCarriesEntirely` refuses to skip on unknown.
@@ -11141,6 +11465,7 @@ export function record(
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(killPosition !== undefined ? { killPosition } : {}),
+    ...reproduced,
     ...(cause !== undefined ? { cause } : {}),
     ...(runner !== undefined ? { runner } : {}),
   });
@@ -11161,6 +11486,7 @@ export function record(
       ...(failureNote !== undefined ? { failureNote } : {}),
       ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
       ...(killPosition !== undefined ? { killPosition } : {}),
+      ...reproduced,
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
       ...(runner !== undefined ? { runner } : {}),
@@ -11183,6 +11509,7 @@ export function record(
       ...(failureNote !== undefined ? { failureNote } : {}),
       ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
       ...(killPosition !== undefined ? { killPosition } : {}),
+      ...reproduced,
       ...(cause !== undefined ? { cause } : {}),
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),

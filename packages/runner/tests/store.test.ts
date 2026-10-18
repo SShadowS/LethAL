@@ -1006,6 +1006,60 @@ CREATE TABLE IF NOT EXISTS mutants (
       }
     });
 
+    test("R577: a pre-R577 database gains kill_reproduced and reproduced_failure; an old kill reads back unmarked, a new one round-trips", () => {
+      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
+      const dbPath = join(dir, "lethal.sqlite");
+      try {
+        const old = new Database(dbPath, { create: true });
+        old.exec(PRE_43_SCHEMA);
+        // A kill as an old build left it, before the columns existed.
+        old.exec(
+          "INSERT INTO runs (project_path, backend, app_version) VALUES ('/p', 'al-runner', '1');" +
+            "INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, operator_name," +
+            " operator_major, file, line, verdict, killing_test, duration_ms) VALUES (1, 'M0001'," +
+            " 'old', 'Sample', 'conditional-boundary', 1, 'Sample.Codeunit.al', 12, 'killed', 'T', 40);",
+        );
+        old.close();
+        const store = new ResultsStore(dbPath);
+        const oldRows = store.mutantVerdicts(1);
+        const runId = store.createRun({
+          coverageMode: "procedure",
+          testAppHash: "T",
+          testAppProven: true,
+          testAppDeps: "D",
+          identityScheme: IDENTITY_SCHEME,
+          buildSymbols: [],
+          projectPath: "/p",
+          backend: "al-runner",
+          appVersion: "1",
+        });
+        // A kill the rule reproduced, written after the migration.
+        store.recordMutant(
+          runId,
+          mutantRow("killed", {
+            mutantCode: "M0002",
+            astHash: "new",
+            killingTest: "T",
+            killReproduced: true,
+            reproducedFailure: "failed again",
+          }),
+        );
+        const byHash = new Map(
+          [...oldRows, ...store.mutantVerdicts(runId)].map((r) => [r.astHash, r]),
+        );
+        store.close();
+        expect(byHash.get("old")?.verdict).toBe("killed");
+        expect("killReproduced" in (byHash.get("old") ?? {})).toBe(false);
+        expect("reproducedFailure" in (byHash.get("old") ?? {})).toBe(false);
+        expect(byHash.get("new")).toMatchObject({
+          killReproduced: true,
+          reproducedFailure: "failed again",
+        });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     test("recordMutant persists failure_note at the column level, NULL when absent", () => {
       // Direct column-level coverage (Task 6 Minor): read the value back out
       // of the column itself, not just through the absence of a throw.

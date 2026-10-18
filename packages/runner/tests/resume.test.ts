@@ -375,6 +375,56 @@ describe("buildResumeIndex — timeout-killed across the stop flag (R53)", () =>
   });
 });
 
+/**
+ * R577 (B1). A kill recorded before the reproduction rule (or with it off) may be a flaky test's
+ * chance failure. A session whose backend has the rule on must re-run it, not carry it, under both
+ * carry rules; one that does not keeps carrying it. Directional, like R53's flag above.
+ */
+describe("buildResumeIndex — a kill without killReproduced under the reproduction rule (R577)", () => {
+  const preRule = [
+    row({ verdict: "killed", astHash: "k", memberHash: "mh-k", killingTest: "T" }),
+    row({ verdict: "timeout-killed", astHash: "t", memberHash: "mh-t", killingTest: "T" }),
+  ];
+  const marked = [
+    row({
+      verdict: "killed",
+      astHash: "k",
+      memberHash: "mh-k",
+      killingTest: "T",
+      killReproduced: true,
+      reproducedFailure: "again",
+    }),
+    row({
+      verdict: "timeout-killed",
+      astHash: "t",
+      memberHash: "mh-t",
+      killingTest: "T",
+      killReproduced: true,
+    }),
+  ];
+  const survivor = row({ verdict: "survived", astHash: "s", memberHash: "mh-s" });
+
+  test("with the rule on, neither pre-rule kill carries, under rule 1 or rule 2, and both are counted", () => {
+    const index = buildResumeIndex([...preRule, survivor], true, true);
+    expect([...index.carryable.values()].map((c) => c.verdict)).toEqual(["survived"]);
+    expect([...index.carryableBySite.values()].map((c) => c.verdict)).toEqual(["survived"]);
+    expect(index.nonCarryableRows).toBe(2);
+  });
+
+  test("with the rule on, a marked kill carries under both rules, with its marker and text", () => {
+    const index = buildResumeIndex(marked, true, true);
+    expect(index.carryable.size).toBe(2);
+    expect(index.carryableBySite.size).toBe(2);
+    const killed = [...index.carryable.values()].find((c) => c.verdict === "killed");
+    expect(killed).toMatchObject({ killReproduced: true, reproducedFailure: "again" });
+  });
+
+  test("with the rule off (the default), a pre-rule kill still carries", () => {
+    expect(buildResumeIndex(preRule, true).carryable.size).toBe(2);
+    expect(buildResumeIndex(preRule, true, false).carryableBySite.size).toBe(2);
+  });
+});
+
 describe("buildResumeIndex (R47)", () => {
   test("carries a scored verdict with its killing test and duration", () => {
     const index = buildResumeIndex([
@@ -4471,7 +4521,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(16);
+    expect(out.explainSchemaVersion).toBe(17);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {

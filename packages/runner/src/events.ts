@@ -422,6 +422,10 @@ export type RunEventInput =
       readonly killingTestFailure?: string;
       /** R206 — see `MutantRow.killPosition` (store.ts). Set on `killed`/`timeout-killed` only. */
       readonly killPosition?: number;
+      /** R577 — see `MutantOutcome.killReproduced` (report.ts). Set on a reproduced kill only. */
+      readonly killReproduced?: true;
+      /** R577 — see `MutantOutcome.reproducedFailure` (report.ts). */
+      readonly reproducedFailure?: string;
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly guardObserved?: boolean;
@@ -491,6 +495,10 @@ export type RunEventInput =
       readonly killingTestFailure?: string;
       /** R206 — see `MutantRow.killPosition`. Carried for the same reason. */
       readonly killPosition?: number;
+      /** R577 — see `MutantRow.killReproduced`. Carried for the same reason. */
+      readonly killReproduced?: true;
+      /** R577 — see `MutantRow.reproducedFailure`. Carried for the same reason. */
+      readonly reproducedFailure?: string;
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly runner?: RunnerKind;

@@ -588,6 +588,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             ? { killingTestFailure: e.killingTestFailure }
             : {}),
           ...(e.killPosition !== undefined ? { killPosition: e.killPosition } : {}),
+          ...(e.killReproduced === true ? { killReproduced: true as const } : {}),
+          ...(e.reproducedFailure !== undefined ? { reproducedFailure: e.reproducedFailure } : {}),
           ...(e.cause !== undefined ? { cause: e.cause } : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
@@ -625,6 +627,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             ? { killingTestFailure: e.killingTestFailure }
             : {}),
           ...(e.killPosition !== undefined ? { killPosition: e.killPosition } : {}),
+          ...(e.killReproduced === true ? { killReproduced: true as const } : {}),
+          ...(e.reproducedFailure !== undefined ? { reproducedFailure: e.reproducedFailure } : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
         if (isKill(e.verdict) && e.killPosition !== undefined && e.killPosition > 1) warmKills += 1;

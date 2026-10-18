@@ -66,6 +66,10 @@ export interface SessionOutcome {
   readonly killingTestFailure?: string;
   /** R206 — see `MutantOutcome.killPosition`. */
   readonly killPosition?: number;
+  /** R577 — see `MutantOutcome.killReproduced`. */
+  readonly killReproduced?: true;
+  /** R577 — see `MutantOutcome.reproducedFailure`. */
+  readonly reproducedFailure?: string;
   /**
    * Structural reason for an "error" verdict, set only at the two call
    * sites in orchestrator.ts that actually know it — see
@@ -599,7 +603,10 @@ export type MutantErrorCause =
   // R534: al-runner ANSWERED with a row that is not a verdict about the mutant, or refused a
   // surface it does not support. Never re-sent, never a session abort, never a kill.
   | "runner-test-error"
-  | "runner-refused";
+  | "runner-refused"
+  // R577: the killer failed (or timed out) under the mutant and passed with no mutant, but the
+  // reproduction under the mutant did not end with it failing (or timing out) again.
+  | "kill-not-reproduced";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -859,6 +866,19 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "Not `killed`: the failure is al-runner's refusal, not the test's assertion. Not " +
       "`survived`: the test did not run to its end.",
     basis: "R534",
+  },
+  "kill-not-reproduced": {
+    meaning:
+      "The test failed under the mutant (or timed out) and passed with no mutant active, so it " +
+      "looked like a kill. LethAL then re-ran it under the mutant, in the same context as the " +
+      "kill, and the reproduction under the mutant did not end with this test failing (or, for " +
+      "a timeout, timing out at the same budget) again. The note says how the reproduction " +
+      "ended. A failure that does not repeat is not attributed to the mutant. No verdict. Re-run " +
+      "with `--resume` to measure it again (R577).",
+    entailedNegative:
+      "Not `survived`: the test failed once under the mutant. Not `killed`: the failure did not " +
+      "repeat. Not `unstable`: the test passed with no mutant.",
+    basis: "R577",
   },
 };
 
@@ -1858,6 +1878,22 @@ export interface MutantOutcome {
    */
   readonly killPosition?: number;
   /**
+   * R577: on a `killed`/`timeout-killed`, `true` when the kill REPRODUCED: after the unmutated
+   * confirmation passed, LethAL re-ran the killer under the mutant, in the same context (the same
+   * prefix replay when `killPosition` > 1), and it failed again (any text), or timed out again at
+   * the same budget for a timeout kill. A marker rather than text, so a reproduced kill whose run
+   * carried no message still says so. Set only on a backend with the rule on
+   * (`ExecutionBackend.killsMustReproduce`, al-runner today); absent elsewhere and on a kill
+   * recorded before the rule existed.
+   */
+  readonly killReproduced?: true;
+  /**
+   * R577: the reproduction's own failure text, beside `killingTestFailure` (the FIRST run's). Taken
+   * from the reproduction's verdict, never from the confirm (R86's hazard). Absent when the
+   * reproduction reported no text; `killReproduced` is the proof that it ran.
+   */
+  readonly reproducedFailure?: string;
+  /**
    * Structural reason for an "error" verdict — mirrors `SessionOutcome.cause`, and see
    * `ERROR_CAUSE_INTERPRETATIONS` for what each value means to a reader. Present only for the two
    * call sites that actually know it (deadline/unstable); other `error` verdicts (e.g. a bisected
@@ -2547,6 +2583,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
       ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
       ...(o.killPosition !== undefined ? { killPosition: o.killPosition } : {}),
+      ...(o.killReproduced === true ? { killReproduced: true as const } : {}),
+      ...(o.reproducedFailure !== undefined ? { reproducedFailure: o.reproducedFailure } : {}),
       ...(o.cause !== undefined ? { cause: o.cause } : {}),
       // R72: a SITE property, so it comes off the manifest entry and never off the outcome — it is
       // true of this mutant whatever happened when it ran.
@@ -3180,7 +3218,7 @@ function summarizeRunnerContexts(
  * R206 causes are listed beside it when non-zero, so a run full of them does not read
  * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
  * when its run's answer was lost. R514 adds `reused-budget-stale`, R516 `timeout-unconfirmed`,
- * R534 `runner-test-error` and `runner-refused`.
+ * R534 `runner-test-error` and `runner-refused`, R577 `kill-not-reproduced`.
  */
 function errorBreakdown(r: SessionReport): string {
   const named: MutantErrorCause[] = [
@@ -3193,6 +3231,7 @@ function errorBreakdown(r: SessionReport): string {
     "timeout-unconfirmed",
     "runner-test-error",
     "runner-refused",
+    "kill-not-reproduced",
   ];
   const parts: string[] = [];
   for (const cause of named) {

@@ -13,6 +13,23 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **On al-runner, a kill must reproduce** (R577). Measured: a Microsoft test that builds its input
+  from a random amount fails about 1 run in 100 on its own, and LethAL scored that chance failure as
+  a kill on every al-runner transport, because the only check was a re-run with no mutant, which a
+  1% test passes 99 times in 100. Now, after that re-run passes, LethAL runs the killing test once
+  more UNDER THE MUTANT, in the kill's own context and at the budget the killing run was sent. A
+  second failure (any text) makes it `killed`; for a timeout kill, a second timeout at the same
+  budget makes it `timeout-killed`. Anything else is `error` with the new cause
+  `kill-not-reproduced`, never `survived`, and the covering loop goes on, so a later test that kills
+  and reproduces still gives `killed`. A reproduction that is lost, cut by the deadline, stranded or
+  run in a reused session keeps that cause. A reproduced kill carries `killReproduced: true` and,
+  when the run had text, `reproducedFailure` (both optional, so the report stays schema v3, R157).
+  **Cost:** one more test run (and one more activation) per kill, and one more whole budget per
+  timeout kill; nothing for survivors. **`lethal explain` is schema v17** (`explain-v17.schema.json`;
+  v16 is kept), because `kill-not-reproduced` is a new value of `notMeasured[].cause` (R233).
+  **`--resume` on al-runner re-runs a kill recorded before this rule** (no `killReproduced`) instead
+  of carrying it. bcdev is unchanged; its switch is R582.
+
 - **The report records which al-runner test selector produced its verdicts** (R558). R551 picks the
   selector once per session by a probe: `--test-exact` when the build accepts it, otherwise R488's
   substring with excludes. Until now only a warning line said which. The choice is now recorded on
