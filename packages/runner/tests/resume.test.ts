@@ -5555,6 +5555,34 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
     ).toEqual({ n: 0 });
   });
 
+  test("I3 wiring: runSession hands the session suite to the backend and to every worker (useSessionTests)", async () => {
+    class Records extends ClockBackend {
+      readonly calls: Array<[string[], string[]]> = [];
+      constructor() {
+        super(100, { authoritative: false });
+      }
+      useSessionTests(suite: readonly TestMethodRef[], undecided: readonly TestMethodRef[]): void {
+        this.calls.push([suite.map((t) => t.method), undecided.map((t) => t.method)]);
+      }
+    }
+    const dirs = await project();
+    const session = new Records();
+    const workers = [new Records(), new Records()];
+    await runSession({
+      ...base(new ResultsStore(":memory:"), dirs),
+      backend: session,
+      workers: workers.length,
+      backendFactory: (i: number) => {
+        const w = workers[i];
+        if (w === undefined) throw new Error(`no worker backend ${i}`);
+        return w;
+      },
+    });
+    const suite: [string[], string[]] = [["OverBudgetDetected", "Space Step", "Pond"], []];
+    expect(session.calls).toEqual([suite]);
+    for (const w of workers) expect(w.calls).toEqual([suite]);
+  });
+
   test("T11: a baseline holding an AL_RUNNER_UNDECIDED_ARM_MISSING error warns once, naming it; a plain error does not", async () => {
     for (const [text, expected] of [
       [`${AL_RUNNER_UNDECIDED_ARM_MISSING}: al-runner selected no test`, 1],

@@ -1863,7 +1863,7 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       await backend.close();
     });
 
-    test("T6: a covering test with no row after a hung one is runner-test-error, presumed, sent once; with no hung row it stays pre-dispatch-rejected and is retried", async () => {
+    test("T6: a covering test with no row after a hung one is runner-test-error, presumed, sent once; with no hung row (a clean answer) it stops by name, sent once (R557)", async () => {
       const fake = hungOnce(true);
       const backend = serverOn(fake.spawn);
       await backend.activate("M0001");
@@ -2406,6 +2406,7 @@ describe("AlRunnerBackend: al-runner's test names (R557)", () => {
         expect(err.message).toContain("Names Tests.Space Step");
         expect(err.message).toContain("Codeunit78850.Space_Step");
         expect(err.message).not.toContain("Gone Step");
+        expect(err.message).not.toContain("Gone_Step");
         expect(err.message).not.toContain("Names Tests.PlainControl");
       } finally {
         await backend.close();
@@ -2441,6 +2442,35 @@ describe("AlRunnerBackend: al-runner's test names (R557)", () => {
         expect(v.failureMessage).toContain("skipped");
       } finally {
         await backend.close();
+      }
+    });
+
+    test("T4g: exit 3 with every row a pass is still unclean: an error, with no throw (I1)", async () => {
+      const backend = await server([{ name: PLAIN, status: "pass" }], { exitCode: 3 });
+      backend.useSessionTests([plain, dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("error");
+        expect(v.failureMessage).toContain("exit 3");
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("T4h: a row named otherwise than `Codeunit<id>.`, or a <ctor> row, is unclean whatever its status (I1)", async () => {
+      for (const odd of [
+        { name: "Names Tests.Other", status: "pass" },
+        { name: "Codeunit78850.<ctor>", status: "fail" },
+      ]) {
+        const backend = await server([{ name: PLAIN, status: "pass" }, odd]);
+        backend.useSessionTests([plain, dash], []);
+        try {
+          const v = await backend.run(dash, opts);
+          expect(v.outcome, odd.name).toBe("error");
+          expect(v.failureMessage).toContain(odd.name);
+        } finally {
+          await backend.close();
+        }
       }
     });
 
