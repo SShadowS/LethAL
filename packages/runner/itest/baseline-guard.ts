@@ -338,7 +338,17 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "al-runner.wrapped.baseline.json",
     "itest:alrunner",
   ),
+  "al-runner.names.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
+    "al-runner.names.baseline.json",
+    "itest:alrunner",
+  ),
   "bcdev.baseline.json": gateHow("LETHAL_ITEST_BCDEV=1", "bcdev.baseline.json", "itest:bcdev"),
+  "bcdev.names.baseline.json": gateHow(
+    "LETHAL_ITEST_BCDEV=1",
+    "bcdev.names.baseline.json",
+    "itest:bcdev-names",
+  ),
   "bcdev.wrapped.baseline.json": gateHow(
     "LETHAL_ITEST_BCDEV=1",
     "bcdev.wrapped.baseline.json",
@@ -374,8 +384,13 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * R497's bcdev wrapped leg (`bcdev.wrapped.baseline.json`) was recorded 2026-10-08 on Cronus28
  * (record exit 3, confirm PASS, fenced and hub per mutant equal), per
  * docs/superpowers/specs/2026-10-08-r497-bcdev-wrapped-precommitment.md.
+ * R557's names legs (`al-runner.names.baseline.json`, `bcdev.names.baseline.json`) are registered
+ * and wait for their one record run, per docs/superpowers/specs/2026-10-09-r557-names-precommitment.md.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = [];
+export const PENDING_FIRST_RECORD: readonly string[] = [
+  "al-runner.names.baseline.json",
+  "bcdev.names.baseline.json",
+];
 
 /** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
 export const SYMBOL_BASELINES: readonly string[] = [
