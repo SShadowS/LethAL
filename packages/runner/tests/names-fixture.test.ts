@@ -92,6 +92,15 @@ describe("assertNamesRun: the names legs' checker (R557)", () => {
     } as unknown as SessionReport;
   }
 
+  test("killingTest is the bare AL method, exactly as table A of the pre-commitment writes it", () => {
+    // A report names the killer by method only (coveringTests are suite-qualified). The first
+    // live run caught the checker expecting "Names Tests.Space Step"; this pins table A's literal.
+    const rows = expectedNamesRows("exact");
+    expect(rows[0]?.killingTest).toBe("Space Step");
+    expect(rows[24]?.killingTest).toBe("Blåbær Step");
+    expect(rows[0]?.coveringTests).toEqual(["Names Tests.Space Step"]);
+  });
+
   test("table A passes, under coverage al-runner and none", () => {
     expect(() =>
       assertNamesRun(report("exact"), "t", { coverage: "al-runner", transport: "bcdev" }),

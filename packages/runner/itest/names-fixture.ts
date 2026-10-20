@@ -33,7 +33,7 @@ const OPERATORS = ["lethal.empty-block", "lethal.return-value", "lethal.swap-add
 /** Table A, one row per procedure, in source order. `row` is al-runner's name (the rule's). */
 export const NAMES_TABLE: ReadonlyArray<{
   readonly procedure: string;
-  /** The only killer's AL name, as `killingTest` shows it after the suite name. */
+  /** The only killer's AL name, exactly as `killingTest` shows it (the bare method; table A). */
   readonly killer: string;
   readonly row: string;
   readonly killText: string;
@@ -80,7 +80,7 @@ export function expectedNamesRows(coverage: "exact" | "all"): NamesRow[] {
       procedureName: r.procedure,
       operatorName,
       verdict: "killed",
-      killingTest: `${SUITE}.${r.killer}`,
+      killingTest: r.killer,
       coveringTests: coverage === "exact" ? [`${SUITE}.${r.killer}`] : NAMES_ALL_TESTS,
     })),
   );
@@ -223,7 +223,7 @@ export function assertNamesLegsEqual(
   const problems = diffRows(strip(namesRows(reference)), strip(namesRows(other)));
   for (const m of reference.mutants) {
     const t = other.mutants.find((x) => x.mutantCode === m.mutantCode);
-    const text = NAMES_TABLE.find((r) => m.killingTest === `${SUITE}.${r.killer}`)?.killText;
+    const text = NAMES_TABLE.find((r) => m.killingTest === r.killer)?.killText;
     if (t !== undefined && text !== undefined && !(t.killingTestFailure ?? "").includes(text))
       problems.push(
         `${m.mutantCode}: kill text ${JSON.stringify(t.killingTestFailure)} lacks ${text}`,
