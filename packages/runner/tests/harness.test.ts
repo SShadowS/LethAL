@@ -307,7 +307,7 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
   test("GH-24: refuses 1.0.0.18", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.18" }));
     expect(message).toContain("1.0.0.18");
-    expect(message).toContain("1.0.0.20");
+    expect(message).toContain("1.0.0.22");
   });
 
   test("refuses a payload with no semver at all rather than assuming it is current", async () => {
