@@ -5461,6 +5461,165 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
     expect(warned(r.events, "resume-al-runner-test-names")).toEqual([]);
   });
 
+  /**
+   * R557 (I1): a run row WITHOUT the R557 test-name mark (`runs.al_runner_names`), as every run
+   * recorded before R557 is. The rows below hold no renamed `error` of their own, so only the mark
+   * can refuse them: each is one of the three ways the review found past the renamed-error rule.
+   */
+  const unmark = (store: ResultsStore, runId: number) =>
+    store.db.run("UPDATE runs SET al_runner_names = NULL WHERE id = ?", [runId]);
+  const carriedOf = (r: SessionReport) => r.mutants.filter((m) => m.carried === true);
+  /** The `resume-al-runner-test-names` warning that refuses the CARRY (not a snapshot). */
+  const notCarried = (events: readonly RunEvent[]) =>
+    warned(events, "resume-al-runner-test-names").filter((m) =>
+      m.includes("its verdicts are not carried"),
+    );
+
+  /** A aborts, B resumes A and aborts too; C resumes B. `unmarked` simulates pre-R557 A and B. */
+  async function resumeOfResume(unmarked: boolean) {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    await runSession({ ...base(store, dirs), backend: alRunner(3) });
+    const a = lastRun(store);
+    await runSession({
+      ...base(store, dirs),
+      backend: alRunner(3),
+      resume: "last",
+      retryStranded: true,
+    });
+    const b = lastRun(store);
+    if (unmarked) {
+      unmark(store, a);
+      unmark(store, b);
+    }
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      ...base(store, dirs),
+      backend: alRunner(),
+      resume: "last",
+      retryStranded: true,
+      emit: [(e) => events.push(e)],
+    });
+    return { report, events, b, store };
+  }
+
+  test("I1 (a): --resume of an UNMARKED resume of a resume carries nothing and warns, naming R53's stranded keys too", async () => {
+    const r = await resumeOfResume(true);
+    expect(r.store.baselineErrorMethods(r.b)).toEqual([]);
+    expect(carriedOf(r.report)).toEqual([]);
+    // The carry refusal; the same run's baseline snapshot is refused by its own warning too.
+    const w = notCarried(r.events);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain(`run ${r.b}`);
+    expect(w[0]).toContain("R557");
+    // Minor 4: the empty carry drops stranded keys too, so a hang-capable mutant runs again.
+    expect(w[0]).toContain("R53");
+    // Minor 1: the banner says WHY nothing was carried, not "the prior run had no reusable verdict".
+    expect(r.report.resumedFrom?.carryRefused).toContain("R557");
+    const banner = renderConsole(r.report);
+    expect(banner).toContain("Nothing was carried");
+    expect(banner).toContain("R557");
+    expect(banner).not.toContain("the prior run had no reusable verdict");
+  });
+
+  test("I1 (a) control: the same chain, MARKED (an R557 session), carries as before", async () => {
+    const r = await resumeOfResume(false);
+    expect(carriedOf(r.report).length).toBeGreaterThan(0);
+    expect(warned(r.events, "resume-al-runner-test-names")).toEqual([]);
+    expect(r.report.resumedFrom?.carryRefused).toBeUndefined();
+  });
+
+  /** A finished run with NO baseline rows (as a resume that carried every batch is), then a
+   *  `--skip-known-survivors` session over it. */
+  async function noBaselineHistory(unmarked: boolean, backend: "al-runner" | "bcdev") {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    const make = () => (backend === "al-runner" ? alRunner() : new ClockBackend(100));
+    const r1 = await runSession({ ...base(store, dirs), backend: make() });
+    const runId = lastRun(store);
+    store.db.run("DELETE FROM test_results WHERE run_id = ? AND mutant_row_id IS NULL", [runId]);
+    if (unmarked) unmark(store, runId);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      ...base(store, dirs),
+      backend: make(),
+      skipKnownSurvivors: true,
+      emit: [(e) => events.push(e)],
+    });
+    return { survived: r1.counts.survived, report, events, runId };
+  }
+
+  test("I1 (b): an UNMARKED finished al-runner run with no baseline rows serves no --skip-known-survivors, and warns", async () => {
+    const h = await noBaselineHistory(true, "al-runner");
+    expect(h.survived).toBeGreaterThan(0);
+    expect(known(h.report)).toEqual([]);
+    const w = warned(h.events, "history-al-runner-test-names");
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain(`run ${h.runId}`);
+    expect(w[0]).toContain("R557");
+  });
+
+  test("I1 (b) controls: a MARKED al-runner run, and an UNMARKED bcdev run, lend their survivors", async () => {
+    for (const [unmarked, backend] of [
+      [false, "al-runner"],
+      [true, "bcdev"],
+    ] as const) {
+      const h = await noBaselineHistory(unmarked, backend);
+      expect(known(h.report).length, `${backend} unmarked=${unmarked}`).toBe(h.survived);
+      expect(warned(h.events, "history-al-runner-test-names")).toEqual([]);
+    }
+  });
+
+  /** Run 1 finishes; run 2 skips its survivors as known-survivor rows and is interrupted; run 3
+   *  resumes run 2. `unmarked`: both are pre-R557 runs. */
+  async function knownThenInterrupted(unmarked: boolean) {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    await runSession({ ...base(store, dirs), backend: alRunner() });
+    const first = lastRun(store);
+    await runSession({ ...base(store, dirs), backend: alRunner(), skipKnownSurvivors: true });
+    const second = lastRun(store);
+    const recordedKnown = (
+      store.db
+        .query("SELECT COUNT(*) AS n FROM mutants WHERE run_id = ? AND verdict = 'known-survivor'")
+        .get(second) as { n: number }
+    ).n;
+    // Every mutant of this project survives, so run 2 has nothing left to execute and finishes;
+    // the interruption is simulated by reopening it.
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [second]);
+    if (unmarked) {
+      unmark(store, first);
+      unmark(store, second);
+    }
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      ...base(store, dirs),
+      backend: alRunner(),
+      skipKnownSurvivors: true,
+      resume: "last",
+      retryStranded: true,
+      emit: [(e) => events.push(e)],
+    });
+    return { report, events, second, recordedKnown };
+  }
+
+  test("I1 (c): known-survivor rows of an UNMARKED interrupted run are not carried by --resume", async () => {
+    const r = await knownThenInterrupted(true);
+    expect(r.recordedKnown).toBeGreaterThan(0);
+    expect(carriedOf(r.report)).toEqual([]);
+    expect(known(r.report)).toEqual([]);
+    const w = notCarried(r.events);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain(`run ${r.second}`);
+  });
+
+  test("I1 (c) control: the same rows of a MARKED run are carried", async () => {
+    const r = await knownThenInterrupted(false);
+    expect(r.recordedKnown).toBeGreaterThan(0);
+    expect(carriedOf(r.report).length).toBeGreaterThan(0);
+    expect(warned(r.events, "resume-al-runner-test-names")).toEqual([]);
+  });
+
   /** Run 1 records batch 0's baseline snapshot and aborts; the snapshot then holds `method` as an
    *  `error`; run 2 resumes, where it would reuse that snapshot. */
   async function snapshotted(method: string) {
@@ -5507,6 +5666,59 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
 
   test("T10b: a snapshot whose only error is a plain name is reused", async () => {
     const s = await snapshotted("Pond");
+    expect(reusedOf(s.events)).toHaveLength(1);
+    expect(warned(s.events, "resume-al-runner-test-names")).toEqual([]);
+  });
+
+  /** R557 (I1): run 1 records batch 0's snapshot and aborts; the snapshot is then moved to ANOTHER
+   *  al-runner run (`findBaselineSnapshot` lends from any run) that is `marked` or not, with no
+   *  error in it at all; run 2 resumes run 1, which is marked, so only the snapshot's own run can
+   *  decide. */
+  async function snapshotFromOtherRun(marked: boolean) {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    await runSession({ ...base(store, dirs), backend: alRunner(3) });
+    const runId = lastRun(store);
+    const row = store.getRun(runId);
+    if (row === null || row.testAppHash === null || row.testAppDeps === null) {
+      throw new Error("run 1 recorded no proven test app");
+    }
+    const other = store.createRun({
+      coverageMode: row.coverageMode ?? "none",
+      identityScheme: row.identityScheme,
+      buildSymbols: [],
+      projectPath: "/elsewhere",
+      backend: "al-runner",
+      appVersion: "0.0.0.0",
+      testAppHash: row.testAppHash,
+      testAppProven: true,
+      testAppDeps: row.testAppDeps,
+      ...(marked ? { alRunnerNames: true } : {}),
+    });
+    store.db.run("UPDATE baseline_snapshots SET run_id = ? WHERE run_id = ?", [other, runId]);
+    const today = alRunner();
+    const events: RunEvent[] = [];
+    await runSession({
+      ...base(store, dirs),
+      backend: today,
+      resume: "last",
+      retryStranded: true,
+      emit: [(e) => events.push(e)],
+    });
+    return { events, other };
+  }
+
+  test("I1 (snapshot): a snapshot whose run is an UNMARKED al-runner run is not reused, and a warning names it", async () => {
+    const s = await snapshotFromOtherRun(false);
+    expect(reusedOf(s.events)).toEqual([]);
+    const w = warned(s.events, "resume-al-runner-test-names");
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain(`run ${s.other}`);
+    expect(w[0]).toContain("R557");
+  });
+
+  test("I1 (snapshot) control: the same snapshot from a MARKED al-runner run is reused", async () => {
+    const s = await snapshotFromOtherRun(true);
     expect(reusedOf(s.events)).toHaveLength(1);
     expect(warned(s.events, "resume-al-runner-test-names")).toEqual([]);
   });

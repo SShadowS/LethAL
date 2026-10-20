@@ -231,7 +231,7 @@ import {
   isRunMutantLineCountMessage,
   testAppRefusal,
 } from "./stale-test-app";
-import { sameHiddenFiles } from "./store";
+import { runLendsAlRunnerNames, sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
 import type { CarryHidden, MutantVerdict, RunRow, RunnerKind, TestAppIdentity } from "./store";
 import { TestAppError } from "./test-app-publish";
@@ -3925,6 +3925,8 @@ function resolveResume(
   // R391: the resumed run's generation hash and `twin_tuples`, never its `source_sha256`.
   let recorded: RecordedCarrySide;
   let priorHidden: CarryHidden | null;
+  // R557 (I1): the resumed run's row, for `runLendsAlRunnerNames`.
+  let priorRow: RunRow | null;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -3977,6 +3979,7 @@ function resolveResume(
     }
     priorRunId = found;
     const foundRow = cfg.store.getRun(found);
+    priorRow = foundRow;
     // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL) must
     // still never be read as a match.
     sameTestApp(foundRow, "--resume");
@@ -4036,6 +4039,7 @@ function resolveResume(
     }
     recorded = recordedCarrySideOf(row);
     priorRunId = cfg.resume;
+    priorRow = row;
   }
 
   // R360 (review r1 #3): no pruned-bundle check here. Nothing on the resume path reads the prior
@@ -4048,18 +4052,28 @@ function resolveResume(
   // and its only-kills read survived. Such a run's verdicts are not carried: the resume goes on
   // with an EMPTY carry, so every mutant is executed (a warning, by ruling; still a resume, so the
   // report says which run it came from, R89).
-  const taintedTests =
-    backendName === "al-runner" ? alRunnerRenamed(cfg.store.baselineErrorMethods(priorRunId)) : [];
-  if (taintedTests.length > 0) {
+  // (I1): first the run-level mark (`runLendsAlRunnerNames`): a run without it may have CARRIED
+  // such verdicts (a resume of a resume, `known-survivor` rows) and hold no baseline row showing
+  // it. Then, second, the run's own renamed baseline errors.
+  const carryRefused =
+    priorRow !== null && !runLendsAlRunnerNames(priorRow)
+      ? `run ${priorRunId} ${AL_RUNNER_UNMARKED_WHY}`
+      : alRunnerRefusal(
+          priorRunId,
+          backendName === "al-runner"
+            ? alRunnerRenamed(cfg.store.baselineErrorMethods(priorRunId))
+            : [],
+        );
+  if (carryRefused !== undefined) {
     emit({
       type: "warning",
       code: "resume-al-runner-test-names",
-      message: `[lethal] --resume: run ${priorRunId} ran on al-runner before R557 and recorded ${taintedTests.length} test(s) as errors that al-runner never ran (${namesSample(taintedTests)}); its verdicts are not carried: every mutant is executed (R557).`,
+      message: `[lethal] --resume: ${carryRefused}; its verdicts are not carried: every mutant is executed, including any it recorded as stranding the tier (R53), since nothing of it is carried (R557).`,
     });
   }
   const { index, dropped: refusedDropped } = withoutRefusedTests(
     buildResumeIndex(
-      taintedTests.length > 0 ? [] : cfg.store.mutantVerdicts(priorRunId),
+      carryRefused !== undefined ? [] : cfg.store.mutantVerdicts(priorRunId),
       cfg.stopHungSessions === true,
     ),
     refusedTests,
@@ -4102,8 +4116,21 @@ function resolveResume(
     carryableCount: index.carryable.size,
     strandedKeyCount: index.strandedKeys.size,
     retryStranded: cfg.retryStranded ?? false,
+    ...(carryRefused !== undefined ? { carryRefused: `${carryRefused} (R557)` } : {}),
   });
   return { runId: priorRunId, index, carryHidden: priorHidden, recorded };
+}
+
+/** R557 (I1): why an al-runner run without the R557 test-name mark lends nothing. */
+const AL_RUNNER_UNMARKED_WHY =
+  "ran on al-runner before R557 (its run row carries no R557 test-name mark), so a test whose al-runner name differs from its AL name may never have run in it, or in a run it carried verdicts from";
+
+/** R557 C1: why a run whose own baseline holds renamed `error` tests lends nothing, or
+ *  `undefined` when `tests` is empty. */
+function alRunnerRefusal(runId: number, tests: readonly string[]): string | undefined {
+  return tests.length === 0
+    ? undefined
+    : `run ${runId} ran on al-runner before R557 and recorded ${tests.length} test(s) as errors that al-runner never ran (${namesSample(tests)})`;
 }
 
 /** R557 C1: up to five test names for a warning, `, ...` when there are more. */
@@ -4868,7 +4895,17 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     // R557 C1: checked on the snapshot itself, since `findBaselineSnapshot` can lend one from ANY
     // run. A pre-fix al-runner snapshot holds a renamed test as an `error` al-runner never ran; it
     // is not reused, and this batch re-runs its baseline under the name al-runner has.
-    if (reused !== undefined && store.getRun(reused.runId)?.backend === "al-runner") {
+    // (I1): first the snapshot run's R557 mark (`runLendsAlRunnerNames`), then its own errors.
+    const snapshotRun = reused !== undefined ? store.getRun(reused.runId) : null;
+    if (reused !== undefined && snapshotRun !== null && !runLendsAlRunnerNames(snapshotRun)) {
+      emit({
+        type: "warning",
+        code: "resume-al-runner-test-names",
+        message: `[lethal] --resume: run ${reused.runId}'s batch ${reused.batchIndex} baseline snapshot is not reused: run ${reused.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
+      });
+      reused = undefined;
+    }
+    if (reused !== undefined && snapshotRun?.backend === "al-runner") {
       const tainted = alRunnerRenamed(
         reused.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
       );
@@ -5712,6 +5749,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const runId = cfg.store.createRun({
     identityScheme: IDENTITY_SCHEME,
     buildSymbols,
+    // R557 (I1): this session sends al-runner tests under `alRunnerMethodName`; the mark is what
+    // lets its verdicts be lent (`runLendsAlRunnerNames`).
+    ...(backendName === "al-runner" ? { alRunnerNames: true } : {}),
     coverageMode: caps.coverage,
     // R391: rule 1's "same source" fact, recorded with the row so no mutant row exists without it.
     generationSourceSha256: sourceHashAtGeneration,
@@ -6662,6 +6702,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               type: "warning",
               code: "history-hidden-files-changed",
               message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, hid ${describeHiddenFiles(old.before)} whole from identity numbering, and this run hides ${describeHiddenFiles(old.now)} (--only/--exclude scope, a preprocessor directive that could not be evaluated, or a file no selector var fits). A file hidden in one run and not the other moves its twins' ordinals, so a recorded key can name another mutant: no survivor from it is skipped, every mutant is executed (R442).`,
+            });
+          },
+          alRunnerUnmarked: (old) => {
+            if (historyAlRunnerNamesWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyAlRunnerNamesWarned = true;
+            emit({
+              type: "warning",
+              code: "history-al-runner-test-names",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ${AL_RUNNER_UNMARKED_WHY}; its survivors may be false, so none is skipped: every mutant is executed (R557).`,
             });
           },
           alRunnerTestNames: {
