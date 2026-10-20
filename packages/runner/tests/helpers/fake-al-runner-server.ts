@@ -6,7 +6,13 @@ import type { ServerSpawnFn } from "../../src/al-runner-server";
  */
 export function fakeAlRunnerServer(
   tests: ReadonlyArray<{ name: string; status: string; message?: string }>,
-  opts: { silent?: boolean; onRunTests?: () => void; perTestCoverage?: readonly unknown[] } = {},
+  opts: {
+    silent?: boolean;
+    onRunTests?: () => void;
+    perTestCoverage?: readonly unknown[];
+    /** Extra summary fields, merged last (R583: `exitCode`, `compilationErrors`). */
+    summary?: Record<string, unknown>;
+  } = {},
 ): { spawn: ServerSpawnFn; runs: () => number } {
   let runs = 0;
   const spawn: ServerSpawnFn = () => {
@@ -35,6 +41,7 @@ export function fakeAlRunnerServer(
               ...(opts.perTestCoverage !== undefined
                 ? { perTestCoverage: opts.perTestCoverage }
                 : {}),
+              ...opts.summary,
             }),
           );
         }

@@ -138,6 +138,26 @@ export function watchResourceSelector(
 }
 
 /**
+ * R583: a `selectorMode: "resource"` leg's proof that the resource channel ran, from
+ * `watchResourceSelector`. Every such leg is ONE batch, so: at least one deploy and activation, no
+ * problem (each deploy left the resource file, each activation wrote its id there) and exactly one
+ * distinct `*.al` text, i.e. one compile. Empty means it ran. A leg whose selector silently went
+ * static would leave no resource file and a new `*.al` text per mutant.
+ */
+export function resourceLegFailures(ev: ResourceEvidence): string[] {
+  const out: string[] = [];
+  if (ev.deploys === 0) out.push("resource: no deploy() was observed");
+  if (ev.activations === 0) out.push("resource: no activate() was observed");
+  out.push(...ev.problems.map((p) => `resource: ${p}`));
+  if (ev.alHashes.size !== 1) {
+    out.push(
+      `resource: the bundle's *.al text took ${ev.alHashes.size} distinct value(s) over ${ev.activations} activation(s); a one-batch resource leg compiles once`,
+    );
+  }
+  return out;
+}
+
+/**
  * THE ONE-SHOT ALLOW-LIST under `--server`, and its only home. Under `--server` the only one-shot
  * calls are `provisionOnce`'s (its exact argv, from the same `provisionArgv` the backend spawns) and
  * `status()`'s probe, exactly `[alRunnerPath, "--version"]`. `cliDefaultMechanismFailures` allows a

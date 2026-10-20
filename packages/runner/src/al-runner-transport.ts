@@ -73,7 +73,12 @@ export type AlRunnerResult =
       readonly abortProven?: readonly string[];
     }
   | { readonly kind: "deadline" }
-  | { readonly kind: "error"; readonly detail: string };
+  | {
+      readonly kind: "error";
+      readonly detail: string;
+      /** R583: al-runner said the TARGET bundle did not fully compile (`targetCompileDiagnostics`). */
+      readonly targetCompile?: true;
+    };
 
 export interface AlRunnerTransport {
   send(req: AlRunnerRequest): Promise<AlRunnerResult>;
@@ -508,6 +513,18 @@ export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[]
   return tests as readonly AlRunnerRawTest[];
 }
 
+/** One top-level field of the envelope, or `undefined` when there is no readable envelope. */
+function envelopeField(stdout: string, key: string): unknown {
+  try {
+    const env = readAlRunnerEnvelope(stdout);
+    return typeof env === "object" && env !== null
+      ? (env as Record<string, unknown>)[key]
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The `--output-json` envelope as parsed JSON (see `parseAlRunnerPayload` for the rule). Throws. */
 export function readAlRunnerEnvelope(stdout: string): unknown {
   const lines = stdout.split("\n");
@@ -546,6 +563,116 @@ function alRunnerMarkerOf(line: string): string | undefined {
 /** Absent, `null`, or an empty array. */
 function absentOrEmpty(v: unknown): boolean {
   return v === undefined || v === null || (Array.isArray(v) && v.length === 0);
+}
+
+/** One `compilationErrors` entry, from the one-shot envelope or the `--server` summary. */
+export interface AlRunnerCompileEntry {
+  readonly file: string;
+  readonly errors: readonly string[];
+}
+
+/** `compilationErrors` as entries. A malformed entry is kept with no `file`, so it counts. */
+export function compileEntriesOf(raw: unknown): readonly AlRunnerCompileEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((e) => {
+    const o = typeof e === "object" && e !== null ? (e as Record<string, unknown>) : {};
+    return {
+      file: typeof o.file === "string" ? o.file : "",
+      errors: Array.isArray(o.errors) ? o.errors.map(String) : [JSON.stringify(e)],
+    };
+  });
+}
+
+/** The two projects one al-runner run compiles: the active target bundle and the test app. */
+export interface AlRunnerCompileScope {
+  readonly sourceDir: string;
+  readonly testDir: string;
+}
+
+/** The objects LethAL emits into the target: an entry naming one is the target's, wherever it sits. */
+const LETHAL_EMITTED_OBJECT = /MutationSelector|Mutation Selector/;
+const SOURCE_FILE_PATH = /SourceFile\(([^@)]+)@/g;
+
+function under(path: string, dir: string): boolean {
+  const p = normalisePlatformAppsPath(path);
+  const d = normalisePlatformAppsPath(dir);
+  return p === d || p.startsWith(`${d}/`);
+}
+
+function baseName(dir: string): string {
+  return normalisePlatformAppsPath(dir).split("/").pop() ?? "";
+}
+
+/**
+ * R583: whether diagnostics belong to the TEST app, which keeps today's behaviour (al-runner's safe
+ * `EMIT-EXCLUDED` of unreached test codeunits leaves absent rows, read as per-test `error`).
+ * Everything else counts as the TARGET's, including what cannot be attributed: the safe side.
+ * `owner` is the entry's `file`: an absolute directory on the one-shot envelope, a module name
+ * such as `V2_<dir>` on `--server` (measured on 069cbf32).
+ */
+function isTestAppOnly(
+  owner: string,
+  texts: readonly string[],
+  scope: AlRunnerCompileScope,
+): boolean {
+  if (texts.some((t) => LETHAL_EMITTED_OBJECT.test(t))) return false;
+  const paths = texts.flatMap((t) => [...t.matchAll(SOURCE_FILE_PATH)].map((m) => m[1] ?? ""));
+  if (paths.some((p) => !under(p, scope.testDir))) return false;
+  if (paths.length > 0) return true;
+  if (owner === "") return false;
+  if (under(owner, scope.testDir)) return true;
+  const mod = owner.replace(/^V\d+_/, "").toLowerCase();
+  const test = baseName(scope.testDir).toLowerCase();
+  return mod === test && test !== baseName(scope.sourceDir).toLowerCase();
+}
+
+/** The stderr markers al-runner prints when a module lost objects; matched by prefix only. */
+const EMIT_MARKER = /(?:^|: )(EMIT-ZERO|EMIT-EXCLUDED|PARTIAL-EMIT-DROP)\b/;
+
+/**
+ * R583: the diagnostics saying al-runner did not fully compile the TARGET bundle, from one
+ * invocation's own output. Empty means none.
+ *
+ * Measured on 069cbf32 (`/coord/handoff/R-583/bisect.md`): a runtime-gated drop (AL0666) exits 3,
+ * prints `EMIT-ZERO` or `EMIT-EXCLUDED` on stderr and fills `compilationErrors`, and the tests STILL
+ * RUN and can pass, against a dependency copy that compiled without the gate. Such rows describe a
+ * bundle nobody asked for, so no row of such a run is scored. Read from the envelope's
+ * `compilationErrors` and, on the one-shot path only, the invocation's own stderr (`stderr`
+ * undefined on `--server`, whose stderr buffer spans the daemon's life). A build that does not
+ * diagnose the drop (f06ee78c ignored `runtime`) prints none of this, so the net is blind there.
+ */
+export function targetCompileDiagnostics(
+  entries: readonly AlRunnerCompileEntry[],
+  stderr: string | undefined,
+  scope: AlRunnerCompileScope,
+): readonly string[] {
+  const found: string[] = [];
+  for (const e of entries) {
+    if (isTestAppOnly(e.file, e.errors, scope)) continue;
+    found.push(`${e.file === "" ? "<unattributed>" : e.file}: ${e.errors.join(" | ")}`);
+  }
+  if (stderr === undefined) return found;
+  // A marker line at column 0 opens a block; its diagnostics follow, indented or as a further
+  // `<lead>: ...` line, until the next column-0 marker or the per-bundle `→` summary. Indented
+  // echoes of a marker inside that summary open nothing.
+  const lines = stderr.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const head = lines[i] ?? "";
+    if (/^\s/.test(head) || !EMIT_MARKER.test(head)) continue;
+    const block = [head];
+    for (let j = i + 1; j < lines.length; j++) {
+      const l = lines[j] ?? "";
+      if (/^\s*→/.test(l) || (!/^\s/.test(l) && EMIT_MARKER.test(l))) break;
+      block.push(l);
+    }
+    if (!isTestAppOnly("", block, scope)) found.push(block.map((l) => l.trim()).join(" | "));
+  }
+  return found;
+}
+
+/** The message every row of a target-compile run carries, and the baseline refusal's text. */
+export function targetCompileMessage(found: readonly string[], exitCode: number): string {
+  return `al-runner did not fully compile the target bundle (exit ${exitCode}), so no test row of this run is scored, even one that passed (R583): ${found.join(" || ").slice(0, 1500)}`;
 }
 
 /**
@@ -817,6 +944,20 @@ export class OneShotTransport implements AlRunnerTransport {
         this.firstMissingImplementation = parseAlRunnerMissingImplementation(
           `${res.stderr}\n${res.stdout}`,
         );
+      }
+      // R583: before any row is read. A target bundle al-runner did not fully compile gives no
+      // scorable row on ANY exit code: on 069cbf32 such a run exits 3 with rows that pass.
+      const found = targetCompileDiagnostics(
+        compileEntriesOf(envelopeField(res.stdout, "compilationErrors")),
+        res.stderr,
+        { sourceDir: req.sourceDir, testDir: req.testDir },
+      );
+      if (found.length > 0) {
+        return {
+          kind: "error",
+          detail: targetCompileMessage(found, res.exitCode),
+          targetCompile: true,
+        };
       }
       // v2 exit codes, from its own --help: 0 = all passed, 1 = at least one test FAILED or
       // ERRORED, 2 = a bundle could not EXECUTE, 3 = a bundle could not COMPILE.

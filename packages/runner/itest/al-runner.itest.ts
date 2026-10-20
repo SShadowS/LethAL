@@ -75,6 +75,7 @@ import {
   platformAppsAgreement,
   recordSpawns,
   reportTestSelectorFailures,
+  resourceLegFailures,
   testSelectorLineFailures,
   watchResourceSelector,
 } from "./cli-default-leg";
@@ -302,6 +303,12 @@ async function runOnce(
       ...(fixture.symbols.length > 0 ? { preprocessorSymbols: fixture.symbols } : {}),
     });
     backendRef = backend;
+    // R583: a resource leg proves the resource channel ran; it never trusts the absence of a
+    // fallback warning. `deploy()` copies each batch to `<instrumentedDir>/active`.
+    const resourceEv =
+      selectorMode === "resource"
+        ? watchResourceSelector(backend, join(scratchRoot, "instrumented", "active"))
+        : undefined;
     // R518: the R123 contract line runSession emits after pinning (one-shot legs only). A fact that
     // does not match already makes runSession THROW; this also prints the line and asserts the new
     // `timeout-exit-readable` fact was measured and matched, so its absence cannot pass.
@@ -356,6 +363,10 @@ async function runOnce(
       ...reportTestSelectorFailures(report, !serverMode),
     ];
     assert.deepEqual(selectorFailures, [], selectorFailures.join("; "));
+    if (resourceEv !== undefined) {
+      const rf = resourceLegFailures(resourceEv);
+      assert.deepEqual(rf, [], `R583: the resource channel did not run: ${rf.join("; ")}`);
+    }
     return report;
   } finally {
     store.close();

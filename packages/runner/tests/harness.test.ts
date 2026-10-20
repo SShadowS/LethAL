@@ -545,7 +545,7 @@ describe("parseLeaseSnapshot (R110)", () => {
     // The failure that matters: this is what an un-republished container answers, and defaulting
     // here would report it as "no lease held".
     expect(() => parseLeaseSnapshot({})).toThrow(HarnessVerificationError);
-    expect(() => parseLeaseSnapshot({})).toThrow(/1\.0\.0\.20/);
+    expect(() => parseLeaseSnapshot({})).toThrow(/1\.0\.0\.22/);
     expect(() => parseLeaseSnapshot({})).toThrow(/republish/);
   });
 

@@ -359,9 +359,9 @@ describe("OneShotTransport exit 3: read only a proven test-timeout abort (R518)"
       ...over,
     };
   }
-  async function sendExit3(stdout: string) {
+  async function sendExit3(stdout: string, testDir = req.testDir) {
     const spawn: SpawnFn = async () => ({ exitCode: 3, stdout, stderr: "stderr text" });
-    return new OneShotTransport("al-runner", spawn).send({ ...req, qualifiedTest: NAME });
+    return new OneShotTransport("al-runner", spawn).send({ ...req, testDir, qualifiedTest: NAME });
   }
 
   test("run 1's envelope, verbatim, on exit 3 is kind=tests with the rows unchanged", async () => {
@@ -431,9 +431,13 @@ describe("OneShotTransport exit 3: read only a proven test-timeout abort (R518)"
   });
 
   test("(g) run 3's compile-error envelope, verbatim, stays kind=error", async () => {
-    const res = await sendExit3(RUN3_STDOUT);
+    // R583: its `file` is the TEST project, so it keeps today's error, not the target refusal.
+    const res = await sendExit3(RUN3_STDOUT, "/tmp/scratchpad/badtests");
     expect(res.kind).toBe("error");
-    if (res.kind === "error") expect(res.detail).toBe("stderr text");
+    if (res.kind === "error") {
+      expect(res.detail).toBe("stderr text");
+      expect(res.targetCompile).toBeUndefined();
+    }
   });
 
   test("marker near-miss: TEST-TIMEOUT-ABORTED and TEST-TIMEOUT refuse (equality, not prefix)", async () => {
