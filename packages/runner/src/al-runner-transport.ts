@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { type SpawnFn, defaultSpawn } from "./publisher";
 
 export interface AlRunnerRequest {
@@ -94,6 +96,8 @@ export interface AlRunnerTransport {
   observedBcBuild(): AlRunnerBcBuild | undefined;
   /** R148 — the first "NO IMPLEMENTATION" warning any invocation printed, if any. */
   observedMissingImplementation(): AlRunnerMissingImplementation | undefined;
+  /** R583 — every distinct dependency `EMIT-EXCLUDED`/`EMIT-ZERO` an invocation printed. */
+  observedDependencyDrops?(): readonly string[];
 }
 
 /** R129 — the BC runtime an al-runner invocation announced, plus the line it was read from. */
@@ -583,15 +587,48 @@ export function compileEntriesOf(raw: unknown): readonly AlRunnerCompileEntry[] 
   });
 }
 
+/** An app as al-runner names its module: `<Publisher>_<Name>` (then ` v<version>`). */
+export interface AlRunnerAppIdentity {
+  readonly publisher: string;
+  readonly name: string;
+}
+
 /** The two projects one al-runner run compiles: the active target bundle and the test app. */
 export interface AlRunnerCompileScope {
   readonly sourceDir: string;
   readonly testDir: string;
+  /** From each project's `app.json`; absent when unreadable, which only loses that one clue. */
+  readonly targetApp?: AlRunnerAppIdentity;
+  readonly testApp?: AlRunnerAppIdentity;
+}
+
+/** `scope` with both apps' identities read from their `app.json`, when readable. */
+export function compileScopeOf(sourceDir: string, testDir: string): AlRunnerCompileScope {
+  const app = (dir: string): AlRunnerAppIdentity | undefined => {
+    try {
+      const j = JSON.parse(readFileSync(join(dir, "app.json"), "utf8").replace(/^﻿/, ""));
+      return typeof j.publisher === "string" && typeof j.name === "string"
+        ? { publisher: j.publisher, name: j.name }
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const targetApp = app(sourceDir);
+  const testApp = app(testDir);
+  return {
+    sourceDir,
+    testDir,
+    ...(targetApp !== undefined ? { targetApp } : {}),
+    ...(testApp !== undefined ? { testApp } : {}),
+  };
 }
 
 /** The objects LethAL emits into the target: an entry naming one is the target's, wherever it sits. */
 const LETHAL_EMITTED_OBJECT = /MutationSelector|Mutation Selector/;
 const SOURCE_FILE_PATH = /SourceFile\(([^@)]+)@/g;
+/** A module as al-runner names a dependency: `Microsoft_Tests-TestLibraries v28.5.54151.55132`. */
+const MODULE_NAME = /([^\s:|[\]()]+_[^:|[\]()]+?) v\d+(?:\.\d+)+/g;
 
 function under(path: string, dir: string): boolean {
   const p = normalisePlatformAppsPath(path);
@@ -600,61 +637,120 @@ function under(path: string, dir: string): boolean {
 }
 
 function baseName(dir: string): string {
-  return normalisePlatformAppsPath(dir).split("/").pop() ?? "";
+  return (normalisePlatformAppsPath(dir).split("/").pop() ?? "").toLowerCase();
 }
 
+/** `V2_<dir>` (the `--server` module name, hyphen kept: measured `V2_sandbox-tests`) names `dir`. */
+function v2Names(owner: string, dir: string, other: string): boolean {
+  const m = /^V\d+_(.+)$/.exec(owner);
+  return (
+    m?.[1] !== undefined &&
+    m[1].toLowerCase() === baseName(dir) &&
+    baseName(dir) !== baseName(other)
+  );
+}
+
+function namesApp(text: string, app: AlRunnerAppIdentity | undefined): boolean {
+  if (app === undefined) return false;
+  return (
+    text.includes(`${app.publisher}_${app.name} v`) ||
+    text.includes(`— ${app.name}:`) ||
+    text.includes(`for ${app.name}:`)
+  );
+}
+
+export type AlRunnerCompileOwner = "target" | "test" | "dependency" | "unattributed";
+
 /**
- * R583: whether diagnostics belong to the TEST app, which keeps today's behaviour (al-runner's safe
- * `EMIT-EXCLUDED` of unreached test codeunits leaves absent rows, read as per-test `error`).
- * Everything else counts as the TARGET's, including what cannot be attributed: the safe side.
- * `owner` is the entry's `file`: an absolute directory on the one-shot envelope, a module name
- * such as `V2_<dir>` on `--server` (measured on 069cbf32).
+ * R583: whose compile diagnostic this is. TARGET only on positive evidence: a LethAL-emitted object
+ * (`MutationSelector`), a `SourceFile(` path under the target bundle, or an owner naming it (its
+ * directory, `V2_<dir>`, or its module `<Publisher>_<Name> v<version>`). TEST likewise. DEPENDENCY
+ * when every path lies outside both projects, or every module named is another app (measured:
+ * `Microsoft_Tests-TestLibraries v28.5...: EMIT-EXCLUDED`, paths under al-runner's own
+ * `/tmp/al-runner-deps`). Anything else is UNATTRIBUTED. Target evidence wins over the rest.
  */
-function isTestAppOnly(
+export function compileOwnerOf(
   owner: string,
   texts: readonly string[],
   scope: AlRunnerCompileScope,
-): boolean {
-  if (texts.some((t) => LETHAL_EMITTED_OBJECT.test(t))) return false;
+): AlRunnerCompileOwner {
+  const all = [owner, ...texts].join("\n");
   const paths = texts.flatMap((t) => [...t.matchAll(SOURCE_FILE_PATH)].map((m) => m[1] ?? ""));
-  if (paths.some((p) => !under(p, scope.testDir))) return false;
-  if (paths.length > 0) return true;
-  if (owner === "") return false;
-  if (under(owner, scope.testDir)) return true;
-  const mod = owner.replace(/^V\d+_/, "").toLowerCase();
-  const test = baseName(scope.testDir).toLowerCase();
-  return mod === test && test !== baseName(scope.sourceDir).toLowerCase();
+  const modules = [...all.matchAll(MODULE_NAME)].map((m) => m[1] ?? "");
+  const isModule = (m: string, app: AlRunnerAppIdentity | undefined) =>
+    app !== undefined && m === `${app.publisher}_${app.name}`;
+  if (
+    LETHAL_EMITTED_OBJECT.test(all) ||
+    paths.some((p) => under(p, scope.sourceDir)) ||
+    namesApp(all, scope.targetApp) ||
+    (owner !== "" && under(owner, scope.sourceDir)) ||
+    v2Names(owner, scope.sourceDir, scope.testDir)
+  )
+    return "target";
+  if (
+    (paths.length > 0 && paths.every((p) => under(p, scope.testDir))) ||
+    (paths.length === 0 &&
+      ((owner !== "" && under(owner, scope.testDir)) ||
+        v2Names(owner, scope.testDir, scope.sourceDir) ||
+        namesApp(all, scope.testApp)))
+  )
+    return "test";
+  const outside = (p: string) => !under(p, scope.sourceDir) && !under(p, scope.testDir);
+  if (
+    (paths.length > 0 && paths.every(outside)) ||
+    (paths.length === 0 &&
+      modules.length > 0 &&
+      modules.every((m) => !isModule(m, scope.targetApp) && !isModule(m, scope.testApp)))
+  )
+    return "dependency";
+  return "unattributed";
 }
 
 /** The stderr markers al-runner prints when a module lost objects; matched by prefix only. */
 const EMIT_MARKER = /(?:^|: )(EMIT-ZERO|EMIT-EXCLUDED|PARTIAL-EMIT-DROP)\b/;
 
+/** What one invocation's output says about its compile, by owner (`compileOwnerOf`). */
+export interface AlRunnerCompileFindings {
+  /** Target-bundle or unattributable diagnostics: no row of this run is scored. */
+  readonly refuse: readonly string[];
+  /** A dependency's dropped objects: scored anyway, and reported as a named warning. */
+  readonly dependency: readonly string[];
+}
+
 /**
- * R583: the diagnostics saying al-runner did not fully compile the TARGET bundle, from one
- * invocation's own output. Empty means none.
+ * R583: the compile diagnostics in one invocation's own output, sorted by owner. Test-app ones are
+ * dropped here and keep today's behaviour (absent rows are per-test `error`).
  *
- * Measured on 069cbf32 (`/coord/handoff/R-583/bisect.md`): a runtime-gated drop (AL0666) exits 3,
- * prints `EMIT-ZERO` or `EMIT-EXCLUDED` on stderr and fills `compilationErrors`, and the tests STILL
- * RUN and can pass, against a dependency copy that compiled without the gate. Such rows describe a
- * bundle nobody asked for, so no row of such a run is scored. Read from the envelope's
- * `compilationErrors` and, on the one-shot path only, the invocation's own stderr (`stderr`
+ * Measured on 069cbf32 (`/coord/handoff/R-583/bisect.md`, `output-shapes.md`): a runtime-gated drop
+ * (AL0666) exits 3, prints `EMIT-ZERO` or `EMIT-EXCLUDED` on stderr and fills `compilationErrors`,
+ * and the tests STILL RUN and can pass. Read from the envelope's `compilationErrors` (or the
+ * `--server` summary's) and, on the one-shot path only, the invocation's own stderr (`stderr`
  * undefined on `--server`, whose stderr buffer spans the daemon's life). A build that does not
  * diagnose the drop (f06ee78c ignored `runtime`) prints none of this, so the net is blind there.
  */
-export function targetCompileDiagnostics(
+export function compileFindingsOf(
   entries: readonly AlRunnerCompileEntry[],
   stderr: string | undefined,
   scope: AlRunnerCompileScope,
-): readonly string[] {
-  const found: string[] = [];
-  for (const e of entries) {
-    if (isTestAppOnly(e.file, e.errors, scope)) continue;
-    found.push(`${e.file === "" ? "<unattributed>" : e.file}: ${e.errors.join(" | ")}`);
-  }
-  if (stderr === undefined) return found;
-  // A marker line at column 0 opens a block; its diagnostics follow, indented or as a further
-  // `<lead>: ...` line, until the next column-0 marker or the per-bundle `→` summary. Indented
-  // echoes of a marker inside that summary open nothing.
+): AlRunnerCompileFindings {
+  const refuse: string[] = [];
+  const dependency: string[] = [];
+  const add = (owner: string, texts: readonly string[], shown: string) => {
+    const kind = compileOwnerOf(owner, texts, scope);
+    if (kind === "target") refuse.push(`the target bundle did not fully compile: ${shown}`);
+    if (kind === "unattributed")
+      refuse.push(
+        `a compile diagnostic not attributable to the test app or a dependency (owner ${JSON.stringify(owner)}): ${shown}`,
+      );
+    // al-runner compiles dependencies under a per-process `/tmp/al-runner-deps/p<pid>/` (measured):
+    // masked, so one drop reads the same on every invocation.
+    if (kind === "dependency") dependency.push(shown.replace(/\/p\d+\//g, "/p<pid>/"));
+  };
+  for (const e of entries) add(e.file, e.errors, `${e.file}: ${e.errors.join(" | ")}`);
+  if (stderr === undefined) return { refuse, dependency };
+  // Measured block shape (output-shapes.md): a column-0 marker line, then indented diagnostics and a
+  // column-0 `<lead>: AL diagnostics that identified ...` line. Anything else ends the block: the
+  // `→` summary, the next `[2/2] ...` bundle line, another marker. Indented echoes open nothing.
   const lines = stderr.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const head = lines[i] ?? "";
@@ -662,17 +758,24 @@ export function targetCompileDiagnostics(
     const block = [head];
     for (let j = i + 1; j < lines.length; j++) {
       const l = lines[j] ?? "";
-      if (/^\s*→/.test(l) || (!/^\s/.test(l) && EMIT_MARKER.test(l))) break;
+      const indented = /^\s/.test(l) && !/^\s*→/.test(l);
+      if (!indented && !/^\S.*: AL diagnostics that identified/.test(l)) break;
       block.push(l);
     }
-    if (!isTestAppOnly("", block, scope)) found.push(block.map((l) => l.trim()).join(" | "));
+    // The owner is what precedes `: <MARKER>` (`<bundled>`, or a dependency module), or the module
+    // after `<MARKER> — ` when the line starts with the marker.
+    const owner =
+      /^(.*?): (?:EMIT-ZERO|EMIT-EXCLUDED|PARTIAL-EMIT-DROP)\b/.exec(head)?.[1] ??
+      /^(?:EMIT-ZERO|EMIT-EXCLUDED|PARTIAL-EMIT-DROP) — ([^:]+):/.exec(head)?.[1] ??
+      "";
+    add(owner, block, block.map((l) => l.trim()).join(" | "));
   }
-  return found;
+  return { refuse, dependency };
 }
 
-/** The message every row of a target-compile run carries, and the baseline refusal's text. */
+/** The message every row of a refused run carries, and the baseline refusal's text. */
 export function targetCompileMessage(found: readonly string[], exitCode: number): string {
-  return `al-runner did not fully compile the target bundle (exit ${exitCode}), so no test row of this run is scored, even one that passed (R583): ${found.join(" || ").slice(0, 1500)}`;
+  return `al-runner did not fully compile this run (exit ${exitCode}), so no test row of it is scored, even one that passed (R583): ${found.join(" || ").slice(0, 1500)}`;
 }
 
 /**
@@ -912,6 +1015,13 @@ export class OneShotTransport implements AlRunnerTransport {
     return this.firstMissingImplementation;
   }
 
+  /** R583: distinct dependency drops, in the order first seen. */
+  private readonly dependencyDrops = new Set<string>();
+
+  observedDependencyDrops(): readonly string[] {
+    return [...this.dependencyDrops];
+  }
+
   async send(req: AlRunnerRequest): Promise<AlRunnerResult> {
     const argv = buildAlRunnerArgv(this.alRunnerPath, req);
 
@@ -947,15 +1057,16 @@ export class OneShotTransport implements AlRunnerTransport {
       }
       // R583: before any row is read. A target bundle al-runner did not fully compile gives no
       // scorable row on ANY exit code: on 069cbf32 such a run exits 3 with rows that pass.
-      const found = targetCompileDiagnostics(
+      const found = compileFindingsOf(
         compileEntriesOf(envelopeField(res.stdout, "compilationErrors")),
         res.stderr,
-        { sourceDir: req.sourceDir, testDir: req.testDir },
+        compileScopeOf(req.sourceDir, req.testDir),
       );
-      if (found.length > 0) {
+      for (const d of found.dependency) this.dependencyDrops.add(d);
+      if (found.refuse.length > 0) {
         return {
           kind: "error",
-          detail: targetCompileMessage(found, res.exitCode),
+          detail: targetCompileMessage(found.refuse, res.exitCode),
           targetCompile: true,
         };
       }

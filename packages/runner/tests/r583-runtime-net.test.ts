@@ -10,7 +10,7 @@ import {
   assertResourceSelectorRuntime,
 } from "../src/al-runner-backend";
 import { AL_RUNNER_PREDEFINED_PROBE_TEST } from "../src/al-runner-predefined-probe";
-import { OneShotTransport } from "../src/al-runner-transport";
+import { OneShotTransport, compileFindingsOf, compileOwnerOf } from "../src/al-runner-transport";
 import {
   type DryRunCliConfig,
   type RunCliConfig,
@@ -177,7 +177,7 @@ describe("R583 §3: a run al-runner did not fully compile is never scored", () =
       await backend.activate("M0001");
       const v = await backend.run(ref, OPTS);
       expect([exitCode, v.outcome]).toEqual([exitCode, "error"]);
-      expect(v.failureMessage).toContain("did not fully compile the target bundle");
+      expect(v.failureMessage).toContain("the target bundle did not fully compile");
       expect(v.failureMessage).toContain("EMIT-ZERO");
     }
   });
@@ -212,7 +212,8 @@ describe("R583 §3: a run al-runner did not fully compile is never scored", () =
       await backend.activate("M0001");
       const v = await backend.run(ref, OPTS);
       expect(v.outcome).toBe("error");
-      expect(v.failureMessage).toContain("did not fully compile the target bundle (exit 3)");
+      expect(v.failureMessage).toContain("did not fully compile this run (exit 3)");
+      expect(v.failureMessage).toContain("the target bundle did not fully compile: V2_active");
       expect(v.failureMessage).toContain("AL0666");
       // On the baseline the same answer stops the session by name.
       await backend.activate(null);
@@ -252,32 +253,167 @@ describe("R583 §3: a run al-runner did not fully compile is never scored", () =
     }
   });
 
-  test("11: a TEST-app EMIT-EXCLUDED does not refuse; an absent row is per-test error, as before", async () => {
-    const testDir = "/tests";
-    const entry = {
-      file: testDir,
-      errors: [
-        "<bundled>: EMIT-EXCLUDED for Sandbox Tests: 1 object(s) dropped from the module — tests they declare are missing: [Unreached.Codeunit].",
-        `SourceFile(${testDir}/Unreached.Codeunit.al@3:5): error AL0118: The name 'X' does not exist in the current context`,
-      ],
-    };
-    const stderr = `<bundled>: EMIT-EXCLUDED — Sandbox Tests: 1 object(s) could not be compiled and were dropped from the module: [Unreached.Codeunit].\n<bundled>: AL diagnostics that identified the excluded object(s):\n  SourceFile(${testDir}/Unreached.Codeunit.al@3:5): error AL0118: x\n  → 1P/0F/0E`;
-    const answer = (tests: unknown[]) => () => ({
-      exitCode: 1,
-      envelope: { tests, exitCode: 1, compilationErrors: [entry] },
-      stderr,
+  test("11 (one-shot, MEASURED): a test-app EMIT-EXCLUDED is not the target's; the exit 3 stays today's error", async () => {
+    // output-shapes.md (a): exit 3, a `skipped` row, `suiteErrors` (no compilationErrors).
+    const testDir = `${SHAPE}/sandbox-tests`;
+    const spawn: SpawnFn = async () => ({
+      exitCode: 3,
+      stdout: alRunnerStdout({
+        tests: [{ name: "Shape Unreached Test.ReadsResource", status: "skipped" }, passRow],
+        exitCode: 3,
+        suiteErrors: [{ file: testDir, errors: [TEST_APP_SUITE_ERROR] }],
+      }),
+      stderr: TEST_APP_ONESHOT_STDERR,
     });
-    // The baseline, where a target entry would throw: the row is absent, so per-test error.
-    const absent = (await oneShotBackend(answer([]))).backend;
-    await absent.activate(null);
-    const v = await absent.run(ref, OPTS);
-    expect(v.outcome).toBe("error");
-    expect(v.operation).toBe("pre-dispatch-rejected");
-    expect(v.failureMessage).toContain(`no test named "${QUALIFIED}"`);
-    // A row that is there is read as before.
-    const present = (await oneShotBackend(answer([passRow]))).backend;
-    await present.activate(null);
-    expect((await present.run(ref, OPTS)).outcome).toBe("pass");
+    const res = await new OneShotTransport("al-runner", spawn).send({
+      sourceDir: `${SHAPE}/app`,
+      testDir,
+      qualifiedTest: QUALIFIED,
+      testTimeoutSeconds: 5,
+      deadlineMs: 5000,
+    });
+    expect(res.kind).toBe("error");
+    if (res.kind === "error") {
+      expect(res.targetCompile).toBeUndefined();
+      expect(res.detail).toBe(TEST_APP_ONESHOT_STDERR);
+    }
+  });
+
+  test("11 (--server, MEASURED): a V2_sandbox-tests entry does not refuse; rows are read as before", async () => {
+    const root = scratch("lethal-r583-srv11-");
+    const dir = join(root, "instr");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    await writeFile(
+      join(dir, "mutant-manifest.json"),
+      JSON.stringify({ artifactId: "a".repeat(32), mutants: [] }),
+      "utf8",
+    );
+    const testDir = join(root, "sandbox-tests");
+    const server = fakeAlRunnerServer([passRow], {
+      summary: { exitCode: 3, compilationErrors: [testAppServerEntry(testDir)] },
+    });
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir,
+        selectorObjectId: 50000,
+        serverMode: true,
+      },
+      undefined,
+      server.spawn,
+    );
+    backend.useMutantBudgetFloor(180_000, 120_000);
+    try {
+      await backend.activate(null);
+      expect((await backend.run(ref, OPTS)).outcome).toBe("pass");
+    } finally {
+      await backend.close();
+    }
+  });
+});
+
+// Measured on 069cbf32 (/coord/handoff/R-583/output-shapes.md); only the scratch root is shortened.
+const SHAPE = "/scratch/r583/shape-a";
+const TEST_APP_SUITE_ERROR =
+  "<bundled>: EMIT-EXCLUDED for Shape Tests: 1 object(s) dropped from the module — tests they declare are missing: [Unreached.Codeunit]. 1 [Test] procedure(s) did not run and are reported as SKIPPED; the module's surviving 1 object(s) ran because nothing surviving references a dropped object.";
+const TEST_APP_ONESHOT_STDERR = [
+  "al-runner 2.12.0-r583.069cbf32 · BC 28.5.54151.55132 · 2 apps",
+  "[1/2] app — 1 suites",
+  "[2/2] sandbox-tests — 1 suites",
+  "<bundled>: EMIT-EXCLUDED — Shape Tests: 1 object(s) could not be compiled and were dropped from the module, so any tests they declare are MISSING from this run: [Unreached.Codeunit]. Every dropped object is a test codeunit no surviving object in this module references, by name or by object id, so the remaining 1 object(s) still run — the 1 [Test] procedure(s) the dropped object(s) declare are reported as SKIPPED. The AL diagnostics that identified them follow.",
+  "<bundled>: AL diagnostics that identified the excluded object(s):",
+  `  SourceFile(${SHAPE}/sandbox-tests/Unreached.Codeunit.al@8:12): error AL0666: 'GetResourceAsText' is not available in runtime version '13.0'. The supported runtime versions are: '14.0' or greater.`,
+  "  → 0P/0F/0E across 0 tests, 0 suite errors (1.2s)",
+  "  → 1P/0F/0E across 2 tests, 1 suite errors (0.3s)",
+  "      ! <bundled>: EMIT-EXCLUDED for Shape Tests: 1 object(s) dropped from the module — tests they declare are missing: [Unreached.Codeunit]. 1 [Test] procedure(s) did not run and are reported as SKIPPED; the module's surviving 1 object(s) ran because nothing surviving references a dropped object.",
+  "seed: 1328831697",
+].join("\n");
+const testAppServerEntry = (testDir: string) => ({
+  file: `V2_${testDir.split("/").pop() ?? ""}`,
+  errors: [
+    `EMIT-EXCLUDED: 1 object(s) dropped from the module — tests they declare are missing: [Unreached.Codeunit]. Every dropped object is a test codeunit no surviving object in this module references, by name or by object id, so the remaining 1 object(s) still run — the 1 [Test] procedure(s) the dropped object(s) declare are reported as skipped. The AL diagnostics that identified them follow.\nSourceFile(${testDir}/Unreached.Codeunit.al@8:12): error AL0666: 'GetResourceAsText' is not available in runtime version '13.0'. The supported runtime versions are: '14.0' or greater.`,
+  ],
+});
+const DEPENDENCY_LINE =
+  "Microsoft_Tests-TestLibraries v28.5.54151.55132: EMIT-EXCLUDED — 2 of this dependency's 203 object(s) could not be compiled and were dropped, so the loaded assembly provides only 201 of them: [Codeunit .\"Library - Azure KV Mock Mgmt.\", LibraryAzureADAuthFlow.Codeunit]. Dependent AL that touches a dropped object fails later with a cryptic NavNCLMissingMethodException, and a test that only touches the survivors passes while covering less than it claims. AL diagnostics that identified the dropped object(s): SourceFile(/tmp/al-runner-deps/p712696/Microsoft_Tests-TestLibraries_28_5_54151_55132/LibraryAzureKVMockMgmt.Codeunit.al@10:42): error AL0185: DotNet 'MockAzureKeyVaultSecretProvider' is missing | SourceFile(/tmp/al-runner-deps/p712696/Microsoft_Tests-TestLibraries_28_5_54151_55132/LibraryAzureADAuthFlow.Codeunit.al@37:71): error AL0133: Argument 1: cannot convert from 'DotNet \"System.Uri\"' to 'DotNet \"System.Uri\"'";
+
+describe("R583 §3: who owns a compile diagnostic (one test per owner branch)", () => {
+  const scope = {
+    sourceDir: "/instr/active",
+    testDir: "/work/fixtures/sandbox-tests",
+    targetApp: { publisher: "LethAL", name: "LethAL Sandbox App" },
+    testApp: { publisher: "LethAL", name: "LethAL Sandbox Tests" },
+  };
+
+  test("owner is the test DIRECTORY (one-shot envelope `file`): test", () => {
+    expect(compileOwnerOf(scope.testDir, ["<bundled>: EMIT-ZERO (1 AL error(s))"], scope)).toBe(
+      "test",
+    );
+  });
+
+  test("owner is V2_<test dir basename> (--server): test", () => {
+    const s = { ...scope, testDir: "/work/fixtures/tests" };
+    expect(compileOwnerOf("V2_tests", ["EMIT-EXCLUDED: 1 object(s) dropped"], s)).toBe("test");
+  });
+
+  test("a HYPHENATED V2_ name (measured V2_sandbox-tests): test", () => {
+    expect(compileOwnerOf("V2_sandbox-tests", ["EMIT-EXCLUDED: 1 object(s) dropped"], scope)).toBe(
+      "test",
+    );
+  });
+
+  test("a dependency module (measured Tests-TestLibraries line): a named warning, never a refusal", async () => {
+    expect(
+      compileOwnerOf("Microsoft_Tests-TestLibraries v28.5.54151.55132", [DEPENDENCY_LINE], scope),
+    ).toBe("dependency");
+    // End to end on one-shot: the measured stderr, exit 0, one pass. The row is scored, and the drop
+    // is reported once, its per-process path masked.
+    const stderr = [
+      "[1/2] app — 1 suites",
+      DEPENDENCY_LINE,
+      "[2/2] sandbox-tests — 1 suites",
+      "  → 0P/0F/0E across 0 tests, 0 suite errors (7.3s)",
+      "  → 1P/0F/0E across 1 tests, 0 suite errors (2.3s)",
+    ].join("\n");
+    const { backend } = await oneShotBackend(() => ({
+      exitCode: 0,
+      envelope: { tests: [passRow], exitCode: 0 },
+      stderr,
+    }));
+    await backend.activate(null);
+    expect((await backend.run(ref, OPTS)).outcome).toBe("pass");
+    await backend.run(ref, OPTS);
+    const drops = backend.observedDependencyDrops();
+    expect(drops).toHaveLength(1);
+    expect(drops[0]).toContain("Microsoft_Tests-TestLibraries v28.5.54151.55132: EMIT-EXCLUDED");
+    expect(drops[0]).toContain("/tmp/al-runner-deps/p<pid>/");
+  });
+
+  test("an unattributable entry refuses, named as such, with its owner", () => {
+    const f = compileFindingsOf(
+      [{ file: "<bundled>", errors: ["EMIT-ZERO (1 AL error(s))"] }],
+      undefined,
+      scope,
+    );
+    expect(f.dependency).toEqual([]);
+    expect(f.refuse).toEqual([
+      'a compile diagnostic not attributable to the test app or a dependency (owner "<bundled>"): <bundled>: EMIT-ZERO (1 AL error(s))',
+    ]);
+  });
+
+  test("a block ends where the measured output ends it: a later line is never absorbed", () => {
+    // The test-app block, then al-runner's own later lines, one of which names the selector. Under a
+    // rule that ran to the next `→` or marker, the selector mention made the test block the target's.
+    const stderr = [
+      "<bundled>: EMIT-EXCLUDED — LethAL Sandbox Tests: 1 object(s) could not be compiled and were dropped from the module: [Unreached.Codeunit].",
+      "<bundled>: AL diagnostics that identified the excluded object(s):",
+      `  SourceFile(${scope.testDir}/Unreached.Codeunit.al@8:12): error AL0666: x`,
+      "[2/2] active — 1 suites, MutationSelector.Codeunit.al loaded",
+      "  → 1P/0F/0E across 1 tests, 0 suite errors (0.3s)",
+    ].join("\n");
+    expect(compileFindingsOf([], stderr, scope)).toEqual({ refuse: [], dependency: [] });
   });
 });
 
@@ -361,7 +497,9 @@ describe("R583 §3: the baseline refuses the session", () => {
           selectorIds: { selectorId: 50000, controlId: 50001, tableId: 50002 },
           mutantTimeoutMs: 20_000,
         }),
-      ).rejects.toThrow(/baseline refused: al-runner did not fully compile the target bundle/);
+      ).rejects.toThrow(
+        /baseline refused: al-runner did not fully compile this run .*the target bundle did not fully compile/,
+      );
       expect(baselineRuns).toBe(1);
     } finally {
       await backend.close();

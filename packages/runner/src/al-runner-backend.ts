@@ -29,12 +29,13 @@ import {
   OneShotTransport,
   alRunnerEnv,
   buildAlRunnerArgv,
+  compileFindingsOf,
+  compileScopeOf,
   isChildChosenExit,
   parseAlRunnerBcBuild,
   parseAlRunnerPlatformAppsDir,
   qualifiedTestName,
   readAlRunnerEnvelope,
-  targetCompileDiagnostics,
   targetCompileMessage,
 } from "./al-runner-transport";
 import type {
@@ -799,6 +800,19 @@ export class AlRunnerBackend implements ExecutionBackend {
 
   observedMissingImplementation(): AlRunnerMissingImplementation | undefined {
     return this.transport.observedMissingImplementation();
+  }
+
+  /** R583: dependency `--server` summary entries; the daemon's stderr is never read per request. */
+  private readonly serverDependencyDrops = new Set<string>();
+
+  /** R583: every distinct dependency drop either transport saw; the session warns once for each. */
+  observedDependencyDrops(): readonly string[] {
+    return [
+      ...new Set([
+        ...(this.transport.observedDependencyDrops?.() ?? []),
+        ...this.serverDependencyDrops,
+      ]),
+    ];
   }
 
   observedBcBuild(): AlRunnerBcBuild | undefined {
@@ -1781,10 +1795,12 @@ export class AlRunnerBackend implements ExecutionBackend {
     // runtime 13 the resource leg scored rows from a bundle al-runner had refused (false SURVIVES:
     // baseline and every mutant behaved alike). Only the summary is read: the daemon's stderr spans
     // its whole life, so a marker there could belong to any earlier request.
-    const compileFound = targetCompileDiagnostics(res.compilationErrors, undefined, {
-      sourceDir: this.activeDir(),
-      testDir: this.cfg.testDir,
-    });
+    const compileFound = compileFindingsOf(
+      res.compilationErrors,
+      undefined,
+      compileScopeOf(this.activeDir(), this.cfg.testDir),
+    );
+    for (const d of compileFound.dependency) this.serverDependencyDrops.add(d);
     const hungTest = res.tests.find(isTimeoutRow)?.name;
     if (res.tests.some((t) => t.status !== "pass" && t.status !== "fail")) await server.close();
     await watch();
@@ -1808,8 +1824,8 @@ export class AlRunnerBackend implements ExecutionBackend {
       // which only over-states (the safe direction, see `runViaServer`).
       wallMs: Date.now() - t0,
       ...(hungTest !== undefined ? { hungTest } : {}),
-      ...(compileFound.length > 0
-        ? { targetCompile: targetCompileMessage(compileFound, res.exitCode) }
+      ...(compileFound.refuse.length > 0
+        ? { targetCompile: targetCompileMessage(compileFound.refuse, res.exitCode) }
         : {}),
     };
     this.serverSuite = suite;

@@ -7474,6 +7474,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         observedMissingImpl.announcement,
     });
   }
+  // R583: a dependency (not the target, not the test app) lost objects in al-runner's compile. The
+  // run is scored anyway; tests touching a dropped object fail, and the rest cover less. Structural,
+  // as above. One-shot reads it from each invocation's stderr; `--server` only from its summary.
+  const depSource = cfg.backend as { observedDependencyDrops?: () => readonly string[] };
+  for (const drop of depSource.observedDependencyDrops?.() ?? []) {
+    emit({
+      type: "warning",
+      code: "al-runner-dependency-emit-excluded",
+      message: `al-runner dropped objects from a DEPENDENCY of this run (neither the target nor the test app), so it was scored anyway: a test that touches a dropped object fails, and one that touches only the survivors covers less than it claims (R583). Runner said: ${drop.slice(0, 1500)}`,
+    });
+  }
   const totalMs = Date.now() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
   // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —
