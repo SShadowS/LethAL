@@ -157,8 +157,8 @@ export interface NamesLegObservations {
 /**
  * One batch, a green baseline with no `baseline-red` caveat, the table per mutant (verdict, killing
  * test, kill text, and the covering set the leg's coverage gives), no R557 undecided warning, and
- * M1's contract rule: on a one-shot leg the `test-name-mangling` fact is present and matches; on a
- * `--server` leg no contract line is present.
+ * the r4 contract rule: on every al-runner leg (one-shot and `--server`) exactly one contract line,
+ * carrying `test-name-mangling=matches`.
  */
 export function assertNamesRun(
   report: SessionReport,
@@ -188,21 +188,23 @@ export function assertNamesRun(
   if (seen !== undefined) {
     if (seen.warningCodes.includes("al-runner-undecided-test-missing"))
       problems.push("an al-runner-undecided-test-missing warning was emitted");
-    if (o.transport === "one-shot" && seen.nameFact !== "matches")
-      problems.push(
-        `the R123 test-name-mangling fact is ${seen.nameFact ?? "absent"}, not matches`,
-      );
-    if (
-      o.transport === "one-shot" &&
-      !seen.contractLines.some((l) => l.includes("test-name-mangling=matches"))
-    )
-      problems.push(
-        `no contract line with test-name-mangling=matches: ${JSON.stringify(seen.contractLines)}`,
-      );
-    if (o.transport === "server" && seen.contractLines.length > 0)
-      problems.push(
-        `a --server leg printed a contract line: ${JSON.stringify(seen.contractLines)}`,
-      );
+    // Pre-commitment r4: EVERY al-runner leg, one-shot and `--server` alike, emits exactly one
+    // contract line carrying test-name-mangling=matches. runSession's R149 re-probe runs whenever
+    // provisioning yields a platform-app directory, `--server` included (R344); r3's "no contract
+    // line on the --server legs" (plan-review M1) was mis-derived and BLOCKED the r3 run.
+    if (o.transport !== "bcdev") {
+      if (seen.nameFact !== "matches")
+        problems.push(
+          `the R123 test-name-mangling fact is ${seen.nameFact ?? "absent"}, not matches`,
+        );
+      if (
+        seen.contractLines.length !== 1 ||
+        !seen.contractLines[0]?.includes("test-name-mangling=matches")
+      )
+        problems.push(
+          `expected exactly one contract line with test-name-mangling=matches: ${JSON.stringify(seen.contractLines)}`,
+        );
+    }
   }
   if (problems.length > 0) {
     throw new Error(

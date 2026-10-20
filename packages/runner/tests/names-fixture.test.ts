@@ -116,25 +116,26 @@ describe("assertNamesRun: the names legs' checker (R557)", () => {
     ).toThrow(/baseline must be green[\s\S]*M0001: expected/);
   });
 
-  test("M1: a one-shot leg without a matching name fact fails; a --server leg with a contract line fails", () => {
-    const seen = { warningCodes: [], contractLines: [] };
-    expect(() =>
-      assertNamesRun(report("exact"), "t", { coverage: "al-runner", transport: "one-shot", seen }),
-    ).toThrow(/test-name-mangling/);
-    expect(() =>
-      assertNamesRun(report("exact"), "t", {
-        coverage: "al-runner",
-        transport: "server",
-        seen: { ...seen, contractLines: ["[lethal] al-runner wire contract: x"] },
-      }),
-    ).toThrow(/contract line/);
-    expect(() =>
-      assertNamesRun(report("exact"), "t", {
-        coverage: "al-runner",
-        transport: "one-shot",
-        seen: { ...seen, nameFact: "matches", contractLines: ["x test-name-mangling=matches y"] },
-      }),
-    ).not.toThrow();
+  test("r4: every al-runner leg, one-shot and --server, needs exactly one contract line with the name fact matching", () => {
+    const none = { warningCodes: [], contractLines: [] };
+    const good = {
+      ...none,
+      nameFact: "matches",
+      contractLines: ["x test-name-mangling=matches y"],
+    };
+    for (const transport of ["one-shot", "server"] as const) {
+      const run = (seen: typeof none & { nameFact?: string }) =>
+        assertNamesRun(report("exact"), "t", { coverage: "al-runner", transport, seen });
+      expect(() => run(none)).toThrow(/test-name-mangling/);
+      expect(() => run({ ...good, contractLines: [] })).toThrow(/exactly one contract line/);
+      expect(() =>
+        run({ ...good, contractLines: [good.contractLines[0] ?? "", "second"] }),
+      ).toThrow(/exactly one contract line/);
+      expect(() => run({ ...good, contractLines: ["x test-name-mangling=diverged y"] })).toThrow(
+        /exactly one contract line/,
+      );
+      expect(() => run(good)).not.toThrow();
+    }
   });
 
   test("an al-runner-undecided-test-missing warning fails the leg", () => {
