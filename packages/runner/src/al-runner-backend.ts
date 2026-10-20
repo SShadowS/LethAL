@@ -152,8 +152,9 @@ export class AlRunnerServerStopUnsetError extends Error {
  *
  * Thrown only where a missing row can mean nothing else: a one-shot "selected no test" (exit 6) or
  * a result with no row equal to the name sent, and a `--server` suite answer that is otherwise clean
- * (I1). A test kept in an `#if` arm discovery could not decide keeps its per-test `error` (I3,
- * `AL_RUNNER_UNDECIDED_ARM_MISSING`).
+ * (I1) or in which the missing test's own codeunit ran at least one test (I2: an emit-excluded
+ * codeunit elsewhere makes every answer unclean). A test kept in an `#if` arm discovery could not
+ * decide keeps its per-test `error` (I3, `AL_RUNNER_UNDECIDED_ARM_MISSING`).
  */
 export class AlRunnerTestNameError extends Error {
   constructor(
@@ -171,7 +172,7 @@ export class AlRunnerTestNameError extends Error {
         returned !== undefined
           ? ` (it returned: ${returned.length > 0 ? returned.slice(0, 20).join(", ") : "<no tests>"}${returned.length > 20 ? `, and ${returned.length - 20} more` : ""})`
           : ""
-      }. LethAL sends a test under BC's C# name for the AL method (alRunnerMethodName); al-runner's naming rule moved, or this build does not compile that test. A test LethAL cannot run cannot kill a mutant, so the session stops rather than scoring its only-kills as survivors (R557).`,
+      }. LethAL sends a test under BC's C# name for the AL method (alRunnerMethodName); al-runner's naming rule moved, or this build does not compile that test (for example an \`#if\` arm LethAL decided compiled-in that al-runner compiled out, R392). A test LethAL cannot run cannot kill a mutant, so the session stops rather than scoring its only-kills as survivors (R557).`,
     );
     this.name = "AlRunnerTestNameError";
   }
@@ -370,6 +371,22 @@ function uncleanRows(suite: ServerSuiteResults): string[] {
         t.name.endsWith(".<ctor>"),
     )
     .map((t) => `${t.name} (${t.status})`);
+}
+
+/** R557 (I2): own-codeunit rows that are not a test method's run. */
+const NOT_A_TEST_RUN = new Set(["<ctor>", "OnRun", "<event>"]);
+
+/**
+ * R557 (I2): al-runner ran at least one test of codeunit `codeunitId`: a row
+ * `Codeunit<id>.<method>` whose method is not `<ctor>`, `OnRun` or `<event>`. Then that codeunit
+ * compiled and ran, so a missing test in it is a naming miss even when another codeunit's
+ * emit-excluded row makes the whole answer unclean.
+ */
+function codeunitRan(suite: ServerSuiteResults, codeunitId: number): boolean {
+  const prefix = `Codeunit${codeunitId}.`;
+  return [...suite.byName.keys()].some(
+    (n) => n.startsWith(prefix) && !NOT_A_TEST_RUN.has(n.slice(prefix.length)),
+  );
 }
 
 /**
@@ -1708,16 +1725,22 @@ export class AlRunnerBackend implements ExecutionBackend {
         };
       }
       // R557 (I3): an undecided-kept test may simply be compiled out: today's `error`, prefixed.
-      // (I1): only a CLEAN answer stops (exit 0 or 1, every row a pass or fail run row); anything
-      // else is a compile or runner failure, not a naming one, so today's `error`, naming the rows
-      // that made it unclean.
+      // (I1): a CLEAN answer stops (exit 0 or 1, every row a pass or fail run row). An unclean one
+      // whose test's own codeunit ran nothing is a compile or runner failure, not a naming one, so
+      // today's `error`, naming the rows that made it unclean.
+      // (I2): an unclean answer still stops when the test's own codeunit ran a test: one
+      // emit-excluded codeunit elsewhere must not turn the stop off for every missing test.
       const unclean = uncleanRows(suite);
       const clean = (suite.exitCode === 0 || suite.exitCode === 1) && unclean.length === 0;
-      if (this.undecidedKept.has(wanted) || clean) {
+      if (this.undecidedKept.has(wanted) || clean || codeunitRan(suite, ref.codeunitId)) {
         // The stop lists every SESSION-SUITE test with no row, never the unfiltered discovery,
-        // which holds tests a decided `#if` arm compiled out.
+        // which holds tests a decided `#if` arm compiled out; on an unclean answer, only tests of
+        // a codeunit that ran.
         const absent = this.sessionSuite.filter(
-          (s) => !suite.byName.has(s.sent) && !this.undecidedKept.has(s.sent),
+          (s) =>
+            !suite.byName.has(s.sent) &&
+            !this.undecidedKept.has(s.sent) &&
+            (clean || codeunitRan(suite, s.ref.codeunitId)),
         );
         return this.undecidedOrStop(
           ref,

@@ -2326,6 +2326,15 @@ describe("AlRunnerBackend: al-runner's test names (R557)", () => {
     expect(v.operation).toBe("pre-dispatch-rejected");
   });
 
+  test("the stop's message also names the R392 cause: an `#if` arm LethAL decided compiled-in that al-runner compiled out", () => {
+    const m = new AlRunnerTestNameError([
+      { alName: "Names Tests.Dash-Step", sent: "Codeunit78850.Dasha45Step" },
+    ]).message;
+    expect(m).toContain("#if");
+    expect(m).toContain("R392");
+    expect(m).toContain("R557");
+  });
+
   test("T5: on the R488 path the FIRST call for `Twin Pair` excludes Twin_PairLong by its al-runner name", async () => {
     const twin = { ...T, method: "Twin Pair" };
     const { calls, spawn } = okSpawn({
@@ -2436,15 +2445,20 @@ describe("AlRunnerBackend: al-runner's test names (R557)", () => {
       }
     });
 
+    // R557 (I2): the unclean tests below keep their pass row in ANOTHER codeunit, so the missing
+    // test's own codeunit has no run row: only then is an unclean answer a per-test error.
+    const other = { codeunitId: 78851, codeunitName: "Other Tests", method: "Fine" };
+    const OTHER = "Codeunit78851.Fine";
+
     test("T4d: exit 3 with an emit-excluded `Names Tests.Dash-Step` row is an error listing it (I1)", async () => {
       const backend = await server(
         [
-          { name: PLAIN, status: "pass" },
+          { name: OTHER, status: "pass" },
           { name: "Names Tests.Dash-Step", status: "skipped", message: "not compiled" },
         ],
         { exitCode: 3 },
       );
-      backend.useSessionTests([plain, dash], []);
+      backend.useSessionTests([other, dash], []);
       try {
         const v = await backend.run(dash, opts);
         expect(v.outcome).toBe("error");
@@ -2456,8 +2470,8 @@ describe("AlRunnerBackend: al-runner's test names (R557)", () => {
     });
 
     test("T4g: exit 3 with every row a pass is still unclean: an error, with no throw (I1)", async () => {
-      const backend = await server([{ name: PLAIN, status: "pass" }], { exitCode: 3 });
-      backend.useSessionTests([plain, dash], []);
+      const backend = await server([{ name: OTHER, status: "pass" }], { exitCode: 3 });
+      backend.useSessionTests([other, dash], []);
       try {
         const v = await backend.run(dash, opts);
         expect(v.outcome).toBe("error");
@@ -2472,8 +2486,8 @@ describe("AlRunnerBackend: al-runner's test names (R557)", () => {
         { name: "Names Tests.Other", status: "pass" },
         { name: "Codeunit78850.<ctor>", status: "fail" },
       ]) {
-        const backend = await server([{ name: PLAIN, status: "pass" }, odd]);
-        backend.useSessionTests([plain, dash], []);
+        const backend = await server([{ name: OTHER, status: "pass" }, odd]);
+        backend.useSessionTests([other, dash], []);
         try {
           const v = await backend.run(dash, opts);
           expect(v.outcome, odd.name).toBe("error");
@@ -2495,6 +2509,47 @@ describe("AlRunnerBackend: al-runner's test names (R557)", () => {
         expect(v.failureMessage).toContain("Codeunit78850.<ctor>");
       } finally {
         await backend.close();
+      }
+    });
+
+    test("I2: an answer made unclean by ANOTHER codeunit's emit-excluded row still stops when the missing test's own codeunit ran", async () => {
+      const backend = await server(
+        [
+          { name: PLAIN, status: "pass" },
+          { name: "Other Tests.Fine", status: "skipped", message: "DotNet object not compiled" },
+        ],
+        { exitCode: 3 },
+      );
+      backend.useSessionTests([plain, dash, other], []);
+      try {
+        const p = backend.run(dash, opts);
+        await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+        const err = (await p.catch((e: unknown) => e)) as Error;
+        expect(err.message).toContain("Names Tests.Dash-Step (sent as Codeunit78850.Dasha45Step)");
+        // The emit-excluded codeunit ran nothing, so its test is not named as a naming miss.
+        expect(err.message).not.toContain(`sent as ${OTHER}`);
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("I2: own-codeunit rows that are not test runs (<ctor>, OnRun, <event>) do not count: an unclean answer stays an error", async () => {
+      for (const method of ["<ctor>", "OnRun", "<event>"]) {
+        const backend = await server(
+          [
+            { name: OTHER, status: "pass" },
+            { name: `Codeunit78850.${method}`, status: "error", message: "setup failed" },
+          ],
+          { exitCode: 3 },
+        );
+        backend.useSessionTests([other, dash], []);
+        try {
+          const v = await backend.run(dash, opts);
+          expect(v.outcome, method).toBe("error");
+          expect(v.failureMessage, method).toContain("not a clean run");
+        } finally {
+          await backend.close();
+        }
       }
     });
 

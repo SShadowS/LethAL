@@ -527,7 +527,11 @@ const CS_RESERVED = new Set(
  * .NET's `char` categories follow .NET's. A code point added or reclassified in one and not the
  * other can map differently. The R123 `test-name-mangling` fact sees only the names it probes; a
  * miss anywhere else selects nothing, and the session refuses at baseline (`AlRunnerTestNameError`)
- * rather than mis-scoring.
+ * rather than mis-scoring: always on one-shot, and on `--server` when the answer is clean or the
+ * test's own codeunit ran at least one test. On a `--server` answer that is unclean AND in which
+ * that codeunit ran nothing (it did not compile, or only its `<ctor>`, `OnRun` or `<event>` rows
+ * came back), the miss is that test's per-test `error` instead, and its only-kills can read
+ * survived; the R123 fact and the one-shot legs are what catch a rule drift there.
  */
 export function alRunnerMethodName(method: string): string {
   let out = "";
