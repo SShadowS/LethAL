@@ -771,11 +771,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   prefixed `_`, format characters deleted), measured on 58 names on two builds. A session-suite test
   al-runner still has no row for now STOPS the session by name (`AlRunnerTestNameError`): on one-shot
   when al-runner selects nothing, on `--server` when its answer is otherwise clean (exit 0 or 1,
-  every row a pass or fail run row). A test in an `#if` arm LethAL could not decide (R403) keeps its
-  `error`, with one `al-runner-undecided-test-missing` warning per batch. A prior pre-fix al-runner run
-  is not trusted: `--skip-known-survivors` skips none of its survivors
-  (`history-al-runner-test-names`), `--resume` carries none of its verdicts and reuses no such
-  baseline snapshot (`resume-al-runner-test-names`). The R123 contract probe gains a seventh fact,
+  every row a pass or fail run row) or when the test's own codeunit ran another test. A test in an
+  `#if` arm LethAL could not decide (R403) keeps its `error`, with one
+  `al-runner-undecided-test-missing` warning per batch. A new store column, `runs.al_runner_names`,
+  marks every run an R557+ al-runner session creates; NULL (every older row) is untrusted. No al-runner
+  run without the mark is trusted, nor a marked one whose baseline holds a renamed test as an
+  `error`: `--skip-known-survivors` skips none of its survivors (`history-al-runner-test-names`),
+  `--resume` carries none of its verdicts (stranded R53 keys included, so those mutants run again;
+  the RESUMED banner names the reason, `resumedFrom.carryRefused`), and none of its baseline
+  snapshots is reused (`resume-al-runner-test-names`). bcdev runs are unaffected. The R123 contract probe gains a seventh fact,
   `test-name-mangling`, which checks the rule against real rows once per session. Every test name in
   `fixtures/` and `examples/` maps to itself, so no existing gate's argv moves; the new
   `fixtures/sandbox-names` pair runs in `itest:alrunner` and in the new `itest:bcdev-names`.
