@@ -4056,7 +4056,7 @@ function resolveResume(
   // such verdicts (a resume of a resume, `known-survivor` rows) and hold no baseline row showing
   // it. Then, second, the run's own renamed baseline errors.
   const carryRefused =
-    priorRow !== null && !runLendsAlRunnerNames(priorRow)
+    priorRow === null || !runLendsAlRunnerNames(priorRow)
       ? `run ${priorRunId} ${AL_RUNNER_UNMARKED_WHY}`
       : alRunnerRefusal(
           priorRunId,

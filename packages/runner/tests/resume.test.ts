@@ -5507,7 +5507,7 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
     const r = await resumeOfResume(true);
     expect(r.store.baselineErrorMethods(r.b)).toEqual([]);
     expect(carriedOf(r.report)).toEqual([]);
-    // The carry refusal; the same run's baseline snapshot is refused by its own warning too.
+    // The carry refusal (the snapshot refusal is pinned by its own test, "I1 (snapshot)").
     const w = notCarried(r.events);
     expect(w).toHaveLength(1);
     expect(w[0]).toContain(`run ${r.b}`);
