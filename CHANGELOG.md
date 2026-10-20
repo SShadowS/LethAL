@@ -770,9 +770,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     an app by name before anything is instrumented, and `deploy()` refuses again. The refusal
     reads: `runtime <X> is below 14.0, which the resource selector needs (NavApp.GetResourceAsText,
     AL0666); set app.json runtime ≥ 17.0 or alRunner.selectorMode static`.
-  - **The net.** A target-bundle `compilationErrors` entry, or a one-shot
-    `EMIT-ZERO`/`EMIT-EXCLUDED`/`PARTIAL-EMIT-DROP` marker, turns every row into `error`. On the
-    baseline it stops the session (`AlRunnerTargetCompileError`).
+  - **The net.** A target-bundle diagnostic turns every row into `error`. That is a target
+    `compilationErrors` entry, or a one-shot target-bundle `EMIT-ZERO`/`EMIT-EXCLUDED`/`PARTIAL-EMIT-DROP`
+    marker. A diagnostic that cannot be attributed does the same, and the refusal names it as one.
+    On the baseline it stops the session (`AlRunnerTargetCompileError`).
+  - **What the net leaves alone.** A test-app entry keeps today's behaviour. A dependency's drop,
+    such as Tests-TestLibraries, is scored anyway and reported as the warning
+    `al-runner-dependency-emit-excluded`.
   - **What the net closes.** `--server` used to ignore `compilationErrors`. That let the default
     transport score false survives from a bundle al-runner had refused.
   - **Runtime 17.0 everywhere.** Every fixture, example and probe app, and LethAL Control
