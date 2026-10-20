@@ -151,6 +151,12 @@ export interface ResumeIndex {
   /** Rows whose verdict is not carryable (today: `error`), and which will be re-executed. */
   readonly nonCarryableRows: number;
   /**
+   * R577 (B1, M2): `killed`/`timeout-killed` rows NOT carried because this session's backend has the
+   * kill-reproduction rule and the row has no `killReproduced` (scored before the rule). Re-run, and
+   * counted apart from `nonCarryableRows` so the warning never calls them 'error' verdicts.
+   */
+  readonly unreproducedKills: number;
+  /**
    * R53: identity keys whose prior run STRANDED the tier — see `isStrandedNote`. Skipped by
    * default on resume rather than retried, because retrying a non-terminating mutant re-hangs and
    * blocks every mutant behind it. `--retry-stranded` overrides.
@@ -231,17 +237,20 @@ export function buildResumeIndex(
   // R53: a `timeout-killed` is only obtainable by stopping a session. A run forbidden to do that
   // must re-measure rather than inherit one — counted, never silent, like every other drop here.
   // R577 (B1): under the reproduction rule a kill carries only with its marker.
+  const unreproducedKill = (row: MutantVerdictRow): boolean =>
+    killsMustReproduce &&
+    (row.verdict === "killed" || row.verdict === "timeout-killed") &&
+    row.killReproduced !== true;
   const carryableRow = (row: MutantVerdictRow): boolean =>
     CARRYABLE_VERDICTS.has(row.verdict) &&
     (row.verdict !== "timeout-killed" || stopHungSessions) &&
-    (!killsMustReproduce ||
-      (row.verdict !== "killed" && row.verdict !== "timeout-killed") ||
-      row.killReproduced === true);
+    !unreproducedKill(row);
 
   const carryable = new Map<string, CarriedVerdict>();
   const strandedKeys = new Set<string>();
   let ambiguousKeys = 0;
   let nonCarryableRows = 0;
+  let unreproducedKills = 0;
   for (const [key, bucket] of seen) {
     // R53: checked BEFORE the ambiguity and carryability rules, and across every row in the bucket.
     // A stranding mutant must be recognised even when its identity key collides with a sibling,
@@ -255,7 +264,9 @@ export function buildResumeIndex(
     const [row] = bucket;
     if (row === undefined) continue; // unreachable: bucket.length === 1
     if (!carryableRow(row)) {
-      nonCarryableRows += 1;
+      // R577 (M2): counted under its own words, never as a prior 'error' verdict.
+      if (unreproducedKill(row)) unreproducedKills += 1;
+      else nonCarryableRows += 1;
       continue;
     }
     carryable.set(key, carriedOf(row));
@@ -268,7 +279,14 @@ export function buildResumeIndex(
       carryableBySite.set(memberSiteOf(site, row.memberHash), carriedOf(row));
     }
   }
-  return { carryable, carryableBySite, ambiguousKeys, nonCarryableRows, strandedKeys };
+  return {
+    carryable,
+    carryableBySite,
+    ambiguousKeys,
+    nonCarryableRows,
+    unreproducedKills,
+    strandedKeys,
+  };
 }
 
 /** The verdict and facts a carry records for `row`. */

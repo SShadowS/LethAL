@@ -408,7 +408,9 @@ describe("buildResumeIndex — a kill without killReproduced under the reproduct
     const index = buildResumeIndex([...preRule, survivor], true, true);
     expect([...index.carryable.values()].map((c) => c.verdict)).toEqual(["survived"]);
     expect([...index.carryableBySite.values()].map((c) => c.verdict)).toEqual(["survived"]);
-    expect(index.nonCarryableRows).toBe(2);
+    // M2: counted as unreproduced kills, never as prior 'error' verdicts.
+    expect(index.unreproducedKills).toBe(2);
+    expect(index.nonCarryableRows).toBe(0);
   });
 
   test("with the rule on, a marked kill carries under both rules, with its marker and text", () => {
@@ -1289,6 +1291,44 @@ describe("runSession --resume (R47)", () => {
     expect(again.deploys).toBe(0);
     expect(report.artifacts ?? []).toEqual([]);
     expect(report.quarantined).toBeUndefined();
+  });
+
+  test("R577 (M2): a resume with the reproduction rule re-runs a pre-rule kill and says so in its own words, not as a prior 'error' verdict", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    // Rule off: one kill is scored (no killReproduced), then the next mutant strands the run.
+    const first = await runSession({
+      backend: new CountingBackend("fail", 1),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(first.quarantined).toBeDefined();
+    expect(first.counts.killed).toBe(1);
+    class ReproCounting extends CountingBackend {
+      readonly killsMustReproduce = true;
+    }
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend: new ReproCounting("fail"),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.resumedFrom?.carriedMutants).toBe(0);
+    const reusing = events.find((e) => e.type === "warning" && e.code === "resume-reusing-run");
+    const message = reusing?.type === "warning" ? reusing.message : "";
+    expect(message).toContain(
+      "1 prior kill(s) recorded before the kill-reproduction rule (no killReproduced) will be re-executed",
+    );
+    // The stranded row is the only prior 'error' verdict.
+    expect(message).toContain(" 1 prior 'error' verdict(s) will be re-executed.");
+    // Re-run under the rule, so the kill now carries the marker.
+    const rescored = report.mutants.filter((m) => m.verdict === "killed");
+    expect(rescored.length).toBeGreaterThan(0);
+    expect(rescored.every((m) => m.killReproduced === true)).toBe(true);
   });
 
   test("recovers the verdicts an aborted run had already scored, and re-runs only the rest", async () => {

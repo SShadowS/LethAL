@@ -32,26 +32,31 @@ export interface ReproductionFigures {
   readonly serverSuiteRuns?: number | null;
 }
 
-/** Leg names: `<fixture>/<transport>`, and `cli-default`. */
+/**
+ * Leg names: `<fixture>/<transport>`, and `cli-default`. MEASURED at 102821df (itest:alrunner,
+ * log /coord/handoff/R-577/scratch/itest-measure.log): every kill on every leg reproduced, none was
+ * kill-not-reproduced. Killer rows are 2 per kill everywhere (the kill and its reproduction);
+ * cli-default made 23 activations and 22 `runTests` requests.
+ */
 export const REPRODUCTION_EXPECTED: Readonly<Record<string, ReproductionFigures>> = {
-  "sandbox/one-shot": { killerRowsPerKill: null },
-  "sandbox/server": { killerRowsPerKill: null },
-  "sandbox/resource": { killerRowsPerKill: null },
-  "layout/one-shot": { killerRowsPerKill: null },
-  "layout/server": { killerRowsPerKill: null },
-  "multiobject/one-shot": { killerRowsPerKill: null },
-  "multiobject/server": { killerRowsPerKill: null },
-  "multiobject/resource": { killerRowsPerKill: null },
-  "wrapped/one-shot": { killerRowsPerKill: null },
-  "wrapped/server": { killerRowsPerKill: null },
-  "wrapped/resource": { killerRowsPerKill: null },
-  "symbols-LETHALA/one-shot": { killerRowsPerKill: null },
-  "symbols-LETHALA/server": { killerRowsPerKill: null },
-  "symbols-LETHALA/resource": { killerRowsPerKill: null },
-  "symbols-LETHALB/one-shot": { killerRowsPerKill: null },
-  "symbols-LETHALB/server": { killerRowsPerKill: null },
-  "symbols-LETHALB/resource": { killerRowsPerKill: null },
-  "cli-default": { killerRowsPerKill: null, activations: null, serverSuiteRuns: null },
+  "sandbox/one-shot": { killerRowsPerKill: 2 },
+  "sandbox/server": { killerRowsPerKill: 2 },
+  "sandbox/resource": { killerRowsPerKill: 2 },
+  "layout/one-shot": { killerRowsPerKill: 2 },
+  "layout/server": { killerRowsPerKill: 2 },
+  "multiobject/one-shot": { killerRowsPerKill: 2 },
+  "multiobject/server": { killerRowsPerKill: 2 },
+  "multiobject/resource": { killerRowsPerKill: 2 },
+  "wrapped/one-shot": { killerRowsPerKill: 2 },
+  "wrapped/server": { killerRowsPerKill: 2 },
+  "wrapped/resource": { killerRowsPerKill: 2 },
+  "symbols-LETHALA/one-shot": { killerRowsPerKill: 2 },
+  "symbols-LETHALA/server": { killerRowsPerKill: 2 },
+  "symbols-LETHALA/resource": { killerRowsPerKill: 2 },
+  "symbols-LETHALB/one-shot": { killerRowsPerKill: 2 },
+  "symbols-LETHALB/server": { killerRowsPerKill: 2 },
+  "symbols-LETHALB/resource": { killerRowsPerKill: 2 },
+  "cli-default": { killerRowsPerKill: 2, activations: 23, serverSuiteRuns: 22 },
 };
 
 /** Every figure a run measured against a `null` in the table, for the end-of-gate failure. */

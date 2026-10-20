@@ -4088,6 +4088,11 @@ function resolveResume(
         ? ` ${index.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`
         : ""
     }${
+      // R577 (M2): a kill scored before the reproduction rule is re-run, and said so in its own words.
+      index.unreproducedKills > 0
+        ? ` ${index.unreproducedKills} prior kill(s) recorded before the kill-reproduction rule (no killReproduced) will be re-executed, because this backend requires a kill to reproduce (R577).`
+        : ""
+    }${
       index.ambiguousKeys > 0
         ? ` ${index.ambiguousKeys} identity key(s) matched more than one prior mutant and will be re-executed (a colliding key cannot say which verdict was whose).`
         : ""

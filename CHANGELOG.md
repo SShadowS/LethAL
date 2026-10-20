@@ -24,11 +24,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   and reproduces still gives `killed`. A reproduction that is lost, cut by the deadline, stranded or
   run in a reused session keeps that cause. A reproduced kill carries `killReproduced: true` and,
   when the run had text, `reproducedFailure` (both optional, so the report stays schema v3, R157).
-  **Cost:** one more test run (and one more activation) per kill, and one more whole budget per
-  timeout kill; nothing for survivors. **`lethal explain` is schema v17** (`explain-v17.schema.json`;
+  **Cost, per kill:** one more activation and one more run of the killing test under the mutant.
+  On one-shot that is one more spawn, with its compile. On `--server` it is one more WHOLE-SUITE run
+  (the daemon runs the suite once per activation), plus a recompile with the static selector (the
+  resource selector only rewrites its file). A timeout kill also waits out one more whole budget.
+  Nothing for survivors. **`lethal explain` is schema v17** (`explain-v17.schema.json`;
   v16 is kept), because `kill-not-reproduced` is a new value of `notMeasured[].cause` (R233).
   **`--resume` on al-runner re-runs a kill recorded before this rule** (no `killReproduced`) instead
-  of carrying it. bcdev is unchanged; its switch is R582.
+  of carrying it, and its warning counts such kills in their own words, apart from prior `error`
+  verdicts. bcdev is unchanged; its switch is R582.
 
 - **The report records which al-runner test selector produced its verdicts** (R558). R551 picks the
   selector once per session by a probe: `--test-exact` when the build accepts it, otherwise R488's

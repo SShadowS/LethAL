@@ -20023,6 +20023,20 @@ class ReproStub extends StubBackend {
 /** R577: the group path's stub (R206's) with the rule on. */
 class ReproWarmStub extends WarmStubBackend {
   readonly killsMustReproduce = true;
+  /** Every non-confirmation `runMany` under `mutant`, as its method names, in order. */
+  callsUnder(mutant: string): string[][] {
+    return this.callLog.filter((c) => c.mutant === mutant).map((c) => c.methods);
+  }
+  private readonly callLog: Array<{ mutant: string | null; methods: string[] }> = [];
+  override async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+    if (opts.confirmation !== true) {
+      this.callLog.push({
+        mutant: this.activations.at(-1) ?? null,
+        methods: opts.methods.map((x) => x.ref.method),
+      });
+    }
+    return super.runMany(opts);
+  }
 }
 
 describe("R577: a kill must reproduce under the mutant", () => {
@@ -20287,6 +20301,53 @@ describe("R577: a kill must reproduce under the mutant", () => {
     store.close();
   });
 
+  test("T5e: at k = 2, a reproduction of the OTHER kind is kill-not-reproduced, both ways (I1)", async () => {
+    // A fail kill at T2 (warm) whose replay under the mutant times out at T2.
+    const failKill: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") failKill.session.set("cache", "populated-by-T1");
+        return mutant === "M0002" && ref.method === "T2" && failKill.session.has("cache")
+          ? "fail"
+          : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    let asked = 0;
+    failKill.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0002" || ref.method !== "T2") return undefined;
+      asked += 1;
+      return asked === 2 ? 999_999 : undefined;
+    };
+    const a = await run(failKill, { testAl: FIVE_TESTS_AL });
+    const ka = rowOf(a.report, "M0002");
+    expect(ka?.cause).toBe("kill-not-reproduced");
+    expect(ka?.failureNote).toContain(
+      "then timed out instead of failing when LethAL re-ran it under the mutant by replaying the same 2 method(s) of its call;",
+    );
+    a.store.close();
+
+    // A timeout kill at T2 (warm) whose replay under the mutant fails at T2.
+    const timeoutKill = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T2" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    let stopped = 0;
+    timeoutKill.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0001" || ref.method !== "T2") return undefined;
+      stopped += 1;
+      return stopped === 1 ? 999_999 : undefined;
+    };
+    const b = await run(timeoutKill, { testAl: FIVE_TESTS_AL });
+    const kb = rowOf(b.report, "M0001");
+    expect(kb?.cause).toBe("kill-not-reproduced");
+    expect(kb?.failureNote).toContain(
+      "then failed instead of timing out when LethAL re-ran it under the mutant at the same budget by replaying the same 2 method(s) of its call;",
+    );
+    b.store.close();
+  });
+
   test("T6: the order is activate(m), fail, activate(null), pass, activate(m), fail, and only then is the mutant scored", async () => {
     const backend = deterministic();
     const { store } = await run(backend, {
@@ -20436,6 +20497,40 @@ describe("R577: a kill must reproduce under the mutant", () => {
     store.close();
   });
 
+  test("T9d: at k = 1, a reproduction of the OTHER kind is kill-not-reproduced, both ways (I1)", async () => {
+    // A fail kill whose reproduction times out.
+    const failKill: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : failKill.nth.get(mutant) === 1 ? "fail" : "timeout"),
+      ["IsOverBudget"],
+    );
+    const a = await run(failKill);
+    expect(a.report.mutants.length).toBeGreaterThan(0);
+    for (const m of a.report.mutants) {
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.failureNote).toContain(
+        "then timed out instead of failing when LethAL re-ran it under the mutant;",
+      );
+    }
+    a.store.close();
+    // A timeout kill whose reproduction fails.
+    const timeoutKill: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) =>
+        mutant === null ? "pass" : timeoutKill.nth.get(mutant) === 1 ? "timeout" : "fail",
+      ["IsOverBudget"],
+    );
+    const b = await run(timeoutKill);
+    expect(b.report.mutants.length).toBeGreaterThan(0);
+    for (const m of b.report.mutants) {
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.failureNote).toContain(
+        "then failed instead of timing out when LethAL re-ran it under the mutant at the same budget;",
+      );
+    }
+    b.store.close();
+  });
+
   test("T9c: the reproduction is sent the budget the timed-out run was sent, not the confirm's longer deadline", async () => {
     const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
       "IsOverBudget",
@@ -20491,6 +20586,12 @@ describe("R577: a kill must reproduce under the mutant", () => {
     expect(m1?.verdict).toBe("killed");
     expect(m1?.killingTest).toBe("T4");
     expect(m1?.killReproduced).toBe(true);
+    // I2: the walk resumes at the method right AFTER the flaky one, skipping none.
+    expect(backend.callsUnder("M0001")).toEqual([
+      ["T1", "T2", "T3", "T4", "T5"],
+      ["T2", "T3", "T4", "T5"],
+      ["T2", "T3", "T4"],
+    ]);
     store.close();
   });
 
@@ -20512,6 +20613,56 @@ describe("R577: a kill must reproduce under the mutant", () => {
     expect(m1?.verdict).toBe("killed");
     expect(m1?.killingTest).toBe("T4");
     expect(m1?.killReproduced).toBe(true);
+    // I2: after the call-level timeout at position 2 the walk resumes at T3, skipping none.
+    expect(backend.callsUnder("M0001")).toEqual([
+      ["T1", "T2", "T3", "T4", "T5"],
+      ["T1", "T2"],
+      ["T3", "T4", "T5"],
+      ["T3", "T4"],
+    ]);
+    store.close();
+  });
+
+  /** M0001's T1 fails on its first run only (flaky X); `later` answers M0001's T2 (Y). */
+  const flakyThen = (later: (v: TestVerdict) => TestVerdict) => {
+    let t1 = 0;
+    const backend = new ReproStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (mutant !== "M0001" || ref.method !== "T1") return "pass";
+        t1 += 1;
+        return t1 === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    backend.answer = (mutant, _n, v) =>
+      mutant === "M0001" && v.ref.method === "T2" ? later(v) : undefined;
+    return backend;
+  };
+
+  test("T11a: X not reproduced, then Y strands: the strand wins, its prefix and quarantine kept (I3)", async () => {
+    const backend = flakyThen((v) => ({
+      ref: v.ref,
+      outcome: "deadline-exceeded",
+      durationMs: 1,
+      operation: "in-flight-unknown",
+    }));
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("stranded");
+    expect(isStrandedNote(m1?.failureNote)).toBe(true);
+    expect(report.quarantined).toBeDefined();
+    store.close();
+  });
+
+  test("T11b: X not reproduced, then Y hits our deadline: deadline-exceeded wins (I3)", async () => {
+    const backend = flakyThen((v) => ({ ...v, outcome: "deadline-exceeded" }));
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("deadline-exceeded");
+    expect(m1?.failureNote).toBe("deadline exceeded running T2 (infrastructure, not a kill)");
     store.close();
   });
 });
