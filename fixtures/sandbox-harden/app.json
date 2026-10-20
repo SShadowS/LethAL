@@ -11,7 +11,7 @@
     }
   ],
   "publisher": "LethAL",
-  "version": "1.0.0.0",
+  "version": "1.0.0.1",
   "privacyStatement": "",
   "EULA": "",
   "help": "",
@@ -23,6 +23,6 @@
     "allowDownloadingSource": true,
     "includeSourceInSymbolFile": true
   },
-  "runtime": "13.0",
+  "runtime": "17.0",
   "features": []
 }
