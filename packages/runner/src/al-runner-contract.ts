@@ -273,7 +273,7 @@ export const CONTRACT_NAMES_METHODS: readonly string[] = [
   "7Lead",
   "default",
   "Ærø Løb",
-  "Soft­Hyphen",
+  "Soft\u00adHyphen",
   "PlainName",
 ];
 

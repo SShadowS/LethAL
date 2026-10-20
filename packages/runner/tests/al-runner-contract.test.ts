@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type AlRunnerContractResult,
+  CONTRACT_NAMES_METHODS,
   type ContractFactName,
   contractRefusals,
   runAlRunnerContractProbe,
@@ -357,6 +358,11 @@ describe("runAlRunnerContractProbe — test-name-mangling (R557)", () => {
     expect(refusal).toContain("Codeunit50012.Dasha45Name");
     expect(refusal).toContain("Codeunit50012.Dash_Name");
     expect(refusal).toContain("alRunnerMethodName");
+  });
+
+  test("the probe list holds a Unicode Cf unit (the soft hyphen), so rule step e is probed live", () => {
+    expect(CONTRACT_NAMES_METHODS).toContain("Soft\u00adHyphen");
+    expect(CONTRACT_NAMES_METHODS.some((m) => /\p{Cf}/u.test(m))).toBe(true);
   });
 
   test("T6b: a missing row diverges (a subset is not a match)", async () => {
