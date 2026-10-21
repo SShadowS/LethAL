@@ -147,6 +147,8 @@ describe("R387: buildBackend's al-runner defaults", () => {
     expect(cliDefaultMechanismFailures(record, ev, ALLOWED)).toEqual([]);
     expect(record.serverArgv).toEqual([["al-runner.exe", "--server", "--test-timeout", "180"]]);
     expect(ev.activations).toBe(3);
+    // R577: one whole-suite run per activation, counted off the daemon's stdin.
+    expect(record.serverRunTests).toBe(3);
     expect(ev.alHashes.size).toBe(1);
     expect(backend.capabilities().coverage).toBe("al-runner");
   });

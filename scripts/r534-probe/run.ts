@@ -262,17 +262,24 @@ if (report !== undefined) {
       rows.length > 0 && rows.every((t) => t.reportedStopMs === N * 1000),
       `${key}: reportedStopMs = ${N * 1000} (got ${rows.map((t) => t.reportedStopMs ?? "-").join(", ") || "<no timeout row>"})`,
     );
+    // R577: al-runner's kill must reproduce, so a timeout kill now has its reproduction too.
+    check(m.killReproduced === true, `${key}: killReproduced (R577)`);
     if (leg === "oneshot") {
+      // R577: TWO spawns with the mutant active, the kill and (after the confirm) its reproduction.
       const idx = spawns.flatMap((s, i) => (s.active === m.mutantCode ? [i] : []));
       const first = idx[0];
       const next = first === undefined ? undefined : spawns[first + 1];
       check(
-        idx.length === 1 && spawns[first ?? -1]?.test === HANG_TEST,
-        `${key}: exactly ONE spawn with ${m.mutantCode} active, of ${HANG_TEST} (got ${idx.map((i) => spawns[i]?.test).join(", ") || "none"})`,
+        idx.length === 2 && idx.every((i) => spawns[i]?.test === HANG_TEST),
+        `${key}: exactly TWO spawns with ${m.mutantCode} active (the kill and its R577 reproduction), both of ${HANG_TEST} (got ${idx.map((i) => spawns[i]?.test).join(", ") || "none"})`,
       );
       check(
         next !== undefined && next.active === "" && next.test === HANG_TEST,
         `${key}: the next spawn is the confirm, ${HANG_TEST} with NO mutant active (got ${next === undefined ? "none" : `${next.active || "<none>"} ${next.test}`})`,
+      );
+      check(
+        first !== undefined && idx[1] === first + 2,
+        `${key}: the reproduction is the spawn right after the confirm (got positions ${idx.join(", ")})`,
       );
     }
   }

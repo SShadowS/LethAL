@@ -1203,7 +1203,8 @@
             "reused-budget-stale",
             "timeout-unconfirmed",
             "runner-test-error",
-            "runner-refused"
+            "runner-refused",
+            "kill-not-reproduced"
           ]
         },
         "killingTestFailure": {
@@ -1211,6 +1212,12 @@
         },
         "killPosition": {
           "type": "number"
+        },
+        "killReproduced": {
+          "const": true
+        },
+        "reproducedFailure": {
+          "type": "string"
         },
         "coveringTests": {
           "type": "array",
@@ -1422,6 +1429,12 @@
         },
         "killPosition": {
           "type": "number"
+        },
+        "killReproduced": {
+          "const": true
+        },
+        "reproducedFailure": {
+          "type": "string"
         },
         "coveringTests": {
           "type": "array",

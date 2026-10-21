@@ -196,8 +196,10 @@ describe("R534: an al-runner row that is an answer never aborts the session", ()
       ["M0001", "timeout-killed", 1],
       ["M0002", "timeout-killed", 1],
     ]);
-    // The baseline, then per mutant: ONE mutated spawn and exactly one unmutated confirm.
-    expect(spawns.map((s) => s.active)).toEqual(["", "M0001", "", "M0002", ""]);
+    // The baseline, then per mutant: ONE mutated spawn, exactly one unmutated confirm, and (R577,
+    // al-runner's rule is on) one reproduction under the mutant, which hung again.
+    expect(spawns.map((s) => s.active)).toEqual(["", "M0001", "", "M0001", "M0002", "", "M0002"]);
+    expect(report.mutants.map((m) => m.killReproduced)).toEqual([true, true]);
   });
 
   test("S1 (b) REPRO: an unexecuted UI handler is error runner-test-error from ONE spawn, and the next mutant is still scored", async () => {
@@ -213,7 +215,8 @@ describe("R534: an al-runner row that is an answer never aborts the session", ()
       ["M0002", "killed", null],
     ]);
     expect(report.mutants[0]?.failureNote).toContain(HANDLER_UNUSED);
-    expect(spawns.map((s) => s.active)).toEqual(["", "M0001", "M0002", ""]);
+    // R577: M0002's kill is reproduced by one more spawn under it, after the confirm.
+    expect(spawns.map((s) => s.active)).toEqual(["", "M0001", "M0002", "", "M0002"]);
   });
 
   test("the causes' ripple (final review M-c): the banner names both causes and explain carries them", async () => {

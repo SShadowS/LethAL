@@ -183,8 +183,18 @@ try {
     const mutated = spawns.flatMap((s, i) =>
       s.active === m.mutantCode && s.test === test ? [i] : [],
     );
-    check(mutated.length === 1, `${label}: mutated spawns of ${test}: ${mutated.length}`);
-    const [at] = mutated;
+    // R577: al-runner's kill must reproduce, so the hang is run TWICE under the mutant: the kill,
+    // then, right after its unmutated confirm, the reproduction (which must time out again).
+    check(
+      mutated.length === 2,
+      `${label}: mutated spawns of ${test}: ${mutated.length} (expected 2: the kill and its R577 reproduction)`,
+    );
+    const [at, again] = mutated;
+    check(
+      at !== undefined && again === at + 2,
+      `${label}: the reproduction is the spawn right after the confirm (got positions ${mutated.join(", ")})`,
+    );
+    check(m.killReproduced === true, `${label}: killReproduced (R577)`);
     const next = at === undefined ? undefined : spawns[at + 1];
     const confirmsOf = spawns.filter(
       (s, i) => i > (at ?? spawns.length) && s.active === "" && s.test === test,

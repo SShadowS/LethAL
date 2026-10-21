@@ -8,6 +8,7 @@ import { buildReport, renderConsole } from "../src/report";
 import type { Caveat, SessionReport } from "../src/report";
 import type { FoldStatics } from "../src/report-fold";
 import { identityKeyOf, serializeKey } from "../src/selection";
+import { legacyBuildReport } from "./helpers/legacy-report";
 
 // ————————————————————————————————————————————————————————————————————————
 // R7/R8: `renderConsole` repeats the al-runner canary's measured verdict at the END of the
@@ -848,5 +849,134 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     for (const [, explanation] of entries) {
       expect(explanation).toBeTruthy();
     }
+  });
+});
+
+// R577: the kill-reproduction fields ride both fold sites, and the banner names the new cause.
+describe("R577: killReproduced, reproducedFailure and kill-not-reproduced on the report", () => {
+  const STATICS: FoldStatics = {
+    caps: { authoritative: false, coverage: "none", deploy: "publish", isolation: "session" },
+    buildSymbols: [],
+  };
+  const mutant = (id: string): MutantManifestEntry => ({
+    mutantId: id,
+    file: "Al/Probe.Codeunit.al",
+    startIndex: 0,
+    endIndex: 1,
+    startLine: 1,
+    operatorName: "lethal.remove-assignment",
+    operatorVersion: "1.0.0",
+    astHash: `hash-${id}`,
+    objectType: "codeunit",
+    codeunitId: 50100,
+    codeunitName: "Probe",
+    procedureName: "P",
+    originalText: "",
+    mutatedText: "",
+  });
+  const report = () =>
+    buildReport(
+      STATICS,
+      [
+        {
+          type: "mutation-set-generated",
+          siteCount: 3,
+          deployedCount: 3,
+          hangCapableCount: 0,
+          totalFiles: 1,
+          instrumentableFiles: 1,
+          notInstrumentedFiles: [],
+          declarativeSiteFiles: [],
+          preprocExcludedFiles: [],
+          excludedByOnly: 0,
+          excludedByExclude: 0,
+          excludedByOperator: 0,
+        },
+        { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+        {
+          type: "mutant-scored",
+          mutant: mutant("M0001"),
+          verdict: "killed",
+          batchIndex: 0,
+          durationMs: 5,
+          coveringTests: ["Probe Tests.T1"],
+          killingTest: "T1",
+          killingTestFailure: "first text",
+          killReproduced: true,
+          reproducedFailure: "second text",
+        },
+        {
+          type: "mutant-carried",
+          mutant: mutant("M0002"),
+          verdict: "killed",
+          fromRunId: 1,
+          batchIndex: 0,
+          priorDurationMs: 5,
+          coveringTests: ["Probe Tests.T1"],
+          killingTest: "T1",
+          killReproduced: true,
+        },
+        {
+          type: "mutant-scored",
+          mutant: mutant("M0003"),
+          verdict: "error",
+          batchIndex: 0,
+          durationMs: 5,
+          coveringTests: ["Probe Tests.T1"],
+          cause: "kill-not-reproduced",
+          failureNote: "kill-not-reproduced T1: ...",
+        },
+        { type: "session-finished", elapsedMs: 15 },
+      ].map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent),
+    );
+
+  test("a scored and a carried reproduced kill keep the marker (and the text where there is one)", () => {
+    const rows = new Map(report().mutants.map((m) => [m.mutantCode, m]));
+    expect(rows.get("M0001")).toMatchObject({
+      killReproduced: true,
+      reproducedFailure: "second text",
+    });
+    expect(rows.get("M0002")?.killReproduced).toBe(true);
+    expect("reproducedFailure" in (rows.get("M0002") ?? {})).toBe(false);
+    expect("killReproduced" in (rows.get("M0003") ?? {})).toBe(false);
+  });
+
+  test("the banner's error breakdown names kill-not-reproduced, and counts.unstable does not", () => {
+    const r = report();
+    expect(renderConsole(r)).toContain(", kill-not-reproduced 1");
+    expect(r.counts.unstable).toBe(0);
+  });
+
+  test("the legacy-report shim carries both fields on a scored and on a carried outcome (M2: it copies field by field, as R86 lost killingTestFailure)", () => {
+    const base = { batchIndex: 0, coveringTests: ["Probe Tests.T1"], killingTest: "T1" } as const;
+    const r = legacyBuildReport({
+      caps: STATICS.caps,
+      baselineGreen: true,
+      batches: 1,
+      outcomes: [
+        {
+          ...base,
+          mutant: mutant("M0001"),
+          verdict: "killed",
+          killReproduced: true,
+          reproducedFailure: "again",
+        },
+        {
+          ...base,
+          mutant: mutant("M0002"),
+          verdict: "killed",
+          carried: true,
+          killReproduced: true,
+        },
+      ],
+      unsupportedTests: [],
+      notInstrumented: { totalFiles: 1, files: [] },
+      timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+      untargetedTriggerCount: 0,
+      baselineTests: [],
+    });
+    const rows = new Map(r.mutants.map((m) => [m.mutantCode, m]));
+    expect(rows.get("M0001")).toMatchObject({ killReproduced: true, reproducedFailure: "again" });
+    expect(rows.get("M0002")?.killReproduced).toBe(true);
   });
 });
