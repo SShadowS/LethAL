@@ -41,7 +41,7 @@ import {
   preflightGateBaseline,
   recordRequested,
 } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   HardenGateError,
@@ -68,6 +68,7 @@ const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-harden");
 const TESTS_DIR = join(REPO_ROOT, "fixtures", "sandbox-harden-tests");
 const ANSWERS_DIR = join(REPO_ROOT, "fixtures", "sandbox-harden-answers");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
 const BASELINE_PATH = join(HERE, "harden.baseline.json");
 /** R169: the top of sandbox-harden's 79500-79549 range, counting down. */
 const SELECTOR_IDS = { selectorId: 79547, controlId: 79548, tableId: 79549 };

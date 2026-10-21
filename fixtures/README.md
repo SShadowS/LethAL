@@ -1669,6 +1669,49 @@ the same shape and point `--config` at it. `packages/runner/itest/bcdev.itest.ts
 file (plus `launch.local.json` for `environmentType`/`environmentName`) directly — it is not
 routed through the CLI.
 
+### The BC on Linux servers: `lethal.config.bc1.json`, `bc2`, `bc3` (R589)
+
+Three BC 28.4 servers run on server1 (192.168.2.157), on BC on Linux, so the BC gates can run in
+parallel instead of queueing for Cronus28. They are W1: the company is `CRONUS International Ltd.`
+(not Cronus28's DK `CRONUS Danmark A/S`), the tenant `default`, the instance `BC`, with Basic
+authentication.
+
+| server | OData | dev endpoint | API |
+|---|---|---|---|
+| `bc1` | 7048 | 7049 | 7052 |
+| `bc2` | 7148 | 7149 | 7152 |
+| `bc3` | 7248 | 7249 | 7252 |
+
+`bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` prepares them. It writes one gitignored
+`lethal.config.<server>.json` and `.vscode/launch.<server>.json` in each gate's fixture directory
+(`sandbox-app`, `sandbox-data`, `sandbox-hang`, `sandbox-harden`). It then publishes LethAL Control
+and every app a BC gate needs (`PUBLISH_PLAN`: `sandbox-probes` before `sandbox-app`, each fixture
+pair, `sandbox-harden-answers`, `sandbox-wrapped` built with `/define:WRAPDEF`, the names pair) over
+the dev endpoint, targets before their dependents, skipping an app the server already has. It ends
+with `lethal doctor` on each config. A gate picks a server with
+`LETHAL_ITEST_CONFIG=lethal.config.bc1.json`, and prints the target it will measure as its first
+line (config, host and dev port, OData root, API root).
+
+`LETHAL_ITEST_CONFIG=lethal.config.<x>.json` requires `.vscode/launch.<x>.json` naming the same
+server: the itest refuses when the file is missing, or when its host (or its dev port, where both
+state one) differs from the config's. With the variable unset, `lethal.config.local.json` and
+`launch.local.json` work as before.
+
+- **The databases are in memory.** A restart of a server's container, or of server1, resets it to
+  a fresh CRONUS with none of LethAL's apps. Re-run the setup script; it is safe to run again.
+- The login is in the gitignored fixture config and in `/coord/secrets/bc-linux.env` (written by
+  the owner). It is never in this repository, which is public.
+- `server` in these configs carries the dev port (`http://192.168.2.157:7149` for `bc2`) and
+  `baseUrl` the OData root, because the three servers share one host: without the port they would
+  be one server to LethAL's quarantine and publish queue.
+- The itests take both ports from the config (R591, folded into R589): OData from `baseUrl`
+  (`configuredOdataBaseUrl`), the dev port from `port`, which reaches bc-dev-mcp and altool's
+  `--port`. LethAL's own API reads (companies, extensions) go to `apiBaseUrl`, because BC on Linux
+  serves the API on its own port. A config with none of these (Cronus28) keeps 7048 for OData and
+  API, and 7049 for dev.
+- **Cronus284 is CentralGauge's, not LethAL's.** LethAL used it from 2026-09-26 to 2026-10-20, and
+  measurements from that time say so; it is not a target any more.
+
 ## Running the fixture manually
 
 ```bash

@@ -62,7 +62,7 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   type QuarantineDiagnostic,
@@ -85,6 +85,7 @@ const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-hang");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-hang-tests");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
 /**
  * R-204b: the SINGLE leg's committed per-mutant baseline (R332: refused when missing, recorded
  * once with `LETHAL_ITEST_RECORD_BASELINE=hang.single.baseline.json`, exit 3, never a pass). The ON

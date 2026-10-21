@@ -49,6 +49,7 @@ import {
   itestConfigName,
   itestConfigPath,
   itestLaunchPath,
+  printItestTarget,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
@@ -74,8 +75,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
-const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 // Committed per-mutant baseline, see baseline-guard.ts. Since R332 a missing file is refused at
 // startup; record it only with LETHAL_ITEST_RECORD_BASELINE=tables.baseline.json (a record run
 // exits 3, never a pass). Never hand-write this file; it must come from a live run.

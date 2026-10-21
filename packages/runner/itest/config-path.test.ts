@@ -12,6 +12,8 @@ import {
   itestConfigPath,
   itestLaunchName,
   itestLaunchPath,
+  itestTargetLine,
+  printItestTarget,
 } from "./config-path";
 
 describe("the default is unchanged", () => {
@@ -114,6 +116,62 @@ describe("the launch file and the lethal config must name one server (R589)", ()
     expect(() =>
       assertLaunchMatchesConfig({ server: "http://192.168.2.157", port: 7149 }, bc1, "l.json"),
     ).toThrow(ItestLaunchPairError);
+  });
+});
+
+describe("the target line an itest prints first (R589)", () => {
+  test("a bc2 config: host + dev port, its own OData and API roots, no login", () => {
+    const line = itestTargetLine("lethal.config.bc2.json", {
+      server: "http://192.168.2.157:7149",
+      serverInstance: "BC",
+      port: 7149,
+      baseUrl: "http://192.168.2.157:7148/BC",
+      apiBaseUrl: "http://192.168.2.157:7152/BC",
+    });
+    expect(line).toBe(
+      "[itest target] config=lethal.config.bc2.json server=192.168.2.157:7149 odata=http://192.168.2.157:7148/BC api=http://192.168.2.157:7152/BC",
+    );
+  });
+
+  test("a Cronus28 config with no ports shows the defaults it will use", () => {
+    expect(
+      itestTargetLine("lethal.config.local.json", {
+        server: "http://Cronus28",
+        serverInstance: "BC",
+      }),
+    ).toBe(
+      "[itest target] config=lethal.config.local.json server=cronus28:7049 (default) odata=http://cronus28:7048/BC api=http://cronus28:7048/BC",
+    );
+  });
+
+  test("printing reads a synthetic config and never prints its login", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "target-line-"));
+    const path = join(tmp, "lethal.config.bc1.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        bcdev: {
+          server: "http://192.168.2.157:7049",
+          serverInstance: "BC",
+          port: 7049,
+          username: "SYNTH-USER",
+          password: "synth-pass!",
+          env: { BC_DEV_USER: "SYNTH-USER", BC_DEV_PASSWORD: "synth-pass!" },
+        },
+      }),
+    );
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => lines.push(a.join(" "));
+    try {
+      printItestTarget(path);
+    } finally {
+      console.log = log;
+    }
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("config=lethal.config.bc1.json server=192.168.2.157:7049");
+    expect(lines[0]).not.toContain("SYNTH-USER");
+    expect(lines[0]).not.toContain("synth-pass");
   });
 });
 

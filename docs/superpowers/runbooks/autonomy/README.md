@@ -117,19 +117,46 @@ containers assigned to this project can be leased. A missing `allocation.json` t
 **The owner's host pause is not seen there.** To pause the container's sessions use
 `kraken tentacle stop` (host) or `bash scripts/coord.sh pause` (inside).
 
-- **LethAL may use `Cronus28` and `Cronus284`** (owner allocation 2026-09-25, Cronus284 added
-  2026-09-26, enforced by coord through `H:\cg-coord\allocation.json`). Cronus281, Cronus282 and
-  Cronus283 belong to CentralGauge; never lease or publish to them. **Owner (2026-09-27): load
-  balance across both.** Each container runs one gate at a time under a coord lease; the two lanes
-  use whichever is free (the orchestrator may assign one per lane). Cronus28 carries every fixture
-  (`sandbox-app`, `sandbox-data`, `sandbox-hang`, ...). Cronus284 carries the control app and the
-  `sandbox-data` pair only (others unpublished 2026-09-26). Which control version a container has
-  installed is machine state, not repo state: `lethal doctor --config <path>` reads it from the
-  server (its `control-version` check), and the client requires the version in
-  `extensions/lethal-control/app.json`. Publish a fixture pair on Cronus284 before its
-  first gate, and point a lane's gitignored `lethal.config.local.json` at `http://Cronus284` for that
-  run. Both have stalled on TestPage tests (R236, `docs/measurements/2026-09-27-nst-wedge-incidents.md`);
-  an unrecoverable container goes to the owner.
+- **LethAL may use `Cronus28` and the three BC on Linux servers `bc1`, `bc2` and `bc3`** (R589,
+  owner allocation 2026-10-21, enforced by coord through the allocation file). **Cronus284 is
+  CentralGauge's, not LethAL's** (owner, 2026-10-21; LethAL used it 2026-09-26 to 2026-10-20, and
+  the measurements from that time stay as history). Cronus281, Cronus282, Cronus283 and Cronus284
+  belong to CentralGauge; never lease or publish to them. Each server runs one gate at a time under
+  a coord lease; lanes use whichever is free (the orchestrator may assign one per lane). Cronus28
+  carries every fixture (`sandbox-app`, `sandbox-data`, `sandbox-hang`, ...). Which control version
+  a server has installed is machine state, not repo state: `lethal doctor --config <path>` reads it
+  from the server (its `control-version` check), and the client requires the version in
+  `extensions/lethal-control/app.json`. Cronus28 has stalled on TestPage tests (R236,
+  `docs/measurements/2026-09-27-nst-wedge-incidents.md`); an unrecoverable container goes to the
+  owner.
+- **The BC on Linux servers (R589).** BC 28.4 on server1 (192.168.2.157), reachable from the kraken
+  container. W1 localization, company `CRONUS International Ltd.`, tenant `default`, instance `BC`,
+  Basic authentication.
+
+  | server | OData | dev endpoint | API |
+  |---|---|---|---|
+  | `bc1` | 7048 | 7049 | 7052 |
+  | `bc2` | 7148 | 7149 | 7152 |
+  | `bc3` | 7248 | 7249 | 7252 |
+
+  - **Their databases are in memory.** A container restart or a server1 reboot resets each one to
+    a fresh CRONUS, with no LethAL app on it. The fix is to re-run the setup script:
+    `bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` (add `--dry-run` to see the plan). It
+    takes and releases the coord lease itself, writes each fixture's config and paired launch
+    file, publishes LethAL Control and every app a BC gate needs (`sandbox-probes` included) over
+    the dev endpoint (Dev scope), skips what is already there, and ends with `lethal doctor` on
+    every config it wrote.
+  - No BcContainerHelper and no Windows Docker context: everything goes over the dev endpoint.
+  - The login is in the gitignored fixture config (`fixtures/<fixture>/lethal.config.<server>.json`,
+    written by the setup script) and in `/coord/secrets/bc-linux.env`, which only the owner writes.
+    Never print either. Select a server for a gate with `LETHAL_ITEST_CONFIG=lethal.config.bc1.json`;
+    it requires `.vscode/launch.bc1.json` naming the same server, and the gate's first line names
+    the target it measures.
+  - Measured 2026-10-21: `itest:bcdev` PASSES on `bc1` and `bc2` at 3 / 12 / 4, per mutant equal to
+    its baseline (`bc3` pending).
+  - The company is W1 `CRONUS International Ltd.`, not Cronus28's DK `CRONUS Danmark A/S`. A gate
+    whose figures were frozen on Cronus28 must reproduce them per mutant here before a server is
+    used for it (R589); any difference is a BLOCK.
 - Before any work that touches it (live gates, control-app publish, fixture publish): check it
   is running (host only: `pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`;
   in the container, `kraken tentacle status`), then

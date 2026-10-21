@@ -60,7 +60,7 @@ import { scanTestPageTests } from "../src/testpage-scan";
 import { VERIFY_EXIT, runVerify } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
 import { preflightReadOnlyBaseline, readGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   ANSWER_KILLERS,
@@ -103,6 +103,7 @@ const ANSWERS_FILE = join(
   "HardenAnswerKey.Codeunit.al",
 );
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
 /** Read only, and refused at startup when missing (R332). This gate never writes it. */
 const BASELINE_PATH = join(HERE, "harden.baseline.json");
 /** R261: verify reads the config's selector ids, the full runs read this; asserted equal first. */

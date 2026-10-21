@@ -44,6 +44,7 @@ import {
   itestConfigName,
   itestConfigPath,
   itestLaunchPath,
+  printItestTarget,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
@@ -62,8 +63,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
-const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 // Committed per-mutant healthy-path baseline (Task 15, design spec §14) — see baseline-guard.ts.
 // Aggregate counts (EXPECTED below) are a smoke test; this catches a per-mutant verdict swap
 // that leaves the aggregate counts unchanged.

@@ -37,6 +37,7 @@ import {
   itestConfigName,
   itestConfigPath,
   itestLaunchPath,
+  printItestTarget,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -57,8 +58,9 @@ if (!process.env.LETHAL_ITEST_BCDEV) {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONNECTION_DIR = join(HERE, "..", "..", "..", "fixtures", "sandbox-app");
-const LAUNCH_LOCAL_PATH = itestLaunchPath(CONNECTION_DIR);
 const CONFIG_LOCAL_PATH = itestConfigPath(CONNECTION_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(CONNECTION_DIR);
 const BASELINE_PATH = join(HERE, "bcdev.names.baseline.json");
 
 interface LaunchLocalConfig {

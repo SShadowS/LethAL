@@ -78,6 +78,7 @@ import {
   itestConfigName,
   itestConfigPath,
   itestLaunchPath,
+  printItestTarget,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertReachEvidence, assertReachIdenticalAcrossLegs } from "./reach-evidence";
@@ -92,8 +93,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
-const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
 
 /** The slice: the only file in this fixture whose kills reach ordered position 5. */

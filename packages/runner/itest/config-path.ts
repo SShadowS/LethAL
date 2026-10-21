@@ -19,8 +19,60 @@
  * would make an env var enough to aim a publish anywhere.
  */
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { configuredOdataBaseUrl } from "../src/cli";
+
+/** The `bcdev` fields the target line reads; nothing else of the config reaches it. */
+interface TargetFields {
+  readonly server: string;
+  readonly serverInstance: string;
+  readonly port?: number;
+  readonly baseUrl?: string;
+  readonly apiBaseUrl?: string;
+}
+
+/**
+ * R589: the line a BC itest prints first, naming what it will measure: the config file, the server
+ * (host and dev port), the OData root and the API root. Built from those fields alone, so no login
+ * can reach it. With parallel servers, a log that cannot say which one it ran against proves
+ * nothing about a server.
+ */
+export function itestTargetLine(configName: string, bcdev: TargetFields): string {
+  const u = new URL(bcdev.server);
+  const devPort = bcdev.port ?? (u.port !== "" ? Number(u.port) : undefined);
+  const odata = configuredOdataBaseUrl(bcdev);
+  return `[itest target] config=${configName} server=${u.hostname}:${devPort ?? "7049 (default)"} odata=${odata} api=${bcdev.apiBaseUrl ?? odata}`;
+}
+
+/** Prints `itestTargetLine` for a config file, reading only its `bcdev` target fields. */
+export function printItestTarget(
+  configPath: string,
+  read: (p: string) => string = (p) => readFileSync(p, "utf8"),
+): void {
+  let bcdev: Partial<TargetFields> | undefined;
+  try {
+    bcdev = (JSON.parse(read(configPath)) as { bcdev?: Partial<TargetFields> }).bcdev;
+  } catch {
+    console.log(`[itest target] config=${basename(configPath)} is missing or unreadable`);
+    return;
+  }
+  const { server, serverInstance } = bcdev ?? {};
+  if (typeof server !== "string" || typeof serverInstance !== "string") {
+    console.log(`[itest target] config=${basename(configPath)} names no bcdev server`);
+    return;
+  }
+  const { port, baseUrl, apiBaseUrl } = bcdev ?? {};
+  console.log(
+    itestTargetLine(basename(configPath), {
+      server,
+      serverInstance,
+      ...(port !== undefined ? { port } : {}),
+      ...(baseUrl !== undefined ? { baseUrl } : {}),
+      ...(apiBaseUrl !== undefined ? { apiBaseUrl } : {}),
+    }),
+  );
+}
 
 /** Thrown for a malformed `LETHAL_ITEST_CONFIG`. Never falls back to the default silently. */
 export class ItestConfigNameError extends Error {}
