@@ -47,7 +47,7 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
    specifically whether a test or frozen figure was weakened.
 3. **GitHub CI on the submitted branch must be green on BOTH jobs** (`gh run list --branch <branch> --limit 1`; `check` is Windows, `unit-linux` is Linux). This container is Linux, so a Windows-only failure (path separators, CRLF, platform APIs) never shows locally: CI is the only Windows check we have. Red or missing: send it back. Merge onto current `master` in the main checkout. Run on that exact tree: `bun run typecheck`,
    `rm -rf packages/*/dist`, `bun test`, `bunx biome check <touched files>`, and
-   `bun run compile:fixtures` when fixtures changed. Live gates the plan names: run them yourself on Cronus28 under `coord lease Cronus28 orchestrator` (standing owner authorization, README), one at a time; a moved figure is a block for the owner.
+   `bun run compile:fixtures` when fixtures changed. Live gates the plan names: run them yourself on a bc server proven for that gate under `coord lease bc1 orchestrator` (or bc2/bc3; Cronus28 is parked) (standing owner authorization, README), one at a time; a moved figure is a block for the owner.
    **Merge-time gates (owner, 2026-10-08): run a gate on the merged tree only when the merge can
    change what it measures.** Re-run `itest:alrunner` only when the merged diff touches the
    al-runner path (`packages/runner/src/al-runner*`, coverage/line-map/selection/orchestrator
