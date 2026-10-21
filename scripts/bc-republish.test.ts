@@ -80,8 +80,23 @@ describe("parseArgs", () => {
         server: "bc3",
         lane: "preproc",
         apps: ["sandbox-app"],
+        mint: [],
       },
     );
+  });
+
+  test("--mint names a fixture to publish at a minted version, and adds it to the plan", () => {
+    expect(parseArgs(["republish", "--server", "bc3", "--lane", "p", "--mint", "a", "b"])).toEqual({
+      mode: "republish",
+      server: "bc3",
+      lane: "p",
+      apps: ["a", "b"],
+      mint: ["a"],
+    });
+    expect(() => parseArgs(["republish", "--server", "bc3", "--lane", "p", "--mint"])).toThrow(
+      /--mint needs/,
+    );
+    expect(() => parseArgs(["alpackages", "--server", "bc3", "--mint", "a"])).toThrow(/no --mint/);
   });
 
   test("refuses a bad server, no apps, an unknown flag, and a lane on alpackages", () => {

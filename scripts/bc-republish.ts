@@ -25,8 +25,9 @@
  * process and leaves it only as a Basic auth header. It is never printed, logged or put on a
  * command line; errors name the key, never the value.
  */
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { reserveAppVersion } from "../packages/runner/src/app-version.ts";
 import { bcFetch } from "../packages/runner/src/bc-fetch.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
@@ -64,11 +65,13 @@ export type Args =
       readonly server: ServerName;
       readonly lane: string;
       readonly apps: string[];
+      /** Fixtures published at a freshly minted version (LethAL's `reserveAppVersion`), not app.json's. */
+      readonly mint: string[];
     }
   | { readonly mode: "alpackages"; readonly server: ServerName; readonly apps: string[] };
 
 const USAGE =
-  "usage: bun scripts/bc-republish.ts republish --server bc1|bc2|bc3 --lane <lane> <fixture>...\n" +
+  "usage: bun scripts/bc-republish.ts republish --server bc1|bc2|bc3 --lane <lane> [--mint <fixture>]... <fixture>...\n" +
   "       bun scripts/bc-republish.ts alpackages --server bc1|bc2|bc3 <tests fixture>...";
 
 export function parseArgs(argv: readonly string[]): Args {
@@ -77,11 +80,17 @@ export function parseArgs(argv: readonly string[]): Args {
   let server: string | undefined;
   let lane: string | undefined;
   const apps: string[] = [];
+  const mint: string[] = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === "--server") server = rest[++i];
     else if (a === "--lane") lane = rest[++i];
-    else if (a === undefined || a.startsWith("-"))
+    else if (a === "--mint") {
+      const m = rest[++i];
+      if (m === undefined || m.startsWith("-")) throw new Error(`--mint needs a fixture\n${USAGE}`);
+      mint.push(m);
+      apps.push(m);
+    } else if (a === undefined || a.startsWith("-"))
       throw new Error(`unknown argument ${JSON.stringify(a)}\n${USAGE}`);
     else apps.push(a);
   }
@@ -90,12 +99,13 @@ export function parseArgs(argv: readonly string[]): Args {
   if (apps.length === 0) throw new Error(`name at least one fixture directory\n${USAGE}`);
   if (mode === "alpackages") {
     if (lane !== undefined) throw new Error("alpackages takes no lease, so it takes no --lane");
+    if (mint.length > 0) throw new Error("alpackages publishes nothing, so it takes no --mint");
     return { mode, server, apps };
   }
   // R598: the lease holder must be the caller's lane, never a default.
   if (lane === undefined || lane === "")
     throw new Error(`--lane is required (the lease is taken in its name)\n${USAGE}`);
-  return { mode, server, lane, apps };
+  return { mode, server, lane, apps, mint };
 }
 
 export interface Plan {
@@ -283,7 +293,12 @@ function leaseFor(lane: string): LeaseDeps {
   };
 }
 
-async function republish(server: ServerName, lane: string, apps: string[]): Promise<boolean> {
+async function republish(
+  server: ServerName,
+  lane: string,
+  apps: string[],
+  mint: readonly string[],
+): Promise<boolean> {
   const all = fixtureManifests();
   const plan = republishPlan(apps, all);
   const log = (s: string) => console.log(s);
@@ -316,9 +331,28 @@ async function republish(server: ServerName, lane: string, apps: string[]): Prom
       }
       const out = join(build, `${dir}.app`);
       const defines = PUBLISH_PLAN.find((s) => s.target === dir)?.defines;
-      await alcCompile(tools.alcPath, join(FIXTURES, dir), symbols, out, defines);
+      let project = join(FIXTURES, dir);
+      let version = m.version;
+      if (mint.includes(dir)) {
+        // A copy whose app.json carries a version minted the way a gate's deploy mints one, so it
+        // outranks an installed-version record a gate run left (R-604).
+        version = reserveAppVersion({ sourceVersion: m.version, nowMs: Date.now() });
+        project = join(build, `${dir}-src`);
+        cpSync(join(FIXTURES, dir), project, { recursive: true });
+        const raw = JSON.parse(readFileSync(join(project, "app.json"), "utf8")) as Record<
+          string,
+          unknown
+        >;
+        writeFileSync(
+          join(project, "app.json"),
+          `${JSON.stringify({ ...raw, version }, null, 2)}\n`,
+        );
+      }
+      await alcCompile(tools.alcPath, project, symbols, out, defines);
       built.set(dir, readFileSync(out));
-      log(`  compiled    ${m.name} ${m.version} sha256 ${sha256Of(readFileSync(out))}`);
+      log(
+        `  compiled    ${m.name} ${version}${version !== m.version ? ` (minted; app.json ${m.version})` : ""} sha256 ${sha256Of(readFileSync(out))}`,
+      );
     }
     // 2. remove, dependents first
     const ext = await extensionsApi(c);
@@ -375,7 +409,7 @@ async function main(): Promise<number> {
       await alpackages(args.server, args.apps);
       return 0;
     }
-    const ok = await republish(args.server, args.lane, args.apps);
+    const ok = await republish(args.server, args.lane, args.apps, args.mint);
     console.log(ok ? "ok" : "FAILED: a read-back did not match");
     return ok ? 0 : 1;
   } catch (err) {
