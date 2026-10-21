@@ -47,6 +47,7 @@ import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError } from "../src/artifact";
 import { formatFailure } from "../src/format-failure";
 import { type SessionConfig, runSession } from "../src/orchestrator";
+import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import {
@@ -522,6 +523,14 @@ async function legX(scratch: string): Promise<void> {
         bcVersion: SANDBOX_BC,
         selectorObjectId: 79199,
       }),
+    );
+    // (c) runs in the production configuration, v3 with coverage on, so `deploy()` builds its
+    // coverage index. That needs the session's build symbols, which `runSession` hands over
+    // (`handBuildSymbols`); without this call R-300b's guard refuses the deploy (measured
+    // 2026-10-21, X.log on 581bba4b). The set is exactly what `runSession` computes for the
+    // sandbox-app session that built `batch`: no config symbols, alc's build (no predefined).
+    b.useBuildSymbols(
+      await effectiveBuildSymbols(fixture("sandbox-app"), [], undefined, { kind: "al-runner-v3" }),
     );
     await b.deploy(batch);
     await b.activate("M0002");
