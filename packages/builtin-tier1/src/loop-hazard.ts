@@ -3324,15 +3324,30 @@ function r570LoopCallees(
 }
 
 /**
- * R572 (prototype r2): a loop FLAG fed by another object's STATEFUL procedure (`Found :=
- * X.NextEntry(..); until not Found`, or `X.Step(Buf, More)` writing `More` through a `var`
- * argument). The calls: those in R480's feeds of the exit parts, and body calls that pass a name
- * the exit reads (directly or through a feed) to a `var` parameter. A call into another object
- * follows its `exit(<call>)` chain (`r572Chain`, no shape test); a same-object wrapper is followed
- * through its `exit(<call>)` into another object (I3b). The chain is refused when a procedure on it
- * is `r572Stateful`; then so is every procedure of a chain object that writes a global the chain
- * uses (`r572Writers`). Decided by statefulness ALONE: a pure callee (result from its arguments and
- * fresh local temporary records only) is not refused (the stated self-feed limit, `selfFeed`).
+ * R572: a loop whose exit is fed by another object's STATEFUL procedure. Three shapes reach it:
+ * a flag (`Found := X.NextEntry(..); until not Found`), a `var` argument the call writes
+ * (`X.Step(Buf, More)`), and a call in the exit itself (`while It.HasNext() do`).
+ *
+ * The calls followed are those in R480's feeds of the exit parts, the exit parts' own calls, and
+ * body calls that pass a name the exit reads to a `var` parameter of a simple type. A call into
+ * another object follows its `exit(<call>)` chain up to 4 hops (`r572Chain`). A same-object
+ * wrapper is followed through its `exit(<call>)` into another object (I3b).
+ *
+ * The chain is refused when a procedure on it is STATEFUL (`r572Stateful`, rule P). Then every
+ * procedure in a chain object that writes the chain's VALUE PATH is refused too, whoever calls it
+ * (`r572ValueWriters`, a fixpoint).
+ *
+ * Option D: a loop whose own step alone forces the exit (`r572ForcedSteps`) keeps only the calls
+ * that get that cursor, and of those only the ones that touch it (`r570Touches`).
+ *
+ * Stated limits (each errs toward deploying):
+ * - A stateless callee fed its own result (`D := X.NextDate(D)`), or whose result is added into the
+ *   flag, is not refused. `scripts/r572-flag-census.ts` prints such rows as `RE-OPEN SHAPE`;
+ *   re-open R572 if one sits in a loop with no other stop.
+ * - Statefulness is read by name, 4 calls deep; past that it is UNKNOWN, which counts as stateful.
+ * - Narrowing (a)'s proof is by name. A write through RecordRef or FieldRef is a call it cannot
+ *   resolve, so it counts as a write and the loop is refused.
+ * - Event subscribers are not followed, as in R570.
  */
 export interface R572Row {
   readonly loop: ALSyntaxNode;
@@ -3350,111 +3365,475 @@ export interface R572Row {
   readonly writers: ALSyntaxNode[];
 }
 
-/** Test and measurement seam. `optionD`: skip a call that does not get the cursor when the loop's
- *  own step alone forces the exit (`r572ForcedSteps`); `touch`: under that same condition, skip a
- *  call that gets the cursor but never touches it (`r570Touches`); `writers`: which writers of the
- *  chain's globals are refused (`reach`: reachable from the chain, the loop body's calls and their
- *  `Codeunit.Run` steps). */
-export const r572Seam = {
-  on: true,
-  writers: "reach" as "all" | "reach" | "none",
-  optionD: true,
-  touch: true,
-};
+/** Test seam: R572 on or off as a whole. */
+export const r572Seam = { on: true };
 
 /**
- * Option D, precise (plan r2 review 2): the cursors whose step ALONE forces the loop's exit. For a
- * `while`, a top-level AND conjunct `R.Next() <> 0` or `R.Next() > 0`; for an `until`, a top-level
- * OR disjunct `R.Next() = 0`; negations are pushed through `not` and De Morgan first. The receiver
- * must be declared a record and the step argument absent or a literal. Empty: anything else
+ * Narrowing (a), behind its own seam. Option D also accepts:
+ * - `R.Next(X)` where X is an Integer LOCAL or BY-VALUE parameter that is invariant by proof in the
+ *   loop (`r572StepInvariant`);
+ * - the same forced step reached through a same-object HELPER (`until Helper()`, `until Helper() =
+ *   0`) when every exit of the helper carries it and nothing in the helper moves the cursor back
+ *   (`r572HelperKeys`);
+ * - a FLAG that only that helper writes, once per pass (`EndLoop := Helper(); until EndLoop`).
+ */
+export const r572InvariantStep = { on: true };
+
+/**
+ * Under narrowing (a), X must also be a local that is assigned only non-zero integer literals
+ * outside the loop, one of them before the loop on every path. ON (the conservative reading) until
+ * a BC probe measures what `R.Next(0)` does: if it steps the cursor, a mutant that leaves X at 0
+ * would loop for ever. With this on, a by-value parameter X is refused.
+ */
+export const r572RequireNonZeroStep = { on: true };
+
+/**
+ * Option D, precise (plan r2 review 2): the cursors (keyed in the loop's procedure) whose step
+ * ALONE forces the loop's exit. For a `while`, a top-level AND conjunct `R.Next() <> 0` or
+ * `R.Next() > 0`; for an `until`, a top-level OR disjunct `R.Next() = 0`. Negations are pushed
+ * through `not` and De Morgan first. The receiver must be declared a record (or a RecordRef), and
+ * the step argument must be absent or a literal, or pass narrowing (a). Empty: anything else
  * (`while More or (R.Next() <> 0)`, `until not More and (R.Next() = 0)`, `while not (Done and EOS)`).
  */
-function r572ForcedSteps(loop: ALSyntaxNode, ctx: SemanticContext): Map<string, ALSyntaxNode> {
-  const out = new Map<string, ALSyntaxNode>();
+function r572ForcedSteps(loop: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+  const out = new Set<string>();
   const parts = loopConditionParts(loop);
   const top = parts.length === 1 ? parts[0] : undefined;
-  if (top === undefined) return out;
+  const scope = codeScope(loop);
+  if (top === undefined || scope === null) return out;
   const isWhile = loop.rawKind === "while_statement";
   if (!isWhile && loop.rawKind !== "repeat_statement") return out;
-  const unparen = (n: ALSyntaxNode): ALSyntaxNode => {
-    let c = n;
-    while (c.rawKind === "parenthesized_expression" && c.namedChildren.length === 1) {
-      const k = c.namedChildren[0];
-      if (k === undefined) break;
-      c = k;
-    }
-    return c;
-  };
-  const opOf = (n: ALSyntaxNode): string => {
-    const l = n.childForFieldName("left");
-    const r = n.childForFieldName("right");
-    if (l === null || r === null) return "";
-    return n.text
-      .slice(l.endIndex - n.startIndex, r.startIndex - n.startIndex)
-      .trim()
-      .toLowerCase();
-  };
-  // the atoms of the top-level split: AND for a while (exit needs one conjunct false), OR for an
-  // until (exit when one disjunct true); `neg`: the atom stands under an odd number of `not`s
-  const atoms: { n: ALSyntaxNode; neg: boolean }[] = [];
-  const split = (n0: ALSyntaxNode, neg: boolean): void => {
-    const n = unparen(n0);
-    if (n.rawKind === "unary_expression" && /^not\b/i.test(n.text.trim())) {
-      const o = n.childForFieldName("operand");
-      if (o !== null) {
-        split(o, !neg);
-        return;
-      }
-    }
-    if (n.rawKind === "logical_expression") {
-      const op = opOf(n);
-      // the connective as seen after pushing the negation through (De Morgan)
-      const eff = neg ? (op === "and" ? "or" : op === "or" ? "and" : op) : op;
-      if (eff === (isWhile ? "and" : "or")) {
-        const l = n.childForFieldName("left");
-        const r = n.childForFieldName("right");
-        if (l !== null) split(l, neg);
-        if (r !== null) split(r, neg);
-        return;
-      }
-    }
-    atoms.push({ n, neg });
-  };
-  split(top, false);
-  const flip: Record<string, string> = { "=": "<>", "<>": "=", ">": "<=" };
-  for (const { n, neg } of atoms) {
-    if (n.rawKind !== "comparison_expression") continue;
-    const l = n.childForFieldName("left");
-    const r = n.childForFieldName("right");
-    const op = n.childForFieldName("operator")?.text.trim() ?? "";
-    if (l === null || r === null || r.text.trim() !== "0" || l.rawKind !== "call_expression")
-      continue;
-    const c = r531Call(l);
-    // a bare `Next()` steps the implicit Rec (key `""`)
-    const key = c === null ? null : (c.recv ?? (r531Implicit(l, ctx) ? "" : null));
-    if (c === null || c.method !== "next" || key === null) continue;
-    if (c.uncertain || c.args.length > 1) continue;
-    const a = c.args[0];
-    if (a !== undefined && !/^-?\d+$/.test(a.text.trim())) continue;
-    // the comparison as it stands after the negation is pushed into it
-    const eff = neg ? (flip[op] ?? "") : op;
-    const forces = isWhile ? eff === "<>" || eff === ">" : eff === "=";
-    if (!forces) continue;
-    const recv = r572Receiver(l);
-    const t = recv === null ? null : declaredType(recv, ctx);
-    // a Record, or a RecordRef (whose `Next` steps a record set the same way)
-    const isRecRef =
-      recv !== null &&
-      normalizeAlName(
-        resolveVarRef(recv, ctx)?.node.childForFieldName("type")?.namedChildren[0]?.text ?? "",
-      ) === "recordref";
-    if (key !== "" && !isRecRef && (t === null || t.kind !== "table")) continue;
-    out.set(key, l);
-  }
+  // an `until` exits when its test is true, a `while` when it is false
+  for (const k of r572Forcing(top, !isWhile, { loop, scope, helper: null }, ctx)) out.add(k);
   return out;
 }
 
-export function r572LoopRows(
+/** Where a forced test is read: the loop's own procedure, or a same-object helper it calls. */
+interface R572Frame {
+  readonly loop: ALSyntaxNode;
+  /** the loop's procedure or trigger */
+  readonly scope: ALSyntaxNode;
+  /** in a helper: the helper and the loop's call of it */
+  readonly helper: { readonly proc: ALSyntaxNode; readonly call: R531Call } | null;
+}
+
+const r572Unparen = (n: ALSyntaxNode): ALSyntaxNode => {
+  let c = n;
+  while (c.rawKind === "parenthesized_expression" && c.namedChildren.length === 1) {
+    const k = c.namedChildren[0];
+    if (k === undefined) break;
+    c = k;
+  }
+  return c;
+};
+
+/** Nodes that make a statement inside them run only sometimes. */
+const R572_BRANCHES: ReadonlySet<string> = new Set([
+  "if_statement",
+  "case_statement",
+  "case_branch",
+  "case_else_branch",
+  "while_statement",
+  "repeat_statement",
+  "for_statement",
+  "foreach_statement",
+  "asserterror_statement",
+  "preproc_conditional_statement",
+]);
+
+/** Does `n` run whenever `stop` (an ancestor) does: no branch, loop or `#if` arm between them? */
+function r572Unconditional(n: ALSyntaxNode, stop: ALSyntaxNode): boolean {
+  for (let a = n.parent; a !== null && !samePos(a, stop); a = a.parent)
+    if (R572_BRANCHES.has(a.rawKind)) return false;
+  return true;
+}
+
+/**
+ * The cursors (keyed in the LOOP's procedure) whose step forces test `e` to exit, where the loop
+ * exits when `e` is `exitWhenTrue`. Splits OR (exit on true) or AND (exit on false), pushes `not`
+ * through, and reads each atom: `R.Next(..) op 0`; under narrowing (a) also a same-object helper
+ * (`H() op 0`, or a Boolean `H()`) and, in the loop itself, a flag only that helper writes.
+ */
+function r572Forcing(
+  e0: ALSyntaxNode,
+  exitWhenTrue: boolean,
+  frame: R572Frame,
+  ctx: SemanticContext,
+): string[] {
+  const e = r572Unparen(e0);
+  if (e.rawKind === "unary_expression" && /^not\b/i.test(e.text.trim())) {
+    const o = e.childForFieldName("operand");
+    return o === null ? [] : r572Forcing(o, !exitWhenTrue, frame, ctx);
+  }
+  if (e.rawKind === "logical_expression") {
+    const l = e.childForFieldName("left");
+    const r = e.childForFieldName("right");
+    if (l === null || r === null) return [];
+    const op = e.text
+      .slice(l.endIndex - e.startIndex, r.startIndex - e.startIndex)
+      .trim()
+      .toLowerCase();
+    if (op !== (exitWhenTrue ? "or" : "and")) return [];
+    return [...r572Forcing(l, exitWhenTrue, frame, ctx), ...r572Forcing(r, exitWhenTrue, frame, ctx)];
+  }
+  if (e.rawKind === "comparison_expression") {
+    const l = e.childForFieldName("left");
+    const r = e.childForFieldName("right");
+    const op = e.childForFieldName("operator")?.text.trim() ?? "";
+    if (l === null || r === null || r.text.trim() !== "0" || l.rawKind !== "call_expression")
+      return [];
+    const forces = exitWhenTrue ? op === "=" : op === "<>" || op === ">";
+    if (!forces) return [];
+    const k = r572NextKey(l, frame, ctx);
+    if (k !== null) return [k];
+    // `Helper() = 0`: every exit of the helper is itself the step
+    return r572HelperKeys(l, frame, ctx, (x, hf) => {
+      const s = r572Unparen(x);
+      const hk = s.rawKind === "call_expression" ? r572NextKey(s, hf, ctx) : null;
+      return hk === null ? [] : [hk];
+    });
+  }
+  if (e.rawKind === "call_expression")
+    // a Boolean helper: every exit of it forces under the same polarity
+    return r572HelperKeys(e, frame, ctx, (x, hf) => r572Forcing(x, exitWhenTrue, hf, ctx));
+  if (isIdentifierLike(e)) return r572FlagKeys(e, exitWhenTrue, frame, ctx);
+  return [];
+}
+
+/**
+ * `l` is `R.Next(..)` (or a bare `Next(..)` on the implicit Rec) on a record or RecordRef whose step
+ * argument is absent, a literal, or proven invariant (narrowing (a)): its cursor's key in the
+ * LOOP's procedure, or null. In a helper the record must be the object's global (not shadowed in
+ * either procedure), the implicit Rec, or a `var` parameter bound to a plain name.
+ */
+function r572NextKey(l: ALSyntaxNode, frame: R572Frame, ctx: SemanticContext): string | null {
+  const c = r531Call(l);
+  const key = c === null ? null : (c.recv ?? (r531Implicit(l, ctx) ? "" : null));
+  if (c === null || c.method !== "next" || key === null) return null;
+  if (c.uncertain || c.args.length > 1) return null;
+  const a = c.args[0];
+  if (a !== undefined && !/^-?\d+$/.test(a.text.trim()) && !r572StepArgOk(a, l, frame, ctx))
+    return null;
+  const recv = r572Receiver(l);
+  const t = recv === null ? null : declaredType(recv, ctx);
+  // a Record, or a RecordRef (whose `Next` steps a record set the same way)
+  const isRecRef =
+    recv !== null &&
+    normalizeAlName(
+      resolveVarRef(recv, ctx)?.node.childForFieldName("type")?.namedChildren[0]?.text ?? "",
+    ) === "recordref";
+  if (key !== "" && !isRecRef && (t === null || t.kind !== "table")) return null;
+  const h = frame.helper;
+  if (h === null || key === "") return key;
+  // map the helper's record to the loop's procedure
+  if (objectGlobalNames(objectOf(h.proc) ?? h.proc).has(key) && !r531Declares(h.proc, key, true))
+    return r531Declares(frame.scope, key, true) ? null : key;
+  for (let i = 0; ; i++) {
+    const p = r531Param(h.proc, i);
+    if (p === null) return null;
+    if (r531ParamKey(p[0]) !== key) continue;
+    const arg = h.call.args[i];
+    if (!p[1] || h.call.uncertain || arg === undefined || !isIdentifierLike(arg)) return null;
+    return r531Key(arg);
+  }
+}
+
+/**
+ * Narrowing (a): may step argument `a` of the step call `next` stand in a forced test? In the loop's
+ * own procedure, X must be an Integer local or by-value parameter that the loop never writes
+ * (`r572StepInvariant`). In a helper, X must be a by-value parameter the helper never writes, bound
+ * to a literal or to a name that passes the loop's own test.
+ */
+function r572StepArgOk(
+  a: ALSyntaxNode,
+  next: ALSyntaxNode,
+  frame: R572Frame,
+  ctx: SemanticContext,
+): boolean {
+  if (!r572InvariantStep.on || !isIdentifierLike(a)) return false;
+  const h = frame.helper;
+  if (h === null) return r572StepInvariant(a, frame.loop, frame.scope, next, ctx);
+  const k = normalizeAlName(a.text);
+  if (r531Declares(h.proc, k, false) || !r572IntegerVar(a, ctx)) return false;
+  for (let i = 0; ; i++) {
+    const p = r531Param(h.proc, i);
+    if (p === null) return false;
+    if (p[0] !== k) continue;
+    if (p[1] || h.call.uncertain || r572WritesName(h.proc, k, new Set([next]), ctx)) return false;
+    const arg = h.call.args[i];
+    if (arg === undefined) return false;
+    if (/^-?\d+$/.test(arg.text.trim())) return true;
+    return isIdentifierLike(arg) && r572StepInvariant(arg, frame.loop, frame.scope, null, ctx);
+  }
+}
+
+const r572IntegerVar = (x: ALSyntaxNode, ctx: SemanticContext): boolean => {
+  const t = normalizeAlName(resolveVarRef(x, ctx)?.typeText ?? "");
+  return t === "integer" || t === "biginteger";
+};
+
+/**
+ * Narrowing (a) in the loop's procedure: X is an Integer LOCAL or BY-VALUE parameter (never a
+ * global, a record field or a `var` parameter) and the loop never writes it (`r572WritesName`,
+ * every `#if` arm read). With `r572RequireNonZeroStep`, X must also be a local whose every write
+ * outside the loop is a non-zero integer literal, one of them before the loop on every path.
+ */
+function r572StepInvariant(
+  x: ALSyntaxNode,
+  loop: ALSyntaxNode,
+  scope: ALSyntaxNode,
+  next: ALSyntaxNode | null,
+  ctx: SemanticContext,
+): boolean {
+  const k = normalizeAlName(x.text);
+  if (!r572IntegerVar(x, ctx)) return false;
+  const local = r531Declares(scope, k, false);
+  if (!local) {
+    let byValue = false;
+    for (let i = 0; ; i++) {
+      const p = r531Param(scope, i);
+      if (p === null) break;
+      if (p[0] === k) byValue = !p[1];
+    }
+    if (!byValue) return false;
+  }
+  if (r572WritesName(loop, k, new Set(next === null ? [] : [next]), ctx)) return false;
+  if (!r572RequireNonZeroStep.on) return true;
+  if (!local) return false;
+  const body = scope.namedChildren.find((c) => c.rawKind === "code_block") ?? null;
+  if (body === null) return false;
+  const inLoop = (n: ALSyntaxNode): boolean =>
+    n.startIndex >= loop.startIndex && n.endIndex <= loop.endIndex;
+  let ok = true;
+  let before = false;
+  const loopAncestors = new Set<number>();
+  for (let a = loop.parent; a !== null; a = a.parent) loopAncestors.add(a.startIndex);
+  visitAll(body, (n) => {
+    if (!ok || inLoop(n) || n.kind !== ALNodeKind.assignment_statement) return;
+    const l = n.childForFieldName("left");
+    if (l === null || !isIdentifierLike(l) || normalizeAlName(l.text) !== k) return;
+    const op = n.childForFieldName("operator")?.text.trim() ?? "";
+    const v = n.childForFieldName("right")?.text.replace(/\s+/g, "") ?? "";
+    if (op !== ":=" || !/^-?\d+$/.test(v) || Number(v) === 0) {
+      ok = false;
+      return;
+    }
+    if (n.startIndex >= loop.startIndex) return;
+    // before the loop on every path: no branch between it and the block it shares with the loop
+    let a = n.parent;
+    while (a !== null && !loopAncestors.has(a.startIndex)) {
+      if (R572_BRANCHES.has(a.rawKind)) return;
+      a = a.parent;
+    }
+    if (a !== null && !R572_BRANCHES.has(a.rawKind)) before = true;
+  });
+  // any other write outside the loop (a `var` or built-in pass) also refuses
+  const outside = r572WritesName(body, k, new Set(), ctx, (n) => !inLoop(n), false);
+  return ok && before && !outside;
+}
+
+/**
+ * Does anything under `n` (EVERY `#if` arm) write the plain name `k`: an assignment to it, or a
+ * call that gets it as a bare argument, unless that call resolves to project procedures whose
+ * parameter there is by value? A built-in (`Evaluate`, `Clear`, any other), an unresolved call and
+ * an uncertain one (R567) count as writes. Calls in `skip` (the step itself) are not read; `where`
+ * limits the nodes read; `assigns` false reads calls only.
+ */
+function r572WritesName(
+  n: ALSyntaxNode,
+  k: string,
+  skip: ReadonlySet<ALSyntaxNode>,
+  ctx: SemanticContext,
+  where: (n: ALSyntaxNode) => boolean = () => true,
+  assigns = true,
+): boolean {
+  let hit = false;
+  visitAll(n, (x) => {
+    if (hit || !where(x)) return;
+    if (x.kind === ALNodeKind.assignment_statement) {
+      const l = x.childForFieldName("left");
+      if (assigns && l !== null && rootName(l) === k) hit = true;
+      return;
+    }
+    if (skip.has(x)) return;
+    const c = r531Call(x);
+    if (c === null) return;
+    c.args.forEach((a, i) => {
+      if (hit || !isIdentifierLike(a) || normalizeAlName(a.text) !== k) return;
+      const ts = c.uncertain ? [] : r570Targets(x, c, ctx);
+      if (ts.length === 0) hit = true;
+      for (const t of ts) {
+        const p = r531Param(t, i);
+        if (p === null || p[1]) hit = true;
+      }
+    });
+  });
+  return hit;
+}
+
+/**
+ * Narrowing (a), the helper form: `call` resolves only to procedures of the loop's own object, and
+ * EVERY exit of each one carries a forced step (`each` reads one exit's value in the helper's
+ * frame): its last statement is an `exit(<value>)`, no exit is bare, and all exits force the same
+ * cursor. The stepped record must not be touched otherwise in the helper (`r572HelperKeeps`: a
+ * re-find each pass would never end). Returns that cursor's key in the loop's procedure.
+ */
+function r572HelperKeys(
+  call: ALSyntaxNode,
+  frame: R572Frame,
+  ctx: SemanticContext,
+  each: (x: ALSyntaxNode, hf: R572Frame) => string[],
+): string[] {
+  if (!r572InvariantStep.on || frame.helper !== null) return [];
+  const c = r531Call(call);
+  const obj = objectOf(frame.loop);
+  if (c === null || obj === null) return [];
+  const ts = r570Targets(call, c, ctx);
+  if (ts.length === 0) return [];
+  let common: Set<string> | null = null;
+  for (const t of ts) {
+    const to = objectOf(t);
+    if (to === null || !samePos(to, obj) || !sameFile(rootOf(to), rootOf(obj))) return [];
+    const body = t.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+    const stmts = body?.namedChildren.find((x) => x.rawKind === "statement_block")?.namedChildren;
+    const last = stmts?.filter((x) => !x.rawKind.includes("comment")).at(-1);
+    if (body === null || last === undefined || last.rawKind !== "exit_statement") return [];
+    const hf: R572Frame = { loop: frame.loop, scope: frame.scope, helper: { proc: t, call: c } };
+    let keys: Set<string> | null = null;
+    const steps = new Set<ALSyntaxNode>();
+    let bad = false;
+    visitAll(body, (x) => {
+      if (bad || x.rawKind !== "exit_statement") return;
+      const v = x.childForFieldName("return_value");
+      const got = v === null ? [] : each(v, hf);
+      if (got.length === 0) bad = true;
+      else keys = new Set(got.filter((g) => keys === null || keys.has(g)));
+      if (v !== null)
+        visitAll(v, (y) => {
+          if (r531Call(y)?.method === "next") steps.add(y);
+        });
+    });
+    if (bad || keys === null) return [];
+    const kept: string[] = [...(keys as Set<string>)].filter((k) =>
+      r572HelperKeeps(t, r572HelperKey(t, k, c), steps, ctx),
+    );
+    common = new Set(kept.filter((k) => common === null || common.has(k)));
+  }
+  return common === null ? [] : [...common];
+}
+
+/** The helper's own key for the loop-frame cursor `k` (the inverse of `r572NextKey`'s mapping). */
+function r572HelperKey(t: ALSyntaxNode, k: string, c: R531Call): string {
+  for (let i = 0; ; i++) {
+    const p = r531Param(t, i);
+    if (p === null) return k; // a global, or the implicit Rec
+    const a = c.args[i];
+    if (p[1] && a !== undefined && isIdentifierLike(a) && r531Key(a) === k) return r531ParamKey(p[0]);
+  }
+}
+
+/**
+ * Does helper `t` leave its record `key` alone apart from the steps in `steps`? No other method on
+ * it but a read-only one, no write to it or its fields, and no call that gets it (`r570Touches`
+ * through a project procedure; anything else counts as touching). For a global or the implicit Rec,
+ * a call to any procedure of the same object that names it counts as touching.
+ */
+function r572HelperKeeps(
+  t: ALSyntaxNode,
+  key: string,
+  steps: ReadonlySet<ALSyntaxNode>,
+  ctx: SemanticContext,
+): boolean {
+  const body = t.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+  if (body === null) return false;
+  const own = r531ObjectProcs(t, ctx);
+  const global = !r531Declares(t, key, true);
+  let moved = false;
+  visitAll(body, (n) => {
+    if (moved || steps.has(n)) return;
+    if (n.kind === ALNodeKind.assignment_statement) {
+      const l = n.childForFieldName("left");
+      if (l !== null && (r531Key(l) === key || rootName(l) === key)) moved = true;
+      if (key === "" && l !== null && isIdentifierLike(l) && r531Implicit(l, ctx)) moved = true;
+      return;
+    }
+    const c = r531Call(n);
+    if (c === null) return;
+    const implicit = key === "" && c.recv === null && !own.has(c.method) && r531Implicit(n, ctx);
+    if ((c.recv === key || implicit) && n.rawKind !== "member_expression") {
+      if (!R572_READ_ONLY.has(c.method)) moved = true;
+      return;
+    }
+    if (global && c.recv === null && own.has(c.method)) {
+      for (const q of r570Targets(n, c, ctx))
+        if (key === "" || r572Globals(q, ctx).has(key)) moved = true;
+    }
+    c.args.forEach((a, i) => {
+      if (moved || !isIdentifierLike(a) || r531Key(a) !== key) return;
+      const ts = c.uncertain ? [] : r570Targets(n, c, ctx);
+      if (ts.length === 0) {
+        if (!(c.recv === null && R531_PURE.has(c.method) && c.method !== "clear")) moved = true;
+        return;
+      }
+      for (const q of ts) {
+        const p = r531Param(q, i);
+        if (p === null) moved = true;
+        else if (r570Touches(q, r531ParamKey(p[0]), !p[1], 0, new Set(["*"]), ctx).length > 0)
+          moved = true;
+      }
+    });
+  });
+  return !moved;
+}
+
+/**
+ * Narrowing (a), the flag form, in the loop's own procedure: `k` is a LOCAL that the loop body
+ * writes exactly once, unconditionally, by plain assignment, and never hands to a call (no
+ * `var`-out pass, `Clear` or `Evaluate`; a local cannot be written by a subscriber). Then the flag
+ * forces the exit when its assigned value does.
+ */
+function r572FlagKeys(
+  id: ALSyntaxNode,
+  exitWhenTrue: boolean,
+  frame: R572Frame,
+  ctx: SemanticContext,
+): string[] {
+  if (!r572InvariantStep.on || frame.helper !== null) return [];
+  const k = normalizeAlName(id.text);
+  const body = frame.loop.childForFieldName("body");
+  if (body === null || !r531Declares(frame.scope, k, false)) return [];
+  const writes: ALSyntaxNode[] = [];
+  let passed = false;
+  visitAll(body, (n) => {
+    if (n.kind === ALNodeKind.assignment_statement) {
+      const l = n.childForFieldName("left");
+      if (l !== null && rootName(l) === k) writes.push(n);
+      return;
+    }
+    const c = r531Call(n);
+    if (c?.args.some((a) => rootName(a) === k) === true) passed = true;
+  });
+  const [w] = writes;
+  if (passed || writes.length !== 1 || w === undefined) return [];
+  const l = w.childForFieldName("left");
+  const v = w.childForFieldName("right");
+  if (w.childForFieldName("operator")?.text.trim() !== ":=" || l === null || !isIdentifierLike(l))
+    return [];
+  if (v === null || !r572Unconditional(w, frame.loop)) return [];
+  return r572Forcing(v, exitWhenTrue, frame, ctx);
+}
+
+/** Record and variable methods that leave the receiver as it was (anything else writes it). */
+const R572_READ_ONLY: ReadonlySet<string> = new Set(
+  (
+    "count countapprox isempty getfilter getfilters getrangemin getrangemax fieldno fieldcaption " +
+    "fieldname tablecaption tablename currentkey getposition recordid istemporary hasfilter marked " +
+    "ascending getview systemid currentcompany readpermission writepermission fieldactive testfield " +
+    "fielderror areloadfields isdirty haslinks"
+  ).split(" "),
+);
+
+function r572LoopRows(
   loop: ALSyntaxNode,
   obj: ALSyntaxNode,
   ctx: SemanticContext,
