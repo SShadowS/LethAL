@@ -394,11 +394,12 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * (docs/superpowers/specs/2026-10-09-r557-names-precommitment.md): `bcdev.names.baseline.json` on
  * Cronus28 (record exit 3, confirm PASS) and `al-runner.names.baseline.json` on al-runner
  * v2.12.0-main.f06ee78c (record exit 3, confirm PASS). The two files are byte-identical.
+ * R586's leg T (`al-runner-v3.tables.baseline.json`) was recorded 2026-10-21 on al-runner v3
+ * 3.0.0-alpha.2 (91253f2d6), LethAL 0043dda1: record exit 3 at 290 / 57 / 59 over 406, its 52
+ * differences from `tables.baseline.json` equal to `precommitment-tables-52.txt` by key and by
+ * transition (pre-commitments dcdd1489, abe76fa6, c7c505e6).
  */
-export const PENDING_FIRST_RECORD: readonly string[] = [
-  // R586: recorded once on alpha.2 after the pre-commitment (dcdd1489), only at 290/57/59 of 406.
-  "al-runner-v3.tables.baseline.json",
-];
+export const PENDING_FIRST_RECORD: readonly string[] = [];
 
 /** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
 export const SYMBOL_BASELINES: readonly string[] = [

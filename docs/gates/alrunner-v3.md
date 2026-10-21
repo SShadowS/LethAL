@@ -47,16 +47,18 @@ The legs:
 }
 ```
 
-- Leg T, `al-runner-v3.tables.baseline.json`: 290 / 57 / 59 over 406. These are the pre-committed figures. The
-  file is recorded once (`LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.tables.baseline.json`, which exits 3) and only
-  if the run gives exactly these figures. Until then it sits in `PENDING_FIRST_RECORD`, and this page's pin test
-  checks that the file is absent.
+- Leg T, `al-runner-v3.tables.baseline.json`: 290 / 57 / 59 over 406, as pre-committed. Its rows differ from
+  `itest:tables`' baseline on exactly the 52 keys and transitions of the pre-commitment's list (41 Commit, 7
+  duplicate key, 4 TestPage).
 
 ## History
 
 - 2026-10-21: leg C's first live run was BLOCKED. v3 alpha.2 runs a virtual AL clock, which made `sleep-is-noop`
   and the wall-clock `timeout-is-cpu` probe miss. The r6 delta restates both.
 - r5 replaced leg X (d)'s target, because r4's control could produce no Sleep refusal at all.
+- 2026-10-21: leg T's baseline was recorded on alpha.2 (91253f2d6), LethAL 0043dda1: record exit 3 at the
+  pre-committed figures, with its 52 differences from BC's equal to the pre-committed list by key and by
+  transition.
 - 2026-10-21: D1's first attempt under r6 was an infra-fail before any mutant ran. It pointed at
   `/work/src/do-lethal`, which has no `Test/.alpackages`, so the contract probe's alc compile failed
   (`/coord/handoff/R-586/gate/r6/D1.infra-fail-no-alpackages.log`). It re-ran on `/work/lethal-wt/cdo-r396`, the
