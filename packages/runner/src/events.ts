@@ -131,6 +131,9 @@ export type RunEventInput =
       readonly carryableCount: number;
       readonly strandedKeyCount: number;
       readonly retryStranded: boolean;
+      /** R557: why NOTHING of the run is carried (an al-runner run without the R557 test-name
+       *  mark, or one whose baseline holds renamed errors). Absent when its verdicts may carry. */
+      readonly carryRefused?: string;
     }
   | {
       readonly type: "phase-entered";

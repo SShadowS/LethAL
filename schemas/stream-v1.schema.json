@@ -231,6 +231,9 @@
         "retryStranded": {
           "type": "boolean"
         },
+        "carryRefused": {
+          "type": "string"
+        },
         "seq": {
           "type": "number"
         }

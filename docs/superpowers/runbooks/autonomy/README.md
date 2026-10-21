@@ -63,6 +63,22 @@ next free id right before writing).
   again. Touch nothing else in that commit. Send the orchestrator its sha
   with your next message. The rule is unchanged: the file lands on master before the run, and a
   differing result is a block, never a re-record. The orchestrator still commits the adopted plan.
+- **Speed rules (owner, 2026-10-21).** The waits, not the thinking, set our pace:
+  - **One deep plan review, not rounds.** Measure first. Then brief the opus reviewer to do it all
+    in ONE pass: attack every class-1 door, AND list every open "what else could break / what is
+    unmeasured" question, AND propose the narrowing for anything over a cost bar. Fold everything
+    in, and re-measure ONCE. A second review looks only at the changed parts (a delta brief, not the
+    whole plan). A third full round needs a reason in the message to the orchestrator.
+  - **Use the master dump cache (rule above) every time.** Before any master-leg dump, look in
+    `/coord/cache/dumps/<master sha>/`. After a fresh master dump, WRITE it there with `DONE`, so
+    the next lane and the next round reuse it. Branch legs re-dump only the projects the change can
+    touch. Say in every measure report which cache entry was used or written.
+  - **Nothing load-bearing in session scratch.** Restarts wipe it (three times in October). Tools go
+    in the repo under `scripts/` (committed with `[skip ci]`); outputs, logs and evidence go in
+    `/coord/handoff/<task>/` or `/coord/cache/`. A gate's log that is evidence for a submit is
+    written to `/coord/handoff/<task>/` as it runs.
+  - **Wait for at most one OTHER heavy job, not zero.** A driver that waits for an empty container
+    can starve for hours. The limit stays two heavy jobs container-wide.
 
 ## coord
 

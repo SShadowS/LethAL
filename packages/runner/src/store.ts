@@ -287,6 +287,24 @@ export interface RunRow {
   /** R565: the run's `dependencySourceSha256`, written after generation (`setDependencySourceSha256`).
    *  `null` when not recorded (before R565, or the run died before generation): no rule-1 carry. */
   readonly dependencySourceSha256: string | null;
+  /** R557 (I1): the run carries the R557 test-name mark (`runs.al_runner_names`). `false` on a row
+   *  recorded before the column, and on every run that is not an R557+ al-runner session. */
+  readonly alRunnerNames: boolean;
+}
+
+/**
+ * R557 (I1): whether a run may lend history, carry or a baseline snapshot, as far as al-runner test
+ * names go. An al-runner run lends only with the R557 mark, which an R557+ session stamps at run
+ * creation: before R557 a renamed test was sent under its AL name and never ran, so its only-kills
+ * read survived, and a run that CARRIED such verdicts (a resume, `known-survivor` rows) holds no
+ * baseline row that shows it. Any other backend lends. A separate predicate that only REMOVES: each
+ * caller ANDs it with its own checks, and it never re-admits a run another check refused.
+ */
+export function runLendsAlRunnerNames(run: {
+  readonly backend: string;
+  readonly alRunnerNames: boolean;
+}): boolean {
+  return run.backend !== "al-runner" || run.alRunnerNames;
 }
 
 /** R391: a stored `twin_tuples`, checked. NULL stays `null`; anything but a JSON string array
@@ -728,6 +746,9 @@ export class ResultsStore {
       ["runs", "numbering_digest TEXT", runCols],
       // R565: NULL on an older row, read as "not recorded": no rule-1 carry from it.
       ["runs", "dependency_source_sha256 TEXT", runCols],
+      // R557 (I1): NULL on an older row, read as untrusted: an al-runner run without it lends no
+      // history, carry or baseline snapshot (`runLendsAlRunnerNames`).
+      ["runs", "al_runner_names INTEGER", runCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
       if (!known.some((c) => c.name === name)) {
@@ -789,6 +810,9 @@ export class ResultsStore {
     /** R565: the run's dependency source digest. Absent or `null` writes NULL. `runSession` writes
      *  it after generation (`setDependencySourceSha256`); verify copies its source's here. */
     dependencySourceSha256?: string | null;
+    /** R557 (I1): the run sends al-runner tests under `alRunnerMethodName`. `true` writes 1;
+     *  absent or `false` writes NULL, which an al-runner run reads as untrusted. */
+    alRunnerNames?: boolean;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
@@ -799,8 +823,8 @@ export class ResultsStore {
       info.testAppDeps !== undefined;
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -821,6 +845,7 @@ export class ResultsStore {
         info.twinTuples != null ? JSON.stringify(info.twinTuples) : null,
         info.numberingDigest ?? null,
         info.dependencySourceSha256 ?? null,
+        info.alRunnerNames === true ? 1 : null,
       ) as {
       id: number;
     };
@@ -1071,10 +1096,11 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256 FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names FROM runs WHERE id = ?",
       )
       .get(runId) as {
       dependency_source_sha256: string | null;
+      al_runner_names: number | null;
       test_app_proven: number | null;
       test_app_deps: string | null;
       carry_hidden: string | null;
@@ -1109,6 +1135,7 @@ export class ResultsStore {
       twinTuples: parseTwinTuples(row.twin_tuples, row.id),
       numberingDigest: row.numbering_digest,
       dependencySourceSha256: row.dependency_source_sha256,
+      alRunnerNames: row.al_runner_names === 1,
     };
   }
 
@@ -1987,6 +2014,20 @@ export class ResultsStore {
     return r;
   }
 
+  /**
+   * R557 C1: the distinct `method` of `runId`'s BASELINE rows (`mutant_row_id IS NULL`) whose
+   * outcome is `error`. Read-only, existing columns. The caller decides which of them a pre-R557
+   * al-runner run sent under a name al-runner never had (`alRunnerRenamed`).
+   */
+  baselineErrorMethods(runId: number): string[] {
+    const rows = this.db
+      .query(
+        "SELECT DISTINCT method FROM test_results WHERE run_id = ? AND mutant_row_id IS NULL AND outcome = 'error' ORDER BY method",
+      )
+      .all(runId) as Array<{ method: string }>;
+    return rows.map((r) => r.method);
+  }
+
   /** A prior "known-survivor" verdict counts exactly like "survived" here (I4) — it means the
    *  identity key was skipped rather than re-tested, so it must remain skippable/filterable in
    *  the run after that, not silently fall out of history after one `--skip-known-survivors` pass.
@@ -2045,14 +2086,29 @@ export class ResultsStore {
         proven: boolean;
         deps: string | null;
       }) => void;
+      /**
+       * R557 C1: the latest finished run ran on al-runner and recorded, as baseline errors, tests
+       * whose al-runner name differs from the AL name (`renamed` picks them from the run's
+       * baseline error methods). Before R557 such a test was never run, so its only-kills read
+       * survived: no key is returned. Checked last. Absent: no check.
+       */
+      readonly alRunnerTestNames?: {
+        readonly renamed: (methods: readonly string[]) => readonly string[];
+        readonly refused: (info: { runId: number; tests: readonly string[] }) => void;
+      };
+      /** R557 (I1): the latest finished run is an al-runner run without the R557 test-name mark
+       *  (`runLendsAlRunnerNames`): no key. Checked always, before `alRunnerTestNames`. */
+      readonly alRunnerUnmarked?: (info: { runId: number }) => void;
     } = {},
   ): PriorSurvivors {
     const none = NO_PRIOR_SURVIVORS;
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256 FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, backend, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256, al_runner_names FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
+      backend: string;
+      al_runner_names: number | null;
       dependency_source_sha256: string | null;
       test_app_proven: number | null;
       test_app_deps: string | null;
@@ -2109,6 +2165,22 @@ export class ResultsStore {
     if (!sameHiddenFiles(hidden.files, hiddenFiles)) {
       on.hiddenFilesChanged?.({ runId: run.id, before: hidden.files, now: hiddenFiles });
       return none;
+    }
+    // R557 (I1): an al-runner run without the R557 mark lends nothing, whatever its own rows hold.
+    if (
+      !runLendsAlRunnerNames({ backend: run.backend, alRunnerNames: run.al_runner_names === 1 })
+    ) {
+      on.alRunnerUnmarked?.({ runId: run.id });
+      return none;
+    }
+    // R557 C1: a pre-fix al-runner run never ran a renamed test; its only-kills read survived.
+    const names = on.alRunnerTestNames;
+    if (names !== undefined && run.backend === "al-runner") {
+      const tests = names.renamed(this.baselineErrorMethods(run.id));
+      if (tests.length > 0) {
+        names.refused({ runId: run.id, tests });
+        return none;
+      }
     }
     const hiddenTuples = new Set(hidden.tuples);
     const rows = this.db

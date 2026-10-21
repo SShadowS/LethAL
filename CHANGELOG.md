@@ -781,6 +781,30 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **al-runner runs a test whose AL name it renames** (R557, upstream al-runner #5572). al-runner names
+  a test row by the C# identifier BC's compiler gives the AL method, so `"Stone Quoted"` is
+  `Stone_Quoted`, `"Dot.Name"` is `Dota46Name`, `"2Lead"` is `_2Lead`, and even an unquoted
+  `Default` is `_Default`. LethAL sent the AL name, al-runner selected nothing, and the test read as
+  a baseline `error`: every mutant only it would kill read `survived` (coverage `none`) or
+  `no-coverage` (coverage `al-runner`), a false survive. DC has 248 such tests of 1,902. LethAL now
+  sends and looks up BC's name (`alRunnerMethodName`: a space or `"` to `_`, a leading non-start
+  character prefixed `_`, any other non-identifier character as `a<code>`, a reserved C# keyword
+  prefixed `_`, format characters deleted), measured on 58 names on two builds. A session-suite test
+  al-runner still has no row for now STOPS the session by name (`AlRunnerTestNameError`): on one-shot
+  when al-runner selects nothing, on `--server` when its answer is otherwise clean (exit 0 or 1,
+  every row a pass or fail run row) or when the test's own codeunit ran another test. A test in an
+  `#if` arm LethAL could not decide (R403) keeps its `error`, with one
+  `al-runner-undecided-test-missing` warning per batch. A new store column, `runs.al_runner_names`,
+  marks every run an R557+ al-runner session creates; NULL (every older row) is untrusted. No al-runner
+  run without the mark is trusted, nor a marked one whose baseline holds a renamed test as an
+  `error`: `--skip-known-survivors` skips none of its survivors (`history-al-runner-test-names`),
+  `--resume` carries none of its verdicts (stranded R53 keys included, so those mutants run again;
+  the RESUMED banner names the reason, `resumedFrom.carryRefused`), and none of its baseline
+  snapshots is reused (`resume-al-runner-test-names`). bcdev runs are unaffected. The R123 contract probe gains a seventh fact,
+  `test-name-mangling`, which checks the rule against real rows once per session. Every test name in
+  `fixtures/` and `examples/` maps to itself, so no existing gate's argv moves; the new
+  `fixtures/sandbox-names` pair runs in `itest:alrunner` and in the new `itest:bcdev-names`.
+
 - **A same-object callee's early exits are hang-refused** (R574). When R531 follows a loop's call into a
   procedure of the same object, or a table procedure on the record, it now builds that hop with R571's rule:
   an `exit` or `Error` before the callee's last consumer, or inside a callee loop that holds one, a `break`

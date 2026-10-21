@@ -1441,6 +1441,10 @@ export interface SessionReport {
      * `STRANDED_SKIP_INTERPRETATION` for what a non-zero value means to a reader.
      */
     readonly skippedStranded: number;
+    /** R557: why nothing of the run was carried, when that is a refusal rather than a run with no
+     *  reusable verdict (an al-runner run without the R557 test-name mark, or one whose baseline
+     *  holds renamed errors). Absent otherwise. */
+    readonly carryRefused?: string;
   };
   /**
    * Wall-clock cost of this run, split into the phases that scale differently — the whole point
@@ -3553,9 +3557,11 @@ export function renderConsole(r: SessionReport): string {
   if (r.resumedFrom !== undefined) {
     lines.push(
       `RESUMED: ${r.resumedFrom.carriedMutants} verdict(s) carried from run ${r.resumedFrom.runId} without re-executing. They were measured over the same source (identity-matched) and the same scope, but by a different published artifact in an earlier session.${
-        r.resumedFrom.carriedMutants === 0
-          ? " Nothing was actually carried — the prior run had no reusable verdict, so this run measured everything itself."
-          : ""
+        r.resumedFrom.carryRefused !== undefined
+          ? ` Nothing was carried: ${r.resumedFrom.carryRefused}. This run measured everything itself.`
+          : r.resumedFrom.carriedMutants === 0
+            ? " Nothing was actually carried — the prior run had no reusable verdict, so this run measured everything itself."
+            : ""
       }${
         // R53: stated separately from the carried count, because it is the opposite kind of fact —
         // these mutants have NO verdict from either run and must not be read as covered.

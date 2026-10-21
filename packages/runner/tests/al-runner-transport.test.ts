@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { oneShotLimits } from "../src/al-runner-backend";
 import {
   OneShotTransport,
+  alRunnerMethodName,
   buildAlRunnerArgv,
+  isNoneSelectedExit,
   parseAlRunnerPayload,
   qualifiedTestName,
   timeoutAbortTests,
@@ -461,5 +463,162 @@ describe("OneShotTransport exit 3: read only a proven test-timeout abort (R518)"
     const env = envelope({ suiteErrors: [{ file: "/t" }] });
     expect(() => timeoutAbortTests(alRunnerStdout(env))).not.toThrow();
     expect(timeoutAbortTests(alRunnerStdout(env))).toBeUndefined();
+  });
+});
+
+/**
+ * R557: every AL test name al-runner was MEASURED to report, beside the row method it reported,
+ * byte for byte (each non-ASCII or control UTF-16 unit is a `\u` escape, so nothing invisible is
+ * lost). Rows are identical on al-runner v2.12.0-main.c5bbaf89 and .43f76177.
+ * - r1 (`/coord/handoff/R557/measure.md` Q2 and R557.md): Gravel tests, and `Plus+Paren(x)`.
+ * - measure M3 (`r557plan/p1`, `out-c5bbaf89/o-1.txt`): 19 names, one per rule step.
+ * - the review's u1 (`r557rev/u1`, `names-c5bbaf89.txt`): 29 Unicode names.
+ * - the review's u2 (`r557rev/u2`, `names2.txt`): 6 names with format (Cf) characters.
+ */
+const MEASURED_NAMES: ReadonlyArray<readonly [string, string]> = [
+  // r1 (R557 Q2 and the R557 row)
+  ["Stone Quoted", "Stone_Quoted"],
+  ["Dot.Name", "Dota46Name"],
+  ["Pond", "Pond"],
+  ["2Lead", "_2Lead"],
+  ["Plus+Paren(x)", "Plusa43Parena40xa41"],
+  // p1 (measure M3)
+  ["Two  Spaces", "Two__Spaces"],
+  ["Dash-Name", "Dasha45Name"],
+  ["Paren(x)", "Parena40xa41"],
+  ["Slash/Name", "Slasha47Name"],
+  ["Amp&Name", "Ampa38Name"],
+  ["9Lead", "_9Lead"],
+  ["Ærø Løb", "Ærø_Løb"],
+  ["Plus+Pct%Colon:Comma,Quote'", "Plusa43Pcta37Colona58Commaa44Quotea39"],
+  ["New", "_New"],
+  ["Default", "_Default"],
+  ["Delegate", "_Delegate"],
+  ["Record", "Record"],
+  ["Finalize", "_Finalize"],
+  ["Class", "_Class"],
+  ["_Under", "_Under"],
+  [" Lead Space", "_Lead_Space"],
+  ["Trail Space ", "Trail_Space_"],
+  ["PlainCase", "PlainCase"],
+  // u1 (review I2)
+  ["Æble Øl Å", "Æble_Øl_Å"],
+  ["Blåbær grød", "Blåbær_grød"],
+  ["Straße", "Straße"],
+  ["Claß", "Claß"],
+  ["ﬁxed", "ﬁxed"],
+  ["Café", "Café"],
+  ["́Lead", "_́Lead"],
+  ["Smile😀", "Smilea55357a56832"],
+  ["Hash#At@", "Hasha35Ata64"],
+  ["Euro€", "Euroa8364"],
+  ["Nb sp", "Nba160sp"],
+  ["Mid·dot", "Mida183dot"],
+  ["Zw‍j", "Zwj"],
+  ["ⅫRoman", "ⅫRoman"],
+  ["²Sup", "a178Sup"],
+  ["٣Arabic", "_٣Arabic"],
+  ["ınt", "ınt"],
+  ["default", "_default"],
+  ["Ελλάδα", "Ελλάδα"],
+  ["İstanbul", "İstanbul"],
+  ["Back\\slash", "Backa92slash"],
+  ["Base", "_Base"],
+  ["Var", "Var"],
+  ["ſtatic", "_ſtatic"],
+  ["KelvinK", "KelvinK"],
+  ["Tab\u0009X", "Taba9X"],
+  ["Under_Score", "Under_Score"],
+  ["Ünïcödé", "Ünïcödé"],
+  ["æøålower", "æøålower"],
+  // u2 (review I2)
+  ["‍Lead", "_Lead"],
+  ["Soft­Hyphen", "SoftHyphen"],
+  ["Zw​Sp", "ZwSp"],
+  ["﻿Bom", "_Bom"],
+  ["Mid‎dir", "Middir"],
+  ["Plain", "Plain"],
+];
+
+describe("alRunnerMethodName: BC's C# identifier for an AL test name (R557)", () => {
+  test("T1a: every measured name maps to the row al-runner reported, byte for byte", () => {
+    // 5 + 18 + 29 + 6 (`Dot.Name` is measured in r1 and p1 and listed once).
+    expect(MEASURED_NAMES.length).toBe(58);
+    expect(MEASURED_NAMES.map(([al]) => [al, alRunnerMethodName(al)])).toEqual(
+      MEASURED_NAMES.map(([al, row]) => [al, row]),
+    );
+  });
+
+  test("T1a: the steps one name each shows, so a red names the step", () => {
+    const step = (al: string) => alRunnerMethodName(al);
+    expect(step("Stone Quoted")).toBe("Stone_Quoted"); // a: space
+    expect(step("Dash-Name")).toBe("Dasha45Name"); // c: a<code>
+    expect(step("2Lead")).toBe("_2Lead"); // b: a digit first
+    expect(step("Default")).toBe("_Default"); // d: keyword, unquoted
+    expect(step("Claß")).toBe("Claß"); // d: ASCII-only compare (JS gives CLASS)
+    expect(step("ﬁxed")).toBe("ﬁxed"); // d: ASCII-only compare (JS gives FIXED)
+    expect(step("ınt")).toBe("ınt"); // d: ASCII-only compare (JS gives INT)
+    expect(step("ſtatic")).toBe("_ſtatic"); // d: the long s maps to s
+    expect(step("Soft­Hyphen")).toBe("SoftHyphen"); // e: Cf deleted
+    expect(step("‍Lead")).toBe("_Lead"); // e after b: the `_` stays, the ZWJ goes
+    expect(step("﻿Bom")).toBe("_Bom"); // e after b
+    expect(step("Smile😀")).toBe("Smilea55357a56832"); // c per UTF-16 unit
+  });
+
+  test("T1b: names the rule must NOT change", () => {
+    const same = [
+      "PlainCase",
+      "Pond",
+      "_Under",
+      "Record",
+      "Var",
+      "Under_Score",
+      "Straße",
+      "Ελλάδα",
+      "İstanbul",
+      "KelvinK",
+      "ⅫRoman",
+    ];
+    expect(same.map(alRunnerMethodName)).toEqual(same);
+  });
+
+  test("qualifiedTestName sends the mangled method", () => {
+    expect(qualifiedTestName(78850, "Dash-Step")).toBe("Codeunit78850.Dasha45Step");
+    expect(qualifiedTestName(78850, "PlainControl")).toBe("Codeunit78850.PlainControl");
+  });
+});
+
+describe("isNoneSelectedExit (R557 T7)", () => {
+  const empty = (exitCode: number) =>
+    alRunnerStdout({ tests: [], passed: 0, failed: 0, errors: 0, total: 0, exitCode });
+
+  test("exit 6 with an empty envelope whose exitCode is 6 is none-selected", () => {
+    expect(isNoneSelectedExit(6, empty(6))).toBe(true);
+  });
+
+  test("exit 6 with rows is not", () => {
+    const rows = alRunnerStdout({
+      tests: [{ name: "Codeunit1.A", status: "pass" }],
+      exitCode: 6,
+    });
+    expect(isNoneSelectedExit(6, rows)).toBe(false);
+  });
+
+  test("an envelope exitCode of 0, another exit code, or no envelope is not", () => {
+    expect(isNoneSelectedExit(6, empty(0))).toBe(false);
+    expect(isNoneSelectedExit(0, empty(6))).toBe(false);
+    expect(isNoneSelectedExit(1, empty(6))).toBe(false);
+    expect(isNoneSelectedExit(6, "")).toBe(false);
+  });
+
+  test("OneShotTransport returns none-selected on it, and error on another exit 6", async () => {
+    const t = (stdout: string) =>
+      new OneShotTransport("al-runner", async () => ({
+        exitCode: 6,
+        stdout,
+        stderr: "--test selected no test in this run\n",
+      })).send(req);
+    expect((await t(empty(6))).kind).toBe("none-selected");
+    expect((await t(empty(0))).kind).toBe("error");
   });
 });

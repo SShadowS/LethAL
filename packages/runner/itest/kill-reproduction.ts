@@ -57,6 +57,11 @@ export const REPRODUCTION_EXPECTED: Readonly<Record<string, ReproductionFigures>
   "symbols-LETHALB/server": { killerRowsPerKill: 2 },
   "symbols-LETHALB/resource": { killerRowsPerKill: 2 },
   "cli-default": { killerRowsPerKill: 2, activations: 23, serverSuiteRuns: 22 },
+  // R557's names legs (A1/A2 one-shot, A3/A4 --server) arrived in the merge with master after the
+  // 102821df measurement, so they are NOT YET MEASURED: the gate prints them and refuses to pass
+  // until these two figures are filled from a run.
+  "names/one-shot": { killerRowsPerKill: null },
+  "names/server": { killerRowsPerKill: null },
 };
 
 /** Every figure a run measured against a `null` in the table, for the end-of-gate failure. */

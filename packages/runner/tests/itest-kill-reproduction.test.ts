@@ -122,12 +122,13 @@ describe("R577: the al-runner gate's kill-reproduction check", () => {
     expect(() => killReproductionFailures("nope", report, store, {}, TABLE)).toThrow(
       "has no row in REPRODUCTION_EXPECTED",
     );
-    expect(Object.keys(REPRODUCTION_EXPECTED)).toHaveLength(18);
-    // Measured at 102821df: no figure of the real table is left blank.
-    const blanks = Object.entries(REPRODUCTION_EXPECTED).filter(([, f]) =>
-      Object.values(f).some((v) => v === null),
-    );
-    expect(blanks).toEqual([]);
+    expect(Object.keys(REPRODUCTION_EXPECTED)).toHaveLength(20);
+    // Measured at 102821df; only R557's names legs (merged later) are still blank, by name. Fill
+    // them and this list becomes [].
+    const blanks = Object.entries(REPRODUCTION_EXPECTED)
+      .filter(([, f]) => Object.values(f).some((v) => v === null))
+      .map(([leg]) => leg);
+    expect(blanks).toEqual(["names/one-shot", "names/server"]);
     expect(Object.keys(REPRODUCTION_EXPECTED["cli-default"] ?? {}).sort()).toEqual([
       "activations",
       "killerRowsPerKill",

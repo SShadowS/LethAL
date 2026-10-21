@@ -216,6 +216,14 @@
       "sha256": "2ab477f5f2d3dbee917471ab112ff66d26110a293398accce510ac83283f691d",
       "mutants": 10
     },
+    "fixtures/sandbox-names-tests/src/NamesTests.Codeunit.al": {
+      "sha256": "1a17b04c07e7c12acee2e7460259988ca1df16d9a60095f6c47b4cf42b81d5f7",
+      "mutants": 48
+    },
+    "fixtures/sandbox-names/src/NamesCalc.Codeunit.al": {
+      "sha256": "b102d523d8b0b80708ca9401af8ad6e1bfcbdbf3e3000c3ce2ddbdf4758bd04a",
+      "mutants": 36
+    },
     "fixtures/sandbox-probes/src/CommitProbe.Codeunit.al": {
       "sha256": "24ce825bce711fe4517e465e3e4803bd82258bab2cccc5af150bea826a993140",
       "mutants": 31
