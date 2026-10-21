@@ -5,7 +5,9 @@
  * (dcdd1489), leg X (d) by its r5 delta
  * `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r5-xd.md` (abe76fa6), leg C's
  * clock facts and X (d)'s baseline by r6
- * `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r6.md` (c7c505e6).
+ * `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r6.md` (c7c505e6), and X (d)'s
+ * scratch setup by r5a
+ * `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r5a-xd-setup.md` (f32aa92a).
  * A differing verdict, killing test, note set, refusal set or Sleep index size is a BLOCK.
  *
  *   LETHAL_ITEST_ALRUNNER_V3=1 bun run itest:alrunner-v3
@@ -44,7 +46,7 @@ import {
 import { runV3ContractProbe } from "../src/al-runner-v3-contract";
 import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
-import { AlcCompileError } from "../src/artifact";
+import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { formatFailure } from "../src/format-failure";
 import { type SessionConfig, runSession } from "../src/orchestrator";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
@@ -550,6 +552,42 @@ async function legX(scratch: string): Promise<void> {
   await legXSleep(scratch);
 }
 
+/**
+ * r5a: a leg's scratch target AND test app are compiled with alc against the leg's deps during
+ * setup, before any session starts. A setup gap is then refused by name here
+ * (`al-runner-v3-itest-setup-does-not-compile`) instead of surfacing inside `deploy()`.
+ */
+async function assertSetupCompiles(
+  leg: string,
+  app: string,
+  tests: string,
+  deps: string,
+  work: string,
+): Promise<void> {
+  const pc = join(work, "packages");
+  await mkdir(join(work, "out"), { recursive: true });
+  await cp(deps, pc, { recursive: true });
+  const compiler = new ArtifactCompiler(
+    { alcPath: ALC, packageCachePath: deps, outputDir: join(work, "out") },
+    defaultArtifactIo,
+  );
+  try {
+    const target = await compiler.compileProject({
+      projectDir: app,
+      packageCachePath: deps,
+      name: "target",
+    });
+    await cp(target.appPath, join(pc, "Target.app"));
+    await compiler.compileProject({ projectDir: tests, packageCachePath: pc, name: "tests" });
+  } catch (err) {
+    if (!(err instanceof AlcCompileError)) throw err;
+    throw new LegFailure(
+      `${leg}: al-runner-v3-itest-setup-does-not-compile: the scratch target or test app does not compile against the leg's deps (${deps}): ${err.message.slice(0, 600)}`,
+    );
+  }
+  console.log(`  ${leg}: setup compiles (target and test app, alc, against ${deps})`);
+}
+
 /** X (d)-(f): the Sleep rule live through the backend, on the probe target `Probe Sleeper`. */
 async function legXSleep(scratch: string): Promise<void> {
   const app = join(scratch, "probe-app");
@@ -568,7 +606,11 @@ async function legXSleep(scratch: string): Promise<void> {
   // refuses a multi-object file (its frame is not measured on v3).
   await rm(join(app, "src", "ProbePair.Codeunit.al"));
   await rm(join(tests, "src", "ProbeCoverage.Codeunit.al"));
+  // r5a (f32aa92a): `TestPermissions = Restricted` does not compile against X (d)'s deps
+  // (AL0169). The file has no Sleep line and is outside --tests-only, so no prediction moves.
+  await rm(join(tests, "src", "ProbePermissions.Codeunit.al"));
   const deps = await microsoftDeps(join(scratch, "x-d"));
+  await assertSetupCompiles("X (d)", app, tests, deps, join(scratch, "x-d-setup"));
   const run = async (tag: string, tamper?: (p: string) => Promise<void>) => {
     const dir = join(scratch, `xd-${tag}`);
     // The results store opens `<dir>/lethal.sqlite`, so the folder must exist first.

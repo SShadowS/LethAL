@@ -4,7 +4,11 @@
 drives the Rust al-runner v3. It needs neither BC nor a lease. Every figure is pre-committed in
 `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment.md` (dcdd1489), with leg X (d) replaced by
 `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r5-xd.md` (abe76fa6), and leg C's two clock facts
-and X (d)'s baseline by `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r6.md` (c7c505e6). A differing verdict, killing test, note set, refusal set or Sleep index size in any leg is a BLOCK.
+and X (d)'s baseline by `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r6.md` (c7c505e6).
+X (d)'s scratch setup is amended by `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r5a-xd-setup.md`
+(f32aa92a), and the leg compiles that setup with alc before any session starts
+(`al-runner-v3-itest-setup-does-not-compile`). A differing verdict, killing test, note set, refusal set or Sleep
+index size in any leg is a BLOCK.
 The leg-by-leg tables live in those pre-commitments and are asserted by the itest, not restated here.
 
 The legs:
