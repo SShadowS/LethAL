@@ -366,6 +366,12 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "itest:hang",
   ),
   "tables.baseline.json": gateHow("LETHAL_ITEST_TABLES=1", "tables.baseline.json", "itest:tables"),
+  // R586 leg T: v3's own tables baseline, recorded once on alpha.2 (pre-committed 290/57/59 of 406).
+  "al-runner-v3.tables.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_TABLES=1 LETHAL_ITEST_V3_LEGS=T",
+    "al-runner-v3.tables.baseline.json",
+    "itest:alrunner-v3",
+  ),
 };
 
 /**
@@ -389,7 +395,10 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * Cronus28 (record exit 3, confirm PASS) and `al-runner.names.baseline.json` on al-runner
  * v2.12.0-main.f06ee78c (record exit 3, confirm PASS). The two files are byte-identical.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = [];
+export const PENDING_FIRST_RECORD: readonly string[] = [
+  // R586: recorded once on alpha.2 after the pre-commitment (dcdd1489), only at 290/57/59 of 406.
+  "al-runner-v3.tables.baseline.json",
+];
 
 /** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
 export const SYMBOL_BASELINES: readonly string[] = [
