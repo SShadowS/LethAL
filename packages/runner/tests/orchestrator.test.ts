@@ -657,7 +657,7 @@ describe("runSession", () => {
             ...(dependentCount !== undefined ? { dependentCount } : {}),
           })
         : stub;
-      const store = new ResultsStore(":memory:");
+      const store = extra.store ?? new ResultsStore(":memory:");
       const events: RunEvent[] = [];
       await runSession({
         backend,
@@ -747,6 +747,63 @@ describe("runSession", () => {
       expect(failed.guardWarning).toHaveLength(1);
       expect(failed.guardWarning[0]).toContain("boom");
       failed.store.close();
+    });
+
+    // Merge review I2: a closed-world run whose test app is NOT proven installed (R495) records no
+    // identity at all. The same closed answer after execution upgrades only its digests; a changed
+    // answer warns and keeps the open digests, and there is no identity to revoke.
+    test("R389: an unproven closed-world run upgrades only its digests on the same answer", async () => {
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => 0,
+      );
+      expect(r.recordedHash).toBeNull();
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], {
+          ...(await inputsFor(r.dirs, OLD_PKG)),
+          closedWorld: { public: true, internal: false },
+        }),
+      );
+      expect((r.store.testDigestParts(r.runId) as { closedWorld?: unknown }).closedWorld).toBe(
+        "public",
+      );
+      expect(r.guardWarning).toEqual([]);
+      r.store.close();
+    });
+
+    test("R389: an unproven closed-world run whose answer changes warns, keeps open digests and revokes nothing", async () => {
+      let n = 0;
+      const revoked: number[] = [];
+      const store = new (class extends ResultsStore {
+        override revokeTestAppHash(runId: number, suffix: string): void {
+          revoked.push(runId);
+          super.revokeTestAppHash(runId, suffix);
+        }
+      })(":memory:");
+      const r = await r372Run(
+        OLD_PKG,
+        { store },
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => (n++ === 0 ? 0 : 1),
+      );
+      expect(n).toBe(2);
+      expect(revoked).toEqual([]);
+      expect(r.recordedHash).toBeNull();
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.guardWarning.some((w) => w.startsWith("closed-world-changed"))).toBe(true);
+      r.store.close();
     });
 
     // Sol's review, critical 1: the server runs (and the run digests) the published package, whose
@@ -940,12 +997,26 @@ describe("runSession", () => {
 
     // envTool.publishApps are prebuilt .app files published under the lease, AFTER the read.
     test("an env-tool session (afterLeaseAcquired) records NULL even when the read has source", async () => {
-      const { store, runId, digestWarning } = await r372Run(OLD_PKG, {
-        afterLeaseAcquired: async () => {},
-      });
+      // R389 (merge review M1): the session stays open-world, so the guard is never asked, even
+      // on a backend that answers 0 dependents for the test app the app.json names.
+      const asked: string[] = [];
+      const { store, runId, digestWarning, recordedHash, snapshotHashes } = await r372Run(
+        OLD_PKG,
+        { afterLeaseAcquired: async () => {} },
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
       expect(store.testDigests(runId)).toBeNull();
       expect(digestWarning).toHaveLength(1);
       expect(digestWarning[0]).toContain("envTool.publishApps");
+      expect(asked).toEqual([]);
+      for (const h of [recordedHash ?? "", ...snapshotHashes])
+        expect(h).not.toContain("closed-world");
       store.close();
     });
 
@@ -9015,11 +9086,17 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       readonly served?: Readonly<Record<string, Uint8Array>>;
       /** R496: app ids whose installed read throws. */
       readonly installedThrows?: readonly string[];
+      /** R389: the backend's `dependentCount`, and the test app.json then names the package's id
+       *  (APP_ID), so the closed-world guard is asked for real. */
+      readonly dependentCount?: (appId: string) => Promise<number>;
     }
 
     async function envRun(o: EnvRun) {
       const dirs = o.dirs ?? (await makeProject(BODY_B));
-      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      await Bun.write(
+        join(dirs.testDir, "app.json"),
+        JSON.stringify(o.dependentCount !== undefined ? { ...TESTS_APP, id: APP_ID } : TESTS_APP),
+      );
       const testAppFile = join(dirs.testDir, "..", "Tests.app");
       const depFile = join(dirs.testDir, "..", "Dep.app");
       writeFileSync(testAppFile, P1);
@@ -9067,6 +9144,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       const { lease } = leaseCfg(client);
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
+        ...(o.dependentCount !== undefined ? { dependentCount: o.dependentCount } : {}),
         ...(o.noMicrosoftMode === true
           ? {}
           : {
@@ -10190,6 +10268,28 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(got.resume.carried).toBe(0);
         expect(got.history.skipped).toBe(0);
         expect(got.snapshot.reused).toBe(0);
+      });
+      // T7c-R389 (merge review I1): the same race on a server that answers 0 dependents, before
+      // and after execution. The closed-world digests were taken over the PRE-lease dependency, so
+      // the confirmation step must not write them back once F9 withdrew the digests.
+      test("T7c-R389: a closed-world run whose digests F9 withdrew gets none back at confirmation", async () => {
+        const asked: string[] = [];
+        const r = await race({
+          dependentCount: async (id) => {
+            asked.push(id);
+            return 0;
+          },
+        })({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(asked).toEqual([APP_ID, APP_ID]); // the guard was asked, before and after
+        unproven(r);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        expect(r.store.testDigestParts(r.runId)).toBeNull();
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain(
+          "a dependency changed while this session waited for the lease",
+        );
+        r.store.close();
       });
       // T7f (F9, full precision, R-496 review): the pre-lease and under-lease fingerprints agree on
       // their first 16 hex digits (all the stored parts keep) and differ after. Still a mismatch.

@@ -895,7 +895,8 @@ export class ResultsStore {
 
   /** R389: the guard's answer changed during the run. In ONE transaction, the run's test-app
    *  identity and every baseline snapshot it recorded get `suffix`, so no later session carries or
-   *  reuses from it (and `findBaselineSnapshot` excludes a revoked owner besides). */
+   *  reuses from it. A revoked owner whose snapshot somehow kept the old key is excluded by
+   *  `findBaselineSnapshot`'s R496 condition that the run's hash equals the snapshot's. */
   revokeTestAppHash(runId: number, suffix: string): void {
     this.db.transaction(() => {
       const changed = this.db
@@ -1838,7 +1839,6 @@ export class ResultsStore {
              AND test_app_hash = baseline_snapshots.test_app_hash
              AND test_app_proven = 1
              AND test_app_deps = ?
-             AND COALESCE(test_app_hash, '') NOT LIKE '%|closed-world:revoked%'
              AND COALESCE(test_app_hash, '') NOT LIKE '%|pending')
            AND NOT EXISTS (SELECT 1 FROM suspect_snapshots s WHERE s.run_id = baseline_snapshots.run_id AND s.batch_index = baseline_snapshots.batch_index)
            AND NOT EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = baseline_snapshots.run_id AND l.batch_index = baseline_snapshots.batch_index)
