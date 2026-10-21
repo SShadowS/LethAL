@@ -15,6 +15,8 @@ lethal.config.local.json
 lethal.config.envtool.json
 lethal.config.agent.json
 lethal.config.cronus*.json
+# R589: per-server fixture configs for the BC on Linux servers (bc1, bc2, bc3); they hold credentials
+lethal.config.bc*.json
 scripts/r289-probe/sidecar-creds.*.json
 *.app
 
