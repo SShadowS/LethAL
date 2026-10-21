@@ -7,7 +7,9 @@
  *
  * `--with-continia` (R594) adds step (d2) after LethAL Control: check that the server's Microsoft
  * apps are the R546 packagesDir's 28.4.53241.53758, then publish the 5 sha256-pinned Continia
- * apps (Dev scope) that Continia Document Output depends on. `--held-lease` names a coord lease
+ * apps (Dev scope) that Continia Document Output depends on, after checking each one's declared
+ * dependencies against the server. `--accept-build <v>` makes P1 accept that Microsoft build
+ * instead (R594's ruling: bc3 at 28.4.53241.56646 is a NEW oracle). `--held-lease` names a coord lease
  * the caller already holds for that one server: the script heartbeats it but never takes or
  * releases it.
  *
@@ -40,6 +42,7 @@ import { basename, dirname, join } from "node:path";
 import { compareAppVersions } from "../packages/runner/src/app-version.ts";
 import { bcFetch } from "../packages/runner/src/bc-fetch.ts";
 import { devPackagesUrl } from "../packages/runner/src/bcdev-backend.ts";
+import { appInputsOfPackage } from "../packages/runner/src/digest-inputs.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
 
@@ -612,16 +615,19 @@ export interface SetupArgs {
   readonly withContinia: boolean;
   /** A lease token the CALLER holds and heartbeats; the script then neither takes nor releases one. */
   readonly heldLease?: string;
+  /** `--with-continia` only: the Microsoft build P1 accepts instead of the pinned one. */
+  readonly acceptBuild?: string;
 }
 
 const USAGE =
-  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--dry-run] [--with-continia] [--held-lease <token>]";
+  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--dry-run] [--with-continia [--accept-build <version>]] [--held-lease <token>]";
 
 export function parseArgs(argv: readonly string[]): SetupArgs {
   let server: string | undefined;
   let dryRun = false;
   let withContinia = false;
   let heldLease: string | undefined;
+  let acceptBuild: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") dryRun = true;
@@ -630,9 +636,19 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
     else if (a === "--held-lease") {
       heldLease = argv[++i];
       if (heldLease === undefined || heldLease === "") throw new Error(USAGE);
+    } else if (a === "--accept-build") {
+      acceptBuild = argv[++i];
+      if (acceptBuild === undefined || !/^\d+\.\d+\.\d+\.\d+$/.test(acceptBuild))
+        throw new Error(USAGE);
     } else throw new Error(`unknown argument ${JSON.stringify(a)}`);
   }
-  const rest = { dryRun, withContinia, ...(heldLease !== undefined ? { heldLease } : {}) };
+  if (acceptBuild !== undefined && !withContinia) throw new Error(USAGE);
+  const rest = {
+    dryRun,
+    withContinia,
+    ...(heldLease !== undefined ? { heldLease } : {}),
+    ...(acceptBuild !== undefined ? { acceptBuild } : {}),
+  };
   if (server === "bc1" || server === "bc2" || server === "bc3")
     return { servers: [server], ...rest };
   // One token leases one server.
@@ -697,30 +713,102 @@ export const PINNED_MICROSOFT = [
 ] as const;
 export const PINNED_MICROSOFT_VERSION = "28.4.53241.53758";
 
+/** A pinned Continia file, read and sha256-checked. */
+export function readContinia(app: (typeof CONTINIA_APPS)[number]): Buffer {
+  const bytes = readFileSync(join(CONTINIA_PACKAGES_DIR, app.file));
+  const sha = sha256Of(bytes);
+  if (sha !== app.sha256) throw new Error(`${app.file}: sha256 ${sha}, expected ${app.sha256}`);
+  return bytes;
+}
+
 /**
- * P1 then the install. Every Microsoft app must be resident at exactly the pinned version, or
- * nothing is published: another build makes R546's frozen oracle incomparable. Then each Continia
- * file is sha256-checked and published, skipped when the server holds exactly that version, and
- * refused when it holds a different one (a third-party app is never replaced here).
+ * `a < b`, part by part. Not `compareAppVersions`: that refuses a part above 65535 (LethAL's own
+ * minted versions), and Continia's builds carry revisions like 336834.
  */
-async function ensureContinia(c: Conn, summary: string[]): Promise<boolean> {
+function versionBelow(a: string, b: string): boolean {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (Number.isNaN(x) || Number.isNaN(y)) throw new Error(`not a version: ${a} or ${b}`);
+    if (x !== y) return x < y;
+  }
+  return false;
+}
+
+/**
+ * Why the server would refuse a Continia app, or [] when it would not: a Microsoft dependency
+ * below its declared minimum, a Continia dependency the pinned set does not satisfy, or an
+ * `Application`/`Platform` above the server's Application/System. `resident` maps a Microsoft
+ * app name (and "System") to the version the server holds.
+ */
+export function continiaDependencyProblems(
+  pkg: Uint8Array,
+  resident: ReadonlyMap<string, string | null>,
+  pinned: ReadonlyMap<string, string>,
+): string[] {
+  const me = readAppIdentity(Buffer.from(pkg)).name;
+  const inp = appInputsOfPackage(pkg);
+  const out: string[] = [];
+  const atLeast = (what: string, have: string | null | undefined, min: string): void => {
+    if (have === null || have === undefined) out.push(`${me}: needs ${what} >= ${min}, absent`);
+    else if (versionBelow(have, min)) out.push(`${me}: needs ${what} >= ${min}, has ${have}`);
+  };
+  for (const d of inp.dependencies) {
+    if (d.publisher === "Microsoft")
+      atLeast(`Microsoft ${d.name}`, resident.get(d.name), d.version);
+    else atLeast(`${d.publisher} ${d.name}`, pinned.get(d.name), d.version);
+  }
+  if (inp.application !== undefined)
+    atLeast("Application", resident.get("Application"), inp.application);
+  if (inp.platform !== undefined)
+    atLeast("System (platform)", resident.get("System"), inp.platform);
+  return out;
+}
+
+/**
+ * P1 then the install. Every Microsoft app must be resident at exactly the pinned version (or at
+ * `acceptBuild`, R594's ruling for bc3: a NEW oracle, recorded, never silently), or nothing is
+ * published: another build makes R546's frozen oracle incomparable. Then every Continia app's
+ * declared dependencies are checked against the server, and only if all would be accepted is each
+ * file published, skipped when the server holds exactly that version, and refused when it holds a
+ * different one (a third-party app is never replaced here).
+ */
+async function ensureContinia(
+  c: Conn,
+  summary: string[],
+  acceptBuild: string | undefined,
+): Promise<boolean> {
+  const want = acceptBuild ?? PINNED_MICROSOFT_VERSION;
+  const resident = new Map<string, string | null>();
   let ok = true;
   for (const name of PINNED_MICROSOFT) {
     const v = await residentVersion(c, "Microsoft", name);
-    const same = v === PINNED_MICROSOFT_VERSION;
+    resident.set(name, v);
+    const same = v === want;
     summary.push(`  P1        Microsoft ${name}: ${v ?? "absent"}${same ? "" : " (DIFFERS)"}`);
     ok &&= same;
   }
+  resident.set("System", await residentVersion(c, "Microsoft", "System"));
+  summary.push(`  P1        Microsoft System: ${resident.get("System") ?? "absent"}`);
   if (!ok) {
-    summary.push(
-      `  STOPPED   the Microsoft apps are not all ${PINNED_MICROSOFT_VERSION}: no Continia app published`,
-    );
+    summary.push(`  STOPPED   the Microsoft apps are not all ${want}: no Continia app published`);
     return false;
   }
-  for (const app of CONTINIA_APPS) {
-    const bytes = readFileSync(join(CONTINIA_PACKAGES_DIR, app.file));
+  const files = CONTINIA_APPS.map((app) => ({ app, bytes: readContinia(app) }));
+  const pinned = new Map(
+    files.map((f) => [readAppIdentity(f.bytes).name, readAppIdentity(f.bytes).version]),
+  );
+  const problems = files.flatMap((f) => continiaDependencyProblems(f.bytes, resident, pinned));
+  if (problems.length > 0) {
+    for (const p of problems) summary.push(`  DEPENDS   ${p}`);
+    summary.push("  STOPPED   a Continia app would be refused: none published");
+    return false;
+  }
+  summary.push("  P1        every Continia app's declared dependencies are satisfied");
+  for (const { bytes } of files) {
     const sha = sha256Of(bytes);
-    if (sha !== app.sha256) throw new Error(`${app.file}: sha256 ${sha}, expected ${app.sha256}`);
     const local = readAppIdentity(bytes);
     const before = await residentVersion(c, local.publisher, local.name);
     if (before === local.version) {
@@ -805,7 +893,7 @@ async function setupServer(
         : `  published LethAL Control ${c.version}`,
     );
     // (d2) before the fixtures, so a P1 stop leaves the fixtures as they were.
-    if (args.withContinia && !(await ensureContinia(conn, summary))) return false;
+    if (args.withContinia && !(await ensureContinia(conn, summary, args.acceptBuild))) return false;
     rmSync(symbols, { recursive: true, force: true });
     mkdirSync(symbols, { recursive: true });
     let ok = true;
