@@ -81,7 +81,10 @@ export function readChallenge(env: NodeJS.ProcessEnv = process.env): GateChallen
 
 export interface ReceiptBody {
   readonly status: "passed" | "failed" | "skipped";
-  /** Names of the sublegs actually executed. A four-leg gate reporting one is a partial run. */
+  /**
+   * Names of the sublegs actually executed. A four-leg gate reporting one is a partial run.
+   * `itest:alrunner` names its 23 leg ids (`ALRUNNER_LEG_IDS`, R-587), and only on a full run.
+   */
   readonly sublegs: readonly string[];
   /**
    * Artifact identities this leg observed on the server, keyed by app name.

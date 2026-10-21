@@ -25,6 +25,8 @@
  * coverage moved four verdicts with the mutant population unchanged at 19.
  */
 
+import { ALRUNNER_LEG_IDS } from "../../packages/runner/itest/alrunner-legs.ts";
+
 /** Every live leg the repo has. `envtool` is absent on purpose: see `MANUAL_ONLY`. */
 export const LEGS = [
   "bcdev",
@@ -74,6 +76,14 @@ export const LEG_ORDER: readonly Leg[] = [
   "coverage-differential",
   "hang",
 ];
+
+/**
+ * R-587: the legs whose receipt must name an exact subleg list. A leg absent here is checked by
+ * count (one, unless the caller says otherwise); a leg present here refuses a numeric override.
+ */
+export const EXPECTED_SUBLEGS: Readonly<Partial<Record<Leg, readonly string[]>>> = {
+  alrunner: ALRUNNER_LEG_IDS,
+};
 
 /** Which container each leg runs against. One instrumented target per container is a hard rule. */
 export const LEG_CONTAINER: Readonly<Record<Leg, "agent-app" | "agent-data">> = {
