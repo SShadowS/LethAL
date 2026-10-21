@@ -54,6 +54,7 @@ import {
   type V3LegOutcome,
   classifyLegT,
   gateOutcome,
+  knownDifferenceKeys,
   writeV3Receipt,
 } from "./al-runner-v3-gate";
 import { compareMutants, normalizeForComparison } from "./mutant-equality";
@@ -576,6 +577,9 @@ async function main(): Promise<void> {
           } else {
             const own = (await readGateBaseline(TABLES_BASELINE_PATH)).entries;
             const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
+            // I-3: the known differences are the pre-committed 52 (41 Commit, 7 duplicate key, 4 TestPage).
+            const known = knownDifferenceKeys(bc, own).size;
+            must(known === 52, `T: v3's own baseline differs from BC's on ${known} rows, pre-committed 52`);
             const t = classifyLegT(own, normalizeForComparison(r), bc);
             for (const l of t.lines) console.log(`  T: ${l}`);
             lines.push(...t.lines);
