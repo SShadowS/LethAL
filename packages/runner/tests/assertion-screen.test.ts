@@ -341,6 +341,19 @@ describe("R553: the screen reads past al-runner's exception-type prefix", () => 
     );
   });
 
+  test("R586: al-runner-v3 is on the bcdev branch: no al-runner note on a plain kill, and `XException: ` is NOT stripped", () => {
+    const V3_CAPS: BackendCapabilities = { ...CAPS, kind: "al-runner-v3" };
+    // Same texts as 5a: v3 gets the standard note, never the al-runner "no prefix" one.
+    const plain = build([kill("M0001", BARE), kill("M0002", OVERFLOW)], V3_CAPS);
+    expect(plain.backend).toBe("al-runner-v3");
+    expect(plain.assertionScreen?.discriminationNote).toBe(
+      ASSERTION_SCREEN_DISCRIMINATION_NOTES.vacuous,
+    );
+    // A prefixed assertion is read WITHOUT stripping, so it is flagged (on al-runner it is not, test 1).
+    const prefixed = build([kill("M0001", P_ASSERT), kill("M0002", ASSERTION)], V3_CAPS);
+    expect(prefixed.assertionScreen?.flaggedMutants).toEqual(["0/M0001"]);
+  });
+
   test("5d. a timeout kill's unprefixed text does not pick the backend note (I3)", () => {
     const r = build(
       [

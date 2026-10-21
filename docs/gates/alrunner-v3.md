@@ -85,9 +85,9 @@ The legs:
 
 ## History
 
-- 2026-10-21: the gate head is a6c189b6, after three Opus build reviews. All eight legs pass there
-  (`/coord/handoff/R-586/gate/final/`), and `.gated` names alpha.2 (91253f2d6) at lethalCommit a6c189b6. Earlier
-  full passes are kept as history: 5eb544ef, 0c0d9f5b and d5bb7d2d.
+- 2026-10-21: the gate head is 8a71e87d (master merged in, after three Opus build reviews and a merge review).
+  All eight legs pass there (`/coord/handoff/R-586/gate/final/`), and `.gated` names alpha.2 (91253f2d6) at
+  lethalCommit 8a71e87d. Earlier full passes are kept as history: 5eb544ef, 0c0d9f5b, d5bb7d2d and a6c189b6.
 - 2026-10-21: leg C's first live run was BLOCKED. v3 alpha.2 runs a virtual AL clock, which made `sleep-is-noop`
   and the wall-clock `timeout-is-cpu` probe miss. The r6 delta restates both.
 - r5 replaced leg X (d)'s target, because r4's control could produce no Sleep refusal at all.
