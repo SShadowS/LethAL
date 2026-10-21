@@ -88,8 +88,12 @@ requires** (the build `extensions/lethal-control/app.json` and `CONTROL_SHA256` 
 `scripts/bc-linux-setup.ts` pin): 13 gates on each of bc1, bc2 and bc3, 39 pairs. bc2 was moved to
 that build first, measured 2026-10-21 by `bc-republish.ts control` as an upgrade with nothing removed,
 read back with the pinned sha256 (`/coord/handoff/R-604/control-bc2.log`), and its 13 gates were
-re-proven after it. bc1's 9 gates proven earlier under the older build were re-proven too. Re-prove
-a server's gates whenever its control build or fixture apps change.
+re-proven after it. bc1's 9 gates proven earlier under the older build were re-proven too. On bc1
+and bc3 the same tool, run after the proofs, read the resident control package back by sha256 and
+found it equal to `CONTROL_SHA256`, so it published nothing (`/coord/handoff/R-604/control-bc1.log`,
+`/coord/handoff/R-604/control-bc3.log`): all three servers hold the pinned bytes, not only the
+pinned version that `lethal doctor` reports. Re-prove a server's gates whenever its control build or
+fixture apps change.
 
 | server | gate | LethAL Control | proof (log) |
 |---|---|---|---|

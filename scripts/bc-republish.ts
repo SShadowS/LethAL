@@ -41,6 +41,7 @@ import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } f
 import { join } from "node:path";
 import { compareAppVersions, reserveAppVersion } from "../packages/runner/src/app-version.ts";
 import { bcFetch } from "../packages/runner/src/bc-fetch.ts";
+import { devPackagesUrl } from "../packages/runner/src/bcdev-backend.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
 import {
@@ -239,8 +240,35 @@ export function controlAction(
   return "already-pinned";
 }
 
+/**
+ * How `control` reads the dev endpoint's answer for the resident package. ONLY a 404 means the
+ * server holds none: any other failure (a 500, a timeout page, a refused login) is an error that
+ * stops the run, so a server that could not be read is never taken for one without the control app.
+ */
+export function packageStatus(status: number): "present" | "absent" {
+  if (status >= 200 && status < 300) return "present";
+  if (status === 404) return "absent";
+  throw new Error(`the dev endpoint answered HTTP ${status} for the resident package; stopped`);
+}
+
 // ---------------------------------------------------------------------------------------------
 // the server
+
+/** `residentPackage`, but strict about what counts as "nothing resident" (`packageStatus`). */
+async function strictResidentPackage(
+  c: Conn,
+  publisher: string,
+  name: string,
+): Promise<Buffer | null> {
+  const url = devPackagesUrl(
+    { server: HOST, serverInstance: "BC", tenant: "default", port: SERVERS[c.server].dev },
+    { publisher, name },
+  );
+  if (url === null) throw new Error("unreachable: devPackagesUrl refused a fixed URL");
+  const res = await bcFetch(url, { headers: { authorization: c.authorization } });
+  if (packageStatus(res.status) === "absent") return null;
+  return Buffer.from(await res.arrayBuffer());
+}
 
 function fixtureManifests(): Map<string, AppManifest> {
   const out = new Map<string, AppManifest>();
@@ -319,7 +347,7 @@ async function removeApp(
   ext: string,
   m: AppManifest,
   log: (s: string) => void,
-): Promise<void> {
+): Promise<boolean> {
   if (m.id === undefined) throw new Error(`${m.name}: app.json has no id`);
   const found = await rows(c, ext, m.id);
   if (found.length === 0) log(`  absent      ${m.name}: nothing to remove`);
@@ -345,6 +373,22 @@ async function removeApp(
     throw new Error(
       `${m.name}: still on the server after unpublish (${after.map(rowVersion).join(", ")})`,
     );
+  return found.length > 0;
+}
+
+/**
+ * What a stopped run left behind, for its error: apps this run REMOVED and did not put back, and
+ * apps that were not on the server before the run and were not published either.
+ */
+export function leftOffNote(notPublished: readonly string[], removed: ReadonlySet<string>): string {
+  const off = notPublished.filter((d) => removed.has(d));
+  const never = notPublished.filter((d) => !removed.has(d));
+  return [
+    ...(off.length > 0 ? [`\n  removed and NOT republished: ${off.join(", ")}`] : []),
+    ...(never.length > 0
+      ? [`\n  not on the server before this run, and not published: ${never.join(", ")}`]
+      : []),
+  ].join("");
 }
 
 function leaseFor(lane: string, tokenDir: string, label: string): LeaseDeps {
@@ -443,7 +487,9 @@ async function republish(args: Args): Promise<void> {
     const refusal = downgradeRefusal(checks);
     if (refusal !== null) throw new Error(refusal);
     // 3. remove, dependents first
-    for (const dir of plan.unpublish) await removeApp(c, ext, all.get(dir) as AppManifest, log);
+    const removed = new Set<string>();
+    for (const dir of plan.unpublish)
+      if (await removeApp(c, ext, all.get(dir) as AppManifest, log)) removed.add(dir);
     // 4. publish, targets first, and read back; stop at the first failure
     for (const [i, dir] of plan.publish.entries()) {
       const bytes = built.get(dir) as Buffer;
@@ -451,9 +497,7 @@ async function republish(args: Args): Promise<void> {
       try {
         await publishBytes(c, `${local.publisher}_${local.name}_${local.version}.app`, bytes);
       } catch (err) {
-        throw new Error(
-          `${errText(err)}\n  removed and NOT republished: ${plan.publish.slice(i).join(", ")}`,
-        );
+        throw new Error(`${errText(err)}${leftOffNote(plan.publish.slice(i), removed)}`);
       }
       const resident = await residentPackage(c, local.publisher, local.name);
       const version = resident === null ? "nothing" : readAppIdentity(resident).version;
@@ -464,9 +508,8 @@ async function republish(args: Args): Promise<void> {
           `resident sha256 ${resident === null ? "-" : sha256Of(resident)} ${sameHash ? "=" : "!="} local`,
       );
       if (!pass) {
-        const rest = plan.publish.slice(i + 1);
         throw new Error(
-          `read-back of ${local.name} does not match the local build; stopped${rest.length > 0 ? `\n  removed and NOT republished: ${rest.join(", ")}` : ""}`,
+          `read-back of ${local.name} (${dir}) does not match the local build: the server holds ${version}${resident === null ? "" : ` sha256 ${sha256Of(resident)}`}, the local build is ${local.version} sha256 ${sha256Of(bytes)}; stopped${leftOffNote(plan.publish.slice(i + 1), removed)}`,
         );
       }
     }
@@ -481,7 +524,7 @@ async function control(args: Args): Promise<void> {
   const local = readAppIdentity(bytes);
   const c = connFor(args.server);
   await withLease(args.server, leaseFor(args.lane, args.tokenDir, "control"), async () => {
-    const before = await residentPackage(c, local.publisher, local.name);
+    const before = await strictResidentPackage(c, local.publisher, local.name);
     const resident =
       before === null
         ? null
@@ -494,7 +537,7 @@ async function control(args: Args): Promise<void> {
       return;
     }
     await publishBytes(c, `${local.publisher}_${local.name}_${local.version}.app`, bytes);
-    const after = await residentPackage(c, local.publisher, local.name);
+    const after = await strictResidentPackage(c, local.publisher, local.name);
     const v = after === null ? "nothing" : readAppIdentity(after).version;
     const s = after === null ? "-" : sha256Of(after);
     console.log(`  published: resident ${v} sha256 ${s} ${s === sha ? "=" : "!="} pinned`);

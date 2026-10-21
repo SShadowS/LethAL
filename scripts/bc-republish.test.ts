@@ -2,7 +2,37 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AppManifest } from "./bc-linux-setup.ts";
-import { controlAction, downgradeRefusal, parseArgs, republishPlan } from "./bc-republish.ts";
+import {
+  controlAction,
+  downgradeRefusal,
+  leftOffNote,
+  packageStatus,
+  parseArgs,
+  republishPlan,
+} from "./bc-republish.ts";
+
+describe("packageStatus (control: only a 404 means nothing resident)", () => {
+  test("a 404 is absent and a 200 is present", () => {
+    expect(packageStatus(404)).toBe("absent");
+    expect(packageStatus(200)).toBe("present");
+  });
+
+  test("any other failure stops the run instead of reading as absent", () => {
+    for (const s of [500, 502, 503, 400, 401, 403]) {
+      expect(() => packageStatus(s)).toThrow(`HTTP ${s}`);
+    }
+  });
+});
+
+describe("leftOffNote", () => {
+  test("names removed apps as removed, and never-present apps as never removed", () => {
+    const n = leftOffNote(["a", "b"], new Set(["a"]));
+    expect(n).toContain("removed and NOT republished: a");
+    expect(n).toContain("not on the server before this run, and not published: b");
+    expect(n).not.toContain("removed and NOT republished: a, b");
+    expect(leftOffNote([], new Set(["a"]))).toBe("");
+  });
+});
 
 const app = (id: string, deps: string[] = []): AppManifest => ({
   id,
