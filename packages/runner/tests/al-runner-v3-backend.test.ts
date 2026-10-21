@@ -1055,9 +1055,9 @@ describe("§6 the Sleep rule through the backend (T12, T31, T32)", () => {
     b.useBuildSymbols([]);
     await b.deploy(l.batch);
     await b.activate(null);
-    await expect(b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 })).rejects.toBeInstanceOf(
-      AlRunnerV3CoverageJoinError,
-    );
+    await expect(
+      b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 }),
+    ).rejects.toBeInstanceOf(AlRunnerV3CoverageJoinError);
   });
 
   test("F1, other direction: a baseline test that reaches only test-app code (no hit under active/) runs", async () => {

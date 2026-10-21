@@ -7,9 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { V3_GATE_LEGS } from "../packages/runner/itest/al-runner-v3-gate";
 import {
+  FIXTURE_SYMBOLS_TAR_SHA256,
   type Outcome,
   type UpdateDeps,
-  FIXTURE_SYMBOLS_TAR_SHA256,
   candidates,
   edgeOnce,
   expectedSha,

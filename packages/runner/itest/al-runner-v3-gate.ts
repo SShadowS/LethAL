@@ -296,6 +296,22 @@ export function classifyXb(r: {
   return "gate-fail";
 }
 
+/**
+ * M6 (RC-5): X (e) and (f) fail closed only when the session holds the SAME five mutants (r5), none
+ * of them survived, and the (d) control M0002 (which survives there) reads `error`. An empty or
+ * short mutant list is a failure, never a vacuous pass. Returns the reason, or `undefined`.
+ */
+export function failsClosedRefusal(
+  mutants: ReadonlyArray<{ readonly mutantCode: string; readonly verdict: string }>,
+): string | undefined {
+  if (mutants.length !== 5) return `${mutants.length} mutants, r5 5`;
+  const survivors = mutants.filter((m) => m.verdict === "survived").map((m) => m.mutantCode);
+  if (survivors.length > 0) return `a survivor (${survivors.join(",")})`;
+  if (mutants.find((m) => m.mutantCode === "M0002")?.verdict !== "error")
+    return "the control M0002 does not read error";
+  return undefined;
+}
+
 /** A pre-committed figure differs: `gate-fail`. Extends `Error` directly. */
 export class V3LegFailure extends Error {
   constructor(message: string) {

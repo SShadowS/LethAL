@@ -63,6 +63,7 @@ import {
   classifyLegC,
   classifyLegT,
   classifyXb,
+  failsClosedRefusal,
   gateOutcome,
   knownDifferencesRefusal,
   legOutcomeOfError,
@@ -755,18 +756,11 @@ async function legXSleep(scratch: string): Promise<void> {
     twin !== undefined && [...twin.values()].every((h) => h === 0),
     `X (d): M0002 hit a Sleep line ${JSON.stringify([...(twin ?? new Map())])}`,
   );
-  // M6 (RC-5): fail closed means the SAME five mutants, none survived, and the (d) control M0002
-  // (which survives there) reading error. An empty or short mutant list is a failure, not a pass.
+  // M6 (RC-5): `failsClosedRefusal` (al-runner-v3-gate.ts, unit-tested): the same five mutants,
+  // none survived, and the (d) control M0002 reading error.
   const failsClosed = (tag: string, rep: SessionReport): void => {
-    must(rep.mutants.length === 5, `${tag}: ${rep.mutants.length} mutants, r5 5`);
-    must(
-      rep.mutants.every((m) => m.verdict !== "survived"),
-      `${tag}: a survivor (${rep.mutants.filter((m) => m.verdict === "survived").map((m) => m.mutantCode)})`,
-    );
-    must(
-      rep.mutants.find((m) => m.mutantCode === "M0002")?.verdict === "error",
-      `${tag}: the control M0002 does not read error`,
-    );
+    const why = failsClosedRefusal(rep.mutants);
+    must(why === undefined, `${tag}: ${why}`);
   };
   // (e) the coverage document removed under every mutant: no pass survives.
   const e = await run("e", async (p) => {

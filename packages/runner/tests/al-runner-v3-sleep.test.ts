@@ -66,10 +66,7 @@ describe("I-1: an index whose roots join no path of the document is a named refu
     );
   const TEST_FILE = "/x/tests/src/Tests.Codeunit.al";
   test("F2 still refuses: an indexed target file listed under ANOTHER prefix (its ending matches)", () => {
-    const why = sleepJoinRefusal(
-      listing([TEST_FILE, "/real/x/active/Logic.Codeunit.al"]),
-      index,
-    );
+    const why = sleepJoinRefusal(listing([TEST_FILE, "/real/x/active/Logic.Codeunit.al"]), index);
     expect(why).toMatch(/al-runner-v3-coverage-join-refused/);
     expect(why).toMatch(/\/real\/x\/active\/Logic\.Codeunit\.al/);
     expect(why).toMatch(/\/x\/active\/logic\.codeunit\.al/);

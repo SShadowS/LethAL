@@ -13,6 +13,7 @@ import {
   classifyLegC,
   classifyLegT,
   classifyXb,
+  failsClosedRefusal,
   gateOutcome,
   knownDifferenceKeys,
   knownDifferencesRefusal,
@@ -249,6 +250,28 @@ describe("RC-4 (M5): leg T's known set is pinned by key and transition", () => {
   });
   test("the committed table holds exactly 52 distinct keys", () => {
     expect(new Set(TABLES_KNOWN_DIFFERENCES.map((d) => d[0])).size).toBe(52);
+  });
+});
+
+describe("RC-5 (M6): X (e)/(f) fail closed only on the five mutants", () => {
+  const five = ["M0001", "M0002", "M0003", "M0004", "M0005"].map((mutantCode) => ({
+    mutantCode,
+    verdict: mutantCode === "M0001" || mutantCode === "M0005" ? "killed" : "error",
+  }));
+  test("the five, none survived, M0002 error: closed", () => {
+    expect(failsClosedRefusal(five)).toBeUndefined();
+  });
+  test("ZERO mutants (or a short list) is a failure, not a vacuous pass", () => {
+    expect(failsClosedRefusal([])).toMatch(/0 mutants, r5 5/);
+    expect(failsClosedRefusal(five.slice(0, 4))).toMatch(/4 mutants/);
+  });
+  test("a survivor, or M0002 not reading error, is a failure", () => {
+    const survived = five.map((m) =>
+      m.mutantCode === "M0003" ? { ...m, verdict: "survived" } : m,
+    );
+    expect(failsClosedRefusal(survived)).toMatch(/a survivor \(M0003\)/);
+    const control = five.map((m) => (m.mutantCode === "M0002" ? { ...m, verdict: "killed" } : m));
+    expect(failsClosedRefusal(control)).toMatch(/M0002/);
   });
 });
 
