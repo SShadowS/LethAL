@@ -41,10 +41,11 @@ export interface ReceiptChallenge {
   /** The container generation in force. A leg run across a generation bump is not evidence. */
   readonly containerGeneration: number;
   /**
-   * How many sublegs the caller requires. `itest:alrunner` has four; a receipt reporting one is a
-   * partial run being presented as a complete one.
+   * The sublegs the caller requires: a count, or (R-587) the exact names, which the receipt must
+   * equal as a set. `itest:alrunner` has 23 named legs (`ALRUNNER_LEG_IDS`); a receipt naming fewer
+   * is a partial run being presented as a complete one.
    */
-  readonly expectedSublegs: number;
+  readonly expectedSublegs: number | readonly string[];
 }
 
 /** What the leg writes when it finishes. */
@@ -140,9 +141,20 @@ export function validateReceipt(challenge: ReceiptChallenge, raw: unknown): Rece
   if (!Array.isArray(sublegs) || sublegs.some((s) => typeof s !== "string")) {
     throw new ReceiptError(`receipt for leg "${leg}" has no sublegs array`);
   }
-  if (sublegs.length !== challenge.expectedSublegs) {
+  const expected = challenge.expectedSublegs;
+  if (typeof expected !== "number") {
+    const missing = expected.filter((s) => !sublegs.includes(s));
+    const extra = sublegs.filter((s) => !expected.includes(s));
+    if (missing.length > 0 || extra.length > 0) {
+      throw new ReceiptError(
+        `leg "${leg}" sublegs differ from the ${expected.length} required: missing [${missing.join(", ")}], extra [${extra.join(", ")}]. A partial run is not a pass.`,
+      );
+    }
+  }
+  const count = typeof expected === "number" ? expected : expected.length;
+  if (sublegs.length !== count) {
     throw new ReceiptError(
-      `leg "${leg}" ran ${sublegs.length} subleg(s), expected ${challenge.expectedSublegs}. A partial run is not a pass.`,
+      `leg "${leg}" ran ${sublegs.length} subleg(s), expected ${count}. A partial run is not a pass.`,
     );
   }
   if (new Set(sublegs).size !== sublegs.length) {

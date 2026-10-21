@@ -18,6 +18,11 @@ import {
   updateOnce,
 } from "./al-runner-v3-update";
 
+// R416's pattern: the update gate's install flow is Linux-only (a symlink for `current`, moved by
+// rename; /proc for "in use"; /work/tools), so its T19 and edge-path tests run on Linux only (the
+// unit-linux CI job). The receipt and worktree-preparation tests are pure and run everywhere.
+const linuxOnly = process.platform === "win32" ? describe.skip : describe;
+
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const GATED_COMMIT = "abcdef1234567abcdef1234567abcdef12345678";
 const FIXED_COMMIT = "fedcba7654321fedcba7654321fedcba76543210";
@@ -106,7 +111,7 @@ function fake(o: {
 const current = async () => readlink(join(root, "current"));
 const failedAt = (tag: string, commit = GATED_COMMIT) => join(root, "failed", `${tag}@${commit}`);
 
-describe("T19: the v3 update gate", () => {
+linuxOnly("T19: the v3 update gate", () => {
   test("candidates: alphas above the gated one, oldest first, never edge", () => {
     expect(
       candidates(["edge", "v3.0.0-alpha.4", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v2.12.0"], 2),
@@ -325,7 +330,7 @@ describe("M4: the gate worktree is prepared, or refused by name", () => {
   });
 });
 
-describe("the daily edge path (edgeOnce)", () => {
+linuxOnly("the daily edge path (edgeOnce)", () => {
   const edge = (
     o: Parameters<typeof fake>[0],
     e: { commit?: string; heavy?: number; free?: number } = {},

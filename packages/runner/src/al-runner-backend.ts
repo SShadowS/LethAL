@@ -1257,6 +1257,8 @@ export class AlRunnerBackend implements ExecutionBackend {
    */
   capabilities(): BackendCapabilities {
     return {
+      // R586 (C1) and R553: identity, not inferred from `authoritative`. The assertion screen reads
+      // past al-runner's `{Type}Exception: ` prefix on this kind only.
       kind: "al-runner",
       // R220: `"al-runner"` sits on the `fenced` side of `CoverageMode`'s routing axis -- ONE
       // runner produces the green set and every verdict -- so it carries no runner-disagreement

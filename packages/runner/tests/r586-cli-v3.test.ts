@@ -16,13 +16,21 @@ const ok = { packagesDir: "/deps", bcVersion: "28.0.46665.47126" };
 
 describe("T16: refused by name for v3, and not for v2", () => {
   const base = ["--project", "P", "--tests", "T", "--backend", "al-runner-v3"];
-  test("--backend al-runner-v3 parses", () => {
+  // M9: the CLI refuses v3 on every platform but Linux, so on another OS (the Windows CI job) these
+  // tests ASSERT that refusal instead of the Linux behaviour; neither direction is skipped.
+  const LINUX = process.platform === "linux";
+  const PLATFORM_REFUSED = /al-runner-v3-(windows|platform)-unsupported/;
+  test("--backend al-runner-v3 parses on Linux, and is refused by name elsewhere", () => {
+    if (!LINUX) {
+      expect(() => parseCliConfig(["run", ...base])).toThrow(PLATFORM_REFUSED);
+      return;
+    }
     const c = parseCliConfig(["run", ...base]);
     expect(c.mode === "run" && c.backendKind).toBe("al-runner-v3");
   });
   test("--workers > 1 is refused for v3, not for v2", () => {
     expect(() => parseCliConfig(["run", ...base, "--workers", "2"])).toThrow(
-      /al-runner-v3-workers-refused/,
+      LINUX ? /al-runner-v3-workers-refused/ : PLATFORM_REFUSED,
     );
     expect(() =>
       parseCliConfig([

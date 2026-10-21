@@ -6,6 +6,7 @@ import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import {
   GATE_FIXTURES,
+  LaneUnknownError,
   type LeaseDeps,
   LeaseLostError,
   NotIgnoredError,
@@ -17,10 +18,12 @@ import {
   continiaDependencyProblems,
   describeLogin,
   gitIgnores,
+  krakenLeaseFor,
   launchFileName,
   parseArgs,
   parseSecretEnv,
   readSecretFile,
+  resolveLane,
   withLease,
   writeConfig,
 } from "./bc-linux-setup.ts";
@@ -352,5 +355,87 @@ describe("withLease", () => {
         throw new Error("publish failed");
       }),
     ).rejects.toThrow("publish failed");
+  });
+});
+
+describe("R598: the coord lease is taken in the caller's lane, never a fixed one", () => {
+  /** The kraken-call seam: records every `kraken coord ...` call, answers a lease with a token. */
+  function fakeKraken(): { calls: string[][]; run: (args: readonly string[]) => Promise<string> } {
+    const calls: string[][] = [];
+    return {
+      calls,
+      run: async (args) => {
+        calls.push([...args]);
+        return args[0] === "lease" ? JSON.stringify({ token: "t-1" }) : "{}";
+      },
+    };
+  }
+
+  test("--lane with an agent name (lane-<x>) is refused and names the lane to pass", () => {
+    expect(() => resolveLane("lane-preproc", { KRAKEN_AGENT: "lane-preproc" })).toThrow(
+      LaneUnknownError,
+    );
+    expect(() => resolveLane("lane-preproc", {})).toThrow(/pass --lane "preproc"/);
+    expect(resolveLane("preproc", {})).toBe("preproc");
+  });
+
+  test("no --lane and no kraken identity: refused by name, before any lease call", () => {
+    expect(() => resolveLane(undefined, {})).toThrow(LaneUnknownError);
+    expect(() => resolveLane(undefined, {})).toThrow(/--lane/);
+    expect(() => resolveLane(undefined, { KRAKEN_AGENT: "" })).toThrow(/KRAKEN_AGENT is not set/);
+    expect(() => resolveLane(undefined, { KRAKEN_AGENT: "someone" })).toThrow(/names no lane/);
+    expect(() => resolveLane(undefined, { KRAKEN_AGENT: "lane-" })).toThrow(LaneUnknownError);
+  });
+
+  test("--lane is passed into the lease call, and wins over the identity", async () => {
+    const k = fakeKraken();
+    const lane = resolveLane("bugs", { KRAKEN_AGENT: "lane-preproc" });
+    expect(lane).toBe("bugs");
+    expect(await krakenLeaseFor(lane, k.run).take("bc2")).toBe("t-1");
+    expect(k.calls).toEqual([["lease", "bc2", "bugs"]]);
+  });
+
+  test("the kraken identity is the fallback: lane-<x> leases as <x>, orchestrator as orchestrator", async () => {
+    const k = fakeKraken();
+    await krakenLeaseFor(resolveLane(undefined, { KRAKEN_AGENT: "lane-preproc" }), k.run).take(
+      "bc1",
+    );
+    await krakenLeaseFor(resolveLane(undefined, { KRAKEN_AGENT: "orchestrator" }), k.run).take(
+      "bc3",
+    );
+    expect(k.calls).toEqual([
+      ["lease", "bc1", "preproc"],
+      ["lease", "bc3", "orchestrator"],
+    ]);
+  });
+
+  test("heartbeat and release go through the same seam with the token", async () => {
+    const k = fakeKraken();
+    const deps = krakenLeaseFor("preproc", k.run);
+    await deps.heartbeat("bc1", "t-1");
+    await deps.release("bc1", "t-1");
+    expect(k.calls).toEqual([
+      ["heartbeat", "bc1", "t-1"],
+      ["release", "bc1", "t-1"],
+    ]);
+  });
+
+  test("the documented command still parses without --lane; --lane takes a name, never a flag", () => {
+    // R594's `withContinia` is always present (false unless --with-continia).
+    expect(parseArgs(["--server", "bc1"])).toEqual({
+      servers: ["bc1"],
+      dryRun: false,
+      withContinia: false,
+    });
+    expect(parseArgs(["--server", "all", "--lane", "code"])).toEqual({
+      servers: ["bc1", "bc2", "bc3"],
+      dryRun: false,
+      lane: "code",
+      withContinia: false,
+    });
+    expect(() => parseArgs(["--server", "bc1", "--lane", "--dry-run"])).toThrow(
+      /--lane needs a lane name/,
+    );
+    expect(() => parseArgs(["--server", "bc1", "--lane"])).toThrow(/--lane needs a lane name/);
   });
 });

@@ -4,12 +4,15 @@ import { CARRIER_KINDS, IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry, ReachGrain } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import {
+  AL_RUNNER_EXCEPTION_PREFIX,
   ASSERTION_SCREEN_DIAGNOSIS,
   ASSERTION_SCREEN_DISCRIMINATION_NOTES,
+  ASSERTION_SCREEN_VACUOUS_AL_RUNNER_NOTE,
   type AssertionScreenDiscrimination,
   killMessageOf,
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
+  screenMessageOf,
 } from "./assertion-screen";
 import type { BackendCapabilities, CoverageMode, TestMethodRef } from "./backend";
 import { isAlRunnerV2, isBcdev } from "./backend";
@@ -2943,12 +2946,23 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     (m) => m.verdict === "killed" || m.verdict === "timeout-killed",
   );
   const killsWithText = screenedKills.filter((m) => m.killingTestFailure !== undefined);
+  // R553: keyed on the backend's declared identity, never on `authoritative`: only a backend that
+  // says it is al-runner has its `{Type}Exception: ` prefix read past.
+  const screenBackend = input.caps.kind === "al-runner" ? "al-runner" : "bcdev";
   const flaggedKills = killsWithText.filter(
-    (m) => !looksLikeAssertionFailure(killMessageOf(m.killingTestFailure)),
+    (m) => !looksLikeAssertionFailure(screenMessageOf(m.killingTestFailure, screenBackend)),
   );
   const runnerRefusals = flaggedKills.filter((m) =>
-    looksLikeRunnerRefusal(killMessageOf(m.killingTestFailure)),
+    looksLikeRunnerRefusal(screenMessageOf(m.killingTestFailure, screenBackend)),
   );
+  // R553 (I3): over `killed` only, so a timeout kill's own text cannot pick the backend note.
+  const unprefixed =
+    screenBackend === "al-runner" &&
+    killsWithText.some(
+      (m) =>
+        m.verdict === "killed" &&
+        !AL_RUNNER_EXCEPTION_PREFIX.test(killMessageOf(m.killingTestFailure)),
+    );
   if (flaggedKills.length > 0) caveats.push("kills-without-assertion");
   const discrimination: AssertionScreenDiscrimination =
     killsWithText.length === 0
@@ -2968,7 +2982,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           flagged: flaggedKills.length,
           flaggedMutants: refsOf(flaggedKills),
           discrimination,
-          discriminationNote: ASSERTION_SCREEN_DISCRIMINATION_NOTES[discrimination],
+          discriminationNote:
+            discrimination === "vacuous" && unprefixed
+              ? ASSERTION_SCREEN_VACUOUS_AL_RUNNER_NOTE
+              : ASSERTION_SCREEN_DISCRIMINATION_NOTES[discrimination],
           runnerRefusals: runnerRefusals.length,
           runnerRefusalMutants: refsOf(runnerRefusals),
           diagnosis: ASSERTION_SCREEN_DIAGNOSIS,
@@ -3130,7 +3147,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     survivorsByProcedure,
     testFiles,
     ...(input.testMethods !== undefined ? { testMethods: input.testMethods } : {}),
-    // R586 (C1): the backend's own kind, never derived from `authoritative`.
+    // R586 (C1) and R553: the backend's own declared kind, never derived from `authoritative`.
+    // `kind` is required on `BackendCapabilities` (R586), so no inference is needed here.
     backend: input.caps.kind,
     authoritative: input.caps.authoritative,
     coverageMode: input.caps.coverage,

@@ -12,9 +12,16 @@
  * (wrapped-fixture.ts).
  * R557: also runs fixtures/sandbox-names (twelve tests al-runner renames, or controls) one-shot and
  * --server, under coverage al-runner and none (names-fixture.ts).
- * R387: LAST, runs sandbox-app through the CLI's own `buildBackend` with no transport key, and
- * checks that its defaults (`--server`, the resource selector) actually ran (cli-default-leg.ts).
- * Since R394 coverage is on by default too, so its verdict table equals leg A's per mutant.
+ * R387: at the END OF THE SANDBOX GROUP (leg 5, after leg D; since R-587 no longer last of the
+ * gate), runs sandbox-app through the CLI's own `buildBackend` with no transport key, and checks
+ * that its defaults (`--server`, the resource selector) actually ran (cli-default-leg.ts). Since R394
+ * coverage is on by default too, so its verdict table equals leg A's per mutant.
+ *
+ * R-587: 23 legs in 7 fixture groups (`alrunner-legs.ts`). `-- --legs <group,...>` runs a subset
+ * and ends PARTIAL with exit 4, never PASS. `-- --parallel[=N]` (N 1 to 3) runs one `--worker`
+ * process per group, at most N at once, after a serial warm-up. `-- --reports <empty dir>` writes
+ * each leg's report as `<id>.json` with the run's nonce. Exit codes: 0 full PASS only, 1 failure,
+ * 2 refused, 3 record, 4 partial with no failure.
  *
  * Skips cleanly (exit 0) when LETHAL_ITEST_ALRUNNER is unset, so CI/local
  * `bun test` runs are unaffected and a developer without al-runner installed
@@ -42,6 +49,8 @@
  * `src/al-runner-transport.ts` for the measurements.
  */
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -57,6 +66,25 @@ import { generateMutationSet, runSession } from "../src/orchestrator";
 import { defaultSpawn } from "../src/publisher";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
+import {
+  type DoneFile,
+  GROUP_NAMES,
+  GateArgsRefusal,
+  type GroupName,
+  type LegId,
+  LegRunner,
+  combineWorkers,
+  exitCodeFor,
+  finalLine,
+  fullRunSublegs,
+  groupLegs,
+  groupRanFailures,
+  parallelVersionRefusal,
+  parseGateArgs,
+  throwCollected,
+  workerEnv,
+} from "./alrunner-legs";
+import { superviseGroups } from "./alrunner-supervisor";
 import {
   BaselineRecordedError,
   assertGateBaseline,
@@ -138,9 +166,27 @@ if (!alRunnerPathEnv) {
   );
   process.exit(1);
 }
-// Narrowed to `string` here; passed explicitly into runOnce() below rather than closed
-// over, since TS does not carry closure-captured narrowing across function boundaries.
-const alRunnerPath: string = alRunnerPathEnv;
+// R-587: parsed after the skip check, so a skipped gate never refuses its arguments.
+let gateArgs: ReturnType<typeof parseGateArgs>;
+try {
+  gateArgs = parseGateArgs(process.argv.slice(2), process.env);
+} catch (err) {
+  if (!(err instanceof GateArgsRefusal)) throw err;
+  console.error(`al-runner itest: REFUSED: ${err.message}`);
+  try {
+    await emitFailed("alrunner", `refused: ${err.message}`);
+  } catch {
+    // a half-set challenge throws in readChallenge; the refusal above is the message that matters
+  }
+  process.exit(2);
+}
+const args = gateArgs;
+
+// I2: the binary is resolved ONCE, at the top of `main()` (so a bad path fails inside its
+// handler and still writes a failed receipt), so a moved `current` symlink cannot change it
+// mid-run, and every worker is handed this path. Narrowed to `string` here.
+const alRunnerPathGiven: string = alRunnerPathEnv;
+let alRunnerPath: string = alRunnerPathGiven;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
@@ -615,7 +661,7 @@ function assertVerdictTable(report: SessionReport): void {
  * update is a "regression" in code that did not change. So the version goes in the log next to the
  * verdicts, every run.
  */
-async function stampRunnerVersion(): Promise<void> {
+async function stampRunnerVersion(): Promise<string> {
   const proc = Bun.spawn([alRunnerPath, "--version"], { stdout: "pipe", stderr: "pipe" });
   const [out, err] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -628,11 +674,27 @@ async function stampRunnerVersion(): Promise<void> {
     0,
     `al-runner --version exited ${exitCode} (${line}) — v1.0.31 rejected --version outright, so this is either a v1 binary or not al-runner. This gate is frozen against v2.`,
   );
-  console.log(`  al-runner build under test: ${line}`);
+  console.log(`  al-runner build under test: ${line} (${alRunnerPath})`);
+  return line;
 }
+
+/** R-587: each symbol group's legs. `runSymbolLegs` matches the group to its SYMBOL_SETS entry. */
+const SYMBOL_GROUP_LEGS = {
+  "symbols-lethala": {
+    oneShot: "symbols-lethala-one-shot",
+    server: "symbols-lethala-server",
+    resource: "symbols-lethala-resource",
+  },
+  "symbols-lethalb": {
+    oneShot: "symbols-lethalb-one-shot",
+    server: "symbols-lethalb-server",
+    resource: "symbols-lethalb-resource",
+  },
+} as const satisfies Record<string, Readonly<Record<"oneShot" | "server" | "resource", LegId>>>;
 
 /**
  * R321: the symbol fixture under `[LETHALA]` and `[LETHALB]`, through all three transports.
+ * Since R-587 one call runs ONE set (its group), so the checks below are collected per set.
  *
  * Every check is COLLECTED and the gate fails once at the end, so a run shows every leg that saw a
  * wrong build rather than the first. A session that crashes still throws at once. Per leg: the table
@@ -642,7 +704,10 @@ async function stampRunnerVersion(): Promise<void> {
  *
  * These legs do not assert the R147 platform pin; only the sandbox one-shot legs do.
  */
-async function runSymbolLegs(): Promise<void> {
+async function runSymbolLegs(
+  legs: LegRunner,
+  group: keyof typeof SYMBOL_GROUP_LEGS,
+): Promise<void> {
   const failures: string[] = [];
   const check = async (what: string, fn: () => void | Promise<void>): Promise<void> => {
     try {
@@ -653,7 +718,10 @@ async function runSymbolLegs(): Promise<void> {
       failures.push(message);
     }
   };
+  // R-587: one set per group; the set comes from SYMBOL_SETS, never from a second list.
   for (const symbols of SYMBOL_SETS) {
+    if (`symbols-${symbols.join("-").toLowerCase()}` !== group) continue;
+    const ids = SYMBOL_GROUP_LEGS[group];
     const label = symbolSetLabel(symbols);
     const fixture: GateFixture = {
       name: `symbols-${symbols.join("-")}`,
@@ -666,39 +734,60 @@ async function runSymbolLegs(): Promise<void> {
     const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-sym-server-"));
     const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-sym-resource-"));
     try {
-      const oneShot = await runOnce(oneShotDir, false, "static", fixture);
-      printSymbolTable(oneShot, symbols, "one-shot");
-      await check(`one-shot ${label}`, async () => {
-        assertSymbolBuild(oneShot, symbols, "one-shot");
-        await assertMatchesFrozenBaseline(
-          oneShot,
-          symbolBaselinePath(symbols),
-          `al-runner itest ${label}`,
-          RECORD_SYMBOL_BASELINES,
-        );
-      });
+      const oneShot = await legs.leg(
+        ids.oneShot,
+        async () => {
+          const r = await runOnce(oneShotDir, false, "static", fixture);
+          printSymbolTable(r, symbols, "one-shot");
+          await check(`one-shot ${label}`, async () => {
+            assertSymbolBuild(r, symbols, "one-shot");
+            await assertMatchesFrozenBaseline(
+              r,
+              symbolBaselinePath(symbols),
+              `al-runner itest ${label}`,
+              RECORD_SYMBOL_BASELINES,
+            );
+          });
+          return r;
+        },
+        failures,
+      );
 
-      const viaServer = await runOnce(serverDir, true, "static", fixture);
-      printSymbolTable(viaServer, symbols, "--server");
-      await check(`--server ${label}`, () => {
-        assert.deepEqual(
-          shape(viaServer),
-          shape(oneShot),
-          `R321 ${label}: the --server transport must reach the SAME per-mutant verdicts as the one-shot one`,
-        );
-        assertSymbolBuild(viaServer, symbols, "--server");
-      });
+      await legs.leg(
+        ids.server,
+        async () => {
+          const viaServer = await runOnce(serverDir, true, "static", fixture);
+          printSymbolTable(viaServer, symbols, "--server");
+          await check(`--server ${label}`, () => {
+            assert.deepEqual(
+              shape(viaServer),
+              shape(oneShot),
+              `R321 ${label}: the --server transport must reach the SAME per-mutant verdicts as the one-shot one`,
+            );
+            assertSymbolBuild(viaServer, symbols, "--server");
+          });
+          return viaServer;
+        },
+        failures,
+      );
 
-      const viaResource = await runOnce(resourceDir, true, "resource", fixture);
-      printSymbolTable(viaResource, symbols, "resource");
-      await check(`resource ${label}`, () => {
-        assert.deepEqual(
-          shape(viaResource),
-          shape(oneShot),
-          `R321 ${label}: the resource selector must reach the SAME per-mutant verdicts as the one-shot one`,
-        );
-        assertSymbolBuild(viaResource, symbols, "resource");
-      });
+      await legs.leg(
+        ids.resource,
+        async () => {
+          const viaResource = await runOnce(resourceDir, true, "resource", fixture);
+          printSymbolTable(viaResource, symbols, "resource");
+          await check(`resource ${label}`, () => {
+            assert.deepEqual(
+              shape(viaResource),
+              shape(oneShot),
+              `R321 ${label}: the resource selector must reach the SAME per-mutant verdicts as the one-shot one`,
+            );
+            assertSymbolBuild(viaResource, symbols, "resource");
+          });
+          return viaResource;
+        },
+        failures,
+      );
 
       console.log(
         `  symbol set ${label}: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}`,
@@ -709,11 +798,7 @@ async function runSymbolLegs(): Promise<void> {
       await rm(resourceDir, { recursive: true, force: true });
     }
   }
-  if (failures.length > 0) {
-    throw new Error(
-      `R321: ${failures.length} symbol-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
-    );
-  }
+  throwCollected("R321", "symbol-leg", failures);
 }
 
 /**
@@ -726,7 +811,7 @@ async function runSymbolLegs(): Promise<void> {
  * report for `main()` to compare with the frozen baseline LAST, after every table check passed,
  * so a record run can never record a leg that disagrees with the pre-commitment.
  */
-async function runLayoutLegs(): Promise<SessionReport> {
+async function runLayoutLegs(legs: LegRunner): Promise<SessionReport> {
   const fixture: GateFixture = {
     name: "layout",
     projectDir: LAYOUT_PROJECT_DIR,
@@ -748,22 +833,32 @@ async function runLayoutLegs(): Promise<SessionReport> {
   const oneShotDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-layout-oneshot-"));
   const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-layout-server-"));
   try {
-    const oneShot = await runOnce(oneShotDir, false, "static", fixture);
-    printLayoutTable(oneShot, "one-shot");
-    check("layout one-shot", () => assertLayoutRun(oneShot, "one-shot"));
-
-    const viaServer = await runOnce(serverDir, true, "static", fixture);
-    printLayoutTable(viaServer, "--server");
-    check("layout --server", () => assertLayoutRun(viaServer, "--server"));
-    check("layout --server vs one-shot", () =>
-      assertLayoutLegsEqual(oneShot, viaServer, "--server"),
+    const oneShot = await legs.leg(
+      "layout-one-shot",
+      async () => {
+        const r = await runOnce(oneShotDir, false, "static", fixture);
+        printLayoutTable(r, "one-shot");
+        check("layout one-shot", () => assertLayoutRun(r, "one-shot"));
+        return r;
+      },
+      failures,
     );
 
-    if (failures.length > 0) {
-      throw new Error(
-        `R353: ${failures.length} layout-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
-      );
-    }
+    await legs.leg(
+      "layout-server",
+      async () => {
+        const viaServer = await runOnce(serverDir, true, "static", fixture);
+        printLayoutTable(viaServer, "--server");
+        check("layout --server", () => assertLayoutRun(viaServer, "--server"));
+        check("layout --server vs one-shot", () =>
+          assertLayoutLegsEqual(oneShot, viaServer, "--server"),
+        );
+        return viaServer;
+      },
+      failures,
+    );
+
+    throwCollected("R353", "layout-leg", failures);
     console.log(
       `  layout legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server identical`,
     );
@@ -790,7 +885,7 @@ async function runLayoutLegs(): Promise<SessionReport> {
  * Checks are collected and thrown once, so a failure shows both legs. Returns the one-shot report
  * for `main()` to compare with the frozen baseline LAST, after every table check passed.
  */
-async function runMultiObjectLegs(): Promise<SessionReport> {
+async function runMultiObjectLegs(legs: LegRunner): Promise<SessionReport> {
   const fixture: GateFixture = {
     name: "multiobject",
     projectDir: MULTIOBJECT_PROJECT_DIR,
@@ -813,31 +908,48 @@ async function runMultiObjectLegs(): Promise<SessionReport> {
   const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-server-"));
   const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-resource-"));
   try {
-    const oneShot = await runOnce(oneShotDir, false, "static", fixture);
-    printMultiObjectTable(oneShot, "one-shot");
-    check("multi-object one-shot", () => assertMultiObjectRun(oneShot, "one-shot"));
-
-    const viaServer = await runOnce(serverDir, true, "static", fixture);
-    printMultiObjectTable(viaServer, "--server");
-    check("multi-object --server", () => assertMultiObjectRun(viaServer, "--server"));
-    check("multi-object --server vs one-shot", () =>
-      assertMultiObjectLegsEqual(oneShot, viaServer, "--server"),
+    const oneShot = await legs.leg(
+      "multiobject-one-shot",
+      async () => {
+        const r = await runOnce(oneShotDir, false, "static", fixture);
+        printMultiObjectTable(r, "one-shot");
+        check("multi-object one-shot", () => assertMultiObjectRun(r, "one-shot"));
+        return r;
+      },
+      failures,
     );
 
-    const viaResource = await runOnce(resourceDir, true, "resource", fixture);
-    printMultiObjectTable(viaResource, "--server + resource");
-    check("multi-object --server + resource", () =>
-      assertMultiObjectRun(viaResource, "--server + resource"),
-    );
-    check("multi-object --server + resource vs one-shot", () =>
-      assertMultiObjectLegsEqual(oneShot, viaResource, "--server + resource"),
+    await legs.leg(
+      "multiobject-server",
+      async () => {
+        const viaServer = await runOnce(serverDir, true, "static", fixture);
+        printMultiObjectTable(viaServer, "--server");
+        check("multi-object --server", () => assertMultiObjectRun(viaServer, "--server"));
+        check("multi-object --server vs one-shot", () =>
+          assertMultiObjectLegsEqual(oneShot, viaServer, "--server"),
+        );
+        return viaServer;
+      },
+      failures,
     );
 
-    if (failures.length > 0) {
-      throw new Error(
-        `R407: ${failures.length} multi-object-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
-      );
-    }
+    await legs.leg(
+      "multiobject-resource",
+      async () => {
+        const viaResource = await runOnce(resourceDir, true, "resource", fixture);
+        printMultiObjectTable(viaResource, "--server + resource");
+        check("multi-object --server + resource", () =>
+          assertMultiObjectRun(viaResource, "--server + resource"),
+        );
+        check("multi-object --server + resource vs one-shot", () =>
+          assertMultiObjectLegsEqual(oneShot, viaResource, "--server + resource"),
+        );
+        return viaResource;
+      },
+      failures,
+    );
+
+    throwCollected("R407", "multi-object-leg", failures);
     console.log(
       `  multi-object legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server and --server + resource identical`,
     );
@@ -860,7 +972,7 @@ async function runMultiObjectLegs(): Promise<SessionReport> {
  * Checks are collected and thrown once. Returns the one-shot report for `main()` to compare with
  * the frozen baseline LAST, so a record run never records a leg that disagrees with the table.
  */
-async function runWrappedLegs(): Promise<SessionReport> {
+async function runWrappedLegs(legs: LegRunner): Promise<SessionReport> {
   const fixture: GateFixture = {
     name: "wrapped",
     projectDir: WRAPPED_PROJECT_DIR,
@@ -879,7 +991,7 @@ async function runWrappedLegs(): Promise<SessionReport> {
     }
   };
   /** One leg, with every `console.warn` line it printed (still printed, also kept). */
-  const leg = async (
+  const capture = async (
     dir: string,
     serverMode: boolean,
     selectorMode: "static" | "resource",
@@ -900,41 +1012,58 @@ async function runWrappedLegs(): Promise<SessionReport> {
   const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-wrapped-server-"));
   const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-wrapped-resource-"));
   try {
-    const oneShot = await leg(oneShotDir, false, "static");
-    printWrappedTable(oneShot.report, "one-shot");
-    check("wrapped one-shot", () => {
-      const reading = assertWrappedRun(oneShot.report, "one-shot", oneShot.warnings);
-      console.log(`  R-300b wrapped: al-runner's --define ${reading} app.json's symbols`);
-    });
-
-    const viaServer = await leg(serverDir, true, "static");
-    printWrappedTable(viaServer.report, "--server");
-    check("wrapped --server", () => {
-      assertWrappedRun(viaServer.report, "--server", viaServer.warnings);
-    });
-    check("wrapped --server vs one-shot", () =>
-      assertWrappedLegsEqual(oneShot.report, viaServer.report, "--server"),
+    const oneShot = await legs.leg(
+      "wrapped-one-shot",
+      async () => {
+        const r = await capture(oneShotDir, false, "static");
+        printWrappedTable(r.report, "one-shot");
+        check("wrapped one-shot", () => {
+          const reading = assertWrappedRun(r.report, "one-shot", r.warnings);
+          console.log(`  R-300b wrapped: al-runner's --define ${reading} app.json's symbols`);
+        });
+        return r.report;
+      },
+      failures,
     );
 
-    const viaResource = await leg(resourceDir, true, "resource");
-    printWrappedTable(viaResource.report, "resource");
-    check("wrapped resource", () => {
-      assertWrappedRun(viaResource.report, "resource", viaResource.warnings);
-    });
-    check("wrapped resource vs one-shot", () =>
-      assertWrappedLegsEqual(oneShot.report, viaResource.report, "resource"),
+    await legs.leg(
+      "wrapped-server",
+      async () => {
+        const viaServer = await capture(serverDir, true, "static");
+        printWrappedTable(viaServer.report, "--server");
+        check("wrapped --server", () => {
+          assertWrappedRun(viaServer.report, "--server", viaServer.warnings);
+        });
+        check("wrapped --server vs one-shot", () =>
+          assertWrappedLegsEqual(oneShot, viaServer.report, "--server"),
+        );
+        return viaServer.report;
+      },
+      failures,
     );
 
-    if (failures.length > 0) {
-      throw new Error(
-        `R-300b: ${failures.length} wrapped-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
-      );
-    }
-    const c = oneShot.report.counts;
+    await legs.leg(
+      "wrapped-resource",
+      async () => {
+        const viaResource = await capture(resourceDir, true, "resource");
+        printWrappedTable(viaResource.report, "resource");
+        check("wrapped resource", () => {
+          assertWrappedRun(viaResource.report, "resource", viaResource.warnings);
+        });
+        check("wrapped resource vs one-shot", () =>
+          assertWrappedLegsEqual(oneShot, viaResource.report, "resource"),
+        );
+        return viaResource.report;
+      },
+      failures,
+    );
+
+    throwCollected("R-300b", "wrapped-leg", failures);
+    const c = oneShot.counts;
     console.log(
       `  wrapped legs: one-shot killed=${c.killed} survived=${c.survived} noCoverage=${c.noCoverage}, --server and resource identical`,
     );
-    return oneShot.report;
+    return oneShot;
   } finally {
     await rm(oneShotDir, { recursive: true, force: true });
     await rm(serverDir, { recursive: true, force: true });
@@ -958,7 +1087,7 @@ async function runWrappedLegs(): Promise<SessionReport> {
  * Checks are collected and thrown once. Returns A1 for `main()` to compare with the frozen
  * baseline LAST, so a record run never records a leg that disagrees with the table.
  */
-async function runNamesLegs(): Promise<SessionReport> {
+async function runNamesLegs(legs: LegRunner): Promise<SessionReport> {
   const failures: string[] = [];
   const check = (what: string, fn: () => void): void => {
     try {
@@ -969,7 +1098,7 @@ async function runNamesLegs(): Promise<SessionReport> {
       failures.push(message);
     }
   };
-  const leg = async (
+  const runNamesLeg = async (
     name: string,
     serverMode: boolean,
     coverage: "al-runner" | "none",
@@ -1005,19 +1134,40 @@ async function runNamesLegs(): Promise<SessionReport> {
       await rm(dir, { recursive: true, force: true });
     }
   };
-  const a1 = await leg("A1-one-shot-al-runner", false, "al-runner");
-  const a2 = await leg("A2-one-shot-none", false, "none");
-  check("names A2 vs A1", () => assertNamesLegsEqual(a1, a2, "A2 vs A1", false));
-  const a3 = await leg("A3-server-al-runner", true, "al-runner");
-  check("names A3 vs A1", () => assertNamesLegsEqual(a1, a3, "A3 vs A1", true));
-  const a4 = await leg("A4-server-none", true, "none");
-  check("names A4 vs A1", () => assertNamesLegsEqual(a1, a4, "A4 vs A1", false));
-  check("names A4 vs A2", () => assertNamesLegsEqual(a2, a4, "A4 vs A2", true));
-  if (failures.length > 0) {
-    throw new Error(
-      `R557: ${failures.length} names-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
-    );
-  }
+  const a1 = await legs.leg(
+    "names-a1",
+    () => runNamesLeg("A1-one-shot-al-runner", false, "al-runner"),
+    failures,
+  );
+  const a2 = await legs.leg(
+    "names-a2",
+    async () => {
+      const r = await runNamesLeg("A2-one-shot-none", false, "none");
+      check("names A2 vs A1", () => assertNamesLegsEqual(a1, r, "A2 vs A1", false));
+      return r;
+    },
+    failures,
+  );
+  await legs.leg(
+    "names-a3",
+    async () => {
+      const r = await runNamesLeg("A3-server-al-runner", true, "al-runner");
+      check("names A3 vs A1", () => assertNamesLegsEqual(a1, r, "A3 vs A1", true));
+      return r;
+    },
+    failures,
+  );
+  await legs.leg(
+    "names-a4",
+    async () => {
+      const r = await runNamesLeg("A4-server-none", true, "none");
+      check("names A4 vs A1", () => assertNamesLegsEqual(a1, r, "A4 vs A1", false));
+      check("names A4 vs A2", () => assertNamesLegsEqual(a2, r, "A4 vs A2", true));
+      return r;
+    },
+    failures,
+  );
+  throwCollected("R557", "names-leg", failures);
   const c = a1.counts;
   console.log(
     `  names legs: A1 killed=${c.killed} survived=${c.survived} noCoverage=${c.noCoverage}, A2-A4 equal per mutant`,
@@ -1037,8 +1187,9 @@ function provenance(report: SessionReport): { bcBuild: string; platformAppsDir: 
 
 /**
  * R387: sandbox-app through `buildBackend` with an `alRunner` section that sets NO transport key,
- * so the leg measures what `lethal run --backend al-runner` does with no config. Runs after every
- * other leg (R345: one al-runner session at a time).
+ * so the leg measures what `lethal run --backend al-runner` does with no config. Runs last in the
+ * SANDBOX group, after leg D (R-587), not last of the gate: R345 (one al-runner session at a time)
+ * is closed, and the leg needs only leg A's report from the same process.
  *
  * Its table is pre-committed against leg A (`expectedCliDefaultShape`, CLI_DEFAULT_COVERAGE_SPEC):
  * equal per mutant, since R394 turned coverage on by default (under R387 `SandboxPricing`'s four
@@ -1193,7 +1344,428 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
   }
 }
 
+/**
+ * The sandbox group: legs A, B (determinism), C (`--server`), D (resource), then cli-default (R387),
+ * which is pre-committed against leg A's report from this same process. `baselines` holds the two
+ * frozen-baseline checks, which `main()` owns (R332: its call sites are checked there).
+ */
+async function runSandboxLegs(
+  legs: LegRunner,
+  baselines: {
+    readonly legA: (r: SessionReport) => Promise<void>;
+    readonly cliDefault: (r: SessionReport) => Promise<void>;
+  },
+): Promise<void> {
+  const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
+  const total = files.reduce((n, f) => n + f.specs.length, 0);
+  assert.equal(
+    total,
+    EXPECTED.totalMutantSites,
+    `expected ${EXPECTED.totalMutantSites} mutant sites across the fixture, generated ${total} — either the fixture changed or a tier-1 operator's targeting changed; update fixtures/README.md`,
+  );
+
+  const scratchA = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-a-"));
+  const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-b-"));
+  const scratchC = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-server-"));
+  const scratchD = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-resource-"));
+  try {
+    // R387: leg A is kept for the CLI-default leg, which ends this group and is pre-committed against it.
+    const first = await legs.leg("sandbox-a", async () => {
+      const r = await runOnce(scratchA);
+      assertVerdictTable(r);
+      assertPlatformAppsPinned(r);
+      // Per-mutant regression guard against the committed baseline — in addition to the aggregate
+      // verdict counts assertVerdictTable already checked. A per-mutant difference fails the
+      // itest even when killed/survived/no-coverage totals still match (Task 15, design spec §14).
+      await baselines.legA(r);
+      return r;
+    });
+
+    await legs.leg("sandbox-b", async () => {
+      const second = await runOnce(scratchB);
+      assertVerdictTable(second);
+      assertPlatformAppsPinned(second);
+      assert.deepEqual(
+        shape(first),
+        shape(second),
+        "two consecutive runs must be 100% verdict-identical (determinism exit criterion)",
+      );
+      return second;
+    });
+
+    // R220 leg 3: the SAME fixture through `al-runner --server`, the warm daemon, which must reach
+    // the same verdicts as the one-shot transport.
+    //
+    // This is the anti-inertness half of server mode. The two transports differ in every way that
+    // could move a verdict -- one process per test against one warm process, one `--test` filter
+    // against a whole-suite run served from a per-activation cache, Cobertura against
+    // `perTestCoverage` -- so agreement here is evidence rather than a tautology. A cache that
+    // outlived an `activate()` would show up as every mutant sharing the baseline's verdicts, and
+    // a suite run that silently reused a previous compile would show up the same way.
+    await legs.leg("sandbox-server", async () => {
+      const viaServer = await runOnce(scratchC, true);
+      assertVerdictTable(viaServer);
+      assertPlatformAppsNotRecorded(viaServer, "--server");
+      assert.deepEqual(
+        shape(viaServer),
+        shape(first),
+        "R220: the --server transport must reach the SAME per-mutant verdicts as the one-shot one",
+      );
+      console.log(`  --server leg: ${viaServer.counts.killed} killed, verdicts identical`);
+      return viaServer;
+    });
+
+    // R222 leg 4: the RESOURCE selector, which compiles the bundle once and writes the active
+    // mutant to a text file the compiled AL reads at runtime, instead of baking the id into AL and
+    // recompiling per mutant.
+    //
+    // The verdicts must be identical AGAIN, and this leg is the one that can go wrong quietly. The
+    // resource is read at runtime, so a selector that failed to re-read, or a file written after
+    // the request started, would score a mutant against the PREVIOUS mutant's value and still
+    // produce a plausible-looking table. Comparing per mutant against the static transports is
+    // what catches that; a matching killed/survived/no-coverage count would not.
+    await legs.leg("sandbox-resource", async () => {
+      const viaResource = await runOnce(scratchD, true, "resource");
+      assertVerdictTable(viaResource);
+      assertPlatformAppsNotRecorded(viaResource, "resource");
+      assert.deepEqual(
+        shape(viaResource),
+        shape(first),
+        "R222: the resource selector must reach the SAME per-mutant verdicts as the baked-in one",
+      );
+      console.log(
+        `  resource-selector leg: ${viaResource.counts.killed} killed, verdicts identical`,
+      );
+      return viaResource;
+    });
+
+    // R387: last in this group, against leg A's report. The frozen baseline is compared AFTER the
+    // leg's own checks, so a record run never records a wrong leg.
+    await legs.leg("cli-default", async () => {
+      const r = await runCliDefaultLeg(first);
+      await baselines.cliDefault(r);
+      return r;
+    });
+  } finally {
+    await rm(scratchA, { recursive: true, force: true });
+    await rm(scratchB, { recursive: true, force: true });
+    await rm(scratchC, { recursive: true, force: true });
+    await rm(scratchD, { recursive: true, force: true });
+  }
+}
+
+/** Each group's runner, built in `main()` (where R332's guard reads the baseline call sites). */
+type GroupRunners = Readonly<Record<GroupName, (legs: LegRunner) => Promise<void>>>;
+
+/** I1: the (testDir, preprocessor symbols) each group's one-shot legs provision with. */
+const GROUP_PROVISION: Readonly<
+  Record<GroupName, { readonly testDir: string; readonly symbols: readonly string[] }>
+> = {
+  sandbox: { testDir: TEST_DIR, symbols: [] },
+  layout: { testDir: LAYOUT_TEST_DIR, symbols: [] },
+  multiobject: { testDir: MULTIOBJECT_TEST_DIR, symbols: [] },
+  wrapped: { testDir: WRAPPED_TEST_DIR, symbols: WRAPPED_SYMBOLS },
+  names: { testDir: NAMES_TEST_DIR, symbols: [] },
+  "symbols-lethala": { testDir: SYMBOL_TEST_DIR, symbols: symbolSetOf("symbols-lethala") },
+  "symbols-lethalb": { testDir: SYMBOL_TEST_DIR, symbols: symbolSetOf("symbols-lethalb") },
+};
+
+/** The SYMBOL_SETS entry a symbol group runs, by the same name match as `runSymbolLegs`. */
+function symbolSetOf(group: keyof typeof SYMBOL_GROUP_LEGS): readonly string[] {
+  const set = SYMBOL_SETS.find((s) => `symbols-${s.join("-").toLowerCase()}` === group);
+  if (set === undefined) throw new Error(`R-587: no SYMBOL_SETS entry for group ${group}`);
+  return set;
+}
+
+/** B2: where this run's evidence goes. Every file carries `nonce`. */
+interface RunFiles {
+  readonly dir: string;
+  readonly nonce: string;
+  readonly buildLine: string;
+}
+
+function writeJson(path: string, value: unknown): void {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/** B2: an empty or new directory only, so no file of an earlier run can stand in for this one's. */
+function freshReportsDir(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  if (readdirSync(dir).length > 0) {
+    throw new GateArgsRefusal(`--reports ${dir} is not empty; give an empty or new directory (B2)`);
+  }
+}
+
+/** `run.json`: the run's nonce, mode and build line, which `alrunner-legs-diff` reads. */
+function startRunFiles(
+  dir: string,
+  buildLine: string,
+  mode: string,
+  groups: readonly GroupName[],
+): RunFiles {
+  const files = { dir, nonce: randomBytes(16).toString("hex"), buildLine };
+  writeJson(join(dir, "run.json"), {
+    runNonce: files.nonce,
+    mode,
+    groups,
+    buildLine,
+    alRunnerPath,
+  });
+  return files;
+}
+
+/**
+ * Runs `groups` in this process, in registry order, failing fast. Each leg's report goes to
+ * `<dir>/<id>.json` when `files` is set; each group's `<group>.done.json` is written only after
+ * EVERY check of the run, R577's included (B2).
+ */
+async function runGroups(
+  runners: GroupRunners,
+  groups: readonly GroupName[],
+  files: RunFiles | undefined,
+  onStart?: (legs: LegRunner) => void,
+): Promise<readonly LegId[]> {
+  const legs = new LegRunner(
+    new Set(groups.flatMap((g) => groupLegs(g))),
+    files === undefined
+      ? {}
+      : {
+          onDone: (id, report) =>
+            writeJson(join(files.dir, `${id}.json`), {
+              runNonce: files.nonce,
+              legId: id,
+              buildLine: files.buildLine,
+              report,
+            }),
+        },
+  );
+  onStart?.(legs);
+  const ranBy = new Map<GroupName, readonly LegId[]>();
+  for (const g of groups) {
+    const before = legs.ran.length;
+    await runners[g](legs);
+    const ran = legs.ran.slice(before);
+    const failures = groupRanFailures(g, ran);
+    if (failures.length > 0) throw new Error(`R-587: ${failures.join("; ")}`);
+    ranBy.set(g, ran);
+  }
+  if (RECORD_SYMBOL_BASELINES) {
+    // Decision 6: recording is not a measurement against a frozen table, so it is never a pass.
+    console.log(
+      "al-runner itest: RECORDED the symbol baselines; NOT a pass. Review them against the pre-commitment, commit, and re-run without LETHAL_ITEST_RECORD_SYMBOL_BASELINES.",
+    );
+    await emitFailed("alrunner", "record mode: symbol baselines recorded, not a pass");
+    process.exit(3);
+  }
+  // R577: a figure still null in REPRODUCTION_EXPECTED was printed by its leg, never checked.
+  // Per process, so every worker checks its own legs.
+  const blanks = unmeasuredReproductionFigures();
+  if (blanks.length > 0) {
+    throw new Error(
+      `R577: ${blanks.length} figure(s) in REPRODUCTION_EXPECTED (itest/kill-reproduction.ts) are not yet measured; this run measured: ${blanks.join("; ")}`,
+    );
+  }
+  if (files !== undefined) {
+    for (const [group, ran] of ranBy) {
+      const done: DoneFile = { runNonce: files.nonce, group, ran, buildLine: files.buildLine };
+      writeJson(join(files.dir, `${group}.done.json`), done);
+    }
+  }
+  return legs.ran;
+}
+
+/**
+ * The last line, the exit code and, for a full run only, the receipt. With `--reports`, a full
+ * PASS also writes `result.json` LAST, after the receipt, so `alrunner-legs-diff` can refuse the
+ * evidence of a run that did not pass (review I-1).
+ */
+async function finish(ran: readonly LegId[], files: RunFiles | undefined): Promise<number> {
+  const line = finalLine(ran);
+  console.log(line);
+  const code = exitCodeFor(ran);
+  if (code === 0) {
+    await emitPassed("alrunner", { sublegs: fullRunSublegs(ran), artifacts: { reported: false } });
+    if (files !== undefined) {
+      writeJson(join(files.dir, "result.json"), {
+        runNonce: files.nonce,
+        exitCode: 0,
+        finalLine: line,
+      });
+    }
+  } else {
+    // Unreachable while `--legs` with a challenge is refused at start; kept so it can never pass.
+    await emitFailed("alrunner", "partial run: not a gate pass");
+  }
+  return code;
+}
+
+/**
+ * I5: a worker turns SIGINT/SIGTERM, or its parent dying, into "no further leg starts" and
+ * signals its own process group (its al-runner and dotnet children), so the running leg fails and
+ * its `finally` closes the backend. A worker still alive 60 s later exits 1.
+ */
+function installWorkerStop(group: GroupName, legs: LegRunner): void {
+  let stopping = false;
+  const stop = (sig: NodeJS.Signals): void => {
+    if (stopping) return;
+    stopping = true;
+    legs.stop(`worker ${group} got ${sig}`);
+    console.error(`worker ${group}: ${sig}; no further leg starts`);
+    try {
+      process.kill(-process.pid, sig);
+    } catch {
+      // not a process-group leader (started by hand): nothing more to signal
+    }
+    setTimeout(() => process.exit(1), 60_000).unref();
+  };
+  process.on("SIGINT", () => stop("SIGINT"));
+  process.on("SIGTERM", () => stop("SIGTERM"));
+  const parent = process.ppid;
+  setInterval(() => {
+    if (process.ppid !== parent) stop("SIGTERM");
+  }, 2000).unref();
+}
+
+/** One group, for the supervisor. Never prints PASS or PARTIAL; exits 4 when green (M2). */
+async function runWorker(runners: GroupRunners, buildLine: string): Promise<number> {
+  const [group] = args.groups ?? [];
+  if (group === undefined || args.reports === undefined || args.nonce === undefined) {
+    throw new Error("R-587: unreachable, parseGateArgs checks --worker's arguments");
+  }
+  const files: RunFiles = { dir: args.reports, nonce: args.nonce, buildLine };
+  const ran = await runGroups(runners, [group], files, (legs) => installWorkerStop(group, legs));
+  console.log(`worker ${group}: done (${ran.join(", ")})`);
+  return 4;
+}
+
+/**
+ * I1: before fan-out, serially: one contract probe, one R551 `--test-exact` probe, and one
+ * `provisionOnce` per distinct (testDir, symbols) pair. Refuses to fan out unless every
+ * provisioning names the same platform-app directory.
+ */
+async function warmUp(groups: readonly GroupName[]): Promise<void> {
+  const t0 = Date.now();
+  const contract = await runAlRunnerContractProbe(alRunnerPath);
+  console.log(
+    `warm-up: contract probe: ${contract.facts.map((f) => `${f.fact}=${f.verdict}`).join(" ")}`,
+  );
+  const scratch = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-warmup-"));
+  try {
+    const base = {
+      alRunnerPath,
+      instrumentedDir: join(scratch, "instrumented"),
+      selectorObjectId: SELECTOR_IDS.selectorId,
+    };
+    const probe = new AlRunnerBackend({ ...base, testDir: TEST_DIR });
+    let selector: Awaited<ReturnType<AlRunnerBackend["probeExactTestSelector"]>>;
+    try {
+      selector = await probe.probeExactTestSelector();
+    } finally {
+      await probe.close();
+    }
+    console.log(`warm-up: R551 --test-exact probe: ${selector.kind}`);
+    const answers = new Map<string, string>();
+    for (const g of groups) {
+      const { testDir, symbols } = GROUP_PROVISION[g];
+      const key = `${testDir} [${symbols.join(",")}]`;
+      if (answers.has(key)) continue;
+      const backend = new AlRunnerBackend({
+        ...base,
+        testDir,
+        ...(symbols.length > 0 ? { preprocessorSymbols: symbols } : {}),
+      });
+      let p: Awaited<ReturnType<AlRunnerBackend["provisionOnce"]>>;
+      try {
+        p = await backend.provisionOnce();
+      } finally {
+        await backend.close();
+      }
+      const answer = p.platformAppsDir ?? `NONE (${p.platformAppsRefusal ?? "no reason given"})`;
+      answers.set(key, answer);
+      console.log(`warm-up: provisionOnce ${key}: ${answer}`);
+    }
+    const dirs = [...new Set(answers.values())];
+    const [only] = dirs;
+    if (dirs.length !== 1 || only === undefined || only.startsWith("NONE")) {
+      throw new Error(
+        `R-587 I1: refusing to fan out: the warm-up's provisioning gave ${dirs.length} answer(s), and needs exactly one platform-app directory: ${dirs.join(" | ")}`,
+      );
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+  console.log(`warm-up: done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+}
+
+/** `--parallel=N`: warm-up, then one `--worker` process per group, at most N at once. */
+async function supervise(n: number, buildLine: string): Promise<number> {
+  const refusal = parallelVersionRefusal(buildLine);
+  if (refusal !== undefined) throw new GateArgsRefusal(refusal);
+  const groups = args.groups ?? GROUP_NAMES;
+  const dir = args.reports ?? (await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-reports-")));
+  freshReportsDir(dir);
+  const files = startRunFiles(dir, buildLine, `parallel N=${n}`, groups);
+  console.log(`mode: parallel N=${n}; reports ${dir}; run nonce ${files.nonce}`);
+  await warmUp(groups);
+
+  const ac = new AbortController();
+  const onSignal = (sig: NodeJS.Signals): void => {
+    console.error(`al-runner itest: ${sig}; forwarding it to the workers`);
+    ac.abort(sig);
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  const script = fileURLToPath(import.meta.url);
+  const env = workerEnv(process.env, alRunnerPath);
+  const res = await superviseGroups({
+    groups,
+    parallel: n,
+    signal: ac.signal,
+    specFor: (group) => ({
+      group,
+      argv: [
+        process.execPath,
+        script,
+        "--worker",
+        "--legs",
+        group,
+        "--reports",
+        dir,
+        "--nonce",
+        files.nonce,
+      ],
+      cwd: process.cwd(),
+      env,
+      reportsDir: dir,
+      out: (line) => console.log(line),
+    }),
+  });
+  console.log(`mode: parallel N=${n}; wall time per group:`);
+  for (const r of res.results) {
+    console.log(
+      `  ${r.group}: ${res.wallSeconds[r.group]?.toFixed(0) ?? "-"} s, exit ${r.exitCode ?? r.signal}`,
+    );
+  }
+  const { ran, failures } = combineWorkers(res.results, {
+    nonce: files.nonce,
+    buildLine,
+    ...(res.interrupted !== undefined ? { interrupted: res.interrupted } : {}),
+  });
+  if (failures.length > 0) {
+    throw new Error(
+      `R-587: ${failures.length} worker failure(s):\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+    );
+  }
+  return finish(ran, files);
+}
+
+/**
+ * Preflights every baseline, builds each group's runner (each one-shot report is compared with its
+ * frozen baseline LAST, after every table check of the group passed, so a record run never
+ * records a leg that disagrees), then runs the gate and exits: 0 full PASS, 4 partial. Failures throw.
+ */
 async function main(): Promise<void> {
+  alRunnerPath = realpathSync(alRunnerPathGiven);
   preflightGateBaseline(BASELINE_PATH, "al-runner itest");
   preflightGateBaseline(CLI_DEFAULT_BASELINE_PATH, "al-runner itest cli-default");
   preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner itest layout");
@@ -1209,149 +1781,59 @@ async function main(): Promise<void> {
       RECORD_SYMBOL_BASELINES,
     );
   }
-  await stampRunnerVersion();
-  const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
-  const total = files.reduce((n, f) => n + f.specs.length, 0);
-  assert.equal(
-    total,
-    EXPECTED.totalMutantSites,
-    `expected ${EXPECTED.totalMutantSites} mutant sites across the fixture, generated ${total} — either the fixture changed or a tier-1 operator's targeting changed; update fixtures/README.md`,
-  );
+  const runners: GroupRunners = {
+    sandbox: (legs) =>
+      runSandboxLegs(legs, {
+        legA: (r) => assertGateBaseline(r, BASELINE_PATH, "al-runner itest"),
+        cliDefault: (r) =>
+          assertGateBaseline(r, CLI_DEFAULT_BASELINE_PATH, "al-runner itest cli-default"),
+      }),
+    layout: async (legs) =>
+      assertGateBaseline(await runLayoutLegs(legs), LAYOUT_BASELINE_PATH, "al-runner itest layout"),
+    multiobject: async (legs) =>
+      assertGateBaseline(
+        await runMultiObjectLegs(legs),
+        MULTIOBJECT_BASELINE_PATH,
+        "al-runner itest multiobject",
+      ),
+    wrapped: async (legs) =>
+      assertGateBaseline(
+        await runWrappedLegs(legs),
+        WRAPPED_BASELINE_PATH,
+        "al-runner itest wrapped",
+      ),
+    names: async (legs) =>
+      assertGateBaseline(await runNamesLegs(legs), NAMES_BASELINE_PATH, "al-runner itest names"),
+    "symbols-lethala": (legs) => runSymbolLegs(legs, "symbols-lethala"),
+    "symbols-lethalb": (legs) => runSymbolLegs(legs, "symbols-lethalb"),
+  };
+  process.exit(await gate(runners));
+}
 
-  const scratchA = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-a-"));
-  const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-b-"));
-  const scratchC = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-server-"));
-  const scratchD = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-resource-"));
-  // R387: kept for the CLI-default leg, which runs last and is pre-committed against it.
-  let legA: SessionReport | undefined;
-  try {
-    const first = await runOnce(scratchA);
-    legA = first;
-    assertVerdictTable(first);
-    assertPlatformAppsPinned(first);
-    // Per-mutant regression guard against the committed baseline — in addition to the aggregate
-    // verdict counts assertVerdictTable already checked. A per-mutant difference fails the
-    // itest even when killed/survived/no-coverage totals still match (Task 15, design spec §14).
-    await assertGateBaseline(first, BASELINE_PATH, "al-runner itest");
+/** The gate after the preflight: worker, supervisor or sequential. Returns the exit code. */
+async function gate(runners: GroupRunners): Promise<number> {
+  const buildLine = await stampRunnerVersion();
+  if (args.worker) return runWorker(runners, buildLine);
+  if (args.parallel !== undefined) return supervise(args.parallel, buildLine);
 
-    const second = await runOnce(scratchB);
-    assertVerdictTable(second);
-    assertPlatformAppsPinned(second);
-
-    assert.deepEqual(
-      shape(first),
-      shape(second),
-      "two consecutive runs must be 100% verdict-identical (determinism exit criterion)",
-    );
-
-    // R220 leg 3: the SAME fixture through `al-runner --server`, the warm daemon, which must reach
-    // the same verdicts as the one-shot transport.
-    //
-    // This is the anti-inertness half of server mode. The two transports differ in every way that
-    // could move a verdict -- one process per test against one warm process, one `--test` filter
-    // against a whole-suite run served from a per-activation cache, Cobertura against
-    // `perTestCoverage` -- so agreement here is evidence rather than a tautology. A cache that
-    // outlived an `activate()` would show up as every mutant sharing the baseline's verdicts, and
-    // a suite run that silently reused a previous compile would show up the same way.
-    const viaServer = await runOnce(scratchC, true);
-    assertVerdictTable(viaServer);
-    assertPlatformAppsNotRecorded(viaServer, "--server");
-    assert.deepEqual(
-      shape(viaServer),
-      shape(first),
-      "R220: the --server transport must reach the SAME per-mutant verdicts as the one-shot one",
-    );
-    console.log(`  --server leg: ${viaServer.counts.killed} killed, verdicts identical`);
-
-    // R222 leg 4: the RESOURCE selector, which compiles the bundle once and writes the active
-    // mutant to a text file the compiled AL reads at runtime, instead of baking the id into AL and
-    // recompiling per mutant.
-    //
-    // The verdicts must be identical AGAIN, and this leg is the one that can go wrong quietly. The
-    // resource is read at runtime, so a selector that failed to re-read, or a file written after
-    // the request started, would score a mutant against the PREVIOUS mutant's value and still
-    // produce a plausible-looking table. Comparing per mutant against the static transports is
-    // what catches that; a matching killed/survived/no-coverage count would not.
-    const viaResource = await runOnce(scratchD, true, "resource");
-    assertVerdictTable(viaResource);
-    assertPlatformAppsNotRecorded(viaResource, "resource");
-    assert.deepEqual(
-      shape(viaResource),
-      shape(first),
-      "R222: the resource selector must reach the SAME per-mutant verdicts as the baked-in one",
-    );
-    console.log(`  resource-selector leg: ${viaResource.counts.killed} killed, verdicts identical`);
-  } finally {
-    await rm(scratchA, { recursive: true, force: true });
-    await rm(scratchB, { recursive: true, force: true });
-    await rm(scratchC, { recursive: true, force: true });
-    await rm(scratchD, { recursive: true, force: true });
+  const groups = args.groups ?? GROUP_NAMES;
+  let files: RunFiles | undefined;
+  if (args.reports !== undefined) {
+    freshReportsDir(args.reports);
+    files = startRunFiles(args.reports, buildLine, "sequential", groups);
+    console.log(`mode: sequential; reports ${args.reports}; run nonce ${files.nonce}`);
   }
-
-  const layoutOneShot = await runLayoutLegs();
-  await assertGateBaseline(layoutOneShot, LAYOUT_BASELINE_PATH, "al-runner itest layout");
-
-  const multiOneShot = await runMultiObjectLegs();
-  await assertGateBaseline(multiOneShot, MULTIOBJECT_BASELINE_PATH, "al-runner itest multiobject");
-
-  const wrappedOneShot = await runWrappedLegs();
-  await assertGateBaseline(wrappedOneShot, WRAPPED_BASELINE_PATH, "al-runner itest wrapped");
-
-  const namesA1 = await runNamesLegs();
-  await assertGateBaseline(namesA1, NAMES_BASELINE_PATH, "al-runner itest names");
-
-  await runSymbolLegs();
-  if (RECORD_SYMBOL_BASELINES) {
-    // Decision 6: recording is not a measurement against a frozen table, so it is never a pass.
-    console.log(
-      "al-runner itest: RECORDED the symbol baselines; NOT a pass. Review them against the pre-commitment, commit, and re-run without LETHAL_ITEST_RECORD_SYMBOL_BASELINES.",
-    );
-    await emitFailed("alrunner", "record mode: symbol baselines recorded, not a pass");
-    process.exit(3);
-  }
-
-  // R387: last, after every existing leg, against leg A's report.
-  if (legA === undefined) throw new Error("R387: leg A produced no report to compare against");
-  const cliDefault = await runCliDefaultLeg(legA);
-  await assertGateBaseline(cliDefault, CLI_DEFAULT_BASELINE_PATH, "al-runner itest cli-default");
-
-  // R577: a figure still null in REPRODUCTION_EXPECTED was printed by its leg, never checked.
-  const blanks = unmeasuredReproductionFigures();
-  if (blanks.length > 0) {
-    throw new Error(
-      `R577: ${blanks.length} figure(s) in REPRODUCTION_EXPECTED (itest/kill-reproduction.ts) are not yet measured; this run measured: ${blanks.join("; ")}`,
-    );
-  }
-
-  console.log("al-runner itest: PASS");
-  await emitPassed("alrunner", {
-    sublegs: [
-      "one-shot",
-      "server",
-      "resource",
-      "platform-pin",
-      "layout-one-shot",
-      "layout-server",
-      "multiobject-one-shot",
-      "multiobject-server",
-      "multiobject-resource",
-      "wrapped-one-shot",
-      "wrapped-server",
-      "wrapped-resource",
-      "names-one-shot-al-runner",
-      "names-one-shot-none",
-      "names-server-al-runner",
-      "names-server-none",
-      "cli-default",
-    ],
-    artifacts: { reported: false },
-  });
+  return finish(await runGroups(runners, groups, files), files);
 }
 
 main().catch(async (err: unknown) => {
   // R332: print the reason before any await, so an operator sees it on the console even when
   // the following receipt write is slow or the process is killed before it finishes.
   console.error(formatFailure(err));
-  await emitFailed("alrunner", err instanceof Error ? err.message : String(err));
+  const refused = err instanceof GateArgsRefusal;
+  if (refused) console.error("al-runner itest: REFUSED (exit 2)");
+  const message = err instanceof Error ? err.message : String(err);
+  await emitFailed("alrunner", refused ? `refused: ${message}` : message);
+  if (refused) process.exit(2);
   process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 });

@@ -21,7 +21,7 @@
  * counts) is learned, not configured.
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
-import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
+import type { BackendCapabilities, BackendKind, TestMethodRef, TestOutcome } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
@@ -45,7 +45,8 @@ export const STREAM_SCHEMA_VERSION = 1;
  * the schema generator reads plain interfaces; `_streamCapsCover` keeps it assignable.
  */
 export interface StreamCapabilities {
-  readonly kind?: BackendCapabilities["kind"];
+  /** Named directly (not `BackendCapabilities["kind"]`) so the schema generator emits its enum. */
+  readonly kind?: BackendKind;
   readonly coverage: BackendCapabilities["coverage"];
   readonly deploy: BackendCapabilities["deploy"];
   readonly isolation: BackendCapabilities["isolation"];

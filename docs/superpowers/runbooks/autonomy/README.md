@@ -168,7 +168,8 @@ containers assigned to this project can be leased. A missing `allocation.json` t
   - **Their databases are in memory.** A container restart or a server1 reboot resets each one to
     a fresh CRONUS, with no LethAL app on it. The fix is to re-run the setup script:
     `bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` (add `--dry-run` to see the plan). It
-    takes and releases the coord lease itself, writes each fixture's config and paired launch
+    takes and releases the coord lease itself, in your lane (`--lane`, else `KRAKEN_AGENT`; it refuses
+    with neither, R598), writes each fixture's config and paired launch
     file, publishes LethAL Control and every app a BC gate needs (`sandbox-probes` included) over
     the dev endpoint (Dev scope), skips what is already there, and ends with `lethal doctor` on
     every config it wrote.
@@ -180,20 +181,22 @@ containers assigned to this project can be leased. A missing `allocation.json` t
     the target it measures.
   - The company is W1 `CRONUS International Ltd.`, not Cronus28's DK `CRONUS Danmark A/S`.
   - **Proof is PER SERVER (orchestrator ruling 2026-10-21).** A gate runs on a server only after
-    its frozen figures have reproduced per mutant on THAT server, under the current fixture builds;
-    any difference is a BLOCK. A proof on bc1 does not admit bc2: the servers can differ in app
-    builds and in what else is installed (bc3 carries the Continia stack). Admitting a new
-    (gate, server) pair is one ordinary run of the gate there. Proven 2026-10-21 under R-583's
-    runtime-17 fixtures (`/coord/handoff/R-583/gates.md`; R592 moves the table to
-    `docs/gates/servers.md`):
-    - `bc1`: bcdev, bcdev-wrapped, bcdev-names, tables, verify (R-595), verify-scale,
-      stale-publish, testapp, lease.
-    - `bc2`: chunked, hang, harden, agreement. (bcdev and verify-scale passed on bc2 only on the
-      pre-runtime-17 fixtures, so they are not admitted there yet.)
-    - `bc3`: hang (R-389, 2026-10-21, runtime-17 fixtures, LethAL Control 1.0.0.23). bcdev was
-      proven there on the PRE-runtime-17 fixtures only, and it now carries the R594 CDO oracle; run
-      `bc-linux-setup.ts --server bc3` and re-prove any other gate there before using it for that
-      gate.
+    its frozen figures have reproduced per mutant on THAT server, under the current fixture builds
+    and the LethAL Control build master pins; any difference is a BLOCK. A proof on bc1 does not
+    admit bc2: the servers can differ in app builds, in what else is installed (bc3 carries the
+    Continia stack) and in the control build, and a proof holds only for the control build it ran
+    under. Admitting a new (gate, server) pair is one ordinary run of the gate there.
+    **As of 2026-10-21 (R-604), every BC gate is proven on every bc server under the control
+    build master requires**: bcdev, bcdev-wrapped, bcdev-names, tables, verify, verify-scale,
+    stale-publish, testapp, lease, chunked, hang, harden and agreement, on bc1, bc2 and bc3.
+    The table, one row per pair with its log and control build, is `docs/gates/servers.md`
+    §"Proof that the gates reproduce here". To reach it, bc2 was moved up to the pinned control
+    build (`bc-republish.ts control`, an upgrade that removes nothing), and bc2's 13 and bc1's 9
+    older proofs were re-proven under it. bc3's stale fixture apps were replaced first with
+    `scripts/bc-republish.ts` (R599). The pre-committed app.json republish FAILED there (R605: a
+    target a gate left at a minted version can only go back at a newer minted version); the
+    minted restore was done under the orchestrator's ruling (a), `/coord/handoff/R-604/rulings.md`.
+    Re-prove a server's gates whenever its control build or fixture apps change.
 - Before any work that touches it (live gates, control-app publish, fixture publish): check it
   is running (host only: `pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`;
   in the container, `kraken tentacle status`), then

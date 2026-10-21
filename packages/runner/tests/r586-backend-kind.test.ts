@@ -84,6 +84,14 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     "authoritative: input.caps.authoritative,": "report-field",
     "if (!r.authoritative) {": "report-field",
     'if (r.backend === "al-runner" && r.alRunnerCanary !== undefined) {': "v2",
+    // R553's assertion screen: strips al-runner v2's `{Type}Exception: ` prefix. v3 takes the
+    // bcdev branch (its messages carry no such prefix: "rows=0 counter=1", "Test exceeded 3s
+    // timeout."), so these are v2-only reads.
+    'const screenBackend = input.caps.kind === "al-runner" ? "al-runner" : "bcdev";': "v2",
+    'screenBackend === "al-runner" &&': "v2",
+  },
+  "assertion-screen.ts": {
+    'return backend === "al-runner" ? m.replace(AL_RUNNER_EXCEPTION_PREFIX, "") : m;': "v2",
   },
   "orchestrator.ts": {
     'backendName === "al-runner"': "v2",

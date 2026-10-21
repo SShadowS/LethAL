@@ -1,11 +1,12 @@
 import { describe, expect, it, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { copyFile, link, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import {
   AlcCompileError,
   ArtifactCompiler,
   ArtifactPrepareError,
+  buildPackageCacheCopy,
   defaultArtifactIo,
 } from "../src/artifact";
 import type { ArtifactIo, CompiledArtifact } from "../src/artifact";
@@ -413,6 +414,195 @@ describe("C02-05: compile's argv parity", () => {
         expect.stringMatching(new RegExp(`^/out:C:/out/${ID}\\.[0-9a-f-]{36}\\.partial\\.app$`)),
       ],
     ]);
+  });
+});
+
+describe("R552: the control symbol's own package-cache path", () => {
+  const ID = "0123456789abcdef0123456789abcdef";
+  const input = {
+    projectDir: "C:/proj",
+    artifactId: ID,
+    appId: "app",
+    appVersion: "1.0.0.0",
+    mutantManifest: { artifactId: ID, mutants: [] } as unknown as MutantManifest,
+    appManifest: {},
+  };
+  function io(argvs: string[][]): ArtifactIo {
+    return {
+      spawn: async (argv) => {
+        argvs.push([...argv]);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      readArtifact: async () => new TextEncoder().encode("x"),
+      writeArtifact: async () => {},
+    };
+  }
+  const cachesOf = (argv: readonly string[] | undefined) =>
+    (argv ?? []).filter((a) => a.startsWith("/packagecachepath:"));
+
+  test("without the extra path the argv sends the one cache, as before", async () => {
+    const argvs: string[][] = [];
+    await new ArtifactCompiler(
+      { alcPath: "C:/alc.exe", packageCachePath: "C:/cache", outputDir: "C:/out" },
+      io(argvs),
+    ).compile(input);
+    expect(cachesOf(argvs[0])).toEqual(["/packagecachepath:C:/cache"]);
+  });
+
+  test("with a copy, alc gets EXACTLY ONE package-cache path: the copy, never the user's cache", async () => {
+    const argvs: string[][] = [];
+    await new ArtifactCompiler(
+      { alcPath: "C:/alc.exe", packageCachePath: "C:\\cache", outputDir: "C:/out" },
+      io(argvs),
+    ).compile({ ...input, packageCacheCopyPath: "C:\\tmp\\lethal-pkgcache-abc" });
+    expect(cachesOf(argvs[0])).toEqual(["/packagecachepath:C:/tmp/lethal-pkgcache-abc"]);
+  });
+
+  test("a ';' or ',' in the user's cache is not refused once a copy is sent: alc never sees it", async () => {
+    const argvs: string[][] = [];
+    await new ArtifactCompiler(
+      { alcPath: "C:/alc.exe", packageCachePath: "C:/a;b,c", outputDir: "C:/out" },
+      io(argvs),
+    ).compile({ ...input, packageCacheCopyPath: "C:/tmp/copy" });
+    expect(cachesOf(argvs[0])).toEqual(["/packagecachepath:C:/tmp/copy"]);
+  });
+
+  for (const [what, copy] of [
+    ["; in the copy's path", "C:/x;y"],
+    [", in the copy's path", "C:/x,y"],
+  ] as const) {
+    test(`refuses ${what} with ArtifactPrepareError, before any spawn (I4)`, async () => {
+      const argvs: string[][] = [];
+      const err = await new ArtifactCompiler(
+        { alcPath: "C:/alc.exe", packageCachePath: "C:/cache", outputDir: "C:/out" },
+        io(argvs),
+      )
+        .compile({ ...input, packageCacheCopyPath: copy })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ArtifactPrepareError);
+      expect(err).not.toBeInstanceOf(AlcCompileError);
+      expect(argvs).toHaveLength(0);
+    });
+  }
+});
+
+describe("R552: buildPackageCacheCopy, the one package cache alc gets", () => {
+  /** A user cache with two packages, a non-package file, and a leftover `lethal-control.app`. */
+  async function fixture() {
+    const base = scratch("lethal-r552-copy-");
+    const cache = join(base, "cache");
+    const root = join(base, "root");
+    await mkdir(cache);
+    await mkdir(root);
+    await Bun.write(join(cache, "Microsoft_System_1.0.0.0.app"), "system");
+    await Bun.write(join(cache, "Microsoft_Base_2.0.0.0.App"), "base");
+    await Bun.write(join(cache, "notes.txt"), "not a package");
+    await Bun.write(join(cache, "lethal-control.app"), "stale-leftover");
+    const control = join(base, "built-control.app");
+    await Bun.write(control, "lethal-control-bytes");
+    return { cache, root, control };
+  }
+  const errno = (code: string) => Object.assign(new Error(code), { code });
+
+  test("holds every user package by hard link, plus LethAL's symbol, and nothing else", async () => {
+    const { cache, root, control } = await fixture();
+    const copy = await buildPackageCacheCopy(cache, control, root);
+    expect(copy.startsWith(join(root, "lethal-pkgcache-"))).toBe(true);
+    expect((await readdir(copy)).sort()).toEqual([
+      "Microsoft_Base_2.0.0.0.App",
+      "Microsoft_System_1.0.0.0.app",
+      "lethal-control.app",
+    ]);
+    const sys = "Microsoft_System_1.0.0.0.app";
+    expect((await stat(join(copy, sys))).ino).toBe((await stat(join(cache, sys))).ino);
+  });
+
+  test("the user's leftover lethal-control.app is skipped by name: the copy's one is LethAL's", async () => {
+    const { cache, root, control } = await fixture();
+    const copy = await buildPackageCacheCopy(cache, control, root);
+    const controls = (await readdir(copy)).filter((n) => /lethal-control/i.test(n));
+    expect(controls).toEqual(["lethal-control.app"]);
+    expect(await readFile(join(copy, "lethal-control.app"), "utf8")).toBe("lethal-control-bytes");
+    expect(await readFile(join(cache, "lethal-control.app"), "utf8")).toBe("stale-leftover");
+  });
+
+  for (const code of ["EXDEV", "EPERM"]) {
+    test(`a link refused with ${code} falls back to a copy of the same bytes`, async () => {
+      const { cache, root, control } = await fixture();
+      let copies = 0;
+      const copy = await buildPackageCacheCopy(cache, control, root, {
+        link: async () => {
+          throw errno(code);
+        },
+        copyFile: async (from, to) => {
+          copies++;
+          await copyFile(from, to);
+        },
+      });
+      expect(copies).toBe(3);
+      expect(await readFile(join(copy, "Microsoft_Base_2.0.0.0.App"), "utf8")).toBe("base");
+      expect(await readFile(join(copy, "lethal-control.app"), "utf8")).toBe("lethal-control-bytes");
+    });
+  }
+
+  test("any other link error is thrown, never copied around, and the partial copy is removed", async () => {
+    const { cache, root, control } = await fixture();
+    let links = 0;
+    const err = await buildPackageCacheCopy(cache, control, root, {
+      link: async (from, to) => {
+        if (++links === 2) throw errno("EIO");
+        await link(from, to);
+      },
+      copyFile: async () => {
+        throw new Error("copyFile must not be reached");
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ArtifactPrepareError);
+    expect(err).not.toBeInstanceOf(AlcCompileError);
+    expect(String((err as Error).message)).toContain("EIO");
+    expect(String((err as Error).message)).toContain(cache);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  test("a copy that fails after EXDEV is an ArtifactPrepareError naming the file (F5)", async () => {
+    const { cache, root, control } = await fixture();
+    const err = await buildPackageCacheCopy(cache, control, root, {
+      link: async () => {
+        throw errno("EXDEV");
+      },
+      copyFile: async () => {
+        throw errno("ENOSPC");
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ArtifactPrepareError);
+    expect(String((err as Error).message)).toContain("ENOSPC");
+    expect(String((err as Error).message)).toContain(cache);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  test("packages in SUBFOLDERS of the cache are copied at the same relative path (F1: alc searches them)", async () => {
+    const { cache, root, control } = await fixture();
+    await mkdir(join(cache, "Microsoft", "deep"), { recursive: true });
+    await Bun.write(join(cache, "Microsoft", "Microsoft_Application_3.0.0.0.app"), "application");
+    await Bun.write(join(cache, "Microsoft", "deep", "Microsoft_Nested_4.0.0.0.app"), "nested");
+    const copy = await buildPackageCacheCopy(cache, control, root);
+    expect(
+      await readFile(join(copy, "Microsoft", "Microsoft_Application_3.0.0.0.app"), "utf8"),
+    ).toBe("application");
+    expect(
+      await readFile(join(copy, "Microsoft", "deep", "Microsoft_Nested_4.0.0.0.app"), "utf8"),
+    ).toBe("nested");
+  });
+
+  test("a leftover lethal-control.app in a SUBFOLDER, any case, is left out too (F1)", async () => {
+    const { cache, root, control } = await fixture();
+    await mkdir(join(cache, "old"), { recursive: true });
+    await Bun.write(join(cache, "old", "Lethal-Control.app"), "nested-leftover");
+    await Bun.write(join(cache, "old", "Microsoft_Old_1.0.0.0.app"), "old");
+    const copy = await buildPackageCacheCopy(cache, control, root);
+    const all = (await readdir(copy, { recursive: true })).map(String);
+    expect(all.filter((n) => /lethal-control/i.test(n))).toEqual(["lethal-control.app"]);
+    expect(await readFile(join(copy, "old", "Microsoft_Old_1.0.0.0.app"), "utf8")).toBe("old");
   });
 });
 

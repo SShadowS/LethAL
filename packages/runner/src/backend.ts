@@ -280,7 +280,11 @@ export function isLocalRunner(kind: BackendKind): boolean {
 }
 
 export interface BackendCapabilities {
-  /** R586 (C1): see `BackendKind`. Required, so no backend can be mistaken for another. */
+  /**
+   * R586 (C1): see `BackendKind`. Required, so no backend can be mistaken for another. R553 keys
+   * the assertion screen on it too: each backend sets it itself, and it is never inferred from
+   * `authoritative` (an al-runner backend made authoritative one day is still al-runner).
+   */
   readonly kind: BackendKind;
   readonly coverage: CoverageMode;
   readonly deploy: "publish" | "none";

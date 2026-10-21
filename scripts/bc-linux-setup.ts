@@ -2,8 +2,12 @@
  * R589: bring one or more of the BC on Linux servers on server1 (bc1, bc2, bc3) to the state the
  * LethAL BC gates need, and check it with `lethal doctor`.
  *
- *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--dry-run] [--with-continia]
- *                                 [--held-lease <token>]
+ *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run]
+ *                                 [--with-continia] [--accept-build <v>] [--held-lease <token>]
+ *
+ * The coord lease is taken in the caller's lane (R598): `--lane`, else the kraken agent identity
+ * (`KRAKEN_AGENT`: `lane-<x>` is lane `<x>`, `orchestrator` is `orchestrator`). With neither, the run
+ * refuses by name before anything else, so a lease is never held in another lane's name.
  *
  * `--with-continia` (R594) adds step (d2) after LethAL Control: check that the server's Microsoft
  * apps are the R546 packagesDir's 28.4.53241.53758, then publish the 5 sha256-pinned Continia
@@ -50,14 +54,14 @@ const REPO = join(import.meta.dir, "..");
 export const SECRET_PATH = "/coord/secrets/bc-linux.env";
 export const EXPECTED_KEYS = ["BC_DEV_USER", "BC_DEV_PASSWORD"] as const;
 // R389: the 1.0.0.23 build (adds `DependentCount`), compiled clean with alc and published to bc3.
-const CONTROL_APP = "/coord/handoff/R-389/control-1.0.0.23/LethAL_LethAL Control_1.0.0.23.app";
-const CONTROL_SHA256 = "c2a959480579943a667cab5fc4abe581e2741307561a05890ce735e54a37d4bd";
+export const CONTROL_APP =
+  "/coord/handoff/R-389/control-1.0.0.23/LethAL_LethAL Control_1.0.0.23.app";
+export const CONTROL_SHA256 = "c2a959480579943a667cab5fc4abe581e2741307561a05890ce735e54a37d4bd";
 const CONTROL_VERSION = "1.0.0.23";
 const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");
 const BC_DEV_MCP = "/home/dev/src/bc-dev-mcp";
-const LANE = "code";
-const HOST = "http://192.168.2.157";
+export const HOST = "http://192.168.2.157";
 const HEARTBEAT_MS = 60_000;
 
 export const SERVERS = {
@@ -378,7 +382,7 @@ export async function withLease<T>(
   return result.value;
 }
 
-async function kraken(args: readonly string[]): Promise<string> {
+export async function kraken(args: readonly string[]): Promise<string> {
   const p = Bun.spawn(["kraken", "coord", ...args], { stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([
     new Response(p.stdout).text(),
@@ -389,25 +393,64 @@ async function kraken(args: readonly string[]): Promise<string> {
   return out;
 }
 
-export const krakenLease: LeaseDeps = {
-  async take(server) {
-    const out = await kraken(["lease", server, LANE]);
-    const token = (JSON.parse(out) as { token?: unknown }).token;
-    if (typeof token !== "string" || token === "") {
-      throw new Error(`kraken coord lease ${server}: no token in its answer`);
+/** R598: no lane could be found for the coord lease; the run refuses rather than borrow one. */
+export class LaneUnknownError extends Error {}
+
+/**
+ * R598: the lane the coord lease is taken in. `--lane` wins; else the kraken agent identity
+ * (`KRAKEN_AGENT`, mapped as `scripts/coord-join-role.ts` maps it: `lane-<x>` is lane `<x>`,
+ * `orchestrator` is `orchestrator`). With neither, or an identity that names no lane, it refuses.
+ */
+export function resolveLane(
+  cliLane: string | undefined,
+  env: Record<string, string | undefined>,
+): string {
+  if (cliLane !== undefined && cliLane !== "") {
+    // The likeliest slip is the agent name (`lane-preproc`): kraken would lease under that holder,
+    // which is no lane, so the holder shown to other lanes would be wrong again.
+    if (cliLane.startsWith("lane-")) {
+      throw new LaneUnknownError(
+        `--lane ${JSON.stringify(cliLane)} is an agent name, not a lane; pass --lane ${JSON.stringify(cliLane.slice("lane-".length))}`,
+      );
     }
-    return token;
-  },
-  recordToken(server, token) {
-    writeFileSync(join(TOKEN_DIR, `lease-${server}.txt`), `${token}\n`, "utf8");
-  },
-  async heartbeat(server, token) {
-    await kraken(["heartbeat", server, token]);
-  },
-  async release(server, token) {
-    await kraken(["release", server, token]);
-  },
-};
+    return cliLane;
+  }
+  const agent = env.KRAKEN_AGENT;
+  if (agent === "orchestrator") return "orchestrator";
+  if (agent?.startsWith("lane-") && agent.length > "lane-".length)
+    return agent.slice("lane-".length);
+  throw new LaneUnknownError(
+    agent === undefined || agent === ""
+      ? "no lane for the coord lease: pass --lane <lane>, or run as a kraken agent (KRAKEN_AGENT is not set)"
+      : `no lane for the coord lease: KRAKEN_AGENT ${JSON.stringify(agent)} names no lane; pass --lane <lane>`,
+  );
+}
+
+/** The coord lease in `lane`'s name. `run` is the kraken-call seam (`kraken` in a real run). */
+export function krakenLeaseFor(
+  lane: string,
+  run: (args: readonly string[]) => Promise<string> = kraken,
+): LeaseDeps {
+  return {
+    async take(server) {
+      const out = await run(["lease", server, lane]);
+      const token = (JSON.parse(out) as { token?: unknown }).token;
+      if (typeof token !== "string" || token === "") {
+        throw new Error(`kraken coord lease ${server}: no token in its answer`);
+      }
+      return token;
+    },
+    recordToken(server, token) {
+      writeFileSync(join(TOKEN_DIR, `lease-${server}.txt`), `${token}\n`, "utf8");
+    },
+    async heartbeat(server, token) {
+      await run(["heartbeat", server, token]);
+    },
+    async release(server, token) {
+      await run(["release", server, token]);
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------------------------
 // (d) publishing over the dev endpoint
@@ -446,7 +489,7 @@ async function residentVersion(c: Conn, publisher: string, name: string): Promis
   return pkg === null ? null : readAppIdentity(pkg).version;
 }
 
-async function publishBytes(c: Conn, fileName: string, bytes: Uint8Array): Promise<void> {
+export async function publishBytes(c: Conn, fileName: string, bytes: Uint8Array): Promise<void> {
   const params = new URLSearchParams({
     tenant: "default",
     SchemaUpdateMode: "forcesync",
@@ -493,19 +536,24 @@ export async function ensureApp(
   return { outcome: "published", version: after };
 }
 
-interface AppManifest {
+export interface AppManifest {
+  readonly id?: string;
   readonly name: string;
   readonly publisher: string;
   readonly version: string;
-  readonly dependencies?: readonly { readonly name: string; readonly publisher: string }[];
+  readonly dependencies?: readonly {
+    readonly id?: string;
+    readonly name: string;
+    readonly publisher: string;
+  }[];
 }
 
-function manifest(dir: string): AppManifest {
+export function manifest(dir: string): AppManifest {
   return JSON.parse(readFileSync(join(dir, "app.json"), "utf8")) as AppManifest;
 }
 
 /** Downloads System plus every Microsoft dependency of `dir` from the server into `cache`. */
-async function downloadSymbols(c: Conn, dir: string, cache: string): Promise<void> {
+export async function downloadSymbols(c: Conn, dir: string, cache: string): Promise<void> {
   const deps = (manifest(dir).dependencies ?? []).filter((d) => d.publisher === "Microsoft");
   for (const name of ["System", ...deps.map((d) => d.name)]) {
     const pkg = await residentPackage(c, "Microsoft", name);
@@ -630,13 +678,15 @@ function bcDevMcpCommand(): string[] {
   return ["node", join(BC_DEV_MCP, entry)];
 }
 
-function errText(err: unknown): string {
+export function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
 export interface SetupArgs {
   readonly servers: ServerName[];
   readonly dryRun: boolean;
+  /** R598: the lane the coord lease is taken in, when given on the command line. */
+  readonly lane?: string;
   readonly withContinia: boolean;
   /** A lease token the CALLER holds and heartbeats; the script then neither takes nor releases one. */
   readonly heldLease?: string;
@@ -645,10 +695,11 @@ export interface SetupArgs {
 }
 
 const USAGE =
-  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--dry-run] [--with-continia [--accept-build <version>]] [--held-lease <token>]";
+  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run] [--with-continia [--accept-build <version>]] [--held-lease <token>]";
 
 export function parseArgs(argv: readonly string[]): SetupArgs {
   let server: string | undefined;
+  let lane: string | undefined;
   let dryRun = false;
   let withContinia = false;
   let heldLease: string | undefined;
@@ -658,7 +709,11 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
     if (a === "--dry-run") dryRun = true;
     else if (a === "--with-continia") withContinia = true;
     else if (a === "--server") server = argv[++i];
-    else if (a === "--held-lease") {
+    else if (a === "--lane") {
+      lane = argv[++i];
+      if (lane === undefined || lane === "" || lane.startsWith("-"))
+        throw new Error(`--lane needs a lane name; ${USAGE}`);
+    } else if (a === "--held-lease") {
       heldLease = argv[++i];
       if (heldLease === undefined || heldLease === "") throw new Error(USAGE);
     } else if (a === "--accept-build") {
@@ -670,6 +725,7 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
   if (acceptBuild !== undefined && !withContinia) throw new Error(USAGE);
   const rest = {
     dryRun,
+    ...(lane !== undefined ? { lane } : {}),
     withContinia,
     ...(heldLease !== undefined ? { heldLease } : {}),
     ...(acceptBuild !== undefined ? { acceptBuild } : {}),
@@ -687,7 +743,10 @@ export function heldLeaseDeps(token: string): LeaseDeps {
   return {
     take: async () => token,
     recordToken() {},
-    heartbeat: (server, t) => krakenLease.heartbeat(server, t),
+    // R598 removed the fixed-lane `krakenLease`; a heartbeat names the token, not a lane.
+    heartbeat: async (server, t) => {
+      await kraken(["heartbeat", server, t]);
+    },
     release: async () => {},
   };
 }
@@ -856,6 +915,7 @@ async function setupServer(
   login: BcLogin,
   args: SetupArgs,
   summary: string[],
+  lane: string,
 ): Promise<boolean> {
   const { dryRun } = args;
   const symbols = join(STATE_ROOT, server, "symbols");
@@ -882,7 +942,7 @@ async function setupServer(
   if (dryRun) {
     for (const { path, launch } of configs) summary.push(`  would write ${path}, ${launch}`);
     summary.push(
-      `  would ${args.heldLease !== undefined ? "use the held lease on" : "lease"} ${server}, publish LethAL Control,${args.withContinia ? " check P1 and publish the 5 Continia apps," : ""} then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
+      `  would ${args.heldLease !== undefined ? "use the held lease on" : "lease"} ${server}${args.heldLease !== undefined ? "" : ` in lane ${lane}`}, publish LethAL Control,${args.withContinia ? " check P1 and publish the 5 Continia apps," : ""} then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
     );
     return true;
   }
@@ -908,7 +968,8 @@ async function setupServer(
     server,
     authorization: `Basic ${Buffer.from(`${login.user}:${login.password}`).toString("base64")}`,
   };
-  const lease = args.heldLease !== undefined ? heldLeaseDeps(args.heldLease) : krakenLease;
+  // R594's held lease, else R598's lease in the caller's lane.
+  const lease = args.heldLease !== undefined ? heldLeaseDeps(args.heldLease) : krakenLeaseFor(lane);
   return await withLease(server, lease, async () => {
     // (d)
     const c = await ensureApp(conn, control, "LethAL Control");
@@ -946,13 +1007,15 @@ async function setupServer(
 
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
-  const { servers, dryRun } = args;
+  const { servers, dryRun, lane: cliLane } = args;
+  // R598: decided before the secret is read or anything is written, so a refusal changes nothing.
+  const lane = resolveLane(cliLane, process.env);
   const login = readSecretFile();
-  const summary = [`login: ${describeLogin(login)}`];
+  const summary = [`login: ${describeLogin(login)}`, `lane: ${lane}`];
   let ok = true;
   for (const server of servers) {
     try {
-      ok = (await setupServer(server, login, args, summary)) && ok;
+      ok = (await setupServer(server, login, args, summary, lane)) && ok;
     } catch (err) {
       ok = false;
       summary.push(`  FAILED    ${server}: ${errText(err)}`);

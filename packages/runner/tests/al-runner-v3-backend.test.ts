@@ -13,7 +13,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitStaticSelector } from "@lethal/schemata";
 import {
@@ -143,8 +143,14 @@ function fakeAlc(fail: (project: string) => boolean = () => false) {
   const calls: { project: string; cache: string; staged: string[] }[] = [];
   const io: ArtifactIo = {
     spawn: async (argv) => {
-      const project = (argv.find((a) => a.startsWith("/project:")) ?? "").slice("/project:".length);
-      const cache = (argv.find((a) => a.startsWith("/packagecachepath:")) ?? "").slice(18);
+      // ArtifactCompiler passes forward slashes on every OS; `normalize` gives them back in the
+      // platform's form, so the expectations (built with `join`) compare like with like on Windows.
+      const project = normalize(
+        (argv.find((a) => a.startsWith("/project:")) ?? "").slice("/project:".length),
+      );
+      const cache = normalize(
+        (argv.find((a) => a.startsWith("/packagecachepath:")) ?? "").slice(18),
+      );
       const out = (argv.find((a) => a.startsWith("/out:")) ?? "").slice(5);
       const { readdir } = await import("node:fs/promises");
       calls.push({ project, cache, staged: (await readdir(cache)).sort() });

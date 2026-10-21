@@ -54,7 +54,7 @@ import type { InstrumentedFile, MutantManifest, SelectorConfig } from "@lethal/s
 import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import { parseVersionConflict, reserveAppVersion } from "../src/app-version";
-import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
+import { ArtifactCompiler, buildPackageCacheCopy, defaultArtifactIo } from "../src/artifact";
 import type { CompiledArtifact } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import type { LethalConfigFile } from "../src/cli";
@@ -272,6 +272,8 @@ interface Ctx {
   readonly versions: VersionState;
   readonly overBudgetRef: TestMethodRef;
   readonly scratchRoot: string;
+  /** R552: the package-cache copy (`buildPackageCacheCopy`) every compile gets, under scratchRoot. */
+  readonly cacheCopy: string;
   /** Task 8b: proves the serializer, not just BC's final state, actually held the two
    * concurrent Probe B publishes to one-at-a-time — see `instrumentedDeployerIo`. */
   readonly publishTracker: { readonly maxInFlight: () => number; readonly reset: () => void };
@@ -352,6 +354,7 @@ async function compileArtifact(
     appVersion,
     mutantManifest,
     appManifest,
+    packageCacheCopyPath: ctx.cacheCopy,
   });
 }
 
@@ -690,10 +693,16 @@ async function main(): Promise<void> {
     { alcPath: toolPaths.alcPath, packageCachePath: bcdev.packageCachePath, outputDir },
     defaultArtifactIo,
   );
-  // Stage the LethAL Control symbol into the compiler's package cache so the instrumented target's
-  // `LC Control State` reference resolves (mirrors BcDevMcpBackend.deploy()'s staging; the
-  // dependency itself is injected per-artifact in compileArtifact). Once — the cache persists.
-  await copyFile(bcdev.controlSymbolPath, join(bcdev.packageCachePath, "lethal-control.app"));
+  // R552, as BcDevMcpBackend does: alc gets ONE package cache, a copy of the configured
+  // `packageCachePath` plus the LethAL Control symbol, under `scratchRoot` (removed in the
+  // `finally` below), so the instrumented target's `LC Control State` reference resolves without
+  // writing into the configured cache. The dependency itself is injected per-artifact in
+  // compileArtifact.
+  const cacheCopy = await buildPackageCacheCopy(
+    bcdev.packageCachePath,
+    bcdev.controlSymbolPath,
+    scratchRoot,
+  );
   // Task 8b: instrument the real deployer IO so Probe B can prove the serializer actually held
   // the two concurrent publishes one-at-a-time, not just that BC's final state happened to be
   // B (see `instrumentedDeployerIo`'s doc comment above).
@@ -749,6 +758,7 @@ async function main(): Promise<void> {
     versions: new VersionState(sourceVersion),
     overBudgetRef,
     scratchRoot,
+    cacheCopy,
     publishTracker: {
       maxInFlight: deployerIoTracker.maxInFlight,
       reset: deployerIoTracker.reset,

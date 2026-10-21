@@ -813,6 +813,27 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The assertion screen reads past al-runner's exception-type prefix** (R553). al-runner writes
+  every failure as `<Type>Exception: <message>`, so the screen found no `Assert.` text on any
+  al-runner kill and reported `vacuous` where bcdev, on the same kills, reported `partial`. On the
+  al-runner backend the screen now reads the message with ONE leading `...Exception: ` removed; bcdev
+  is unchanged, and the stored `killingTestFailure` is never rewritten. The backend is told by a new
+  optional `kind` that each backend declares (stream schema gains it), not by `authoritative`. A
+  `vacuous` al-runner screen whose killed kills include text without that prefix gets a note that
+  names the backend as a possible cause, instead of blaming the suite. `caps` in the stream schema
+  has `additionalProperties: false`, so a validator still holding the previous `stream-v1` rejects
+  a new stream for the `kind` field alone.
+- **bcdev no longer writes `lethal-control.app` into `packageCachePath`** (R552). alc now gets ONE
+  package-cache path: a LethAL-owned directory (`lethal-pkgcache-<random>` under the temp
+  directory), made once per backend, holding a hard link (a copy where linking fails with EXDEV or
+  EPERM, which inside kraken and for a cache off C: on Windows is the usual case) to every `.app` in
+  the user's cache, subfolders included, plus LethAL's own `lethal-control.app`. It is removed when
+  the backend closes. The user's cache is only read. The leftover `lethal-control.app` an older
+  LethAL left there (any case, any depth) is left out of the copy; it gets one warning (safe to
+  delete) and is never touched. Any other link or copy failure is an `ArtifactPrepareError` naming
+  the file. A `;` or `,` in that path is refused before alc runs, because alc splits its
+  package-cache list on both. `scripts/campaign/compile-only.ts` and the `stale-publish` itest do
+  the same.
 - **`lethal verify` sees an edit to a test-app codeunit handed out in a Variant or interface**
   (R389). Code in another app can run a test-app codeunit it receives in a Variant (measured live),
   and a test's digest did not cover it, so an edit there left the test read as unchanged. The digest
