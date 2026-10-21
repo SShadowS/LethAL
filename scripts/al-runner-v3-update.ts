@@ -116,17 +116,19 @@ export async function readReceipt(
     nonce?: unknown;
     binarySha256?: unknown;
     lethalCommit?: unknown;
+    dirty?: unknown;
     outcome?: unknown;
     legs?: unknown;
   };
   if (r.nonce !== nonce) return { outcome: "infra-fail", why: "a receipt of another run (nonce)" };
   if (r.binarySha256 !== sha)
     return { outcome: "infra-fail", why: "a receipt for another binary (sha256)" };
+  // F6: the full 40-character sha, equal; never a prefix match either way.
   const at = typeof r.lethalCommit === "string" ? r.lethalCommit : "";
-  if (at === "" || !(at.startsWith(commit) || commit.startsWith(at)))
+  if (!FULL_SHA.test(at) || !FULL_SHA.test(commit) || at !== commit)
     return {
       outcome: "infra-fail",
-      why: `a receipt of LethAL ${at || "(none)"}, not the requested ${commit}`,
+      why: `a receipt of LethAL ${at || "(none)"}, not the requested ${commit} (both must be the full 40-character sha)`,
     };
   if (
     r.outcome !== "pass" &&
@@ -146,8 +148,24 @@ export async function readReceipt(
       outcome: "infra-fail",
       why: `the receipt says ${r.outcome}, but its legs ${JSON.stringify(legs)} give ${byLegs} (every leg of ${V3_GATE_LEGS.join(",")} must be present)`,
     };
+  // F5: a pass from a dirty gate worktree (an edited file, a rewritten lockfile) proves nothing.
+  if (r.outcome === "pass" && r.dirty !== false)
+    return {
+      outcome: "infra-fail",
+      why: `a pass from a gate worktree that was not clean (dirty: ${JSON.stringify(r.dirty)})`,
+    };
   return { outcome: r.outcome, why: `receipt legs ${JSON.stringify(legs)}` };
 }
+
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+/**
+ * F5: the fixture symbol tar the gate extracts, pinned by sha256 (measured 2026-10-21 on
+ * `/work/lethal/.kraken-local/fixture-symbols.tar`, 1,705,707,520 bytes). A different tar is
+ * refused by name; changing it is a deliberate edit here, then a `--regate`.
+ */
+export const FIXTURE_SYMBOLS_TAR_SHA256 =
+  "bdf460e292f005f1c02cc7b45e83ede1d5c5df280070dc97231f9b314d4f175e";
 
 /** Fixture symbol folders the gate's legs compile against (gitignored, from the kraken tar). */
 export const GATE_ALPACKAGES = [
@@ -165,15 +183,22 @@ export function gatePreparation(s: {
   readonly worktree: string;
   readonly alpackagesPresent: boolean;
   readonly symbolTar: string | undefined;
+  /** The tar's sha256, when it is to be extracted (F5). */
+  readonly symbolTarSha256?: string;
 }): { readonly steps: readonly string[][] } | { readonly refused: string } {
+  // F5: the lockfile is never rewritten in the gate worktree.
   const steps: string[][] = [
-    ["bun", "install"],
+    ["bun", "install", "--frozen-lockfile"],
     ["bun", "scripts/build-native-parser.ts"],
   ];
   if (!s.alpackagesPresent) {
     if (s.symbolTar === undefined)
       return {
         refused: `al-runner-v3-gate-worktree-unprepared: ${s.worktree} has no fixture .alpackages (${GATE_ALPACKAGES.join(", ")}) and no fixture-symbols.tar was found to extract them from`,
+      };
+    if (s.symbolTarSha256 !== FIXTURE_SYMBOLS_TAR_SHA256)
+      return {
+        refused: `al-runner-v3-gate-symbol-tar-mismatch: ${s.symbolTar} has sha256 ${s.symbolTarSha256 ?? "(not computed)"}, pinned ${FIXTURE_SYMBOLS_TAR_SHA256}`,
       };
     steps.push(["tar", "-xf", s.symbolTar, "-C", s.worktree]);
   }
@@ -470,10 +495,14 @@ export function realDeps(root = ROOT): UpdateDeps {
       // M4: prepare the worktree, or refuse by name before any leg (a throw here is infra-fail:
       // no receipt is written).
       const tar = ["/work/lethal/.kraken-local/fixture-symbols.tar"].find((p) => existsSync(p));
+      const alpackagesPresent = GATE_ALPACKAGES.every((d) => existsSync(join(GATE_WORKTREE, d)));
       const prep = gatePreparation({
         worktree: GATE_WORKTREE,
-        alpackagesPresent: GATE_ALPACKAGES.every((d) => existsSync(join(GATE_WORKTREE, d))),
+        alpackagesPresent,
         symbolTar: tar,
+        ...(tar !== undefined && !alpackagesPresent
+          ? { symbolTarSha256: await sha256OfFile(tar) }
+          : {}),
       });
       if ("refused" in prep) throw new Error(prep.refused);
       for (const step of prep.steps) await run(step, {}, GATE_WORKTREE);
@@ -570,8 +599,8 @@ if (import.meta.main && process.argv.includes("--edge")) {
 } else if (import.meta.main) {
   const i = process.argv.indexOf("--regate");
   const regateAt = i >= 0 ? process.argv[i + 1] : undefined;
-  if (i >= 0 && (regateAt === undefined || !/^[0-9a-f]{7,40}$/.test(regateAt))) {
-    throw new Error("--regate needs a LethAL commit sha");
+  if (i >= 0 && (regateAt === undefined || !/^[0-9a-f]{40}$/.test(regateAt))) {
+    throw new Error("--regate needs a full 40-character LethAL commit sha (F6)");
   }
   const out = await updateOnce(realDeps(), regateAt !== undefined ? { regateAt } : {});
   console.log(`al-runner-v3-update: ${out.join(", ") || "no candidate"}`);

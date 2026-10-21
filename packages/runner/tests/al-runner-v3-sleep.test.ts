@@ -64,19 +64,32 @@ describe("I-1: an index whose roots join no path of the document is a named refu
         perTestCoverage: [],
       }),
     );
-  test("every coverage file under another prefix (a symlink, a relative form): refused", () => {
-    const why = sleepJoinRefusal(listing(["/real/x/active/Logic.Codeunit.al"]), index);
+  const TEST_FILE = "/x/tests/src/Tests.Codeunit.al";
+  test("F2 still refuses: an indexed target file listed under ANOTHER prefix (its ending matches)", () => {
+    const why = sleepJoinRefusal(
+      listing([TEST_FILE, "/real/x/active/Logic.Codeunit.al"]),
+      index,
+    );
     expect(why).toMatch(/al-runner-v3-coverage-join-refused/);
-    expect(why).toMatch(/\/x\/active\//);
     expect(why).toMatch(/\/real\/x\/active\/Logic\.Codeunit\.al/);
+    expect(why).toMatch(/\/x\/active\/logic\.codeunit\.al/);
   });
-  test("a file under the indexed root joins: no refusal", () => {
-    expect(sleepJoinRefusal(listing(["/X/Active/Other.Codeunit.al"]), index)).toBeUndefined();
+  test("F2 now admits the good project: no target file listed at all (a test codeunit exercising only test-app code, coverage none)", () => {
+    expect(sleepJoinRefusal(listing([TEST_FILE]), index)).toBeUndefined();
   });
-  test("only a side with indexed Sleep lines must join (the test side has 0 here)", () => {
-    expect(sleepJoinRefusal(listing(["/x/active/A.al"]), index)).toBeUndefined();
-    const both: SleepIndex = { ...index, sizes: { target: 1, test: 2 } };
-    expect(sleepJoinRefusal(listing(["/x/active/A.al"]), both)).toMatch(/\/x\/tests\//);
+  test("F2: the indexed target file under its own root joins; another target file listed is fine", () => {
+    expect(
+      sleepJoinRefusal(listing([TEST_FILE, "/X/Active/Logic.Codeunit.al"]), index),
+    ).toBeUndefined();
+    expect(
+      sleepJoinRefusal(listing([TEST_FILE, "/x/active/Other.Codeunit.al"]), index),
+    ).toBeUndefined();
+  });
+  test("F2: the test side is always anchored: no listed path under the test root is refused", () => {
+    expect(sleepJoinRefusal(listing(["/elsewhere/x/tests/src/Tests.Codeunit.al"]), index)).toMatch(
+      /under the test root \/x\/tests\//,
+    );
+    expect(sleepJoinRefusal(listing([]), index)).toMatch(/under the test root/);
   });
   test("an empty index needs no join; an unavailable document is case 1, not a join failure", () => {
     const empty: SleepIndex = { ...index, byFile: new Map(), sizes: { target: 0, test: 0 } };

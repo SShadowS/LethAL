@@ -30,6 +30,7 @@ import {
   type AlRunnerCoverageIndex,
   alRunnerCoverageFromServer,
   buildAlRunnerCoverageIndex,
+  normalizeFileKey,
 } from "./al-runner-coverage";
 import { assertBcVersionMatchesPackages } from "./al-runner-v3-config";
 import {
@@ -411,12 +412,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private sleepIndex: SleepIndex | undefined;
   /** I-1: `active/` and the test dir under `realpath`, the form the index and the argv both use. */
   private realDirs: { readonly active: string; readonly test: string } | undefined;
-  /**
-   * I-1 audit, the coverage-index join: on unmutated calls with coverage on, how many passing tests'
-   * per-test entries listed a hit statement, and how many of those mapped to at least one indexed
-   * target line. A suite where some listed and none joined is an empty join, not "covers nothing".
-   */
-  private coverageJoin = { listed: 0, joined: 0 };
   /** §6 case 2: a mutant call showed v3 cannot see an indexed Sleep line: every later pass errors. */
   private batchBlind: string | undefined;
   private buildSymbols: readonly string[] | undefined;
@@ -692,7 +687,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // §6 (I-1 (1)): from the text v3 reads, rebuilt with every deploy.
     this.sleepIndex = await buildSleepIndex(active, this.cfg.testDir);
     this.realDirs = { active: await realpath(active), test: await realpath(this.cfg.testDir) };
-    this.coverageJoin = { listed: 0, joined: 0 };
     return null;
   }
 
@@ -775,12 +769,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (mutantId !== null && !proof.manifestIds.has(mutantId)) {
       throw new Error(
         `al-runner-v3: activate(${mutantId}): not a mutant of the deployed batch's manifest`,
-      );
-    }
-    const cj = this.coverageJoin;
-    if (mutantId !== null && cj.listed > 0 && cj.joined === 0) {
-      throw new AlRunnerV3CoverageJoinError(
-        `al-runner-v3-coverage-join-refused: coverage is on and ${cj.listed} baseline test(s) listed hit statements in v3's per-test coverage, but none of them mapped to a line of the deployed batch (${dir}); every mutant would read no-coverage from an empty join, so the session stops (R586 I-1)`,
       );
     }
     // The plan is NOT dropped here: keyed by mutant id and read only while that mutant is active,
@@ -943,14 +931,30 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const own = doc.perTestCoverage.filter((e) => e.test === rowName);
     const entry = own[0];
     if (entry === undefined || own.length !== 1) return "unavailable";
-    const map = alRunnerCoverageFromServer({ test: entry.test, coverage: entry.coverage }, index);
-    // I-1 audit: one test that reaches no target line is normal; a suite where none joins while
-    // tests listed hits is an empty join (`activate` refuses it).
-    if (entry.coverage.some((f) => (f.statements ?? []).some((s) => (s.hits ?? 0) > 0))) {
-      this.coverageJoin.listed += 1;
-      if (map.entries.length > 0) this.coverageJoin.joined += 1;
+    // F1 (delta review): on the unmutated call, a hit in a file under the real `active/` must be a
+    // file the coverage index knows (indexed or deliberately skipped). One that is neither means v3
+    // names our files in another form, and the empty join would make its mutants no-coverage. An
+    // uncovered mutant is never activated, so this is checked here, per test, not at `activate`.
+    const real = this.realDirs?.active;
+    if (real !== undefined) {
+      const root = `${normalizeFileKey(real).replace(/\/+$/, "")}/`;
+      const control = new Set(
+        [CONTROL_SELECTOR_FILENAME, CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME].map(
+          normalizeFileKey,
+        ),
+      );
+      for (const f of entry.coverage) {
+        if (!(f.statements ?? []).some((s) => (s.hits ?? 0) > 0)) continue;
+        const key = normalizeFileKey(f.file);
+        if (!key.startsWith(root)) continue;
+        const rel = key.slice(root.length);
+        if (control.has(rel) || index.byFile.has(rel) || index.skippedFiles.includes(rel)) continue;
+        throw new AlRunnerV3CoverageJoinError(
+          `al-runner-v3-coverage-join-refused: ${rowName}'s per-test coverage has a hit in ${f.file}, under the deployed batch (${real}), but the coverage index knows no file "${rel}"; reading it as "covered nothing" would be an empty join, so the session stops (R586 I-1, F1)`,
+        );
+      }
     }
-    return map;
+    return alRunnerCoverageFromServer({ test: entry.test, coverage: entry.coverage }, index);
   }
 
   private rowMissing(ref: TestMethodRef, why: string, wallMs: number): TestVerdict {

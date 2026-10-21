@@ -9,6 +9,7 @@ import { V3_GATE_LEGS } from "../packages/runner/itest/al-runner-v3-gate";
 import {
   type Outcome,
   type UpdateDeps,
+  FIXTURE_SYMBOLS_TAR_SHA256,
   candidates,
   edgeOnce,
   expectedSha,
@@ -18,7 +19,9 @@ import {
 } from "./al-runner-v3-update";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
-const GATED_COMMIT = "abcdef1234567";
+const GATED_COMMIT = "abcdef1234567abcdef1234567abcdef12345678";
+const FIXED_COMMIT = "fedcba7654321fedcba7654321fedcba76543210";
+const REGATE_COMMIT = "1234567abcdef1234567abcdef1234567abcdef1";
 
 let root = "";
 afterEach(async () => {
@@ -85,6 +88,7 @@ function fake(o: {
           nonce: o.badNonce === true ? "stale" : env.LETHAL_V3_GATE_NONCE,
           binarySha256: o.receiptSha ?? (o.badSha === true ? sha("other") : sha("alpha3")),
           lethalCommit: o.receiptCommit ?? commit,
+          dirty: false,
           outcome: o.outcome,
           legs: o.legs ?? legsFor(o.outcome),
         }),
@@ -170,11 +174,11 @@ describe("T19: the v3 update gate", () => {
   });
 
   test("RC-2 (I-2): after a LethAL fix (a new .gated commit) the same build is gated again, and can be held", async () => {
-    await setup("fedcba7654321");
+    await setup(FIXED_COMMIT);
     await mkdir(failedAt("v3.0.0-alpha.3", GATED_COMMIT), { recursive: true });
     const { deps, seen } = fake({ outcome: "held" });
     expect(await updateOnce(deps)).toEqual(["held"]);
-    expect(seen.gates).toEqual(["fedcba7654321"]);
+    expect(seen.gates).toEqual([FIXED_COMMIT]);
     expect(existsSync(join(root, "held", "v3.0.0-alpha.3"))).toBe(true);
   });
 
@@ -192,10 +196,10 @@ describe("T19: the v3 update gate", () => {
     await setup();
     const { deps, seen } = fake({ outcome: "pass", receiptSha: sha("alpha2") });
     deps.versionOf = async () => "alrunner 3.0.0-alpha.2 (91253f2d6)";
-    expect(await updateOnce(deps, { regateAt: "1234567abcdef" })).toEqual(["pass"]);
-    expect(seen.gates).toEqual(["1234567abcdef"]);
+    expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+    expect(seen.gates).toEqual([REGATE_COMMIT]);
     const g = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
-    expect(g.lethalCommit).toBe("1234567abcdef");
+    expect(g.lethalCommit).toBe(REGATE_COMMIT);
   });
 });
 
@@ -209,6 +213,7 @@ describe("RC-3 (M3): the receipt must prove what it claims", () => {
     nonce: "n",
     binarySha256: "s",
     lethalCommit: GATED_COMMIT,
+    dirty: false,
     outcome: "pass",
     legs: legsFor("pass"),
     ...o,
@@ -255,19 +260,52 @@ describe("RC-3 (M3): the receipt must prove what it claims", () => {
     expect(r.outcome).toBe("infra-fail");
     expect(r.why).toMatch(/not the requested/);
   });
+  test("F6: a PREFIX of the requested commit, either way, is infra-fail; only the full equal sha passes", async () => {
+    await setup();
+    for (const at of [GATED_COMMIT.slice(0, 2), GATED_COMMIT.slice(0, 12)]) {
+      const r = await readReceipt(await write(base({ lethalCommit: at })), "n", "s", GATED_COMMIT);
+      expect(r.outcome).toBe("infra-fail");
+    }
+    const short = await readReceipt(await write(base()), "n", "s", GATED_COMMIT.slice(0, 12));
+    expect(short.outcome).toBe("infra-fail");
+  });
+  test("F5: a pass from a dirty gate worktree (or one that does not say) is infra-fail", async () => {
+    await setup();
+    for (const dirty of [true, undefined]) {
+      const r = await readReceipt(await write(base({ dirty })), "n", "s", GATED_COMMIT);
+      expect(r.outcome).toBe("infra-fail");
+      expect(r.why).toMatch(/not clean/);
+    }
+  });
 });
 
 describe("M4: the gate worktree is prepared, or refused by name", () => {
-  test("bun install and the native parser build always run", () => {
+  test("bun install (F5: --frozen-lockfile) and the native parser build always run", () => {
     const p = gatePreparation({ worktree: "/w", alpackagesPresent: true, symbolTar: undefined });
     expect("steps" in p && p.steps).toEqual([
-      ["bun", "install"],
+      ["bun", "install", "--frozen-lockfile"],
       ["bun", "scripts/build-native-parser.ts"],
     ]);
   });
-  test("missing fixture .alpackages are extracted from the symbol tar", () => {
-    const p = gatePreparation({ worktree: "/w", alpackagesPresent: false, symbolTar: "/t.tar" });
+  test("missing fixture .alpackages are extracted from the PINNED symbol tar", () => {
+    const p = gatePreparation({
+      worktree: "/w",
+      alpackagesPresent: false,
+      symbolTar: "/t.tar",
+      symbolTarSha256: FIXTURE_SYMBOLS_TAR_SHA256,
+    });
     expect("steps" in p && p.steps.at(-1)).toEqual(["tar", "-xf", "/t.tar", "-C", "/w"]);
+  });
+  test("F5: a symbol tar with another sha256 (or none computed) is refused by name", () => {
+    for (const symbolTarSha256 of ["0".repeat(64), undefined]) {
+      const p = gatePreparation({
+        worktree: "/w",
+        alpackagesPresent: false,
+        symbolTar: "/t.tar",
+        ...(symbolTarSha256 !== undefined ? { symbolTarSha256 } : {}),
+      });
+      expect("refused" in p && p.refused).toMatch(/al-runner-v3-gate-symbol-tar-mismatch/);
+    }
   });
   test("missing .alpackages and no tar: refused by name", () => {
     const p = gatePreparation({ worktree: "/w", alpackagesPresent: false, symbolTar: undefined });

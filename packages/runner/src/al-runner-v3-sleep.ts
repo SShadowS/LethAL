@@ -51,25 +51,39 @@ export class AlRunnerV3CoverageJoinError extends Error {
 }
 
 /**
- * I-1 (review build Opus; ruling 2026-10-21): for each side of the index that holds Sleep lines,
- * the document must list at least one file under that side's root. A covering call always reaches
- * its test codeunit's file (under the test root) and the mutated file (under the target root), so a
- * side whose root no listed path sits under means our keys and v3's paths are in different forms
- * (a symlink, a relative path, a case or `..` change). Returns the refusal, or `undefined`. An
- * unavailable document is case 1's business, not this one's.
+ * I-1, as narrowed by the delta review's F2 (ruling 2026-10-21). With any Sleep line indexed:
+ * - TEST side, always: the called test codeunit's own file is always in its reach, so a document
+ *   with no listed path under the test root means our keys and v3's paths are in different forms.
+ * - TARGET side, only a REAL mismatch: a listed path that ends like an indexed target file (its
+ *   path relative to the target root) but sits under another prefix. A target file simply absent
+ *   from the document was not reached (v3 lists the call's whole reach), which is sound: a test
+ *   codeunit that exercises only test-app or Microsoft code lists no target file at all.
+ * Returns the refusal, or `undefined`. An unavailable document is case 1's business.
  */
 export function sleepJoinRefusal(doc: V3CoverageRead, index: SleepIndex): string | undefined {
   if (doc.kind === "unavailable") return undefined;
-  const listed = doc.coverage.map((f) => sleepFileKey(f.file));
-  for (const side of ["target", "test"] as const) {
-    if (index.sizes[side] === 0) continue;
-    const root = index.roots[side];
-    if (listed.some((k) => k.startsWith(root))) continue;
-    const sample = doc.coverage
-      .slice(0, 3)
-      .map((f) => f.file)
-      .join(", ");
-    return `al-runner-v3-coverage-join-refused: the Sleep index holds ${index.sizes[side]} ${side} line(s) under ${root}, but no path in v3's coverage document sits under it (${doc.coverage.length} listed, e.g. ${sample || "none"}); reading that as "no Sleep hit" would be an empty join, so the session stops (R586 §6, I-1)`;
+  if (index.sizes.target + index.sizes.test === 0) return undefined;
+  const listed = doc.coverage.map((f) => ({ key: sleepFileKey(f.file), file: f.file }));
+  const sample = listed
+    .slice(0, 3)
+    .map((l) => l.file)
+    .join(", ");
+  const why = (what: string) =>
+    `al-runner-v3-coverage-join-refused: ${what} (${listed.length} listed, e.g. ${sample || "none"}); reading that as "no Sleep hit" would be an empty join, so the session stops (R586 §6, I-1)`;
+  if (!listed.some((l) => l.key.startsWith(index.roots.test))) {
+    return why(`no path in v3's coverage document sits under the test root ${index.roots.test}`);
+  }
+  const targetRels = [...index.byFile.keys()]
+    .filter((k) => k.startsWith(index.roots.target))
+    .map((k) => k.slice(index.roots.target.length));
+  for (const l of listed) {
+    if (l.key.startsWith(index.roots.target)) continue;
+    const rel = targetRels.find((r) => l.key.endsWith(`/${r}`));
+    if (rel !== undefined) {
+      return why(
+        `v3 lists ${l.file}, which ends like the indexed target file ${index.roots.target}${rel} but sits under another prefix`,
+      );
+    }
   }
   return undefined;
 }

@@ -20,6 +20,7 @@ import {
 } from "../itest/al-runner-v3-gate";
 import { TABLES_KNOWN_DIFFERENCES } from "../itest/al-runner-v3-tables-known";
 import type { NormalizedMutant } from "../itest/mutant-equality";
+import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 
 describe("the D legs' CDO checkout guard (lane ruling 2026-10-21)", () => {
   const ok = {
@@ -201,16 +202,26 @@ describe("RC-2 (I-2): leg C, a fixed defect is held, never a blacklisting", () =
 });
 
 describe("RC-2 (I-2): X (b) moving with #5602's fix is held", () => {
+  const xb = (o: Partial<Parameters<typeof classifyXb>[0]>) =>
+    classifyXb({ exitCode: 7, passed: 1, notRun: 1, parsed: true, compileError: false, ...o });
   test("as measured (exit 7, 1 pass, 1 not run) is a pass", () => {
-    expect(classifyXb({ exitCode: 7, passed: 1, notRun: 1 })).toBe("pass");
+    expect(xb({})).toBe("pass");
   });
-  test("v3 now refusing the broken target (non-zero exit, nothing passed) is held", () => {
-    expect(classifyXb({ exitCode: 1, passed: 0, notRun: 0 })).toBe("held");
+  test("F3: v3 refusing the broken target with its parsed compile diagnostic (AL0118) is held", () => {
+    expect(xb({ exitCode: 1, passed: 0, notRun: 0, compileError: true })).toBe("held");
+  });
+  test("F3: a crash is never held: a panic, a signal, unparseable output, or no compile diagnostic", () => {
+    expect(xb({ exitCode: 101, passed: 0, notRun: 0, compileError: false })).toBe("gate-fail");
+    expect(xb({ exitCode: -1, passed: 0, notRun: 0, compileError: true })).toBe("gate-fail");
+    expect(xb({ exitCode: 1, passed: 0, notRun: 0, parsed: false, compileError: true })).toBe(
+      "gate-fail",
+    );
+    expect(xb({ exitCode: 1, passed: 0, notRun: 0, compileError: false })).toBe("gate-fail");
   });
   test("anything else is gate-fail (a pass that should not be, or exit 0)", () => {
-    expect(classifyXb({ exitCode: 0, passed: 2, notRun: 0 })).toBe("gate-fail");
-    expect(classifyXb({ exitCode: 7, passed: 2, notRun: 0 })).toBe("gate-fail");
-    expect(classifyXb({ exitCode: 0, passed: 0, notRun: 0 })).toBe("gate-fail");
+    expect(xb({ exitCode: 0, passed: 2, notRun: 0 })).toBe("gate-fail");
+    expect(xb({ exitCode: 7, passed: 2, notRun: 0 })).toBe("gate-fail");
+    expect(xb({ exitCode: 0, passed: 0, notRun: 0, compileError: true })).toBe("gate-fail");
   });
 });
 
@@ -247,6 +258,9 @@ describe("M2: environment refusals are infra-fail, verdict failures gate-fail", 
     expect(legOutcomeOfError(new V3LegFailure("x"))).toBe("gate-fail");
     expect(legOutcomeOfError(new V3LegHeld(["a"]))).toBe("held");
     expect(legOutcomeOfError(new Error("a difference that differs, BLOCK"))).toBe("infra-fail");
+  });
+  test("F4: inside the gate a coverage join refusal is gate-fail (v3's path form moved)", () => {
+    expect(legOutcomeOfError(new AlRunnerV3CoverageJoinError("x"))).toBe("gate-fail");
   });
   test("the three classes extend Error directly", () => {
     for (const C of [V3LegEnvironment, V3LegFailure, V3LegHeld])

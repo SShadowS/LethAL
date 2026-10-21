@@ -453,7 +453,7 @@ async function legX(scratch: string): Promise<void> {
     }),
   );
   let b7 = "";
-  let xb = { exitCode: 0, passed: 0, notRun: 0 };
+  let xb = { exitCode: 0, passed: 0, notRun: 0, parsed: false, compileError: false };
   try {
     execFileSync(
       BIN,
@@ -477,14 +477,26 @@ async function legX(scratch: string): Promise<void> {
     );
     b7 = "exit 0";
   } catch (e) {
-    const x = e as { status?: number; stdout?: string };
-    let doc: { passed?: number; notRun?: number } = {};
+    const x = e as { status?: number | null; stdout?: string; stderr?: string };
+    let doc: { passed?: number; notRun?: number; compilationErrors?: unknown } = {};
+    let parsed = false;
     try {
-      doc = JSON.parse(x.stdout ?? "{}") as { passed?: number; notRun?: number };
+      doc = JSON.parse(x.stdout ?? "") as typeof doc;
+      parsed = typeof doc === "object" && doc !== null;
     } catch {
       doc = {};
     }
-    xb = { exitCode: x.status ?? -1, passed: doc.passed ?? 0, notRun: doc.notRun ?? 0 };
+    // F3: held only for the parsed compile-refusal shape, never for a crash or a signal.
+    const compileError =
+      (Array.isArray(doc.compilationErrors) && doc.compilationErrors.length > 0) ||
+      /\bAL0118\b/.test(`${x.stdout ?? ""}\n${x.stderr ?? ""}`);
+    xb = {
+      exitCode: typeof x.status === "number" ? x.status : -1,
+      passed: doc.passed ?? 0,
+      notRun: doc.notRun ?? 0,
+      parsed,
+      compileError,
+    };
     b7 = `exit ${x.status} passed ${doc.passed} notRun ${doc.notRun}`;
   }
   console.log(`  X (b): ${b7}`);
@@ -1035,6 +1047,12 @@ async function main(): Promise<void> {
       lethalCommit: (
         execFileSync("git", ["-C", REPO, "rev-parse", "HEAD"], { encoding: "utf8" }) as string
       ).trim(),
+      // F5: checked again at the end, so a file changed during the run counts too.
+      dirty:
+        dirty !== "" ||
+        execFileSync("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=no"], {
+          encoding: "utf8",
+        }).trim() !== "",
       outcome,
       legs,
       lines,

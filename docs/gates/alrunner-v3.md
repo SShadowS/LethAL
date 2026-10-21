@@ -40,20 +40,27 @@ The legs:
 - The pin is never moved by hand. `bun scripts/al-runner-v3-update.ts` gates newer `v3.0.0-alpha.N` releases, and
   `--edge` gates the daily `edge` release by download.
 - In both, the checksum is checked before anything is extracted, and the gate runs at `.gated`'s commit, in a
-  worktree it prepares first (`bun install`, the native parser, the fixture `.alpackages`) or refuses by name
-  (`al-runner-v3-gate-worktree-unprepared`). Only a `pass` moves `current`.
+  worktree it prepares first (`bun install --frozen-lockfile`, the native parser, the fixture `.alpackages` from
+  the symbol tar pinned by sha256) or refuses by name (`al-runner-v3-gate-worktree-unprepared`,
+  `al-runner-v3-gate-symbol-tar-mismatch`). Only a `pass` moves `current`.
 - A leg's outcome comes from its error's TYPE, never its text:
-  - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`;
-  - `held`: every difference is a move toward BC (a defect fact `defect-present` -> `gone`, X (b) once v3 refuses
-    the broken target, a leg-T known row reaching its BC row). Kept under `held/` for re-pre-commitment, never
+  - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`, or v3's
+    coverage paths no longer join LethAL's (`AlRunnerV3CoverageJoinError`, a real behaviour change; in a user
+    session the same error is a plain refusal);
+  - `held`: every difference is a move toward BC (a defect fact `defect-present` -> `gone`; X (b) once v3 refuses
+    the broken target with its parsed compile diagnostic, AL0118, while a crash, a signal or unparseable output
+    stays `gate-fail`; a leg-T known row reaching its BC row). Kept under `held/` for re-pre-commitment, never
     blacklisted;
   - `infra-fail`: the environment (the CDO checkout guard, `al-runner-v3-itest-setup-does-not-compile`, an unset
     variable, an unmeasurable fact). Retried next run.
 - A `gate-fail` goes to `failed/<tag>@<lethalCommit>`: final for that build at that LethAL commit only, so a
   LethAL fix and a re-pre-commitment can gate the same build again.
-- The receipt must name the requested LethAL commit, and its legs must give its outcome over the exact leg set.
+- The receipt must name the requested LethAL commit as the full, equal 40-character sha, record whether the gate
+  worktree was dirty (a dirty `pass` is refused), and give its outcome from its legs over the exact leg set.
 - `timeout-is-cpu` is GATE-ONLY: its burns are fixed iteration counts calibrated on one machine, so only leg C
-  measures it, and a session trusts the gated build's record instead of re-burning (M1).
+  measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
+  BUILD: a later LethAL change to how a call's timeout is sent (`v3CallArgv`, `stopSecondsOf`) is not covered by
+  the old record and needs `bun scripts/al-runner-v3-update.ts --regate <commit>`.
 - `.gated` names a commit on `lethal/r586`. The orchestrator merges with `--no-ff`, so that commit stays reachable
   from master.
 

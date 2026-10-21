@@ -887,6 +887,8 @@ describe("§6 the Sleep rule through the backend (T12, T31, T32)", () => {
       });
       return {
         coverage: [
+          // v3 always lists the called test codeunit's own file (the RC1-R9 log shows it).
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
           {
             file: target,
             statements:
@@ -981,6 +983,37 @@ describe("§6 the Sleep rule through the backend (T12, T31, T32)", () => {
     expect(String(err)).toMatch(/al-runner-v3-coverage-join-refused/);
   });
 
+  test("F2 now admits: a covering call listing only the test file (no target file reached) is scored, not refused", async () => {
+    const onlyTests = (_id: string, _active: string, testDir: string) => ({
+      coverage: [{ file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] }],
+      perTestCoverage: ["A", "B"].map((m) => ({
+        test: `Codeunit${CU}.${m}`,
+        coverage: [
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+        ],
+      })),
+    });
+    const { b } = await sleeper(onlyTests);
+    expect(b.sleepIndexSize()).toEqual({ target: 1, test: 0 });
+    await b.activate("M0001");
+    expect((await runA(b)).outcome).toBe("pass");
+  });
+
+  test("F2 still refuses: the target file listed under another prefix stops the session", async () => {
+    const moved = (id: string, active: string, testDir: string) => {
+      const d = sleepCoverage({ hit: true })(id, active, testDir);
+      const away = <F extends { file: string }>(f: F): F =>
+        f.file.startsWith(testDir) ? f : { ...f, file: `/elsewhere${f.file}` };
+      return {
+        coverage: d.coverage.map(away),
+        perTestCoverage: d.perTestCoverage.map((e) => ({ ...e, coverage: e.coverage.map(away) })),
+      };
+    };
+    const { b } = await sleeper(moved);
+    await b.activate("M0001");
+    await expect(runA(b)).rejects.toBeInstanceOf(AlRunnerV3CoverageJoinError);
+  });
+
   test("I-1: through a symlinked test dir, the argv and the index use its real path", async () => {
     const l = await layout(SLEEPER);
     const link = `${l.testDir}-link`;
@@ -1000,14 +1033,19 @@ describe("§6 the Sleep rule through the backend (T12, T31, T32)", () => {
     }
   });
 
-  test("I-1 audit: baseline per-test hits that map to no batch line stop the session at the first mutant", async () => {
+  test("F1: a BASELINE run whose hit sits under the real active/ but maps to no batch line stops the session", async () => {
+    // The run the orchestrator makes (baseline, unmutated): never via activate(mutant), which an
+    // uncovered mutant never reaches.
     const l = await layout(SLEEPER);
-    const cov = (_id: string, _active: string, testDir: string) => ({
-      coverage: [{ file: "/elsewhere/Nope.Codeunit.al", statements: [{ line: 5, hits: 1 }] }],
+    const cov = (_id: string, active: string, testDir: string) => ({
+      coverage: [
+        { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+        { file: join(active, "Renamed", "LOGIC.al"), statements: [{ line: 5, hits: 1 }] },
+      ],
       perTestCoverage: ["A", "B"].map((m) => ({
         test: `Codeunit${CU}.${m}`,
         coverage: [
-          { file: "/elsewhere/Nope.Codeunit.al", statements: [{ line: 5, hits: 1 }] },
+          { file: join(active, "Renamed", "LOGIC.al"), statements: [{ line: 5, hits: 1 }] },
           { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
         ],
       })),
@@ -1017,14 +1055,39 @@ describe("§6 the Sleep rule through the backend (T12, T31, T32)", () => {
     b.useBuildSymbols([]);
     await b.deploy(l.batch);
     await b.activate(null);
-    await b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
-    await expect(b.activate("M0001")).rejects.toBeInstanceOf(AlRunnerV3CoverageJoinError);
+    await expect(b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      AlRunnerV3CoverageJoinError,
+    );
   });
 
-  test("I-1 audit, other direction: a baseline hit that maps to a batch line lets mutants run", async () => {
+  test("F1, other direction: a baseline test that reaches only test-app code (no hit under active/) runs", async () => {
+    const l = await layout(SLEEPER);
+    const cov = (_id: string, _active: string, testDir: string) => ({
+      coverage: [{ file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] }],
+      perTestCoverage: ["A", "B"].map((m) => ({
+        test: `Codeunit${CU}.${m}`,
+        coverage: [
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+        ],
+      })),
+    });
+    const v3 = fakeV3(allPass, { coverage: cov });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    const v = await b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+    expect(v.outcome).toBe("pass");
+    expect(v.coverage?.entries.length ?? -1).toBe(0);
+  });
+
+  test("F1, other direction: a baseline hit that maps to a batch line runs, with coverage", async () => {
     const l = await layout(SLEEPER);
     const cov = (_id: string, active: string, testDir: string) => ({
-      coverage: [{ file: join(active, "Logic.Codeunit.al"), statements: [{ line: 5, hits: 1 }] }],
+      coverage: [
+        { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+        { file: join(active, "Logic.Codeunit.al"), statements: [{ line: 5, hits: 1 }] },
+      ],
       perTestCoverage: ["A", "B"].map((m) => ({
         test: `Codeunit${CU}.${m}`,
         coverage: [
@@ -1074,6 +1137,7 @@ codeunit 79000 "Logic"
       const target = join(active, "Logic.Codeunit.al");
       return {
         coverage: [
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
           {
             file: target,
             statements: [

@@ -10,6 +10,7 @@
  * AND it now equals the BC row (verdict and killing test). Anything else is `gate-fail`.
  */
 import { writeFile } from "node:fs/promises";
+import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import type { NormalizedMutant } from "./mutant-equality";
 
 export type V3LegOutcome = "pass" | "held" | "gate-fail" | "infra-fail" | "skipped";
@@ -275,17 +276,23 @@ export function classifyLegC(
 }
 
 /**
- * RC-2 (I-2): X (b), v3 alone on the broken target. As measured (#5602): exit 7, 1 pass, 1 not
- * run. v3 now refusing it (a non-zero exit with nothing passed) is #5602's fix, a move toward BC:
- * `held`. Anything else is `gate-fail`.
+ * RC-2 (I-2), as narrowed by F3: X (b), v3 alone on the broken target. As measured (#5602): exit 7,
+ * 1 pass, 1 not run. `held` (#5602's fix, a move toward BC) ONLY for the parsed compile-refusal
+ * shape: a positive exit code, a document that parsed, nothing passed, and the compile diagnostic
+ * (AL0118, or a non-empty `compilationErrors`) reported. A panic or other code without the
+ * diagnostic, a signal (no exit code), or unparseable output is `gate-fail`.
  */
 export function classifyXb(r: {
   readonly exitCode: number;
   readonly passed: number;
   readonly notRun: number;
+  /** The `--output-json` document parsed. */
+  readonly parsed: boolean;
+  /** The output names the broken target's compile diagnostic (AL0118 / `compilationErrors`). */
+  readonly compileError: boolean;
 }): "pass" | "held" | "gate-fail" {
   if (r.exitCode === 7 && r.passed === 1 && r.notRun === 1) return "pass";
-  if (r.exitCode !== 0 && r.passed === 0) return "held";
+  if (r.exitCode > 0 && r.parsed && r.compileError && r.passed === 0) return "held";
   return "gate-fail";
 }
 
@@ -315,10 +322,16 @@ export class V3LegHeld extends Error {
   }
 }
 
-/** M2: a leg's outcome from its error, by TYPE only. Anything untyped is `infra-fail`. */
+/**
+ * M2: a leg's outcome from its error, by TYPE only. Anything untyped is `infra-fail`. F4: inside
+ * the update gate, `AlRunnerV3CoverageJoinError` is a real v3 behaviour change (the form of its
+ * coverage paths moved), so it is `gate-fail`, kept under `failed/<tag>@<commit>`; in a user
+ * session it stays a plain refusal.
+ */
 export function legOutcomeOfError(err: unknown): V3LegOutcome {
   if (err instanceof V3LegHeld) return "held";
   if (err instanceof V3LegFailure) return "gate-fail";
+  if (err instanceof AlRunnerV3CoverageJoinError) return "gate-fail";
   return "infra-fail";
 }
 
@@ -337,6 +350,8 @@ export interface V3GateReceipt {
   readonly binarySha256: string;
   readonly version: string;
   readonly lethalCommit: string;
+  /** F5: the gate worktree had tracked changes (a rewritten lockfile, an edited file). */
+  readonly dirty: boolean;
   readonly outcome: V3GateOutcome;
   readonly legs: Readonly<Record<string, V3LegOutcome>>;
   readonly lines: readonly string[];
