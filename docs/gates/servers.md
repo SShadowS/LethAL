@@ -37,6 +37,15 @@ server it:
 The databases are in memory. A container restart or a server1 reboot resets each server to a fresh
 CRONUS with no LethAL app on it. The script is idempotent, so re-running it is the fix.
 
+The setup compares versions, not contents (R599). To replace a stale same-version build, use
+`bun scripts/bc-republish.ts republish --server bcN --lane <your lane> [--mint <target>]... <fixture>...`:
+it compiles first, then uninstalls and unpublishes (dependents first, adding any fixture that
+depends on a named app), publishes (targets first) and reads back each app's version and sha256.
+A target that a gate left at a minted version can only go back at a newer minted version (`--mint`,
+R605). `bc-republish.ts alpackages --server bcN <tests fixture>...` fills a tests fixture's
+gitignored `.alpackages` from that server, which `itest:testapp`, `:verify`, `:verify-scale` and
+`:agreement` need.
+
 ## How a gate reads a server
 
 - `LETHAL_ITEST_CONFIG=lethal.config.<x>.json` selects the config file in one of the four fixture
@@ -61,23 +70,63 @@ and in what else is installed (`bc3` carries the Continia stack). Admitting a ne
 pair is one ordinary run of the gate there; add the pair to this table when it passes.
 
 This table is the record. It lists the pairs exactly as the autonomy runbook
-(`docs/superpowers/runbooks/autonomy/README.md`, "Proof is PER SERVER") does. Each passed on
-2026-10-21 under R-583's runtime-17 fixtures (`/coord/handoff/R-583/gates.md`), per mutant equal to
-its baseline or frozen table where the gate has mutants:
+(`docs/superpowers/runbooks/autonomy/README.md`, "Proof is PER SERVER") does. **Every one of the 13
+BC gates is proven on every one of the three servers.** Each pair below PASSED on 2026-10-21 under
+the runtime-17 fixtures, per mutant equal to its baseline or frozen table where the gate has mutants,
+with no baseline re-recorded. The control column is the LethAL Control version the server held
+during that proof (read by `lethal doctor`'s `control-version` check). It matters: 1.0.0.22 and
+1.0.0.23 take different paths in some gates, so a proof holds for the version it ran under.
 
-| server | gates proven on it |
-|---|---|
-| `bc1` | `itest:bcdev`, `itest:bcdev-wrapped`, `itest:bcdev-names`, `itest:tables`, `itest:verify` (R-595, `/coord/handoff/R-595/itest-verify-bc1-e2e-PASS.log`), `itest:verify-scale`, `itest:stale-publish`, `itest:testapp`, `itest:lease` |
-| `bc2` | `itest:chunked`, `itest:hang`, `itest:harden`, `itest:agreement` (R-583's code only) |
-| `bc3` | **BEING RESTORED (R-604, 2026-10-21): use NOTHING on bc3, not even `itest:hang`.** Its fixture apps were unpublished and are being republished (log `/coord/handoff/R-604/republish-bc3.log`); `itest:hang` is re-proven before anything else. Until then the text below is history. Was: `itest:hang` (R-389, 2026-10-21, with LethAL Control 1.0.0.23, `/coord/handoff/R-389/bc-live/hang-bc3.log`). No other gate under the current fixtures: `itest:bcdev` passed there on the pre-runtime-17 fixtures only, and it now carries the R594 CDO oracle. Run `bc-linux-setup.ts --server bc3` and re-prove a gate there before using it for that gate. The setup compares versions, not contents (R599): before a bc3 proof for `itest:bcdev` or the names gates, first republish `Sandbox App`, `Sandbox Names` and `Sandbox Names Tests` (and `Sandbox Hang` for any gate but `itest:hang`) through the automation API (uninstall, then the bound `Microsoft.NAV.unpublish` action, then publish) |
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc1` | `itest:bcdev`, `itest:bcdev-wrapped`, `itest:bcdev-names`, `itest:tables`, `itest:verify-scale`, `itest:stale-publish`, `itest:testapp`, `itest:lease` | 1.0.0.22 | R-583 phase 2, `/coord/handoff/R-583/gates/p2-<gate>-bc1.log` |
+| `bc1` | `itest:verify` | not recorded | R-595, `/coord/handoff/R-595/itest-verify-bc1-e2e-PASS.log` |
+| `bc1` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-chunked.log` |
+| `bc1` | `itest:hang` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-hang.log` |
+| `bc1` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-harden.log` |
+| `bc1` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-agreement.log` |
+| `bc2` | `itest:chunked`, `itest:hang`, `itest:harden`, `itest:agreement` | 1.0.0.22 | R-583 phase 2, `/coord/handoff/R-583/gates/p2-<gate>-bc2.log` |
+| `bc2` | `itest:bcdev` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-bcdev.log` |
+| `bc2` | `itest:bcdev-wrapped` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-bcdev-wrapped.log` |
+| `bc2` | `itest:bcdev-names` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-bcdev-names.log` |
+| `bc2` | `itest:tables` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-tables.log` |
+| `bc2` | `itest:verify` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-verify.log` |
+| `bc2` | `itest:verify-scale` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-verify-scale.log` |
+| `bc2` | `itest:stale-publish` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-stale-publish.log` |
+| `bc2` | `itest:testapp` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-testapp.log` |
+| `bc2` | `itest:lease` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-lease.log` |
+| `bc3` | `itest:hang` | 1.0.0.23 | R-604 (re-proven after the republish), `/coord/handoff/R-604/bc3-hang.log` |
+| `bc3` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev.log` |
+| `bc3` | `itest:bcdev-wrapped` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev-wrapped.log` |
+| `bc3` | `itest:bcdev-names` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev-names.log` |
+| `bc3` | `itest:tables` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-tables.log` |
+| `bc3` | `itest:verify` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-verify.log` |
+| `bc3` | `itest:verify-scale` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-verify-scale.log` |
+| `bc3` | `itest:stale-publish` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-stale-publish.log` |
+| `bc3` | `itest:testapp` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-testapp.log` |
+| `bc3` | `itest:lease` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-lease.log` |
+| `bc3` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-chunked.log` |
+| `bc3` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-harden.log` |
+| `bc3` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-agreement.log` |
 
 `itest:stale-publish` and `itest:lease` have no per-mutant figures; they passed their own checks.
 `itest:envtool` is host-only and not proven on any bc server. `itest:alrunner` and
 `itest:growth` need no BC server.
 
+**bc3's fixture apps (R599, R605).** Before its R-604 proofs, bc3's stale `Sandbox App`, `Sandbox
+Hang`, `Sandbox Names` and `Sandbox Names Tests` were replaced with the current builds by
+`scripts/bc-republish.ts` (uninstall, the bound `Microsoft.NAV.unpublish` action, publish, then read
+back the version and sha256). `Sandbox Tests` and `Sandbox Hang Tests` had to come off and go back
+with their targets. BC refused the app.json build of a target that a gate had left at a minted
+version (R605), so the three targets went back at versions minted by `reserveAppVersion`; the test
+apps are at their app.json versions. Logs: `/coord/handoff/R-604/republish-bc3.log` (the refusal)
+and `republish-bc3-restore.log`. No bc3 result differed from bc1's or bc2's, so nothing there is a
+Continia-stack difference.
+
 Earlier proofs not in the table: `itest:verify-scale` also passed on `bc2` under master's code before
 R-583 merged, and `itest:bcdev` passed on all three servers in R589, before the runtime-17
-fixtures.
+fixtures. bc3's earlier `itest:hang` proof (R-389, `/coord/handoff/R-389/bc-live/hang-bc3.log`) is
+replaced by R-604's, made after the republish.
 
 ## Other servers
 
