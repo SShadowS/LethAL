@@ -358,7 +358,8 @@ describe("B5 the heavy-job guard", () => {
     expect(v.foreign).toEqual([]);
   });
 
-  // Real flock on temp lock files.
+  // Real flock on temp lock files (util-linux; the tool runs in the Linux container only, so these
+  // two are skipped on the Windows CI job).
   // The holder BLOCKS on the lock: our slotHeld probe takes it for an instant, and a `-n` holder
   // racing that probe would give up.
   async function hold(lock: string, orphan?: string): Promise<{ pid: number }> {
@@ -378,45 +379,52 @@ describe("B5 the heavy-job guard", () => {
       process.kill(pid, "SIGKILL");
     } catch {}
   };
-  test("both slots held by live holders -> refused; slot 1 busy, slot 2 free -> slot 2", async () => {
-    const dir = fresh("locks");
-    const one = await hold(join(dir, "heavy.1"));
-    try {
-      expect(trySlots(dir, () => ["true"])).toEqual({ slot: 2, code: 0 });
-      const two = await hold(join(dir, "heavy.2"));
+  const posix = test.skipIf(process.platform === "win32");
+  posix(
+    "both slots held by live holders -> refused; slot 1 busy, slot 2 free -> slot 2",
+    async () => {
+      const dir = fresh("locks");
+      const one = await hold(join(dir, "heavy.1"));
       try {
-        expect(trySlots(dir, () => ["true"])).toBeNull();
+        expect(trySlots(dir, () => ["true"])).toEqual({ slot: 2, code: 0 });
+        const two = await hold(join(dir, "heavy.2"));
+        try {
+          expect(trySlots(dir, () => ["true"])).toBeNull();
+        } finally {
+          kill(two.pid);
+        }
       } finally {
-        kill(two.pid);
+        kill(one.pid);
       }
-    } finally {
-      kill(one.pid);
-    }
-  });
-  test("a holder that was SIGKILLed frees its slot at once; an orphaned child keeps it held", async () => {
-    const dir = fresh("locks");
-    const lock = join(dir, "heavy.1");
-    const a = await hold(lock);
-    kill(a.pid);
-    let free = false;
-    for (let i = 0; i < 50 && !free; i++) {
-      free = !slotHeld(dir, 1);
-      if (!free) await Bun.sleep(20);
-    }
-    expect(free).toBe(true);
+    },
+  );
+  posix(
+    "a holder that was SIGKILLed frees its slot at once; an orphaned child keeps it held",
+    async () => {
+      const dir = fresh("locks");
+      const lock = join(dir, "heavy.1");
+      const a = await hold(lock);
+      kill(a.pid);
+      let free = false;
+      for (let i = 0; i < 50 && !free; i++) {
+        free = !slotHeld(dir, 1);
+        if (!free) await Bun.sleep(20);
+      }
+      expect(free).toBe(true);
 
-    const pidFile = join(dir, "orphan.pid");
-    const b = await hold(lock, pidFile);
-    for (let i = 0; i < 50 && !existsSync(pidFile); i++) await Bun.sleep(20);
-    const orphan = Number(readFileSync(pidFile, "utf8").trim());
-    try {
-      kill(b.pid);
-      await Bun.sleep(100);
-      expect(slotHeld(dir, 1)).toBe(true);
-    } finally {
-      kill(orphan);
-    }
-  });
+      const pidFile = join(dir, "orphan.pid");
+      const b = await hold(lock, pidFile);
+      for (let i = 0; i < 50 && !existsSync(pidFile); i++) await Bun.sleep(20);
+      const orphan = Number(readFileSync(pidFile, "utf8").trim());
+      try {
+        kill(b.pid);
+        await Bun.sleep(100);
+        expect(slotHeld(dir, 1)).toBe(true);
+      } finally {
+        kill(orphan);
+      }
+    },
+  );
 });
 
 describe("B6/B6b diff", () => {
