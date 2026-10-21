@@ -63,10 +63,17 @@ export function matchingProcesses(ps: string, re: RegExp, exclude: ReadonlySet<n
     .filter((l) => {
       const m = /^(\d+)\s+(.*)$/.exec(l);
       return (
-        m?.[1] !== undefined && m[2] !== undefined && !exclude.has(Number(m[1])) && re.test(m[2])
+        m?.[1] !== undefined &&
+        m[2] !== undefined &&
+        !exclude.has(Number(m[1])) &&
+        !WATCHER.test(m[2]) &&
+        re.test(m[2])
       );
     });
 }
+
+/** A shell, log watcher or search that merely MENTIONS a job is not the job (its child is). */
+const WATCHER = /^(\S*\/)?(bash|sh|tail|grep|ugrep|rg|ps|less|cat)\b/;
 
 function sh(cmd: string[]): string {
   return Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" }).stdout.toString();

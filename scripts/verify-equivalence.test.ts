@@ -72,6 +72,8 @@ describe("the heavy-job wait", () => {
     "     13 bun scripts/prod-identity-keys.ts /x out /work/src/DC/app",
     "     14 bun packages/runner/itest/tables.itest.ts",
     "     15 bun scripts/verify-equivalence.ts --serial 3",
+    "     16 tail -F /coord/handoff/x/al-runner.log",
+    "     17 /bin/bash -c ps -eo pid,args | grep al-runner",
   ].join("\n");
   test("matches local heavy jobs and itest:hang, not a remote BC gate or itself", () => {
     const got = matchingProcesses(PS, new RegExp(DEFAULT_WAIT), new Set([15]));
