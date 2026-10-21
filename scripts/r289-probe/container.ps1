@@ -1,8 +1,8 @@
 # R289 probe P1: container-side collector beside the real itest:hang gate. See README.md here and
 # docs/superpowers/specs/2026-09-27-r289-probe-precommitment.md section 3.
 #
-#   pwsh -File scripts/r289-probe/container.ps1 -Container Cronus284 `
-#     -Config fixtures/sandbox-hang/lethal.config.cronus284.json -Out <file> `
+#   pwsh -File scripts/r289-probe/container.ps1 -Container Cronus28 `
+#     -Config fixtures/sandbox-hang/lethal.config.cronus28.json -Out <file> `
 #     [-Parts sql,service,sessions,stats] [-StopFile <path>] [-Seconds <n>]
 #
 # Every 5 s, one JSON line per part, each stamped with host epoch ms (sentAt before the call,

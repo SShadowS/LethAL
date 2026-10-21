@@ -552,7 +552,8 @@ export class HarnessVerifier {
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const query = params.size > 0 ? `?${params.toString()}` : "";
     // R441: fetch's URL parser drops tab, CR and LF, so check the parsed URL and send exactly that.
-    const sent = new URL(`${this.cfg.baseUrl}/${path}${query}`);
+    // R589: API rows from their own root when the config names one (BC on Linux's API port).
+    const sent = new URL(`${this.cfg.apiBaseUrl ?? this.cfg.baseUrl}/${path}${query}`);
     refuseUnfilteredExtensionsQuery(sent.pathname, [...sent.searchParams], this.cfg.tenant);
     const url = sent.href;
     let res: Response;

@@ -58,7 +58,7 @@ import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import type { CompiledArtifact } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import type { LethalConfigFile } from "../src/cli";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { discoverTests } from "../src/discovery";
 import { formatFailure } from "../src/format-failure";
@@ -68,7 +68,13 @@ import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { ContainerDeployerIo, SpawnFn } from "../src/publisher";
 import { RunMutantTransport } from "../src/run-mutant-transport";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import {
+  assertLaunchMatchesConfig,
+  itestConfigName,
+  itestConfigPath,
+  itestLaunchPath,
+  printItestTarget,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
@@ -84,8 +90,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 
 // Same ids as bcdev.itest.ts / al-runner.itest.ts — must live inside the fixture's declared
 // idRanges (79000-79199), enforced by real alc.exe (AL0297).
@@ -666,6 +673,7 @@ async function main(): Promise<void> {
 
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
+  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
 
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
@@ -694,6 +702,7 @@ async function main(): Promise<void> {
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -702,7 +711,7 @@ async function main(): Promise<void> {
     deployerIoTracker.io,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
