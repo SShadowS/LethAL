@@ -391,6 +391,15 @@ describe("R583 §3: who owns a compile diagnostic (one test per owner branch)", 
     expect(drops[0]).toContain("/tmp/al-runner-deps/p<pid>/");
   });
 
+  test("paths outside both projects with NO foreign module name are unattributed (refused), not a dependency", () => {
+    const block = [
+      "<bundled>: EMIT-ZERO — 0 sources emitted, 1 AL error(s):",
+      "  SourceFile(C:/PROGRA~1/tmp/active/Logic.Codeunit.al@5:14): error AL0118: x",
+    ];
+    expect(compileOwnerOf("<bundled>", block, scope)).toBe("unattributed");
+    expect(compileFindingsOf([], block.join("\n"), scope).refuse).toHaveLength(1);
+  });
+
   test("an unattributable entry refuses, named as such, with its owner", () => {
     const f = compileFindingsOf(
       [{ file: "<bundled>", errors: ["EMIT-ZERO (1 AL error(s))"] }],
@@ -501,6 +510,63 @@ describe("R583 §3: the baseline refuses the session", () => {
         /baseline refused: al-runner did not fully compile this run .*the target bundle did not fully compile/,
       );
       expect(baselineRuns).toBe(1);
+    } finally {
+      await backend.close();
+    }
+  });
+
+  test("a dependency drop is scored and the session emits al-runner-dependency-emit-excluded once", async () => {
+    const root = scratch("lethal-r583-depwarn-");
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    const backendDir = join(root, "backend");
+    await Bun.write(join(projectDir, "app.json"), APP_JSON);
+    await Bun.write(join(projectDir, "R583Target.Codeunit.al"), TARGET_AL);
+    await Bun.write(join(testDir, "R583Tests.Codeunit.al"), TESTS_AL);
+    // Every run passes and prints the measured Tests-TestLibraries line (the mutants survive).
+    const spawn: SpawnFn = async (argv) => {
+      if (argv.includes("--version"))
+        return { exitCode: 0, stdout: "al-runner v2.12.0.0", stderr: "" };
+      const t = argv.indexOf("--test");
+      const wanted = t >= 0 ? argv[t + 1] : undefined;
+      if (wanted === undefined) return { exitCode: 0, stdout: "", stderr: "" };
+      if (wanted === AL_RUNNER_PREDEFINED_PROBE_TEST) {
+        return fakeProbeSpawn(
+          probeFailed(maskFor(new Set(AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0))),
+        ).spawn(argv);
+      }
+      const envelope = { tests: [{ name: wanted, status: "pass", durationMs: 5 }], exitCode: 0 };
+      return {
+        exitCode: 0,
+        stdout: alRunnerStdout(envelope),
+        stderr: `[1/2] app — 1 suites\n${DEPENDENCY_LINE}\n[2/2] tests — 1 suites\n  → 1P/0F/0E`,
+      };
+    };
+    const backend = new AlRunnerBackend(
+      { alRunnerPath: "al-runner", instrumentedDir: backendDir, testDir, selectorObjectId: 50000 },
+      spawn,
+    );
+    const warnings: { code: string; message: string }[] = [];
+    try {
+      const report = await runSession({
+        backend,
+        store: new ResultsStore(":memory:"),
+        projectDir,
+        testDir,
+        instrumentedDir: join(root, "instr"),
+        selectorIds: { selectorId: 50000, controlId: 50001, tableId: 50002 },
+        mutantTimeoutMs: 20_000,
+        emit: [
+          (e) => {
+            if (e.type === "warning") warnings.push({ code: e.code, message: e.message });
+          },
+        ],
+      });
+      expect(report.mutants.length).toBeGreaterThan(0);
+      const dep = warnings.filter((w) => w.code === "al-runner-dependency-emit-excluded");
+      expect(dep).toHaveLength(1);
+      expect(dep[0]?.message).toContain("Microsoft_Tests-TestLibraries v28.5.54151.55132");
+      expect(dep[0]?.message).toContain("--server cannot see such drops");
     } finally {
       await backend.close();
     }

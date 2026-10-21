@@ -665,9 +665,9 @@ export type AlRunnerCompileOwner = "target" | "test" | "dependency" | "unattribu
  * R583: whose compile diagnostic this is. TARGET only on positive evidence: a LethAL-emitted object
  * (`MutationSelector`), a `SourceFile(` path under the target bundle, or an owner naming it (its
  * directory, `V2_<dir>`, or its module `<Publisher>_<Name> v<version>`). TEST likewise. DEPENDENCY
- * when every path lies outside both projects, or every module named is another app (measured:
- * `Microsoft_Tests-TestLibraries v28.5...: EMIT-EXCLUDED`, paths under al-runner's own
- * `/tmp/al-runner-deps`). Anything else is UNATTRIBUTED. Target evidence wins over the rest.
+ * only when it names a module and every module named is another app, with no path inside either
+ * project (measured: `Microsoft_Tests-TestLibraries v28.5...: EMIT-EXCLUDED`, paths under
+ * al-runner's own `/tmp/al-runner-deps`). Anything else is UNATTRIBUTED. Target evidence wins.
  */
 export function compileOwnerOf(
   owner: string,
@@ -695,12 +695,14 @@ export function compileOwnerOf(
         namesApp(all, scope.testApp)))
   )
     return "test";
+  // DEPENDENCY only on POSITIVE evidence: a foreign module name (review r2). Paths outside both
+  // projects alone are not enough: a target diagnostic spelled through another path (relative, a
+  // short name, a symlinked tmp) would be scored. Such a block is unattributed, which refuses.
   const outside = (p: string) => !under(p, scope.sourceDir) && !under(p, scope.testDir);
   if (
-    (paths.length > 0 && paths.every(outside)) ||
-    (paths.length === 0 &&
-      modules.length > 0 &&
-      modules.every((m) => !isModule(m, scope.targetApp) && !isModule(m, scope.testApp)))
+    modules.length > 0 &&
+    modules.every((m) => !isModule(m, scope.targetApp) && !isModule(m, scope.testApp)) &&
+    paths.every(outside)
   )
     return "dependency";
   return "unattributed";

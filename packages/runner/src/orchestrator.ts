@@ -7476,13 +7476,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   }
   // R583: a dependency (not the target, not the test app) lost objects in al-runner's compile. The
   // run is scored anyway; tests touching a dropped object fail, and the rest cover less. Structural,
-  // as above. One-shot reads it from each invocation's stderr; `--server` only from its summary.
+  // as above. One-shot reads it from each invocation's stderr. `--server` CANNOT see it: the measured
+  // drop prints only on the daemon's stderr, which is never read per request, so on `--server` the
+  // absence of this warning is not evidence that no dependency lost objects.
   const depSource = cfg.backend as { observedDependencyDrops?: () => readonly string[] };
   for (const drop of depSource.observedDependencyDrops?.() ?? []) {
     emit({
       type: "warning",
       code: "al-runner-dependency-emit-excluded",
-      message: `al-runner dropped objects from a DEPENDENCY of this run (neither the target nor the test app), so it was scored anyway: a test that touches a dropped object fails, and one that touches only the survivors covers less than it claims (R583). Runner said: ${drop.slice(0, 1500)}`,
+      message: `al-runner dropped objects from a DEPENDENCY of this run (neither the target nor the test app), so it was scored anyway: a test that touches a dropped object fails, and one that touches only the survivors covers less than it claims (R583). Seen on the one-shot transport; --server cannot see such drops (they print only on the daemon's stderr), so no warning there is not evidence of no drop. Runner said: ${drop.slice(0, 1500)}`,
     });
   }
   const totalMs = Date.now() - sessionStartedMs;
