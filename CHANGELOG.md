@@ -781,6 +781,30 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **al-runner: the resource selector is refused below runtime 14.0, and a run al-runner did not
+  fully compile is never scored** (R583).
+  - **The cause.** From upstream f23b9b5f, al-runner compiles at the app's own `runtime`. The
+    resource selector calls `NavApp.GetResourceAsText`, which needs 14.0 (AL0666). On a
+    runtime-13 app, al-runner drops the selector, but the tests still run against a dependency
+    copy and can PASS (upstream #5573).
+  - **The refusal.** `lethal run` (campaign stages included) and `run --dry-run` now refuse such
+    an app by name before anything is instrumented, and `deploy()` refuses again. The refusal
+    reads: `runtime <X> is below 14.0, which the resource selector needs (NavApp.GetResourceAsText,
+    AL0666); set app.json runtime ≥ 17.0 or alRunner.selectorMode static`.
+  - **The net.** A target-bundle diagnostic turns every row into `error`. That is a target
+    `compilationErrors` entry, or a one-shot target-bundle `EMIT-ZERO`/`EMIT-EXCLUDED`/`PARTIAL-EMIT-DROP`
+    marker. A diagnostic that cannot be attributed does the same, and the refusal names it as one.
+    On the baseline it stops the session (`AlRunnerTargetCompileError`).
+  - **What the net leaves alone.** A test-app entry keeps today's behaviour. A dependency's drop,
+    such as Tests-TestLibraries, is scored anyway and reported as the warning
+    `al-runner-dependency-emit-excluded`. It is a dependency only when a foreign module is named.
+    `--server` cannot see such drops, because they print only on the daemon's stderr. So no
+    warning there is not evidence of no drop.
+  - **What the net closes.** `--server` used to ignore `compilationErrors`. That let the default
+    transport score false survives from a bundle al-runner had refused.
+  - **Runtime 17.0 everywhere.** Every fixture, example and probe app, and LethAL Control
+    1.0.0.22, now declare runtime 17.0. `MIN_CONTROL_VERSION` is 1.0.0.22.
+
 - **al-runner runs a test whose AL name it renames** (R557, upstream al-runner #5572). al-runner names
   a test row by the C# identifier BC's compiler gives the AL method, so `"Stone Quoted"` is
   `Stone_Quoted`, `"Dot.Name"` is `Dota46Name`, `"2Lead"` is `_2Lead`, and even an unquoted
