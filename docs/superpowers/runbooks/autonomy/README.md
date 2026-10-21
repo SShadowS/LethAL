@@ -42,7 +42,12 @@ next free id right before writing).
   result** (R482): keep the log, re-run once, and investigate only if it fails again or fails with
   no overlap. Never raise a timeout to make it pass.
 - **At most two BaseApp-corpus jobs at once.** The container has 24 GB; a third census or diff
-  process gets OOM-killed (R-458 planner, 2026-10-05).
+  process gets OOM-killed (R-458 planner, 2026-10-05). The two-heavy-job limit counts corpus jobs and
+  local runners (itest:alrunner, the Rust runtime); a BC gate against a remote server (bc1/bc2/bc3) is
+  about 100 MB locally and does NOT count: run up to one per bc server in parallel, and back off if
+  `free -g` shows under 10 GB available (2026-10-21). A parallel itest counts as ONE job: count its
+  root `bun packages/runner/itest/` process (the one WITHOUT `--worker` in its argv), not its
+  workers; it runs at `--parallel` 3 or lower (about 4 GB), under the same 10 GB back-off.
 - **Push work early, but WIP pushes carry `[skip ci]`** in the head commit's message. Unplanned
   restarts happen, so push; but CI runs on every branch and every red run emails the owner. Push
   WITHOUT `[skip ci]` only when you want a real CI result (before submitting, or to reproduce a
