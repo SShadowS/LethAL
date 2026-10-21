@@ -60,6 +60,9 @@ hangs on a wedged server stalls that instance's later ticks, so for P1 run two i
 
 ## One P1 run
 
+These commands are the ones run on Cronus284 in 2026-09. **Cronus284 is CentralGauge's since
+2026-10-21 (R589), not LethAL's**: to replay the probe, substitute `Cronus28` (and its config).
+
 ```bash
 S=<scratchpad>/r289; R=1; rm -f $S/stop
 bun scripts/r289-probe/sidecar.ts --container Cronus284 --config fixtures/sandbox-hang/lethal.config.cronus284.json \

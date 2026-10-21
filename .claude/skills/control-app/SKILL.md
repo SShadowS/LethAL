@@ -61,8 +61,10 @@ fixtures target *different* containers, and a gate against the one you forgot wi
 grep -h '"server"' fixtures/*/lethal.config.local.json
 ```
 
-Today that is `Cronus28` (sandbox-app: `itest:bcdev`) and `Cronus284` (sandbox-data:
-`itest:tables`). Publish to each.
+Today that is `Cronus28` (every fixture). Publish to it. The BC on Linux servers `bc1`, `bc2` and
+`bc3` (R589) get the control app from `bun scripts/bc-linux-setup.ts --server <name>`, not from
+this procedure: they have no BcContainerHelper, and the script publishes over the dev endpoint.
+**Cronus284 is CentralGauge's, not LethAL's**: never publish to it.
 
 **Inside the kraken container:** the compile steps above work there (Linux `alc` through
 `LETHAL_ALC_DIR`). The Global publish with sync/upgrade (`Publish-BcContainerApp`) needs
@@ -142,11 +144,11 @@ If the apps were already published globally, unpublish DEPENDENTS FIRST and then
 (`UnPublish-BcContainerApp -unInstall -force`), then republish both through the dev endpoint.
 
 **3. Which apps, and where.** Read the containers from the configs, never from memory. As of
-2026-08-19 (container names updated 2026-10-03 to Cronus28 and Cronus284):
+2026-08-19 (container names updated 2026-10-03; Cronus284 left LethAL 2026-10-21 and is
+CentralGauge's; `bc1`-`bc3` are set up by `scripts/bc-linux-setup.ts`):
 
 | container | apps |
 | --- | --- |
-| Cronus284 | `sandbox-data`, `sandbox-data-tests` |
 | Cronus28 | `sandbox-app`, `sandbox-tests`, `gift-card`, `gift-card-tests`, `sandbox-probes`, `sandbox-hang`, `sandbox-hang-tests` |
 
 `sandbox-probes` and the `sandbox-hang` pair are the two easy to forget, and each fails a DIFFERENT

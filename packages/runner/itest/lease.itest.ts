@@ -145,7 +145,7 @@ import { fileURLToPath } from "node:url";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import type { LethalConfigFile } from "../src/cli";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import { formatFailure } from "../src/format-failure";
 import { HarnessVerifier } from "../src/harness";
 import type { Lease, LeaseTuple } from "../src/lease";
@@ -154,7 +154,13 @@ import type { QuarantineRecord } from "../src/quarantine-store";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { RunMutantTransport } from "../src/run-mutant-transport";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import {
+  assertLaunchMatchesConfig,
+  itestConfigName,
+  itestConfigPath,
+  itestLaunchPath,
+  printItestTarget,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
@@ -169,8 +175,9 @@ if (!process.env.LETHAL_ITEST_BCDEV) {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 
 // Frozen sandbox target app id (fixtures/sandbox-app/app.json "id"), same constant bcdev.itest.ts /
 // stale-publish.itest.ts already use.
@@ -1454,8 +1461,9 @@ async function main(): Promise<void> {
 
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
+  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
   const cfg: ActivationConfig = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
