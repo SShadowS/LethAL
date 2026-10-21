@@ -57,7 +57,7 @@ first live bcdev compile.
 
 Since Layer 5C-A the bcdev backend no longer drives per-mutant tests through the hub. Instead a
 separate BC extension, **`LethAL Control`** (`extensions/lethal-control/`, app id
-`5e7a1c00-1111-4c00-8c00-1e7a1c000701`, runtime 16, ids 91000–91099), owns a single OData action
+`5e7a1c00-1111-4c00-8c00-1e7a1c000701`, runtime 17 (so BC 28+), ids 91000–91099), owns a single OData action
 `LethALControl_RunMutant` that, in one server-side call, **activates a mutant → runs exactly one
 named test method under Codeunit isolation → clears the active mutant** (always, on every terminal
 path, so the container is left unmutated after each call). The instrumented target's
@@ -503,7 +503,8 @@ Both apps declare runtime 17.0 (owner ruling, R-583). Pre-committed per mutant i
 `packages/runner/itest/names-fixture.ts`, and `packages/runner/tests/names-fixture.test.ts` fails
 offline if the table stops describing the fixture.
 
-**Frozen figures** (their home, with the spec, until the owner approves the CLAUDE.md sentence):
+**Frozen figures** (the per-gate pages `docs/gates/alrunner.md` and `docs/gates/bcdev-names.md`
+hold the pinned counts; the leg detail is here, with the spec):
 - `itest:alrunner`, four legs at one batch: A1 one-shot coverage `al-runner`, A2 one-shot `none`, A3
   `--server` `al-runner`, A4 `--server` `none`. Each: killed **36** / survived **0** / no-coverage
   **0**, every kill by its row's test with its row's text, a green baseline (12 of 12), no
@@ -515,7 +516,9 @@ offline if the table stops describing the fixture.
   (coverage `none`) and 6 / 0 / 30 (coverage `al-runner`), M0001-M0030 moving.
 - `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-names`: the same table on Cronus28, fenced, 36 / 0 / 0,
   baseline `bcdev.names.baseline.json`. Kept out of `itest:bcdev`, so its 3 / 12 / 4 cannot move.
-- Both baselines are registered and wait for their one R332 record run (`PENDING_FIRST_RECORD`).
+- Both baselines were recorded per pre-commitment r4 (2026-10-20), committed in b7aa3f1e (R332), on al-runner
+  v2.12.0-main.f06ee78c and on Cronus28; the two files are byte-identical, and
+  `PENDING_FIRST_RECORD` is empty.
 
 A2 costs about 115 one-shot invocations (10-11 min), so the names legs add about 16-18 min to
 `itest:alrunner`.

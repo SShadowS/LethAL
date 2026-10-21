@@ -62,7 +62,7 @@ else is not.
    ```
 4. Run the live integration gates (`/live-gate`). A differing verdict is a block, never
    "close enough" — unit tests are structurally blind to AL that cannot compile and to real BC
-   behaviour. See `CLAUDE.md` for the frozen per-gate numbers.
+   behaviour. See `docs/gates/` (one page per gate) for the frozen per-gate numbers.
 5. Build the binaries: `bun run build:binaries`.
 6. Smoke-test the host binary against a fixture (see [Verifying a build](#verifying-a-build)).
 7. Tag and publish the artifacts — see [Tagging a release](#tagging-a-release) below.
