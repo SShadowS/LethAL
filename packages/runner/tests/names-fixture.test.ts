@@ -6,6 +6,7 @@ import {
   NAMES_TABLE,
   NAMES_TESTS_CODEUNIT_ID,
   NAMES_TEST_DIR,
+  type NamesLegObservations,
   assertNamesRun,
   expectedNamesRows,
 } from "../itest/names-fixture";
@@ -117,14 +118,14 @@ describe("assertNamesRun: the names legs' checker (R557)", () => {
   });
 
   test("r4: every al-runner leg, one-shot and --server, needs exactly one contract line with the name fact matching", () => {
-    const none = { warningCodes: [], contractLines: [] };
-    const good = {
+    const none: NamesLegObservations = { warningCodes: [], contractLines: [] };
+    const good: NamesLegObservations = {
       ...none,
       nameFact: "matches",
       contractLines: ["x test-name-mangling=matches y"],
     };
     for (const transport of ["one-shot", "server"] as const) {
-      const run = (seen: typeof none & { nameFact?: string }) =>
+      const run = (seen: NamesLegObservations) =>
         assertNamesRun(report("exact"), "t", { coverage: "al-runner", transport, seen });
       expect(() => run(none)).toThrow(/test-name-mangling/);
       expect(() => run({ ...good, contractLines: [] })).toThrow(/exactly one contract line/);
