@@ -437,6 +437,57 @@ describe("r6 classifySleep", () => {
     expect(classifySleep({ rows: undefined, wallMs: 30 })).toBe("unmeasurable");
   });
 
+  test("M1: a SESSION trusts the gated build's record: timeout-is-cpu is neither run nor refused on", async () => {
+    const calls: string[] = [];
+    const base = fakeV3();
+    const r = await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => {
+        throw new Error("a session must not start the burner");
+      },
+      spawn: async (argv, o) => {
+        calls.push(argv.join(" "));
+        return base(argv, o);
+      },
+      gateOnlyTrusted: "the gated build's leg C at 5eb544ef",
+    });
+    expect(
+      calls.some((c) => c.includes("--codeunit 50656") || c.includes("--codeunit 50658")),
+    ).toBe(false);
+    const f = r.facts.find((x) => x.fact === "timeout-is-cpu");
+    expect(f?.measured).toMatch(
+      /not re-measured in a session: trusted from the gated build's leg C at 5eb544ef/,
+    );
+    expect(v3ContractRefusals(r)).toEqual([]);
+  });
+
+  test("M1, other direction: without the trust (the gate's leg C) the burns run", async () => {
+    const calls: string[] = [];
+    const base = fakeV3();
+    const r = await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: async (argv, o) => {
+        calls.push(argv.join(" "));
+        return base(argv, o);
+      },
+    });
+    expect(calls.some((c) => c.includes("--codeunit 50656"))).toBe(true);
+    expect(r.facts.find((x) => x.fact === "timeout-is-cpu")?.verdict).toBe("matches");
+  });
+
   test("no taskset leaves timeout-is-cpu unmeasurable, which refuses (a contract fact)", async () => {
     const r = await runV3ContractProbe({
       alRunnerPath: "/fake/alrunner",

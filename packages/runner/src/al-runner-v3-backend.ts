@@ -38,6 +38,7 @@ import {
   v3ContractSummary,
   v3DefectWarnings,
 } from "./al-runner-v3-contract";
+import { assertBcVersionMatchesPackages } from "./al-runner-v3-config";
 import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
 import {
   AlRunnerV3CoverageJoinError,
@@ -486,12 +487,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         details: `${this.cfg.alRunnerPath} reports "${reported.slice(0, 200)}", which is not an al-runner v3 build (R586)`,
       };
     }
+    // T17 and M8: `<deps>`'s System Application must exist and equal bcVersion, here as in the CLI.
+    try {
+      await assertBcVersionMatchesPackages(this.cfg.packagesDir, this.cfg.bcVersion);
+    } catch (err) {
+      return { ok: false, details: err instanceof Error ? err.message : String(err) };
+    }
     // §12: only a gated build runs (the update gate's candidate excepted).
+    let gateRecord: string;
     try {
       const gated = await checkGated(this.cfg.alRunnerPath, reported, {
         ...(this.cfg.candidate === true ? { candidate: true } : {}),
       });
       this.build = { version: reported, binarySha256: gated.binarySha256 };
+      // M1: a session trusts leg C's gate-only facts from this record instead of re-measuring them.
+      gateRecord =
+        this.cfg.candidate === true
+          ? "this update gate's own leg C (a candidate build)"
+          : `the gated build's leg C (.gated lethalCommit ${gated.lethalCommit})`;
     } catch (err) {
       if (err instanceof AlRunnerV3UngatedBuildError) return { ok: false, details: err.message };
       throw err;
@@ -505,6 +518,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       alcPath: this.cfg.alcPath,
       ...(this.cfg.cacheDir !== undefined ? { cacheDir: this.cfg.cacheDir } : {}),
       ...(Bun.which("taskset") !== null ? { tasksetPath: Bun.which("taskset") ?? "" } : {}),
+      gateOnlyTrusted: gateRecord,
       spawn: this.spawn,
     });
     for (const line of v3DefectWarnings(this.contract)) console.warn(line);

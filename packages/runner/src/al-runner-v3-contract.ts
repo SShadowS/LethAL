@@ -387,6 +387,13 @@ export interface V3ProbeEnv {
   readonly tasksetPath?: string;
   /** Test hook: the competing busy loop on core 0 (default: `taskset -c 0 sh -c 'while :; do :; done'`). */
   readonly startBurner?: () => { kill(): void };
+  /**
+   * M1 (review build Opus): `timeout-is-cpu`'s burns are fixed iteration counts calibrated on ONE
+   * machine, so the fact is GATE-ONLY: the update gate's leg C measures it (this field absent), and
+   * its pass is recorded with `.gated`. A session names that record here instead: the burns do not
+   * run, and the fact cannot refuse a session on other hardware.
+   */
+  readonly gateOnlyTrusted?: string;
 }
 
 interface Call {
@@ -693,7 +700,18 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     //   shared: `--codeunit 50658` under `taskset -c 0`, beside `taskset -c 0 sh -c 'while :; do :; done'`
     //           `CpuBurnShort` (BURN_SHORT, 1.5 s of CPU) -> a pass whose row durationMs is over 2000.
     // A wall-time stop would stop the second; only a CPU-time stop gives both.
-    if (env.tasksetPath === undefined) {
+    // M1: GATE-ONLY. The burns are fixed counts for one machine; a session trusts the gated record.
+    if (env.gateOnlyTrusted !== undefined) {
+      facts.push(
+        fact(
+          "timeout-is-cpu",
+          "contract",
+          "matches",
+          "gate-only (M1): measured by the update gate's leg C",
+          `not re-measured in a session: trusted from ${env.gateOnlyTrusted}`,
+        ),
+      );
+    } else if (env.tasksetPath === undefined) {
       facts.push(
         fact("timeout-is-cpu", "contract", "unmeasurable", "taskset available", "no taskset"),
       );

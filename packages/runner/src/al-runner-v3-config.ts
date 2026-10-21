@@ -85,14 +85,16 @@ export function validateAlRunnerV3Config(raw: unknown): AlRunnerV3ConfigSection 
 }
 
 /**
- * T17: when `packagesDir` holds Microsoft's System Application, its version must equal
- * `bcVersion` (`al-runner-v3-bc-version-mismatch`): v3 would otherwise run one BC build's apps
- * while the proof and the report name another.
+ * T17: `packagesDir`'s Microsoft System Application must equal `bcVersion`
+ * (`al-runner-v3-bc-version-mismatch`): v3 would otherwise run one BC build's apps while the proof
+ * and the report name another. M8: a folder where no System Application can be identified is
+ * refused by name (`al-runner-v3-system-application-not-found`), never passed unchecked.
  */
 export async function assertBcVersionMatchesPackages(
   packagesDir: string,
   bcVersion: string,
 ): Promise<void> {
+  let found = 0;
   for (const name of (await readdir(packagesDir)).sort()) {
     if (!name.toLowerCase().endsWith(".app")) continue;
     let id: ReturnType<typeof readAppIdentity>;
@@ -101,23 +103,31 @@ export async function assertBcVersionMatchesPackages(
     } catch {
       continue; // not a manifest package (a Ready-to-Run wrapper or the platform): not this check
     }
-    if (
-      id.publisher === "Microsoft" &&
-      id.name === "System Application" &&
-      id.version !== bcVersion
-    ) {
+    if (id.publisher !== "Microsoft" || id.name !== "System Application") continue;
+    found += 1;
+    if (id.version !== bcVersion) {
       throw new Error(
         `al-runner-v3-bc-version-mismatch: ${join(packagesDir, name)} is System Application ${id.version}, but "alRunnerV3.bcVersion" is ${bcVersion} (R586).`,
       );
     }
   }
+  if (found === 0) {
+    throw new Error(
+      `al-runner-v3-system-application-not-found: no readable Microsoft System Application .app in ${packagesDir}, so "alRunnerV3.bcVersion" ${bcVersion} cannot be checked against it (R586 M8).`,
+    );
+  }
 }
 
-/** T16: the platform refusal, before anything is built. */
+/** T16 and M9: the platform refusal, before anything is built. Only Linux x64 was measured. */
 export function refuseV3Platform(platform: NodeJS.Platform = process.platform): void {
   if (platform === "win32") {
     throw new Error(
       "al-runner-v3-windows-unsupported: --backend al-runner-v3 is not measured on Windows (R586 v1).",
+    );
+  }
+  if (platform !== "linux") {
+    throw new Error(
+      `al-runner-v3-platform-unsupported: ${platform}: --backend al-runner-v3 was measured on Linux only (R586 v1).`,
     );
   }
 }

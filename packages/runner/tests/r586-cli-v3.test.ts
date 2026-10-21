@@ -98,4 +98,24 @@ describe("T17: bcVersion is required and must equal the package folder's System 
       /al-runner-v3-bc-version-mismatch/,
     );
   });
+  test("M8: no System Application found (nothing checked) is refused by name, never a pass", async () => {
+    dir = await mkdtemp(join(tmpdir(), "lethal-r586-bc-"));
+    await writeFile(
+      join(dir, "Microsoft_Base Application.app"),
+      app("Base Application", "1.2.3.4"),
+    );
+    await writeFile(join(dir, "Unreadable.app"), "not a package");
+    await expect(assertBcVersionMatchesPackages(dir, "28.0.46665.47126")).rejects.toThrow(
+      /al-runner-v3-system-application-not-found/,
+    );
+  });
+});
+
+describe("M9: every platform but Linux is refused by name (only Linux was measured)", () => {
+  test("darwin, win32 and freebsd are refused; linux is not", () => {
+    expect(() => refuseV3Platform("darwin")).toThrow(/al-runner-v3-platform-unsupported: darwin/);
+    expect(() => refuseV3Platform("win32")).toThrow(/al-runner-v3-windows-unsupported/);
+    expect(() => refuseV3Platform("freebsd")).toThrow(/al-runner-v3-platform-unsupported/);
+    expect(() => refuseV3Platform("linux")).not.toThrow();
+  });
 });

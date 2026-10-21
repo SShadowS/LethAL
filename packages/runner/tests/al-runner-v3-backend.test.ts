@@ -321,6 +321,36 @@ describe("§3 the compile proof", () => {
   });
 });
 
+describe("M8: status() refuses a package folder with no System Application", () => {
+  const versionOnly: SpawnFn = async () => ({
+    exitCode: 0,
+    stdout: "alrunner 3.0.0-alpha.2 (91253f2d6)\n",
+    stderr: "",
+  });
+  test("none found: refused by name before the pin or the probe", async () => {
+    const l = await layout();
+    const s = await backendOf(l, versionOnly, fakeAlc().io).status();
+    expect(s.ok).toBe(false);
+    expect(s.details).toMatch(/al-runner-v3-system-application-not-found/);
+  });
+  test("other direction: with the System Application at bcVersion, status() goes on to the pin", async () => {
+    const l = await layout();
+    const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+    await writeFile(
+      join(l.deps, "Microsoft_System Application.app"),
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0"?><Package ${NS}><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
+      }),
+    );
+    const bin = join(l.root, "al-runner");
+    await writeFile(bin, "binary");
+    const s = await backendOf(l, versionOnly, fakeAlc().io, { alRunnerPath: bin }).status();
+    expect(s.ok).toBe(false);
+    expect(s.details).not.toMatch(/system-application-not-found/);
+    expect(s.details).toMatch(/al-runner-v3-ungated-build/);
+  });
+});
+
 describe("T3, T4, T23", () => {
   test("T3: two static selectors differ only in the id literal", () => {
     const a = emitStaticSelector({
