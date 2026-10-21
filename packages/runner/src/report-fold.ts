@@ -172,6 +172,7 @@ export interface FoldedReport {
     readonly runId: number;
     readonly carriedMutants: number;
     readonly skippedStranded: number;
+    readonly carryRefused?: string;
   };
   readonly timings: {
     readonly totalMs: number;
@@ -395,6 +396,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     | { selector: "exact" | "substring-with-excludes"; reason?: string }
     | undefined;
   let resumeFromRunId: number | undefined;
+  let resumeCarryRefused: string | undefined;
 
   const outcomes: SessionOutcome[] = [];
   const invalidations: BatchInvalidation[] = [];
@@ -568,6 +570,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "resume-resolved":
         resumeFromRunId = e.fromRunId;
+        resumeCarryRefused = e.carryRefused;
         break;
       case "mutant-scored":
         outcomes.push({
@@ -792,6 +795,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             runId: resumeFromRunId,
             carriedMutants: carriedCount,
             skippedStranded: strandedSkipCount,
+            ...(resumeCarryRefused !== undefined ? { carryRefused: resumeCarryRefused } : {}),
           },
         }
       : {}),

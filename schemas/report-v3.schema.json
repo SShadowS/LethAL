@@ -1018,6 +1018,9 @@
         },
         "skippedStranded": {
           "type": "number"
+        },
+        "carryRefused": {
+          "type": "string"
         }
       }
     },

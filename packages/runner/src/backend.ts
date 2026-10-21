@@ -446,6 +446,15 @@ export interface ExecutionBackend {
   useDiscoveredTests?(tests: readonly TestMethodRef[]): void;
 
   /**
+   * R557, OPTIONAL: the session's test suite (`chooseTestSuite`'s `tests`) and the tests kept in
+   * an `#if` arm discovery could not decide (`preproc-undecided-kept`, R403), given next to
+   * `useDiscoveredTests` and to every worker. al-runner reads them when a test has no row: an
+   * undecided-kept test keeps a per-test `error`, any other session-suite test stops the session
+   * (`AlRunnerTestNameError`), and a `--server` stop lists only missing session-suite tests.
+   */
+  useSessionTests?(suite: readonly TestMethodRef[], undecidedKept: readonly TestMethodRef[]): void;
+
+  /**
    * R517, OPTIONAL: the session's `--mutant-timeout-ms` floor and baseline timeout, given once
    * both are known, before the first run, and to every worker. al-runner `--server` starts its
    * daemon with `--test-timeout ceil(max(floor, baseline) / 1000)` and refuses to start one
