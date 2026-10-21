@@ -5,12 +5,15 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { V3_GATE_LEGS } from "../packages/runner/itest/al-runner-v3-gate";
 import {
   type Outcome,
   type UpdateDeps,
   candidates,
   edgeOnce,
   expectedSha,
+  gatePreparation,
+  readReceipt,
   updateOnce,
 } from "./al-runner-v3-update";
 
@@ -22,7 +25,7 @@ afterEach(async () => {
   if (root !== "") await rm(root, { recursive: true, force: true });
 });
 
-async function setup(): Promise<string> {
+async function setup(commit = GATED_COMMIT): Promise<string> {
   root = await mkdtemp(join(tmpdir(), "lethal-r586-update-"));
   const cur = join(root, "3.0.0-alpha.2-91253f2d6");
   await mkdir(cur, { recursive: true });
@@ -32,12 +35,16 @@ async function setup(): Promise<string> {
     JSON.stringify({
       version: "alrunner 3.0.0-alpha.2 (91253f2d6)",
       binarySha256: sha("alpha2"),
-      lethalCommit: GATED_COMMIT,
+      lethalCommit: commit,
     }),
   );
   await symlink(cur, join(root, "current"));
   return root;
 }
+
+/** Legs that give `o` by gateOutcome over the exact leg set (M3). */
+const legsFor = (o: Outcome): Record<string, string> =>
+  Object.fromEntries(V3_GATE_LEGS.map((l, i) => [l, i === 0 ? o : "pass"]));
 
 function fake(o: {
   outcome?: Outcome;
@@ -46,6 +53,9 @@ function fake(o: {
   badSums?: boolean;
   inUse?: boolean;
   tags?: string[];
+  legs?: Record<string, string>;
+  receiptCommit?: string;
+  receiptSha?: string;
 }) {
   const seen = { gates: [] as string[], extracts: 0, logs: [] as string[] };
   const deps: UpdateDeps = {
@@ -73,9 +83,11 @@ function fake(o: {
         env.LETHAL_V3_GATE_RECEIPT ?? "",
         JSON.stringify({
           nonce: o.badNonce === true ? "stale" : env.LETHAL_V3_GATE_NONCE,
-          binarySha256: o.badSha === true ? sha("other") : sha("alpha3"),
+          binarySha256:
+            o.receiptSha ?? (o.badSha === true ? sha("other") : sha("alpha3")),
+          lethalCommit: o.receiptCommit ?? commit,
           outcome: o.outcome,
-          legs: {},
+          legs: o.legs ?? legsFor(o.outcome),
         }),
       );
     },
@@ -89,6 +101,7 @@ function fake(o: {
 }
 
 const current = async () => readlink(join(root, "current"));
+const failedAt = (tag: string, commit = GATED_COMMIT) => join(root, "failed", `${tag}@${commit}`);
 
 describe("T19: the v3 update gate", () => {
   test("candidates: alphas above the gated one, oldest first, never edge", () => {
@@ -136,7 +149,7 @@ describe("T19: the v3 update gate", () => {
     const { deps, seen } = fake({});
     for (let i = 0; i < 3; i++) await updateOnce(deps);
     expect(seen.logs.some((l) => l.includes("3 infra-fails in a row"))).toBe(true);
-    expect(existsSync(join(root, "failed", "v3.0.0-alpha.3"))).toBe(false);
+    expect(existsSync(failedAt("v3.0.0-alpha.3"))).toBe(false);
   });
 
   test("a checksum mismatch is infra-fail and the tarball is never extracted", async () => {
@@ -147,14 +160,23 @@ describe("T19: the v3 update gate", () => {
     expect(seen.gates).toEqual([]);
   });
 
-  test("gate-fail goes to failed/ for good: the next run does not gate it again", async () => {
+  test("gate-fail goes to failed/<tag>@<commit>: the next run at that commit does not gate it again", async () => {
     await setup();
     const a = fake({ outcome: "gate-fail" });
     expect(await updateOnce(a.deps)).toEqual(["gate-fail"]);
-    expect(existsSync(join(root, "failed", "v3.0.0-alpha.3", "al-runner"))).toBe(true);
+    expect(existsSync(join(failedAt("v3.0.0-alpha.3"), "al-runner"))).toBe(true);
     const b = fake({ outcome: "pass" });
     expect(await updateOnce(b.deps)).toEqual(["gate-fail"]);
     expect(b.seen.gates).toEqual([]);
+  });
+
+  test("RC-2 (I-2): after a LethAL fix (a new .gated commit) the same build is gated again, and can be held", async () => {
+    await setup("fedcba7654321");
+    await mkdir(failedAt("v3.0.0-alpha.3", GATED_COMMIT), { recursive: true });
+    const { deps, seen } = fake({ outcome: "held" });
+    expect(await updateOnce(deps)).toEqual(["held"]);
+    expect(seen.gates).toEqual(["fedcba7654321"]);
+    expect(existsSync(join(root, "held", "v3.0.0-alpha.3"))).toBe(true);
   });
 
   test("held is kept under held/, never blacklisted, and current does not move", async () => {
@@ -162,33 +184,95 @@ describe("T19: the v3 update gate", () => {
     const { deps, seen } = fake({ outcome: "held" });
     expect(await updateOnce(deps)).toEqual(["held"]);
     expect(existsSync(join(root, "held", "v3.0.0-alpha.3"))).toBe(true);
-    expect(existsSync(join(root, "failed", "v3.0.0-alpha.3"))).toBe(false);
+    expect(existsSync(failedAt("v3.0.0-alpha.3"))).toBe(false);
     expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
     expect(seen.logs.some((l) => l.includes("HELD"))).toBe(true);
   });
 
   test("--regate gates the CURRENT build at the new commit; on pass .gated takes that commit", async () => {
     await setup();
-    const { deps, seen } = fake({ outcome: "pass" });
+    const { deps, seen } = fake({ outcome: "pass", receiptSha: sha("alpha2") });
     deps.versionOf = async () => "alrunner 3.0.0-alpha.2 (91253f2d6)";
-    const { runGate } = deps;
-    deps.runGate = async (c, env) => {
-      await writeFile(
-        env.LETHAL_V3_GATE_RECEIPT ?? "",
-        JSON.stringify({
-          nonce: env.LETHAL_V3_GATE_NONCE,
-          binarySha256: sha("alpha2"),
-          outcome: "pass",
-          legs: {},
-        }),
-      );
-      seen.gates.push(c);
-      void runGate;
-    };
     expect(await updateOnce(deps, { regateAt: "1234567abcdef" })).toEqual(["pass"]);
     expect(seen.gates).toEqual(["1234567abcdef"]);
     const g = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
     expect(g.lethalCommit).toBe("1234567abcdef");
+  });
+});
+
+describe("RC-3 (M3): the receipt must prove what it claims", () => {
+  const write = async (r: object) => {
+    const p = join(root, "receipt.json");
+    await writeFile(p, JSON.stringify(r));
+    return p;
+  };
+  const base = (o: object = {}) => ({
+    nonce: "n",
+    binarySha256: "s",
+    lethalCommit: GATED_COMMIT,
+    outcome: "pass",
+    legs: legsFor("pass"),
+    ...o,
+  });
+  test("every leg passed at the requested commit: pass", async () => {
+    await setup();
+    expect((await readReceipt(await write(base()), "n", "s", GATED_COMMIT)).outcome).toBe("pass");
+  });
+  test("outcome pass with a leg missing, or skipped, is infra-fail", async () => {
+    await setup();
+    const { T: _t, ...missing } = legsFor("pass");
+    expect(
+      (await readReceipt(await write(base({ legs: missing })), "n", "s", GATED_COMMIT)).outcome,
+    ).toBe("infra-fail");
+    expect(
+      (
+        await readReceipt(
+          await write(base({ legs: { ...legsFor("pass"), X: "skipped" } })),
+          "n",
+          "s",
+          GATED_COMMIT,
+        )
+      ).outcome,
+    ).toBe("infra-fail");
+    expect(
+      (await readReceipt(await write(base({ legs: {} })), "n", "s", GATED_COMMIT)).outcome,
+    ).toBe("infra-fail");
+  });
+  test("outcome pass with a gate-fail leg is infra-fail (the legs and the outcome disagree)", async () => {
+    await setup();
+    const legs = { ...legsFor("pass"), S1: "gate-fail" };
+    const r = await readReceipt(await write(base({ legs })), "n", "s", GATED_COMMIT);
+    expect(r.outcome).toBe("infra-fail");
+    expect(r.why).toMatch(/give gate-fail/);
+  });
+  test("a receipt of another LethAL commit is infra-fail", async () => {
+    await setup();
+    const r = await readReceipt(
+      await write(base({ lethalCommit: "0000000aaaaaaa" })),
+      "n",
+      "s",
+      GATED_COMMIT,
+    );
+    expect(r.outcome).toBe("infra-fail");
+    expect(r.why).toMatch(/not the requested/);
+  });
+});
+
+describe("M4: the gate worktree is prepared, or refused by name", () => {
+  test("bun install and the native parser build always run", () => {
+    const p = gatePreparation({ worktree: "/w", alpackagesPresent: true, symbolTar: undefined });
+    expect("steps" in p && p.steps).toEqual([
+      ["bun", "install"],
+      ["bun", "scripts/build-native-parser.ts"],
+    ]);
+  });
+  test("missing fixture .alpackages are extracted from the symbol tar", () => {
+    const p = gatePreparation({ worktree: "/w", alpackagesPresent: false, symbolTar: "/t.tar" });
+    expect("steps" in p && p.steps.at(-1)).toEqual(["tar", "-xf", "/t.tar", "-C", "/w"]);
+  });
+  test("missing .alpackages and no tar: refused by name", () => {
+    const p = gatePreparation({ worktree: "/w", alpackagesPresent: false, symbolTar: undefined });
+    expect("refused" in p && p.refused).toMatch(/al-runner-v3-gate-worktree-unprepared/);
   });
 });
 
@@ -243,7 +327,7 @@ describe("the daily edge path (edgeOnce)", () => {
     await rm(join(root, "edge.last-seen"));
     expect(await edgeOnce(edge({ outcome: "held" }, { commit: "d00d00d00" }).deps)).toBe("held");
     expect(existsSync(join(root, "held", "edge-d00d00d00"))).toBe(true);
-    expect(existsSync(join(root, "failed", "edge-d00d00d00"))).toBe(false);
+    expect(existsSync(failedAt("edge-d00d00d00"))).toBe(false);
     expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
   });
 

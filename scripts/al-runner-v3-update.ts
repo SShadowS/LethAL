@@ -38,10 +38,14 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  V3_GATE_LEGS,
+  type V3LegOutcome,
+  gateOutcome,
+} from "../packages/runner/itest/al-runner-v3-gate";
 import { type GatedBuild, parseGated, sha256OfFile } from "../packages/runner/src/al-runner-v3-pin";
 
-export const ROOT = "/work/tools/al-runner-v3";
-export const REPO = "aldevtools/BusinessCentral.AL.Runner";
+export const ROOT = "/work/tools/al-runner-v3";export const REPO = "aldevtools/BusinessCentral.AL.Runner";
 export const GATE_WORKTREE = "/work/lethal-wt/al-runner-v3-gate";
 export const LOG = "/coord/handoff/R-586/v3-updates.log";
 
@@ -90,11 +94,16 @@ export function expectedSha(sums: string, file: string): string | undefined {
   return undefined;
 }
 
-/** Reads the receipt: valid only with this nonce and this binary's sha256; else infra-fail. */
+/**
+ * Reads the receipt: valid only with this nonce, this binary's sha256 and the LethAL commit the gate
+ * was asked to run at (M3); and its `legs` must give its `outcome` by `gateOutcome` over the exact
+ * leg set (a `pass` needs EVERY leg passed). Anything else is infra-fail, never a pass.
+ */
 export async function readReceipt(
   path: string,
   nonce: string,
   sha: string,
+  commit: string,
 ): Promise<{ outcome: Outcome; why: string }> {
   let raw: unknown;
   try {
@@ -102,19 +111,69 @@ export async function readReceipt(
   } catch {
     return { outcome: "infra-fail", why: "no receipt" };
   }
-  const r = raw as { nonce?: unknown; binarySha256?: unknown; outcome?: unknown; legs?: unknown };
+  const r = raw as {
+    nonce?: unknown;
+    binarySha256?: unknown;
+    lethalCommit?: unknown;
+    outcome?: unknown;
+    legs?: unknown;
+  };
   if (r.nonce !== nonce) return { outcome: "infra-fail", why: "a receipt of another run (nonce)" };
   if (r.binarySha256 !== sha)
     return { outcome: "infra-fail", why: "a receipt for another binary (sha256)" };
+  const at = typeof r.lethalCommit === "string" ? r.lethalCommit : "";
+  if (at === "" || !(at.startsWith(commit) || commit.startsWith(at)))
+    return {
+      outcome: "infra-fail",
+      why: `a receipt of LethAL ${at || "(none)"}, not the requested ${commit}`,
+    };
   if (
-    r.outcome === "pass" ||
-    r.outcome === "held" ||
-    r.outcome === "gate-fail" ||
-    r.outcome === "infra-fail"
+    r.outcome !== "pass" &&
+    r.outcome !== "held" &&
+    r.outcome !== "gate-fail" &&
+    r.outcome !== "infra-fail"
   ) {
-    return { outcome: r.outcome, why: `receipt legs ${JSON.stringify(r.legs)}` };
+    return { outcome: "infra-fail", why: `a receipt with outcome ${JSON.stringify(r.outcome)}` };
   }
-  return { outcome: "infra-fail", why: `a receipt with outcome ${JSON.stringify(r.outcome)}` };
+  const legs = (typeof r.legs === "object" && r.legs !== null ? r.legs : {}) as Record<
+    string,
+    V3LegOutcome
+  >;
+  const byLegs = gateOutcome(legs);
+  if (byLegs !== r.outcome)
+    return {
+      outcome: "infra-fail",
+      why: `the receipt says ${r.outcome}, but its legs ${JSON.stringify(legs)} give ${byLegs} (every leg of ${V3_GATE_LEGS.join(",")} must be present)`,
+    };
+  return { outcome: r.outcome, why: `receipt legs ${JSON.stringify(legs)}` };
+}
+
+/** Fixture symbol folders the gate's legs compile against (gitignored, from the kraken tar). */
+export const GATE_ALPACKAGES = [
+  "fixtures/sandbox-tests/.alpackages",
+  "fixtures/sandbox-data-tests/.alpackages",
+] as const;
+
+/**
+ * M4: what the gate worktree needs before any leg, or why it cannot be prepared. `bun install` and
+ * the native parser build always run (a moved commit can need either). The fixture symbol folders
+ * come from the main checkout's `fixture-symbols.tar` when absent; with neither, the gate is refused
+ * by name (`al-runner-v3-gate-worktree-unprepared`), an infra-fail before any leg.
+ */
+export function gatePreparation(s: {
+  readonly worktree: string;
+  readonly alpackagesPresent: boolean;
+  readonly symbolTar: string | undefined;
+}): { readonly steps: readonly string[][] } | { readonly refused: string } {
+  const steps: string[][] = [["bun", "install"], ["bun", "scripts/build-native-parser.ts"]];
+  if (!s.alpackagesPresent) {
+    if (s.symbolTar === undefined)
+      return {
+        refused: `al-runner-v3-gate-worktree-unprepared: ${s.worktree} has no fixture .alpackages (${GATE_ALPACKAGES.join(", ")}) and no fixture-symbols.tar was found to extract them from`,
+      };
+    steps.push(["tar", "-xf", s.symbolTar, "-C", s.worktree]);
+  }
+  return { steps };
 }
 
 async function readCurrentGated(root: string): Promise<GatedBuild & { readonly dir: string }> {
@@ -144,10 +203,14 @@ export async function gateOne(
     let binary: string;
     let tarballSha: string | undefined;
     const name = tag;
+    const commit = opts.regateAt ?? gated.lethalCommit;
+    // I-2: a gate-fail is final for THIS build at THIS LethAL commit only; a LethAL fix (a new
+    // `.gated` commit after a re-pre-commitment) may gate the same build again.
+    const failedDir = join(root, "failed", `${name}@${commit}`);
     if (opts.regateAt !== undefined) {
       binary = join(await readlink(join(root, "current")), "al-runner");
     } else {
-      if (existsSync(join(root, "failed", name))) return "gate-fail";
+      if (existsSync(failedDir)) return "gate-fail";
       const dl = join(work, "dl");
       await mkdir(dl);
       let got: { tarball: string; sums: string };
@@ -175,7 +238,6 @@ export async function gateOne(
     const nonce = randomUUID();
     const receipt = join(work, "receipt.json");
     await rm(receipt, { force: true });
-    const commit = opts.regateAt ?? gated.lethalCommit;
     try {
       await deps.runGate(commit, {
         LETHAL_ITEST_ALRUNNER_V3: "1",
@@ -188,14 +250,14 @@ export async function gateOne(
     } catch {
       // A failing gate still writes its receipt; the receipt decides.
     }
-    const { outcome, why } = await readReceipt(receipt, nonce, sha);
+    const { outcome, why } = await readReceipt(receipt, nonce, sha, commit);
     await deps.log(`${deps.now()} ${tag} (${version}, ${sha}) at ${commit}: ${outcome}: ${why}`);
     if (outcome === "infra-fail") return infra(deps, name);
     await infraCount(root, name, false);
     if (outcome === "gate-fail") {
       if (opts.regateAt === undefined) {
-        await mkdir(join(root, "failed", name), { recursive: true });
-        await cp(binary, join(root, "failed", name, "al-runner"));
+        await mkdir(failedDir, { recursive: true });
+        await cp(binary, join(failedDir, "al-runner"));
       }
       return "gate-fail";
     }
@@ -401,6 +463,16 @@ export function realDeps(root = ROOT): UpdateDeps {
           commit,
         ]);
       await run(["git", "-C", GATE_WORKTREE, "checkout", "--detach", commit]);
+      // M4: prepare the worktree, or refuse by name before any leg (a throw here is infra-fail:
+      // no receipt is written).
+      const tar = ["/work/lethal/.kraken-local/fixture-symbols.tar"].find((p) => existsSync(p));
+      const prep = gatePreparation({
+        worktree: GATE_WORKTREE,
+        alpackagesPresent: GATE_ALPACKAGES.every((d) => existsSync(join(GATE_WORKTREE, d))),
+        symbolTar: tar,
+      });
+      if ("refused" in prep) throw new Error(prep.refused);
+      for (const step of prep.steps) await run(step, {}, GATE_WORKTREE);
       await run(
         ["bun", "run", "itest:alrunner-v3"],
         {
