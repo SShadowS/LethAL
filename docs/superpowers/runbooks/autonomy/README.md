@@ -46,7 +46,10 @@ next free id right before writing).
 - **Push work early, but WIP pushes carry `[skip ci]`** in the head commit's message. Unplanned
   restarts happen, so push; but CI runs on every branch and every red run emails the owner. Push
   WITHOUT `[skip ci]` only when you want a real CI result (before submitting, or to reproduce a
-  Windows-only failure); the submitted head must have a CI run.
+  Windows-only failure); the submitted head must have a CI run. A clean MERGE commit as the
+  submit head may start no CI run at all when the same push also carries `[skip ci]` commits
+  (R-577, 1ab9cbdc): after pushing, check `gh run list --commit <sha>`; if there is no run, push an
+  empty "CI run for the submit" commit on top.
 - **Measure a corpus once per master commit, and reuse it (owner, 2026-10-08).** A full
   BC.History dump of master costs hours, and plan rounds repeated it. Keep master's dump in
   `/coord/cache/dumps/<master sha>/<set>/` (sets: `bch`, `cdo`, `dc`, `do`, `fixtures`), with a
@@ -79,6 +82,12 @@ next free id right before writing).
     written to `/coord/handoff/<task>/` as it runs.
   - **Wait for at most one OTHER heavy job, not zero.** A driver that waits for an empty container
     can starve for hours. The limit stays two heavy jobs container-wide.
+  - **Check before any status line (owner, 2026-10-21).** Before you report the state of background
+    work (a gate, a driver, a queue), read its log and the running processes with their working
+    directory. Never repeat the last state you remember: R-577 reported a confirm as "still waiting for
+    a slot" an hour after it had PASSED, because the confirm and the slice queue ran as one background
+    job, so the confirm's end raised no notification. Run each phase as its own background job (or
+    watch the log's phase lines), so every phase's end reaches you.
 
 ## coord
 

@@ -121,6 +121,11 @@ export interface MutantRow {
    * recorded before the field existed and on every non-kill verdict.
    */
   readonly killPosition?: number;
+  /** R577 — see `MutantOutcome.killReproduced` (report.ts). Absent on every non-kill, on a kill
+   *  scored with the rule off, and on a row recorded before the column existed. */
+  readonly killReproduced?: true;
+  /** R577 — see `MutantOutcome.reproducedFailure` (report.ts). */
+  readonly reproducedFailure?: string;
   readonly durationMs: number;
   /**
    * Which batch produced this verdict. Added by R47 so `invalidateBatch` can reach exactly the rows
@@ -190,6 +195,10 @@ export interface MutantVerdictRow {
   readonly killingTestFailure?: string;
   /** R206 — see `MutantRow.killPosition`. Threaded through for the same reason. */
   readonly killPosition?: number;
+  /** R577 — see `MutantRow.killReproduced`. Read by `--resume` (B1) as well as carried. */
+  readonly killReproduced?: true;
+  /** R577 — see `MutantRow.reproducedFailure`. Threaded through for the same reason. */
+  readonly reproducedFailure?: string;
   readonly durationMs: number;
   /**
    * R69 Phase 2 Task 5 — see `RunnerKind`. Threaded through so `--resume` can carry it: without
@@ -436,6 +445,8 @@ CREATE TABLE IF NOT EXISTS mutants (
   failure_note TEXT,
   killing_test_failure TEXT,
   kill_position INTEGER,
+  kill_reproduced INTEGER,
+  reproduced_failure TEXT,
   duration_ms INTEGER NOT NULL,
   batch_index INTEGER,
   runner TEXT,
@@ -659,6 +670,15 @@ export class ResultsStore {
     // DROP rather than default: a kill without a position predates the field, and says so.
     if (!cols.some((c) => c.name === "kill_position")) {
       this.db.exec("ALTER TABLE mutants ADD COLUMN kill_position INTEGER");
+    }
+    // R577: `kill_reproduced` (1 on a reproduced kill) and `reproduced_failure`. Same hazard (the
+    // INSERT names them). Pre-R577 rows keep NULL: a kill recorded before the rule, which `--resume`
+    // refuses to carry on a backend with the rule on (resume.ts).
+    if (!cols.some((c) => c.name === "kill_reproduced")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN kill_reproduced INTEGER");
+    }
+    if (!cols.some((c) => c.name === "reproduced_failure")) {
+      this.db.exec("ALTER TABLE mutants ADD COLUMN reproduced_failure TEXT");
     }
     if (!trCols.some((c) => c.name === "session_id")) {
       this.db.exec("ALTER TABLE test_results ADD COLUMN session_id INTEGER");
@@ -1183,8 +1203,8 @@ export class ResultsStore {
         `SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major,
            ${EFFECTIVE_VERDICT_SQL} AS verdict, m.verdict AS stored_verdict,
            (SELECT l.note FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index) AS lost_note,
-           killing_test, failure_note, killing_test_failure, kill_position, duration_ms, runner,
-           covering_tests, coverage_attribution, unplaceable, identity_ordinal, file, member_hash
+           killing_test, failure_note, killing_test_failure, kill_position, kill_reproduced,
+           reproduced_failure, duration_ms, runner, covering_tests, coverage_attribution, unplaceable, identity_ordinal, file, member_hash
          FROM mutants m WHERE m.run_id = ?`,
       )
       .all(runId) as Array<{
@@ -1202,6 +1222,8 @@ export class ResultsStore {
       failure_note: string | null;
       killing_test_failure: string | null;
       kill_position: number | null;
+      kill_reproduced: number | null;
+      reproduced_failure: string | null;
       duration_ms: number;
       runner: string | null;
       covering_tests: string | null;
@@ -1219,6 +1241,8 @@ export class ResultsStore {
               killing_test: null,
               killing_test_failure: null,
               kill_position: null,
+              kill_reproduced: null,
+              reproduced_failure: null,
             };
       return {
         identityOrdinal: r.identity_ordinal ?? 0,
@@ -1242,6 +1266,8 @@ export class ResultsStore {
         ...(r.failure_note !== null ? { failureNote: r.failure_note } : {}),
         ...(r.killing_test_failure !== null ? { killingTestFailure: r.killing_test_failure } : {}),
         ...(r.kill_position !== null ? { killPosition: r.kill_position } : {}),
+        ...(r.kill_reproduced === 1 ? { killReproduced: true as const } : {}),
+        ...(r.reproduced_failure !== null ? { reproducedFailure: r.reproduced_failure } : {}),
         ...(r.runner !== null
           ? {
               runner: this.parseRunnerKind(r.runner, {
@@ -1793,9 +1819,10 @@ export class ResultsStore {
       .query(
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name,
          operator_name, operator_major, file, line, verdict, killing_test, failure_note,
-         killing_test_failure, kill_position, duration_ms, batch_index, runner,
-         covering_tests, coverage_attribution, unplaceable, identity_ordinal, carried, member_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         killing_test_failure, kill_position, kill_reproduced, reproduced_failure, duration_ms,
+         batch_index, runner, covering_tests, coverage_attribution, unplaceable, identity_ordinal,
+         carried, member_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -1812,6 +1839,8 @@ export class ResultsStore {
         row.failureNote ?? null,
         row.killingTestFailure ?? null,
         row.killPosition ?? null,
+        row.killReproduced === true ? 1 : null,
+        row.reproducedFailure ?? null,
         row.durationMs,
         row.batchIndex,
         row.runner ?? null,
@@ -1858,7 +1887,8 @@ export class ResultsStore {
         // this row is no longer a kill, so a leftover account of "why the test went red" would
         // describe a verdict that has just been withdrawn.
         `UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL,
-           killing_test_failure = NULL, kill_position = NULL
+           killing_test_failure = NULL, kill_position = NULL, kill_reproduced = NULL,
+           reproduced_failure = NULL
          WHERE run_id = ? AND batch_index = ? AND verdict NOT IN ${INVALIDATION_KEEPS_SQL}`,
       )
       .run(note, runId, batchIndex);

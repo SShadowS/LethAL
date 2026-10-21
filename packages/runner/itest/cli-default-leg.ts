@@ -50,14 +50,21 @@ export interface SpawnRecord {
   readonly serverArgv: string[][];
   /** Everything every daemon wrote to stderr, for the platform-app directory it names, if any. */
   serverStderr: string;
+  /** R577: the `runTests` requests written to every daemon: one per whole-suite run. */
+  serverRunTests: number;
 }
 
-/** Wraps the real spawns so the leg sees every argv and the daemons' stderr. */
+/** Wraps the real spawns so the leg sees every argv, the daemons' stderr and their suite runs. */
 export function recordSpawns(
   oneShot: SpawnFn,
   server: ServerSpawnFn,
 ): { record: SpawnRecord; spawn: SpawnFn; serverSpawn: ServerSpawnFn } {
-  const record: SpawnRecord = { oneShotArgv: [], serverArgv: [], serverStderr: "" };
+  const record: SpawnRecord = {
+    oneShotArgv: [],
+    serverArgv: [],
+    serverStderr: "",
+    serverRunTests: 0,
+  };
   const spawn: SpawnFn = (argv, opts) => {
     record.oneShotArgv.push([...argv]);
     return oneShot(argv, opts);
@@ -74,7 +81,11 @@ export function recordSpawns(
         }
       },
     };
-    const teed: ServerProcessHandle = { ...handle, stderr };
+    const write = (line: string): void => {
+      if (line.includes('"command":"runTests"')) record.serverRunTests += 1;
+      handle.write(line);
+    };
+    const teed: ServerProcessHandle = { ...handle, stderr, write };
     return teed;
   };
   return { record, spawn, serverSpawn };

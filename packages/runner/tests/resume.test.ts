@@ -380,6 +380,58 @@ describe("buildResumeIndex — timeout-killed across the stop flag (R53)", () =>
   });
 });
 
+/**
+ * R577 (B1). A kill recorded before the reproduction rule (or with it off) may be a flaky test's
+ * chance failure. A session whose backend has the rule on must re-run it, not carry it, under both
+ * carry rules; one that does not keeps carrying it. Directional, like R53's flag above.
+ */
+describe("buildResumeIndex — a kill without killReproduced under the reproduction rule (R577)", () => {
+  const preRule = [
+    row({ verdict: "killed", astHash: "k", memberHash: "mh-k", killingTest: "T" }),
+    row({ verdict: "timeout-killed", astHash: "t", memberHash: "mh-t", killingTest: "T" }),
+  ];
+  const marked = [
+    row({
+      verdict: "killed",
+      astHash: "k",
+      memberHash: "mh-k",
+      killingTest: "T",
+      killReproduced: true,
+      reproducedFailure: "again",
+    }),
+    row({
+      verdict: "timeout-killed",
+      astHash: "t",
+      memberHash: "mh-t",
+      killingTest: "T",
+      killReproduced: true,
+    }),
+  ];
+  const survivor = row({ verdict: "survived", astHash: "s", memberHash: "mh-s" });
+
+  test("with the rule on, neither pre-rule kill carries, under rule 1 or rule 2, and both are counted", () => {
+    const index = buildResumeIndex([...preRule, survivor], true, true);
+    expect([...index.carryable.values()].map((c) => c.verdict)).toEqual(["survived"]);
+    expect([...index.carryableBySite.values()].map((c) => c.verdict)).toEqual(["survived"]);
+    // M2: counted as unreproduced kills, never as prior 'error' verdicts.
+    expect(index.unreproducedKills).toBe(2);
+    expect(index.nonCarryableRows).toBe(0);
+  });
+
+  test("with the rule on, a marked kill carries under both rules, with its marker and text", () => {
+    const index = buildResumeIndex(marked, true, true);
+    expect(index.carryable.size).toBe(2);
+    expect(index.carryableBySite.size).toBe(2);
+    const killed = [...index.carryable.values()].find((c) => c.verdict === "killed");
+    expect(killed).toMatchObject({ killReproduced: true, reproducedFailure: "again" });
+  });
+
+  test("with the rule off (the default), a pre-rule kill still carries", () => {
+    expect(buildResumeIndex(preRule, true).carryable.size).toBe(2);
+    expect(buildResumeIndex(preRule, true, false).carryableBySite.size).toBe(2);
+  });
+});
+
 describe("buildResumeIndex (R47)", () => {
   test("carries a scored verdict with its killing test and duration", () => {
     const index = buildResumeIndex([
@@ -1244,6 +1296,44 @@ describe("runSession --resume (R47)", () => {
     expect(again.deploys).toBe(0);
     expect(report.artifacts ?? []).toEqual([]);
     expect(report.quarantined).toBeUndefined();
+  });
+
+  test("R577 (M2): a resume with the reproduction rule re-runs a pre-rule kill and says so in its own words, not as a prior 'error' verdict", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    // Rule off: one kill is scored (no killReproduced), then the next mutant strands the run.
+    const first = await runSession({
+      backend: new CountingBackend("fail", 1),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(first.quarantined).toBeDefined();
+    expect(first.counts.killed).toBe(1);
+    class ReproCounting extends CountingBackend {
+      readonly killsMustReproduce = true;
+    }
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend: new ReproCounting("fail"),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.resumedFrom?.carriedMutants).toBe(0);
+    const reusing = events.find((e) => e.type === "warning" && e.code === "resume-reusing-run");
+    const message = reusing?.type === "warning" ? reusing.message : "";
+    expect(message).toContain(
+      "1 prior kill(s) recorded before the kill-reproduction rule (no killReproduced) will be re-executed",
+    );
+    // The stranded row is the only prior 'error' verdict.
+    expect(message).toContain(" 1 prior 'error' verdict(s) will be re-executed.");
+    // Re-run under the rule, so the kill now carries the marker.
+    const rescored = report.mutants.filter((m) => m.verdict === "killed");
+    expect(rescored.length).toBeGreaterThan(0);
+    expect(rescored.every((m) => m.killReproduced === true)).toBe(true);
   });
 
   test("recovers the verdicts an aborted run had already scored, and re-runs only the rest", async () => {
@@ -4476,7 +4566,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(16);
+    expect(out.explainSchemaVersion).toBe(17);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {
@@ -5322,6 +5412,68 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
       expect(w.sent.length).toBeGreaterThan(0);
       expect(w.floorCalls).toEqual([pair]);
     }
+  });
+});
+
+/**
+ * R557 x R577: two remove-only filters on --resume, each of which ALONE refuses a kill. R557's
+ * run-level trust (`runs.al_runner_names`) empties the carry of an untrusted al-runner run; R577's
+ * row-level rule refuses an unmarked kill from a trusted one. The control carries.
+ */
+describe("R557 x R577: --resume on al-runner, each remove-only rule alone", () => {
+  /** The al-runner shape (non-authoritative, test app proven from source) that kills. */
+  class AlRunnerKills extends CountingBackend {
+    readonly killsMustReproduce: boolean;
+    /** R392: read only when non-authoritative. */
+    readonly measurePredefinedSymbols = measuredV2_12;
+    constructor(rule: boolean, abortAfter?: number) {
+      super("fail", abortAfter);
+      this.killsMustReproduce = rule;
+      (this as { fetchPublishedAppPackage?: unknown }).fetchPublishedAppPackage = undefined;
+    }
+    override capabilities(): BackendCapabilities {
+      return { ...super.capabilities(), authoritative: false };
+    }
+  }
+  /** Run 1 kills its first mutant (marked when `marked`), then strands; run 2 resumes it. */
+  async function resume(o: { trusted: boolean; marked: boolean }) {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    // The rule makes the first kill cost two mutated runs (the kill and its reproduction).
+    const first = await runSession({
+      backend: new AlRunnerKills(o.marked, o.marked ? 2 : 1),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(first.quarantined).toBeDefined();
+    const prior = first.mutants.filter((m) => m.verdict === "killed");
+    expect(prior).toHaveLength(1);
+    expect(prior[0]?.killReproduced === true).toBe(o.marked);
+    const runId = lastRun(store);
+    if (!o.trusted) store.db.run("UPDATE runs SET al_runner_names = NULL WHERE id = ?", [runId]);
+    const report = await runSession({
+      backend: new AlRunnerKills(true),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+      retryStranded: true,
+    });
+    expect(report.resumedFrom?.runId).toBe(runId);
+    return report.mutants.filter((m) => m.carried === true && m.verdict === "killed").length;
+  }
+
+  test("(a) an UNTRUSTED run's MARKED kill is not carried (R557 alone)", async () => {
+    expect(await resume({ trusted: false, marked: true })).toBe(0);
+  });
+
+  test("(b) a TRUSTED run's UNMARKED kill is not carried (R577 alone)", async () => {
+    expect(await resume({ trusted: true, marked: false })).toBe(0);
+  });
+
+  test("(c) control: a TRUSTED run's MARKED kill is carried", async () => {
+    expect(await resume({ trusted: true, marked: true })).toBe(1);
   });
 });
 

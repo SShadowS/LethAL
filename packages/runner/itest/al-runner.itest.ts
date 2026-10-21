@@ -111,6 +111,7 @@ import {
   assertNoReachAttestation,
   printReachSummary,
 } from "./reach-evidence";
+import { killReproductionFailures, unmeasuredReproductionFigures } from "./kill-reproduction";
 import { SYMBOL_SETS, assertSymbolBuild, printSymbolTable, symbolSetLabel } from "./symbol-fixture";
 import {
   WRAPPED_PROJECT_DIR,
@@ -179,6 +180,8 @@ function symbolBaselinePath(symbols: readonly string[]): string {
 }
 
 interface GateFixture {
+  /** R577: the fixture half of the leg's name in `REPRODUCTION_EXPECTED`. */
+  readonly name: string;
   readonly projectDir: string;
   readonly testDir: string;
   readonly selectorIds: typeof SELECTOR_IDS;
@@ -190,6 +193,7 @@ interface GateFixture {
 }
 
 const SANDBOX: GateFixture = {
+  name: "sandbox",
   projectDir: PROJECT_DIR,
   testDir: TEST_DIR,
   selectorIds: SELECTOR_IDS,
@@ -383,6 +387,14 @@ async function runOnce(
       ...reportTestSelectorFailures(report, !serverMode),
     ];
     assert.deepEqual(selectorFailures, [], selectorFailures.join("; "));
+    // R577: the reproduction ran on this leg, by marker and by its exact store rows.
+    const transport = !serverMode
+      ? "one-shot"
+      : selectorMode === "resource"
+        ? "resource"
+        : "server";
+    const reproFailures = killReproductionFailures(`${fixture.name}/${transport}`, report, store);
+    assert.deepEqual(reproFailures, [], reproFailures.join("; "));
     observer?.contractLines.push(...contractLines);
     return report;
   } finally {
@@ -632,6 +644,7 @@ async function runSymbolLegs(): Promise<void> {
   for (const symbols of SYMBOL_SETS) {
     const label = symbolSetLabel(symbols);
     const fixture: GateFixture = {
+      name: `symbols-${symbols.join("-")}`,
       projectDir: SYMBOL_PROJECT_DIR,
       testDir: SYMBOL_TEST_DIR,
       selectorIds: SYMBOL_SELECTOR_IDS,
@@ -703,6 +716,7 @@ async function runSymbolLegs(): Promise<void> {
  */
 async function runLayoutLegs(): Promise<SessionReport> {
   const fixture: GateFixture = {
+    name: "layout",
     projectDir: LAYOUT_PROJECT_DIR,
     testDir: LAYOUT_TEST_DIR,
     selectorIds: LAYOUT_SELECTOR_IDS,
@@ -766,6 +780,7 @@ async function runLayoutLegs(): Promise<SessionReport> {
  */
 async function runMultiObjectLegs(): Promise<SessionReport> {
   const fixture: GateFixture = {
+    name: "multiobject",
     projectDir: MULTIOBJECT_PROJECT_DIR,
     testDir: MULTIOBJECT_TEST_DIR,
     selectorIds: MULTIOBJECT_SELECTOR_IDS,
@@ -835,6 +850,7 @@ async function runMultiObjectLegs(): Promise<SessionReport> {
  */
 async function runWrappedLegs(): Promise<SessionReport> {
   const fixture: GateFixture = {
+    name: "wrapped",
     projectDir: WRAPPED_PROJECT_DIR,
     testDir: WRAPPED_TEST_DIR,
     selectorIds: WRAPPED_SELECTOR_IDS,
@@ -950,6 +966,8 @@ async function runNamesLegs(): Promise<SessionReport> {
     const observer: LegObserver = { warningCodes: [], contractLines: [], nameFacts: [] };
     try {
       const fixture: GateFixture = {
+        // R577: one row per transport in REPRODUCTION_EXPECTED; the two coverage legs share it.
+        name: "names",
         projectDir: NAMES_PROJECT_DIR,
         testDir: NAMES_TEST_DIR,
         selectorIds: NAMES_SELECTOR_IDS,
@@ -1136,6 +1154,13 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
         "R551: the --test-exact probe must not run under --server",
       ),
     );
+    check("cli-default kill reproduction (R577)", () => {
+      const reproFailures = killReproductionFailures("cli-default", report, store, {
+        activations: resource.activations,
+        serverSuiteRuns: rec.record.serverRunTests,
+      });
+      assert.deepEqual(reproFailures, [], reproFailures.join("; "));
+    });
     check("cli-default report selector (R558)", () =>
       assert.deepEqual(
         reportTestSelectorFailures(report, false),
@@ -1277,6 +1302,14 @@ async function main(): Promise<void> {
   if (legA === undefined) throw new Error("R387: leg A produced no report to compare against");
   const cliDefault = await runCliDefaultLeg(legA);
   await assertGateBaseline(cliDefault, CLI_DEFAULT_BASELINE_PATH, "al-runner itest cli-default");
+
+  // R577: a figure still null in REPRODUCTION_EXPECTED was printed by its leg, never checked.
+  const blanks = unmeasuredReproductionFigures();
+  if (blanks.length > 0) {
+    throw new Error(
+      `R577: ${blanks.length} figure(s) in REPRODUCTION_EXPECTED (itest/kill-reproduction.ts) are not yet measured; this run measured: ${blanks.join("; ")}`,
+    );
+  }
 
   console.log("al-runner itest: PASS");
   await emitPassed("alrunner", {
