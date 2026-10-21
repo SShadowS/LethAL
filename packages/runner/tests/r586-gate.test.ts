@@ -45,8 +45,7 @@ describe("the update-gate outcome", () => {
     Object.fromEntries(V3_GATE_LEGS.map((l) => [l, v])) as Record<string, typeof v>;
   test("pass needs EVERY leg of the exact set", () => {
     expect(gateOutcome(all("pass"))).toBe("pass");
-    const missing = { ...all("pass") } as Record<string, "pass">;
-    delete missing.D1c;
+    const { D1c: _dropped, ...missing } = all("pass");
     expect(gateOutcome(missing)).toBe("infra-fail");
   });
   test("gate-fail wins; held only when nothing failed", () => {

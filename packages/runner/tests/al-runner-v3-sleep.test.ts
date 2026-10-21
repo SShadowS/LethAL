@@ -39,7 +39,7 @@ describe("T30: the Sleep index finds bare Sleep( calls only", () => {
     for (const l of [8, 9, 10]) expect(lines).not.toContain(l);
   });
   test("a test-app helper that sleeps is a call like any other", () => {
-    const helper = `codeunit 50 H\n{\n    procedure Wait()\n    begin\n        Sleep(10);\n    end;\n}\n`;
+    const helper = "codeunit 50 H\n{\n    procedure Wait()\n    begin\n        Sleep(10);\n    end;\n}\n";
     expect(sleepCallLines(helper)).toEqual([5]);
   });
 });

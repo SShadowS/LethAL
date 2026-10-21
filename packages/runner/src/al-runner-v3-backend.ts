@@ -770,7 +770,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     if ((await hashAlTree(this.cfg.testDir)) !== proof.testDirHash) {
-      throw new AlRunnerV3UnprovenBatchError(`an .al file in the test dir changed after the alc proof`);
+      throw new AlRunnerV3UnprovenBatchError("an .al file in the test dir changed after the alc proof");
     }
     if ((await fileSha256(join(this.cfg.testDir, "app.json"))) !== proof.testAppJsonSha256) {
       throw new AlRunnerV3UnprovenBatchError("the test app's app.json changed after the alc proof");
