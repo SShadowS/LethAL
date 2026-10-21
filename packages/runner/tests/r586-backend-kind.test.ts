@@ -49,6 +49,11 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'return kind === "al-runner" || kind === "al-runner-v3";': "predicate",
   },
   "verify-reach.ts": { 'case "al-runner":': "coverage-mode" },
+  "al-runner-v3-config.ts": {
+    'if (r.coverage !== undefined && r.coverage !== "al-runner" && r.coverage !== "none") {':
+      "coverage-mode",
+    'coverage: (r.coverage as "al-runner" | "none" | undefined) ?? "al-runner",': "coverage-mode",
+  },
   // The v2 coverage index's own refusal sentences; v3 reuses the index (plan M1, the safe direction).
   "al-runner-coverage.ts": {
     'for (const [key, reason] of refusedObjectsOfFile(root, file, "al-runner")) {': "v2",
@@ -87,9 +92,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'backendName === "al-runner" ? alRunnerAdmitsWrappedFile(f.root) : admittedOnBc(f),': "v2",
   },
   "cli.ts": {
-    'if (raw !== "bcdev" && raw !== "al-runner") {': "config",
-    'if (keepEnv && backendArg === "al-runner") {': "config",
-    'if (allowExpiringEnv && backendArg === "al-runner") {': "config",
+    'if (raw !== "bcdev" && raw !== "al-runner" && raw !== "al-runner-v3") {': "config",
+    'if (coverage === "al-runner") {': "coverage-mode",
     'coverage: c.coverage ?? "al-runner",': "coverage-mode",
     'if (effectiveAlRunnerTransport(section).coverage !== "al-runner") {': "coverage-mode",
     '`[lethal] al-runner-coverage-unsupported: al-runner coverage (${section.coverage === "al-runner" ? \'set by "alRunner.coverage": "al-runner"\' : "on by default"}) is turned OFF for this run, which runs with coverage "none" instead. al-runner\'s coverage cannot be placed in ${named.join(", ")}: ${why.join("; ")}. Trusting it would credit those objects\' mutants to the wrong tests, or report them no-coverage while tests do reach them.`,':

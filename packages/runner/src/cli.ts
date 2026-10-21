@@ -56,7 +56,15 @@ import type { ServerSpawnFn } from "./al-runner-server";
 import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
-import type { BackendStatus, ExecutionBackend } from "./backend";
+import { AlRunnerV3Backend } from "./al-runner-v3-backend";
+import {
+  AL_RUNNER_V3_NOT_AUTHORITATIVE,
+  assertBcVersionMatchesPackages,
+  refuseV3Platform,
+  validateAlRunnerV3Config,
+} from "./al-runner-v3-config";
+import type { BackendKind, BackendStatus, ExecutionBackend } from "./backend";
+import { isLocalRunner } from "./backend";
 import { readTargetSource } from "./baseline-snapshot";
 import { bcFetch } from "./bc-fetch";
 import { BcDevMcpBackend } from "./bcdev-backend";
@@ -341,12 +349,12 @@ export async function validateSelectorIdsForProject(
 }
 
 /** `--backend`'s one validation, for `run` and `run --dry-run` alike. */
-function parseBackendKind(raw: string | undefined): "bcdev" | "al-runner" {
+function parseBackendKind(raw: string | undefined): BackendKind {
   if (raw === undefined || raw === "") {
-    throw new Error('missing required --backend <"bcdev" | "al-runner">');
+    throw new Error('missing required --backend <"bcdev" | "al-runner" | "al-runner-v3">');
   }
-  if (raw !== "bcdev" && raw !== "al-runner") {
-    throw new Error(`unknown --backend "${raw}" (expected "bcdev" or "al-runner")`);
+  if (raw !== "bcdev" && raw !== "al-runner" && raw !== "al-runner-v3") {
+    throw new Error(`unknown --backend "${raw}" (expected "bcdev", "al-runner" or "al-runner-v3")`);
   }
   return raw;
 }
@@ -411,14 +419,14 @@ export interface DryRunCliConfig {
   readonly configExplicit?: true;
   /** R377: `--backend`, optional here. It changes which `#if` arms are listed, because al-runner
    *  predefines symbols alc does not. Absent lists alc's build. */
-  readonly backendKind?: "bcdev" | "al-runner";
+  readonly backendKind?: BackendKind;
 }
 
 export interface RunCliConfig {
   readonly mode: "run";
   readonly projectDir: string;
   readonly testDir: string;
-  readonly backendKind: "bcdev" | "al-runner";
+  readonly backendKind: BackendKind;
   readonly dbPath: string;
   readonly configPath: string;
   readonly skipKnownSurvivors: boolean;
@@ -904,7 +912,7 @@ export function helpText(version: string): string {
   return `lethal ${version} — mutation testing for Business Central AL
 
 USAGE
-  lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner> [options]
+  lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner|al-runner-v3> [options]
   lethal run               --project <dir> --dry-run
   lethal init              --project <dir> [--out <path>] [--force]
   lethal clear-quarantine  --server <url> --instance <name>
@@ -939,7 +947,9 @@ EXPORT — R178. Projects a finished report into a format a CI system can DISPLA
 RUN — required
   --project <dir>            AL project to mutate (the app under test)
   --tests <dir>              AL test project (omit only with --dry-run)
-  --backend <name>           bcdev (live BC, authoritative) or al-runner (offline, NOT authoritative)
+  --backend <name>           bcdev (live BC, authoritative), al-runner (offline, NOT authoritative)
+                             or al-runner-v3 (the Rust al-runner, offline, NOT authoritative,
+                             pinned in /work/tools/al-runner-v3, config section "alRunnerV3")
 
 RUN — scope. These bound cost. --tests-only can change a verdict; the others cannot.
   --only <glob>              only these files contribute mutants (repeatable). Every file is still
@@ -2089,17 +2099,27 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   // backend with no environment at all, should hear about the mismatch, not see it do nothing.
   const keepEnv = values["keep-env"] === true;
   const allowExpiringEnv = values["allow-expiring-env"] === true;
-  if (keepEnv && backendArg === "al-runner") {
+  // R586: every local runner (v2 and v3) has no environment.
+  if (keepEnv && isLocalRunner(backendArg)) {
     throw new Error(
-      "--keep-env applies to the bcdev backend's environment tool; al-runner has no environment",
+      `--keep-env applies to the bcdev backend's environment tool; ${backendArg} has no environment`,
     );
   }
   // Minor 5 (Task 7 review): `--allow-expiring-env` got the silent-no-op treatment `--keep-env`
   // just above explicitly argues against — same backend-mismatch, same refusal, same reasoning.
-  if (allowExpiringEnv && backendArg === "al-runner") {
+  if (allowExpiringEnv && isLocalRunner(backendArg)) {
     throw new Error(
-      "--allow-expiring-env applies to the bcdev backend's environment tool; al-runner has no environment",
+      `--allow-expiring-env applies to the bcdev backend's environment tool; ${backendArg} has no environment`,
     );
+  }
+  // R586 (T16): v1 of the v3 backend is sequential and not measured on Windows.
+  if (backendArg === "al-runner-v3") {
+    refuseV3Platform();
+    if (workers > 1) {
+      throw new Error(
+        "al-runner-v3-workers-refused: --workers > 1 is refused with --backend al-runner-v3 (R586 v1 is sequential).",
+      );
+    }
   }
 
   return {
@@ -2520,6 +2540,8 @@ export async function refuseResourceSelectorRuntime(
 export interface LethalConfigFile {
   readonly bcdev?: Partial<BcDevConfigSection>;
   readonly alRunner?: Partial<AlRunnerConfigSection>;
+  /** R586: the al-runner-v3 section, validated by `validateAlRunnerV3Config`. */
+  readonly alRunnerV3?: unknown;
   // Task 7: an environment tool (Task 6) resolves/provisions the bcdev section instead of it
   // being hand-written — see `resolveEnvToolSession` below.
   readonly envTool?: Partial<EnvToolConfigSection>;
@@ -3193,6 +3215,64 @@ export type BackendInputs = Pick<
   // R505: the run's own output files, which the source-drift watch must not count.
   Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
+/**
+ * R586 (plan r2 §9): the al-runner-v3 backend from the `alRunnerV3` section. One-shot, static
+ * selector, sequential. Coverage is turned off (with a warning) for a project holding a
+ * multi-object or an `#if`-wrapped object file: v3's frame for those is not measured, and its
+ * index refuses a multi-object file rather than guess.
+ */
+async function buildAlRunnerV3Backend(
+  parsed: BackendInputs,
+  configFile: LethalConfigFile,
+  scratchDir: string,
+  deps: {
+    readonly alToolPaths: typeof defaultAlToolPaths;
+    readonly spawn?: SpawnFn;
+    readonly selectorIds: SelectorConfig;
+    readonly source?: ReadonlyMap<string, Buffer>;
+    readonly preprocessorSymbols: readonly string[];
+  },
+): Promise<ExecutionBackend> {
+  refuseV3Platform();
+  await validateSelectorIdsForProject(parsed.projectDir, deps.selectorIds, deps.source);
+  const c = validateAlRunnerV3Config(configFile.alRunnerV3);
+  await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
+  const alcPath = c.alcPath ?? (await deps.alToolPaths())?.alcPath;
+  if (alcPath === undefined) {
+    throw new Error(
+      'could not locate alc under the AL Language VS Code extension install; --backend al-runner-v3 compiles every batch with alc before v3 runs it (R586). Install the extension, or set "alRunnerV3.alcPath".',
+    );
+  }
+  let coverage = c.coverage;
+  if (coverage === "al-runner") {
+    const support = await alRunnerCoverageSupport(parsed.projectDir, deps.source);
+    const named = [...support.multiObjectFiles, ...support.wrappedObjectFiles];
+    if (named.length > 0) {
+      console.warn(
+        `[lethal] al-runner-v3-coverage-off: coverage is turned OFF for this run (coverage "none"): v3's coverage frame for a multi-object or #if-wrapped object file is not measured (${named.join(", ")}) (R586).`,
+      );
+      coverage = "none";
+    }
+  }
+  console.warn(AL_RUNNER_V3_NOT_AUTHORITATIVE);
+  return new AlRunnerV3Backend(
+    {
+      alRunnerPath: c.path,
+      instrumentedDir: join(scratchDir, "al-runner-v3"),
+      testDir: parsed.testDir,
+      packagesDir: c.packagesDir,
+      bcVersion: c.bcVersion,
+      selectorObjectId: deps.selectorIds.selectorId,
+      alcPath,
+      coverage,
+      sourceProjectDir: parsed.projectDir,
+      ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
+      ...(deps.preprocessorSymbols.length > 0 ? { preprocessorSymbols: deps.preprocessorSymbols } : {}),
+    },
+    deps.spawn,
+  );
+}
+
 export async function buildBackend(
   parsed: BackendInputs,
   configFile: LethalConfigFile,
@@ -3261,6 +3341,16 @@ export async function buildBackend(
       deps.alRunnerSpawn,
       deps.alRunnerServerSpawn,
     );
+  }
+
+  if (parsed.backendKind === "al-runner-v3") {
+    return buildAlRunnerV3Backend(parsed, configFile, scratchDir, {
+      alToolPaths: deps.alToolPaths ?? defaultAlToolPaths,
+      ...(deps.alRunnerSpawn !== undefined ? { spawn: deps.alRunnerSpawn } : {}),
+      selectorIds,
+      ...(source !== undefined ? { source } : {}),
+      preprocessorSymbols,
+    });
   }
 
   const c = validateBcDevConfig(configFile.bcdev);
@@ -3624,7 +3714,7 @@ export async function printDryRun(
     /** R214: the config's symbols, so a dry run answers for the build the real run compiles. */
     readonly preprocessorSymbols?: readonly string[];
     /** R377: the backend whose build is listed; absent is alc's (`bcdev`). */
-    readonly backendKind?: "bcdev" | "al-runner";
+    readonly backendKind?: BackendKind;
     /** R392: the config's al-runner binary, probed once when `backendKind` is `al-runner`. */
     readonly alRunnerPath?: string;
     /** R565: the dependency package folders the config names (`MutationSetOptions`). */
@@ -3656,6 +3746,10 @@ export async function printDryRun(
     );
   } else if (paths.backendKind === "bcdev") {
     backend = { kind: "bcdev" };
+  } else if (paths.backendKind === "al-runner-v3") {
+    // R586: v3 compiles what alc proved, so the listing is alc's build (its contract refuses a
+    // v3 that predefines a symbol).
+    backend = { kind: "al-runner-v3" };
   }
   const { files, skipped, totalFiles, excludedByOnly, excludedByOperator, excludedByLines } =
     await generateMutationSet(projectDir, {
