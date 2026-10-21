@@ -16,6 +16,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs as parseCli } from "node:util";
+import { WATCHER } from "./corpus-snapshot.ts";
 import { type JunitCase, cleanDist, parseJunit, parseTestSummary } from "./verify.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -72,11 +73,36 @@ export function matchingProcesses(ps: string, re: RegExp, exclude: ReadonlySet<n
     });
 }
 
-/** A shell, log watcher or search that merely MENTIONS a job is not the job (its child is). */
-const WATCHER = /^(\S*\/)?(bash|sh|tail|grep|ugrep|rg|ps|less|cat)\b/;
-
 function sh(cmd: string[]): string {
   return Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" }).stdout.toString();
+}
+
+/**
+ * Review r1 #4: an empty comparison is never "identical". Refuses a reference with zero junit cases,
+ * a run whose console summary could not be read, and a run whose junit case count differs from its
+ * own pass + skip + fail + todo (a reporter that dropped cases).
+ */
+export function vacuity(
+  runs: readonly {
+    name: string;
+    cases: number;
+    pass: number;
+    skip: number;
+    fail: number;
+    todo: number;
+  }[],
+): string[] {
+  const out: string[] = [];
+  if ((runs[0]?.cases ?? 0) === 0) out.push("the reference run has 0 junit cases");
+  for (const r of runs) {
+    if (r.pass < 0) out.push(`${r.name}: no pass/fail summary in its output`);
+    else if (r.cases !== r.pass + r.skip + r.fail + r.todo) {
+      out.push(
+        `${r.name}: ${r.cases} junit cases but ${r.pass + r.skip + r.fail + r.todo} counted by bun`,
+      );
+    }
+  }
+  return out;
 }
 
 interface RunResult {
@@ -85,6 +111,7 @@ interface RunResult {
   pass: number;
   fail: number;
   skip: number;
+  todo: number;
   files: number | undefined;
   cases: JunitCase[];
   load: string;
@@ -203,6 +230,7 @@ async function main(): Promise<number> {
         pass: s?.pass ?? -1,
         fail: s?.fail ?? -1,
         skip: s?.skip ?? -1,
+        todo: s?.todo ?? 0,
         files: s?.files,
         cases,
         load,
@@ -216,6 +244,10 @@ async function main(): Promise<number> {
 
   const ref = runs[0];
   if (ref === undefined) throw new Error("no runs");
+  const empty = vacuity(runs.map((r) => ({ ...r, cases: r.cases.length })));
+  if (empty.length > 0) {
+    throw new Error(`refused, the comparison would be vacuous:\n  ${empty.join("\n  ")}`);
+  }
   const lines = [
     `# verify-equivalence: ${k} serial + ${n} parallel (--parallel=${p})`,
     "",

@@ -69,7 +69,9 @@ next free id right before writing).
   dumper (`<sha>/<set>/<dumperKey>/`) and takes one of two heavy slots, `/coord/locks/heavy.1` and
   `heavy.2`, with `flock`. Known limit: two corpus jobs started from ONE shell (`a & b`) share a
   process group and count as one, and a job on a corpus COPY is invisible to its `ps` scan; such
-  jobs take a slot themselves: `flock -n /coord/locks/heavy.<n> <cmd>`.
+  jobs take a slot themselves: `flock -n /coord/locks/heavy.<n> <cmd>`. A slot taken by hand like
+  that writes no pid, so the tool counts it twice: once as a held slot and once as a running job.
+  That errs on the safe side.
 - **A lane commits its own pre-commitment to `master` (owner, 2026-10-08).** Once a pre-commitment
   is written (and plan-reviewed), commit it yourself, specs-only, as
   `docs/superpowers/specs/<date>-<id>-...-precommitment.md` with `[skip ci]`, BEFORE any live run.

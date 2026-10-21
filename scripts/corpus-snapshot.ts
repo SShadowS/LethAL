@@ -70,6 +70,11 @@ export const SET_NAMES = ["fixtures", ...Object.keys(EXTERNAL_SETS)];
 /** A process whose argv names one of these is a corpus job. */
 export const CORPUS_ROOT_RE = /\/work\/src\/(BC\.History|do-lethal|DC|DO)(\/|\s|$)/;
 
+/** A shell, reader, log watcher or search that merely NAMES a job or a corpus is not the job (its
+ *  child is, when there is one). Shared with verify-equivalence.ts. */
+export const WATCHER =
+  /^(\S*\/)?(bash|sh|tail|grep|ugrep|rg|ps|less|more|cat|head|git|find|ls|du|vi|vim|nano)(\s|$)/;
+
 const INTERPRETERS = new Set(["bun", "node", "dotnet", "bash", "sh"]);
 
 /** The script an interpreter runs (`bun [run] <x>`, `dotnet exec <x>`), else undefined. */
@@ -88,6 +93,7 @@ function scriptOf(argv: readonly string[]): string | undefined {
  * gate against a remote server (itest:hang, itest:bcdev, ...) is not heavy.
  */
 export function isHeavy(args: string): boolean {
+  if (WATCHER.test(args)) return false;
   if (CORPUS_ROOT_RE.test(args)) return true;
   const argv = args.trim().split(/\s+/);
   if (argv.includes("--worker")) return false;
@@ -217,7 +223,24 @@ export function pickMaster(o: {
   git: Git;
 }): Pick {
   const own = entryDir(o.cacheRoot, o.sha, o.set, o.key);
-  if (existsSync(join(own, "DONE"))) return { kind: "cached", dir: own, message: `cached: ${own}` };
+  if (existsSync(join(own, "DONE"))) {
+    // Review r1 #2: the same sha is not enough. A re-pinned external corpus or other DEP_DIRS would
+    // make a branch diff blame the corpus change on the branch. The entry cannot be replaced
+    // in place (it is never edited), so refuse and name the reason.
+    const m = readManifest(own);
+    const why =
+      m.corpusHead !== o.corpusHead
+        ? `its corpus head ${m.corpusHead} is not today's ${o.corpusHead}`
+        : JSON.stringify(m.depDirs) !== JSON.stringify(o.depDirs)
+          ? `its DEP_DIRS ${JSON.stringify(m.depDirs)} are not today's ${JSON.stringify(o.depDirs)}`
+          : undefined;
+    if (why !== undefined) {
+      throw new RefusedError(
+        `cached entry ${own} does not match this run: ${why}. Delete it by hand to re-dump, or restore the corpus/DEP_DIRS it was dumped with.`,
+      );
+    }
+    return { kind: "cached", dir: own, message: `cached: ${own}` };
+  }
   const candidates: { sha: string; distance: number }[] = [];
   for (const a of existsSync(o.cacheRoot) ? readdirSync(o.cacheRoot) : []) {
     if (a === o.sha || !/^[0-9a-f]{40}$/.test(a)) continue;
@@ -537,6 +560,8 @@ function ancestors(procs: readonly Proc[], pid: number): Set<number> {
  * process's ancestors and descendants and the descendants of every pid recorded in a held slot,
  * counted by DISTINCT pgid. Refuse when those plus the slots held by others reach 2.
  */
+const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [12]\b/;
+
 export function heavyVerdict(
   procs: readonly Proc[],
   self: number,
@@ -544,7 +569,15 @@ export function heavyVerdict(
   otherSlotsHeld: number,
 ): { refuse: boolean; foreign: Proc[]; message: string } {
   const skip = new Set<number>([...ancestors(procs, self), ...descendants(procs, self)]);
-  for (const s of slotPids) for (const d of descendants(procs, s)) skip.add(d);
+  // A slot file's pid is trusted only when it names a live corpus-snapshot slot holder. A manual
+  // `flock heavy.<n> <cmd>` writes nothing (empty reads as 0, and pid 0's descendants are the whole
+  // container), and a stale pid names someone else. Untrusted -> exclude nothing; a manual holder is
+  // then counted as a held slot AND as a foreign job, which errs on the safe side (review r1 #1).
+  for (const s of slotPids) {
+    const p = procs.find((x) => x.pid === s);
+    if (!(s > 1) || p === undefined || !SLOT_HOLDER_RE.test(p.args)) continue;
+    for (const d of descendants(procs, s)) skip.add(d);
+  }
   const byPgid = new Map<number, Proc>();
   for (const p of procs) {
     if (skip.has(p.pid) || !isHeavy(p.args)) continue;
@@ -846,10 +879,11 @@ function runDiff(
   const corpusRoot = set === "fixtures" ? join(o.branch, "fixtures") : (EXTERNAL_SETS[set] ?? "");
   let wanted: Set<string> | undefined;
   if (o.projects !== undefined) {
-    wanted = new Set(
-      o.projects
-        .split(",")
-        .map((x) => master.index.get(x) ?? relative(corpusRoot, join(corpusRoot, x))),
+    wanted = resolveProjects(
+      o.projects,
+      master.index,
+      new Set(master.dumps.keys()),
+      new Set(findProjects(corpusRoot).map((p) => relative(corpusRoot, p))),
     );
   } else if (!o.all && set === "bch") {
     throw new RefusedError(
@@ -882,8 +916,34 @@ function runDiff(
   }
 }
 
-function main(argv: readonly string[]): number {
-  const { values, positionals } = parseCli({
+/**
+ * `--projects`: each name is a master index (`<n>`) or a path relative to the corpus root, and must
+ * name a project on at least one side. An unknown name is refused BY NAME (review r1 #3): silently
+ * dropping it would print `identical` for a typo.
+ */
+export function resolveProjects(
+  names: string,
+  index: ReadonlyMap<string, string>,
+  masterRels: ReadonlySet<string>,
+  branchRels: ReadonlySet<string>,
+): Set<string> {
+  const wanted = new Set<string>();
+  const unknown: string[] = [];
+  for (const raw of names.split(",")) {
+    const x = raw.trim().replace(/\/+$/, "");
+    const rel = index.get(x) ?? x;
+    if (x === "" || (!masterRels.has(rel) && !branchRels.has(rel))) unknown.push(raw);
+    else wanted.add(rel);
+  }
+  if (unknown.length > 0) {
+    throw new RefusedError(`--projects names no project on either side: ${unknown.join(", ")}`);
+  }
+  return wanted;
+}
+
+/** The CLI table. Strict: an unknown flag throws. */
+export function parseCliArgs(argv: readonly string[]) {
+  return parseCli({
     args: [...argv],
     allowPositionals: true,
     strict: true,
@@ -896,6 +956,17 @@ function main(argv: readonly string[]): number {
       "in-slot": { type: "string" },
     },
   });
+}
+
+function main(argv: readonly string[]): number {
+  let parsed: ReturnType<typeof parseCliArgs>;
+  try {
+    parsed = parseCliArgs(argv);
+  } catch (e) {
+    // Review r1 #7: a bad flag is a refusal (2), never "different or a dump failure" (1).
+    throw new RefusedError(e instanceof Error ? e.message : String(e));
+  }
+  const { values, positionals } = parsed;
   const [cmd, set] = positionals;
   if (set === undefined || !SET_NAMES.includes(set)) {
     throw new RefusedError(`usage: corpus-snapshot.ts snapshot|diff <${SET_NAMES.join("|")}> ...`);

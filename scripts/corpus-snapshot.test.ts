@@ -19,6 +19,7 @@ import {
   parsePs,
   pickMaster,
   readEntry,
+  resolveProjects,
   slotHeld,
   trySlots,
   writeEntry,
@@ -312,12 +313,78 @@ describe("B8 only the dumper keys an entry", () => {
   });
 });
 
+describe("review r1: the cached path and the DONE gate", () => {
+  test("#2 a same-sha entry is refused when its corpus head or DEP_DIRS differ from today's", () => {
+    const r = repo();
+    const cache = fresh("cache");
+    const a = r.git(["rev-parse", "HEAD"]);
+    snap(r.dir, r.git, cache, a);
+    const { key } = dumperKeyOf(r.dir);
+    const head = corpusHeadOf("fixtures", a, r.git);
+    const base = { cacheRoot: cache, set: "fixtures", sha: a, key, git: r.git };
+    expect(pickMaster({ ...base, corpusHead: head, depDirs: [] }).kind).toBe("cached");
+    expect(() => pickMaster({ ...base, corpusHead: "f".repeat(40), depDirs: [] })).toThrow(
+      "corpus head",
+    );
+    expect(() => pickMaster({ ...base, corpusHead: head, depDirs: ["/deps"] })).toThrow("DEP_DIRS");
+  });
+  test("a half-written entry (no DONE) is never used: not as cached, not as a reuse candidate", () => {
+    const r = repo();
+    const cache = fresh("cache");
+    const a = r.git(["rev-parse", "HEAD"]);
+    snap(r.dir, r.git, cache, a);
+    const { key } = dumperKeyOf(r.dir);
+    rmSync(join(entryDir(cache, a, "fixtures", key), "DONE"));
+    const head = corpusHeadOf("fixtures", a, r.git);
+    const base = { cacheRoot: cache, set: "fixtures", key, depDirs: [], git: r.git };
+    expect(pickMaster({ ...base, sha: a, corpusHead: head }).kind).toBe("dump");
+    const b = r.commit({ "docs/a.md": "b\n" });
+    expect(
+      pickMaster({ ...base, sha: b, corpusHead: corpusHeadOf("fixtures", b, r.git) }).kind,
+    ).toBe("dump");
+  });
+});
+
+describe("review r1: --projects and bad flags", () => {
+  const index = new Map([
+    ["0", "sandbox-app"],
+    ["1", "sandbox-data"],
+  ]);
+  const masterRels = new Set(["sandbox-app", "sandbox-data"]);
+  const branchRels = new Set(["sandbox-app", "sandbox-data", "sandbox-new"]);
+  test("#3 known names (index, master path, branch-only path) resolve", () => {
+    expect([
+      ...resolveProjects("0,sandbox-data,sandbox-new/", index, masterRels, branchRels),
+    ]).toEqual(["sandbox-app", "sandbox-data", "sandbox-new"]);
+  });
+  test("#3 an unknown name is refused by name, not dropped", () => {
+    expect(() =>
+      resolveProjects("sandbox-data,sandbox-dta", index, masterRels, branchRels),
+    ).toThrow("sandbox-dta");
+    expect(() => resolveProjects("7", index, masterRels, branchRels)).toThrow(RefusedError);
+  });
+  test("#7 a bad flag exits 2 (refused), not 1", () => {
+    const r = Bun.spawnSync(
+      [
+        process.execPath,
+        join(REPO_ROOT, "scripts", "corpus-snapshot.ts"),
+        "snapshot",
+        "fixtures",
+        "--bogus",
+      ],
+      { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(r.exitCode, r.stderr.toString()).toBe(2);
+    expect(r.stderr.toString()).toContain("--bogus");
+  });
+});
+
 describe("B5 the heavy-job guard", () => {
   const ps = (rows: string[]): string => ["PID PPID PGID COMMAND", ...rows].join("\n");
   const SELF = 100;
   const base = [
     "1 0 1 init",
-    "90 1 90 bash -c bun scripts/corpus-snapshot.ts diff dc --branch /w # /work/src/DC wrapper",
+    "90 1 90 timeout 3600 bun scripts/corpus-snapshot.ts diff dc --branch /w/src/DC --x /work/src/DC/a",
     `${SELF} 90 90 bun scripts/corpus-snapshot.ts diff dc --in-slot 1`,
     `101 ${SELF} 90 bun scripts/prod-identity-keys.ts /w /tmp/0.jsonl /work/src/DC/app`,
   ];
@@ -373,6 +440,42 @@ describe("B5 the heavy-job guard", () => {
     expect(isHeavy("tail -F /coord/handoff/x/al-runner.log")).toBe(false);
     expect(isHeavy("bun packages/runner/itest/hang.itest.ts")).toBe(false);
     expect(isHeavy("bun packages/runner/itest/al-runner.itest.ts --worker 2")).toBe(false);
+  });
+  test("#1 an EMPTY or 0 slot pid (a manual flock holder) does not hide the container", () => {
+    // Lane A holds slot 2 by hand (no pid written); lane B runs an unslotted corpus job.
+    const procs = parsePs(ps([...base, job(200, 200)]));
+    for (const pid of [0, Number(""), Number.NaN]) {
+      const v = heavyVerdict(procs, SELF, [pid], 1);
+      expect(
+        v.foreign.map((p) => p.pid),
+        `slot pid ${pid}`,
+      ).toEqual([200]);
+      expect(v.refuse, `slot pid ${pid}`).toBe(true);
+    }
+  });
+  test("#1 a STALE slot pid (reused by another job) excludes nothing, so that job is not hidden", () => {
+    // pid 200 is now an unrelated corpus job; the slot holder that wrote it is gone.
+    const procs = parsePs(ps([...base, job(200, 200), job(201, 201)]));
+    const v = heavyVerdict(procs, SELF, [200], 0);
+    expect(v.foreign.map((p) => p.pid)).toEqual([200, 201]);
+    expect(v.refuse).toBe(true);
+    // A LIVE corpus-snapshot holder's children are still excluded, so they are not counted twice.
+    const slot = [
+      "500 1 500 bun scripts/corpus-snapshot.ts snapshot bch --master --in-slot 2",
+      "501 500 500 bun scripts/prod-identity-keys.ts /t /o /work/src/BC.History/x",
+    ];
+    expect(heavyVerdict(parsePs(ps([...base, ...slot])), SELF, [500], 1).foreign).toEqual([]);
+  });
+  test("#5 a reader or search naming a corpus root is not a job", () => {
+    for (const a of [
+      "grep -rn x /work/src/BC.History",
+      "git -C /work/src/DC log",
+      "less /work/src/DO/a.al",
+      "/bin/bash -c cd /work/src/DC && ls",
+    ]) {
+      expect(isHeavy(a), a).toBe(false);
+    }
+    expect(isHeavy("bun census.ts /work/src/DC/app")).toBe(true);
   });
   test("an itest:alrunner run (root + al-runner child, one pgid) is ONE job; its workers add none", () => {
     const run = [

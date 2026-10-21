@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_WAIT, diffCases, matchingProcesses } from "./verify-equivalence.ts";
+import { DEFAULT_WAIT, diffCases, matchingProcesses, vacuity } from "./verify-equivalence.ts";
 import { parseJunit } from "./verify.ts";
 
 const tc = (file: string, name: string, body = "", classname = "D"): string =>
@@ -60,6 +60,31 @@ describe("verify-equivalence diff (hand-written junit)", () => {
     expect([...diffCases(REF, crashed)]).toEqual([
       ["b.test.ts", ["- D > four [pass]", "+ (worker crashed) [fail]"]],
     ]);
+  });
+});
+
+describe("review r1 #4: an empty comparison is refused, never IDENTICAL", () => {
+  const run = (name: string, cases: number, pass = cases, todo = 0) => ({
+    name,
+    cases,
+    pass,
+    skip: 0,
+    fail: 0,
+    todo,
+  });
+  test("real runs with matching counts pass", () => {
+    expect(vacuity([run("serial-1", 3), run("parallel-1", 4, 3, 1)])).toEqual([]);
+  });
+  test("zero cases everywhere, an unread summary, or dropped cases are refused", () => {
+    expect(vacuity([run("serial-1", 0), run("parallel-1", 0)])).toContain(
+      "the reference run has 0 junit cases",
+    );
+    expect(vacuity([run("serial-1", 3), run("parallel-1", 3, -1)]).join("\n")).toContain(
+      "parallel-1: no pass/fail summary",
+    );
+    expect(vacuity([run("serial-1", 3), run("parallel-1", 2, 3)]).join("\n")).toContain(
+      "parallel-1: 2 junit cases but 3 counted",
+    );
   });
 });
 
