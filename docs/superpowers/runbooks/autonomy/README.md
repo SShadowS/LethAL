@@ -131,12 +131,15 @@ containers assigned to this project can be leased. A missing `allocation.json` t
 **The owner's host pause is not seen there.** To pause the container's sessions use
 `kraken tentacle stop` (host) or `bash scripts/coord.sh pause` (inside).
 
-- **LethAL may use `Cronus28` and the three BC on Linux servers `bc1`, `bc2` and `bc3`** (R589,
-  owner allocation 2026-10-21, enforced by coord through the allocation file). **Cronus284 is
+- **LethAL uses the three BC on Linux servers `bc1`, `bc2` and `bc3`** (R589, owner allocation
+  2026-10-21, enforced by coord through the allocation file). **`Cronus28` is PARKED** (owner,
+  2026-10-21: unreachable at its new address; no lane waits for it, and the text about it below is
+  kept for when it returns). **Cronus284 is
   CentralGauge's, not LethAL's** (owner, 2026-10-21; LethAL used it 2026-09-26 to 2026-10-20, and
   the measurements from that time stay as history). Cronus281, Cronus282, Cronus283 and Cronus284
   belong to CentralGauge; never lease or publish to them. Each server runs one gate at a time under
-  a coord lease; lanes use whichever is free (the orchestrator may assign one per lane). Cronus28
+  a coord lease; lanes use whichever is free AMONG the servers proven for that gate (the bullet on
+  proof below; the orchestrator may assign one per lane). Cronus28
   carries every fixture (`sandbox-app`, `sandbox-data`, `sandbox-hang`, ...). Which control version
   a server has installed is machine state, not repo state: `lethal doctor --config <path>` reads it
   from the server (its `control-version` check), and the client requires the version in
@@ -166,11 +169,20 @@ containers assigned to this project can be leased. A missing `allocation.json` t
     Never print either. Select a server for a gate with `LETHAL_ITEST_CONFIG=lethal.config.bc1.json`;
     it requires `.vscode/launch.bc1.json` naming the same server, and the gate's first line names
     the target it measures.
-  - Measured 2026-10-21: `itest:bcdev` PASSES on `bc1` and `bc2` at 3 / 12 / 4, per mutant equal to
-    its baseline (`bc3` pending).
-  - The company is W1 `CRONUS International Ltd.`, not Cronus28's DK `CRONUS Danmark A/S`. A gate
-    whose figures were frozen on Cronus28 must reproduce them per mutant here before a server is
-    used for it (R589); any difference is a BLOCK.
+  - The company is W1 `CRONUS International Ltd.`, not Cronus28's DK `CRONUS Danmark A/S`.
+  - **Proof is PER SERVER (orchestrator ruling 2026-10-21).** A gate runs on a server only after
+    its frozen figures have reproduced per mutant on THAT server, under the current fixture builds;
+    any difference is a BLOCK. A proof on bc1 does not admit bc2: the servers can differ in app
+    builds and in what else is installed (bc3 carries the Continia stack). Admitting a new
+    (gate, server) pair is one ordinary run of the gate there. Proven 2026-10-21 under R-583's
+    runtime-17 fixtures (`/coord/handoff/R-583/gates.md`; R592 moves the table to
+    `docs/gates/servers.md`):
+    - `bc1`: bcdev, bcdev-wrapped, bcdev-names, tables, verify (R-595), verify-scale,
+      stale-publish, testapp, lease.
+    - `bc2`: bcdev, chunked, hang, harden, agreement.
+    - `bc3`: bcdev and hang were proven on the PRE-runtime-17 fixtures only, and it now carries the
+      R594 CDO oracle; run `bc-linux-setup.ts --server bc3` and re-prove a gate there before using
+      it for that gate.
 - Before any work that touches it (live gates, control-app publish, fixture publish): check it
   is running (host only: `pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`;
   in the container, `kraken tentacle status`), then
