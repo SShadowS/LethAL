@@ -173,12 +173,24 @@ describe("T19: the v3 update gate", () => {
     expect(b.seen.gates).toEqual([]);
   });
 
-  test("RC-2 (I-2): after a LethAL fix (a new .gated commit) the same build is gated again, and can be held", async () => {
-    await setup(FIXED_COMMIT);
-    await mkdir(failedAt("v3.0.0-alpha.3", GATED_COMMIT), { recursive: true });
-    const { deps, seen } = fake({ outcome: "held" });
-    expect(await updateOnce(deps)).toEqual(["held"]);
-    expect(seen.gates).toEqual([FIXED_COMMIT]);
+  test("RC-2 (I-2): a build that gate-failed is gated AGAIN after .gated moves to a new LethAL commit, and NOT at the same commit", async () => {
+    await setup();
+    // The build gate-fails at the old commit, through the gate itself.
+    const first = fake({ outcome: "gate-fail" });
+    expect(await updateOnce(first.deps)).toEqual(["gate-fail"]);
+    expect(first.seen.gates).toEqual([GATED_COMMIT]);
+    // At the SAME commit it is not gated again: the gate is never invoked.
+    const same = fake({ outcome: "pass" });
+    expect(await updateOnce(same.deps)).toEqual(["gate-fail"]);
+    expect(same.seen.gates.length).toBe(0);
+    // A LethAL fix moves .gated to a new commit: the same build is gated again (0 -> 1).
+    const cur = await current();
+    const gated = JSON.parse(await readFile(join(cur, ".gated"), "utf8"));
+    await writeFile(join(cur, ".gated"), JSON.stringify({ ...gated, lethalCommit: FIXED_COMMIT }));
+    const fixed = fake({ outcome: "held" });
+    expect(fixed.seen.gates.length).toBe(0);
+    expect(await updateOnce(fixed.deps)).toEqual(["held"]);
+    expect(fixed.seen.gates).toEqual([FIXED_COMMIT]);
     expect(existsSync(join(root, "held", "v3.0.0-alpha.3"))).toBe(true);
   });
 
