@@ -20,7 +20,9 @@ endpoint.
 
 ## Setting a server up
 
-`bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` (add `--dry-run` to see the plan). For each
+`bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` (add `--dry-run` to see the plan). It takes the lease in
+your lane: `--lane <lane>` if given, else your kraken agent identity (`KRAKEN_AGENT`); with neither it refuses
+(R598). For each
 server it:
 
 1. reads the login from `/coord/secrets/bc-linux.env`, which only the owner writes;

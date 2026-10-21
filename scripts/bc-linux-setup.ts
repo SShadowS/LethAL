@@ -2,7 +2,11 @@
  * R589: bring one or more of the BC on Linux servers on server1 (bc1, bc2, bc3) to the state the
  * LethAL BC gates need, and check it with `lethal doctor`.
  *
- *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--dry-run]
+ *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run]
+ *
+ * The coord lease is taken in the caller's lane (R598): `--lane`, else the kraken agent identity
+ * (`KRAKEN_AGENT`: `lane-<x>` is lane `<x>`, `orchestrator` is `orchestrator`). With neither, the run
+ * refuses by name before anything else, so a lease is never held in another lane's name.
  *
  * In order, per server:
  *   (a) read /coord/secrets/bc-linux.env in this process (exactly BC_DEV_USER and BC_DEV_PASSWORD);
@@ -47,7 +51,6 @@ const CONTROL_VERSION = "1.0.0.23";
 const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");
 const BC_DEV_MCP = "/home/dev/src/bc-dev-mcp";
-const LANE = "code";
 export const HOST = "http://192.168.2.157";
 const HEARTBEAT_MS = 60_000;
 
@@ -380,25 +383,55 @@ export async function kraken(args: readonly string[]): Promise<string> {
   return out;
 }
 
-export const krakenLease: LeaseDeps = {
-  async take(server) {
-    const out = await kraken(["lease", server, LANE]);
-    const token = (JSON.parse(out) as { token?: unknown }).token;
-    if (typeof token !== "string" || token === "") {
-      throw new Error(`kraken coord lease ${server}: no token in its answer`);
-    }
-    return token;
-  },
-  recordToken(server, token) {
-    writeFileSync(join(TOKEN_DIR, `lease-${server}.txt`), `${token}\n`, "utf8");
-  },
-  async heartbeat(server, token) {
-    await kraken(["heartbeat", server, token]);
-  },
-  async release(server, token) {
-    await kraken(["release", server, token]);
-  },
-};
+/** R598: no lane could be found for the coord lease; the run refuses rather than borrow one. */
+export class LaneUnknownError extends Error {}
+
+/**
+ * R598: the lane the coord lease is taken in. `--lane` wins; else the kraken agent identity
+ * (`KRAKEN_AGENT`, mapped as `scripts/coord-join-role.ts` maps it: `lane-<x>` is lane `<x>`,
+ * `orchestrator` is `orchestrator`). With neither, or an identity that names no lane, it refuses.
+ */
+export function resolveLane(
+  cliLane: string | undefined,
+  env: Record<string, string | undefined>,
+): string {
+  if (cliLane !== undefined && cliLane !== "") return cliLane;
+  const agent = env.KRAKEN_AGENT;
+  if (agent === "orchestrator") return "orchestrator";
+  if (agent?.startsWith("lane-") && agent.length > "lane-".length)
+    return agent.slice("lane-".length);
+  throw new LaneUnknownError(
+    agent === undefined || agent === ""
+      ? "no lane for the coord lease: pass --lane <lane>, or run as a kraken agent (KRAKEN_AGENT is not set)"
+      : `no lane for the coord lease: KRAKEN_AGENT ${JSON.stringify(agent)} names no lane; pass --lane <lane>`,
+  );
+}
+
+/** The coord lease in `lane`'s name. `run` is the kraken-call seam (`kraken` in a real run). */
+export function krakenLeaseFor(
+  lane: string,
+  run: (args: readonly string[]) => Promise<string> = kraken,
+): LeaseDeps {
+  return {
+    async take(server) {
+      const out = await run(["lease", server, lane]);
+      const token = (JSON.parse(out) as { token?: unknown }).token;
+      if (typeof token !== "string" || token === "") {
+        throw new Error(`kraken coord lease ${server}: no token in its answer`);
+      }
+      return token;
+    },
+    recordToken(server, token) {
+      writeFileSync(join(TOKEN_DIR, `lease-${server}.txt`), `${token}\n`, "utf8");
+    },
+    async heartbeat(server, token) {
+      await run(["heartbeat", server, token]);
+    },
+    async release(server, token) {
+      await run(["release", server, token]);
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------------------------
 // (d) publishing over the dev endpoint
@@ -630,19 +663,32 @@ export function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export function parseArgs(argv: readonly string[]): { servers: ServerName[]; dryRun: boolean } {
+const USAGE =
+  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run]";
+
+export function parseArgs(argv: readonly string[]): {
+  servers: ServerName[];
+  dryRun: boolean;
+  lane?: string;
+} {
   let server: string | undefined;
+  let lane: string | undefined;
   let dryRun = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") dryRun = true;
     else if (a === "--server") server = argv[++i];
-    else throw new Error(`unknown argument ${JSON.stringify(a)}`);
+    else if (a === "--lane") {
+      lane = argv[++i];
+      if (lane === undefined || lane === "" || lane.startsWith("-"))
+        throw new Error(`--lane needs a lane name; ${USAGE}`);
+    } else throw new Error(`unknown argument ${JSON.stringify(a)}`);
   }
-  if (server === "all") return { servers: ["bc1", "bc2", "bc3"], dryRun };
+  const withLane = lane !== undefined ? { lane } : {};
+  if (server === "all") return { servers: ["bc1", "bc2", "bc3"], dryRun, ...withLane };
   if (server === "bc1" || server === "bc2" || server === "bc3")
-    return { servers: [server], dryRun };
-  throw new Error("usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--dry-run]");
+    return { servers: [server], dryRun, ...withLane };
+  throw new Error(USAGE);
 }
 
 async function setupServer(
@@ -650,6 +696,7 @@ async function setupServer(
   login: BcLogin,
   dryRun: boolean,
   summary: string[],
+  lane: string,
 ): Promise<boolean> {
   const symbols = join(STATE_ROOT, server, "symbols");
   const paths: ConfigPaths = {
@@ -675,7 +722,7 @@ async function setupServer(
   if (dryRun) {
     for (const { path, launch } of configs) summary.push(`  would write ${path}, ${launch}`);
     summary.push(
-      `  would lease ${server}, publish LethAL Control, then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
+      `  would lease ${server} in lane ${lane}, publish LethAL Control, then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
     );
     return true;
   }
@@ -701,7 +748,7 @@ async function setupServer(
     server,
     authorization: `Basic ${Buffer.from(`${login.user}:${login.password}`).toString("base64")}`,
   };
-  return await withLease(server, krakenLease, async () => {
+  return await withLease(server, krakenLeaseFor(lane), async () => {
     // (d)
     const c = await ensureApp(conn, control, "LethAL Control");
     summary.push(
@@ -735,13 +782,15 @@ async function setupServer(
 }
 
 async function main(): Promise<number> {
-  const { servers, dryRun } = parseArgs(process.argv.slice(2));
+  const { servers, dryRun, lane: cliLane } = parseArgs(process.argv.slice(2));
+  // R598: decided before the secret is read or anything is written, so a refusal changes nothing.
+  const lane = resolveLane(cliLane, process.env);
   const login = readSecretFile();
-  const summary = [`login: ${describeLogin(login)}`];
+  const summary = [`login: ${describeLogin(login)}`, `lane: ${lane}`];
   let ok = true;
   for (const server of servers) {
     try {
-      ok = (await setupServer(server, login, dryRun, summary)) && ok;
+      ok = (await setupServer(server, login, dryRun, summary, lane)) && ok;
     } catch (err) {
       ok = false;
       summary.push(`  FAILED    ${server}: ${errText(err)}`);
