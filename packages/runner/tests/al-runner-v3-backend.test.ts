@@ -2,7 +2,16 @@
 // docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md, §3-§6, tests T5, T12, T21, T22,
 // T24, T28-T32 and the decoder rows of §5. Every guard has a test per direction.
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -22,6 +31,7 @@ import {
   v3CallDeadlineMs,
   v3RowVerdict,
 } from "../src/al-runner-v3-backend";
+import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import type { SpawnFn } from "../src/publisher";
@@ -923,6 +933,84 @@ describe("§6 the Sleep rule through the backend (T12, T31, T32)", () => {
     expect((await runA(b)).failureMessage).toMatch(/not in v3's coverage/);
     await b.activate("M0002");
     expect((await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe("error");
+  });
+
+  test("I-1: coverage paths under another prefix than the index's real roots stop the session by name", async () => {
+    const moved = (id: string, active: string, testDir: string) => {
+      const d = sleepCoverage({ hit: true })(id, active, testDir);
+      const away = <F extends { file: string }>(f: F): F => ({ ...f, file: `/elsewhere${f.file}` });
+      return {
+        coverage: d.coverage.map(away),
+        perTestCoverage: d.perTestCoverage.map((e) => ({ ...e, coverage: e.coverage.map(away) })),
+      };
+    };
+    const { b } = await sleeper(moved);
+    await b.activate("M0001");
+    const err = await runA(b).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3CoverageJoinError);
+    expect(String(err)).toMatch(/al-runner-v3-coverage-join-refused/);
+  });
+
+  test("I-1: through a symlinked test dir, the argv and the index use its real path", async () => {
+    const l = await layout(SLEEPER);
+    const link = `${l.testDir}-link`;
+    await symlink(l.testDir, link);
+    try {
+      const v3 = fakeV3(allPass, { coverage: sleepCoverage() });
+      const b = backendOf(l, v3.spawn, fakeAlc().io, { testDir: link });
+      await b.deploy(l.batch);
+      await b.activate("M0001");
+      await runA(b);
+      const argv = v3.calls[0] ?? [];
+      const real = await realpath(l.testDir);
+      expect(argv.at(-1)).toBe(real);
+      expect(argv.at(-2)).toBe(await realpath(argv.at(-2) ?? ""));
+    } finally {
+      await rm(link, { force: true });
+    }
+  });
+
+  test("I-1 audit: baseline per-test hits that map to no batch line stop the session at the first mutant", async () => {
+    const l = await layout(SLEEPER);
+    const cov = (_id: string, _active: string, testDir: string) => ({
+      coverage: [{ file: "/elsewhere/Nope.Codeunit.al", statements: [{ line: 5, hits: 1 }] }],
+      perTestCoverage: ["A", "B"].map((m) => ({
+        test: `Codeunit${CU}.${m}`,
+        coverage: [
+          { file: "/elsewhere/Nope.Codeunit.al", statements: [{ line: 5, hits: 1 }] },
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+        ],
+      })),
+    });
+    const v3 = fakeV3(allPass, { coverage: cov });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    await b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+    await expect(b.activate("M0001")).rejects.toBeInstanceOf(AlRunnerV3CoverageJoinError);
+  });
+
+  test("I-1 audit, other direction: a baseline hit that maps to a batch line lets mutants run", async () => {
+    const l = await layout(SLEEPER);
+    const cov = (_id: string, active: string, testDir: string) => ({
+      coverage: [{ file: join(active, "Logic.Codeunit.al"), statements: [{ line: 5, hits: 1 }] }],
+      perTestCoverage: ["A", "B"].map((m) => ({
+        test: `Codeunit${CU}.${m}`,
+        coverage: [
+          { file: join(active, "Logic.Codeunit.al"), statements: [{ line: 6, hits: 1 }] },
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+        ],
+      })),
+    });
+    const v3 = fakeV3(allPass, { coverage: cov });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "al-runner" });
+    b.useBuildSymbols([]);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    const v = await b.run(ref("A"), { coverage: "al-runner", timeoutMs: 1000 });
+    expect(v.coverage?.entries.length ?? 0).toBeGreaterThan(0);
+    await b.activate("M0001");
   });
 
   test("T32 case 4: a top-level hit no per-test entry owns errors every covering pass of the call", async () => {

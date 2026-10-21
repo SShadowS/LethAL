@@ -16,7 +16,7 @@
  * One-shot only; the static selector only (the resource selector is refused by name).
  */
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
@@ -40,11 +40,13 @@ import {
 } from "./al-runner-v3-contract";
 import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
 import {
+  AlRunnerV3CoverageJoinError,
   type SleepIndex,
   type V3CoverageRead,
   buildSleepIndex,
   decodeV3Coverage,
   sleepCallRefusal,
+  sleepJoinRefusal,
   sleepPassRefusal,
 } from "./al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
@@ -406,6 +408,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private rowsByCodeunit = new Map<number, CallRows>();
   private coverageIndex: AlRunnerCoverageIndex | undefined;
   private sleepIndex: SleepIndex | undefined;
+  /** I-1: `active/` and the test dir under `realpath`, the form the index and the argv both use. */
+  private realDirs: { readonly active: string; readonly test: string } | undefined;
+  /**
+   * I-1 audit, the coverage-index join: on unmutated calls with coverage on, how many passing tests'
+   * per-test entries listed a hit statement, and how many of those mapped to at least one indexed
+   * target line. A suite where some listed and none joined is an empty join, not "covers nothing".
+   */
+  private coverageJoin = { listed: 0, joined: 0 };
   /** §6 case 2: a mutant call showed v3 cannot see an indexed Sleep line: every later pass errors. */
   private batchBlind: string | undefined;
   private buildSymbols: readonly string[] | undefined;
@@ -667,6 +677,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     // §6 (I-1 (1)): from the text v3 reads, rebuilt with every deploy.
     this.sleepIndex = await buildSleepIndex(active, this.cfg.testDir);
+    this.realDirs = { active: await realpath(active), test: await realpath(this.cfg.testDir) };
+    this.coverageJoin = { listed: 0, joined: 0 };
     return null;
   }
 
@@ -749,6 +761,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (mutantId !== null && !proof.manifestIds.has(mutantId)) {
       throw new Error(
         `al-runner-v3: activate(${mutantId}): not a mutant of the deployed batch's manifest`,
+      );
+    }
+    const cj = this.coverageJoin;
+    if (mutantId !== null && cj.listed > 0 && cj.joined === 0) {
+      throw new AlRunnerV3CoverageJoinError(
+        `al-runner-v3-coverage-join-refused: coverage is on and ${cj.listed} baseline test(s) listed hit statements in v3's per-test coverage, but none of them mapped to a line of the deployed batch (${dir}); every mutant would read no-coverage from an empty join, so the session stops (R586 I-1)`,
       );
     }
     // The plan is NOT dropped here: keyed by mutant id and read only while that mutant is active,
@@ -851,6 +869,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const index = this.sleepIndex;
       if (index === undefined)
         throw new Error("al-runner-v3: no Sleep index for the deployed batch");
+      // I-1: an index that joins no path of the document is not "no hit": the session stops.
+      const joinWhy = sleepJoinRefusal(call.coverage, index);
+      if (joinWhy !== undefined) throw new AlRunnerV3CoverageJoinError(joinWhy);
       this.batchBlind ??= blindNote(call.coverage, index);
       const note = this.batchBlind ?? sleepPassRefusal(call.coverage, index, row.name);
       if (note !== undefined) {
@@ -908,7 +929,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const own = doc.perTestCoverage.filter((e) => e.test === rowName);
     const entry = own[0];
     if (entry === undefined || own.length !== 1) return "unavailable";
-    return alRunnerCoverageFromServer({ test: entry.test, coverage: entry.coverage }, index);
+    const map = alRunnerCoverageFromServer({ test: entry.test, coverage: entry.coverage }, index);
+    // I-1 audit: one test that reaches no target line is normal; a suite where none joins while
+    // tests listed hits is an empty join (`activate` refuses it).
+    if (entry.coverage.some((f) => (f.statements ?? []).some((s) => (s.hits ?? 0) > 0))) {
+      this.coverageJoin.listed += 1;
+      if (map.entries.length > 0) this.coverageJoin.joined += 1;
+    }
+    return map;
   }
 
   private rowMissing(ref: TestMethodRef, why: string, wallMs: number): TestVerdict {
@@ -951,8 +979,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       bcVersion: this.cfg.bcVersion,
       symbols: this.cfg.preprocessorSymbols ?? [],
       coverageJson: covPath,
-      activeDir: resolve(this.activeDir()),
-      testDir: resolve(this.cfg.testDir),
+      // I-1: the same real paths the Sleep index is keyed by.
+      activeDir: this.realDirs?.active ?? resolve(this.activeDir()),
+      testDir: this.realDirs?.test ?? resolve(this.cfg.testDir),
     });
     const deadlineMs = v3CallDeadlineMs(stopSeconds, this.testsPerCodeunit.get(id) ?? 1);
     const controller = new AbortController();

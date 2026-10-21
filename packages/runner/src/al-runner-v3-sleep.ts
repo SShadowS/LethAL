@@ -10,7 +10,7 @@
  * `--coverage-json` lines: never through the line map, the coverage index or its multi-object and
  * wrapped refusals (those are the safe direction for selection and the unsafe one here).
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   type ALSyntaxNode,
@@ -35,6 +35,43 @@ export interface SleepIndex {
   readonly shown: ReadonlyMap<string, string>;
   /** Count per root, for the pre-committed index size (S1 0, D 3 + 0, ...). */
   readonly sizes: { readonly target: number; readonly test: number };
+  /** The two roots, as `sleepFileKey`s of their `realpath` with a trailing `/` (I-1). */
+  readonly roots: { readonly target: string; readonly test: string };
+}
+
+/**
+ * I-1: the index's keys and v3's coverage paths do not join, so "no Sleep hit" would be an empty
+ * join, not a measurement. The session refuses. Extends `Error` directly.
+ */
+export class AlRunnerV3CoverageJoinError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AlRunnerV3CoverageJoinError";
+  }
+}
+
+/**
+ * I-1 (review build Opus; ruling 2026-10-21): for each side of the index that holds Sleep lines,
+ * the document must list at least one file under that side's root. A covering call always reaches
+ * its test codeunit's file (under the test root) and the mutated file (under the target root), so a
+ * side whose root no listed path sits under means our keys and v3's paths are in different forms
+ * (a symlink, a relative path, a case or `..` change). Returns the refusal, or `undefined`. An
+ * unavailable document is case 1's business, not this one's.
+ */
+export function sleepJoinRefusal(doc: V3CoverageRead, index: SleepIndex): string | undefined {
+  if (doc.kind === "unavailable") return undefined;
+  const listed = doc.coverage.map((f) => sleepFileKey(f.file));
+  for (const side of ["target", "test"] as const) {
+    if (index.sizes[side] === 0) continue;
+    const root = index.roots[side];
+    if (listed.some((k) => k.startsWith(root))) continue;
+    const sample = doc.coverage
+      .slice(0, 3)
+      .map((f) => f.file)
+      .join(", ");
+    return `al-runner-v3-coverage-join-refused: the Sleep index holds ${index.sizes[side]} ${side} line(s) under ${root}, but no path in v3's coverage document sits under it (${doc.coverage.length} listed, e.g. ${sample || "none"}); reading that as "no Sleep hit" would be an empty join, so the session stops (R586 §6, I-1)`;
+  }
+  return undefined;
 }
 
 /** The key both sides are compared by: `/`-separated and lower-cased. */
@@ -66,12 +103,19 @@ async function alFilesUnder(dir: string): Promise<string[]> {
     .sort();
 }
 
-/** The index of `targetDir` (the deployed `active/`) and `testDir`, under their absolute paths. */
-export async function buildSleepIndex(targetDir: string, testDir: string): Promise<SleepIndex> {
+/**
+ * The index of `targetDir` (the deployed `active/`) and `testDir`, under their `realpath` (I-1:
+ * the backend sends v3 the same real paths, so a symlinked root cannot split the two forms).
+ */
+export async function buildSleepIndex(targetDirIn: string, testDirIn: string): Promise<SleepIndex> {
   await initParser();
+  const targetDir = await realpath(targetDirIn);
+  const testDir = await realpath(testDirIn);
   const byFile = new Map<string, Set<number>>();
   const shown = new Map<string, string>();
   const sizes = { target: 0, test: 0 };
+  const rootKey = (d: string) => `${sleepFileKey(resolve(d)).replace(/\/+$/, "")}/`;
+  const roots = { target: rootKey(targetDir), test: rootKey(testDir) };
   for (const [root, which] of [
     [targetDir, "target"],
     [testDir, "test"],
@@ -86,7 +130,7 @@ export async function buildSleepIndex(targetDir: string, testDir: string): Promi
       sizes[which] += lines.length;
     }
   }
-  return { byFile, shown, sizes };
+  return { byFile, shown, sizes, roots };
 }
 
 /** One test's statements as `perTestCoverage` lists them. */
