@@ -384,7 +384,7 @@ export const krakenLease: LeaseDeps = {
 // ---------------------------------------------------------------------------------------------
 // (d) publishing over the dev endpoint
 
-interface Conn {
+export interface Conn {
   readonly server: ServerName;
   /** `Basic ...`, built in memory from the secret file. */
   readonly authorization: string;
@@ -395,7 +395,11 @@ function devBase(c: Conn): string {
 }
 
 /** The package the server holds for publisher/name, or `null` when it holds none. */
-async function residentPackage(c: Conn, publisher: string, name: string): Promise<Buffer | null> {
+export async function residentPackage(
+  c: Conn,
+  publisher: string,
+  name: string,
+): Promise<Buffer | null> {
   const url = devPackagesUrl(
     { server: HOST, serverInstance: "BC", tenant: "default", port: SERVERS[c.server].dev },
     { publisher, name },
@@ -441,7 +445,7 @@ export type AppOutcome = "published" | "skipped";
  * gate run leaves the target at a higher minted version, and a downgrade would be refused). After
  * a publish, the server must report exactly the local version.
  */
-async function ensureApp(
+export async function ensureApp(
   c: Conn,
   bytes: Uint8Array,
   label: string,
@@ -486,7 +490,7 @@ async function downloadSymbols(c: Conn, dir: string, cache: string): Promise<voi
   }
 }
 
-async function alcCompile(
+export async function alcCompile(
   alc: string,
   project: string,
   cache: string,
