@@ -68,11 +68,15 @@ export function itestLaunchName(env: NodeJS.ProcessEnv = process.env): string {
   return `launch.${name}.json`;
 }
 
+/** R589: a selected config whose paired launch file is missing, or names another server. */
+export class ItestLaunchPairError extends Error {}
+
 /**
- * The launch path for a fixture directory. When the paired file is absent, `launch.local.json` is
- * used and a line says so. That fallback is deliberate: the itests read only `environmentType` and
- * `environmentName` from it, and the configs selected before R589 (`agent`, `cronus*`) were always
- * run with `launch.local.json`, so refusing would break them for a file with no server in it.
+ * The launch path for a fixture directory. STRICT (orchestrator ruling, 2026-10-21): with
+ * `LETHAL_ITEST_CONFIG` selecting a config, its paired `launch.<name>.json` must exist, or the
+ * itest refuses; there is no fallback to `launch.local.json`, which may describe another server.
+ * With nothing selected, `launch.local.json` is returned as before (its readers decide whether a
+ * missing one is an error).
  */
 export function itestLaunchPath(
   projectDir: string,
@@ -80,8 +84,47 @@ export function itestLaunchPath(
   exists: (path: string) => boolean = existsSync,
 ): string {
   const named = join(projectDir, ".vscode", itestLaunchName(env));
-  const fallback = join(projectDir, ".vscode", DEFAULT_ITEST_LAUNCH);
-  if (named === fallback || exists(named)) return named;
-  console.log(`[itest] ${named} is absent; using ${fallback} (environmentType/Name only)`);
-  return fallback;
+  const local = join(projectDir, ".vscode", DEFAULT_ITEST_LAUNCH);
+  if (named === local || exists(named)) return named;
+  throw new ItestLaunchPairError(
+    `LETHAL_ITEST_CONFIG=${itestConfigName(env)} pairs with ${named}, which does not exist (the default pair is ${local}). Fix: if ${local} targets the same server, copy it to ${named}; for a BC on Linux server, run bun scripts/bc-linux-setup.ts --server <name>.`,
+  );
+}
+
+/** Host (lowercase) and port of a server URL; `port` only when the URL states one. */
+function hostAndPort(url: string, what: string): { host: string; port?: number } {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new ItestLaunchPairError(`${what}: server ${JSON.stringify(url)} is not a URL`);
+  }
+  return { host: u.hostname.toLowerCase(), ...(u.port !== "" ? { port: Number(u.port) } : {}) };
+}
+
+/**
+ * R589: refuses when the launch file and the selected lethal config name different servers. It
+ * compares the host, and the dev port where both state one (`port`, or a port written into
+ * `server`). A launch file that names no server is not compared. Reads only `server` and `port`
+ * from each side, so nothing else in either file reaches a message.
+ */
+export function assertLaunchMatchesConfig(
+  launch: object,
+  bcdev: { readonly server: string; readonly port?: number },
+  launchPath: string,
+): void {
+  const l = launch as { server?: unknown; port?: unknown };
+  if (typeof l.server !== "string" || l.server === "") return;
+  const fromLaunch = hostAndPort(l.server, launchPath);
+  const fromConfig = hostAndPort(bcdev.server, "the lethal config");
+  const launchPort = typeof l.port === "number" ? l.port : fromLaunch.port;
+  const configPort = bcdev.port ?? fromConfig.port;
+  const hostDiffers = fromLaunch.host !== fromConfig.host;
+  const portDiffers =
+    launchPort !== undefined && configPort !== undefined && launchPort !== configPort;
+  if (hostDiffers || portDiffers) {
+    throw new ItestLaunchPairError(
+      `${launchPath} names ${fromLaunch.host}${launchPort !== undefined ? `:${launchPort}` : ""}, but the selected lethal config names ${fromConfig.host}${configPort !== undefined ? `:${configPort}` : ""}. The pair must describe one server.`,
+    );
+  }
 }

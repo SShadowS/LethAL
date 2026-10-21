@@ -60,7 +60,7 @@ export type ServerName = keyof typeof SERVERS;
  * packages/runner/itest), with the pair each one needs published. `sandbox-app` also serves
  * `itest:bcdev-names`, `-wrapped`, `:verify`, `:lease`, `:stale-publish` and `:testapp`;
  * `sandbox-data` serves `:tables`, `:chunked` and `:verify-scale`; `sandbox-harden` also serves
- * `:verify-agreement`. The names and wrapped pairs are not published here (see the R589 build notes).
+ * `:verify-agreement`. What each gate needs PUBLISHED is `PUBLISH_PLAN`, which is longer.
  */
 export const GATE_FIXTURES = [
   { configDir: "sandbox-app", target: "sandbox-app", tests: "sandbox-tests" },
@@ -68,6 +68,38 @@ export const GATE_FIXTURES = [
   { configDir: "sandbox-hang", target: "sandbox-hang", tests: "sandbox-hang-tests" },
   { configDir: "sandbox-harden", target: "sandbox-harden", tests: "sandbox-harden-tests" },
 ] as const;
+
+export interface PublishStep {
+  /** The fixture published first. */
+  readonly target: string;
+  /** `/define:` symbols for the target's compile (fixtures/README.md says which). */
+  readonly defines?: readonly string[];
+  /** Apps that depend on `target`, compiled against the target package the server holds. */
+  readonly dependents: readonly string[];
+}
+
+/**
+ * Every app a BC gate needs on the server, after LethAL Control, in this order (Cronus28's setup,
+ * /coord/handoff/R-583/cronus28-setup.md). LethAL publishes only the instrumented target; the rest
+ * is the user's job (CLAUDE.md, R56):
+ * - `sandbox-probes` before `sandbox-app`: `itest:bcdev`'s protocol-invariant probes call it
+ *   (`ZzFailsIfMarkerPresent`, codeunit 79210), and without it they find 0 methods.
+ * - `sandbox-harden-answers` for `itest:harden`'s answer key (fixtures/README.md, sandbox-harden).
+ * - `sandbox-wrapped` with `/define:WRAPDEF` for `itest:bcdev-wrapped` (fixtures/README.md: the
+ *   tests app must be compiled against the WRAPDEF build, or the run refuses `StaleTestAppError`).
+ * - `sandbox-names` for `itest:bcdev-names`.
+ * `itest:chunked` and `:verify-scale` use the `sandbox-data` pair, `:verify`, `:lease`,
+ * `:stale-publish` and `:testapp` the `sandbox-app` pair, `:agreement` the `sandbox-harden` pair.
+ */
+export const PUBLISH_PLAN: readonly PublishStep[] = [
+  { target: "sandbox-probes", dependents: [] },
+  { target: "sandbox-app", dependents: ["sandbox-tests"] },
+  { target: "sandbox-data", dependents: ["sandbox-data-tests"] },
+  { target: "sandbox-hang", dependents: ["sandbox-hang-tests"] },
+  { target: "sandbox-harden", dependents: ["sandbox-harden-tests", "sandbox-harden-answers"] },
+  { target: "sandbox-wrapped", defines: ["WRAPDEF"], dependents: ["sandbox-wrapped-tests"] },
+  { target: "sandbox-names", dependents: ["sandbox-names-tests"] },
+];
 
 // ---------------------------------------------------------------------------------------------
 // (a) the secret file
@@ -419,11 +451,17 @@ async function downloadSymbols(c: Conn, dir: string, cache: string): Promise<voi
   }
 }
 
-async function alcCompile(alc: string, project: string, cache: string, out: string): Promise<void> {
-  const p = Bun.spawn([alc, `/project:${project}`, `/packagecachepath:${cache}`, `/out:${out}`], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+async function alcCompile(
+  alc: string,
+  project: string,
+  cache: string,
+  out: string,
+  defines: readonly string[] = [],
+): Promise<void> {
+  const argv = [alc, `/project:${project}`, `/packagecachepath:${cache}`];
+  if (defines.length > 0) argv.push(`/define:${defines.join(",")}`);
+  argv.push(`/out:${out}`);
+  const p = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([
     new Response(p.stdout).text(),
     new Response(p.stderr).text(),
@@ -437,19 +475,19 @@ async function alcCompile(alc: string, project: string, cache: string, out: stri
   }
 }
 
-/** Target first, then tests compiled against the target package the SERVER now holds. */
-async function ensurePair(
+/** Target first, then each dependent compiled against the target package the SERVER now holds. */
+async function ensureStep(
   c: Conn,
   alc: string,
-  fixture: (typeof GATE_FIXTURES)[number],
+  step: PublishStep,
   symbols: string,
   log: string[],
 ): Promise<void> {
-  const targetDir = join(REPO, "fixtures", fixture.target);
-  const testsDir = join(REPO, "fixtures", fixture.tests);
-  const build = join(STATE_ROOT, c.server, "build", fixture.target);
+  const targetDir = join(REPO, "fixtures", step.target);
+  const build = join(STATE_ROOT, c.server, "build", step.target);
   rmSync(build, { recursive: true, force: true });
   mkdirSync(build, { recursive: true });
+  await downloadSymbols(c, targetDir, symbols);
 
   const t = manifest(targetDir);
   const tBefore = await residentVersion(c, t.publisher, t.name);
@@ -457,28 +495,32 @@ async function ensurePair(
     log.push(`  skipped   ${t.name}: the server holds ${tBefore} (app.json ${t.version})`);
   } else {
     const out = join(build, "target.app");
-    await alcCompile(alc, targetDir, symbols, out);
+    await alcCompile(alc, targetDir, symbols, out, step.defines);
     const r = await ensureApp(c, readFileSync(out), t.name);
     log.push(`  ${r.outcome.padEnd(9)} ${t.name} ${r.version}`);
   }
 
-  const s = manifest(testsDir);
-  const sBefore = await residentVersion(c, s.publisher, s.name);
-  if (sBefore !== null && compareAppVersions(sBefore, s.version) >= 0) {
-    log.push(`  skipped   ${s.name}: the server holds ${sBefore} (app.json ${s.version})`);
-    return;
+  for (const dependent of step.dependents) {
+    const depDir = join(REPO, "fixtures", dependent);
+    const s = manifest(depDir);
+    const sBefore = await residentVersion(c, s.publisher, s.name);
+    if (sBefore !== null && compareAppVersions(sBefore, s.version) >= 0) {
+      log.push(`  skipped   ${s.name}: the server holds ${sBefore} (app.json ${s.version})`);
+      continue;
+    }
+    const cache = join(build, `${dependent}-symbols`);
+    mkdirSync(cache, { recursive: true });
+    await downloadSymbols(c, depDir, cache);
+    const resident = await residentPackage(c, t.publisher, t.name);
+    if (resident === null) {
+      throw new Error(`${c.server}: ${t.name} is not on the server after its publish`);
+    }
+    writeFileSync(join(cache, `${t.publisher}_${t.name}.app`), resident);
+    const out = join(build, `${dependent}.app`);
+    await alcCompile(alc, depDir, cache, out);
+    const r = await ensureApp(c, readFileSync(out), s.name);
+    log.push(`  ${r.outcome.padEnd(9)} ${s.name} ${r.version}`);
   }
-  const cache = join(build, "tests-symbols");
-  mkdirSync(cache, { recursive: true });
-  await downloadSymbols(c, testsDir, cache);
-  const resident = await residentPackage(c, t.publisher, t.name);
-  if (resident === null)
-    throw new Error(`${c.server}: ${t.name} is not on the server after its publish`);
-  writeFileSync(join(cache, `${t.publisher}_${t.name}.app`), resident);
-  const out = join(build, "tests.app");
-  await alcCompile(alc, testsDir, cache, out);
-  const r = await ensureApp(c, readFileSync(out), s.name);
-  log.push(`  ${r.outcome.padEnd(9)} ${s.name} ${r.version}`);
 }
 
 export function sha256Of(bytes: Uint8Array): string {
@@ -565,7 +607,7 @@ async function setupServer(
   if (dryRun) {
     for (const { path, launch } of configs) summary.push(`  would write ${path}, ${launch}`);
     summary.push(
-      `  would lease ${server}, publish LethAL Control and ${GATE_FIXTURES.length} pairs, run doctor`,
+      `  would lease ${server}, publish LethAL Control, then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
     );
     return true;
   }
@@ -598,13 +640,12 @@ async function setupServer(
     rmSync(symbols, { recursive: true, force: true });
     mkdirSync(symbols, { recursive: true });
     let ok = true;
-    for (const { fixture } of configs) {
+    for (const step of PUBLISH_PLAN) {
       try {
-        await downloadSymbols(conn, join(REPO, "fixtures", fixture.target), symbols);
-        await ensurePair(conn, tools.alcPath, fixture, symbols, summary);
+        await ensureStep(conn, tools.alcPath, step, symbols, summary);
       } catch (err) {
         ok = false;
-        summary.push(`  FAILED    ${fixture.target} pair: ${errText(err)}`);
+        summary.push(`  FAILED    ${step.target}: ${errText(err)}`);
       }
     }
     // (e)

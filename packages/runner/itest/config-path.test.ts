@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DEFAULT_ITEST_CONFIG,
   DEFAULT_ITEST_LAUNCH,
   ItestConfigNameError,
+  ItestLaunchPairError,
+  assertLaunchMatchesConfig,
   itestConfigName,
   itestConfigPath,
   itestLaunchName,
@@ -62,9 +65,55 @@ describe("the launch file follows the selected config (R589)", () => {
     expect(fixed).toEqual([]);
   });
 
-  test("an absent paired file falls back to launch.local.json (agent, cronus* configs)", () => {
-    const env = { LETHAL_ITEST_CONFIG: "lethal.config.agent.json" };
-    expect(posix(itestLaunchPath(dir, env, () => false))).toBe(`${dir}/.vscode/launch.local.json`);
+  test("STRICT: a selected config whose launch file is missing refuses, naming both and the fix", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "launch-pair-"));
+    mkdirSync(join(tmp, ".vscode"));
+    writeFileSync(join(tmp, ".vscode", "launch.local.json"), '{"configurations":[{}]}');
+    const env = { LETHAL_ITEST_CONFIG: "lethal.config.bc1.json" };
+    let message = "";
+    try {
+      itestLaunchPath(tmp, env);
+    } catch (e) {
+      expect(e).toBeInstanceOf(ItestLaunchPairError);
+      message = (e as Error).message;
+    }
+    expect(message).toContain("launch.bc1.json");
+    expect(message).toContain("launch.local.json");
+    expect(message).toContain("copy");
+    writeFileSync(join(tmp, ".vscode", "launch.bc1.json"), '{"configurations":[{}]}');
+    expect(posix(itestLaunchPath(tmp, env))).toBe(posix(join(tmp, ".vscode", "launch.bc1.json")));
+  });
+
+  test("unset, an empty fixture still gets launch.local.json and no refusal", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "launch-pair-"));
+    expect(posix(itestLaunchPath(tmp, {}))).toBe(posix(join(tmp, ".vscode", "launch.local.json")));
+  });
+});
+
+describe("the launch file and the lethal config must name one server (R589)", () => {
+  const bc1 = { server: "http://192.168.2.157:7049", port: 7049 };
+
+  test("a matching pair passes (host, and dev port where both state it)", () => {
+    expect(() =>
+      assertLaunchMatchesConfig({ server: "http://192.168.2.157", port: 7049 }, bc1, "l.json"),
+    ).not.toThrow();
+    expect(() =>
+      assertLaunchMatchesConfig({ server: "http://Cronus28" }, { server: "http://cronus28" }, "l"),
+    ).not.toThrow();
+    // A launch file naming no server has nothing to compare.
+    expect(() => assertLaunchMatchesConfig({}, bc1, "l.json")).not.toThrow();
+  });
+
+  test("a bc1 config paired with a launch file naming another server refuses", () => {
+    expect(() =>
+      assertLaunchMatchesConfig({ server: "http://Cronus28", port: 7049 }, bc1, "l.json"),
+    ).toThrow(ItestLaunchPairError);
+  });
+
+  test("the same host on another dev port (bc2's) refuses", () => {
+    expect(() =>
+      assertLaunchMatchesConfig({ server: "http://192.168.2.157", port: 7149 }, bc1, "l.json"),
+    ).toThrow(ItestLaunchPairError);
   });
 });
 

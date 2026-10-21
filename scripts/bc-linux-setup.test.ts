@@ -6,6 +6,7 @@ import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import {
   type LeaseDeps,
   NotIgnoredError,
+  PUBLISH_PLAN,
   SecretFileError,
   buildConfig,
   buildLaunch,
@@ -142,6 +143,43 @@ describe("config writer", () => {
     // `authentication: "UserPassword"` names the scheme; no KEY may hold a login.
     const keys = JSON.stringify(launch).match(/"[^"]+":/g) ?? [];
     expect(keys.filter((k) => /password|user/i.test(k))).toEqual([]);
+  });
+});
+
+describe("publish plan", () => {
+  const targets = PUBLISH_PLAN.map((s) => s.target);
+  const all = PUBLISH_PLAN.flatMap((s) => [s.target, ...s.dependents]);
+
+  test("sandbox-probes is published, before sandbox-app (itest:bcdev's invariant probes)", () => {
+    expect(targets).toContain("sandbox-probes");
+    expect(targets.indexOf("sandbox-probes")).toBeLessThan(targets.indexOf("sandbox-app"));
+  });
+
+  test("every BC gate's apps are in it, and wrapped is built with WRAPDEF", () => {
+    for (const app of [
+      "sandbox-app",
+      "sandbox-tests",
+      "sandbox-data",
+      "sandbox-data-tests",
+      "sandbox-hang",
+      "sandbox-hang-tests",
+      "sandbox-harden",
+      "sandbox-harden-tests",
+      "sandbox-harden-answers",
+      "sandbox-wrapped",
+      "sandbox-wrapped-tests",
+      "sandbox-names",
+      "sandbox-names-tests",
+    ]) {
+      expect(all).toContain(app);
+    }
+    expect(PUBLISH_PLAN.find((s) => s.target === "sandbox-wrapped")?.defines).toEqual(["WRAPDEF"]);
+  });
+
+  test("every app in it is a fixture with an app.json", () => {
+    for (const app of all) {
+      expect(existsSync(join(import.meta.dir, "..", "fixtures", app, "app.json"))).toBe(true);
+    }
   });
 });
 
