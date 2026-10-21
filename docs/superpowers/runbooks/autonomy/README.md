@@ -79,6 +79,12 @@ next free id right before writing).
     written to `/coord/handoff/<task>/` as it runs.
   - **Wait for at most one OTHER heavy job, not zero.** A driver that waits for an empty container
     can starve for hours. The limit stays two heavy jobs container-wide.
+  - **Check before any status line (owner, 2026-10-21).** Before you report the state of background
+    work (a gate, a driver, a queue), read its log and the running processes with their working
+    directory. Never repeat the last state you remember: R-577 reported a confirm as "still waiting for
+    a slot" an hour after it had PASSED, because the confirm and the slice queue ran as one background
+    job, so the confirm's end raised no notification. Run each phase as its own background job (or
+    watch the log's phase lines), so every phase's end reaches you.
 
 ## coord
 
