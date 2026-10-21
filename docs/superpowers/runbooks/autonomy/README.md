@@ -181,9 +181,10 @@ containers assigned to this project can be leased. A missing `allocation.json` t
       stale-publish, testapp, lease.
     - `bc2`: chunked, hang, harden, agreement. (bcdev and verify-scale passed on bc2 only on the
       pre-runtime-17 fixtures, so they are not admitted there yet.)
-    - `bc3`: bcdev and hang were proven on the PRE-runtime-17 fixtures only, and it now carries the
-      R594 CDO oracle; run `bc-linux-setup.ts --server bc3` and re-prove a gate there before using
-      it for that gate.
+    - `bc3`: hang (R-389, 2026-10-21, runtime-17 fixtures, LethAL Control 1.0.0.23). bcdev was
+      proven there on the PRE-runtime-17 fixtures only, and it now carries the R594 CDO oracle; run
+      `bc-linux-setup.ts --server bc3` and re-prove any other gate there before using it for that
+      gate.
 - Before any work that touches it (live gates, control-app publish, fixture publish): check it
   is running (host only: `pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`;
   in the container, `kraken tentacle status`), then
