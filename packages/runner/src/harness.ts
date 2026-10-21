@@ -72,8 +72,12 @@ const MIN_PROTOCOL_VERSION = 2;
  * "clientProtocol is not a valid parameter" 400 for a build older still. Each of those is a
  * different-looking failure for one cause, which is exactly what R28 was filed for.
  *
- * Kept in LOCKSTEP with `extensions/lethal-control/app.json`'s `version`: raising this constant
- * without bumping that file makes a freshly built control app fail its own gate. Pinned by a test.
+ * Never AHEAD of `extensions/lethal-control/app.json`'s `version`: raising this constant without
+ * bumping that file makes a freshly built control app fail its own gate. Pinned by a test. It may
+ * lag behind for an action the client treats as optional: 1.0.0.23 adds R389's `DependentCount`,
+ * which an older control app answers with 404, read as "unknown" (the guard falls back).
+ * Raise it (to app.json's version) whenever a client path REQUIRES a new control action and has
+ * no fallback: that is why the two were once pinned equal.
  * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
  * the runtime-16 build is refused before any gate measures against it.
  */
@@ -105,6 +109,18 @@ export class HarnessVerificationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "HarnessVerificationError";
+  }
+}
+
+/**
+ * R389: the deployed control app has no `DependentCount` action (it predates 1.0.0.23; BC answers
+ * 404). Not a failure: `MIN_CONTROL_VERSION` stays below 1.0.0.23 on purpose, and the closed-world
+ * guard reads this as "unknown" and falls back. Extends `Error` directly (CLAUDE.md).
+ */
+export class DependentCountUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DependentCountUnavailableError";
   }
 }
 
@@ -404,6 +420,82 @@ export class HarnessVerifier {
    */
   async fetchLease(): Promise<LeaseSnapshot> {
     return parseLeaseSnapshot(await this.fetchHarnessInfo());
+  }
+
+  /**
+   * R389: how many PUBLISHED apps declare `appId` as a dependency (control app 1.0.0.23,
+   * `DependentCount`). Refuses a non-GUID before any request. Throws on every answer it cannot
+   * read as that app's count, never a plausible 0; `DependentCountUnavailableError` for a control
+   * app without the action (404).
+   */
+  async fetchDependentCount(appId: string): Promise<number> {
+    if (!GUID_RE.test(appId)) {
+      throw new Error(`DependentCount: app id ${JSON.stringify(appId)} is not a bare GUID`);
+    }
+    const params = new URLSearchParams({ company: this.cfg.company });
+    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
+    const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_DependentCount?${params.toString()}`;
+    // Sol's review: the timeout covers the BODY too. A server that sends headers and then stalls
+    // must time out (the guard then falls back), never hang the run. The race also covers a fetch
+    // whose body ignores the abort signal.
+    const ms = this.cfg.timeoutMs ?? 30_000;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new HarnessVerificationError(`DependentCount timed out after ${ms} ms`));
+      }, ms);
+    });
+    const exchange = async (): Promise<{ status: number; ok: boolean; text: string }> => {
+      const r = await this.fetchFn(url, {
+        method: "POST",
+        headers: {
+          authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ appId }),
+        signal: controller.signal,
+      });
+      return { status: r.status, ok: r.ok, text: await r.text() };
+    };
+    let res: { status: number; ok: boolean; text: string };
+    try {
+      res = await Promise.race([exchange(), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      const what = `DependentCount failed: HTTP ${res.status}${res.text ? `: ${res.text}` : ""}`;
+      if (res.status === 401 || res.status === 403) throw new HarnessAuthError(what);
+      if (res.status === 404) throw new DependentCountUnavailableError(what);
+      throw new HarnessVerificationError(what);
+    }
+    let value: unknown;
+    try {
+      value = (JSON.parse(res.text) as { value?: unknown }).value;
+    } catch {
+      value = undefined;
+    }
+    let parsed: { appId?: unknown; publishedDependents?: unknown };
+    try {
+      parsed = JSON.parse(String(value)) as typeof parsed;
+    } catch {
+      throw new HarnessVerificationError(`DependentCount value is not JSON: ${String(value)}`);
+    }
+    const n = parsed?.publishedDependents;
+    if (
+      typeof parsed?.appId !== "string" ||
+      parsed.appId.toLowerCase() !== appId.toLowerCase() ||
+      typeof n !== "number" ||
+      !Number.isInteger(n) ||
+      n < 0
+    ) {
+      throw new HarnessVerificationError(
+        `DependentCount answered ${String(value)}, not a count for app ${appId}`,
+      );
+    }
+    return n;
   }
 
   /**

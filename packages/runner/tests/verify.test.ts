@@ -19,6 +19,7 @@ import type {
 } from "../src/backend";
 import * as baselineSnapshotModule from "../src/baseline-snapshot";
 import { hashTargetSource } from "../src/baseline-snapshot";
+import { ClosedWorldChangedError } from "../src/closed-world";
 import {
   DependencyUnreadableError,
   appInputsOfAppJson,
@@ -891,6 +892,31 @@ describe("planVerify", () => {
     });
     expect(keys(plan.newTests)).toEqual(["50101::OnlyUnderX"]);
     expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50100::A", "50101::OnlyUnderX"]);
+  });
+
+  // R389 guard: the source run recorded its digests with the closed-world guard on. A verify whose
+  // guard answers otherwise computes other digests, so nothing carries; the same answer carries.
+  test("R389: a closed-world guard flip since the source run makes every test new; the same guard carries", async () => {
+    const dir = testDir([{ id: 50100, name: "Old", methods: ["A"] }]);
+    const closed = { public: true, internal: true };
+    const recorded = await testDigests(dir, await discoverTests(dir), {
+      ...INPUTS,
+      closedWorld: closed,
+    });
+    const plan = (closedWorld: { public: boolean; internal: boolean } | undefined) =>
+      planVerify({
+        coverage: "procedure",
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "Old", "A")],
+        sourceTestDigests: recorded,
+        dependencies: DEPS,
+        testDir: dir,
+        ...(closedWorld !== undefined ? { closedWorld: async () => closedWorld } : {}),
+      });
+    expect(keys((await plan(undefined)).newTests)).toEqual(["50100::A"]);
+    expect(keys((await plan({ public: false, internal: false })).newTests)).toEqual(["50100::A"]);
+    expect(keys((await plan(closed)).newTests)).toEqual([]);
   });
 
   /** One survivor covered by `T.M`, planned against the given baseline and test codeunits. */
@@ -2077,6 +2103,11 @@ describe("C02-09: gap ids", () => {
       readonly maxNewTests?: number;
       /** R259: what the test-app publish answers; without it a publish throws. */
       readonly published?: PublishedTestApp;
+      /** R389: the backend's DependentCount, the test app.json's id, and the source run's
+       *  recorded digests made under this closed-world answer. */
+      readonly dependentCount?: (appId: string) => Promise<number>;
+      readonly testAppId?: string;
+      readonly sourceClosedWorld?: { public: boolean; internal: boolean };
     } = {},
   ) {
     const projectDir = scratch("lethal-verify-gap-proj-");
@@ -2098,7 +2129,12 @@ describe("C02-09: gap ids", () => {
     }
     const testDir = over.testDir ?? scratch("lethal-verify-gap-tests-");
     if (over.testDir === undefined) {
-      writeFileSync(join(testDir, "app.json"), TEST_APP_JSON);
+      writeFileSync(
+        join(testDir, "app.json"),
+        over.testAppId === undefined
+          ? TEST_APP_JSON
+          : JSON.stringify({ ...JSON.parse(TEST_APP_JSON), id: over.testAppId }),
+      );
       writeFileSync(
         join(testDir, "50100.Codeunit.al"),
         'codeunit 50100 "T"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure M()\n    begin\n    end;\n}\n',
@@ -2128,6 +2164,9 @@ describe("C02-09: gap ids", () => {
                 projectDir,
               ),
               buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
+              ...(over.sourceClosedWorld !== undefined
+                ? { closedWorld: over.sourceClosedWorld }
+                : {}),
             }),
           ),
       runId,
@@ -2165,6 +2204,7 @@ describe("C02-09: gap ids", () => {
           compiledAgainst: { artifactId: target.artifactId, sha256: target.sha256 },
         }),
         publishTestApp: async () => over.published ?? boom(),
+        ...(over.dependentCount !== undefined ? { dependentCount: over.dependentCount } : {}),
       },
       lease: {
         client: {
@@ -2387,6 +2427,34 @@ describe("C02-09: gap ids", () => {
       ).toEqual([{ coverage_mode: "fenced" }]);
       w.store.close();
     });
+  });
+
+  // R389, sol's review critical 3: verify plans with the guard closed (0 dependents), a dependent
+  // is published before it runs, and the guard answers 1 after execution. The plan read tests as
+  // unchanged under an answer that no longer holds: refused loudly. Control: 0 both times.
+  test("R389: a closed-world answer that changes during verify throws ClosedWorldChangedError; the same answer completes", async () => {
+    const TEST_ID = "33333333-3333-3333-3333-333333333333";
+    for (const after of [1, 0]) {
+      let n = 0;
+      const asked: string[] = [];
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        testAppId: TEST_ID,
+        sourceClosedWorld: { public: true, internal: true },
+        dependentCount: async (id) => {
+          asked.push(id);
+          return n++ === 0 ? 0 : after;
+        },
+      });
+      const out = w.verify(["0/M0001"]);
+      if (after === 1) await expect(out).rejects.toBeInstanceOf(ClosedWorldChangedError);
+      else {
+        const done = await out;
+        expect(done.refused).toBeUndefined();
+        expect(done.results.map((r) => r.verdict)).toEqual(["survived"]);
+      }
+      expect(asked).toEqual([TEST_ID, TEST_ID]);
+      w.store.close();
+    }
   });
 
   test("a gap of reader-marked survivors reads exactly like naming them one by one", async () => {

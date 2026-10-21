@@ -605,6 +605,16 @@ describe("runSession", () => {
         ...entries,
       });
     const OLD_PKG = pkg({ "src/SandboxTests.Codeunit.al": TEST_AL });
+    /** R495: `fakeMicrosoftMode` with OLD_PKG installed at its own version, so the run's
+     *  test-app identity is proven and recorded (R389's guard is bound into it). */
+    const provenMode = (): MicrosoftMode => {
+      const base = fakeMicrosoftMode();
+      if (base.kind !== "bytes") throw new Error("fakeMicrosoftMode is not bytes mode");
+      return {
+        ...base,
+        installed: async (id) => (id === APP_ID ? ["1.0.0.2"] : base.installed(id)),
+      };
+    };
     /** R-371: the inputs the run digests with: the package's manifest, or the disk's app.json.
      *  R-385: the published path reads Microsoft apps by bytes, al-runner's by declared version. */
     const inputsFor = async (dirs: { projectDir: string; testDir: string }, from?: Uint8Array) => {
@@ -631,9 +641,12 @@ describe("runSession", () => {
       fetch = true,
       /** `null`: a backend with no microsoftMode. */
       microsoft: MicrosoftMode | null = fakeMicrosoftMode(),
+      /** R389: the test app.json written, and the backend's `dependentCount`, if any. */
+      testApp: Record<string, unknown> = TESTS_APP,
+      dependentCount?: (appId: string) => Promise<number>,
     ) {
       const dirs = await makeProject(NEW_AL);
-      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(testApp));
       const stub = new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), [
         "IsOverBudget",
       ]);
@@ -641,9 +654,10 @@ describe("runSession", () => {
         ? Object.assign(stub, {
             fetchPublishedAppPackage: typeof read === "function" ? read : async () => read,
             ...(microsoft !== null ? { microsoftMode: () => microsoft } : {}),
+            ...(dependentCount !== undefined ? { dependentCount } : {}),
           })
         : stub;
-      const store = new ResultsStore(":memory:");
+      const store = extra.store ?? new ResultsStore(":memory:");
       const events: RunEvent[] = [];
       await runSession({
         backend,
@@ -657,8 +671,227 @@ describe("runSession", () => {
       const digestWarning = events.flatMap((e) =>
         e.type === "warning" && e.code === "test-digests-unavailable" ? [e.message] : [],
       );
-      return { dirs, store, runId, digestWarning };
+      const guardWarning = events.flatMap((e) =>
+        e.type === "warning" &&
+        (e.code === "closed-world-unmeasured" || e.code === "closed-world-changed")
+          ? [`${e.code}: ${e.message}`]
+          : [],
+      );
+      const recordedHash = (
+        store.db.query("SELECT test_app_hash AS h FROM runs WHERE id = ?").get(runId) as {
+          h: string | null;
+        }
+      ).h;
+      const snapshotHashes = (
+        store.db
+          .query("SELECT test_app_hash AS h FROM baseline_snapshots WHERE run_id = ?")
+          .all(runId) as { h: string }[]
+      ).map((r) => r.h);
+      return { dirs, store, runId, digestWarning, guardWarning, recordedHash, snapshotHashes };
     }
+
+    // R389 guard: the run asks the backend by the PUBLISHED package's id (APP_ID in OLD_PKG's
+    // manifest), before execution and again after it, and records the answer in every digest, in
+    // the parts and in the run's test-app identity; a failing ask falls back with a warning.
+    test("R389: the run records the closed-world guard; an erroring ask falls back with a warning", async () => {
+      const asked: string[] = [];
+      const closed = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
+      expect(asked).toEqual([APP_ID, APP_ID]); // before and after execution
+      const inputs = await inputsFor(closed.dirs, OLD_PKG);
+      // OLD_PKG's manifest carries no InternalsVisibleTo element at all: unknown, so internal
+      // procedures stay open and only public ones are closed-world.
+      expect(closed.store.testDigests(closed.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], {
+          ...inputs,
+          closedWorld: { public: true, internal: false },
+        }),
+      );
+      expect(
+        (closed.store.testDigestParts(closed.runId) as { closedWorld?: unknown }).closedWorld,
+      ).toBe("public");
+      expect(closed.guardWarning).toEqual([]);
+      // Sol's review, critical 2: the answer is bound into the identity resume, survivor skips and
+      // baseline reuse compare.
+      expect(closed.recordedHash).toMatch(/\|closed-world:public$/);
+      expect(closed.snapshotHashes.length).toBeGreaterThan(0);
+      for (const h of closed.snapshotHashes) expect(h).toMatch(/\|closed-world:public$/);
+      closed.store.close();
+
+      const failed = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => {
+          throw new Error("boom");
+        },
+      );
+      expect(failed.recordedHash).not.toContain("closed-world");
+      expect(failed.store.testDigests(failed.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], inputs),
+      );
+      expect(
+        (failed.store.testDigestParts(failed.runId) as { closedWorld?: unknown }).closedWorld,
+      ).toBe("none");
+      expect(failed.guardWarning).toHaveLength(1);
+      expect(failed.guardWarning[0]).toContain("boom");
+      failed.store.close();
+    });
+
+    // Merge review I2: a closed-world run whose test app is NOT proven installed (R495) records no
+    // identity at all. The same closed answer after execution upgrades only its digests; a changed
+    // answer warns and keeps the open digests, and there is no identity to revoke.
+    test("R389: an unproven closed-world run upgrades only its digests on the same answer", async () => {
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => 0,
+      );
+      expect(r.recordedHash).toBeNull();
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], {
+          ...(await inputsFor(r.dirs, OLD_PKG)),
+          closedWorld: { public: true, internal: false },
+        }),
+      );
+      expect((r.store.testDigestParts(r.runId) as { closedWorld?: unknown }).closedWorld).toBe(
+        "public",
+      );
+      expect(r.guardWarning).toEqual([]);
+      r.store.close();
+    });
+
+    test("R389: an unproven closed-world run whose answer changes warns, keeps open digests and revokes nothing", async () => {
+      let n = 0;
+      const revoked: number[] = [];
+      const store = new (class extends ResultsStore {
+        override revokeTestAppHash(runId: number, suffix: string): void {
+          revoked.push(runId);
+          super.revokeTestAppHash(runId, suffix);
+        }
+      })(":memory:");
+      const r = await r372Run(
+        OLD_PKG,
+        { store },
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => (n++ === 0 ? 0 : 1),
+      );
+      expect(n).toBe(2);
+      expect(revoked).toEqual([]);
+      expect(r.recordedHash).toBeNull();
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.guardWarning.some((w) => w.startsWith("closed-world-changed"))).toBe(true);
+      r.store.close();
+    });
+
+    // Sol's review, critical 1: the server runs (and the run digests) the published package, whose
+    // manifest names APP_ID; the disk app.json names another app with no dependents.
+    test("R389: a disk app.json naming another app than the published package stays open-world and asks nothing", async () => {
+      const asked: string[] = [];
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: "22222222-2222-2222-2222-222222222222" },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
+      expect(asked).toEqual([]);
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.recordedHash).not.toContain("closed-world");
+      expect(r.guardWarning.join()).toContain("22222222-2222-2222-2222-222222222222");
+      r.store.close();
+    });
+
+    // Sol's review, critical 3: 0 before execution, 1 after (a dependent published mid-run).
+    test("R389: a guard answer that changes during the run keeps open-world digests and revokes the run's identity", async () => {
+      let n = 0;
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => (n++ === 0 ? 0 : 1),
+      );
+      expect(n).toBe(2);
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.recordedHash).toMatch(/\|closed-world:revoked$/);
+      expect(r.snapshotHashes.length).toBeGreaterThan(0);
+      for (const h of r.snapshotHashes) expect(h).toMatch(/\|closed-world:revoked$/);
+      expect(r.guardWarning.some((w) => w.startsWith("closed-world-changed"))).toBe(true);
+      r.store.close();
+    });
+
+    // Sol's review, critical 2: a dependent published between a run and its resume. The package
+    // bytes are unchanged, so only the guard's answer differs; the resume must carry nothing.
+    test("R389: --resume-run across a guard flip is refused (R247's refusal); the same answer resumes", async () => {
+      for (const later of [1, 0]) {
+        const first = await r372Run(
+          OLD_PKG,
+          {},
+          true,
+          provenMode(),
+          { ...TESTS_APP, id: APP_ID },
+          async () => 0,
+        );
+        const backend = Object.assign(
+          new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), ["IsOverBudget"]),
+          {
+            fetchPublishedAppPackage: async () => OLD_PKG,
+            microsoftMode: () => provenMode(),
+            dependentCount: async () => later,
+          },
+        );
+        const resumed = runSession({
+          backend,
+          store: first.store,
+          ...first.dirs,
+          selectorIds,
+          resume: first.runId,
+        });
+        if (later === 1) await expect(resumed).rejects.toThrow(/closed-world:public.*R247/s);
+        else expect((await resumed).resumedFrom?.runId).toBe(first.runId);
+        first.store.close();
+      }
+    });
 
     test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {
       const { dirs, store, runId, digestWarning } = await r372Run(OLD_PKG);
@@ -764,12 +997,26 @@ describe("runSession", () => {
 
     // envTool.publishApps are prebuilt .app files published under the lease, AFTER the read.
     test("an env-tool session (afterLeaseAcquired) records NULL even when the read has source", async () => {
-      const { store, runId, digestWarning } = await r372Run(OLD_PKG, {
-        afterLeaseAcquired: async () => {},
-      });
+      // R389 (merge review M1): the session stays open-world, so the guard is never asked, even
+      // on a backend that answers 0 dependents for the test app the app.json names.
+      const asked: string[] = [];
+      const { store, runId, digestWarning, recordedHash, snapshotHashes } = await r372Run(
+        OLD_PKG,
+        { afterLeaseAcquired: async () => {} },
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
       expect(store.testDigests(runId)).toBeNull();
       expect(digestWarning).toHaveLength(1);
       expect(digestWarning[0]).toContain("envTool.publishApps");
+      expect(asked).toEqual([]);
+      for (const h of [recordedHash ?? "", ...snapshotHashes])
+        expect(h).not.toContain("closed-world");
       store.close();
     });
 
@@ -8839,11 +9086,17 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       readonly served?: Readonly<Record<string, Uint8Array>>;
       /** R496: app ids whose installed read throws. */
       readonly installedThrows?: readonly string[];
+      /** R389: the backend's `dependentCount`, and the test app.json then names the package's id
+       *  (APP_ID), so the closed-world guard is asked for real. */
+      readonly dependentCount?: (appId: string) => Promise<number>;
     }
 
     async function envRun(o: EnvRun) {
       const dirs = o.dirs ?? (await makeProject(BODY_B));
-      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      await Bun.write(
+        join(dirs.testDir, "app.json"),
+        JSON.stringify(o.dependentCount !== undefined ? { ...TESTS_APP, id: APP_ID } : TESTS_APP),
+      );
       const testAppFile = join(dirs.testDir, "..", "Tests.app");
       const depFile = join(dirs.testDir, "..", "Dep.app");
       writeFileSync(testAppFile, P1);
@@ -8891,6 +9144,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       const { lease } = leaseCfg(client);
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
+        ...(o.dependentCount !== undefined ? { dependentCount: o.dependentCount } : {}),
         ...(o.noMicrosoftMode === true
           ? {}
           : {
@@ -10014,6 +10268,28 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(got.resume.carried).toBe(0);
         expect(got.history.skipped).toBe(0);
         expect(got.snapshot.reused).toBe(0);
+      });
+      // T7c-R389 (merge review I1): the same race on a server that answers 0 dependents, before
+      // and after execution. The closed-world digests were taken over the PRE-lease dependency, so
+      // the confirmation step must not write them back once F9 withdrew the digests.
+      test("T7c-R389: a closed-world run whose digests F9 withdrew gets none back at confirmation", async () => {
+        const asked: string[] = [];
+        const r = await race({
+          dependentCount: async (id) => {
+            asked.push(id);
+            return 0;
+          },
+        })({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(asked).toEqual([APP_ID, APP_ID]); // the guard was asked, before and after
+        unproven(r);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        expect(r.store.testDigestParts(r.runId)).toBeNull();
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain(
+          "a dependency changed while this session waited for the lease",
+        );
+        r.store.close();
       });
       // T7f (F9, full precision, R-496 review): the pre-lease and under-lease fingerprints agree on
       // their first 16 hex digits (all the stored parts keep) and differ after. Still a mismatch.
