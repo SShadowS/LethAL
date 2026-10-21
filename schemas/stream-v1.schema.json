@@ -50,6 +50,14 @@
             "authoritative"
           ],
           "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "bcdev",
+                "al-runner",
+                "al-runner-v3"
+              ]
+            },
             "coverage": {
               "type": "string",
               "enum": [
@@ -76,13 +84,6 @@
             },
             "authoritative": {
               "type": "boolean"
-            },
-            "kind": {
-              "type": "string",
-              "enum": [
-                "bcdev",
-                "al-runner"
-              ]
             }
           }
         },

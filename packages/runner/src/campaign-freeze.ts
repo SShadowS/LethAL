@@ -77,6 +77,13 @@ export async function freezeStageTo(
   recordsDir: string,
 ): Promise<void> {
   const report = JSON.parse(await readFile(reportPath, "utf8")) as SessionReport;
+  // R586 (I4): a stage baseline records no backend, so a frozen v3 stage could later "match" a v2
+  // or bcdev run. Refused by name in v1; `campaign compare` of a v3 report stays allowed.
+  if (report.backend === "al-runner-v3") {
+    throw new Error(
+      `al-runner-v3-campaign-freeze-refused: ${stage} freeze: ${reportPath} ran on al-runner-v3, and a frozen stage records no backend, so it could later match a run of another backend (R586). Freeze a bcdev or al-runner report instead.`,
+    );
+  }
   // R355: every stage frozen from now on records the coverage mode it was measured under, so
   // `campaign compare` can refuse a report from another mode. A report without one (written before
   // R252) would freeze a stage whose mode is unknown, which is the gap this closes. Refused before

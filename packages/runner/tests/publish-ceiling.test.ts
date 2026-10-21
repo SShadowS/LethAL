@@ -554,6 +554,7 @@ const CEILING_CAPS: BackendCapabilities = {
   coverage: "none",
   deploy: "publish",
   isolation: "session",
+  kind: "bcdev",
   authoritative: true,
 };
 

@@ -21,10 +21,11 @@ const CAPS_AUTHORITATIVE = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
+  kind: "bcdev",
   authoritative: true,
 } as const;
 
-const CAPS_AL_RUNNER = { ...CAPS_AUTHORITATIVE, authoritative: false } as const;
+const CAPS_AL_RUNNER = { ...CAPS_AUTHORITATIVE, kind: "al-runner", authoritative: false } as const;
 
 function entry(): MutantManifestEntry {
   return {

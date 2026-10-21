@@ -13,6 +13,38 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A new backend, `al-runner-v3`, for the Rust al-runner** (R586). It sits beside the .NET
+  al-runner (`--backend al-runner`), which does not change. Select it with `--backend al-runner-v3`
+  and an `alRunnerV3` section in `lethal.config.json` (`packagesDir` and a four-number `bcVersion` are
+  required). It is pinned to `alrunner 3.0.0-alpha.2 (91253f2d6)` under `/work/tools/al-runner-v3/`,
+  and it runs only a build whose `.gated` file names its sha256. It is NOT authoritative: v3 runs code
+  that does not compile (#5602), a statement-form duplicate-key `Insert` does not raise (#5603), and
+  `Sleep` returns at once on a virtual AL clock (#5605: the clock moves forward by the requested
+  time, but a wait costs nothing and is never stopped). What LethAL does about each:
+  - **Code that does not compile:** before v3 sees a batch, LethAL compiles the batch and the test
+    app with alc. Before every run it checks that the files v3 reads are still the ones alc
+    compiled, and refuses otherwise.
+  - **Selection:** one `--codeunit` call per test codeunit, with rows matched by codeunit and method,
+    so quoted test names work.
+  - **Not-run rows** are never killed and never survived.
+  - **Sleep:** a covering pass that reaches a project `Sleep` reads `error` / `runner-refused`. The
+    Sleep index and v3's argv use the folders' real paths, and an index that joins no path of v3's
+    coverage stops the session by name (`al-runner-v3-coverage-join-refused`).
+  - **Platforms:** Linux only (the only platform measured); every other one is refused by name.
+  - **`timeout-is-cpu`** is measured by the update gate's leg C alone; a session trusts the gated
+    build's record and does not re-burn.
+  - **Notes:** a kill made after another covering test of the same codeunit run carries
+    `[v3-codeunit-state-possible]` in `failureNote`. A survivor beside a test v3 refused at baseline
+    carries `[v3-refused-test-nearby]`.
+  - **Not supported in this version:** one-shot only; `--workers > 1`, Windows, `serverMode`,
+    `selectorMode` and `campaign freeze` are refused by name.
+  - **Never lent across backends:** a v3 run lends history, resume verdicts and baseline snapshots
+    only to a v3 session of the same build (`runs.runner_build`).
+  - **Contract probe:** each session re-measures v3's wire contract (23 facts).
+  - **Update gate:** `scripts/al-runner-v3-update.ts` moves the pin only after
+    `itest:alrunner-v3` passes.
+  - **Report:** `executionContexts[]` gains `runnerBuild` and `binarySha256`.
+
 - **On al-runner, a kill must reproduce** (R577). Measured: a Microsoft test that builds its input
   from a random amount fails about 1 run in 100 on its own, and LethAL scored that chance failure as
   a kill on every al-runner transport, because the only check was a re-run with no mutant, which a

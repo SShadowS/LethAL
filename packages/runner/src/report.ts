@@ -15,6 +15,7 @@ import {
   screenMessageOf,
 } from "./assertion-screen";
 import type { BackendCapabilities, CoverageMode, TestMethodRef } from "./backend";
+import { isAlRunnerV2, isBcdev } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import {
   EQUIVALENCE_MARKS_FILENAME,
@@ -1046,6 +1047,14 @@ export interface ExecutionContext {
   /** R558: the probe's reason, verbatim, when `testSelector` is `"substring-with-excludes"`. Absent
    *  with `"exact"`, which has no reason to give. */
   readonly testSelectorReason?: string;
+  /**
+   * R586: the al-runner-v3 build THIS session's directly measured verdicts ran on, its `--version`
+   * line (`alrunner 3.0.0-alpha.2 (91253f2d6)`). Absent on every other backend and on carried
+   * entries, whose build belongs to the run they came from.
+   */
+  readonly runnerBuild?: string;
+  /** R586: the sha256 of that v3 binary, on the same terms as `runnerBuild`. */
+  readonly binarySha256?: string;
 }
 
 /** R272: one discovered test method — see `SessionReport.testMethods`. */
@@ -2313,7 +2322,16 @@ function measuredExecutionContext(
   // R57 measured the fenced `RunMutant` path directly (`GuiAllowed=No`, `ClientType=ODataV4`).
   // al-runner is a headless CLI, which is not the same evidence, and saying "measured" of both
   // would be the kind of static claim R7/R8 exist to stop.
-  return caps.authoritative
+  if (caps.kind === "al-runner-v3") {
+    return {
+      guiAllowed: false,
+      clientType: "al-runner v3 CLI",
+      basis:
+        "al-runner v3 (Rust) executes headlessly by construction, one process per test codeunit; " +
+        "not separately measured by LethAL the way the fenced path was under R57 (R586)",
+    };
+  }
+  return isBcdev(caps.kind)
     ? {
         guiAllowed: false,
         clientType: "ODataV4",
@@ -2358,6 +2376,8 @@ function buildExecutionContexts(
   alRunnerTestSelector:
     | { readonly selector: "exact" | "substring-with-excludes"; readonly reason?: string }
     | undefined,
+  // R586 — see `ExecutionContext.runnerBuild`. On a v3 backend only, directly measured entries.
+  runnerBuild?: { readonly version: string; readonly binarySha256: string },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
   for (const o of outcomes) {
@@ -2375,16 +2395,20 @@ function buildExecutionContexts(
   // was produced by a DIFFERENT run against whatever that run selected, and stamping this run's
   // observation onto it would be a provenance claim about a session this one never made.
   const bcFields = {
-    ...(alRunnerBcBuild !== undefined && !caps.authoritative
+    ...(runnerBuild !== undefined && caps.kind === "al-runner-v3"
+      ? { runnerBuild: runnerBuild.version, binarySha256: runnerBuild.binarySha256 }
+      : {}),
+    // R586: the three are v2 observations (its `[bc]` line, R147 pin, R551 probe).
+    ...(alRunnerBcBuild !== undefined && isAlRunnerV2(caps.kind)
       ? { bcBuild: alRunnerBcBuild.build, bcBuildAnnouncement: alRunnerBcBuild.announcement }
       : {}),
     // R147, same two gates and for the same reason: a carried verdict's platform apps belong to the
     // run it came from, and bcdev has no such concept at all.
-    ...(alRunnerPlatformAppsDir !== undefined && !caps.authoritative
+    ...(alRunnerPlatformAppsDir !== undefined && isAlRunnerV2(caps.kind)
       ? { platformAppsDir: alRunnerPlatformAppsDir }
       : {}),
     // R558, same two gates: a carried verdict's selector belongs to the run it came from.
-    ...(alRunnerTestSelector !== undefined && !caps.authoritative
+    ...(alRunnerTestSelector !== undefined && isAlRunnerV2(caps.kind)
       ? {
           testSelector: alRunnerTestSelector.selector,
           ...(alRunnerTestSelector.reason !== undefined
@@ -3057,6 +3081,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.alRunnerBcBuild,
     input.alRunnerPlatformAppsDir,
     input.alRunnerTestSelector,
+    statics.runnerBuild,
   );
 
   return {
@@ -3122,8 +3147,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     survivorsByProcedure,
     testFiles,
     ...(input.testMethods !== undefined ? { testMethods: input.testMethods } : {}),
-    // R553: the backend's declared identity; the inference covers events written before `kind`.
-    backend: input.caps.kind ?? (input.caps.authoritative ? "bcdev" : "al-runner"),
+    // R586 (C1) and R553: the backend's own declared kind, never derived from `authoritative`.
+    // `kind` is required on `BackendCapabilities` (R586), so no inference is needed here.
+    backend: input.caps.kind,
     authoritative: input.caps.authoritative,
     coverageMode: input.caps.coverage,
     baselineGreen: input.baselineGreen,
@@ -3730,7 +3756,8 @@ export function renderConsole(r: SessionReport): string {
   // single mutant has run, which is exactly the "warning that scrolls past on a long run" pattern
   // that let the original static claim go unnoticed for a session's whole duration. The end of a
   // long run — right after the score — is where a reader actually is.
-  if (!r.authoritative && r.alRunnerCanary !== undefined) {
+  // R586: the canary is the v2 al-runner's (absent on v3 anyway).
+  if (r.backend === "al-runner" && r.alRunnerCanary !== undefined) {
     lines.push("");
     lines.push(...alRunnerCanaryWarnings(r.alRunnerCanary));
   }

@@ -272,8 +272,9 @@ describe("R332: a frozen baseline never records itself", () => {
     }
   });
 
-  test("the registry names thirteen gate baselines and their record commands", () => {
+  test("the registry names fourteen gate baselines and their record commands", () => {
     expect(Object.keys(GATE_BASELINES).sort()).toEqual([
+      "al-runner-v3.tables.baseline.json",
       "al-runner.baseline.json",
       "al-runner.cli-default.baseline.json",
       "al-runner.layout.baseline.json",

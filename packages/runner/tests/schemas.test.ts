@@ -537,6 +537,7 @@ function neverCalledBackend(): VerifyDeps["backend"] {
       coverage: "procedure",
       deploy: "publish",
       isolation: "session",
+      kind: "bcdev",
       authoritative: true,
     }),
     status: async () => boom(),

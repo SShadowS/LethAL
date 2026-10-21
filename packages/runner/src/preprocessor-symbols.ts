@@ -124,7 +124,10 @@ export interface AlRunnerPredefinedProbe {
  *  to an assumed list. */
 export type BuildBackend =
   | { readonly kind: "bcdev" }
-  | { readonly kind: "al-runner"; readonly predefined: AlRunnerPredefinedProbe };
+  | { readonly kind: "al-runner"; readonly predefined: AlRunnerPredefinedProbe }
+  // R586: al-runner v3 runs only what alc proved, and `runSession` refuses a v3 that predefines a
+  // symbol, so its build set is alc's: no predefined symbols.
+  | { readonly kind: "al-runner-v3" };
 
 /** The build's effective symbols: sorted and de-duplicated, so two equal sets compare equal.
  *  `backend` is required so no caller can forget it: an al-runner build also has al-runner's

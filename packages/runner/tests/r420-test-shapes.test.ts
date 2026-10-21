@@ -803,6 +803,7 @@ class StubBackend implements ExecutionBackend {
       coverage: "procedure",
       deploy: "publish",
       isolation: "session",
+      kind: this.authoritative ? "bcdev" : "al-runner",
       authoritative: this.authoritative,
     };
   }

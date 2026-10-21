@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
+import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import {
   GATE_FIXTURES,
   LaneUnknownError,
@@ -14,6 +15,7 @@ import {
   buildConfig,
   buildLaunch,
   configFileName,
+  continiaDependencyProblems,
   describeLogin,
   gitIgnores,
   krakenLeaseFor,
@@ -25,6 +27,52 @@ import {
   withLease,
   writeConfig,
 } from "./bc-linux-setup.ts";
+
+// R594: a Continia app the server would refuse is caught before anything is published.
+describe("continiaDependencyProblems", () => {
+  const pkg = buildFakeAppWithEntries({
+    "NavxManifest.xml": `<Package><App Id="1" Name="Core" Publisher="Continia Software" Version="28.5.0.1" Application="28.0.0.0" Platform="28.0.0.0" /><Dependencies><Dependency Id="2" Name="Continia System Application" Publisher="Continia Software" MinVersion="28.4.0.0" /><Dependency Id="3" Name="Base Application" Publisher="Microsoft" MinVersion="28.4.0.0" /></Dependencies></Package>`,
+  });
+  const resident = (base: string | null, system = "28.0.54946.56477") =>
+    new Map<string, string | null>([
+      ["Base Application", base],
+      ["Application", "28.4.53241.56646"],
+      ["System", system],
+    ]);
+  const pinned = new Map([["Continia System Application", "28.5.0.336834"]]);
+
+  test("accepts a server that satisfies every declared minimum", () => {
+    expect(continiaDependencyProblems(pkg, resident("28.4.53241.56646"), pinned)).toEqual([]);
+  });
+  test("names a Microsoft dependency that is absent or below its minimum", () => {
+    expect(continiaDependencyProblems(pkg, resident(null), pinned)).toEqual([
+      "Core: needs Microsoft Base Application >= 28.4.0.0, absent",
+    ]);
+    expect(continiaDependencyProblems(pkg, resident("28.3.0.0"), pinned)).toEqual([
+      "Core: needs Microsoft Base Application >= 28.4.0.0, has 28.3.0.0",
+    ]);
+  });
+  test("names a platform below the app's Platform and a Continia dependency not pinned", () => {
+    expect(continiaDependencyProblems(pkg, resident("28.4.0.0", "27.0.0.0"), new Map())).toEqual([
+      "Core: needs Continia Software Continia System Application >= 28.4.0.0, absent",
+      "Core: needs System (platform) >= 28.0.0.0, has 27.0.0.0",
+    ]);
+  });
+  test("--accept-build needs --with-continia and a four-part version", () => {
+    expect(parseArgs(["--server", "bc3", "--with-continia", "--accept-build", "28.4.1.2"])).toEqual(
+      {
+        servers: ["bc3"],
+        dryRun: false,
+        withContinia: true,
+        acceptBuild: "28.4.1.2",
+      },
+    );
+    expect(() => parseArgs(["--server", "bc3", "--accept-build", "28.4.1.2"])).toThrow();
+    expect(() =>
+      parseArgs(["--server", "bc3", "--with-continia", "--accept-build", "28.4"]),
+    ).toThrow();
+  });
+});
 
 // A made-up value: the tests check it never appears in an error.
 const SECRET = "Tr0ub4dor=&3!";
@@ -373,11 +421,17 @@ describe("R598: the coord lease is taken in the caller's lane, never a fixed one
   });
 
   test("the documented command still parses without --lane; --lane takes a name, never a flag", () => {
-    expect(parseArgs(["--server", "bc1"])).toEqual({ servers: ["bc1"], dryRun: false });
+    // R594's `withContinia` is always present (false unless --with-continia).
+    expect(parseArgs(["--server", "bc1"])).toEqual({
+      servers: ["bc1"],
+      dryRun: false,
+      withContinia: false,
+    });
     expect(parseArgs(["--server", "all", "--lane", "code"])).toEqual({
       servers: ["bc1", "bc2", "bc3"],
       dryRun: false,
       lane: "code",
+      withContinia: false,
     });
     expect(() => parseArgs(["--server", "bc1", "--lane", "--dry-run"])).toThrow(
       /--lane needs a lane name/,

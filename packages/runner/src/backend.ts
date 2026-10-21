@@ -214,6 +214,12 @@ export interface TestVerdict {
    * cause, exactly like the grouped call's `stopped-after-completion`.
    */
   readonly stopRefusal?: "stopped-after-completion";
+  /**
+   * R586 (I1): on a `fail` or `timeout` under a mutant, a tagged note the backend attaches to the
+   * kill (`[v3-codeunit-state-possible] ...`). The orchestrator writes it into the KILLED mutant's
+   * `failureNote`; it never moves a verdict. Internal only; absent on every backend but v3.
+   */
+  readonly backendNote?: string;
 }
 
 /** R-204b: see `TestVerdict.stopState`. */
@@ -248,18 +254,42 @@ export function stopIsRetrySafe(s: StopState | undefined): boolean {
  */
 export type CoverageMode = "none" | "procedure" | "line" | "fenced" | "al-runner";
 
+/**
+ * R586 (C1): WHICH backend this is. Before R586 `!authoritative` meant "al-runner" everywhere
+ * (`runSession`'s build backend, the run row's `backend`, resume, R557's stamp, the report), so a
+ * second non-authoritative backend would have read as the frozen .NET al-runner. Every branch about
+ * the backend's identity keys on this, through the predicates below; `authoritative` keeps only
+ * its own meaning (a verdict to act on). `"al-runner-v3"` is the Rust al-runner (`3.0.0-alpha.N`,
+ * plan `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`).
+ */
+export type BackendKind = "bcdev" | "al-runner" | "al-runner-v3";
+
+/** R586: the backend publishes to a BC server (leases, attestation, quarantine, TestPage scan). */
+export function isBcdev(kind: BackendKind): boolean {
+  return kind === "bcdev";
+}
+
+/** R586: the frozen .NET al-runner (v2): its predefined-symbol probe, R557 names, R147 pin. */
+export function isAlRunnerV2(kind: BackendKind): boolean {
+  return kind === "al-runner";
+}
+
+/** R586: a backend that publishes nothing and compiles the source it was given (v2 or v3). */
+export function isLocalRunner(kind: BackendKind): boolean {
+  return kind === "al-runner" || kind === "al-runner-v3";
+}
+
 export interface BackendCapabilities {
+  /**
+   * R586 (C1): see `BackendKind`. Required, so no backend can be mistaken for another. R553 keys
+   * the assertion screen on it too: each backend sets it itself, and it is never inferred from
+   * `authoritative` (an al-runner backend made authoritative one day is still al-runner).
+   */
+  readonly kind: BackendKind;
   readonly coverage: CoverageMode;
   readonly deploy: "publish" | "none";
   readonly isolation: "session" | "full-reset";
   readonly authoritative: boolean;
-  /**
-   * R553: the backend's own identity, set by `BcDevMcpBackend` and `AlRunnerBackend` themselves and
-   * never inferred from `authoritative` (an al-runner backend made authoritative one day is still
-   * al-runner). The assertion screen keys on it. Optional only because the unit suite's in-memory
-   * fakes predate it; absent is never treated as al-runner by the screen.
-   */
-  readonly kind?: "bcdev" | "al-runner";
 }
 
 export interface BackendStatus {
@@ -486,4 +516,20 @@ export interface ExecutionBackend {
    * without it.
    */
   useMutantBudgetFloor?(floorMs: number, baselineTimeoutMs: number): void;
+
+  /**
+   * R586 (F5), OPTIONAL: a mutant's covering tests and the budget the covering loop will send
+   * each, given once per mutant after its activation and before its first run. al-runner v3 runs
+   * a whole test codeunit per call, so it sends the call the LARGEST budget of the refs it serves.
+   */
+  useCoveringBudgets?(
+    mutantId: string,
+    budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
+  ): void;
+
+  /**
+   * R586 (I3), OPTIONAL: a tagged note for a SURVIVOR with these covering tests
+   * (`[v3-refused-test-nearby] ...`), written into its `failureNote`. Never moves a verdict.
+   */
+  survivorNote?(covering: readonly TestMethodRef[]): string | undefined;
 }

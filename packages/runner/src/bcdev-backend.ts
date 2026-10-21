@@ -400,12 +400,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
   capabilities(): BackendCapabilities {
     return {
+      // R586 (C1) and R553: identity, not inferred from `authoritative`.
+      kind: "bcdev",
       coverage: this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE,
       deploy: "publish",
       isolation: "session",
       authoritative: true,
-      // R553: identity, not inferred from `authoritative`.
-      kind: "bcdev",
     };
   }
 

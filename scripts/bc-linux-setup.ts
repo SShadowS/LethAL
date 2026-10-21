@@ -3,10 +3,19 @@
  * LethAL BC gates need, and check it with `lethal doctor`.
  *
  *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run]
+ *                                 [--with-continia] [--accept-build <v>] [--held-lease <token>]
  *
  * The coord lease is taken in the caller's lane (R598): `--lane`, else the kraken agent identity
  * (`KRAKEN_AGENT`: `lane-<x>` is lane `<x>`, `orchestrator` is `orchestrator`). With neither, the run
  * refuses by name before anything else, so a lease is never held in another lane's name.
+ *
+ * `--with-continia` (R594) adds step (d2) after LethAL Control: check that the server's Microsoft
+ * apps are the R546 packagesDir's 28.4.53241.53758, then publish the 5 sha256-pinned Continia
+ * apps (Dev scope) that Continia Document Output depends on, after checking each one's declared
+ * dependencies against the server. `--accept-build <v>` makes P1 accept that Microsoft build
+ * instead (R594's ruling: bc3 at 28.4.53241.56646 is a NEW oracle). `--held-lease` names a coord lease
+ * the caller already holds for that one server: the script heartbeats it but never takes or
+ * releases it.
  *
  * In order, per server:
  *   (a) read /coord/secrets/bc-linux.env in this process (exactly BC_DEV_USER and BC_DEV_PASSWORD);
@@ -37,6 +46,7 @@ import { basename, dirname, join } from "node:path";
 import { compareAppVersions } from "../packages/runner/src/app-version.ts";
 import { bcFetch } from "../packages/runner/src/bc-fetch.ts";
 import { devPackagesUrl } from "../packages/runner/src/bcdev-backend.ts";
+import { appInputsOfPackage } from "../packages/runner/src/digest-inputs.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
 
@@ -506,7 +516,7 @@ export type AppOutcome = "published" | "skipped";
  * gate run leaves the target at a higher minted version, and a downgrade would be refused). After
  * a publish, the server must report exactly the local version.
  */
-async function ensureApp(
+export async function ensureApp(
   c: Conn,
   bytes: Uint8Array,
   label: string,
@@ -672,41 +682,242 @@ export function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-const USAGE =
-  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run]";
+export interface SetupArgs {
+  readonly servers: ServerName[];
+  readonly dryRun: boolean;
+  /** R598: the lane the coord lease is taken in, when given on the command line. */
+  readonly lane?: string;
+  readonly withContinia: boolean;
+  /** A lease token the CALLER holds and heartbeats; the script then neither takes nor releases one. */
+  readonly heldLease?: string;
+  /** `--with-continia` only: the Microsoft build P1 accepts instead of the pinned one. */
+  readonly acceptBuild?: string;
+}
 
-export function parseArgs(argv: readonly string[]): {
-  servers: ServerName[];
-  dryRun: boolean;
-  lane?: string;
-} {
+const USAGE =
+  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run] [--with-continia [--accept-build <version>]] [--held-lease <token>]";
+
+export function parseArgs(argv: readonly string[]): SetupArgs {
   let server: string | undefined;
   let lane: string | undefined;
   let dryRun = false;
+  let withContinia = false;
+  let heldLease: string | undefined;
+  let acceptBuild: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") dryRun = true;
+    else if (a === "--with-continia") withContinia = true;
     else if (a === "--server") server = argv[++i];
     else if (a === "--lane") {
       lane = argv[++i];
       if (lane === undefined || lane === "" || lane.startsWith("-"))
         throw new Error(`--lane needs a lane name; ${USAGE}`);
+    } else if (a === "--held-lease") {
+      heldLease = argv[++i];
+      if (heldLease === undefined || heldLease === "") throw new Error(USAGE);
+    } else if (a === "--accept-build") {
+      acceptBuild = argv[++i];
+      if (acceptBuild === undefined || !/^\d+\.\d+\.\d+\.\d+$/.test(acceptBuild))
+        throw new Error(USAGE);
     } else throw new Error(`unknown argument ${JSON.stringify(a)}`);
   }
-  const withLane = lane !== undefined ? { lane } : {};
-  if (server === "all") return { servers: ["bc1", "bc2", "bc3"], dryRun, ...withLane };
+  if (acceptBuild !== undefined && !withContinia) throw new Error(USAGE);
+  const rest = {
+    dryRun,
+    ...(lane !== undefined ? { lane } : {}),
+    withContinia,
+    ...(heldLease !== undefined ? { heldLease } : {}),
+    ...(acceptBuild !== undefined ? { acceptBuild } : {}),
+  };
   if (server === "bc1" || server === "bc2" || server === "bc3")
-    return { servers: [server], dryRun, ...withLane };
+    return { servers: [server], ...rest };
+  // One token leases one server.
+  if (server === "all" && heldLease === undefined)
+    return { servers: ["bc1", "bc2", "bc3"], ...rest };
   throw new Error(USAGE);
+}
+
+/** The caller holds the lease (R594): heartbeat it too, but never take or release it. */
+export function heldLeaseDeps(token: string): LeaseDeps {
+  return {
+    take: async () => token,
+    recordToken() {},
+    // R598 removed the fixed-lane `krakenLease`; a heartbeat names the token, not a lane.
+    heartbeat: async (server, t) => {
+      await kraken(["heartbeat", server, t]);
+    },
+    release: async () => {},
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// (d2) the Continia stack (R594), for the R546 CDO slice
+
+/** The packagesDir R546 measured with, pinned by sha256 in the R396 pre-commitment, addendum 2. */
+export const CONTINIA_PACKAGES_DIR = "/work/lethal-wt/cdo-r396/Test/.alpackages";
+
+/** The 5 Continia apps, dependencies first (System Application, then Core, then its dependents). */
+export const CONTINIA_APPS = [
+  {
+    file: "Continia Software_Continia System Application_28.5.0.336834.app",
+    sha256: "5eee39f7f79dd7242e632c9bb3a8872870105618ac997f95fc2990ea6a0af7d4",
+  },
+  {
+    file: "Continia Software_Continia Core_28.5.0.336883.app",
+    sha256: "8b09259ac3d5d7fb407c4aa64e4df2311293879b6cffa37abea414eaebafa52d",
+  },
+  {
+    file: "Continia Software_Continia Connector App_28.5.0.336834.app",
+    sha256: "82487ec6ad0f2e5b105aecdd4b09060898e69f49a7cc6ada06d88664fd8b3966",
+  },
+  {
+    file: "Continia Software_Continia Delivery Network_28.5.0.336910.app",
+    sha256: "922e59ea6d22746714a032fe548d9dd8520757f6f6d5c560f1c1b5622f34cf6f",
+  },
+  {
+    file: "Continia Software_Continia Core Internal Activation App_28.0.0.218906.app",
+    sha256: "c57fb082a313d61c8e7b1b6811c9e220dd54af9916e7d9999ad5ea270f60d3b8",
+  },
+] as const;
+
+/** The Microsoft apps of that packagesDir, which the server must already hold at these versions. */
+export const PINNED_MICROSOFT = [
+  "Any",
+  "Application Test Library",
+  "Application",
+  "Base Application",
+  "Business Foundation",
+  "Library Assert",
+  "Permissions Mock",
+  "System Application Test Library",
+  "System Application",
+  "Test Runner",
+  "Tests-TestLibraries",
+] as const;
+export const PINNED_MICROSOFT_VERSION = "28.4.53241.53758";
+
+/** A pinned Continia file, read and sha256-checked. */
+export function readContinia(app: (typeof CONTINIA_APPS)[number]): Buffer {
+  const bytes = readFileSync(join(CONTINIA_PACKAGES_DIR, app.file));
+  const sha = sha256Of(bytes);
+  if (sha !== app.sha256) throw new Error(`${app.file}: sha256 ${sha}, expected ${app.sha256}`);
+  return bytes;
+}
+
+/**
+ * `a < b`, part by part. Not `compareAppVersions`: that refuses a part above 65535 (LethAL's own
+ * minted versions), and Continia's builds carry revisions like 336834.
+ */
+function versionBelow(a: string, b: string): boolean {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (Number.isNaN(x) || Number.isNaN(y)) throw new Error(`not a version: ${a} or ${b}`);
+    if (x !== y) return x < y;
+  }
+  return false;
+}
+
+/**
+ * Why the server would refuse a Continia app, or [] when it would not: a Microsoft dependency
+ * below its declared minimum, a Continia dependency the pinned set does not satisfy, or an
+ * `Application`/`Platform` above the server's Application/System. `resident` maps a Microsoft
+ * app name (and "System") to the version the server holds.
+ */
+export function continiaDependencyProblems(
+  pkg: Uint8Array,
+  resident: ReadonlyMap<string, string | null>,
+  pinned: ReadonlyMap<string, string>,
+): string[] {
+  const me = readAppIdentity(Buffer.from(pkg)).name;
+  const inp = appInputsOfPackage(pkg);
+  const out: string[] = [];
+  const atLeast = (what: string, have: string | null | undefined, min: string): void => {
+    if (have === null || have === undefined) out.push(`${me}: needs ${what} >= ${min}, absent`);
+    else if (versionBelow(have, min)) out.push(`${me}: needs ${what} >= ${min}, has ${have}`);
+  };
+  for (const d of inp.dependencies) {
+    if (d.publisher === "Microsoft")
+      atLeast(`Microsoft ${d.name}`, resident.get(d.name), d.version);
+    else atLeast(`${d.publisher} ${d.name}`, pinned.get(d.name), d.version);
+  }
+  if (inp.application !== undefined)
+    atLeast("Application", resident.get("Application"), inp.application);
+  if (inp.platform !== undefined)
+    atLeast("System (platform)", resident.get("System"), inp.platform);
+  return out;
+}
+
+/**
+ * P1 then the install. Every Microsoft app must be resident at exactly the pinned version (or at
+ * `acceptBuild`, R594's ruling for bc3: a NEW oracle, recorded, never silently), or nothing is
+ * published: another build makes R546's frozen oracle incomparable. Then every Continia app's
+ * declared dependencies are checked against the server, and only if all would be accepted is each
+ * file published, skipped when the server holds exactly that version, and refused when it holds a
+ * different one (a third-party app is never replaced here).
+ */
+async function ensureContinia(
+  c: Conn,
+  summary: string[],
+  acceptBuild: string | undefined,
+): Promise<boolean> {
+  const want = acceptBuild ?? PINNED_MICROSOFT_VERSION;
+  const resident = new Map<string, string | null>();
+  let ok = true;
+  for (const name of PINNED_MICROSOFT) {
+    const v = await residentVersion(c, "Microsoft", name);
+    resident.set(name, v);
+    const same = v === want;
+    summary.push(`  P1        Microsoft ${name}: ${v ?? "absent"}${same ? "" : " (DIFFERS)"}`);
+    ok &&= same;
+  }
+  resident.set("System", await residentVersion(c, "Microsoft", "System"));
+  summary.push(`  P1        Microsoft System: ${resident.get("System") ?? "absent"}`);
+  if (!ok) {
+    summary.push(`  STOPPED   the Microsoft apps are not all ${want}: no Continia app published`);
+    return false;
+  }
+  const files = CONTINIA_APPS.map((app) => ({ app, bytes: readContinia(app) }));
+  const pinned = new Map(
+    files.map((f) => [readAppIdentity(f.bytes).name, readAppIdentity(f.bytes).version]),
+  );
+  const problems = files.flatMap((f) => continiaDependencyProblems(f.bytes, resident, pinned));
+  if (problems.length > 0) {
+    for (const p of problems) summary.push(`  DEPENDS   ${p}`);
+    summary.push("  STOPPED   a Continia app would be refused: none published");
+    return false;
+  }
+  summary.push("  P1        every Continia app's declared dependencies are satisfied");
+  for (const { bytes } of files) {
+    const sha = sha256Of(bytes);
+    const local = readAppIdentity(bytes);
+    const before = await residentVersion(c, local.publisher, local.name);
+    if (before === local.version) {
+      summary.push(`  skipped   ${local.name} ${before} (resident, equal)`);
+      continue;
+    }
+    if (before !== null) {
+      throw new Error(
+        `${c.server}: ${local.name} is resident at ${before}, not the pinned ${local.version}; not replacing it`,
+      );
+    }
+    const r = await ensureApp(c, bytes, local.name);
+    summary.push(`  ${r.outcome.padEnd(9)} ${local.name} ${r.version} (Dev scope, sha256 ${sha})`);
+  }
+  return true;
 }
 
 async function setupServer(
   server: ServerName,
   login: BcLogin,
-  dryRun: boolean,
+  args: SetupArgs,
   summary: string[],
   lane: string,
 ): Promise<boolean> {
+  const { dryRun } = args;
   const symbols = join(STATE_ROOT, server, "symbols");
   const paths: ConfigPaths = {
     mcpCommand: bcDevMcpCommand(),
@@ -731,7 +942,7 @@ async function setupServer(
   if (dryRun) {
     for (const { path, launch } of configs) summary.push(`  would write ${path}, ${launch}`);
     summary.push(
-      `  would lease ${server} in lane ${lane}, publish LethAL Control, then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
+      `  would ${args.heldLease !== undefined ? "use the held lease on" : "lease"} ${server}${args.heldLease !== undefined ? "" : ` in lane ${lane}`}, publish LethAL Control,${args.withContinia ? " check P1 and publish the 5 Continia apps," : ""} then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
     );
     return true;
   }
@@ -757,7 +968,9 @@ async function setupServer(
     server,
     authorization: `Basic ${Buffer.from(`${login.user}:${login.password}`).toString("base64")}`,
   };
-  return await withLease(server, krakenLeaseFor(lane), async () => {
+  // R594's held lease, else R598's lease in the caller's lane.
+  const lease = args.heldLease !== undefined ? heldLeaseDeps(args.heldLease) : krakenLeaseFor(lane);
+  return await withLease(server, lease, async () => {
     // (d)
     const c = await ensureApp(conn, control, "LethAL Control");
     summary.push(
@@ -765,6 +978,8 @@ async function setupServer(
         ? `  skipped   LethAL Control: ${skipNote(c.version, CONTROL_VERSION)}`
         : `  published LethAL Control ${c.version}`,
     );
+    // (d2) before the fixtures, so a P1 stop leaves the fixtures as they were.
+    if (args.withContinia && !(await ensureContinia(conn, summary, args.acceptBuild))) return false;
     rmSync(symbols, { recursive: true, force: true });
     mkdirSync(symbols, { recursive: true });
     let ok = true;
@@ -791,7 +1006,8 @@ async function setupServer(
 }
 
 async function main(): Promise<number> {
-  const { servers, dryRun, lane: cliLane } = parseArgs(process.argv.slice(2));
+  const args = parseArgs(process.argv.slice(2));
+  const { servers, dryRun, lane: cliLane } = args;
   // R598: decided before the secret is read or anything is written, so a refusal changes nothing.
   const lane = resolveLane(cliLane, process.env);
   const login = readSecretFile();
@@ -799,7 +1015,7 @@ async function main(): Promise<number> {
   let ok = true;
   for (const server of servers) {
     try {
-      ok = (await setupServer(server, login, dryRun, summary, lane)) && ok;
+      ok = (await setupServer(server, login, args, summary, lane)) && ok;
     } catch (err) {
       ok = false;
       summary.push(`  FAILED    ${server}: ${errText(err)}`);
