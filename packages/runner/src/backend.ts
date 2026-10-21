@@ -214,6 +214,12 @@ export interface TestVerdict {
    * cause, exactly like the grouped call's `stopped-after-completion`.
    */
   readonly stopRefusal?: "stopped-after-completion";
+  /**
+   * R586 (I1): on a `fail` or `timeout` under a mutant, a tagged note the backend attaches to the
+   * kill (`[v3-codeunit-state-possible] ...`). The orchestrator writes it into the KILLED mutant's
+   * `failureNote`; it never moves a verdict. Internal only; absent on every backend but v3.
+   */
+  readonly backendNote?: string;
 }
 
 /** R-204b: see `TestVerdict.stopState`. */
@@ -494,4 +500,20 @@ export interface ExecutionBackend {
    * without it.
    */
   useMutantBudgetFloor?(floorMs: number, baselineTimeoutMs: number): void;
+
+  /**
+   * R586 (F5), OPTIONAL: a mutant's covering tests and the budget the covering loop will send
+   * each, given once per mutant after its activation and before its first run. al-runner v3 runs
+   * a whole test codeunit per call, so it sends the call the LARGEST budget of the refs it serves.
+   */
+  useCoveringBudgets?(
+    mutantId: string,
+    budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
+  ): void;
+
+  /**
+   * R586 (I3), OPTIONAL: a tagged note for a SURVIVOR with these covering tests
+   * (`[v3-refused-test-nearby] ...`), written into its `failureNote`. Never moves a verdict.
+   */
+  survivorNote?(covering: readonly TestMethodRef[]): string | undefined;
 }

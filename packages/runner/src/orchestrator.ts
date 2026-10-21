@@ -10242,6 +10242,12 @@ async function runMutantsOnBackend(args: {
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
     const ordered = orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
+    // R586 (F5): a backend that runs a whole test codeunit per call learns every covering ref's
+    // budget up front, so one call can be sent the largest of them.
+    args.backend.useCoveringBudgets?.(
+      m.mutantId,
+      ordered.map((ref) => ({ ref, budgetMs: budgetOf(ref).ms })),
+    );
     // R198: every method a call REPORTED as run with a mapped pass/fail result. A survivor stands
     // only if this equals the covering set (checked after the loop): a chunking bug that skipped a
     // test must not manufacture a survivor. On the sequential path it is trivially complete.
@@ -10650,6 +10656,8 @@ async function runMutantsOnBackend(args: {
           killingTest = ref.method;
           killingTestRef = ref;
           killPosition = 1;
+          // R586 (I1): the backend's tagged note on this kill (v3's shared-codeunit run).
+          if (v.backendNote !== undefined) failureNote = v.backendNote;
           recordKill(args.killLedger, m, ref);
           // R86: `v`, the MUTATED run that failed — not `confirm`, which just passed. See the
           // `killingTestFailure` declaration above for why the distinction is the whole point.
@@ -10716,6 +10724,11 @@ async function runMutantsOnBackend(args: {
         cause = "group-coverage-incomplete";
         failureNote = `group-coverage-incomplete: every call answered and every returned method passed, but ${missing.length} of ${wanted.size} covering test(s) were never attempted (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}) — not a survivor (R198)`;
       }
+    }
+    // R586 (I3): the backend's tagged note on a survivor (v3: a baseline refusal beside it).
+    if (verdict === "survived") {
+      const note = args.backend.survivorNote?.(covering);
+      if (note !== undefined) failureNote = note;
     }
     // GH-24: a manifest with no grain (written before GH-24) is never decided either.
     const reach =
