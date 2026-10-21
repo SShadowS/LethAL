@@ -77,17 +77,17 @@ describe("stageCompileOnlyBatch (R219)", () => {
 });
 
 describe("compileOnly (R552): the --package-cache is never written", () => {
-  test("the symbol reaches alc through LethAL's own path; the cache listing is unchanged", async () => {
-    const projectDir = join(root, "r552-app");
+  async function run(name: string, exitCode: number) {
+    const projectDir = join(root, `${name}-app`);
     await Bun.write(join(projectDir, "app.json"), JSON.stringify(APP));
     await Bun.write(join(projectDir, SALES), SALES_AL);
-    const cache = join(root, "r552-cache");
+    const cache = join(root, `${name}-cache`);
     await mkdir(cache, { recursive: true });
     const other = join(cache, "Microsoft_System_1.0.0.0.app");
     await Bun.write(other, "system-symbol-bytes");
     const past = new Date("2020-01-02T03:04:05Z");
     await utimes(other, past, past);
-    const controlSymbolPath = join(root, "r552-control", "lethal-control.app");
+    const controlSymbolPath = join(root, `${name}-control`, "lethal-control.app");
     await Bun.write(controlSymbolPath, "control-symbol-bytes");
     const listing = async () =>
       Promise.all(
@@ -100,18 +100,22 @@ describe("compileOnly (R552): the --package-cache is never written", () => {
     const before = await listing();
 
     let caches: string[] = [];
+    let held: string[] = [];
     let seen = "";
     const io: ArtifactIo = {
       spawn: async (argv) => {
         caches = argv.filter((a) => a.startsWith("/packagecachepath:"));
-        const extra = caches[0]?.slice("/packagecachepath:".length).split(";")[1];
-        if (extra !== undefined) seen = await readFile(join(extra, "lethal-control.app"), "utf8");
-        return { exitCode: 0, stdout: "", stderr: "" };
+        const copy = caches[0]?.slice("/packagecachepath:".length) ?? "";
+        held = (await readdir(copy)).sort();
+        seen = await readFile(join(copy, "lethal-control.app"), "utf8");
+        return exitCode === 0
+          ? { exitCode: 0, stdout: "", stderr: "" }
+          : { exitCode, stdout: "", stderr: "AL0001: boom" };
       },
       readArtifact: async () => new TextEncoder().encode("x"),
       writeArtifact: async () => {},
     };
-    await compileOnly(
+    const outcome = await compileOnly(
       {
         projectDir,
         selectorIds: { selectorId: 50197, controlId: 50198, tableId: 50199 },
@@ -121,11 +125,30 @@ describe("compileOnly (R552): the --package-cache is never written", () => {
         configPath: join(root, "no-such-config.json"),
       },
       io,
+    ).then(
+      () => undefined,
+      (e: unknown) => e,
     );
+    const copy = (caches[0] ?? "").slice("/packagecachepath:".length);
+    return { outcome, caches, held, seen, copy, before, after: await listing() };
+  }
 
-    expect(caches).toHaveLength(1);
-    expect((caches[0] ?? "").split(";")).toHaveLength(2);
-    expect(seen).toBe("control-symbol-bytes");
-    expect(await listing()).toEqual(before);
+  test("alc gets EXACTLY ONE path, a copy with the symbol; the cache listing is unchanged", async () => {
+    const r = await run("r552", 0);
+    expect(r.outcome).toBeUndefined();
+    expect(r.caches).toHaveLength(1);
+    expect(r.copy).not.toContain(";");
+    expect(r.held).toEqual(["Microsoft_System_1.0.0.0.app", "lethal-control.app"]);
+    expect(r.seen).toBe("control-symbol-bytes");
+    expect(r.after).toEqual(r.before);
+    await expect(stat(r.copy)).rejects.toThrow();
+  });
+
+  test("a failed alc compile still removes the copy (the finally)", async () => {
+    const r = await run("r552-fail", 1);
+    expect(r.outcome).toBeInstanceOf(Error);
+    expect(r.held).toContain("lethal-control.app");
+    await expect(stat(r.copy)).rejects.toThrow();
+    expect(r.after).toEqual(r.before);
   });
 });

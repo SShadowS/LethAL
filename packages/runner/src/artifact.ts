@@ -1,4 +1,5 @@
-import { readFile, rename, rm } from "node:fs/promises";
+import { copyFile, link, mkdtemp, readFile, readdir, rename, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FLAT_NAMES_FILENAME, type MutantManifest } from "@lethal/schemata";
 import type { DeploymentVerification, PublishOutcome } from "./deployment-verifier";
@@ -127,29 +128,81 @@ export interface CompileInput {
   readonly mutantManifest: MutantManifest;
   readonly appManifest: Readonly<Record<string, unknown>>;
   /**
-   * R552: a second package-cache directory LethAL owns (the staged copy's `.lethal-symbols`, holding
-   * `lethal-control.app`), sent after the configured cache in ONE `/packagecachepath:A;B`. alc
-   * takes a `;`- or `,`-split list and resolves the highest version whatever the order (measured on
-   * Linux alc 18.0.2732683; the Windows alc is unmeasured, R552). Absent: the argv is unchanged.
+   * R552: a LethAL-owned copy of the package cache (`buildPackageCacheCopy`), sent to alc INSTEAD
+   * of the configured cache, as the one `/packagecachepath:`. It holds every package of the
+   * user's cache plus LethAL's own `lethal-control.app`. Absent: the argv is unchanged.
    */
-  readonly extraPackageCachePath?: string;
+  readonly packageCacheCopyPath?: string;
 }
 
 /**
- * R552: the `/packagecachepath:` value for `compile`. With an extra path, a `;` or `,` in either
- * path is refused before any spawn: alc would split it silently and resolve symbols from a
- * directory nobody named. `ArtifactPrepareError`, never `AlcCompileError`: alc never ran.
+ * R552: the `/packagecachepath:` value for `compile`: the copy when there is one, else the
+ * configured cache. A `;` or `,` in the copy's path is refused before any spawn: alc would split
+ * it silently and resolve symbols from a directory nobody named. `ArtifactPrepareError`, never
+ * `AlcCompileError`: alc never ran.
  */
-function packageCacheListOf(cache: string, extra: string | undefined): string {
-  if (extra === undefined) return cache;
-  for (const p of [cache, extra]) {
-    if (/[;,]/.test(p)) {
-      throw new ArtifactPrepareError(
-        `package cache path ${p} contains ';' or ',', which alc reads as a list separator; LethAL refuses to pass it rather than let alc split it silently. Move the cache or the project to a path without them.`,
-      );
-    }
+function packageCacheListOf(cache: string, copy: string | undefined): string {
+  if (copy === undefined) return cache;
+  if (/[;,]/.test(copy)) {
+    throw new ArtifactPrepareError(
+      `package cache path ${copy} contains ';' or ',', which alc reads as a list separator; LethAL refuses to pass it rather than let alc split it silently. Point the temp directory at a path without them.`,
+    );
   }
-  return `${cache};${extra}`;
+  return copy;
+}
+
+/** R552: the file name LethAL's control symbol takes in a package-cache copy. */
+export const CONTROL_SYMBOL_FILE = "lethal-control.app";
+
+/** R552: the two file operations `buildPackageCacheCopy` uses; a seam for the EXDEV/EPERM test. */
+export interface PackageCacheCopyFs {
+  readonly link: (from: string, to: string) => Promise<void>;
+  readonly copyFile: (from: string, to: string) => Promise<void>;
+}
+
+/**
+ * R552 (owner ruling 2026-10-21: one path, no two-path form): build a LethAL-owned package cache
+ * under `root`, `lethal-pkgcache-<random>`. It holds every `*.app` in `userCache` plus
+ * `controlSymbolPath` as `lethal-control.app`. A `lethal-control.app` an older LethAL left in
+ * `userCache` is skipped by name, so the copy holds exactly one LethAL Control package. Each file
+ * goes in by hard link (one inode, never written), or by copy where linking fails with EXDEV
+ * (another volume) or EPERM (no hard links there). `userCache` is only read. A throw removes the
+ * partial copy. The caller owns the result and removes it.
+ */
+export async function buildPackageCacheCopy(
+  userCache: string,
+  controlSymbolPath: string,
+  root: string = tmpdir(),
+  fs: PackageCacheCopyFs = { link, copyFile },
+): Promise<string> {
+  const copy = await mkdtemp(join(root, "lethal-pkgcache-"));
+  try {
+    for (const name of await readdir(userCache)) {
+      const lower = name.toLowerCase();
+      if (!lower.endsWith(".app") || lower === CONTROL_SYMBOL_FILE) continue;
+      await linkOrCopy(fs, join(userCache, name), join(copy, name));
+    }
+    await linkOrCopy(fs, controlSymbolPath, join(copy, CONTROL_SYMBOL_FILE));
+  } catch (e) {
+    await removePackageCacheCopy(copy).catch(() => {});
+    throw e;
+  }
+  return copy;
+}
+
+/** R552: remove a `buildPackageCacheCopy` directory (Windows retry knobs, as elsewhere). */
+export async function removePackageCacheCopy(copy: string): Promise<void> {
+  await rm(copy, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+}
+
+async function linkOrCopy(fs: PackageCacheCopyFs, from: string, to: string): Promise<void> {
+  try {
+    await fs.link(from, to);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== "EXDEV" && code !== "EPERM") throw e;
+    await fs.copyFile(from, to);
+  }
 }
 
 export interface ArtifactCompilerConfig {
@@ -221,7 +274,7 @@ export class ArtifactCompiler {
     }
     const { appPath, sha256 } = await this.alcToContentAddressed(
       input.projectDir,
-      packageCacheListOf(this.cfg.packageCachePath, input.extraPackageCachePath),
+      packageCacheListOf(this.cfg.packageCachePath, input.packageCacheCopyPath),
       input.artifactId,
     );
     return {
