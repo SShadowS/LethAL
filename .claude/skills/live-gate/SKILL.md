@@ -9,7 +9,7 @@ disable-model-invocation: true
 The authority for LethAL correctness (unit tests are structurally blind to AL that can't compile / real BC behavior). Runs the env-gated integration itests foreground and checks the frozen per-mutant tables. A differing verdict = BLOCKED (a real regression), never "close enough".
 
 ## Prerequisite: harness + publish order (bcdev path)
-The instrumented target depends on the `LethAL Control` extension and every RunMutant routes through it. Publish order to the container (Cronus28; Cronus284 is the second):
+The instrumented target depends on the `LethAL Control` extension and every RunMutant routes through it. Publish order to the container (Cronus28, or one of the BC on Linux servers `bc1`-`bc3`, which `scripts/bc-linux-setup.ts` prepares; Cronus284 is CentralGauge's, never LethAL's):
 1. `LethAL Control` (`extensions/lethal-control`) — must expose `HarnessInfo`, `RegisterArtifact` is IN-PROCESS only (no OData write), `RegisteredArtifact` + `RunMutant` OData actions.
 2. The instrumented sandbox target (the itest publishes it — needs the LethAL Control dependency + `lethal-control.app` symbol staged).
 3. `fixtures/sandbox-tests`.
