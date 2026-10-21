@@ -64,6 +64,60 @@ The legs and their figures:
 - Kill reproduction (R577): every kill on every leg is reproduced, with 2 killer rows per kill.
   The CLI-default leg makes 23 activations and 22 `runTests` requests.
 
+## Running part of the gate, or in parallel (R587)
+
+The gate is 23 legs in 7 fixture groups, listed in `packages/runner/itest/alrunner-legs.ts`:
+
+| Group | Legs |
+|---|---|
+| `sandbox` | sandbox-a, sandbox-b, sandbox-server, sandbox-resource, cli-default |
+| `layout` | layout-one-shot, layout-server |
+| `multiobject` | multiobject-one-shot, -server, -resource |
+| `wrapped` | wrapped-one-shot, -server, -resource |
+| `names` | names-a1, names-a2, names-a3, names-a4 |
+| `symbols-lethala` | symbols-lethala-one-shot, -server, -resource |
+| `symbols-lethalb` | symbols-lethalb-one-shot, -server, -resource |
+
+Every check that compares two legs stays inside one group, so a group always runs whole.
+
+- **Only a full run is a gate pass.** Only a run of all 23 legs prints `al-runner itest: PASS` and exits 0.
+  Submit and merge need that full run.
+- **Part of the gate, for the inner loop.** `-- --legs <group,...>` takes group names only.
+  - Unless it names all 7 groups, the run ends
+    `al-runner itest: PARTIAL, <k> of 23 legs ran green (...); NOT a gate pass` with exit 4, and writes no
+    receipt.
+  - Under a receipt challenge (the `LETHAL_GATE_*` variables), `--legs` is refused: exit 2 and a failed
+    receipt.
+- **Exit codes.** 0 full PASS, 1 failure, 2 refused, 3 record, 4 partial with no failures.
+- **Parallel.** `-- --parallel=N` (N from 1 to 3; a bare `--parallel` means 3).
+  - **Warm-up first.** It runs the contract probe, the R551 probe, and one `provisionOnce` per distinct test
+    folder and symbol set. It refuses to go on unless they all name one platform-app folder.
+  - **Workers.** Then it runs one worker process per group, longest group first, at most N at once. Each
+    worker carries `--worker` in its argv.
+  - **One heavy job.** Count only the root `bun packages/runner/itest/...` process.
+  - **Builds.** It is refused on a released al-runner at or below 2.12.0 (R345). A source build is allowed, so
+    on the Windows host use one at or after c39ad5de.
+  - **Stopping it.** One Ctrl-C passes the signal to the workers, and the run fails. A worker whose parent
+    dies stops within about 2 s.
+  - **Measured on 2026-10-21** (`/coord/handoff/R-587/compare.md`): 20.6 min against 53.6 min sequential,
+    peak memory 2.2 GB, identical per mutant on all 23 legs.
+- **Reports.** `-- --reports <empty or new folder>` writes:
+  - `run.json` (the run nonce and the al-runner build);
+  - each leg's `<id>.json`;
+  - each group's `<group>.done.json`;
+  - in parallel mode, each group's `<group>.log`;
+  - `result.json`, only after a full PASS.
+  Every file carries the run's nonce. A folder that is not empty is refused.
+- **Comparing two full runs.** `bun scripts/alrunner-legs-diff.ts <dir A> <dir B>` compares two passed runs leg
+  by leg.
+  - It refuses (exit 2) a folder without `result.json`, a missing file, a file from another run, or a
+    done-file from another al-runner build.
+  - Otherwise it exits 0 for IDENTICAL, 1 for DIFFERENT, or 3 for VOID (different al-runner builds, or a row
+    whose mutated text could not be checked).
+- **Receipt.** A passing receipt names exactly the 23 leg ids, and `scripts/agentflow` checks the set.
+- **Recording a baseline** stays a full sequential run: the `LETHAL_ITEST_RECORD_*` variables are refused
+  together with `--legs` or `--parallel`.
+
 ## The legs in detail
 
 - **Leg A and coverage.** Leg A has been 3 / 12 / 4 since R220 wired al-runner's own
@@ -120,7 +174,8 @@ The legs and their figures:
   that `--define` adds to the symbols in `app.json`. R343 froze it at 36 mutants
   (`docs/superpowers/specs/2026-10-08-r343-wrapped-leg-precommitment.md`); the fixture has grown
   since, to the figures above.
-- **The CLI-default leg (R387, R394).** It runs `sandbox-app` last, through the CLI's own
+- **The CLI-default leg (R387, R394).** It runs `sandbox-app` at the end of the sandbox group (leg 5
+  since R587, no longer last of the gate), through the CLI's own
   `buildBackend`, with no transport or coverage key (`cli-default-leg.ts`). It checks that
   `--server` and the resource selector actually ran. Since R394 coverage is on by default. So the
   leg equals leg A mutant by mutant, in verdict and `killingTest`. Under R387, before coverage was
