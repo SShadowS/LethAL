@@ -36,8 +36,8 @@ next free id right before writing).
 - **Submit only on green CI, both jobs.** Push the task branch; `check` (Windows) and `unit-linux`
   must both pass, and the submit note names the run id. The container is Linux, so CI is the only
   Windows check. A local verify quoted in a submit note is the `VERIFY FULL` line of
-  `bun scripts/verify.ts` with no arguments; `--changed` and package runs print `VERIFY PARTIAL`
-  and are an inner loop only (R593).
+  `bun scripts/verify.ts` with no arguments; `--changed` and package runs print `VERIFY PARTIAL`,
+  exit 4 even when every test passes, and are an inner loop only (R593).
 - **Never pipe a gating command into `grep` or `tail` before `&&`.** The pipeline's status is the
   last command's. Use `set -o pipefail;` if the output must be trimmed.
 - **A lone timeout in a full `verify` while another full `verify` overlaps is starvation, not a
