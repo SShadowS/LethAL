@@ -1,5 +1,15 @@
 # R-604 pre-commitment: every BC gate proven on every bc server (2026-10-21, lethal-preproc)
 
+**Addendum (2026-10-21, before the runs it covers; orchestrator ruling):**
+- bc2's LethAL Control is moved to master's pinned build (`CONTROL_APP` and `CONTROL_SHA256` in
+  `scripts/bc-linux-setup.ts`, sha256 c2a95948…d4bd) by `scripts/bc-republish.ts` under lethal-preproc's lease. Its
+  sha256 read-back must equal the pinned one, and `lethal doctor` must report it.
+- Then bc1's 9 gates proven earlier under 1.0.0.22 (bcdev, bcdev-wrapped, bcdev-names, tables, verify, verify-scale,
+  stale-publish, testapp, lease) and all 13 of bc2's gates are re-proved under it.
+- Prediction for every pair: the SAME frozen figures, per mutant, as Step 2 below, under control 1.0.0.23. Each
+  pair's record names the control version, verify included.
+- The rules are unchanged: a moved figure is a BLOCK for that pair and is never re-recorded.
+
 Written BEFORE any republish or proof run. The rule (orchestrator, 2026-10-21; `docs/gates/servers.md` §"Proof that
 the gates reproduce here"): a gate runs on a server only after its frozen figures reproduced per mutant on THAT
 server, under the current fixtures. Master c03d5356; control app per the setup script's pinned build.
