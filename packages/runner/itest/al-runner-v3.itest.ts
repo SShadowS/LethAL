@@ -26,6 +26,7 @@
  * No leg needs a BC server.
  */
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -53,6 +54,7 @@ import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import {
+  CDO_SLICE_FILE,
   V3LegEnvironment,
   V3LegFailure,
   V3LegHeld,
@@ -827,11 +829,26 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   if (fp === undefined) throw new Error(`${leg}: corpus-fingerprint printed no sha256: ${fpOut}`);
   const head = git("rev-parse", "HEAD").trim();
   console.log(`  ${leg}: CDO ${CDO} at ${head}, corpus fingerprint ${fp.slice(0, 16)}`);
+  // M14: the slice's file under .dependencies and every Test/.alpackages app, by sha256.
+  const alpDir = join(CDO, "Test", ".alpackages");
+  const alpackages = existsSync(alpDir)
+    ? await Promise.all(
+        (await readdir(alpDir))
+          .filter((n) => n.toLowerCase().endsWith(".app"))
+          .map(async (name) => ({ name, sha256: await sha256OfFile(join(alpDir, name)) })),
+      )
+    : [];
+  const sliceFile = join(CDO, CDO_SLICE_FILE);
   const refused = cdoCheckoutRefusal({
     head,
     porcelain: git("status", "--porcelain"),
     fingerprint: fp,
+    sliceSha256: existsSync(sliceFile) ? await sha256OfFile(sliceFile) : "(missing)",
+    alpackages,
   });
+  console.log(
+    `  ${leg}: slice file and ${alpackages.length} Test/.alpackages app(s) checked by sha256`,
+  );
   if (refused !== undefined) throw new V3LegEnvironment(`${leg}: ${refused}`);
   const b = new AlRunnerV3Backend(
     backendCfg({

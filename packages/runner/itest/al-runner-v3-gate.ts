@@ -23,11 +23,43 @@ export type V3GateOutcome = "pass" | "held" | "gate-fail" | "infra-fail";
 export const CDO_COMMIT = "5f2a71d";
 export const CDO_FINGERPRINT = "aa47c61c1fcbb7e3";
 
-/** `undefined` when the checkout is the pre-committed one; otherwise the named refusal. */
+/**
+ * M14: the corpus fingerprint excludes `.dependencies`, where the slice's target lives, and
+ * `Test/.alpackages` (the D legs' `<deps>`, gitignored) is bound by nothing else. Both are pinned
+ * by sha256, measured 2026-10-21 on `/work/lethal-wt/cdo-r396` (the R594 measurement checkout).
+ */
+export const CDO_SLICE_FILE = "Cloud/.dependencies/CDO/Codeunit/CDORecipientMgt.Codeunit.al";
+export const CDO_SLICE_SHA256 = "b3f4de48fe5fa1cb022a07a41e04495062881f2aabf09aed742e55450be6fbd4";
+export const CDO_ALPACKAGES: ReadonlyArray<readonly [string, string]> = [
+  ["Continia Software_Continia Connector App_28.5.0.336834.app", "82487ec6ad0f2e5b105aecdd4b09060898e69f49a7cc6ada06d88664fd8b3966"],
+  ["Continia Software_Continia Core Internal Activation App_28.0.0.218906.app", "c57fb082a313d61c8e7b1b6811c9e220dd54af9916e7d9999ad5ea270f60d3b8"],
+  ["Continia Software_Continia Core_28.5.0.336883.app", "8b09259ac3d5d7fb407c4aa64e4df2311293879b6cffa37abea414eaebafa52d"],
+  ["Continia Software_Continia Delivery Network_28.5.0.336910.app", "922e59ea6d22746714a032fe548d9dd8520757f6f6d5c560f1c1b5622f34cf6f"],
+  ["Continia Software_Continia System Application_28.5.0.336834.app", "5eee39f7f79dd7242e632c9bb3a8872870105618ac997f95fc2990ea6a0af7d4"],
+  ["Microsoft_Any_28.4.53241.53758.app", "e08ef542779c8758a6c1780bc25cb804ae833d6967c77fc430b25d2729b2fe22"],
+  ["Microsoft_Application Test Library_28.4.53241.53758.app", "cd619b16b502051041123a62f5c70629b98012f609328f2f1ff217f97b89ca6c"],
+  ["Microsoft_Application_28.4.53241.53758.app", "6e80099c53b4395f0fe22c62dd03ae8acd0daea9c055160047efa43b43261470"],
+  ["Microsoft_Base Application_28.4.53241.53758.app", "6859ff17baadb5d013927bf8eca849b8f60ca2d29fc8e7e75c4236d8a02817fd"],
+  ["Microsoft_Business Foundation_28.4.53241.53758.app", "a5c6ad808ea9a7b5360e80605e459ffadd0d9c52b4b27c5e393abe1fc0ab9ad1"],
+  ["Microsoft_Library Assert_28.4.53241.53758.app", "a6fe0dc8a0bedcf187752f47e049a5e15ec10dac5e543bbec8d1e278f10f6f43"],
+  ["Microsoft_Permissions Mock_28.4.53241.53758.app", "40bc1261bb8edbdaa48818ce358634d3807199febb409c4d8a048c5f93e7585b"],
+  ["Microsoft_System Application Test Library_28.4.53241.53758.app", "34b73dfd9e534cc3e73e53ee44af7e7bc4a4b3b3faa012554606543f8c096bed"],
+  ["Microsoft_System Application_28.4.53241.53758.app", "a12a1cf3436d77938a5f6b15e8164a30a254bb268b762061be0da7e801ef3ec1"],
+  ["Microsoft_System_28.0.53667.0.app", "ffa9cff0c111f5f469a5cb3dbe8e8bd22952c2c94281372c566458f09d8fb99c"],
+  ["Microsoft_Test Runner_28.4.53241.53758.app", "0304659173ce0dcbc95792815a61a97a5dc1c31382f1059ef8daeb6ed2bcf29c"],
+  ["Microsoft_Tests-TestLibraries_28.4.53241.53758.app", "4a928583106125a80db7bf48ccd23df4665b2806412e054b28313c6a6a838d9b"],
+];
+
+/**
+ * `undefined` when the checkout is the pre-committed one; otherwise the named refusal. The
+ * `alpackages` listing is compared as a whole set, so an empty or partial listing never matches.
+ */
 export function cdoCheckoutRefusal(c: {
   readonly head: string;
   readonly porcelain: string;
   readonly fingerprint: string;
+  readonly sliceSha256: string;
+  readonly alpackages: ReadonlyArray<{ readonly name: string; readonly sha256: string }>;
 }): string | undefined {
   const tag = "al-runner-v3-cdo-checkout-refused";
   const head = c.head.trim();
@@ -37,6 +69,15 @@ export function cdoCheckoutRefusal(c: {
   const fp = c.fingerprint.slice(0, 16);
   if (fp !== CDO_FINGERPRINT)
     return `${tag}: corpus fingerprint ${fp}, pre-committed ${CDO_FINGERPRINT}`;
+  if (c.sliceSha256 !== CDO_SLICE_SHA256)
+    return `${tag}: the slice's mutated file ${CDO_SLICE_FILE} has sha256 ${c.sliceSha256}, pre-committed ${CDO_SLICE_SHA256}`;
+  const got = [...c.alpackages].map((a) => `${a.name} ${a.sha256}`).sort();
+  const want = CDO_ALPACKAGES.map(([n, s]) => `${n} ${s}`).sort();
+  if (got.join("\n") !== want.join("\n")) {
+    const missing = want.filter((w) => !got.includes(w)).length;
+    const extra = got.filter((g) => !want.includes(g)).length;
+    return `${tag}: Test/.alpackages is not the pinned ${want.length} apps (${got.length} found, ${missing} pinned missing or changed, ${extra} not pinned)`;
+  }
   return undefined;
 }
 

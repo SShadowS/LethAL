@@ -1,8 +1,10 @@
 // R586 T19 (the itest half): leg T's `held` rule (r4 I-3) and the update-gate outcome (r3 F6).
 import { describe, expect, test } from "bun:test";
 import {
+  CDO_ALPACKAGES,
   CDO_COMMIT,
   CDO_FINGERPRINT,
+  CDO_SLICE_SHA256,
   V3_GATE_LEGS,
   V3LegEnvironment,
   V3LegFailure,
@@ -24,7 +26,28 @@ describe("the D legs' CDO checkout guard (lane ruling 2026-10-21)", () => {
     head: `${CDO_COMMIT}0123456789abcdef0123456789abcdef`,
     porcelain: "",
     fingerprint: `${CDO_FINGERPRINT}acb96562a01478cced5cf3295919f0a60c1d6dd18a702004`,
+    sliceSha256: CDO_SLICE_SHA256,
+    alpackages: CDO_ALPACKAGES.map(([name, sha256]) => ({ name, sha256 })),
   };
+  test("M14: another slice file (by hash) is refused by name", () => {
+    expect(cdoCheckoutRefusal({ ...ok, sliceSha256: "0".repeat(64) })).toMatch(
+      /al-runner-v3-cdo-checkout-refused: the slice's mutated file/,
+    );
+  });
+  test("M14: a Test/.alpackages file changed, missing, added, or the folder empty, is refused", () => {
+    const [first, ...rest] = ok.alpackages;
+    expect(first).toBeDefined();
+    const changed = [{ name: first?.name ?? "", sha256: "1".repeat(64) }, ...rest];
+    expect(cdoCheckoutRefusal({ ...ok, alpackages: changed })).toMatch(/Test\/\.alpackages/);
+    expect(cdoCheckoutRefusal({ ...ok, alpackages: rest })).toMatch(/Test\/\.alpackages/);
+    expect(
+      cdoCheckoutRefusal({ ...ok, alpackages: [...ok.alpackages, { name: "X.app", sha256: "2".repeat(64) }] }),
+    ).toMatch(/Test\/\.alpackages/);
+    expect(cdoCheckoutRefusal({ ...ok, alpackages: [] })).toMatch(/Test\/\.alpackages/);
+  });
+  test("M14: the pinned dependency list is the measured 17 apps", () => {
+    expect(CDO_ALPACKAGES.length).toBe(17);
+  });
   test("the measurement checkout (5f2a71d, clean, aa47c61c1fcbb7e3) is accepted", () => {
     expect(cdoCheckoutRefusal(ok)).toBeUndefined();
   });
