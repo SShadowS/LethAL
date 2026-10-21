@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -14,6 +14,7 @@ import type { EquivalenceMark } from "../src/equivalence-marks";
 import type { RunEvent } from "../src/events";
 import { runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
+import { removeScratchDir } from "./helpers/scratch";
 
 // R214, the DC case: the build's symbols come from app.json ONLY, and no config symbol is set.
 // Every runSession site that records or compares the build's symbols must see the EFFECTIVE set
@@ -67,8 +68,8 @@ const TEST_AL = `codeunit 50140 "P7 Tests"
 `;
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 /** A private copy of p7-appjson (app.json `"preprocessorSymbols": ["APPSYM"]`) and a test app. */

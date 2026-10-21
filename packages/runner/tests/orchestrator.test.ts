@@ -605,6 +605,16 @@ describe("runSession", () => {
         ...entries,
       });
     const OLD_PKG = pkg({ "src/SandboxTests.Codeunit.al": TEST_AL });
+    /** R495: `fakeMicrosoftMode` with OLD_PKG installed at its own version, so the run's
+     *  test-app identity is proven and recorded (R389's guard is bound into it). */
+    const provenMode = (): MicrosoftMode => {
+      const base = fakeMicrosoftMode();
+      if (base.kind !== "bytes") throw new Error("fakeMicrosoftMode is not bytes mode");
+      return {
+        ...base,
+        installed: async (id) => (id === APP_ID ? ["1.0.0.2"] : base.installed(id)),
+      };
+    };
     /** R-371: the inputs the run digests with: the package's manifest, or the disk's app.json.
      *  R-385: the published path reads Microsoft apps by bytes, al-runner's by declared version. */
     const inputsFor = async (dirs: { projectDir: string; testDir: string }, from?: Uint8Array) => {
@@ -631,9 +641,12 @@ describe("runSession", () => {
       fetch = true,
       /** `null`: a backend with no microsoftMode. */
       microsoft: MicrosoftMode | null = fakeMicrosoftMode(),
+      /** R389: the test app.json written, and the backend's `dependentCount`, if any. */
+      testApp: Record<string, unknown> = TESTS_APP,
+      dependentCount?: (appId: string) => Promise<number>,
     ) {
       const dirs = await makeProject(NEW_AL);
-      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(testApp));
       const stub = new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), [
         "IsOverBudget",
       ]);
@@ -641,9 +654,10 @@ describe("runSession", () => {
         ? Object.assign(stub, {
             fetchPublishedAppPackage: typeof read === "function" ? read : async () => read,
             ...(microsoft !== null ? { microsoftMode: () => microsoft } : {}),
+            ...(dependentCount !== undefined ? { dependentCount } : {}),
           })
         : stub;
-      const store = new ResultsStore(":memory:");
+      const store = extra.store ?? new ResultsStore(":memory:");
       const events: RunEvent[] = [];
       await runSession({
         backend,
@@ -657,8 +671,227 @@ describe("runSession", () => {
       const digestWarning = events.flatMap((e) =>
         e.type === "warning" && e.code === "test-digests-unavailable" ? [e.message] : [],
       );
-      return { dirs, store, runId, digestWarning };
+      const guardWarning = events.flatMap((e) =>
+        e.type === "warning" &&
+        (e.code === "closed-world-unmeasured" || e.code === "closed-world-changed")
+          ? [`${e.code}: ${e.message}`]
+          : [],
+      );
+      const recordedHash = (
+        store.db.query("SELECT test_app_hash AS h FROM runs WHERE id = ?").get(runId) as {
+          h: string | null;
+        }
+      ).h;
+      const snapshotHashes = (
+        store.db
+          .query("SELECT test_app_hash AS h FROM baseline_snapshots WHERE run_id = ?")
+          .all(runId) as { h: string }[]
+      ).map((r) => r.h);
+      return { dirs, store, runId, digestWarning, guardWarning, recordedHash, snapshotHashes };
     }
+
+    // R389 guard: the run asks the backend by the PUBLISHED package's id (APP_ID in OLD_PKG's
+    // manifest), before execution and again after it, and records the answer in every digest, in
+    // the parts and in the run's test-app identity; a failing ask falls back with a warning.
+    test("R389: the run records the closed-world guard; an erroring ask falls back with a warning", async () => {
+      const asked: string[] = [];
+      const closed = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
+      expect(asked).toEqual([APP_ID, APP_ID]); // before and after execution
+      const inputs = await inputsFor(closed.dirs, OLD_PKG);
+      // OLD_PKG's manifest carries no InternalsVisibleTo element at all: unknown, so internal
+      // procedures stay open and only public ones are closed-world.
+      expect(closed.store.testDigests(closed.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], {
+          ...inputs,
+          closedWorld: { public: true, internal: false },
+        }),
+      );
+      expect(
+        (closed.store.testDigestParts(closed.runId) as { closedWorld?: unknown }).closedWorld,
+      ).toBe("public");
+      expect(closed.guardWarning).toEqual([]);
+      // Sol's review, critical 2: the answer is bound into the identity resume, survivor skips and
+      // baseline reuse compare.
+      expect(closed.recordedHash).toMatch(/\|closed-world:public$/);
+      expect(closed.snapshotHashes.length).toBeGreaterThan(0);
+      for (const h of closed.snapshotHashes) expect(h).toMatch(/\|closed-world:public$/);
+      closed.store.close();
+
+      const failed = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => {
+          throw new Error("boom");
+        },
+      );
+      expect(failed.recordedHash).not.toContain("closed-world");
+      expect(failed.store.testDigests(failed.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], inputs),
+      );
+      expect(
+        (failed.store.testDigestParts(failed.runId) as { closedWorld?: unknown }).closedWorld,
+      ).toBe("none");
+      expect(failed.guardWarning).toHaveLength(1);
+      expect(failed.guardWarning[0]).toContain("boom");
+      failed.store.close();
+    });
+
+    // Merge review I2: a closed-world run whose test app is NOT proven installed (R495) records no
+    // identity at all. The same closed answer after execution upgrades only its digests; a changed
+    // answer warns and keeps the open digests, and there is no identity to revoke.
+    test("R389: an unproven closed-world run upgrades only its digests on the same answer", async () => {
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => 0,
+      );
+      expect(r.recordedHash).toBeNull();
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], {
+          ...(await inputsFor(r.dirs, OLD_PKG)),
+          closedWorld: { public: true, internal: false },
+        }),
+      );
+      expect((r.store.testDigestParts(r.runId) as { closedWorld?: unknown }).closedWorld).toBe(
+        "public",
+      );
+      expect(r.guardWarning).toEqual([]);
+      r.store.close();
+    });
+
+    test("R389: an unproven closed-world run whose answer changes warns, keeps open digests and revokes nothing", async () => {
+      let n = 0;
+      const revoked: number[] = [];
+      const store = new (class extends ResultsStore {
+        override revokeTestAppHash(runId: number, suffix: string): void {
+          revoked.push(runId);
+          super.revokeTestAppHash(runId, suffix);
+        }
+      })(":memory:");
+      const r = await r372Run(
+        OLD_PKG,
+        { store },
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => (n++ === 0 ? 0 : 1),
+      );
+      expect(n).toBe(2);
+      expect(revoked).toEqual([]);
+      expect(r.recordedHash).toBeNull();
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.guardWarning.some((w) => w.startsWith("closed-world-changed"))).toBe(true);
+      r.store.close();
+    });
+
+    // Sol's review, critical 1: the server runs (and the run digests) the published package, whose
+    // manifest names APP_ID; the disk app.json names another app with no dependents.
+    test("R389: a disk app.json naming another app than the published package stays open-world and asks nothing", async () => {
+      const asked: string[] = [];
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: "22222222-2222-2222-2222-222222222222" },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
+      expect(asked).toEqual([]);
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.recordedHash).not.toContain("closed-world");
+      expect(r.guardWarning.join()).toContain("22222222-2222-2222-2222-222222222222");
+      r.store.close();
+    });
+
+    // Sol's review, critical 3: 0 before execution, 1 after (a dependent published mid-run).
+    test("R389: a guard answer that changes during the run keeps open-world digests and revokes the run's identity", async () => {
+      let n = 0;
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        provenMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => (n++ === 0 ? 0 : 1),
+      );
+      expect(n).toBe(2);
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.recordedHash).toMatch(/\|closed-world:revoked$/);
+      expect(r.snapshotHashes.length).toBeGreaterThan(0);
+      for (const h of r.snapshotHashes) expect(h).toMatch(/\|closed-world:revoked$/);
+      expect(r.guardWarning.some((w) => w.startsWith("closed-world-changed"))).toBe(true);
+      r.store.close();
+    });
+
+    // Sol's review, critical 2: a dependent published between a run and its resume. The package
+    // bytes are unchanged, so only the guard's answer differs; the resume must carry nothing.
+    test("R389: --resume-run across a guard flip is refused (R247's refusal); the same answer resumes", async () => {
+      for (const later of [1, 0]) {
+        const first = await r372Run(
+          OLD_PKG,
+          {},
+          true,
+          provenMode(),
+          { ...TESTS_APP, id: APP_ID },
+          async () => 0,
+        );
+        const backend = Object.assign(
+          new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), ["IsOverBudget"]),
+          {
+            fetchPublishedAppPackage: async () => OLD_PKG,
+            microsoftMode: () => provenMode(),
+            dependentCount: async () => later,
+          },
+        );
+        const resumed = runSession({
+          backend,
+          store: first.store,
+          ...first.dirs,
+          selectorIds,
+          resume: first.runId,
+        });
+        if (later === 1) await expect(resumed).rejects.toThrow(/closed-world:public.*R247/s);
+        else expect((await resumed).resumedFrom?.runId).toBe(first.runId);
+        first.store.close();
+      }
+    });
 
     test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {
       const { dirs, store, runId, digestWarning } = await r372Run(OLD_PKG);
@@ -689,6 +922,7 @@ describe("runSession", () => {
           generationSourceSha256: null,
           twinTuples: null,
           numberingDigest: null,
+          dependencySourceSha256: null,
           targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
           rows: [],
         },
@@ -763,12 +997,26 @@ describe("runSession", () => {
 
     // envTool.publishApps are prebuilt .app files published under the lease, AFTER the read.
     test("an env-tool session (afterLeaseAcquired) records NULL even when the read has source", async () => {
-      const { store, runId, digestWarning } = await r372Run(OLD_PKG, {
-        afterLeaseAcquired: async () => {},
-      });
+      // R389 (merge review M1): the session stays open-world, so the guard is never asked, even
+      // on a backend that answers 0 dependents for the test app the app.json names.
+      const asked: string[] = [];
+      const { store, runId, digestWarning, recordedHash, snapshotHashes } = await r372Run(
+        OLD_PKG,
+        { afterLeaseAcquired: async () => {} },
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
       expect(store.testDigests(runId)).toBeNull();
       expect(digestWarning).toHaveLength(1);
       expect(digestWarning[0]).toContain("envTool.publishApps");
+      expect(asked).toEqual([]);
+      for (const h of [recordedHash ?? "", ...snapshotHashes])
+        expect(h).not.toContain("closed-world");
       store.close();
     });
 
@@ -848,6 +1096,7 @@ describe("runSession", () => {
             generationSourceSha256: null,
             twinTuples: null,
             numberingDigest: null,
+            dependencySourceSha256: null,
             targets: [
               {
                 batchIndex: 0,
@@ -3766,6 +4015,166 @@ describe("runSession — parallel workers", () => {
     }
     expect(made).toBe(3);
     store.close();
+  });
+
+  // R551: the session backend's `--test-exact` probe, and the boolean it hands every worker.
+  describe("the --test-exact probe (R551)", () => {
+    const caps: BackendCapabilities = {
+      coverage: "none",
+      deploy: "none",
+      isolation: "full-reset",
+      authoritative: false,
+    };
+    type Probe =
+      | { kind: "not-applicable" }
+      | { kind: "exact"; elapsedMs: number }
+      | { kind: "substring"; elapsedMs: number; reason: string };
+    type Entry = { backend: number; what: "probe" | "selector" | "run"; on?: boolean };
+
+    /** Backend 0 is the session's. `withSetter: false` leaves the WORKERS without the setter. */
+    async function session(probe: Probe, o: { workers?: number; withSetter?: boolean } = {}) {
+      const dirs = await makeProject();
+      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+      const store = new ResultsStore(":memory:");
+      const log: Entry[] = [];
+      const events: RunEvent[] = [];
+      let made = 0;
+      const make = () => {
+        const id = made++;
+        const b = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
+        const run = b.run.bind(b);
+        const extra: Record<string, unknown> = {
+          run: (ref: TestMethodRef, opts: RunOpts) => {
+            log.push({ backend: id, what: "run" });
+            return run(ref, opts);
+          },
+        };
+        if (id === 0) {
+          extra.probeExactTestSelector = async () => {
+            log.push({ backend: id, what: "probe" });
+            return probe;
+          };
+        }
+        if (id === 0 || o.withSetter !== false) {
+          extra.useExactTestSelector = (on: boolean) => {
+            log.push({ backend: id, what: "selector", on });
+          };
+        }
+        return Object.assign(b, extra);
+      };
+      let report: Awaited<ReturnType<typeof runSession>>;
+      try {
+        report = await runSession({
+          backend: make(),
+          backendFactory: make,
+          store,
+          ...dirs,
+          selectorIds,
+          workers: o.workers ?? 2,
+          emit: [(e) => events.push(e)],
+        });
+      } finally {
+        store.close();
+      }
+      const selectorLines = events.flatMap((e) =>
+        e.type === "warning" && e.code === "al-runner-test-selector" ? [e.message] : [],
+      );
+      const selectorEvents = events.filter((e) => e.type === "al-runner-test-selector");
+      const contexts = report.validity.executionContexts.filter((c) => c.verdictCount > 0);
+      return { log, made, selectorLines, events, selectorEvents, contexts };
+    }
+
+    test("O1: the probe runs once, before the session's first run(); every worker gets the boolean before its own", async () => {
+      const { log, made } = await session({ kind: "exact", elapsedMs: 5 });
+      expect(made).toBe(3);
+      const probes = log.filter((e) => e.what === "probe");
+      expect(probes).toEqual([{ backend: 0, what: "probe" }]);
+      const firstRun0 = log.findIndex((e) => e.backend === 0 && e.what === "run");
+      expect(firstRun0).toBeGreaterThan(log.indexOf(probes[0] as Entry));
+      for (const id of [1, 2]) {
+        const sel = log.filter((e) => e.backend === id && e.what === "selector");
+        expect(sel).toEqual([{ backend: id, what: "selector", on: true }]);
+        const at = log.findIndex((e) => e.backend === id && e.what === "selector");
+        const firstRun = log.findIndex((e) => e.backend === id && e.what === "run");
+        expect(firstRun).toBeGreaterThan(at);
+      }
+    });
+
+    test("O2: a rejecting probe hands every worker false", async () => {
+      const { log } = await session({ kind: "substring", elapsedMs: 5, reason: "exit 2" });
+      for (const id of [1, 2]) {
+        expect(log.filter((e) => e.backend === id && e.what === "selector")).toEqual([
+          { backend: id, what: "selector", on: false },
+        ]);
+      }
+    });
+
+    test("O3: a worker without useExactTestSelector makes runSession throw, naming the worker", async () => {
+      await expect(session({ kind: "exact", elapsedMs: 5 }, { withSetter: false })).rejects.toThrow(
+        /worker backend 0.*useExactTestSelector|useExactTestSelector.*worker backend 0/,
+      );
+    });
+
+    test("O4: exactly one al-runner-test-selector warning per probed session; none when not-applicable", async () => {
+      expect(
+        (await session({ kind: "exact", elapsedMs: 7 }, { workers: 1 })).selectorLines,
+      ).toEqual([
+        "al-runner test selector: exact (--test-exact accepted by a one-call probe in 7 ms; R551)",
+      ]);
+      expect(
+        (
+          await session(
+            { kind: "substring", elapsedMs: 9, reason: "exit 2; stderr: Unknown option" },
+            { workers: 1 },
+          )
+        ).selectorLines,
+      ).toEqual([
+        "al-runner test selector: substring with R488 excludes (--test-exact not accepted: exit 2; stderr: Unknown option; probe 9 ms; R551)",
+      ]);
+      const na = await session({ kind: "not-applicable" }, { workers: 1 });
+      expect(na.selectorLines).toEqual([]);
+      // Non-vacuous: the hook did receive the session's other events.
+      expect(na.events.length).toBeGreaterThan(0);
+    });
+
+    // R558: the choice reaches the report through a structured event, not the warning text.
+    test("R558 exact: one structured event, and every measured context records exact with no reason", async () => {
+      const s = await session({ kind: "exact", elapsedMs: 7 }, { workers: 1 });
+      expect(s.selectorEvents).toHaveLength(1);
+      const [ev] = s.selectorEvents;
+      expect(ev).toMatchObject({ type: "al-runner-test-selector", selector: "exact" });
+      expect(ev !== undefined && "reason" in ev).toBe(false);
+      expect(s.contexts.length).toBeGreaterThan(0);
+      for (const c of s.contexts) {
+        expect(c.testSelector).toBe("exact");
+        expect(c.testSelectorReason).toBeUndefined();
+      }
+    });
+
+    test("R558 substring: the event and every measured context carry substring-with-excludes and the probe's reason", async () => {
+      const s = await session(
+        { kind: "substring", elapsedMs: 9, reason: "exit 2; stderr: Unknown option" },
+        { workers: 1 },
+      );
+      expect(s.selectorEvents).toHaveLength(1);
+      expect(s.selectorEvents[0]).toMatchObject({
+        type: "al-runner-test-selector",
+        selector: "substring-with-excludes",
+        reason: "exit 2; stderr: Unknown option",
+      });
+      expect(s.contexts.length).toBeGreaterThan(0);
+      for (const c of s.contexts) {
+        expect(c.testSelector).toBe("substring-with-excludes");
+        expect(c.testSelectorReason).toBe("exit 2; stderr: Unknown option");
+      }
+    });
+
+    test("R558 not-applicable (--server): no event, and no measured context records a selector", async () => {
+      const s = await session({ kind: "not-applicable" }, { workers: 1 });
+      expect(s.selectorEvents).toEqual([]);
+      expect(s.contexts.length).toBeGreaterThan(0);
+      for (const c of s.contexts) expect(c.testSelector).toBeUndefined();
+    });
   });
 
   test("a worker deploy failure does not double-record a mutant step 5 already marked no-coverage", async () => {
@@ -8579,6 +8988,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       dep?: boolean;
       /** R496: false builds a package without `.al` source (its manifest still declares `dep`). */
       source?: boolean;
+      /** R498: more entries, none of them `.al`, so the bytes differ and the source set does not. */
+      extra?: Readonly<Record<string, string>>;
     }) =>
       new Uint8Array(
         buildFakeAppWithEntries({
@@ -8598,6 +9009,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             ],
           }),
           ...(o.source === false ? {} : { "src/SandboxTests.Codeunit.al": o.body }),
+          ...o.extra,
         }),
       );
     const depPkg = (build: string) =>
@@ -8674,11 +9086,17 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       readonly served?: Readonly<Record<string, Uint8Array>>;
       /** R496: app ids whose installed read throws. */
       readonly installedThrows?: readonly string[];
+      /** R389: the backend's `dependentCount`, and the test app.json then names the package's id
+       *  (APP_ID), so the closed-world guard is asked for real. */
+      readonly dependentCount?: (appId: string) => Promise<number>;
     }
 
     async function envRun(o: EnvRun) {
       const dirs = o.dirs ?? (await makeProject(BODY_B));
-      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      await Bun.write(
+        join(dirs.testDir, "app.json"),
+        JSON.stringify(o.dependentCount !== undefined ? { ...TESTS_APP, id: APP_ID } : TESTS_APP),
+      );
       const testAppFile = join(dirs.testDir, "..", "Tests.app");
       const depFile = join(dirs.testDir, "..", "Dep.app");
       writeFileSync(testAppFile, P1);
@@ -8726,6 +9144,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       const { lease } = leaseCfg(client);
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
+        ...(o.dependentCount !== undefined ? { dependentCount: o.dependentCount } : {}),
         ...(o.noMicrosoftMode === true
           ? {}
           : {
@@ -9850,6 +10269,28 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(got.history.skipped).toBe(0);
         expect(got.snapshot.reused).toBe(0);
       });
+      // T7c-R389 (merge review I1): the same race on a server that answers 0 dependents, before
+      // and after execution. The closed-world digests were taken over the PRE-lease dependency, so
+      // the confirmation step must not write them back once F9 withdrew the digests.
+      test("T7c-R389: a closed-world run whose digests F9 withdrew gets none back at confirmation", async () => {
+        const asked: string[] = [];
+        const r = await race({
+          dependentCount: async (id) => {
+            asked.push(id);
+            return 0;
+          },
+        })({});
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(asked).toEqual([APP_ID, APP_ID]); // the guard was asked, before and after
+        unproven(r);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        expect(r.store.testDigestParts(r.runId)).toBeNull();
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain(
+          "a dependency changed while this session waited for the lease",
+        );
+        r.store.close();
+      });
       // T7f (F9, full precision, R-496 review): the pre-lease and under-lease fingerprints agree on
       // their first 16 hex digits (all the stored parts keep) and differ after. Still a mismatch.
       test("T7f: fingerprints equal in their first 16 hex digits but not after still invalidate", async () => {
@@ -9974,6 +10415,136 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           expect(r2.store.getRun(id)?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
         }
         r2.store.close();
+      });
+
+      // R498: a HOOK session whose test app carries no `.al` is proven when the served package's
+      // bytes equal the publishApps file's (measured: the dev endpoint serves back the bytes it was
+      // given, with or without `.al`).
+      describe("R498: a source-less read-back after the hook is proven by byte equality", () => {
+        /** The same identity and version as P2DS, other bytes (one more non-`.al` entry). */
+        const P2DSX = testPkg({
+          version: "1.0.0.2",
+          body: BODY_B,
+          dep: true,
+          source: false,
+          extra: { "Translations/x.xlf": "<xliff/>" },
+        });
+        /** A hook session that serves P2DS and publishes it as the publishApps test-app file. */
+        const hookSL = (more: Partial<EnvRun> = {}) =>
+          session("H", "one", { pre: P2DS, post: P2DS, testAppInPublishApps: true, ...more });
+
+        test("H1: served bytes equal the publishApps file: proven, deps recorded, and it lends", async () => {
+          const r = await hookSL()({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          const row = r.store.getRun(r.runId);
+          expect(row?.testAppProven).toBe(true);
+          expect(row?.testAppHash).toBe(`package:${hashPackage(P2DS)}`);
+          expect(row?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
+          r.store.close();
+          lendsAll(await consumers(hookSL(), hookSL()));
+        });
+
+        test("H2: same identity and version, other bytes: unproven, named, and it lends nothing", async () => {
+          const r = await hookSL({ file: P2DSX })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("bytes differ from the publishApps file");
+          r.store.close();
+          lendsNothing(await consumers(hookSL({ file: P2DSX }), hookSL()));
+        });
+
+        test("H3: an identity or version that differs from the file is named as such", async () => {
+          const r = await hookSL({
+            file: testPkg({ version: "1.0.0.3", body: BODY_B, dep: true, source: false }),
+          })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("version 1.0.0.2");
+          expect(r.digestWarning[0]).toContain("version 1.0.0.3");
+          r.store.close();
+        });
+
+        test("H4: the served version not installed: unproven", async () => {
+          const r = await hookSL({ installed: { [APP_ID]: ["1.0.0.1"], [DEP.id]: ["1.0.0.0"] } })(
+            {},
+          );
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("not proven installed");
+          expect(r.digestWarning[0]).toContain(APP_ID);
+          r.store.close();
+        });
+
+        test("H5: no publishApps file is the test app: proven by the installed checks alone", async () => {
+          const r = await hookSL({ testAppInPublishApps: false })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          r.store.close();
+        });
+
+        test("H6: a proven source-less hook run records no digests and one named warning", async () => {
+          const r = await hookSL()({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          expect(r.store.testDigests(r.runId)).toBeNull();
+          expect(r.store.testDigestParts(r.runId)).toBeNull();
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("carries no AL source");
+          r.store.close();
+        });
+
+        test("H7: a read-back WITH source, other bytes but the same .al set, stays proven", async () => {
+          const P2DX = testPkg({
+            version: "1.0.0.2",
+            body: BODY_B,
+            dep: true,
+            extra: { "Translations/x.xlf": "<xliff/>" },
+          });
+          const r = await session("H", "one", {
+            pre: P2D,
+            post: P2D,
+            file: P2DX,
+            testAppInPublishApps: true,
+          })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          expect(r.store.testDigests(r.runId)).not.toBeNull();
+          expect(r.digestWarning).toEqual([]);
+          r.store.close();
+        });
+
+        test("H8: proven, but the dependencies are unreadable: the dependency reason is named", async () => {
+          // No dependency is served, so its fingerprint cannot be taken.
+          const r = await envRun({
+            pre: P2DS,
+            post: P2DS,
+            installed: INSTALLED,
+            testAppInPublishApps: true,
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("dependencies could not be fingerprinted");
+          expect(r.digestWarning[0]).not.toContain("carries no AL source");
+          r.store.close();
+        });
+
+        test("H9: served WITH source against a source-less publishApps file stays unproven", async () => {
+          const r = await session("H", "one", {
+            pre: P2D,
+            post: P2D,
+            file: P2DS,
+            testAppInPublishApps: true,
+          })({});
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          unproven(r);
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain("other .al sources");
+          r.store.close();
+        });
       });
     });
 
@@ -10217,6 +10788,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
               generationSourceSha256: null,
               twinTuples: null,
               numberingDigest: null,
+              dependencySourceSha256: null,
               targets: [
                 {
                   batchIndex: 0,
@@ -17130,7 +17702,10 @@ describe("R536: runNamedMutants reads the installed artifact under the source ru
       ...fx.cfg,
       backend: withSymbolsTaker(fx, []),
       narrow: (_baseline, ctx) => {
-        seen.push({ buildSymbols: ctx.buildSymbols, backendRefused: [...ctx.backendRefused.keys()] });
+        seen.push({
+          buildSymbols: ctx.buildSymbols,
+          backendRefused: [...ctx.backendRefused.keys()],
+        });
         return { methods: new Map([["M0001", [OVER]]]), unreached: new Set() };
       },
     });
@@ -19690,6 +20265,681 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
     expect(() => assertExplainableReport(report)).toThrow(
       "`coverageMode` is a value this build cannot interpret",
     );
+  });
+});
+
+/**
+ * R577: "a kill must reproduce". A stub with the rule ON (`killsMustReproduce`), which counts the
+ * mutated runs per mutant (`nth`, read by the script), logs every activation and run in one shared
+ * `trace` (so order is asserted by sequence, never by clock), and records what each run was SENT.
+ * `answer` replaces a run's verdict outright (a lost or stranded reproduction).
+ */
+class ReproStub extends StubBackend {
+  readonly killsMustReproduce = true;
+  readonly nth = new Map<string, number>();
+  readonly trace: string[] = [];
+  readonly sent: Array<{ mutant: string | null; method: string; timeoutMs: number }> = [];
+  answer?: (mutant: string | null, n: number, v: TestVerdict) => TestVerdict | undefined;
+  override async activate(id: string | null) {
+    this.trace.push(`activate ${id ?? "null"}`);
+    await super.activate(id);
+  }
+  override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    const active = this.activations.at(-1) ?? null;
+    const n = active === null ? 0 : (this.nth.get(active) ?? 0) + 1;
+    if (active !== null) this.nth.set(active, n);
+    this.sent.push({ mutant: active, method: ref.method, timeoutMs: opts.timeoutMs });
+    const base = await super.run(ref, opts);
+    const v = this.answer?.(active, n, base) ?? base;
+    this.trace.push(`run ${active ?? "null"} ${ref.method} ${v.outcome}`);
+    return v;
+  }
+}
+
+/** R577: the group path's stub (R206's) with the rule on. */
+class ReproWarmStub extends WarmStubBackend {
+  readonly killsMustReproduce = true;
+  /** Every non-confirmation `runMany` under `mutant`, as its method names, in order. */
+  callsUnder(mutant: string): string[][] {
+    return this.callLog.filter((c) => c.mutant === mutant).map((c) => c.methods);
+  }
+  private readonly callLog: Array<{ mutant: string | null; methods: string[] }> = [];
+  override async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+    if (opts.confirmation !== true) {
+      this.callLog.push({
+        mutant: this.activations.at(-1) ?? null,
+        methods: opts.methods.map((x) => x.ref.method),
+      });
+    }
+    return super.runMany(opts);
+  }
+}
+
+describe("R577: a kill must reproduce under the mutant", () => {
+  const rowOf = (r: SessionReport, id: string) => r.mutants.find((m) => m.mutantCode === id);
+  const run = async (
+    backend: ExecutionBackend,
+    extra: { testAl?: string; mutantTimeoutMs?: number; onEvent?: (e: RunEvent) => void } = {},
+  ) => {
+    const dirs = await makeProject(extra.testAl);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      ...(extra.mutantTimeoutMs !== undefined ? { mutantTimeoutMs: extra.mutantTimeoutMs } : {}),
+      ...(extra.onEvent !== undefined ? { emit: [createEmitter([extra.onEvent])] } : {}),
+    });
+    return { report, store };
+  };
+  /** Fails under a mutant on its FIRST mutated run only: the measured flaky shape (R577). */
+  const flaky = () => {
+    const backend: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : backend.nth.get(mutant) === 1 ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    backend.failureMessageFor = (mutant) =>
+      mutant === null ? undefined : `text ${backend.nth.get(mutant)}`;
+    return backend;
+  };
+  /** Fails under every mutant on every run: a deterministic kill. */
+  const deterministic = () => {
+    const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    backend.failureMessageFor = (mutant) => (mutant === null ? undefined : "Assert failed");
+    return backend;
+  };
+  /** The activations from mutant `id`'s first one, `len` long. */
+  const activationsOf = (b: StubBackend, id: string, len: number) => {
+    const at = b.activations.indexOf(id);
+    return b.activations.slice(at, at + len);
+  };
+
+  test("T1: fail under m, pass with no mutant, pass under m again is error kill-not-reproduced, never killed, and the banner names it", async () => {
+    const backend = flaky();
+    const { report, store } = await run(backend);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.killingTest).toBeUndefined();
+      expect(m.killingTestFailure).toBeUndefined();
+      expect(m.killReproduced).toBeUndefined();
+      expect(m.failureNote).toContain(
+        "kill-not-reproduced OverBudgetDetected: failed under the mutant (text 1), passed with no mutant active, then passed when LethAL re-ran it under the mutant;",
+      );
+      expect(m.failureNote).toContain("Re-run with --resume");
+    }
+    expect(activationsOf(backend, "M0001", 4)).toEqual(["M0001", null, "M0001", "M0002"]);
+    expect(report.counts.killed).toBe(0);
+    expect(report.counts.unstable).toBe(0);
+    expect(renderConsole(report)).toContain(`, kill-not-reproduced ${report.mutants.length}`);
+    store.close();
+  });
+
+  test("T1b: an unreproduced kill never feeds R197's ledger, a reproduced one does (the next mutant's first test says which)", async () => {
+    // T3 is the killer; on a cold ledger the order is by name (T1 first), and a recorded kill in
+    // the procedure moves T3 to the front for the next mutant.
+    const firstFor = async (repeats: boolean) => {
+      const backend: ReproStub = new ReproStub(
+        CAPS_NST,
+        (mutant, ref) => {
+          if (mutant !== "M0001" || ref.method !== "T3") return "pass";
+          const t3Runs = backend.sent.filter((s) => s.mutant === "M0001" && s.method === "T3");
+          return repeats || t3Runs.length === 1 ? "fail" : "pass";
+        },
+        ["IsOverBudget"],
+      );
+      const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+      store.close();
+      return {
+        m1: rowOf(report, "M0001"),
+        first: backend.sent.find((s) => s.mutant === "M0002")?.method,
+      };
+    };
+    const flakyRun = await firstFor(false);
+    expect(flakyRun.m1?.cause).toBe("kill-not-reproduced");
+    expect(flakyRun.first).toBe("T1");
+    const realRun = await firstFor(true);
+    expect(realRun.m1?.verdict).toBe("killed");
+    expect(realRun.first).toBe("T3");
+  });
+
+  test("T2: fail, pass, fail with the same text is killed, with killReproduced and reproducedFailure taken from the reproduction", async () => {
+    const backend = deterministic();
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killReproduced).toBe(true);
+      expect(m.killingTestFailure).toBe("Assert failed");
+      expect(m.reproducedFailure).toBe("Assert failed");
+      expect(m.killPosition).toBe(1);
+    }
+    // The marker reaches the store, where --resume reads it (B1).
+    const rows = store.mutantVerdicts(1);
+    expect(rows.length).toBe(report.mutants.length);
+    expect(rows.every((r) => r.killReproduced === true)).toBe(true);
+    store.close();
+  });
+
+  test("T3: a second failure with a DIFFERENT text still reproduces; both texts are kept", async () => {
+    // Every mutated run fails, with its own text: "text 1", then "text 2".
+    const always = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    always.failureMessageFor = (mutant) =>
+      mutant === null ? undefined : `text ${always.nth.get(mutant)}`;
+    const { report, store } = await run(always);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killingTestFailure).toBe("text 1");
+      expect(m.reproducedFailure).toBe("text 2");
+    }
+    store.close();
+  });
+
+  test("T4: with the flag unset, T1's script is a kill exactly as before: [m, null], no third run, no marker", async () => {
+    // The flaky script per mutant: fail on the first mutated run, pass after.
+    const seen = new Map<string, number>();
+    const offBackend = new StubBackend(
+      CAPS_NST,
+      (mutant) => {
+        if (mutant === null) return "pass";
+        const k = (seen.get(mutant) ?? 0) + 1;
+        seen.set(mutant, k);
+        return k === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    expect("killsMustReproduce" in offBackend).toBe(false);
+    const { report, store } = await run(offBackend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect("killReproduced" in m).toBe(false);
+      expect("reproducedFailure" in m).toBe(false);
+    }
+    expect(activationsOf(offBackend, "M0001", 3)).toEqual(["M0001", null, "M0002"]);
+    // No third run: one mutated run per mutant.
+    expect([...seen.values()].every((k) => k === 1)).toBe(true);
+    store.close();
+  });
+
+  test("T5: a warm kill at k = 2 is reproduced by replaying [T1, T2] under the mutant, with no confirmation flag; two mutated `many` rows for the killer", async () => {
+    const backend: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+        if (mutant === "M0002" && ref.method === "T2" && backend.session.get("cache") !== undefined)
+          return "fail";
+        if (mutant === "M0001" && ref.method === "T1") return "fail";
+        return "pass";
+      },
+      ["IsOverBudget"],
+    );
+    backend.failureMessageFor = (mutant, ref) => `stale cache in ${ref.method} under ${mutant}`;
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.verdict).toBe("killed");
+    expect(k?.killPosition).toBe(2);
+    expect(k?.killReproduced).toBe(true);
+    expect(k?.reproducedFailure).toBe("stale cache in T2 under M0002");
+    expect(report.warmKills).toBe(1);
+    const pairs = backend.manyCalls
+      .filter((c) => c.methods.map((x) => x.ref.method).join(",") === "T1,T2")
+      .map((c) => c.confirmation === true);
+    expect(pairs).toEqual([true, false]);
+    const killerRows = store.db
+      .query(
+        "SELECT op_kind FROM test_results WHERE mutant_code = 'M0002' AND method = 'T2' ORDER BY id",
+      )
+      .all() as Array<{ op_kind: string | null }>;
+    expect(killerRows.map((r) => r.op_kind)).toEqual(["many", "many"]);
+    store.close();
+  });
+
+  /** T5's backend, with M0002's warm failure on its first warm T2 only. */
+  const warmFlaky = () => {
+    let warmT2 = 0;
+    const backend: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+        if (
+          mutant === "M0002" &&
+          ref.method === "T2" &&
+          backend.session.get("cache") !== undefined
+        ) {
+          warmT2 += 1;
+          return warmT2 === 1 ? "fail" : "pass";
+        }
+        if (mutant === "M0001" && ref.method === "T1") return "fail";
+        return "pass";
+      },
+      ["IsOverBudget"],
+    );
+    return backend;
+  };
+
+  test("T5b: a replay under the mutant that passes all k is kill-not-reproduced, with the replay clause", async () => {
+    const backend = warmFlaky();
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.verdict).toBe("error");
+    expect(k?.cause).toBe("kill-not-reproduced");
+    expect(k?.failureNote).toContain(
+      "then passed when LethAL re-ran it under the mutant by replaying the same 2 method(s) of its call;",
+    );
+    store.close();
+  });
+
+  test("T5c: a prefix method failing first in the replay under the mutant is kill-not-reproduced naming it", async () => {
+    const backend = warmFlaky();
+    backend.manyOverride = (_call, opts, composed) => {
+      const names = opts.methods.map((x) => x.ref.method).join(",");
+      if (opts.confirmation === true || names !== "T1,T2" || composed.kind !== "verdicts")
+        return composed;
+      const first = composed.verdicts[0];
+      if (first === undefined) return composed;
+      return {
+        ...composed,
+        endedBy: "failure",
+        ranCount: 1,
+        verdicts: [{ ...first, outcome: "fail", failureMessage: "T1 is order-sensitive" }],
+      };
+    };
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.cause).toBe("kill-not-reproduced");
+    expect(k?.failureNote).toContain(
+      "then 1. T1 failed first when LethAL replayed the same 2 method(s) of its call under the mutant;",
+    );
+    store.close();
+  });
+
+  test("T5d: a replay under the mutant that stops at the server's cap is warm-confirmation-incomplete (I5), never a kill", async () => {
+    const backend = warmFlaky();
+    backend.manyOverride = (_call, opts, composed) => {
+      const names = opts.methods.map((x) => x.ref.method).join(",");
+      if (opts.confirmation === true || names !== "T1,T2" || composed.kind !== "verdicts")
+        return composed;
+      const first = composed.verdicts[0];
+      if (first === undefined) return composed;
+      return { ...composed, endedBy: "cap", ranCount: 1, verdicts: [first] };
+    };
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0002");
+    expect(k?.verdict).toBe("error");
+    expect(k?.cause).toBe("warm-confirmation-incomplete");
+    expect(k?.failureNote).toContain("stopped at the server's cap after 1 of 2 method(s)");
+    store.close();
+  });
+
+  test("T5e: at k = 2, a reproduction of the OTHER kind is kill-not-reproduced, both ways (I1)", async () => {
+    // A fail kill at T2 (warm) whose replay under the mutant times out at T2.
+    const failKill: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (ref.method === "T1") failKill.session.set("cache", "populated-by-T1");
+        return mutant === "M0002" && ref.method === "T2" && failKill.session.has("cache")
+          ? "fail"
+          : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    let asked = 0;
+    failKill.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0002" || ref.method !== "T2") return undefined;
+      asked += 1;
+      return asked === 2 ? 999_999 : undefined;
+    };
+    const a = await run(failKill, { testAl: FIVE_TESTS_AL });
+    const ka = rowOf(a.report, "M0002");
+    expect(ka?.cause).toBe("kill-not-reproduced");
+    expect(ka?.failureNote).toContain(
+      "then timed out instead of failing when LethAL re-ran it under the mutant by replaying the same 2 method(s) of its call;",
+    );
+    a.store.close();
+
+    // A timeout kill at T2 (warm) whose replay under the mutant fails at T2.
+    const timeoutKill = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T2" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    let stopped = 0;
+    timeoutKill.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0001" || ref.method !== "T2") return undefined;
+      stopped += 1;
+      return stopped === 1 ? 999_999 : undefined;
+    };
+    const b = await run(timeoutKill, { testAl: FIVE_TESTS_AL });
+    const kb = rowOf(b.report, "M0001");
+    expect(kb?.cause).toBe("kill-not-reproduced");
+    expect(kb?.failureNote).toContain(
+      "then failed instead of timing out when LethAL re-ran it under the mutant at the same budget by replaying the same 2 method(s) of its call;",
+    );
+    b.store.close();
+  });
+
+  test("T6: the order is activate(m), fail, activate(null), pass, activate(m), fail, and only then is the mutant scored", async () => {
+    const backend = deterministic();
+    const { store } = await run(backend, {
+      onEvent: (e) => {
+        if (e.type === "mutant-scored")
+          backend.trace.push(`scored ${e.mutant.mutantId} ${e.verdict}`);
+      },
+    });
+    const at = backend.trace.indexOf("activate M0001");
+    expect(backend.trace.slice(at, at + 7)).toEqual([
+      "activate M0001",
+      "run M0001 OverBudgetDetected fail",
+      "activate null",
+      "run null OverBudgetDetected pass",
+      "activate M0001",
+      "run M0001 OverBudgetDetected fail",
+      "scored M0001 killed",
+    ]);
+    store.close();
+  });
+
+  test("T7: a backend that caches its suite per activation (al-runner --server) still reproduces a deterministic kill, because the mutant is re-activated", async () => {
+    // `activate` drops the cached answer; `run` answers from the cache while it holds one.
+    class CachingStub extends ReproStub {
+      cached: TestVerdict | undefined;
+      override async activate(id: string | null) {
+        this.cached = undefined;
+        await super.activate(id);
+      }
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        if (this.cached !== undefined) return this.cached;
+        const v = await super.run(ref, opts);
+        this.cached = v;
+        return v;
+      }
+    }
+    const backend = new CachingStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killReproduced).toBe(true);
+    }
+    store.close();
+  });
+
+  test("T8a: a reproduction our own deadline cut keeps deadline-exceeded, never a kill", async () => {
+    const backend = deterministic();
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 2 ? { ...v, outcome: "deadline-exceeded" } : undefined;
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("deadline-exceeded");
+      expect(m.failureNote).toContain("reproducing OverBudgetDetected under the mutant");
+    }
+    store.close();
+  });
+
+  test("T8b: a reproduction whose answer is unreadable and unresolved is stranded, quarantined, never a kill", async () => {
+    const backend = deterministic();
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 2
+        ? {
+            ref: v.ref,
+            outcome: "deadline-exceeded",
+            durationMs: 1,
+            operation: "in-flight-unknown",
+          }
+        : undefined;
+    const { report, store } = await run(backend);
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("stranded");
+    expect(isStrandedNote(m1?.failureNote)).toBe(true);
+    expect(report.counts.killed).toBe(0);
+    store.close();
+  });
+
+  test("T8c: a reproduction that ran in a reused session is session-reused, never a kill", async () => {
+    const backend: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T1" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    // Only single-method calls under a mutant report a used session: here, the reproduction.
+    backend.singleTestRunsBefore = (mutant) => (mutant !== null ? 3 : 0);
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("session-reused");
+    expect(m1?.failureNote).toContain("reproducing T1 under the mutant");
+    store.close();
+  });
+
+  test("T8d: an al-runner row the reproduction answered keeps its cause, and its note says it came from the reproduction (I5)", async () => {
+    const backend = deterministic();
+    backend.answer = (mutant, n, v) =>
+      mutant !== null && n === 2
+        ? {
+            ref: v.ref,
+            outcome: "error",
+            durationMs: 1,
+            runnerRow: "runner-test-error",
+            failureMessage: "handler not executed",
+          }
+        : undefined;
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("runner-test-error");
+      expect(m.failureNote).toBe(
+        "reproducing OverBudgetDetected under the mutant (first run failed: Assert failed): handler not executed",
+      );
+    }
+    store.close();
+  });
+
+  test("T9: timeout, a fast confirm, timeout again is timeout-killed with the marker", async () => {
+    const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
+      "IsOverBudget",
+    ]);
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.killReproduced).toBe(true);
+    }
+    expect(activationsOf(backend, "M0001", 3)).toEqual(["M0001", null, "M0001"]);
+    store.close();
+  });
+
+  test("T9b: timeout, a fast confirm, then a pass under the mutant is kill-not-reproduced, saying it passed", async () => {
+    const backend: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : backend.nth.get(mutant) === 1 ? "timeout" : "pass"),
+      ["IsOverBudget"],
+    );
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.failureNote).toContain("timed out under the mutant at its");
+      expect(m.failureNote).toContain("then passed when LethAL re-ran it under the mutant;");
+      expect(m.failureNote).toContain("the timeout did not repeat");
+    }
+    store.close();
+  });
+
+  test("T9d: at k = 1, a reproduction of the OTHER kind is kill-not-reproduced, both ways (I1)", async () => {
+    // A fail kill whose reproduction times out.
+    const failKill: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) => (mutant === null ? "pass" : failKill.nth.get(mutant) === 1 ? "fail" : "timeout"),
+      ["IsOverBudget"],
+    );
+    const a = await run(failKill);
+    expect(a.report.mutants.length).toBeGreaterThan(0);
+    for (const m of a.report.mutants) {
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.failureNote).toContain(
+        "then timed out instead of failing when LethAL re-ran it under the mutant;",
+      );
+    }
+    a.store.close();
+    // A timeout kill whose reproduction fails.
+    const timeoutKill: ReproStub = new ReproStub(
+      CAPS_NST,
+      (mutant) =>
+        mutant === null ? "pass" : timeoutKill.nth.get(mutant) === 1 ? "timeout" : "fail",
+      ["IsOverBudget"],
+    );
+    const b = await run(timeoutKill);
+    expect(b.report.mutants.length).toBeGreaterThan(0);
+    for (const m of b.report.mutants) {
+      expect(m.cause).toBe("kill-not-reproduced");
+      expect(m.failureNote).toContain(
+        "then failed instead of timing out when LethAL re-ran it under the mutant at the same budget;",
+      );
+    }
+    b.store.close();
+  });
+
+  test("T9c: the reproduction is sent the budget the timed-out run was sent, not the confirm's longer deadline", async () => {
+    const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
+      "IsOverBudget",
+    ]);
+    const { store } = await run(backend, { mutantTimeoutMs: 1000 });
+    const at = backend.sent.findIndex((s) => s.mutant === "M0001");
+    expect(backend.sent.slice(at, at + 3).map((s) => [s.mutant, s.timeoutMs])).toEqual([
+      ["M0001", 1000],
+      [null, 120_000],
+      ["M0001", 1000],
+    ]);
+    store.close();
+  });
+
+  test("T10: a flaky test ordered before a deterministic killer does not lose the kill: the loop goes on and the later test kills, reproduced", async () => {
+    const t1Runs = new Map<string, number>();
+    const backend = new ReproStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (mutant !== "M0001") return "pass";
+        if (ref.method === "T3") return "fail";
+        if (ref.method !== "T1") return "pass";
+        const k = (t1Runs.get(mutant) ?? 0) + 1;
+        t1Runs.set(mutant, k);
+        return k === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("killed");
+    expect(m1?.killingTest).toBe("T3");
+    expect(m1?.killReproduced).toBe(true);
+    expect(m1?.cause).toBeUndefined();
+    store.close();
+  });
+
+  test("T10b: on the group path too, a flaky failure at position 1 does not end the walk: the call after it runs and its kill stands", async () => {
+    let t1 = 0;
+    const backend = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (mutant !== "M0001") return "pass";
+        if (ref.method === "T4") return "fail";
+        if (ref.method !== "T1") return "pass";
+        t1 += 1;
+        return t1 === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("killed");
+    expect(m1?.killingTest).toBe("T4");
+    expect(m1?.killReproduced).toBe(true);
+    // I2: the walk resumes at the method right AFTER the flaky one, skipping none.
+    expect(backend.callsUnder("M0001")).toEqual([
+      ["T1", "T2", "T3", "T4", "T5"],
+      ["T2", "T3", "T4", "T5"],
+      ["T2", "T3", "T4"],
+    ]);
+    store.close();
+  });
+
+  test("T10c: on the group path, a warm timeout that does not reproduce does not end the walk either: the next call's kill stands", async () => {
+    let stopped = 0;
+    const backend = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T4" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    // T2 is stopped under M0001 the first time only: a chance overrun at k = 2.
+    backend.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0001" || ref.method !== "T2") return undefined;
+      stopped += 1;
+      return stopped === 1 ? 999_999 : undefined;
+    };
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("killed");
+    expect(m1?.killingTest).toBe("T4");
+    expect(m1?.killReproduced).toBe(true);
+    // I2: after the call-level timeout at position 2 the walk resumes at T3, skipping none.
+    expect(backend.callsUnder("M0001")).toEqual([
+      ["T1", "T2", "T3", "T4", "T5"],
+      ["T1", "T2"],
+      ["T3", "T4", "T5"],
+      ["T3", "T4"],
+    ]);
+    store.close();
+  });
+
+  /** M0001's T1 fails on its first run only (flaky X); `later` answers M0001's T2 (Y). */
+  const flakyThen = (later: (v: TestVerdict) => TestVerdict) => {
+    let t1 = 0;
+    const backend = new ReproStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (mutant !== "M0001" || ref.method !== "T1") return "pass";
+        t1 += 1;
+        return t1 === 1 ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    backend.answer = (mutant, _n, v) =>
+      mutant === "M0001" && v.ref.method === "T2" ? later(v) : undefined;
+    return backend;
+  };
+
+  test("T11a: X not reproduced, then Y strands: the strand wins, its prefix and quarantine kept (I3)", async () => {
+    const backend = flakyThen((v) => ({
+      ref: v.ref,
+      outcome: "deadline-exceeded",
+      durationMs: 1,
+      operation: "in-flight-unknown",
+    }));
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("stranded");
+    expect(isStrandedNote(m1?.failureNote)).toBe(true);
+    expect(report.quarantined).toBeDefined();
+    store.close();
+  });
+
+  test("T11b: X not reproduced, then Y hits our deadline: deadline-exceeded wins (I3)", async () => {
+    const backend = flakyThen((v) => ({ ...v, outcome: "deadline-exceeded" }));
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const m1 = rowOf(report, "M0001");
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.cause).toBe("deadline-exceeded");
+    expect(m1?.failureNote).toBe("deadline exceeded running T2 (infrastructure, not a kill)");
+    store.close();
   });
 });
 

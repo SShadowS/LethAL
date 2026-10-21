@@ -1,5 +1,6 @@
 import { compareCodeUnits } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef } from "./backend";
+import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import {
@@ -171,6 +172,7 @@ export interface FoldedReport {
     readonly runId: number;
     readonly carriedMutants: number;
     readonly skippedStranded: number;
+    readonly carryRefused?: string;
   };
   readonly timings: {
     readonly totalMs: number;
@@ -188,6 +190,10 @@ export interface FoldedReport {
   readonly numbering?: FoldedNumbering;
   /** R274 — see `SessionReport.sourceSha256`. Absent for an older stream. */
   readonly sourceSha256?: string;
+  /** R565 — see `SessionReport.dependencyReportSources`. Absent for an older stream. */
+  readonly dependencyReportSources?: readonly DependencyReportSourceRecord[];
+  /** R565 — see `SessionReport.dependencySourceSha256`. Absent for an older stream. */
+  readonly dependencySourceSha256?: string;
   /** R206 — see `SessionReport.warmKills`. */
   readonly warmKills: number;
   /** R175 — see `SessionReport.unplaceableCount`. */
@@ -208,6 +214,12 @@ export interface FoldedReport {
    *  every other backend, and absent on an al-runner session that declined to pin (which emits a
    *  named `al-runner-platform-apps-unpinned` warning carrying the reason instead). */
   readonly alRunnerPlatformAppsDir?: string;
+  /** R558 — the test selector R551's probe chose for this session's one-shot al-runner runs. Absent
+   *  on every other backend and on `--server`, where the probe is not-applicable. */
+  readonly alRunnerTestSelector?: {
+    readonly selector: "exact" | "substring-with-excludes";
+    readonly reason?: string;
+  };
 }
 
 interface BatchInvalidation {
@@ -304,6 +316,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let excludedByLines = 0;
   let numbering: FoldedNumbering | undefined;
   let sourceSha256: string | undefined;
+  let dependencyReportSources: readonly DependencyReportSourceRecord[] | undefined;
+  let dependencySourceSha256: string | undefined;
 
   // AND across every baseline verdict across every `baseline-batch-finished` event — mirrors
   // `orchestrator.ts`'s `baselineGreenOverall`, which starts true and is never reset once false.
@@ -378,7 +392,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let permissionCanary: PermissionCanaryResult | undefined;
   let alRunnerBcBuild: { build: string; announcement: string } | undefined;
   let alRunnerPlatformAppsDir: string | undefined;
+  let alRunnerTestSelector:
+    | { selector: "exact" | "substring-with-excludes"; reason?: string }
+    | undefined;
   let resumeFromRunId: number | undefined;
+  let resumeCarryRefused: string | undefined;
 
   const outcomes: SessionOutcome[] = [];
   const invalidations: BatchInvalidation[] = [];
@@ -400,6 +418,13 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         excludedByOperator = e.excludedByOperator;
         excludedByLines = e.excludedByLines ?? 0;
         sourceSha256 = e.sourceSha256;
+        // R565: written together by the producer, so a stream with only one is corrupt.
+        if ((e.dependencyReportSources === undefined) !== (e.dependencySourceSha256 === undefined))
+          throw new Error(
+            "foldEvents: mutation-set-generated carries only one of dependencyReportSources and dependencySourceSha256 (R565). The producer writes both or neither.",
+          );
+        dependencyReportSources = e.dependencyReportSources;
+        dependencySourceSha256 = e.dependencySourceSha256;
         {
           // R443: written together by the producer, so a stream with only some is corrupt.
           const { numberingDigest, twinSites, carryHidden } = e;
@@ -537,8 +562,15 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "al-runner-platform-apps":
         alRunnerPlatformAppsDir = e.dir;
         break;
+      case "al-runner-test-selector":
+        alRunnerTestSelector = {
+          selector: e.selector,
+          ...(e.reason !== undefined ? { reason: e.reason } : {}),
+        };
+        break;
       case "resume-resolved":
         resumeFromRunId = e.fromRunId;
+        resumeCarryRefused = e.carryRefused;
         break;
       case "mutant-scored":
         outcomes.push({
@@ -559,6 +591,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             ? { killingTestFailure: e.killingTestFailure }
             : {}),
           ...(e.killPosition !== undefined ? { killPosition: e.killPosition } : {}),
+          ...(e.killReproduced === true ? { killReproduced: true as const } : {}),
+          ...(e.reproducedFailure !== undefined ? { reproducedFailure: e.reproducedFailure } : {}),
           ...(e.cause !== undefined ? { cause: e.cause } : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
@@ -596,6 +630,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             ? { killingTestFailure: e.killingTestFailure }
             : {}),
           ...(e.killPosition !== undefined ? { killPosition: e.killPosition } : {}),
+          ...(e.killReproduced === true ? { killReproduced: true as const } : {}),
+          ...(e.reproducedFailure !== undefined ? { reproducedFailure: e.reproducedFailure } : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
         if (isKill(e.verdict) && e.killPosition !== undefined && e.killPosition > 1) warmKills += 1;
@@ -763,6 +799,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             runId: resumeFromRunId,
             carriedMutants: carriedCount,
             skippedStranded: strandedSkipCount,
+            ...(resumeCarryRefused !== undefined ? { carryRefused: resumeCarryRefused } : {}),
           },
         }
       : {}),
@@ -783,8 +820,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
     ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),
     ...(alRunnerPlatformAppsDir !== undefined ? { alRunnerPlatformAppsDir } : {}),
+    ...(alRunnerTestSelector !== undefined ? { alRunnerTestSelector } : {}),
     ...(numbering !== undefined ? { numbering } : {}),
     ...(sourceSha256 !== undefined ? { sourceSha256 } : {}),
+    ...(dependencyReportSources !== undefined ? { dependencyReportSources } : {}),
+    ...(dependencySourceSha256 !== undefined ? { dependencySourceSha256 } : {}),
   };
 }
 

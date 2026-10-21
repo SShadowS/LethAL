@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
@@ -11,6 +11,7 @@ import {
   planArtifacts,
   prepareBatchProject,
 } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R353, offline guard for `fixtures/sandbox-layout`'s PURPOSE. The live leg in `itest:alrunner`
@@ -112,8 +113,8 @@ describe("R353: sandbox-layout splits at maxGuardsPerBatch 7 across a member bou
     root = await mkdtemp(join(tmpdir(), "lethal-r353-"));
     built = await build(root);
   });
-  afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(root);
   });
   const get = (): Built => {
     if (built === undefined) throw new Error("beforeAll did not build the batches");

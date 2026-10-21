@@ -22,6 +22,7 @@ import { sessionFingerprint } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 // R323: a named return value (`procedure P() Result: Integer`) is a local of its member. These pin
 // the engine's rule through the real pipeline, on the hand-written repros (invented names, no corpus
@@ -520,8 +521,8 @@ class SurvivingBackend implements ExecutionBackend {
 
 // Every project root this file makes, removed once all its tests are done.
 const runRoots: string[] = [];
-afterAll(async () => {
-  for (const root of runRoots) await rm(root, { recursive: true, force: true });
+afterAll(() => {
+  for (const root of runRoots) removeScratchDir(root);
 });
 
 async function makeN14Project() {

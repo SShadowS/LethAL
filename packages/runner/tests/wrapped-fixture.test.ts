@@ -7,6 +7,7 @@ import {
   ARMS_REFUSAL,
   EXPECTED_WRAPPED,
   EXPECTED_WRAPPED_BC,
+  KILL_TEXTS,
   PAIR_CODES,
   PAIR_REPLACES,
   WRAPPED_PROJECT_DIR,
@@ -28,6 +29,7 @@ import {
 } from "../src/orchestrator";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 import { AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0 } from "../src/preprocessor-symbols";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R-300b, offline guard for `fixtures/sandbox-wrapped`'s PURPOSE and for the live leg's checker.
@@ -87,15 +89,15 @@ describe("R-300b: sandbox-wrapped", () => {
     root = await mkdtemp(join(tmpdir(), "lethal-r300b-fixture-"));
     built = await build(root);
   });
-  afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(root);
   });
   const get = (): Built => {
     if (built === undefined) throw new Error("beforeAll did not build the batch");
     return built;
   };
 
-  it("gives the pre-committed 70 mutants in one batch (R-343, R536, R545)", () => {
+  it("gives the pre-committed 98 mutants in one batch (R-343, R536, R545, R550)", () => {
     expect(get().rows).toEqual(
       EXPECTED_WRAPPED.map(
         (r) => `${r.code} ${r.file} ${r.line} ${r.operatorName} ${r.procedureName}`,
@@ -103,7 +105,7 @@ describe("R-300b: sandbox-wrapped", () => {
     );
   });
 
-  it("admits WrappedTop, WrappedPre, WrappedPairA, WrappedTrigger, WrappedView and WrappedXtra; refuses WrappedArms; skips WrappedPairB", async () => {
+  it("admits WrappedTop, WrappedPre, WrappedPairA, WrappedTrigger, WrappedView, WrappedXtra and WrappedYBand; refuses WrappedArms; skips WrappedPairB", async () => {
     const index = await buildAlRunnerCoverageIndex(get().dir, {
       symbols: ["WRAPAPP", ...WRAPPED_SYMBOLS, ...predefined.symbols],
     });
@@ -114,6 +116,7 @@ describe("R-300b: sandbox-wrapped", () => {
       "wrappedtrigger.table.al",
       "wrappedview.page.al",
       "wrappedxtra.pageext.al",
+      "wrappedyband.report.al",
     ]);
     expect(index.refusedFiles).toEqual(["WrappedArms.Codeunit.al"]);
     expect(index.skippedFiles).toEqual(["wrappedarms.codeunit.al", "wrappedpairb.codeunit.al"]);
@@ -147,6 +150,10 @@ function reportOf(rows: typeof EXPECTED_WRAPPED): WrappedReport {
       procedureName: r.procedureName,
       verdict: r.verdict,
       ...(r.killingTest !== undefined ? { killingTest: r.killingTest } : {}),
+      // R550: a real kill's text, as the backend reports it (the test's Error, then a call stack).
+      ...(KILL_TEXTS[r.code] !== undefined
+        ? { killingTestFailure: `${KILL_TEXTS[r.code]}\\nWrapped Tests(CodeUnit 78950).X line 1` }
+        : {}),
       coveringTests: r.coveringTests,
       ...(r.file.endsWith("WrappedArms.Codeunit.al") ? { failureNote: ARMS_REFUSAL } : {}),
     })),
@@ -226,7 +233,7 @@ function bcReportOf(rows: typeof EXPECTED_WRAPPED): WrappedReport {
 }
 
 describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline)", () => {
-  it("a bcdev build gives the pre-committed 70 mutants, and its line map refuses none of them", async () => {
+  it("a bcdev build gives the pre-committed 98 mutants, and its line map refuses none of them", async () => {
     const root = await mkdtemp(join(tmpdir(), "lethal-r497-fixture-"));
     try {
       const set = await generateMutationSet(WRAPPED_PROJECT_DIR, {
@@ -253,7 +260,8 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
       ).toEqual(EXPECTED_WRAPPED_BC.map((r) => `${r.code} ${r.file} ${r.line} ${r.operatorName}`));
       // The deployed batch's line map under the bcdev build's symbols: every fixture object is
       // mapped, none refused (A1: WrappedPairB's compiled-out 78905 does not refuse WrappedPairA;
-      // R536: the wrapped table and page and their twins; R545: the page extension and its twin).
+      // R536: the wrapped table and page and their twins; R545: the page extension and its twin;
+      // R550: the report and its twin, and the plain table they read).
       const symbols = await effectiveBuildSymbols(WRAPPED_PROJECT_DIR, WRAPPED_SYMBOLS, undefined, {
         kind: "bcdev",
       });
@@ -265,6 +273,11 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
         "page:78910",
         "pageextension:78911",
         "pageextension:78912",
+        "report:78913",
+        "report:78914",
+        // Not "table:78915" (the plain, code-free table the reports read): it carries no site, so
+        // it is not in the batch this test writes. A real batch copies it verbatim
+        // (`prepareBatchProject`), and the live gate refuses any table refusal by pattern.
       ]);
       const map = await buildLineMap(dir, declared, symbols);
       expect([...map.refusedByKey().keys()].filter((k) => declared.has(k))).toEqual([]);
@@ -280,6 +293,10 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
         ["WrappedViewTwin.Page.al", "Page", 78910, "Label"],
         ["WrappedXtra.PageExt.al", "PageExtension", 78911, "Scaled"],
         ["WrappedXtraTwin.PageExt.al", "PageExtension", 78912, "Scaled"],
+        ["WrappedYBand.Report.al", "Report", 78913, "Band"],
+        ["WrappedYBandTwin.Report.al", "Report", 78914, "Band"],
+        ["WrappedYBand.Report.al", "Report", 78913, "GetTotal"],
+        ["WrappedYBandTwin.Report.al", "Report", 78914, "GetTotal"],
       ] as const) {
         const at = await lineOf(file, `procedure ${name}(`);
         expect(at).toBeGreaterThan(0);
@@ -288,7 +305,9 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
         // ORIGINAL-text lines lie inside the instrumented trigger above it, which names nobody, so a
         // backend reading original lines against the instrumented text would turn the procedure's
         // rows no-coverage. Moving the procedure above its trigger would lose this; this fails then.
-        const original = (await readFile(join(WRAPPED_PROJECT_DIR, "src", file), "utf8")).split("\n");
+        const original = (await readFile(join(WRAPPED_PROJECT_DIR, "src", file), "utf8")).split(
+          "\n",
+        );
         const origAt = original.findIndex((l) => l.includes(`procedure ${name}(`)) + 1;
         expect(origAt).toBeGreaterThan(0);
         expect(at).toBeGreaterThan(origAt + 3);
@@ -308,6 +327,32 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
     expect(() =>
       assertBcWrappedRun(bcReportOf(EXPECTED_WRAPPED_BC), "t", [
         "[lethal] coverage refused for Codeunit:78905 (WrappedPairB.Codeunit.al): ...",
+      ]),
+    ).toThrow("refusal");
+  });
+
+  // R550 (plan review I3): a report-arm kill whose failure is NOT the test's own Error (here a
+  // duplicate key, as a left-over seed would give) matches the verdict table, so only the pinned
+  // text catches it; and a report refusal warning is caught by the pattern.
+  it("the checker refuses a report kill for another reason, and a report refusal warning", () => {
+    const duplicateKey = (r: WrappedReport): WrappedReport => ({
+      ...r,
+      mutants: r.mutants.map((m) =>
+        m.mutantCode === "M0071"
+          ? { ...m, killingTestFailure: "The record in table Wrapped Band Row already exists." }
+          : m,
+      ),
+    });
+    const report = bcReportOf(EXPECTED_WRAPPED_BC);
+    expect(() => assertBcWrappedRun(duplicateKey(report), "t", [])).toThrow(
+      "M0071: killingTestFailure",
+    );
+    expect(() => assertWrappedRun(duplicateKey(reportOf(EXPECTED_WRAPPED)), "t", [])).toThrow(
+      "M0071: killingTestFailure",
+    );
+    expect(() =>
+      assertBcWrappedRun(report, "t", [
+        "[lethal] coverage refused for Report:78913 (WrappedYBand.Report.al): ...",
       ]),
     ).toThrow("refusal");
   });

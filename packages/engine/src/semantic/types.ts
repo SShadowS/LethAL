@@ -23,6 +23,7 @@ import {
   enclosingTrigger,
   objectScopeKey,
   qualifiedObjectName,
+  triggerHeaderSymbols,
   triggerLocalNames,
 } from "./symbol-table";
 import type { SourceFile, SymbolTable } from "./symbol-table";
@@ -278,10 +279,29 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
   // R330 (run 002 fix round): inside a trigger, a name the trigger declares in its own header is
   // unknown. Without this it fell through to the object's globals, and since R322 also to a global
   // whose casing differs: an `alc`-failing swap (AL0175).
+  // R340: such a name is now typed by its own declaration in the trigger header, as a procedure's
+  // is; a name declared in a `#if` region of the header, or any header name not parsed as a plain
+  // parameter, local or named return, stays unknown (it still hides the global).
   if (proc === null) {
     const trigger = enclosingTrigger(node);
-    if (trigger !== null && triggerLocalNames(trigger).has(stripQuotes(node.text).toLowerCase()))
+    const name = stripQuotes(node.text).toLowerCase();
+    if (trigger !== null && triggerLocalNames(trigger).has(name)) {
+      // R340 (review M1): a trigger that parsed with an ERROR (a header split by `#if`, which the
+      // grammar attaches to one arm) types nothing, as an unindexed procedure has since R331.
+      if (trigger.hasError) return null;
+      const header = triggerHeaderSymbols(trigger);
+      // A name declared in a `#if` region of the header. Unreachable by any shape measured today
+      // (R-340 red-check): a `#if` var block's names never enter `locals` (direct children only),
+      // and a `#if` inside the parameter list parses with an ERROR (caught above). Kept because
+      // `collectParameters` walks recursively: if the grammar ever parsed a conditional parameter
+      // cleanly, both arms would land in `parameters`, and this keeps such a name unknown.
+      if (header.ambiguous.includes(name)) return null;
+      const local = header.locals.find((v) => sameName(v.name, node.text));
+      if (local !== undefined) return extractType(local.typeText);
+      const param = header.parameters.find((p) => sameName(p.name, node.text));
+      if (param !== undefined) return extractType(param.typeText);
       return null;
+    }
   }
   // A member-level declaration wins over an object-level one, which is AL's own shadowing rule:
   // a procedure's local or parameter hides a global of the same name.

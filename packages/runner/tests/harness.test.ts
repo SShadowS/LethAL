@@ -307,7 +307,7 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
   test("GH-24: refuses 1.0.0.18", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.18" }));
     expect(message).toContain("1.0.0.18");
-    expect(message).toContain("1.0.0.20");
+    expect(message).toContain("1.0.0.22");
   });
 
   test("refuses a payload with no semver at all rather than assuming it is current", async () => {
@@ -387,13 +387,21 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
    * `app.json` would make a FRESHLY BUILT control app fail its own gate — an unfixable error
    * telling the operator to rebuild something they just rebuilt — and nothing else in this repo
    * connects the two files.
+   *
+   * R389: app.json MAY be ahead of the minimum. 1.0.0.23 adds `DependentCount`, an action the
+   * client treats as optional (an older control app means "fall back"), so the minimum stays at
+   * 1.0.0.22 and no gate waits for the republish. The hazard is only the other direction. The
+   * minimum MUST be raised when a client path requires a new control action and has no fallback.
    */
-  test("MIN_CONTROL_VERSION equals extensions/lethal-control/app.json's version", async () => {
+  test("MIN_CONTROL_VERSION is not ahead of extensions/lethal-control/app.json's version", async () => {
     const appJsonPath = fileURLToPath(
       new URL("../../../extensions/lethal-control/app.json", import.meta.url),
     );
     const appJson = JSON.parse(await readFile(appJsonPath, "utf8")) as { version?: unknown };
-    expect(appJson.version).toBe(MIN_CONTROL_VERSION);
+    expect(typeof appJson.version).toBe("string");
+    expect(compareAppVersions(String(appJson.version), MIN_CONTROL_VERSION)).toBeGreaterThanOrEqual(
+      0,
+    );
   });
 });
 
@@ -545,7 +553,7 @@ describe("parseLeaseSnapshot (R110)", () => {
     // The failure that matters: this is what an un-republished container answers, and defaulting
     // here would report it as "no lease held".
     expect(() => parseLeaseSnapshot({})).toThrow(HarnessVerificationError);
-    expect(() => parseLeaseSnapshot({})).toThrow(/1\.0\.0\.20/);
+    expect(() => parseLeaseSnapshot({})).toThrow(/1\.0\.0\.22/);
     expect(() => parseLeaseSnapshot({})).toThrow(/republish/);
   });
 

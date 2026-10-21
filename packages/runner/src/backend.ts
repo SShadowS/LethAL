@@ -359,6 +359,17 @@ export interface ExecutionBackend {
    */
   readonly inRunStopIsBudget?: boolean;
   /**
+   * R577: "a kill must reproduce". When `true`, a kill whose unmutated confirmation passed is
+   * re-run UNDER THE MUTANT once more, in the kill's own context (a single run at position 1, the
+   * call's prefix replayed at k > 1), at the budget the killing run was sent. Only a second `fail`
+   * (any text), or for a timeout kill a second `timeout`, makes it `killed`/`timeout-killed`;
+   * anything else is `error` `kill-not-reproduced`, or the reproduction's own non-verdict cause.
+   * Absent counts as false: the rule is off and the confirm is exactly what it was before. al-runner
+   * sets it; bcdev does not yet (R582). Kept off `BackendCapabilities` so the stream schema does not
+   * change, like `inRunStopIsBudget`.
+   */
+  readonly killsMustReproduce?: boolean;
+  /**
    * R517, OPTIONAL: the in-run stop LethAL configured for the whole session, timed on the test's
    * own body, enforced whatever budget a run is sent. al-runner `--server` answers it once
    * `useMutantBudgetFloor` was called; absent elsewhere (the stop is the budget). An upper bound
@@ -446,11 +457,27 @@ export interface ExecutionBackend {
   microsoftMode?(): MicrosoftMode;
 
   /**
+   * R389, OPTIONAL: how many published apps on the server declare `appId` as a dependency (the
+   * control app's `DependentCount`). Present on bcdev only; absent means the closed-world guard
+   * is never asked and falls back (`closed-world.ts`).
+   */
+  dependentCount?(appId: string): Promise<number>;
+
+  /**
    * R488, OPTIONAL: every test the session discovered, every arm read, given before the baseline
    * and to every worker. A backend whose test selector is a substring match (al-runner one-shot)
    * excludes the look-alikes up front with it.
    */
   useDiscoveredTests?(tests: readonly TestMethodRef[]): void;
+
+  /**
+   * R557, OPTIONAL: the session's test suite (`chooseTestSuite`'s `tests`) and the tests kept in
+   * an `#if` arm discovery could not decide (`preproc-undecided-kept`, R403), given next to
+   * `useDiscoveredTests` and to every worker. al-runner reads them when a test has no row: an
+   * undecided-kept test keeps a per-test `error`, any other session-suite test stops the session
+   * (`AlRunnerTestNameError`), and a `--server` stop lists only missing session-suite tests.
+   */
+  useSessionTests?(suite: readonly TestMethodRef[], undecidedKept: readonly TestMethodRef[]): void;
 
   /**
    * R517, OPTIONAL: the session's `--mutant-timeout-ms` floor and baseline timeout, given once

@@ -72,6 +72,7 @@
  *    itself, so an extension has no `OnInsert` to contribute. (R-476: it can declare
  *    `OnBeforeInsert`/`OnAfterInsert`, which also run only with `RunTrigger` true.)
  */
+import { argumentList, argumentsReadable } from "../ast/arguments";
 import { ALNodeKind } from "../ast/node-kinds";
 import { type ALSyntaxNode, findAll, visit } from "../ast/syntax-node";
 import { liveMembers } from "../ast/tree-walks";
@@ -89,7 +90,6 @@ const KEY_DECLARATION = "key_declaration";
 const FIELD_LIST = "field_list";
 const MEMBER_EXPRESSION = "member_expression";
 const CALL_EXPRESSION = "call_expression";
-const ARGUMENT_LIST = "argument_list";
 const IDENTIFIER_KINDS = new Set(["identifier", "quoted_identifier"]);
 
 /** The record a table trigger's unqualified field names belong to. `xRec` is included because
@@ -231,8 +231,9 @@ export function onInsertAssignsPrimaryKey(
         ? (callee.namedChildren.filter((c) => IDENTIFIER_KINDS.has(c.rawKind)).at(-1)?.text ?? "")
         : callee.text;
     if (!equalsIgnoreCase(stripQuotes(calleeName), "Validate")) continue;
-    const args = call.namedChildren.find((c) => c.rawKind === ARGUMENT_LIST);
-    const first = args?.namedChildren[0];
+    // R567: comments are not arguments; a pragma among them hides the field, so it may be a key
+    if (!argumentsReadable(call)) return true;
+    const first = argumentList(call)[0];
     if (first === undefined) continue;
     if (key.some((f) => referencesOwnField(first, f))) return true;
   }

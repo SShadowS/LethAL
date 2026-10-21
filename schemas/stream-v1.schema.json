@@ -238,6 +238,9 @@
         "retryStranded": {
           "type": "boolean"
         },
+        "carryRefused": {
+          "type": "string"
+        },
         "seq": {
           "type": "number"
         }
@@ -563,6 +566,65 @@
               }
             }
           }
+        },
+        "dependencyReportSources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "outcome"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "report",
+                  "extension",
+                  "package"
+                ]
+              },
+              "report": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "parse-damaged",
+                  "not-found",
+                  "ambiguous",
+                  "no-source",
+                  "unwrap-failed",
+                  "no-symbols",
+                  "unreadable",
+                  "base-not-found"
+                ]
+              },
+              "package": {
+                "type": "string"
+              },
+              "appId": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "entry": {
+                "type": "string"
+              },
+              "entrySha256": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "dependencySourceSha256": {
+          "type": "string"
         },
         "seq": {
           "type": "number"
@@ -952,6 +1014,33 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "selector",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "al-runner-test-selector"
+        },
+        "selector": {
+          "type": "string",
+          "enum": [
+            "exact",
+            "substring-with-excludes"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "mutant",
         "verdict",
         "batchIndex",
@@ -1121,7 +1210,8 @@
             "reused-budget-stale",
             "timeout-unconfirmed",
             "runner-test-error",
-            "runner-refused"
+            "runner-refused",
+            "kill-not-reproduced"
           ]
         },
         "killingTestFailure": {
@@ -1129,6 +1219,12 @@
         },
         "killPosition": {
           "type": "number"
+        },
+        "killReproduced": {
+          "const": true
+        },
+        "reproducedFailure": {
+          "type": "string"
         },
         "coveringTests": {
           "type": "array",
@@ -1340,6 +1436,12 @@
         },
         "killPosition": {
           "type": "number"
+        },
+        "killReproduced": {
+          "const": true
+        },
+        "reproducedFailure": {
+          "type": "string"
         },
         "coveringTests": {
           "type": "array",

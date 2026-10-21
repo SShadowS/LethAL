@@ -2,8 +2,8 @@
 // line per call. See README.md in this folder and
 // docs/superpowers/specs/2026-09-27-r289-probe-precommitment.md section 3 and its ADDENDUM.
 //
-//   bun scripts/r289-probe/sidecar.ts --container Cronus284 \
-//     --config fixtures/sandbox-hang/lethal.config.cronus284.json \
+//   bun scripts/r289-probe/sidecar.ts --container Cronus28 \
+//     --config fixtures/sandbox-hang/lethal.config.cronus28.json \
 //     --user <sidecar-only BC user> --password <its password> --out <file> \
 //     [--stop-file <path>] [--seconds <n>]
 //

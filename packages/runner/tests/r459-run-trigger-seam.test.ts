@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
  * Then the identity consequence: a two-argument Insert's literals are new flips, so a later
  * same-tuple `true` twin in the procedure moves ordinal (IDENTITY_SCHEME 21).
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import { initParser } from "@lethal/engine";
 import { IDENTITY_SCHEME, dedupeSpecs, writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
+import { removeScratchDir } from "./helpers/scratch";
 
 const FLIP = "lethal.flip-boolean-literal";
 const SWAP = "lethal.swap-modify-flag";
@@ -80,7 +81,7 @@ const seamDir = project("r459-seam-", {
   "W.Codeunit.al":
     "#if not CLEANX\ncodeunit 50595 Wrapped\n{\n    Bogus\n    procedure P()\n    var\n        Par: Record Par;\n    begin\n        Par.Modify(true);\n    end;\n}\n#endif\n",
 });
-afterAll(() => rmSync(seamDir, { recursive: true, force: true }));
+afterAll(() => removeScratchDir(seamDir));
 
 /** Per literal of `line` in `file`: its owners, as `<op> <after> <tag>`. */
 async function ownersOf(file: string, line: string): Promise<string[][]> {
@@ -230,7 +231,7 @@ describe("R459: an Insert(true, true) moves a later twin's key", () => {
     expect(last.key).toBe(`${first.key}|3`);
   });
 
-  it("the identity scheme is 36 (21 for R459; 20, 23 and 31 unused; 22 R-464; 24 R475; 25 R446; 26 R477; 27 R480; 28 R484; 29 R-300b; 30 R487; 32 R509; 33 R501; 34 R343; 35 R500; 36 R497)", () => {
-    expect(IDENTITY_SCHEME).toBe(36);
+  it("the identity scheme is 40 (21 for R459; 20, 23 and 31 unused; 22 R-464; 24 R475; 25 R446; 26 R477; 27 R480; 28 R484; 29 R-300b; 30 R487; 32 R509; 33 R501; 34 R343; 35 R500; 36 R497; 37 R340; 38 R555; 39 R-531; 40 R565)", () => {
+    expect(IDENTITY_SCHEME).toBe(40);
   });
 });

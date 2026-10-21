@@ -99,9 +99,9 @@ killing test and its mutant is reported survived. `--only` and `--exclude` give 
 caveat, `--operator` gives `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
 and `--tests-only` gives `tests-narrowed`.
 
-**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is OFF by
-default and CONDITIONAL when on. `lethal run` reads al-runner's own coverage output (R220) only with
-`"alRunner": { "coverage": "al-runner" }`. One file holding a `#if`-wrapped object turns it off for
+**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is
+CONDITIONAL. `lethal run` reads al-runner's own coverage output (R220) by default since R394;
+`"alRunner": { "coverage": "none" }` turns it off. One file holding a `#if`-wrapped object turns it off for
 the whole run, with a warning naming the file. One file declaring more than one object keeps it only
 when a once-per-session frame probe admits the installed al-runner build, and turns it off
 otherwise; either way one warning line names the probe's answer and the build. (Multi-object:
@@ -128,16 +128,17 @@ the compiled batch, so there the check can only refuse. The host still pins `c39
 
 **al-runner settings (R387).** The `alRunner` section accepts `alRunnerPath`, `packagesDir`,
 `serverMode`, `selectorMode` and `coverage`, and refuses any other key by name. With none of the last
-three set, `lethal run` uses `--server` (one daemon per worker) and the resource selector (one compile
-per batch). `"serverMode": false` gives one process per test with the `"static"` selector (a recompile
+three set, `lethal run` uses `--server` (one daemon per worker), the resource selector (one compile
+per batch) and al-runner's coverage (R394). `"serverMode": false` gives one process per test with the `"static"` selector (a recompile
 per mutant), which is much slower. The run prints one `[lethal] al-runner settings:` line naming any
-slow or unmeasured setting; until coverage is on by default it always names `coverage`. `lethal
+slow or unmeasured setting; it names `coverage` only when the config sets `"none"` (an unreached
+mutant then reads survived, not no-coverage) or when the coverage guard turned it off. `lethal
 doctor` checks the binary's version only, not the transport. Under `--server` a hung test becomes an
 error after one suite deadline of at least 10 minutes, not a per-test timeout.
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one
-round trip instead of forty. This needs LethAL Control 1.0.0.20 or newer on the server; an older
+round trip instead of forty. This needs LethAL Control 1.0.0.22 or newer on the server; an older
 one is refused before any test runs. The report's `groupedCalls` says how many such calls were
 made. Three flags touch it and you should not need them: `--max-methods-per-call <n>` caps one
 call, `--request-ceiling-ms <n>` bounds one call (keep it under the hosting gateway's idle
@@ -182,7 +183,9 @@ has the complete set.
 optional there and changes the listing. With `--backend al-runner` a dry run runs al-runner ONCE
 to measure the preprocessor symbols it predefines (R392), needs `alRunner.alRunnerPath` in the
 config and refuses without it, and lists the `#if` arms for the MEASURED set (absent lists alc's
-build). The other
+build). A dry run on al-runner also has no provisioned platform-apps folder, so a Microsoft report
+the project calls through `Report X` is read only from `alRunner.packagesDir`, and the hang-refused
+set can differ from a real run's; it warns (R565). The other
 exception is `--out <file>`, which writes the dry-run listing as JSON:
 `{files, sites, deployed, perFile[{file, sites, deployed}], batches[{index, sites[{file, line,
 operator, deployed}]}], notInstrumented[{file, kinds, sites}]}`. `sites` counts raw mutation sites;
@@ -196,7 +199,11 @@ only on `compare`.
 
 `lethal campaign compare --json` prints one object on stdout and its lines on stderr:
 `{campaignCompareSchemaVersion, stage, baselinePath, mutantCount, identical, differences[],
-coverage}`. Read `coverage` before `identical` (R355). `coverage.verified: true` carries the one
+coverage, identity}`. Read `coverage` and `identity` before `identical` (R355, R556).
+`identity.verified: true` means both sides record the same identity scheme and every paired mutant's
+mutated text was checked by hash, so `identical` covers the text too; `identity.verified: false`
+carries a `statement` (a stage frozen before R556 has no hashes, a scheme changed, or rows could not
+be checked) and then `identical` means matching VERDICTS only. `coverage.verified: true` carries the one
 `coverageMode` both sides share. `coverage.verified: false` means the stage was frozen before R355
 (its baseline records no mode) or the report predates R252, and it always carries
 `stageCoverageMode`, `reportCoverageMode` (`null` where unrecorded) and a `statement`: a matching
@@ -274,7 +281,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v16.schema.json](../schemas/explain-v16.schema.json)
+- `lethal explain`: [../schemas/explain-v17.schema.json](../schemas/explain-v17.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -320,7 +327,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 16`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 17`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -659,7 +666,7 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
 {
-  "identityScheme": 36,
+  "identityScheme": 40,
   "marks": [
     {
       "key": "...",
@@ -707,7 +714,12 @@ before R443, because such a report records no numbering facts.
 A marks file without `identityScheme` was written before the field existed and reads as scheme 1,
 and a mark made under a scheme other than the one the run keys under is reported stale and never
 applied, because a key can name a different mutant after an engine change renumbers its twins
-(R325). `markKey` (and a mark's `key`) is this key, built from the survivor's row in `report.json`:
+(R325). The current scheme is 40: since R565 the hang-refused set depends on the source of the
+dependency reports the project calls, read from its dependency packages. So history and `--resume`
+carry a verdict by its key (rule 1) only when both the source hash and the report's
+`dependencySourceSha256` equal the recorded run's. A mutant that is a singleton in its file can
+still carry under rule 2, by its file and its member's hash, whatever the digests say; that is by
+design (R391, R474). `markKey` (and a mark's `key`) is this key, built from the survivor's row in `report.json`:
 
 ```text
 key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>
@@ -861,8 +873,15 @@ version) leaves the run unproven, with a `test-app-dependencies-unproven` or
 `test-digests-unavailable` warning naming the app. A resume refused for this reason says "the test
 app's dependencies changed (A, now B)" or "it recorded no dependency fingerprint". Not covered: an
 installed app outside the dependency closure, a dependency changed during the batches, and the
-control app's own bytes (only its version and its dependencies count). A hook session whose test app
-has no `.al` source is never proven (R498).
+control app's own bytes (only its version and its dependencies count).
+
+**A hook session whose test app has no `.al` source (R498)** is proven when the package read back
+after the hook is byte for byte the `publishApps` test-app file (same SHA-256), on top of the usual
+installed checks. If no `publishApps` file is the test app, the installed checks alone prove it. It
+records its identity and dependency fingerprint, but no test digests (one `test-digests-unavailable`
+warning: "carries no AL source"). Byte equality was measured on the dev-endpoint (`altool`) publish
+route only. The hook publishes through the env tool's own publish command; if that command
+repackages the file, the bytes differ and the run stays unproven (safe, but no resume, skip or reuse).
 
 **Second one-time cost on upgrade.** Runs recorded before R496, R495's included, carry no
 fingerprint, so the first run after this upgrade carries nothing on `--resume`, skips nothing on

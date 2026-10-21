@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openItemHangRefuses } from "@lethal/builtin-tier1";
@@ -17,6 +17,7 @@ import {
   generateMutationSet,
   identityOrdinalsOf,
 } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R500 at the orchestrator: what only `generateMutationSet` shows. (1) The real r1 hang, pinned:
@@ -171,8 +172,8 @@ beforeAll(async () => {
   for (const [rel, content] of Object.entries(FILES)) await Bun.write(join(dir, rel), content);
   set = await generateMutationSet(dir, { emit: () => {} });
 });
-afterAll(async () => {
-  if (dir !== "") await rm(dir, { recursive: true, force: true });
+afterAll(() => {
+  if (dir !== "") removeScratchDir(dir);
 });
 
 const specsOf = (file: string) => set.files.filter((f) => f.path === file).flatMap((f) => f.specs);
@@ -228,8 +229,8 @@ describe("R500 step 7: an XMLport is not a carrier, so its own refusal is dorman
       if (hit === null) throw new Error(`no Calls write in ${path}`);
       return hit;
     };
-    expect(openItemHangRefuses(callsWrite(XP), ctx)).toBe(true);
-    expect(openItemHangRefuses(callsWrite(XP_BOUNDED), ctx)).toBe(false);
+    expect(openItemHangRefuses(callsWrite(XP), ctx, undefined)).toBe(true);
+    expect(openItemHangRefuses(callsWrite(XP_BOUNDED), ctx, undefined)).toBe(false);
   });
 
   test("so the open XMLport's `skipped` sites equal its bounded twin's: nothing moved out of `skipped`", () => {
@@ -238,8 +239,8 @@ describe("R500 step 7: an XMLport is not a carrier, so its own refusal is dorman
 });
 
 describe("R500: the identity scheme twin (a Date item refused, a MaxIteration twin renumbered)", () => {
-  test("the identity scheme is 36 (34 R343, 35 for R500, 36 R497)", () => {
-    expect(IDENTITY_SCHEME).toBe(36);
+  test("the identity scheme is 40 (34 R343, 35 for R500, 36 R497, 37 R340, 38 R555, 39 R-531, 40 R565)", () => {
+    expect(IDENTITY_SCHEME).toBe(40);
   });
 
   test("the Date item's `Total := 0` emits nothing and is hang-refused", () => {

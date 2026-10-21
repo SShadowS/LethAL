@@ -11,6 +11,7 @@ import {
   FileRefusedError,
   type MutationOperator,
   type MutationSpec,
+  type SemanticContext,
   buildSemanticContext,
   buildSpanIndex,
   evaluateArms,
@@ -53,9 +54,11 @@ import {
   varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
-import type { AlRunnerProvisionResult } from "./al-runner-backend";
+import { AL_RUNNER_UNDECIDED_ARM_MISSING } from "./al-runner-backend";
+import type { AlRunnerProvisionResult, TestSelectorProbe } from "./al-runner-backend";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { predefinedSymbolsChangedWarning } from "./al-runner-predefined-probe";
+import { alRunnerRenamed } from "./al-runner-transport";
 import type { AlRunnerBcBuild } from "./al-runner-transport";
 import {
   confirmedDowngradeRefusal,
@@ -96,6 +99,22 @@ import {
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
+import {
+  type ClosedWorldResult,
+  PENDING_SUFFIX,
+  REVOKED_SUFFIX,
+  closedWorldGuard,
+  digestedAppOfPackage,
+  guardedTestAppHash,
+  isClosedWorld,
+  sameClosedWorld,
+} from "./closed-world";
+import {
+  type DependencyReportSourceRecord,
+  dependencyReportReader,
+  dependencySourceDigest,
+  dependencySourceWarning,
+} from "./dependency-report-source";
 import type { PublishOutcome } from "./deployment-verifier";
 import {
   DependencyUnreadableError,
@@ -203,7 +222,7 @@ import {
   wasStranded,
   withoutRefusedTests,
 } from "./resume";
-import type { ResumeIndex } from "./resume";
+import type { CarriedVerdict, ResumeIndex } from "./resume";
 import { CONTROL_DRAIN_MS } from "./run-mutant-transport";
 import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
 import {
@@ -222,7 +241,7 @@ import {
   isRunMutantLineCountMessage,
   testAppRefusal,
 } from "./stale-test-app";
-import { sameHiddenFiles } from "./store";
+import { runLendsAlRunnerNames, sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
 import type { CarryHidden, MutantVerdict, RunRow, RunnerKind, TestAppIdentity } from "./store";
 import { TestAppError } from "./test-app-publish";
@@ -245,6 +264,8 @@ import {
   recordKill,
 } from "./test-order";
 import {
+  type ClosedWorld,
+  OPEN_WORLD,
   type TestAppModel,
   buildTestAppModel,
   readTestAppSources,
@@ -518,6 +539,10 @@ export interface MutationSetResult {
    * `--only`/`--exclude`, `preproc-undecided`, no selector var fits).
    */
   readonly carryHidden: CarryHidden;
+  /** R565: every dependency report lookup and every package that could not be used, sorted. */
+  readonly dependencyReportSources: readonly DependencyReportSourceRecord[];
+  /** R565: `dependencySourceDigest` over `dependencyReportSources`. */
+  readonly dependencySourceSha256: string;
 }
 
 export interface MutationSetOptions {
@@ -606,6 +631,13 @@ export interface MutationSetOptions {
    * `"win32"` to simulate a Windows readdir on any host.
    */
   readonly platform?: NodeJS.Platform;
+  /**
+   * R565: the folders whose `.app` packages are searched, in order, for a report the project calls
+   * through `Report X` but does not declare (`dependency-report-source.ts`). al-runner: the pinned
+   * platform-apps folder, then `packagesDir`; bcdev and envtool: `packageCachePath`. Absent or
+   * empty: nothing is found, and each such report is named in a warning.
+   */
+  readonly dependencyPackageDirs?: readonly string[];
 }
 
 /**
@@ -921,10 +953,16 @@ export async function generateMutationSet(
   const armsByRoot = new Map<ALSyntaxNode, ArmEvaluation>(
     parsed.map(({ source, root }) => [root, evaluateArms(root, source, buildSymbols)]),
   );
-  const ctx = buildSemanticContext(
-    parsed.map(({ path, root }) => ({ path, root })),
-    armsByRoot,
-  );
+  // R565: a report outside the project is read from the dependency packages, lazily, by the hang
+  // refusal (`crossWriters`); the reader keeps what it looked up for the report and the digest.
+  const depReader = dependencyReportReader(options.dependencyPackageDirs ?? []);
+  const ctx: SemanticContext = {
+    ...buildSemanticContext(
+      parsed.map(({ path, root }) => ({ path, root })),
+      armsByRoot,
+    ),
+    dependencyReport: depReader.lookup,
+  };
   const preprocExcluded: PreprocExcludedFile[] = [];
   const symbolsDetail = `symbols: ${buildSymbols.length > 0 ? buildSymbols.join(", ") : "none"}`;
 
@@ -997,7 +1035,7 @@ export async function generateMutationSet(
         // R500: not in a file whose kind cannot carry the selector var (an XMLport): its specs go to
         // the `skipped` row below, and a refusal here would drop them from both rows.
         const r501 =
-          carrierFile && targeted && isMutableSite(node) && openItemHangRefuses(node, ctx);
+          carrierFile && targeted && isMutableSite(node) && openItemHangRefuses(node, ctx, op.name);
         if (!targeted || r501) {
           // R447: a site a hang check refused (R196's loop-condition write, or R501 above), counted
           // only where this run would have mutated it: not compiled out, and admitted by
@@ -1334,7 +1372,14 @@ export async function generateMutationSet(
       `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
     );
   }
+  // R565: read once every lookup this generation made is done.
+  const dependencyReportSources = depReader.records();
+  for (const r of dependencyReportSources)
+    if (r.outcome !== "ok")
+      warn("dependency-report-source-unavailable", dependencySourceWarning(r));
   return {
+    dependencyReportSources,
+    dependencySourceSha256: dependencySourceDigest(dependencyReportSources),
     files,
     duplicateObjects: duplicateObjectRefusals(
       parsed.map(({ path, root }) => {
@@ -1523,6 +1568,12 @@ export interface SessionConfig {
    * database instead, with no deploy and no baseline (R192). See `resume.ts`.
    */
   readonly resume?: "last" | number;
+  /**
+   * R565: dependency package folders the config names (bcdev and envtool: `packageCachePath`),
+   * searched after al-runner's provisioned platform apps and the backend's own
+   * (`ExecutionBackend.dependencyPackageDirs`). See `MutationSetOptions.dependencyPackageDirs`.
+   */
+  readonly dependencyPackageDirs?: readonly string[];
   /**
    * R53: re-run mutants a prior run stranded the tier on, instead of skipping them.
    *
@@ -2761,6 +2812,59 @@ interface GroupRunSettings {
 }
 
 /**
+ * R198: one single-method covering run as a `CoveringStep`, at `budget`. R577: a module function so
+ * the kill reproduction runs the killer exactly as the covering loop did, at the budget the
+ * killing run was SENT (never a recomputed one).
+ */
+async function singleStep(
+  ctx: {
+    readonly backend: ExecutionBackend;
+    readonly safety: SessionSafety;
+    readonly leaseSession: LeaseSession | undefined;
+    readonly emit: RunEmitter;
+    readonly resyncOpSeq: (() => Promise<void>) | undefined;
+  },
+  ref: TestMethodRef,
+  budget: TestBudget,
+): Promise<CoveringStep> {
+  const { ms, source } = budget;
+  const out = await runFenced(
+    ctx.backend,
+    ctx.safety,
+    ref,
+    { coverage: "none", timeoutMs: ms },
+    ctx.leaseSession,
+    ctx.emit,
+    ctx.resyncOpSeq,
+  );
+  return {
+    ref,
+    verdict: out.verdict,
+    lostAck: out.lostAck,
+    retried: out.retried,
+    ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
+    ...(out.original !== undefined ? { original: out.original } : {}),
+    // R-204b: the single path's two causes, carried exactly as the grouped call's are. R534:
+    // al-runner's answered row, keyed on `runnerRow` ONLY (never on `completed-accepted`, which
+    // R488/R491's refusals also carry and which must still abort).
+    ...(out.cause !== undefined
+      ? { cause: out.cause }
+      : out.verdict.stopRefusal !== undefined
+        ? { cause: out.verdict.stopRefusal }
+        : out.verdict.runnerRow !== undefined
+          ? { cause: out.verdict.runnerRow }
+          : {}),
+    testBudgetMs: ms,
+    testBudgetSource: source,
+    groupBudgetMs: ms,
+    opKind: "single",
+    groupPosition: 1,
+    chunkPrefix: [{ ref, budgetMs: ms }],
+    callSettings: { requestCeilingMs: ms, stopGraceMs: 0 },
+  };
+}
+
+/**
  * R198: the covering loop's dispatcher. On a backend WITHOUT `runMany` (or with group runs
  * disabled) it is today's loop: one `runFenced` per test in R197's order. On a backend WITH it, it
  * walks `ordered` with a cursor, IN ORDER, never skipping: a chunk is a CONTIGUOUS run of fittable
@@ -2784,43 +2888,8 @@ async function* coveringRuns(args: {
   readonly group: GroupRunSettings | undefined;
   readonly mutantId: string;
 }): AsyncGenerator<CoveringStep, void, undefined> {
-  const single = async (ref: TestMethodRef): Promise<CoveringStep> => {
-    const { ms: budget, source } = args.budgetOf(ref);
-    const out = await runFenced(
-      args.backend,
-      args.safety,
-      ref,
-      { coverage: "none", timeoutMs: budget },
-      args.leaseSession,
-      args.emit,
-      args.resyncOpSeq,
-    );
-    return {
-      ref,
-      verdict: out.verdict,
-      lostAck: out.lostAck,
-      retried: out.retried,
-      ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
-      ...(out.original !== undefined ? { original: out.original } : {}),
-      // R-204b: the single path's two causes, carried exactly as the grouped call's are. R534:
-      // al-runner's answered row, keyed on `runnerRow` ONLY (never on `completed-accepted`, which
-      // R488/R491's refusals also carry and which must still abort).
-      ...(out.cause !== undefined
-        ? { cause: out.cause }
-        : out.verdict.stopRefusal !== undefined
-          ? { cause: out.verdict.stopRefusal }
-          : out.verdict.runnerRow !== undefined
-            ? { cause: out.verdict.runnerRow }
-            : {}),
-      testBudgetMs: budget,
-      testBudgetSource: source,
-      groupBudgetMs: budget,
-      opKind: "single",
-      groupPosition: 1,
-      chunkPrefix: [{ ref, budgetMs: budget }],
-      callSettings: { requestCeilingMs: budget, stopGraceMs: 0 },
-    };
-  };
+  const single = (ref: TestMethodRef): Promise<CoveringStep> =>
+    singleStep(args, ref, args.budgetOf(ref));
   const group = args.group;
   if (group === undefined || args.backend.runMany === undefined) {
     for (const ref of args.ordered) yield await single(ref);
@@ -2912,7 +2981,11 @@ async function* coveringRuns(args: {
         chunkPrefix: methods.slice(0, position),
         callSettings,
       };
-      return;
+      // R577 (I4): the consumer pulls again after a timeout only when its kill did not reproduce;
+      // the walk then goes on after it. Every other call-level ending ends the walk, as before.
+      if (verdict.outcome !== "timeout" || cause !== undefined) return;
+      cursor += position;
+      continue;
     }
     for (const [i, verdict] of out.result.verdicts.entries()) {
       yield {
@@ -2927,11 +3000,12 @@ async function* coveringRuns(args: {
         callSettings,
       };
     }
-    // A `failure` ends the walk. `complete` means every method of THIS call ran (the transport
-    // refuses a `complete` with fewer entries than the call asked for) and `cap` a prefix of it;
-    // either way the cursor advances by what ran and the next call, if any, takes the rest. The
-    // loop's attempted-set guard is what catches an answer whose `ranCount` outran its entries.
-    if (out.result.endedBy === "failure") return;
+    // `complete` means every method of THIS call ran (the transport refuses a `complete` with
+    // fewer entries than the call asked for) and `cap` a prefix of it; either way the cursor
+    // advances by what ran and the next call, if any, takes the rest. The loop's attempted-set
+    // guard is what catches an answer whose `ranCount` outran its entries. A `failure` advances
+    // the same way: the consumer breaks at a failure, so the walk ends there, except (R577, I4)
+    // after a kill that did not reproduce, when the walk goes on after the failed method.
     cursor += out.result.ranCount;
   }
 }
@@ -3886,6 +3960,8 @@ function resolveResume(
   // R391: the resumed run's generation hash and `twin_tuples`, never its `source_sha256`.
   let recorded: RecordedCarrySide;
   let priorHidden: CarryHidden | null;
+  // R557 (I1): the resumed run's row, for `runLendsAlRunnerNames`.
+  let priorRow: RunRow | null;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -3938,6 +4014,7 @@ function resolveResume(
     }
     priorRunId = found;
     const foundRow = cfg.store.getRun(found);
+    priorRow = foundRow;
     // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL) must
     // still never be read as a match.
     sameTestApp(foundRow, "--resume");
@@ -3997,6 +4074,7 @@ function resolveResume(
     }
     recorded = recordedCarrySideOf(row);
     priorRunId = cfg.resume;
+    priorRow = row;
   }
 
   // R360 (review r1 #3): no pruned-bundle check here. Nothing on the resume path reads the prior
@@ -4005,8 +4083,37 @@ function resolveResume(
   // (`findBaselineSnapshot`) keys on the CURRENT batch dir's hash and the test app. A batch with
   // work left is rebuilt and republished. `lethal verify` keeps its refusal.
 
+  // R557 C1: a pre-fix al-runner run sent a renamed test under its AL name, al-runner ran nothing,
+  // and its only-kills read survived. Such a run's verdicts are not carried: the resume goes on
+  // with an EMPTY carry, so every mutant is executed (a warning, by ruling; still a resume, so the
+  // report says which run it came from, R89).
+  // (I1): first the run-level mark (`runLendsAlRunnerNames`): a run without it may have CARRIED
+  // such verdicts (a resume of a resume, `known-survivor` rows) and hold no baseline row showing
+  // it. Then, second, the run's own renamed baseline errors.
+  const carryRefused =
+    priorRow === null || !runLendsAlRunnerNames(priorRow)
+      ? `run ${priorRunId} ${AL_RUNNER_UNMARKED_WHY}`
+      : alRunnerRefusal(
+          priorRunId,
+          backendName === "al-runner"
+            ? alRunnerRenamed(cfg.store.baselineErrorMethods(priorRunId))
+            : [],
+        );
+  if (carryRefused !== undefined) {
+    emit({
+      type: "warning",
+      code: "resume-al-runner-test-names",
+      message: `[lethal] --resume: ${carryRefused}; its verdicts are not carried: every mutant is executed, including any it recorded as stranding the tier (R53), since nothing of it is carried (R557).`,
+    });
+  }
   const { index, dropped: refusedDropped } = withoutRefusedTests(
-    buildResumeIndex(cfg.store.mutantVerdicts(priorRunId), cfg.stopHungSessions === true),
+    buildResumeIndex(
+      // Two remove-only filters (R557 + R577, agreed 2026-10-20): R557's run-level trust empties the
+      // rows of an untrusted run, then R577's row-level rule refuses an unmarked kill among the rest.
+      carryRefused !== undefined ? [] : cfg.store.mutantVerdicts(priorRunId),
+      cfg.stopHungSessions === true,
+      cfg.backend.killsMustReproduce === true,
+    ),
     refusedTests,
   );
   if (refusedDropped > 0) {
@@ -4022,6 +4129,11 @@ function resolveResume(
     message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192).${
       index.nonCarryableRows > 0
         ? ` ${index.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`
+        : ""
+    }${
+      // R577 (M2): a kill scored before the reproduction rule is re-run, and said so in its own words.
+      index.unreproducedKills > 0
+        ? ` ${index.unreproducedKills} prior kill(s) recorded before the kill-reproduction rule (no killReproduced) will be re-executed, because this backend requires a kill to reproduce (R577).`
         : ""
     }${
       index.ambiguousKeys > 0
@@ -4047,8 +4159,26 @@ function resolveResume(
     carryableCount: index.carryable.size,
     strandedKeyCount: index.strandedKeys.size,
     retryStranded: cfg.retryStranded ?? false,
+    ...(carryRefused !== undefined ? { carryRefused: `${carryRefused} (R557)` } : {}),
   });
   return { runId: priorRunId, index, carryHidden: priorHidden, recorded };
+}
+
+/** R557 (I1): why an al-runner run without the R557 test-name mark lends nothing. */
+const AL_RUNNER_UNMARKED_WHY =
+  "ran on al-runner before R557 (its run row carries no R557 test-name mark), so a test whose al-runner name differs from its AL name may never have run in it, or in a run it carried verdicts from";
+
+/** R557 C1: why a run whose own baseline holds renamed `error` tests lends nothing, or
+ *  `undefined` when `tests` is empty. */
+function alRunnerRefusal(runId: number, tests: readonly string[]): string | undefined {
+  return tests.length === 0
+    ? undefined
+    : `run ${runId} ran on al-runner before R557 and recorded ${tests.length} test(s) as errors that al-runner never ran (${namesSample(tests)})`;
+}
+
+/** R557 C1: up to five test names for a warning, `, ...` when there are more. */
+function namesSample(tests: readonly string[]): string {
+  return `${tests.slice(0, 5).join(", ")}${tests.length > 5 ? ", ..." : ""}`;
 }
 
 /** R391: a run row's side of `carryRecord`. A missing row, like a NULL column, carries nothing. */
@@ -4057,6 +4187,7 @@ function recordedCarrySideOf(row: RunRow | null): RecordedCarrySide {
   return {
     hash: row?.generationSourceSha256 ?? null,
     twins: twins === null ? null : new Set(twins),
+    dependencyHash: row?.dependencySourceSha256 ?? null,
   };
 }
 
@@ -4215,6 +4346,8 @@ interface ScoreBatchInput {
     readonly batchDir: string;
     readonly testDir: string;
     readonly allowReuse: boolean;
+    /** R389: the session's closed-world answer, bound into the snapshot key like the run's. */
+    readonly closedWorld: ClosedWorld;
     /** R492 (sol run 001), R495: the session's PROVEN test app (`undefined`: unproven). Reuse
      *  needs the batch's own read to equal it: a later unpinned read can serve a
      *  published-but-not-installed package, whose snapshot another run did prove. A different
@@ -4709,11 +4842,13 @@ async function dispatchUnmutated(
 async function batchTestAppReader(
   backend: ExecutionBackend,
   testDir: string,
+  /** R389: the session's closed-world answer, bound into the hash as the run's identity is. */
+  closedWorld: ClosedWorld,
 ): Promise<() => Promise<string | undefined>> {
   const packageReader = backend.fetchPublishedAppPackage;
   const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
-  return () =>
-    testAppHashFor(
+  return async () => {
+    const h = await testAppHashFor(
       packageReader === undefined
         ? undefined
         : async () =>
@@ -4722,6 +4857,9 @@ async function batchTestAppReader(
               : packageReader.call(backend, { publisher: manifest.publisher, name: manifest.name }),
       testDir,
     );
+    // R389: a snapshot taken under another guard answer is never reused.
+    return h === undefined ? undefined : guardedTestAppHash(h, closedWorld);
+  };
 }
 
 /**
@@ -4789,9 +4927,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
   let hashTestApp: (() => Promise<string | undefined>) | undefined;
   if (input.snapshot !== undefined) {
-    const { batchDir, testDir, allowReuse, provenTestApp } = input.snapshot;
+    const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
-    hashTestApp = await batchTestAppReader(backend, testDir);
+    hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
     const testAppHash = await hashTestApp();
     // R495: before `select` carries anything or a snapshot is reused.
     assertNoTestAppDrift(store, runId, provenTestApp?.hash, testAppHash, batchIdx);
@@ -4804,6 +4942,32 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
+    // R557 C1: checked on the snapshot itself, since `findBaselineSnapshot` can lend one from ANY
+    // run. A pre-fix al-runner snapshot holds a renamed test as an `error` al-runner never ran; it
+    // is not reused, and this batch re-runs its baseline under the name al-runner has.
+    // (I1): first the snapshot run's R557 mark (`runLendsAlRunnerNames`), then its own errors.
+    const snapshotRun = reused !== undefined ? store.getRun(reused.runId) : null;
+    if (reused !== undefined && snapshotRun !== null && !runLendsAlRunnerNames(snapshotRun)) {
+      emit({
+        type: "warning",
+        code: "resume-al-runner-test-names",
+        message: `[lethal] --resume: run ${reused.runId}'s batch ${reused.batchIndex} baseline snapshot is not reused: run ${reused.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
+      });
+      reused = undefined;
+    }
+    if (reused !== undefined && snapshotRun?.backend === "al-runner") {
+      const tainted = alRunnerRenamed(
+        reused.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
+      );
+      if (tainted.length > 0) {
+        emit({
+          type: "warning",
+          code: "resume-al-runner-test-names",
+          message: `[lethal] --resume: run ${reused.runId}'s batch ${reused.batchIndex} baseline snapshot ran on al-runner before R557 and recorded ${tainted.length} test(s) as errors that al-runner never ran (${namesSample(tainted)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
+        });
+        reused = undefined;
+      }
+    }
     // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
     // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
     // tests, so a saved row for any other test is DROPPED: it must not come back green and be
@@ -4879,8 +5043,25 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       runId,
       batchIndex: batchIdx,
       batchHash: snapshotKey.batchHash,
-      testAppHash,
+      // R389: a closed-world snapshot stays pending (unmatchable) until the run's recheck confirms.
+      testAppHash:
+        input.snapshot !== undefined && isClosedWorld(input.snapshot.closedWorld)
+          ? `${testAppHash}${PENDING_SUFFIX}`
+          : testAppHash,
       baseline: baseline as BaselineObservation[],
+    });
+  }
+  // R557 (I3): one warning per batch naming every test al-runner had no row for that sits in an
+  // `#if` arm discovery could not decide; it is not run, so a mutant only it would kill may read
+  // survived.
+  const undecidedMissing = baseline
+    .filter((b) => b.verdict.failureMessage?.startsWith(AL_RUNNER_UNDECIDED_ARM_MISSING) === true)
+    .map((b) => qualifiedTestName(b.ref));
+  if (undecidedMissing.length > 0) {
+    emit({
+      type: "warning",
+      code: "al-runner-undecided-test-missing",
+      message: `[lethal] batch ${batchIdx}: al-runner has no row for these tests, which sit in an \`#if\` arm LethAL could not decide (R403); they are not run, so a mutant only they would kill may read survived. Pass the build's symbols to decide the arm (R557): ${undecidedMissing.join(", ")}`,
     });
   }
   // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
@@ -5323,6 +5504,41 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     }
   }
 
+  // R551: does this al-runner build accept `--test-exact`? One call, once per session, on the
+  // session backend, before the baseline, so the baseline and every mutant run under one selector.
+  // Structural, like `provisionOnce`. Anything but an acceptance keeps R488's path, which is
+  // correct on every build measured, so "not accepted" never refuses the session.
+  let exactTestSelector = false;
+  const selectorProber = cfg.backend as {
+    probeExactTestSelector?: () => Promise<TestSelectorProbe>;
+  };
+  const selectorProbed = selectorProber.probeExactTestSelector !== undefined;
+  if (selectorProber.probeExactTestSelector !== undefined) {
+    const p = await selectorProber.probeExactTestSelector();
+    if (p.kind !== "not-applicable") {
+      exactTestSelector = p.kind === "exact";
+      emit({
+        type: "warning",
+        code: "al-runner-test-selector",
+        message:
+          p.kind === "exact"
+            ? `al-runner test selector: exact (--test-exact accepted by a one-call probe in ${p.elapsedMs} ms; R551)`
+            : `al-runner test selector: substring with R488 excludes (--test-exact not accepted: ${p.reason}; probe ${p.elapsedMs} ms; R551)`,
+      });
+      // R558: the same choice as a structured event, which the report folds into
+      // `ExecutionContext.testSelector`. The warning above stays for the console line.
+      emit(
+        p.kind === "exact"
+          ? { type: "al-runner-test-selector", selector: "exact" }
+          : {
+              type: "al-runner-test-selector",
+              selector: "substring-with-excludes",
+              reason: p.reason,
+            },
+      );
+    }
+  }
+
   // R392: MEASURE al-runner's predefined symbols, every al-runner session, after provisioning and
   // before anything computes the build's symbols. Awaited, with nothing else in flight. A probe that
   // cannot give a complete answer throws AlRunnerPredefinedProbeError and the run is refused.
@@ -5399,6 +5615,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R488: the UNFILTERED list, every arm read: a look-alike al-runner would also select must be
   // excluded whether or not this session runs it. Given again to every worker below.
   cfg.backend.useDiscoveredTests?.(discovery.unfiltered);
+  // R557 (I3): the suite this session runs, and the tests kept in an `#if` arm discovery could not
+  // decide: al-runner stops on a session-suite test it has no row for, except one of those. Given
+  // again to every worker below.
+  const undecidedKeptTests = discovery.excluded
+    .filter((x) => x.reason === "preproc-undecided-kept")
+    .map((x) => x.test);
+  cfg.backend.useSessionTests?.(tests, undecidedKeptTests);
   // Discovery returns the whole list in one parse — 1,000+ per-item events at one instant would
   // be false granularity, not liveness (see events.ts's doc comment on `tests-discovered`).
   // R403 phase C. With no compiled evidence the unfiltered suite runs, so a `compiled-out` record
@@ -5462,18 +5685,29 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // snapshot, so each compiles exactly the hashed bytes.
   const sourceSnapshot = cfg.source ?? (await readTargetSource(cfg.projectDir));
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
-  const { testAppHash, testDigests, testDigestParts, testDigestDependencies } =
-    await testAppIdentity(
-      cfg,
-      publishedRead,
-      tests,
-      testModel,
-      emit,
-      // R403 phase B: R139's source-to-source comparison filters both sides alike.
-      armPolicyApplied ? testBuildSymbols : undefined,
-      sourceSnapshot,
-      envPublishes !== undefined,
-    );
+  const {
+    testAppHash,
+    testDigests,
+    testDigestParts,
+    testDigestDependencies,
+    closedWorld: pendingClosedWorld,
+  } = await testAppIdentity(
+    cfg,
+    publishedRead,
+    tests,
+    testModel,
+    emit,
+    // R403 phase B: R139's source-to-source comparison filters both sides alike.
+    armPolicyApplied ? testBuildSymbols : undefined,
+    sourceSnapshot,
+    envPublishes !== undefined,
+  );
+  // R389: the session's closed-world answer, bound into every test-app hash it reads or records.
+  const sessionClosedWorld = pendingClosedWorld?.guard.closedWorld ?? OPEN_WORLD;
+  // R389: a closed-world run's identity is recorded PENDING (unmatchable) until its
+  // post-execution recheck confirms it; a run killed before that never supplies a verdict.
+  const recordedTestAppHash = (h: string): string =>
+    pendingClosedWorld !== undefined ? `${h}${PENDING_SUFFIX}` : h;
   // R495: the identity resume, history and the R192 snapshot may use, `undefined` unless proven.
   // A hook session proves it after the hook, under the lease (below); this read may be outgoing.
   const provenTestAppHash =
@@ -5580,6 +5814,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const runId = cfg.store.createRun({
     identityScheme: IDENTITY_SCHEME,
     buildSymbols,
+    // R557 (I1): this session sends al-runner tests under `alRunnerMethodName`; the mark is what
+    // lets its verdicts be lent (`runLendsAlRunnerNames`).
+    ...(backendName === "al-runner" ? { alRunnerNames: true } : {}),
     coverageMode: caps.coverage,
     // R391: rule 1's "same source" fact, recorded with the row so no mutant row exists without it.
     generationSourceSha256: sourceHashAtGeneration,
@@ -5592,7 +5829,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // records all three under the lease, after its fingerprint is taken there.
     ...(alRunnerTestApp !== undefined
       ? {
-          testAppHash: alRunnerTestApp.hash,
+          testAppHash: recordedTestAppHash(alRunnerTestApp.hash),
           testAppProven: true,
           testAppDeps: alRunnerTestApp.deps,
         }
@@ -5651,6 +5888,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     preprocExcluded,
     buildSymbols: generatedSymbols,
     carryHidden,
+    dependencyReportSources,
+    dependencySourceSha256,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
@@ -5660,9 +5899,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     preprocessorSymbols: sourceSymbols,
     backend: buildBackend,
     emit,
+    // R565: al-runner's provisioned platform apps first, then the backend's own package folders
+    // (al-runner's `packagesDir`), then the config's (bcdev and envtool: `packageCachePath`).
+    dependencyPackageDirs: [
+      ...(provisionedPlatformAppsDir !== undefined ? [provisionedPlatformAppsDir] : []),
+      ...(cfg.backend.dependencyPackageDirs?.() ?? []),
+      ...(cfg.dependencyPackageDirs ?? []),
+    ],
   });
   // R442: before any mutant row, so a run that dies earlier holds no verdict and stays NULL.
   cfg.store.setCarryHidden(runId, carryHidden);
+  // R565: likewise, so a run that dies before it carries nothing by rule 1.
+  cfg.store.setDependencySourceSha256(runId, dependencySourceSha256);
   // R374: numbered once over the whole run, here and not inside `generateMutationSet`'s file loop,
   // which then held one entry per mutant until its end (R400). Still inside the generate phase.
   // `identityOrdinalsOf`'s numbering, from entries kept long enough to read the twins below.
@@ -5680,6 +5928,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const carryCurrent: CurrentCarrySide = {
     hash: sourceHashAtGeneration,
     twins: new Set(twinTuples),
+    dependencyHash: dependencySourceSha256,
     refused: new Set(),
   };
   // R214: fail loudly if the set recorded on the run (above) and the set generation enumerated
@@ -5816,6 +6065,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     numberingDigest,
     twinSites: twinTuples,
     carryHidden: { tuples: [...carryHidden.tuples], files: [...carryHidden.files] },
+    // R565: what was read from the dependency packages, and the digest the carry rule compares.
+    dependencyReportSources,
+    dependencySourceSha256,
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
   // satisfy a presence check while being useless to the person it is for. Built-in operators now
@@ -5925,6 +6177,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let historyTestApp: TestAppIdentity | undefined;
   // R442: likewise for its untrusted-run and hidden-files warnings.
   let historyCarryWarned = false;
+  // R557 C1: likewise for its pre-fix al-runner test-names warning.
+  let historyAlRunnerNamesWarned = false;
 
   // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
@@ -6081,16 +6335,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // R373: the env-tool run's digests, from the read-back, recorded only with proof it is what
     // runs; otherwise exactly one `test-digests-unavailable` warning, and the row stays NULL.
     if (envPublishes !== undefined && readBack !== undefined && readBackProof !== undefined) {
-      // A proof implies a readable read-back; the second test only narrows the type.
+      // A proof implies a readable read-back, so `unavailable` only narrows the type. R498: a lost
+      // dependency fingerprint is named BEFORE a proven source-less read-back's "no AL source".
       const got =
         "why" in readBackProof
           ? readBackProof
-          : readBack.kind === "unavailable"
-            ? { why: readBack.why }
-            : readBackDeps !== undefined && "why" in readBackDeps
-              ? {
-                  why: `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${readBackDeps.why}`,
-                }
+          : readBackDeps !== undefined && "why" in readBackDeps
+            ? {
+                why: `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${readBackDeps.why}`,
+              }
+            : readBack.kind === "unavailable" || readBack.kind === "source-less"
+              ? { why: readBack.why }
               : await digestsOf(
                   cfg,
                   readBack,
@@ -6127,7 +6382,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               ? `a dependency changed while this session waited for the lease (its digests were taken over dependencies ${pre}, and under the lease they are ${got.deps})`
               : undefined;
         if (why === undefined && "deps" in got) {
-          cfg.store.setRunTestAppHash(runId, provenTestAppHash, true, got.deps);
+          cfg.store.setRunTestAppHash(
+            runId,
+            recordedTestAppHash(provenTestAppHash),
+            true,
+            got.deps,
+          );
           historyTestApp = { hash: provenTestAppHash, deps: got.deps };
         } else {
           // In one step: no identity, no digests, one warning; `historyTestApp` stays undefined.
@@ -6210,8 +6470,22 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           );
         }
         handBuildSymbols(worker, buildSymbols);
+        // R551: every worker gets the session's selector, true or false, every time. Workers never
+        // probe. A worker that cannot take it would run other argv than the baseline: refuse.
+        if (selectorProbed) {
+          const sel = worker as { useExactTestSelector?: (on: boolean) => void };
+          if (typeof sel.useExactTestSelector !== "function") {
+            throw new Error(
+              `runSession: the session backend probed al-runner's --test-exact (${exactTestSelector ? "accepted" : "not accepted"}) but worker backend ${i} has no useExactTestSelector, so the baseline and the mutants could run under different test selectors (R551).`,
+            );
+          }
+          sel.useExactTestSelector(exactTestSelector);
+        }
         // R488: each worker starts with an empty sibling cache, so it needs the list too.
         worker.useDiscoveredTests?.(discovery.unfiltered);
+        // R557 (I3): and the session suite, so a worker stops (or carves out) exactly as the
+        // session backend does.
+        worker.useSessionTests?.(tests, undecidedKeptTests);
         worker.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
         workerBackends.push(worker);
       }
@@ -6254,7 +6528,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // whole-batch carry, history's known survivors, a compile failure's error rows or a baseline.
       // (`scoreBatch` reads again before its baseline.)
       if (historyTestApp !== undefined) {
-        const now = await (await batchTestAppReader(cfg.backend, cfg.testDir))();
+        const now = await (
+          await batchTestAppReader(cfg.backend, cfg.testDir, sessionClosedWorld)
+        )();
         assertNoTestAppDrift(cfg.store, runId, historyTestApp.hash, now, batchIdx);
       }
       // 1. write the instrumented project for this artifact — currently
@@ -6499,6 +6775,27 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               code: "history-hidden-files-changed",
               message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, hid ${describeHiddenFiles(old.before)} whole from identity numbering, and this run hides ${describeHiddenFiles(old.now)} (--only/--exclude scope, a preprocessor directive that could not be evaluated, or a file no selector var fits). A file hidden in one run and not the other moves its twins' ordinals, so a recorded key can name another mutant: no survivor from it is skipped, every mutant is executed (R442).`,
             });
+          },
+          alRunnerUnmarked: (old) => {
+            if (historyAlRunnerNamesWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyAlRunnerNamesWarned = true;
+            emit({
+              type: "warning",
+              code: "history-al-runner-test-names",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ${AL_RUNNER_UNMARKED_WHY}; its survivors may be false, so none is skipped: every mutant is executed (R557).`,
+            });
+          },
+          alRunnerTestNames: {
+            renamed: alRunnerRenamed,
+            refused: (old) => {
+              if (historyAlRunnerNamesWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+              historyAlRunnerNamesWarned = true;
+              emit({
+                type: "warning",
+                code: "history-al-runner-test-names",
+                message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ran on al-runner before R557 and recorded ${old.tests.length} test(s) as errors that al-runner never ran (${namesSample(old.tests)}); its survivors may be false, so none is skipped: every mutant is executed (R557).`,
+              });
+            },
           },
         },
       );
@@ -7044,6 +7341,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               carried.killingTestFailure,
               undefined, // unplaceable
               carried.killPosition,
+              undefined, // reach
+              undefined, // killingTestRef
+              carriedReproduction(carried),
             );
           }
         }
@@ -7199,6 +7499,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           allowReuse:
             resumeState !== undefined &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
+          closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
         },
         select,
@@ -7290,6 +7591,35 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     });
   }
 
+  // R389 (sol's review): zero dependents is a point-in-time answer. Asked again now, after
+  // execution: only the same closed answer upgrades the recorded open-world digests. Any other
+  // answer keeps them open and revokes the run's test-app identity, so nothing carries from it.
+  if (pendingClosedWorld !== undefined) {
+    const again = await pendingClosedWorld.recheck();
+    if (sameClosedWorld(pendingClosedWorld.guard, again)) {
+      // One transaction: the closed-world digests, and reuse enabled for the run and its snapshots.
+      // R495/R496: the row holds the pending identity only when it was recorded proven
+      // (`historyTestApp`); a run whose digests were withdrawn under the lease (F9) gets none back.
+      if (historyTestApp !== undefined) {
+        cfg.store.confirmClosedWorld(
+          runId,
+          PENDING_SUFFIX,
+          pendingClosedWorld.digests,
+          pendingClosedWorld.parts,
+        );
+      } else if (cfg.store.testDigests(runId) !== null) {
+        cfg.store.setTestDigests(runId, pendingClosedWorld.digests, pendingClosedWorld.parts);
+      }
+    } else {
+      if (historyTestApp !== undefined) cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX);
+      emit({
+        type: "warning",
+        code: "closed-world-changed",
+        message: `[lethal] the closed-world guard answered differently after execution (${again.why}), so this run records open-world test digests and no later run carries or reuses its verdicts`,
+      });
+    }
+  }
+
   // Layer 5C-A Task 8, Task 10 (design §G): a quarantined run must NEVER be marked finished.
   // `priorSurvivorKeys` (store.ts) selects the most recent run with `finished_at IS NOT NULL` and
   // treats its "survived"/"known-survivor" mutant rows as a future session's skip-list
@@ -7372,6 +7702,19 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         "it will fail. If that app is one this session mutated or called, its procedure bodies were absent and " +
         "every verdict touching it describes a program that cannot run. Runner said: " +
         observedMissingImpl.announcement,
+    });
+  }
+  // R583: a dependency (not the target, not the test app) lost objects in al-runner's compile. The
+  // run is scored anyway; tests touching a dropped object fail, and the rest cover less. Structural,
+  // as above. One-shot reads it from each invocation's stderr. `--server` CANNOT see it: the measured
+  // drop prints only on the daemon's stderr, which is never read per request, so on `--server` the
+  // absence of this warning is not evidence that no dependency lost objects.
+  const depSource = cfg.backend as { observedDependencyDrops?: () => readonly string[] };
+  for (const drop of depSource.observedDependencyDrops?.() ?? []) {
+    emit({
+      type: "warning",
+      code: "al-runner-dependency-emit-excluded",
+      message: `al-runner dropped objects from a DEPENDENCY of this run (neither the target nor the test app), so it was scored anyway: a test that touches a dropped object fails, and one that touches only the survivors covers less than it claims (R583). Seen on the one-shot transport; --server cannot see such drops (they print only on the daemon's stderr), so no warning there is not evidence of no drop. Runner said: ${drop.slice(0, 1500)}`,
     });
   }
   const totalMs = Date.now() - sessionStartedMs;
@@ -8589,7 +8932,8 @@ async function reportPublishedTestApp(
       files.length > 0
         ? { kind: "published", files, pkg: bytes }
         : {
-            kind: "unavailable",
+            kind: "source-less",
+            pkg: bytes,
             why: `the published test app "${name}" carries no AL source, so the body the server runs cannot be digested. Build the test app so its .app includes its source`,
           },
   };
@@ -8605,12 +8949,23 @@ type PublishedTestSources =
       readonly files: ReadonlyArray<{ path: string; text: string }>;
       readonly pkg: Uint8Array;
     }
+  /** R498: a readable package with no `.al` entries. Nothing to digest (`why`), but its bytes can
+   *  still prove an env-tool read-back (`proveReadBack`). */
+  | { readonly kind: "source-less"; readonly pkg: Uint8Array; readonly why: string }
   | { readonly kind: "unavailable"; readonly why: string };
 
 const NO_PUBLISHED_READ =
   "the published test app could not be requested from the server (no dev server, no dev-endpoint credentials, or no readable test app.json), and the source on disk is not known to be the body it runs";
 const UNREADABLE =
   "the published test app could not be read (on an env-tool session this is the read before its own publish; the published-test-app-unreadable warning appears only if the read after the publish fails too)";
+
+/** R389: a closed-world answer not yet confirmed after execution, and the digests it would give. */
+interface PendingClosedWorld {
+  readonly guard: ClosedWorldResult;
+  readonly digests: Record<string, string>;
+  readonly parts: TestDigestParts;
+  readonly recheck: () => Promise<ClosedWorldResult>;
+}
 
 /**
  * R139 check 2 plus R-278's digests, from ONE package read. R-372: on a backend that publishes, the
@@ -8634,6 +8989,7 @@ async function testAppIdentity(
   testAppHash: string | undefined;
   testDigests?: Record<string, string>;
   testDigestParts?: TestDigestParts;
+  closedWorld?: PendingClosedWorld;
   /** R496 F9: the full dependency fingerprint the digests were taken over. */
   testDigestDependencies?: string;
 }> {
@@ -8660,14 +9016,36 @@ async function testAppIdentity(
       "this run publishes its test apps itself (envTool.publishApps, prebuilt .app files) after the published test app is read, so neither that read nor the source on disk is known to be the body the server runs",
     );
   }
-  if (sources.kind === "unavailable") return none(sources.why);
+  if (sources.kind === "unavailable" || sources.kind === "source-less") return none(sources.why);
   const got = await digestsOf(cfg, sources, tests, diskModel, source);
   if ("why" in got) return none(got.why);
+  // R389: the closed-world guard, asked for the package actually DIGESTED (the published one on
+  // bcdev; sol's review). The run records OPEN-world digests; the closed-world ones replace them
+  // only after the same question, asked again after execution, gets the same answer (`recheck`).
+  // An env-tool session returned above, so it stays open-world (the safe direction).
+  const digested = sources.kind === "published" ? digestedAppOfPackage(sources.pkg) : undefined;
+  const ask = () => closedWorldGuard(cfg.backend, cfg.testDir, digested);
+  const guard = await ask();
+  if (guard.warn) {
+    emit({
+      type: "warning",
+      code: "closed-world-unmeasured",
+      message: `[lethal] public and internal test-app procedures are digested open-world (the safe direction): ${guard.why}`,
+    });
+  }
+  const c = isClosedWorld(guard.closedWorld)
+    ? await digestsOf(cfg, sources, tests, diskModel, source, got.dependencies, guard.closedWorld)
+    : undefined;
+  if (c !== undefined && "why" in c) return none(c.why);
   return {
-    testAppHash,
+    testAppHash:
+      testAppHash === undefined ? undefined : guardedTestAppHash(testAppHash, guard.closedWorld),
     testDigests: got.digests,
     testDigestParts: got.parts,
     testDigestDependencies: got.dependencies,
+    ...(c !== undefined
+      ? { closedWorld: { guard, digests: c.digests, parts: c.parts, recheck: ask } }
+      : {}),
   };
 }
 
@@ -8745,13 +9123,18 @@ function warnTestAppDependenciesUnproven(emit: RunEmitter, why: string): void {
  */
 async function digestsOf(
   cfg: SessionConfig,
-  sources: Exclude<PublishedTestSources, { readonly kind: "unavailable" }>,
+  sources: Exclude<
+    PublishedTestSources,
+    { readonly kind: "unavailable" } | { readonly kind: "source-less" }
+  >,
   tests: readonly TestMethodRef[],
   diskModel: TestAppModel,
   source: ReadonlyMap<string, Buffer>,
   /** R496: the fingerprint already taken under the lease for this read-back, so it is not walked
    *  twice. Absent: walked here. */
   takenDependencies?: string,
+  /** R389: the closed-world answer the digests are taken under. Absent: open-world. */
+  closedWorld?: ClosedWorld,
 ): Promise<
   | {
       readonly digests: Record<string, string>;
@@ -8761,6 +9144,13 @@ async function digestsOf(
     }
   | { readonly why: string }
 > {
+  // `not-published` digests the disk, `published` the package; nothing else has a body to digest.
+  if (sources.kind !== "published" && sources.kind !== "not-published") {
+    const unknown: never = sources;
+    throw new Error(
+      `digestsOf was handed test sources of kind ${String((unknown as { kind: unknown }).kind)}`,
+    );
+  }
   try {
     const published = sources.kind === "published";
     const inputs = published
@@ -8772,7 +9162,11 @@ async function digestsOf(
     const { digests, parts } = testDigestsOfModel(
       published ? buildTestAppModel(sources.files) : diskModel,
       tests,
-      { dependencies, buildInputs: inputs.buildInputs },
+      {
+        dependencies,
+        buildInputs: inputs.buildInputs,
+        ...(closedWorld !== undefined ? { closedWorld } : {}),
+      },
     );
     return { digests, parts, dependencies };
   } catch (err) {
@@ -8845,7 +9239,8 @@ async function provenWithoutHook(
  * `publishApps` (`sources`) is what runs: exactly one INSTALLED row at the served version for the
  * test app and for every app the hook published (R-385 D2: `dev/packages` serves a version that
  * may be published but not installed), and, when a `publishApps` file is the test app, the
- * read-back's identity, version and `.al` source set equal that file's. Anything else is `why`.
+ * read-back's identity, version and `.al` source set equal that file's (R498: a read-back with no
+ * `.al` must equal the file byte for byte instead). Anything else is `why`.
  * The run's test-app identity, its history hash and its digests are recorded only with this proof.
  * It assumes BC holds one package per app id and version, so the bytes served at the installed
  * version are the installed bytes.
@@ -8860,6 +9255,8 @@ async function proveReadBack(
     return { why: `this backend cannot read the published test app back ${AFTER}` };
   }
   if (sources.kind === "unavailable") return { why: `${AFTER}: ${sources.why}` };
+  // R498: `source-less` takes the same identity and installed checks as `published`; only the
+  // final comparison with the publishApps file differs (bytes, as it has no `.al` set).
   // bcdev's `microsoftMode` throws `DependencyUnreadableError` with no harness verifier: that is a
   // run without digests, never a session abort.
   let mode: MicrosoftMode | undefined;
@@ -8931,6 +9328,18 @@ async function proveReadBack(
       return {
         why: `the test app read back ${AFTER} is ${describe(got)}, but the publishApps file ${file.path} is ${describe(want)}, so that file is not known to be what runs`,
       };
+    }
+    if (sources.kind === "source-less") {
+      // R498: nothing to compare by source, so the served package must BE the file: measured, the
+      // dev endpoint serves back exactly the bytes published, with or without `.al`.
+      const served = hashPackage(sources.pkg);
+      const published = hashPackage(local);
+      if (served !== published) {
+        return {
+          why: `the test app read back ${AFTER} carries no AL source and its bytes differ from the publishApps file ${file.path} (sha256 ${served}, file ${published}), so that file is not known to be what runs (a publish that skipped an already-installed version, say)`,
+        };
+      }
+      return { proven: true };
     }
     const sourceSet = (files: ReadonlyArray<{ path: string; text: string }>) =>
       JSON.stringify(files.map((f) => [f.path, f.text]).sort());
@@ -9300,6 +9709,222 @@ async function confirmWarm(p: {
   return { kind: "confirmed", killPosition: k };
 }
 
+/** R577: a kill decision that is not a kill: `WarmDecision`'s error shape, its cause optional as a
+ *  covering step's is (a lease loss and a transport error carry none). */
+interface KillErrorDecision {
+  readonly kind: "error";
+  readonly cause: MutantErrorCause | undefined;
+  readonly failureNote: string;
+  readonly transportError: boolean;
+}
+
+type ReproDecision =
+  | {
+      readonly kind: "reproduced";
+      /** `record()`'s `reproduction` argument: the reproduction's own text, when it had one. */
+      readonly reproduction: { readonly reproducedFailure?: string };
+    }
+  | KillErrorDecision;
+
+/**
+ * R577: "a kill must reproduce". Called after a kill's unmutated confirmation passed (cold at
+ * position 1, `confirmWarm` at k > 1), on a backend with `killsMustReproduce`. It re-activates the
+ * mutant (MANDATORY: al-runner `--server` caches its suite per activation and `activate` clears
+ * it, so without it the run would read the confirm's null suite), then re-runs the kill in its
+ * own context at the budget the killing run was SENT: at k = 1 one single run (`op_kind` single);
+ * at k > 1 the call's prefix 1..k through one `runMany` with no `confirmation` flag.
+ *
+ * Reproduced: the killer itself answers `fail` again (any text) for a fail kill, or `timeout` again
+ * for a timeout kill; at k > 1 only as method k of a replay that ran all k. Everything else that
+ * is an outcome is `kill-not-reproduced`, and the note says how the reproduction ended. A
+ * non-verdict ending (lost, deadline, stranded, a lease answer, a transport error) keeps its own
+ * cause through `classifyNonVerdictStep`, side effects included; a reused session is
+ * `session-reused`; a cap is `warm-confirmation-incomplete`. Never `survived`. The rows are
+ * MUTATED rows (`mutantCode` set) and their durations are not added to `spent`.
+ */
+async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<ReproDecision> {
+  const { args, m, step, leaseSession, resyncOpSeq, testResultBuffer } = p;
+  const k = step.groupPosition;
+  const killer = step.ref;
+  const timedOut = step.verdict.outcome === "timeout";
+  const firstLine = step.verdict.failureMessage?.split("\n")[0];
+  const what = `reproducing ${killer.method} under the mutant (first run ${
+    timedOut
+      ? `timed out at its ${step.testBudgetMs} ms budget`
+      : `failed: ${firstLine ?? "no text"}`
+  })`;
+  const error = (
+    cause: MutantErrorCause | undefined,
+    failureNote: string,
+    transportError = false,
+  ) => ({ kind: "error", cause, failureNote, transportError }) as const;
+  const replay = k > 1 ? ` by replaying the same ${k} method(s) of its call` : "";
+  const notReproduced = (how: string) =>
+    error(
+      "kill-not-reproduced",
+      `kill-not-reproduced ${killer.method}: ${
+        timedOut
+          ? `timed out under the mutant at its ${step.testBudgetMs} ms budget`
+          : `failed under the mutant${firstLine !== undefined ? ` (${firstLine})` : ""}`
+      }, passed with no mutant active, then ${how}; the ${
+        timedOut ? "timeout" : "failure"
+      } did not repeat, so it is not attributed to the mutant (R577). Re-run with --resume to measure it again.`,
+    );
+  // `how` for the killer's own answer in the reproduction, when it was not the reproducing one.
+  const answered = (outcome: TestVerdict["outcome"]) =>
+    outcome === "pass"
+      ? `passed when LethAL re-ran it under the mutant${replay}`
+      : outcome === "fail"
+        ? `failed instead of timing out when LethAL re-ran it under the mutant at the same budget${replay}`
+        : outcome === "timeout"
+          ? `timed out instead of failing when LethAL re-ran it under the mutant${replay}`
+          : `answered ${outcome} when LethAL re-ran it under the mutant${replay}`;
+  const reproduced = (v: TestVerdict): ReproDecision => ({
+    kind: "reproduced",
+    reproduction: v.failureMessage !== undefined ? { reproducedFailure: v.failureMessage } : {},
+  });
+  const fromNonVerdict = (nv: NonVerdictDecision): ReproDecision => {
+    const note = nv.failureNote ?? "the reproduction ended without a readable answer";
+    // I5: say the row came from the reproduction. Never in front of a strand's note, whose prefix
+    // `--resume` reads (`isStrandedNote`).
+    return error(
+      nv.cause,
+      nv.cause === "stranded" || note.includes(what) ? note : `${what}: ${note}`,
+      nv.transportError,
+    );
+  };
+  const push = (v: TestVerdict, opKind: "single" | "many", ref = v.ref) => {
+    testResultBuffer.push({
+      mutantCode: m.mutantId,
+      ref,
+      outcome: v.outcome,
+      durationMs: v.durationMs,
+      failureMessage: v.failureMessage,
+      opKind,
+      ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+    });
+    feedAttestation(args.attestation, v.attestation);
+  };
+  const classifyCtx = {
+    m,
+    leaseSession,
+    safety: args.safety,
+    quarantineStore: args.quarantineStore,
+    resourceKey: args.resourceKey,
+    nowIso: args.nowIso,
+    what,
+  };
+  const reusedNote = (v: TestVerdict) =>
+    `session-reused ${what}: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the reproduction started, so it did not run in the kill's context; the kill is unconfirmed (R577)`;
+
+  await activateOnce(args.backend, args.safety, m.mutantId);
+
+  if (k === 1) {
+    const r = await singleStep(
+      { backend: args.backend, safety: args.safety, leaseSession, emit: args.emit, resyncOpSeq },
+      killer,
+      { ms: step.testBudgetMs, source: step.testBudgetSource },
+    );
+    push(r.verdict, "single", killer);
+    const nonVerdict = await classifyNonVerdictStep(r, classifyCtx);
+    if (nonVerdict !== null) return fromNonVerdict(nonVerdict);
+    if (sessionWasReused(r.verdict)) return error("session-reused", reusedNote(r.verdict));
+    const want = timedOut ? "timeout" : "fail";
+    return r.verdict.outcome === want
+      ? reproduced(r.verdict)
+      : notReproduced(answered(r.verdict.outcome));
+  }
+
+  const out = await runFencedMany(
+    args.backend,
+    args.safety,
+    {
+      methods: step.chunkPrefix,
+      requestCeilingMs: step.callSettings.requestCeilingMs,
+      stopGraceMs: step.callSettings.stopGraceMs,
+    },
+    leaseSession,
+    args.emit,
+    resyncOpSeq,
+    m.mutantId,
+  );
+  const provenance = {
+    lostAck: out.lostAck,
+    retried: out.retried,
+    ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
+    ...(out.original !== undefined ? { original: out.original } : {}),
+  };
+  const prefix = step.chunkPrefix;
+  if (out.result.kind === "call") {
+    const { verdict, cause, abortSession, methodIndex } = out.result;
+    const j = Math.min(Math.max(methodIndex, 1), k);
+    push(verdict, "many");
+    const nonVerdict = await classifyNonVerdictStep(
+      {
+        ...provenance,
+        ref: verdict.ref,
+        verdict,
+        testBudgetMs: prefix[j - 1]?.budgetMs ?? 0,
+        testBudgetSource: step.testBudgetSource,
+        groupBudgetMs: step.callSettings.requestCeilingMs + step.callSettings.stopGraceMs,
+        opKind: "many",
+        ...(cause !== undefined ? { cause } : {}),
+        ...(abortSession !== undefined ? { abortSession } : {}),
+        groupPosition: j,
+        chunkPrefix: prefix.slice(0, j),
+        callSettings: step.callSettings,
+      },
+      classifyCtx,
+    );
+    if (nonVerdict !== null) return fromNonVerdict(nonVerdict);
+    if (verdict.outcome === "timeout") {
+      if (j < k) {
+        return notReproduced(
+          `${j}. ${verdict.ref.method} timed out first when LethAL replayed the same ${k} method(s) of its call under the mutant`,
+        );
+      }
+      return timedOut ? reproduced(verdict) : notReproduced(answered("timeout"));
+    }
+    return error(
+      "warm-confirmation-incomplete",
+      `warm-confirmation-incomplete ${what}: the replay answered at call level with outcome ${verdict.outcome}${verdict.failureMessage !== undefined ? ` (${verdict.failureMessage})` : ""}, which reproduces nothing (R577)`,
+    );
+  }
+  const { endedBy, ranCount, verdicts } = out.result;
+  for (const rv of verdicts) push(rv, "many");
+  const reusedIn = verdicts.find(sessionWasReused);
+  if (reusedIn !== undefined) return error("session-reused", reusedNote(reusedIn));
+  if (endedBy === "failure") {
+    const failed = verdicts[ranCount - 1];
+    if (ranCount < k) {
+      return notReproduced(
+        `${ranCount}. ${failed?.ref.method ?? "?"} failed first when LethAL replayed the same ${k} method(s) of its call under the mutant`,
+      );
+    }
+    if (failed !== undefined && ranCount === k && failed.outcome === "fail") {
+      return timedOut ? notReproduced(answered("fail")) : reproduced(failed);
+    }
+  }
+  if (endedBy === "cap") {
+    return error(
+      "warm-confirmation-incomplete",
+      `warm-confirmation-incomplete ${what}: the replay stopped at the server's cap after ${ranCount} of ${k} method(s), before reaching ${killer.method}; the kill is unconfirmed (R577)`,
+    );
+  }
+  if (
+    endedBy === "complete" &&
+    ranCount === k &&
+    verdicts.length === k &&
+    verdicts.every((rv) => rv.outcome === "pass")
+  ) {
+    return notReproduced(answered("pass"));
+  }
+  return error(
+    "warm-confirmation-incomplete",
+    `warm-confirmation-incomplete ${what}: the replay answered ${endedBy} with ${ranCount} of ${k} method(s), which reproduces nothing (R577)`,
+  );
+}
+
 /**
  * R206: what the covering loop and the warm confirmation's replay do with a step that carries NO
  * verdict (a lease answer, a lost ack, the group call's own per-mutant causes, our own deadline,
@@ -9667,6 +10292,12 @@ async function runMutantsOnBackend(args: {
      */
     let failureNote: string | undefined;
     let cause: MutantErrorCause | undefined;
+    // R577: set at a kill site when the kill reproduced (`record()`'s `reproduction`).
+    let reproduction: { readonly reproducedFailure?: string } | undefined;
+    // R577 (I4): the FIRST kill that did not reproduce. The covering loop goes on with the mutant
+    // active; a later test that kills and reproduces makes it `killed`, a later error keeps that
+    // error, and a loop that ends with no other verdict records this one.
+    let notReproduced: KillErrorDecision | undefined;
     // Fix round 2, residual 1 (events.ts doc comment): the exact instant the kill-confirmation
     // loop below decides `cause: "unstable"` because a HUB-green test failed on the FENCE is also
     // the exact instant it knows WHICH test disagreed — captured here so the eventual `record()`
@@ -9773,6 +10404,24 @@ async function runMutantsOnBackend(args: {
           message: `[lethal] alrunner-timeout-wording-unrecognised: al-runner stopped ${ref.method} (mutant ${m.mutantId}) at its timeout but the row's message is neither known timeout wording (${v.failureMessage ?? "no message"}); such hangs are scored runner-test-error, not timeout-killed, until RUNNER_TIMEOUT_MESSAGE / RUNNER_ONRUN_TIMEOUT_MESSAGE learn it (R534)`,
         });
       }
+      // R577: the reproduction, after a kill's confirmation passed; `undefined` with the rule off,
+      // which leaves every kill site exactly as it was.
+      const reproduce = (): Promise<ReproDecision | undefined> =>
+        args.backend.killsMustReproduce === true
+          ? reproduceKill({ args, m, step, leaseSession, resyncOpSeq, testResultBuffer })
+          : Promise.resolve(undefined);
+      // R577: a kill that did not reproduce. `true`: the covering loop goes on (I4).
+      const notKilled = (r: KillErrorDecision): boolean => {
+        if (r.cause === "kill-not-reproduced") {
+          notReproduced ??= r;
+          return true;
+        }
+        verdict = "error";
+        cause = r.cause;
+        failureNote = r.failureNote;
+        if (r.transportError) transportErrorRef = ref;
+        return false;
+      };
       // R206: every non-verdict ending (a lease answer, a lost ack, a group cause, our own
       // deadline, a transport error) is classified by `classifyNonVerdictStep`, the same branches
       // the warm confirmation's replay is classified by. `null` means a real outcome, decided below.
@@ -9839,6 +10488,12 @@ async function runMutantsOnBackend(args: {
             testResultBuffer,
           });
           if (warm.kind === "confirmed") {
+            const repro = await reproduce();
+            if (repro?.kind === "error") {
+              if (notKilled(repro)) continue;
+              break;
+            }
+            reproduction = repro?.reproduction;
             verdict = "timeout-killed";
             killingTest = ref.method;
             killingTestRef = ref;
@@ -9870,6 +10525,12 @@ async function runMutantsOnBackend(args: {
           testResultBuffer,
         });
         if (warm.kind === "confirmed") {
+          const repro = await reproduce();
+          if (repro?.kind === "error") {
+            if (notKilled(repro)) continue;
+            break;
+          }
+          reproduction = repro?.reproduction;
           verdict = "killed";
           killingTest = ref.method;
           killingTestRef = ref;
@@ -10070,6 +10731,14 @@ async function runMutantsOnBackend(args: {
             }
             break;
           }
+          // R577: the kill must reproduce under the mutant, at the budget `v` was sent, before it
+          // is a kill and before R197's ledger learns from it.
+          const repro = await reproduce();
+          if (repro?.kind === "error") {
+            if (notKilled(repro)) continue;
+            break;
+          }
+          reproduction = repro?.reproduction;
           verdict = timedOut ? "timeout-killed" : "killed";
           killingTest = ref.method;
           killingTestRef = ref;
@@ -10121,6 +10790,14 @@ async function runMutantsOnBackend(args: {
         break;
       }
     }
+    // R577 (I4): the loop ended with no other verdict after a kill that did not reproduce, so the
+    // mutant is that error, never `survived`. Before R198's check below, which guards survivors
+    // only: a group timeout's earlier methods are never in `attempted`, and this is no survivor.
+    if (verdict === "survived" && notReproduced !== undefined) {
+      verdict = "error";
+      cause = notReproduced.cause;
+      failureNote = notReproduced.failureNote;
+    }
     // R198: a survivor is a mutant EVERY covering test ran against. On the group path a chunking
     // bug could skip tests and still answer all-pass; on the sequential path the set is complete
     // by construction. Checked here, before anything is recorded.
@@ -10171,6 +10848,7 @@ async function runMutantsOnBackend(args: {
       killPosition,
       reach,
       killingTestRef,
+      reproduction,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -10867,6 +11545,9 @@ function replayCarriedBatch(
       prior.killingTestFailure,
       prior.unplaceable,
       prior.killPosition,
+      undefined, // reach
+      undefined, // killingTestRef
+      carriedReproduction(prior),
     );
   }
   emit({
@@ -10883,6 +11564,14 @@ function replayCarriedBatch(
     unplaceableCount: unplaceable.length,
     unplaceableMutants: unplaceable.sort(),
   });
+}
+
+/** R577: `record()`'s `reproduction` argument for a carried verdict: its prior row's, unchanged. */
+function carriedReproduction(
+  c: CarriedVerdict,
+): { readonly reproducedFailure?: string } | undefined {
+  if (c.killReproduced !== true) return undefined;
+  return c.reproducedFailure !== undefined ? { reproducedFailure: c.reproducedFailure } : {};
 }
 
 export function record(
@@ -10963,8 +11652,21 @@ export function record(
   // `--resume`'s replays, which carry no ref. `SessionOutcome`-only: NOT written to the store and
   // NOT put on `mutant-scored`/`mutant-carried`, so no event or report field moves.
   killingTestRef?: TestMethodRef,
+  // R577: present iff the kill REPRODUCED under the mutant (`MutantOutcome.killReproduced`), with
+  // the reproduction's own text when it had one. Passed by the covering loop's kill sites when the
+  // backend has the rule on, and by the two resume replays, which carry a prior row's unchanged.
+  reproduction?: { readonly reproducedFailure?: string },
 ): number {
   const key = identityKeyOf(m);
+  const reproduced =
+    reproduction !== undefined
+      ? {
+          killReproduced: true as const,
+          ...(reproduction.reproducedFailure !== undefined
+            ? { reproducedFailure: reproduction.reproducedFailure }
+            : {}),
+        }
+      : {};
   const mutantRowId = store.recordMutant(runId, {
     mutantCode: m.mutantId,
     astHash: key.astHash,
@@ -10982,6 +11684,7 @@ export function record(
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(killPosition !== undefined ? { killPosition } : {}),
+    ...reproduced,
     ...(runner !== undefined ? { runner } : {}),
     // R192: always written, `[]` included — an explicit empty list is "no test ran this", while
     // NULL (a pre-R192 row) is "unknown", and `batchCarriesEntirely` refuses to skip on unknown.
@@ -11012,6 +11715,7 @@ export function record(
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(killPosition !== undefined ? { killPosition } : {}),
+    ...reproduced,
     ...(cause !== undefined ? { cause } : {}),
     ...(runner !== undefined ? { runner } : {}),
   });
@@ -11032,6 +11736,7 @@ export function record(
       ...(failureNote !== undefined ? { failureNote } : {}),
       ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
       ...(killPosition !== undefined ? { killPosition } : {}),
+      ...reproduced,
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
       ...(runner !== undefined ? { runner } : {}),
@@ -11054,6 +11759,7 @@ export function record(
       ...(failureNote !== undefined ? { failureNote } : {}),
       ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
       ...(killPosition !== undefined ? { killPosition } : {}),
+      ...reproduced,
       ...(cause !== undefined ? { cause } : {}),
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),

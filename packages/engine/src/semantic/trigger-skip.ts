@@ -1,3 +1,4 @@
+import { argumentList } from "../ast/arguments";
 import { ALNodeKind } from "../ast/node-kinds";
 import { type ALSyntaxNode, visit } from "../ast/syntax-node";
 import { liveMembers } from "../ast/tree-walks";
@@ -344,15 +345,18 @@ function textObserves(
  * R485: an `[EventSubscriber(...)]` whose target MAY be one of `tableNames`, whatever its event.
  * Only a subscriber proven to target something else is `false`: an object type read as other than
  * `Table`, or a `Database::` name or bare id read as another table. Anything unreadable (no
- * arguments, an object type or target of another shape) counts as this table.
+ * arguments, an object type or target of another shape) counts as this table. R567: comments are
+ * not arguments (`argumentList`). A `#pragma` among them (unreadable) needs no rule of its own: a
+ * pragma is never a `qualified_enum_value`, `database_reference` or `integer`, so a position it
+ * shifts reads as "another shape", which counts as this table.
  */
 function subscribesToTable(content: ALSyntaxNode, tableNames: ReadonlySet<string>): boolean {
   if (content.childForFieldName("name")?.text.toLowerCase() !== "eventsubscriber") return false;
-  const args = content
+  const list = content
     .childForFieldName("arguments")
-    ?.namedChildren.find((c) => c.rawKind === "attribute_argument_list")?.namedChildren;
-  if (args === undefined) return true;
-  const [objectType, target] = args;
+    ?.namedChildren.find((c) => c.rawKind === "attribute_argument_list");
+  if (list === undefined) return true;
+  const [objectType, target] = argumentList(list);
   if (objectType?.rawKind === "qualified_enum_value") {
     const value = objectType.childForFieldName("value")?.text.replace(/"/g, "").toLowerCase();
     if (value !== undefined && value !== "table") return false;

@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
@@ -14,6 +14,7 @@ import {
   planArtifacts,
 } from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R421: discovered paths are normalised to `/` ONCE, at discovery, so a project gives the same
@@ -26,8 +27,8 @@ import { identityKeyOf, serializeKey } from "../src/selection";
  */
 
 const dirs: string[] = [];
-afterAll(async () => {
-  for (const d of dirs) await rm(d, { recursive: true, force: true });
+afterAll(() => {
+  for (const d of dirs) removeScratchDir(d);
 });
 
 async function tempDir(): Promise<string> {

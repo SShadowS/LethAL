@@ -48,7 +48,7 @@ import { fileURLToPath } from "node:url";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import type { EventSubscriber } from "../src/events";
@@ -62,7 +62,8 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
+import { HANG_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   type QuarantineDiagnostic,
@@ -85,6 +86,7 @@ const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-hang");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-hang-tests");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
 /**
  * R-204b: the SINGLE leg's committed per-mutant baseline (R332: refused when missing, recorded
  * once with `LETHAL_ITEST_RECORD_BASELINE=hang.single.baseline.json`, exit 3, never a pass). The ON
@@ -102,7 +104,7 @@ const SELECTOR_IDS = { selectorId: 79447, controlId: 79448, tableId: 79449 };
  * terminating mutants' measured cost (66-141 ms, three orders of magnitude of headroom) and far
  * below anything that would make a slow-but-correct mutant look like a hang.
  */
-const BUDGET_MS = 20_000;
+const BUDGET_MS = HANG_FIGURES.budgetMs;
 /** `RunMutantRequest.stopGraceMs`'s default — how long the held request waits after the stop. */
 const STOP_GRACE_MS = 30_000;
 
@@ -220,7 +222,7 @@ const EXPECTED_ON: ReadonlyArray<{
 ];
 
 /** R206: the warm kills of the ON leg, all in the new arm: three warm fails and one warm timeout. */
-const EXPECTED_WARM_KILLS = 4;
+const EXPECTED_WARM_KILLS = HANG_FIGURES.warmKills;
 
 /**
  * R516: the cold confirms of the position-1 timeouts, pinned as NUMBERS, never read back from the
@@ -228,8 +230,8 @@ const EXPECTED_WARM_KILLS = 4;
  * ON: lines 37, 43, 44 and 73 (line 145 is at position 2 and is confirmed by its replay instead).
  * SINGLE: the same four plus line 145, every call holding one method.
  */
-const EXPECTED_COLD_CONFIRMS_ON = 4;
-const EXPECTED_COLD_CONFIRMS_SINGLE = 5;
+const EXPECTED_COLD_CONFIRMS_ON = HANG_FIGURES.coldConfirmsOn;
+const EXPECTED_COLD_CONFIRMS_SINGLE = HANG_FIGURES.coldConfirmsSingle;
 
 /**
  * R516: every position-1 timeout is confirmed by ONE unmutated `RunMutant` call before it is
@@ -367,6 +369,7 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -375,7 +378,7 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
     defaultDeployerIo,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -387,6 +390,7 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
       mcpCommand: bcdev.mcpCommand,
       project: PROJECT_DIR,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
       packageCachePath: bcdev.packageCachePath,

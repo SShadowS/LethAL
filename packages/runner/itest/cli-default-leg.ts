@@ -3,7 +3,8 @@
  *
  * The leg builds its backend through `buildBackend` (cli.ts) with an `alRunner` section that sets
  * no transport key, so it measures what a CLI user gets with no config. Its verdict table cannot
- * tell the fast path from the one-shot static path (both reach 3 / 16 / 0), so the leg also records,
+ * tell the fast path from the one-shot static path (both reach 3 / 12 / 4 since R394 turned
+ * coverage on by default; 3 / 16 / 0 before), so the leg also records,
  * independently of the config:
  * - every al-runner spawn, through `buildBackend`'s injectable `deps` spawns: exactly one `--server`
  *   daemon per backend, and no one-shot call except the exact argvs `expectedOneShotArgvs` allows;
@@ -33,28 +34,37 @@ import {
   parseAlRunnerPlatformAppsDir,
 } from "../src/al-runner-transport";
 import type { ExecutionBackend } from "../src/backend";
+import type { RunEvent } from "../src/events";
 import type { SpawnFn } from "../src/publisher";
 import type { SessionReport } from "../src/report";
 
 export const CLI_DEFAULT_SPEC =
   "docs/superpowers/specs/2026-10-01-r387-cli-default-leg-precommitment.md";
 
-/** The file whose mutants are `no-coverage` in leg A and `survived` here (coverage is off). */
-const PRICING_FILE = "SandboxPricing.Codeunit.al";
+/** R394: the pre-commitment that moved the leg's verdict table when coverage went on by default. */
+export const CLI_DEFAULT_COVERAGE_SPEC =
+  "docs/superpowers/specs/2026-10-11-r394-coverage-default-precommitment.md";
 
 export interface SpawnRecord {
   readonly oneShotArgv: string[][];
   readonly serverArgv: string[][];
   /** Everything every daemon wrote to stderr, for the platform-app directory it names, if any. */
   serverStderr: string;
+  /** R577: the `runTests` requests written to every daemon: one per whole-suite run. */
+  serverRunTests: number;
 }
 
-/** Wraps the real spawns so the leg sees every argv and the daemons' stderr. */
+/** Wraps the real spawns so the leg sees every argv, the daemons' stderr and their suite runs. */
 export function recordSpawns(
   oneShot: SpawnFn,
   server: ServerSpawnFn,
 ): { record: SpawnRecord; spawn: SpawnFn; serverSpawn: ServerSpawnFn } {
-  const record: SpawnRecord = { oneShotArgv: [], serverArgv: [], serverStderr: "" };
+  const record: SpawnRecord = {
+    oneShotArgv: [],
+    serverArgv: [],
+    serverStderr: "",
+    serverRunTests: 0,
+  };
   const spawn: SpawnFn = (argv, opts) => {
     record.oneShotArgv.push([...argv]);
     return oneShot(argv, opts);
@@ -71,7 +81,11 @@ export function recordSpawns(
         }
       },
     };
-    const teed: ServerProcessHandle = { ...handle, stderr };
+    const write = (line: string): void => {
+      if (line.includes('"command":"runTests"')) record.serverRunTests += 1;
+      handle.write(line);
+    };
+    const teed: ServerProcessHandle = { ...handle, stderr, write };
     return teed;
   };
   return { record, spawn, serverSpawn };
@@ -132,6 +146,26 @@ export function watchResourceSelector(
     ev.alHashes.add(await alHash(activeDir));
   };
   return ev;
+}
+
+/**
+ * R583: a `selectorMode: "resource"` leg's proof that the resource channel ran, from
+ * `watchResourceSelector`. Every such leg is ONE batch, so: at least one deploy and activation, no
+ * problem (each deploy left the resource file, each activation wrote its id there) and exactly one
+ * distinct `*.al` text, i.e. one compile. Empty means it ran. A leg whose selector silently went
+ * static would leave no resource file and a new `*.al` text per mutant.
+ */
+export function resourceLegFailures(ev: ResourceEvidence): string[] {
+  const out: string[] = [];
+  if (ev.deploys === 0) out.push("resource: no deploy() was observed");
+  if (ev.activations === 0) out.push("resource: no activate() was observed");
+  out.push(...ev.problems.map((p) => `resource: ${p}`));
+  if (ev.alHashes.size !== 1) {
+    out.push(
+      `resource: the bundle's *.al text took ${ev.alHashes.size} distinct value(s) over ${ev.activations} activation(s); a one-batch resource leg compiles once`,
+    );
+  }
+  return out;
 }
 
 /**
@@ -224,6 +258,72 @@ export function cliDefaultMechanismFailures(
   return out;
 }
 
+const TEST_SELECTOR_CODE = "al-runner-test-selector";
+
+/**
+ * R551 I3: the cli-default leg runs under `--server`, where the `--test-exact` probe must not spawn,
+ * so its session emits NO `al-runner-test-selector` warning. Non-vacuous: a hook that received no
+ * event at all proves nothing, so that fails too.
+ */
+export function cliDefaultSelectorFailures(events: readonly RunEvent[]): string[] {
+  if (events.length === 0) {
+    return [
+      "selector: the cli-default leg's emit hook received nothing; the zero is vacuous (R551)",
+    ];
+  }
+  const n = events.filter((e) => e.type === "warning" && e.code === TEST_SELECTOR_CODE).length;
+  return n === 0
+    ? []
+    : [`selector: expected no ${TEST_SELECTOR_CODE} warning under --server, saw ${n} (R551)`];
+}
+
+/**
+ * R551: the selector lines one `runOnce` leg's session emitted. Exactly one on a one-shot leg, none
+ * on a `--server` or resource leg. The VALUE is printed by the gate, not asserted here.
+ */
+export function testSelectorLineFailures(lines: readonly string[], oneShot: boolean): string[] {
+  const want = oneShot ? 1 : 0;
+  return lines.length === want
+    ? []
+    : [
+        `selector: expected ${want} ${TEST_SELECTOR_CODE} warning(s) on a ${oneShot ? "one-shot" : "--server/resource"} leg, saw ${lines.length}: ${JSON.stringify(lines)} (R551)`,
+      ];
+}
+
+/**
+ * R558: the report's `executionContexts[].testSelector` per leg. A one-shot leg records it on every
+ * measured context (either value: the gate prints R551's warning line, from the same probe result), with
+ * `testSelectorReason` exactly when it is `substring-with-excludes`. A `--server` leg (server,
+ * resource, cli-default) records it on none. A one-shot leg with no measured context fails: an
+ * absent field there would prove nothing.
+ */
+export function reportTestSelectorFailures(report: SessionReport, oneShot: boolean): string[] {
+  const contexts = report.validity.executionContexts;
+  if (!oneShot) {
+    const recorded = contexts.filter((c) => c.testSelector !== undefined);
+    return recorded.length === 0
+      ? []
+      : [
+          `selector: a --server leg recorded testSelector (${recorded.map((c) => c.testSelector).join(", ")}), but --server never probes (R558)`,
+        ];
+  }
+  const measured = contexts.filter((c) => c.verdictCount > 0 && !c.basis.includes("carried"));
+  if (measured.length === 0) {
+    return ["selector: the one-shot leg has no measured execution context to check (R558)"];
+  }
+  return measured.flatMap((c) => {
+    if (c.testSelector === undefined) {
+      return [`selector: a one-shot ${c.runner} context recorded no testSelector (R558)`];
+    }
+    const wantReason = c.testSelector === "substring-with-excludes";
+    return wantReason === (c.testSelectorReason !== undefined)
+      ? []
+      : [
+          `selector: testSelector ${c.testSelector} with testSelectorReason ${JSON.stringify(c.testSelectorReason)} (R558: a reason exactly with substring-with-excludes)`,
+        ];
+  });
+}
+
 /** What two legs are compared on, per mutant. */
 export interface LegRow {
   readonly mutantCode: string;
@@ -237,21 +337,13 @@ export function legShape(r: SessionReport): LegRow[] {
     .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode));
 }
 
-/** The pre-committed table, derived from leg A: only `SandboxPricing`'s rows change. */
+/**
+ * The pre-committed table: leg A's, per mutant (CLI_DEFAULT_COVERAGE_SPEC). Under R387 coverage was
+ * off by default and `SandboxPricing`'s four rows read `survived` here; since R394 the default is
+ * on, so they are `no-coverage` as in leg A and every row equals leg A's.
+ */
 export function expectedCliDefaultShape(legA: SessionReport): LegRow[] {
-  const pricing = new Set(
-    legA.mutants.filter((m) => m.file.endsWith(PRICING_FILE)).map((m) => m.mutantCode),
-  );
-  if (pricing.size !== 4) {
-    throw new Error(
-      `R387: leg A holds ${pricing.size} ${PRICING_FILE} mutants; ${CLI_DEFAULT_SPEC} pre-committed 4`,
-    );
-  }
-  return legShape(legA).map((row) =>
-    pricing.has(row.mutantCode)
-      ? { mutantCode: row.mutantCode, verdict: "survived", killingTest: undefined }
-      : row,
-  );
+  return legShape(legA);
 }
 
 /**

@@ -92,7 +92,7 @@ async function project(files: Record<string, string>): Promise<string> {
     join(dir, "app.json"),
     JSON.stringify({
       id: "11111111-1111-1111-1111-111111111111",
-      runtime: "13.0",
+      runtime: "17.0", // R583: the default resource selector is refused below 14.0
       idRanges: [{ from: 50000, to: 79999 }],
     }),
     "utf8",
@@ -193,7 +193,8 @@ async function pairBundle(): Promise<string> {
   await writeFile(join(d, PAIR_FILE), PAIR, "utf8");
   await writeFile(join(d, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
   // buildBackend's default selector mode (resource, R387) declares its folder in the bundle's app.json.
-  await writeFile(join(d, "app.json"), JSON.stringify({ id: "1", runtime: "13.0" }), "utf8");
+  // R583: 17.0, since the resource selector is refused below 14.0.
+  await writeFile(join(d, "app.json"), JSON.stringify({ id: "1", runtime: "17.0" }), "utf8");
   await writeFile(
     join(d, "mutant-manifest.json"),
     JSON.stringify({

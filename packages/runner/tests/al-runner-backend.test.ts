@@ -1,22 +1,27 @@
 import { describe, expect, jest, test } from "bun:test";
 import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { initParser } from "@lethal/engine";
 import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
 import {
   AL_RUNNER_UNCLASSIFIED_ERROR,
+  AL_RUNNER_UNDECIDED_ARM_MISSING,
   AlRunnerBackend,
   AlRunnerServerStopUnsetError,
+  AlRunnerTestNameError,
   parseReportedStopMs,
   verdictFromRunnerTest,
 } from "../src/al-runner-backend";
 import type { ServerSpawnFn } from "../src/al-runner-server";
 import type { TestVerdict } from "../src/backend";
+import { refusalLine } from "../src/cli";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import { runOnce } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
 import { SessionSafety } from "../src/session-safety";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
+import { fakeAlRunnerServer } from "./helpers/fake-al-runner-server";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -917,6 +922,20 @@ describe("AlRunnerBackend serverMode (R220)", () => {
     expect([backend.inRunStopIsBudget, oneShot.inRunStopIsBudget]).toEqual([false, true]);
   });
 
+  test("R577: a kill must reproduce on al-runner, on --server and one-shot alike", async () => {
+    const { backend } = await serverBackend([]);
+    const oneShot = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: "/x",
+        testDir: "/tests",
+        selectorObjectId: 50000,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+    expect([backend.killsMustReproduce, oneShot.killsMustReproduce]).toEqual([true, true]);
+  });
+
   test("runs the suite ONCE per activation and serves every test from it", async () => {
     // This is the whole economics of the mode. The server has no per-test filter, so `runTests`
     // runs everything; caching per activation is what turns T calls into one suite run. Without
@@ -982,15 +1001,17 @@ describe("AlRunnerBackend serverMode (R220)", () => {
     await backend.close();
   });
 
-  test("a test the suite never reported is an error naming both sides, not a silent pass", async () => {
+  test("a test the suite never reported is a refusal naming both sides, not a silent pass", async () => {
+    // R557: on a CLEAN answer (exit 0, every row a pass run row) a missing test stops the session
+    // (`AlRunnerTestNameError`) rather than reading as a per-test `error`; it still names both sides.
     const { backend } = await serverBackend([{ name: "Codeunit79100.A", status: "pass" }]);
-    const v = await backend.run(
+    const p = backend.run(
       { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "Missing" },
       { coverage: "none", timeoutMs: 1000 },
     );
-    expect(v.outcome).toBe("error");
-    expect(v.failureMessage).toContain("Codeunit79100.Missing");
-    expect(v.failureMessage).toContain("Codeunit79100.A");
+    await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+    await expect(p).rejects.toThrow(/Codeunit79100\.Missing/);
+    await expect(p).rejects.toThrow(/Codeunit79100\.A\b/);
     await backend.close();
   });
 
@@ -1060,7 +1081,8 @@ describe("AlRunnerBackend serverMode (R220)", () => {
       await server.run(ref, { coverage: "none", timeoutMs: 1000 });
       await server.close();
 
-      const oneShotSpawn = okSpawn({ tests: [] });
+      // R557: the one-shot fake answers with A's row: a run with no row for A now stops by name.
+      const oneShotSpawn = okSpawn({ tests: [{ name: "Codeunit79100.A", status: "pass" }] });
       const oneShot = new AlRunnerBackend(
         {
           alRunnerPath: "al-runner",
@@ -1857,7 +1879,7 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       await backend.close();
     });
 
-    test("T6: a covering test with no row after a hung one is runner-test-error, presumed, sent once; with no hung row it stays pre-dispatch-rejected and is retried", async () => {
+    test("T6: a covering test with no row after a hung one is runner-test-error, presumed, sent once; with no hung row (a clean answer) it stops by name, sent once (R557)", async () => {
       const fake = hungOnce(true);
       const backend = serverOn(fake.spawn);
       await backend.activate("M0001");
@@ -1873,7 +1895,9 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       expect(c.runs()).toBe(1);
       await backend.close();
 
-      // Control: the same missing row with no hung test in the suite.
+      // Control: the same missing row with no hung test in the suite. Before R557 that was a
+      // per-test `error`, retried once. R557 (I1): the answer is CLEAN (exit 1, every row a pass
+      // run row), so a missing row stops the session by name, sent once and never retried.
       const plain = daemons((_d, _r, emit) => {
         emit({ type: "test", name: "Codeunit79100.A", status: "pass", durationMs: 5 });
         emit(summary(1));
@@ -1882,13 +1906,10 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       const other = serverOn(plain.spawn);
       await other.activate("M0001");
       const o = counted(other);
-      const missing = await runOnce(other, new SessionSafety(), t("Later"), run);
-      expect([missing.outcome, missing.operation, missing.runnerRow]).toEqual([
-        "error",
-        "pre-dispatch-rejected",
-        undefined,
-      ]);
-      expect(o.runs()).toBe(2);
+      await expect(runOnce(other, new SessionSafety(), t("Later"), run)).rejects.toBeInstanceOf(
+        AlRunnerTestNameError,
+      );
+      expect(o.runs()).toBe(1);
       await other.close();
     });
 
@@ -2210,5 +2231,354 @@ describe("AlRunnerBackend: an answered row never aborts (R534)", () => {
       "runner-test-error",
       undefined,
     ]);
+  });
+});
+
+/**
+ * R557: al-runner names a test row by BC's C# identifier for the AL method (`"Dash-Step"` ->
+ * `Dasha45Step`), so LethAL sends and looks up that name; a session-suite test al-runner has no row
+ * for stops the session by name (`AlRunnerTestNameError`), within I1's and I3's limits.
+ */
+describe("AlRunnerBackend: al-runner's test names (R557)", () => {
+  const T = { codeunitId: 78850, codeunitName: "Names Tests" };
+  const dash = { ...T, method: "Dash-Step" };
+  const space = { ...T, method: "Space Step" };
+  const plain = { ...T, method: "PlainControl" };
+  const DASH = "Codeunit78850.Dasha45Step";
+  const PLAIN = "Codeunit78850.PlainControl";
+  const opts = { coverage: "none", timeoutMs: 5000 } as const;
+  const noneSelected = (calls: string[][]): SpawnFn => {
+    return async (argv) => {
+      calls.push([...argv]);
+      return {
+        exitCode: 6,
+        stdout: alRunnerStdout({
+          tests: [],
+          passed: 0,
+          failed: 0,
+          errors: 0,
+          total: 0,
+          exitCode: 6,
+        }),
+        stderr: `--test ${argv[argv.indexOf("--test") + 1]} selected no test in this run\n`,
+      };
+    };
+  };
+
+  test("AlRunnerTestNameError extends Error directly, is named, and the CLI prints it by name", () => {
+    const err = new AlRunnerTestNameError(
+      [{ alName: "Names Tests.Dash-Step", sent: DASH }],
+      "28.5.54151.55132",
+    );
+    expect(Object.getPrototypeOf(AlRunnerTestNameError.prototype)).toBe(Error.prototype);
+    expect(err.name).toBe("AlRunnerTestNameError");
+    const line = refusalLine(err);
+    expect(line).toStartWith("AlRunnerTestNameError: ");
+    for (const s of ["Names Tests.Dash-Step", DASH, "28.5.54151.55132", "R557"]) {
+      expect(line).toContain(s);
+    }
+    expect(line).toContain(
+      "al-runner's naming rule moved, or this build does not compile that test",
+    );
+  });
+
+  test("T2: the exact path sends --test and --test-exact with the mangled name, and credits the caller's ref", async () => {
+    const { calls, spawn } = okSpawn({ tests: [{ name: DASH, status: "pass", durationMs: 1 }] });
+    const { backend } = await makeBackend(spawn);
+    backend.useExactTestSelector(true);
+    const v = await backend.run(dash, opts);
+    expect(v.outcome).toBe("pass");
+    expect(v.ref).toEqual(dash);
+    const argv = calls[0] ?? [];
+    expect(argv[argv.indexOf("--test") + 1]).toBe(DASH);
+    expect(argv[argv.indexOf("--test-exact") + 1]).toBe(DASH);
+  });
+
+  test("T3a: one-shot exit 6 with an empty envelope stops with AlRunnerTestNameError, after 1 spawn", async () => {
+    const calls: string[][] = [];
+    const { backend } = await makeBackend(noneSelected(calls));
+    backend.useExactTestSelector(true);
+    backend.useSessionTests([dash, plain], []);
+    const p = runOnce(backend, new SessionSafety(), dash, opts);
+    await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+    await expect(p).rejects.toThrow(/Names Tests\.Dash-Step/);
+    await expect(p).rejects.toThrow(/Codeunit78850\.Dasha45Step/);
+    await expect(p).rejects.toThrow(/R557/);
+    expect(calls.length).toBe(1);
+  });
+
+  test("T3b: the R488 path's exit 0 with zero rows gives the same refusal", async () => {
+    const { calls, spawn } = okSpawn({ tests: [] });
+    const { backend } = await makeBackend(spawn);
+    backend.useSessionTests([dash, plain], []);
+    const p = runOnce(backend, new SessionSafety(), dash, opts);
+    await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+    await expect(p).rejects.toThrow(/Names Tests\.Dash-Step.*Codeunit78850\.Dasha45Step/s);
+    expect(calls.length).toBe(1);
+  });
+
+  test("T3c: exit 1 with only stderr is still an error, and a fail row named wanted is still a kill", async () => {
+    const broken: SpawnFn = async () => ({ exitCode: 1, stdout: "", stderr: "boom\n" });
+    const b1 = await makeBackend(broken);
+    b1.backend.useSessionTests([dash], []);
+    const v = await b1.backend.run(dash, opts);
+    expect(v.outcome).toBe("error");
+    const b2 = await makeBackend(
+      okSpawn({ tests: [{ name: DASH, status: "fail", message: "DashStep(5) must be 6" }] }, 1)
+        .spawn,
+    );
+    b2.backend.useSessionTests([dash], []);
+    expect((await b2.backend.run(dash, opts)).outcome).toBe("fail");
+  });
+
+  test("T3d: exit 6 for an undecided-kept test keeps a prefixed error, no throw (I3)", async () => {
+    const calls: string[][] = [];
+    const { backend } = await makeBackend(noneSelected(calls));
+    backend.useExactTestSelector(true);
+    backend.useSessionTests([dash, plain], [dash]);
+    const v = await backend.run(dash, opts);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage?.startsWith(AL_RUNNER_UNDECIDED_ARM_MISSING)).toBe(true);
+    expect(v.operation).toBe("pre-dispatch-rejected");
+  });
+
+  test("the stop's message also names the R392 cause: an `#if` arm LethAL decided compiled-in that al-runner compiled out", () => {
+    const m = new AlRunnerTestNameError([
+      { alName: "Names Tests.Dash-Step", sent: "Codeunit78850.Dasha45Step" },
+    ]).message;
+    expect(m).toContain("#if");
+    expect(m).toContain("R392");
+    expect(m).toContain("R557");
+  });
+
+  test("T5: on the R488 path the FIRST call for `Twin Pair` excludes Twin_PairLong by its al-runner name", async () => {
+    const twin = { ...T, method: "Twin Pair" };
+    const { calls, spawn } = okSpawn({
+      tests: [{ name: "Codeunit78850.Twin_Pair", status: "pass", durationMs: 1 }],
+    });
+    const { backend } = await makeBackend(spawn);
+    backend.useDiscoveredTests([twin, { ...T, method: "Twin_PairLong" }, plain]);
+    expect((await backend.run(twin, opts)).outcome).toBe("pass");
+    const first = calls[0] ?? [];
+    expect(first[first.indexOf("--test") + 1]).toBe("Codeunit78850.Twin_Pair");
+    expect(first[first.indexOf("--exclude-test") + 1]).toBe("Codeunit78850.Twin_PairLong");
+    expect(first.filter((a) => a === "--exclude-test").length).toBe(1);
+  });
+
+  describe("--server", () => {
+    const CALC_AL = `codeunit 78800 "Names Calc"
+{
+    procedure DashStep(x: Integer): Integer
+    begin
+        exit(x + 1);
+    end;
+}
+`;
+    async function server(
+      rows: Array<{ name: string; status: string; message?: string }>,
+      extra: { exitCode?: number; perTestCoverage?: readonly unknown[]; coverage?: boolean } = {},
+    ): Promise<AlRunnerBackend> {
+      const dir = scratch("lethal-r557-srv-");
+      await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+      await writeFile(join(dir, "NamesCalc.Codeunit.al"), CALC_AL, "utf8");
+      const fake = fakeAlRunnerServer(rows, {
+        ...(extra.exitCode !== undefined ? { exitCode: extra.exitCode } : {}),
+        ...(extra.perTestCoverage !== undefined ? { perTestCoverage: extra.perTestCoverage } : {}),
+      });
+      const backend = new AlRunnerBackend(
+        {
+          alRunnerPath: "al-runner",
+          instrumentedDir: dir,
+          testDir: "/tests",
+          selectorObjectId: 50000,
+          serverMode: true,
+          ...(extra.coverage === true ? { coverage: "al-runner" as const } : {}),
+        },
+        okSpawn({ tests: [] }).spawn,
+        fake.spawn,
+      );
+      backend.useBuildSymbols([]);
+      backend.useMutantBudgetFloor(180_000, 120_000);
+      return backend;
+    }
+
+    test("T4a: a mangled row and its perTestCoverage are found, so coverage is attached", async () => {
+      await initParser();
+      const backend = await server([{ name: DASH, status: "pass" }], {
+        coverage: true,
+        perTestCoverage: [
+          {
+            test: DASH,
+            coverage: [
+              {
+                file: "NamesCalc.Codeunit.al",
+                statements: [{ line: 5, hits: 1, scope: "DashStep" }],
+              },
+            ],
+          },
+        ],
+      });
+      backend.useSessionTests([dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("pass");
+        expect((v.coverage?.entries ?? []).map((e) => e.procedure)).toEqual(["DashStep"]);
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("T4b: a clean answer missing a session-suite test stops, listing only missing SESSION-SUITE tests", async () => {
+      const backend = await server([{ name: PLAIN, status: "pass" }]);
+      backend.useDiscoveredTests([dash, space, plain, { ...T, method: "Gone Step" }]);
+      backend.useSessionTests([dash, space, plain], []);
+      try {
+        const p = backend.run(dash, opts);
+        await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+        const err = (await p.catch((e: unknown) => e)) as Error;
+        expect(err.message).toContain("Names Tests.Dash-Step");
+        expect(err.message).toContain("Codeunit78850.Dasha45Step");
+        expect(err.message).toContain("Names Tests.Space Step");
+        expect(err.message).toContain("Codeunit78850.Space_Step");
+        expect(err.message).not.toContain("Gone Step");
+        expect(err.message).not.toContain("Gone_Step");
+        expect(err.message).not.toContain("Names Tests.PlainControl");
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("T4c: a miss after a hung test stays R534's runner-test-error", async () => {
+      const backend = await server([
+        { name: PLAIN, status: "error", message: "Test exceeded 5s timeout." },
+      ]);
+      backend.useSessionTests([plain, dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+      } finally {
+        await backend.close();
+      }
+    });
+
+    // R557 (I2): the unclean tests below keep their pass row in ANOTHER codeunit, so the missing
+    // test's own codeunit has no run row: only then is an unclean answer a per-test error.
+    const other = { codeunitId: 78851, codeunitName: "Other Tests", method: "Fine" };
+    const OTHER = "Codeunit78851.Fine";
+
+    test("T4d: exit 3 with an emit-excluded `Names Tests.Dash-Step` row is an error listing it (I1)", async () => {
+      const backend = await server(
+        [
+          { name: OTHER, status: "pass" },
+          { name: "Names Tests.Dash-Step", status: "skipped", message: "not compiled" },
+        ],
+        { exitCode: 3 },
+      );
+      backend.useSessionTests([other, dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("error");
+        expect(v.failureMessage).toContain("Names Tests.Dash-Step");
+        expect(v.failureMessage).toContain("skipped");
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("T4g: exit 3 with every row a pass is still unclean: an error, with no throw (I1)", async () => {
+      const backend = await server([{ name: OTHER, status: "pass" }], { exitCode: 3 });
+      backend.useSessionTests([other, dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("error");
+        expect(v.failureMessage).toContain("exit 3");
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("T4h: a row named otherwise than `Codeunit<id>.`, or a <ctor> row, is unclean whatever its status (I1)", async () => {
+      for (const odd of [
+        { name: "Names Tests.Other", status: "pass" },
+        { name: "Codeunit78850.<ctor>", status: "fail" },
+      ]) {
+        const backend = await server([{ name: OTHER, status: "pass" }, odd]);
+        backend.useSessionTests([other, dash], []);
+        try {
+          const v = await backend.run(dash, opts);
+          expect(v.outcome, odd.name).toBe("error");
+          expect(v.failureMessage).toContain(odd.name);
+        } finally {
+          await backend.close();
+        }
+      }
+    });
+
+    test("T4e: a <ctor> row is an error listing it, with no throw (I1)", async () => {
+      const backend = await server([
+        { name: "Codeunit78850.<ctor>", status: "error", message: "setup failed" },
+      ]);
+      backend.useSessionTests([dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("error");
+        expect(v.failureMessage).toContain("Codeunit78850.<ctor>");
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("I2: an answer made unclean by ANOTHER codeunit's emit-excluded row still stops when the missing test's own codeunit ran", async () => {
+      const backend = await server(
+        [
+          { name: PLAIN, status: "pass" },
+          { name: "Other Tests.Fine", status: "skipped", message: "DotNet object not compiled" },
+        ],
+        { exitCode: 3 },
+      );
+      backend.useSessionTests([plain, dash, other], []);
+      try {
+        const p = backend.run(dash, opts);
+        await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+        const err = (await p.catch((e: unknown) => e)) as Error;
+        expect(err.message).toContain("Names Tests.Dash-Step (sent as Codeunit78850.Dasha45Step)");
+        // The emit-excluded codeunit ran nothing, so its test is not named as a naming miss.
+        expect(err.message).not.toContain(`sent as ${OTHER}`);
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("I2: own-codeunit rows that are not test runs (<ctor>, OnRun, <event>) do not count: an unclean answer stays an error", async () => {
+      for (const method of ["<ctor>", "OnRun", "<event>"]) {
+        const backend = await server(
+          [
+            { name: OTHER, status: "pass" },
+            { name: `Codeunit78850.${method}`, status: "error", message: "setup failed" },
+          ],
+          { exitCode: 3 },
+        );
+        backend.useSessionTests([other, dash], []);
+        try {
+          const v = await backend.run(dash, opts);
+          expect(v.outcome, method).toBe("error");
+          expect(v.failureMessage, method).toContain("not a clean run");
+        } finally {
+          await backend.close();
+        }
+      }
+    });
+
+    test("T4f: a miss for an undecided-kept test is a prefixed error, with no throw (I3)", async () => {
+      const backend = await server([{ name: PLAIN, status: "pass" }]);
+      backend.useSessionTests([plain, dash], [dash]);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("error");
+        expect(v.failureMessage?.startsWith(AL_RUNNER_UNDECIDED_ARM_MISSING)).toBe(true);
+      } finally {
+        await backend.close();
+      }
+    });
   });
 });

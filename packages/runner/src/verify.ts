@@ -14,6 +14,12 @@ import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import type { BcDevMcpBackend } from "./bcdev-backend";
 import {
+  ClosedWorldChangedError,
+  type ClosedWorldResult,
+  closedWorldGuard,
+  sameClosedWorld,
+} from "./closed-world";
+import {
   DependencyUnreadableError,
   dependencyFingerprint,
   publishedPackageReader,
@@ -70,7 +76,12 @@ import {
   testDigestKey,
   testDigestsOfModel,
 } from "./test-digest";
-import { buildTestAppModel, readTestAppSources, scanTestPageModel } from "./testpage-scan";
+import {
+  type ClosedWorld,
+  buildTestAppModel,
+  readTestAppSources,
+  scanTestPageModel,
+} from "./testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
 import {
   type ReachFilterOffReason,
@@ -295,6 +306,8 @@ export interface VerifySource {
   /** R443: the source run's numbering digest, which a mark's proof is checked against, and
    *  copied onto verify's run row with `twin_tuples`. `null` (before R443): no mark applies. */
   readonly numberingDigest: string | null;
+  /** R565: the source run's dependency source digest, copied with the generation hash. */
+  readonly dependencySourceSha256: string | null;
   readonly targets: ReadonlyArray<{
     readonly batchIndex: number;
     readonly mutantCode: string;
@@ -622,6 +635,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     generationSourceSha256: run.generationSourceSha256,
     twinTuples: run.twinTuples,
     numberingDigest: run.numberingDigest,
+    dependencySourceSha256: run.dependencySourceSha256,
     targets,
     rows: [...rows.values()].map((r) => ({
       mutantCode: r.mutantCode,
@@ -812,6 +826,9 @@ export async function planVerify(a: {
    *  digest-scheme check included), so `source-predates-verify` wins over `dependency-unreadable`
    *  and costs no download. */
   readonly dependencies: string | (() => Promise<string>);
+  /** R389: the closed-world guard (`closedWorldGuard`), asked once with the digest inputs. Absent
+   *  is `OPEN_WORLD`. A source run recorded under another answer has other digests: none carries. */
+  readonly closedWorld?: () => Promise<ClosedWorld>;
   /** R-371: the cap: refuse above `maxNewTests x (S + 2)` extra test runs (R-384 counts runs, not
    *  tests). Default `DEFAULT_MAX_NEW_TESTS`. */
   readonly maxNewTests?: number;
@@ -990,6 +1007,7 @@ export async function planVerify(a: {
   const inputs = {
     dependencies: typeof a.dependencies === "string" ? a.dependencies : await a.dependencies(),
     buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
+    ...(a.closedWorld !== undefined ? { closedWorld: await a.closedWorld() } : {}),
   };
   const digestsNow = testDigestsOfModel(model, discovered, inputs).digests;
   const recorded = new Map(Object.entries(sourceTestDigests));
@@ -1144,6 +1162,8 @@ const CAUSE_WORDS: Readonly<Record<NewTestCause, string>> = {
     "a test-app edit, for a test whose reach has an edge the walk cannot follow (it covers the whole test-app source)",
   dependency: "a dependency changed",
   build: "an app.json build input changed",
+  "closed-world":
+    "the closed-world guard answered differently (R389: whether another published app depends on the test app)",
   reach: "which procedures it reaches changed",
   unknown: "the source run recorded no parts to compare against",
 };
@@ -1609,6 +1629,8 @@ export async function runVerify(
   let published: PublishedTestApp | undefined;
   // R-425: set once, right after the coverage-mode-changed check; undefined means "not decided".
   let decided: ReachState | undefined;
+  // R389: the guard's closed answer the plan used, rechecked after execution.
+  let firstGuard: ClosedWorldResult | undefined;
   const header = () => ({
     verifySchemaVersion: VERIFY_SCHEMA_VERSION,
     ...(decided !== undefined ? { reachFilter: verifyReachFilterOf(decided) } : {}),
@@ -1686,6 +1708,11 @@ export async function runVerify(
       sourceTestDigestParts: store.testDigestParts(source.runId),
       testDir: args.testDir,
       dependencies: () => verifyDependencyFingerprint(backend, args.testDir, projectPath),
+      closedWorld: async () => {
+        const g = await closedWorldGuard(backend, args.testDir);
+        if (g.closedWorld.public || g.closedWorld.internal) firstGuard = g;
+        return g.closedWorld;
+      },
       ...(args.maxNewTests !== undefined ? { maxNewTests: args.maxNewTests } : {}),
       // R-384: the filter state decides which cap check runs before the lease.
       coverage: coverageMode,
@@ -1836,6 +1863,7 @@ export async function runVerify(
         generationSourceSha256: source.generationSourceSha256,
         twinTuples: source.twinTuples,
         numberingDigest: source.numberingDigest,
+        dependencySourceSha256: source.dependencySourceSha256,
         // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
         coverageMode,
         // R247: the test app this run measures against, the one it is about to publish. The
@@ -1869,6 +1897,16 @@ export async function runVerify(
         ...(narrow !== undefined ? { narrow } : {}),
         probe,
       });
+    }
+    // R389 (sol's review): the plan read tests as unchanged under a point-in-time answer. Asked
+    // again after execution; any other answer voids the plan, loudly.
+    if (firstGuard !== undefined) {
+      const again = await closedWorldGuard(backend, args.testDir);
+      if (!sameClosedWorld(firstGuard, again)) {
+        throw new ClosedWorldChangedError(
+          `verify planned with the closed-world guard answering "${firstGuard.why}", but after execution it answered "${again.why}"; tests it read as unchanged may not be. Run lethal verify again.`,
+        );
+      }
     }
 
     // Decision 11: every new test's two unmutated runs, from this call's own answers.

@@ -159,6 +159,16 @@
               },
               "platformAppsDir": {
                 "type": "string"
+              },
+              "testSelector": {
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "substring-with-excludes"
+                ]
+              },
+              "testSelectorReason": {
+                "type": "string"
               }
             }
           }
@@ -377,6 +387,12 @@
           "killPosition": {
             "type": "number"
           },
+          "killReproduced": {
+            "const": true
+          },
+          "reproducedFailure": {
+            "type": "string"
+          },
           "cause": {
             "type": "string",
             "enum": [
@@ -397,7 +413,8 @@
               "reused-budget-stale",
               "timeout-unconfirmed",
               "runner-test-error",
-              "runner-refused"
+              "runner-refused",
+              "kill-not-reproduced"
             ]
           },
           "platformKillMechanism": {
@@ -1008,6 +1025,9 @@
         },
         "skippedStranded": {
           "type": "number"
+        },
+        "carryRefused": {
+          "type": "string"
         }
       }
     },
@@ -1084,6 +1104,65 @@
       "type": "number"
     },
     "sourceSha256": {
+      "type": "string"
+    },
+    "dependencyReportSources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "outcome"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "report",
+              "extension",
+              "package"
+            ]
+          },
+          "report": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "parse-damaged",
+              "not-found",
+              "ambiguous",
+              "no-source",
+              "unwrap-failed",
+              "no-symbols",
+              "unreadable",
+              "base-not-found"
+            ]
+          },
+          "package": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "entry": {
+            "type": "string"
+          },
+          "entrySha256": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "dependencySourceSha256": {
       "type": "string"
     },
     "numberingDigest": {

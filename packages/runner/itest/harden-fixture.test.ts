@@ -16,7 +16,7 @@ import { applyEquivalenceMarks, parseEquivalenceMarks } from "../src/equivalence
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, numberingDigestOf, serializeKey, twinSitesOf } from "../src/selection";
-import { BaselineRecordedError, RECORD_BASELINE_ENV } from "./baseline-guard";
+import { BaselineRecordedError, RECORD_BASELINE_ENV, readGateBaseline } from "./baseline-guard";
 import {
   ANSWER_KILLERS,
   EXPECTED,
@@ -29,7 +29,6 @@ import {
   siteOf,
 } from "./harden-expected";
 import { diffMutants, normalizeForComparison } from "./mutant-equality";
-import type { NormalizedMutant } from "./mutant-equality";
 
 const PROJECT_DIR = resolve(import.meta.dir, "../../../fixtures/sandbox-harden");
 
@@ -367,7 +366,9 @@ describe("C02-03 + R332: written only after leg B passes, and only in record mod
       ).catch((e: unknown) => e);
       expect(legBRan).toBe(true);
       expect(err).toBeInstanceOf(BaselineRecordedError);
-      const written = JSON.parse(await readFile(okPath, "utf8")) as NormalizedMutant[];
+      const recorded = await readGateBaseline(okPath);
+      expect(recorded.identityScheme).toBe(IDENTITY_SCHEME);
+      const written = recorded.entries;
       expect(written.length).toBe(EXPECTED.length);
       expect(diffMutants(written, normalizeForComparison(reportA))).toEqual([]);
     } finally {

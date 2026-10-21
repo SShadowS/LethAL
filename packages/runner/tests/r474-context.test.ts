@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -23,6 +23,7 @@ import type { SessionReport } from "../src/report";
 import { carryRecord, memberSiteOf, twinSiteOf } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R474 (sol, review of R-391's plan): rule 2 matched a mutant on (file, tuple) alone, so `exit(1);`
@@ -90,8 +91,8 @@ const A = "A_Twin.Table.al";
 const B = "B_Twin.Codeunit.al";
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 type Outcome = "pass" | "fail" | "abort";
@@ -508,8 +509,8 @@ ${guard}        ${S}
     expect(
       carryRecord(
         m,
-        { hash: "old", twins: new Set() },
-        { hash: "new", twins: new Set(), refused },
+        { hash: "old", twins: new Set(), dependencyHash: "dep" },
+        { hash: "new", twins: new Set(), dependencyHash: "dep", refused },
         answer,
         answer,
       ),
@@ -520,8 +521,8 @@ ${guard}        ${S}
     expect(
       carryRecord(
         { ...m, memberHash: "x" },
-        { hash: "old", twins: new Set() },
-        { hash: "new", twins: new Set(), refused: new Set() },
+        { hash: "old", twins: new Set(), dependencyHash: "dep" },
+        { hash: "new", twins: new Set(), dependencyHash: "dep", refused: new Set() },
         () => undefined,
         (s) => (s === memberSiteOf(site, "x") ? "carried" : undefined),
       ),

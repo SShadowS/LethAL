@@ -1002,6 +1002,52 @@ here as measured and neither was.**
 
 ## al-runner v2 — the CLI and wire contract, measured against the released binary
 
+### A test row's name is BC's C# name for the AL method (measured 2026-10-09, c5bbaf89 and 43f76177; R557)
+
+al-runner names each row `Codeunit<id>.<CLR method>`, and the CLR method is the C# identifier BC's
+compiler emits for the AL method name, not the AL name. `--test`, `--test-exact` and
+`--exclude-test` all select by that name, and `--server`'s rows and `perTestCoverage[].test` carry
+it. The rule, walking UTF-16 code units (`alRunnerMethodName`, `al-runner-transport.ts`):
+
+1. a space or `"` becomes `_`;
+2. a C# identifier-part unit (Unicode L, Nl, Nd, Mn, Mc, Pc, Cf) is kept, with a `_` before a
+   FIRST unit that cannot start an identifier (a digit, a combining mark);
+3. any other unit becomes `a` + its decimal code (`-` `a45`, `.` `a46`, `(` `a40`, NBSP `a160`, a
+   surrogate pair two codes);
+4. when the result, with `ſ` read as `s`, is ASCII and its upper case is a Roslyn reserved keyword
+   (`GetReservedKeywordKinds`, so `__arglist` and friends too) or `FINALIZE`, a `_` goes before it.
+   Contextual keywords (`Record`, `Var`) are not prefixed, and neither are `Claß`, `ﬁxed` or `ınt`
+   (JS `toUpperCase` would wrongly make them `CLASS`, `FIXED`, `INT`);
+5. every Cf unit (ZWJ, soft hyphen, BOM, LRM) is deleted, after step 4.
+
+Measured on 58 names (R557's measure, Q2 and M3, and its review's u1 and u2), identical on both
+builds: all in `al-runner-transport.test.ts`. Steps 1 to 4 are al-runner's own port,
+`RunnerPageInstance.EmittedIdentifier` (`AlRunner/Patches/RunnerPageInstance.cs`), of BC's
+`Utilities.StringExtensions.MangleIdentifierName`; step 5 is not in that port but is what BC's
+emitter does. Two AL names that map to one CLR name are refused by al-runner's compiler (AL0757) and
+never reach row pairing. The AL name never reaches a row (`TestExecutor.TestAlName` reads it only for
+test-runner events); upstream al-runner #5572 asks for it on the row.
+
+A selection by the AL name selects nothing: exit 6 with an empty envelope on c5bbaf89, exit 0 with
+zero rows when `--exclude-test` empties it on 43f76177. LethAL stops the session by name on either
+(`AlRunnerTestNameError`) rather than reading a baseline `error`. The R123 contract probe checks the
+rule once per session (fact `test-name-mangling`): one `--test Codeunit50012.` run over eleven
+probe methods, one per step, whose row set must EQUAL the rule's names, both directions.
+
+### `--test-exact NAME` (measured 2026-10-09, c5bbaf89 and 43f76177; R551)
+
+On `v2.12.0-main.c5bbaf89`, `--test-exact NAME` selects the WHOLE qualified name, case-insensitively.
+It is repeatable, it intersects `--test` (same name: that test alone; disjoint: nothing), and it exits
+6 when nothing is selected. It is refused with `--server` (exit 2 at startup). On `43f76177` and
+earlier it is an unknown option (exit 2, `Unknown option '--test-exact'`).
+
+LethAL's session probe (`--output-json --test-exact Codeunit0.LethalR551NoSuchTest <empty dir>`) shows
+only that a build PARSES the flag: exit 6 on an empty bundle comes from al-runner's selection audit,
+not the executor. The whole-name guarantee is `--test` kept in the argv plus the refusal of any other
+test's row. The R123 contract probe's argv deliberately does not carry the flag; the fields it reads
+were measured identical with and without it (R551 plan review, M3). The plan
+(`docs/superpowers/plans/2026-10-09-r551-test-exact-probe.md`) summarises the measurements.
+
 ### A bundle's `.al` files must all sit at one directory level (measured 2026-09-08, v2.11.0)
 
 **al-runner does not compile a root-level `.al` together with one in a subdirectory of the same

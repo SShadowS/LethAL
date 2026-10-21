@@ -24,7 +24,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { loadEquivalenceMarks, odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, loadEquivalenceMarks, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { formatFailure } from "../src/format-failure";
@@ -41,7 +41,7 @@ import {
   preflightGateBaseline,
   recordRequested,
 } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   HardenGateError,
@@ -68,6 +68,7 @@ const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-harden");
 const TESTS_DIR = join(REPO_ROOT, "fixtures", "sandbox-harden-tests");
 const ANSWERS_DIR = join(REPO_ROOT, "fixtures", "sandbox-harden-answers");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
 const BASELINE_PATH = join(HERE, "harden.baseline.json");
 /** R169: the top of sandbox-harden's 79500-79549 range, counting down. */
 const SELECTOR_IDS = { selectorId: 79547, controlId: 79548, tableId: 79549 };
@@ -112,6 +113,7 @@ async function runLeg(
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -120,7 +122,7 @@ async function runLeg(
     defaultDeployerIo,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -132,6 +134,7 @@ async function runLeg(
       mcpCommand: bcdev.mcpCommand,
       project: PROJECT_DIR,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
       packageCachePath: bcdev.packageCachePath,

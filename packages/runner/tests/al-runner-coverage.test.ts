@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
@@ -14,6 +14,7 @@ import {
 import type { ServerPerTestCoverage } from "../src/al-runner-server";
 import { coverageRefusedObjects } from "../src/line-map";
 import { buildCoverageIndex, coverageFilter } from "../src/selection";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * Verbatim al-runner 2.11.0 output, captured by running
@@ -54,8 +55,8 @@ const REAL_COBERTURA = `<?xml version="1.0" encoding="utf-8"?>
 </coverage>`;
 
 const scratchDirs: string[] = [];
-afterAll(async () => {
-  for (const d of scratchDirs) await rm(d, { recursive: true, force: true });
+afterAll(() => {
+  for (const d of scratchDirs) removeScratchDir(d);
 });
 
 async function bundle(files: Record<string, string>): Promise<string> {

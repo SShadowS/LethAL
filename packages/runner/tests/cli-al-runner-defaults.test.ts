@@ -113,6 +113,8 @@ async function drive(alRunner: NonNullable<LethalConfigFile["alRunner"]>): Promi
   const ev = watchResourceSelector(backend, join(scratchDir, "al-runner-active", "active"));
   // R517: as `runSession` does before the first run, at its defaults (no leg sets either).
   backend.useMutantBudgetFloor(180_000, 120_000);
+  // R394: coverage is on by default, and `runSession` hands the build symbols over before deploy.
+  backend.useBuildSymbols([]);
   await backend.deploy(await batch());
   for (const id of ["M0001", "M0002", null]) {
     await backend.activate(id);
@@ -139,13 +141,16 @@ const kinds = (failures: readonly string[]): string[] =>
   [...new Set(failures.map((f) => f.split(":")[0] ?? ""))].sort();
 
 describe("R387: buildBackend's al-runner defaults", () => {
-  test("no transport key: one --server daemon, no one-shot test spawn, resource selector, coverage off", async () => {
+  // R394: "coverage off" became "coverage on" when the default flipped; the transport checks stand.
+  test("no transport key: one --server daemon, no one-shot test spawn, resource selector, coverage on", async () => {
     const { backend, record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
     expect(cliDefaultMechanismFailures(record, ev, ALLOWED)).toEqual([]);
     expect(record.serverArgv).toEqual([["al-runner.exe", "--server", "--test-timeout", "180"]]);
     expect(ev.activations).toBe(3);
+    // R577: one whole-suite run per activation, counted off the daemon's stdin.
+    expect(record.serverRunTests).toBe(3);
     expect(ev.alHashes.size).toBe(1);
-    expect(backend.capabilities().coverage).toBe("none");
+    expect(backend.capabilities().coverage).toBe("al-runner");
   });
 
   test("R517: a daemon argv without --test-timeout 180 exactly once fails the server check", async () => {
@@ -591,6 +596,8 @@ describe("R387: a hung suite under the default --server path", () => {
         IDS,
       )) as AlRunnerBackend;
       backend.useMutantBudgetFloor(180_000, 120_000);
+      // R394: coverage is on by default; `runSession` hands the build symbols over before deploy.
+      backend.useBuildSymbols([]);
       await backend.deploy(await batch());
       await backend.activate("M0001");
       const v = await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
@@ -657,23 +664,35 @@ describe("R387: validateAlRunnerConfig refuses unknown keys and bad values by na
 });
 
 describe("R387: effectiveAlRunnerTransport and the advisory line", () => {
-  test("defaults: server on, resource, coverage none; server off gives static", () => {
+  // R394: coverage is "al-runner" by default (it was "none" under R387).
+  test("defaults: server on, resource, coverage al-runner; server off gives static", () => {
     expect(effectiveAlRunnerTransport({})).toEqual({
       serverMode: true,
       selectorMode: "resource",
-      coverage: "none",
+      coverage: "al-runner",
     });
     expect(effectiveAlRunnerTransport({ serverMode: false })).toEqual({
       serverMode: false,
       selectorMode: "static",
-      coverage: "none",
+      coverage: "al-runner",
     });
   });
 
-  test("the default config names only coverage, with the key that changes it", () => {
-    const line = alRunnerAdvisory({});
+  test("R394: an explicit coverage none stays none", () => {
+    expect(effectiveAlRunnerTransport({ coverage: "none" }).coverage).toBe("none");
+  });
+
+  // R394: under R387 the default config printed a coverage note; now the default is the fast setting.
+  test("R394: the default config prints no advisory line at all", () => {
+    expect(alRunnerAdvisory({})).toBeUndefined();
+  });
+
+  test("R394: an explicit coverage none is named, with what it costs", () => {
+    const line = alRunnerAdvisory({ coverage: "none" });
     expect(line).toMatch(/^\[lethal\] al-runner settings: /);
-    expect(line).toContain('"alRunner.coverage": "al-runner"');
+    expect(line).toContain('"alRunner.coverage": "none"');
+    expect(line).toContain("survived");
+    expect(line).toContain("every green test");
     expect(line).not.toContain("serverMode");
     expect(line).not.toContain("selectorMode");
   });
@@ -827,6 +846,73 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     expect(warned.filter((l) => l.includes("al-runner-coverage-unsupported"))).toEqual([]);
   });
 
+  // R394: the guard acts on the EFFECTIVE coverage, so a config that sets no coverage key (the
+  // default, now "al-runner") still gets the R407 frame probe and the R298 wrapped refusal.
+  const dflt = (): LethalConfigFile => ({ alRunner: { alRunnerPath: "a" } });
+
+  test("R394: under the default, a multi-object file the probe refuses falls back to none", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS });
+    const warned: string[] = [];
+    const out = await withAlRunnerCoverageGuard(dflt(), dir, (l) => warned.push(l), refused);
+    expect(out.alRunner?.coverage).toBe("none");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("al-runner-coverage-unsupported");
+    expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
+  });
+
+  test("R394: under the default, a refused #if-wrapped file falls back to none", async () => {
+    const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    const out = await withAlRunnerCoverageGuard(dflt(), dir, (l) => warned.push(l));
+    expect(out.alRunner?.coverage).toBe("none");
+    expect(warned[0]).toContain("B.Codeunit.al (an #if-wrapped object)");
+  });
+
+  test("R394: the warning under the default says coverage was on by default, never that a key is IGNORED", async () => {
+    const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    await withAlRunnerCoverageGuard(dflt(), dir, (l) => warned.push(l));
+    expect(warned[0]).toContain("al-runner coverage (on by default) is turned OFF for this run");
+    expect(warned[0]).not.toContain("IGNORED");
+  });
+
+  test("R394: the warning under an explicit key says the config set it", async () => {
+    const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    expect(warned[0]).toContain(
+      'al-runner coverage (set by "alRunner.coverage": "al-runner") is turned OFF for this run',
+    );
+  });
+
+  test("R394: an explicit none never runs the guard: no probe, no warning", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS });
+    const warned: string[] = [];
+    let probes = 0;
+    const out = await withAlRunnerCoverageGuard(
+      { alRunner: { alRunnerPath: "a", coverage: "none" } },
+      dir,
+      (l) => warned.push(l),
+      {
+        frameProbe: async () => {
+          probes += 1;
+          return REFUSED_FRAME_PROBE();
+        },
+      },
+    );
+    expect(out.alRunner?.coverage).toBe("none");
+    expect([probes, warned.length]).toEqual([0, 0]);
+  });
+
+  test("R394: prepareAlRunnerSession under the default prints the guard warning and the turned-off line only", async () => {
+    const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    await prepareAlRunnerSession(dflt(), dir, (l) => warned.push(l));
+    expect(warned).toHaveLength(2);
+    expect(warned[1]).toContain("turned off for this run");
+    expect(warned[1]).not.toContain('"alRunner.coverage": "none"');
+  });
+
   test("prepareAlRunnerSession refuses a bad section before anything else", async () => {
     await expect(
       prepareAlRunnerSession({ alRunner: { alRunnerPath: "a", typo: 1 } as never }, "unused"),
@@ -850,6 +936,8 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
     files: Record<string, string>,
     /** R205: an edit made after `runFromCli`'s snapshot (inside id validation). */
     edit?: (projectDir: string) => Promise<void>,
+    /** R394: the config's `alRunner` section; the default sets the coverage key explicitly. */
+    section: Record<string, unknown> = { alRunnerPath: "C:/al-runner.exe", coverage: "al-runner" },
   ): Promise<{
     readonly coverage: string | undefined;
     readonly warnings: readonly string[];
@@ -858,11 +946,7 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
   }> {
     const projectDir = await alProject(files);
     const configPath = join(projectDir, "lethal.config.json");
-    await writeFile(
-      configPath,
-      JSON.stringify({ alRunner: { alRunnerPath: "C:/al-runner.exe", coverage: "al-runner" } }),
-      "utf8",
-    );
+    await writeFile(configPath, JSON.stringify({ alRunner: section }), "utf8");
     const parsed: RunCliConfig = {
       mode: "run",
       projectDir,
@@ -927,6 +1011,30 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
     const guard = warnings.filter((w) => w.includes("al-runner-coverage-unsupported"));
     expect(guard).toHaveLength(1);
     expect(guard[0]).toContain("Two.Codeunit.al (more than one object)");
+  });
+
+  test("R394: with NO coverage key, a multi-object file still reaches buildBackend with coverage none", async () => {
+    const { coverage, warnings } = await coverageReachingBuild(
+      { "Two.Codeunit.al": TWO_OBJECTS },
+      undefined,
+      { alRunnerPath: "C:/al-runner.exe" },
+    );
+    expect(coverage).toBe("none");
+    const guard = warnings.filter((w) => w.includes("al-runner-coverage-unsupported"));
+    expect(guard).toHaveLength(1);
+    expect(guard[0]).toContain("(on by default)");
+  });
+
+  test("R394: with NO coverage key, a clean project reaches buildBackend with NO coverage key, so the default (al-runner) applies", async () => {
+    const { coverage, warnings } = await coverageReachingBuild(
+      { "A.Codeunit.al": "codeunit 50100 A\n{\n}\n" },
+      undefined,
+      { alRunnerPath: "C:/al-runner.exe" },
+    );
+    expect(coverage).toBeUndefined();
+    expect(
+      warnings.filter((w) => w.includes("al-runner settings") || w.includes("al-runner-coverage")),
+    ).toEqual([]);
   });
 
   test("an #if-wrapped object reaches buildBackend with coverage none, and the named warning prints", async () => {

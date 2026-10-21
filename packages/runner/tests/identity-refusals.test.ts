@@ -35,6 +35,7 @@ import { identityKeyOf, serializeKey, twinSiteOf } from "../src/selection";
 import type { MutantVerdict, MutantVerdictRow } from "../src/store";
 import { ResultsStore } from "../src/store";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R307 Task 6: identity when a file is refused (plan section 3).
@@ -47,8 +48,8 @@ import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
  */
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 beforeAll(async () => {
   await initParser();
@@ -177,8 +178,8 @@ function verdictRow(m: MutantManifestEntry, verdict: MutantVerdict): MutantVerdi
 /** R391: a carry rule under which the recorded run had the same source (rule 1: by key). */
 function sameSourceRule(): NonNullable<ResumeIndex["carryRule"]> {
   return {
-    recorded: { hash: "same", twins: null },
-    current: { hash: "same", twins: new Set(), refused: new Set() },
+    recorded: { hash: "same", twins: null, dependencyHash: "dep" },
+    current: { hash: "same", twins: new Set(), dependencyHash: "dep", refused: new Set() },
   };
 }
 
@@ -232,8 +233,8 @@ describe("R307 T6 (a): an exact refusal reserves its sites, so the twins keep th
     const edited = {
       ...index,
       carryRule: {
-        recorded: { hash: "run1", twins },
-        current: { hash: "run2", twins, refused: new Set<string>() },
+        recorded: { hash: "run1", twins, dependencyHash: "dep" },
+        current: { hash: "run2", twins, dependencyHash: "dep", refused: new Set<string>() },
       },
     };
     expect(run2.map((m) => carriedVerdictFor(edited, m))).toEqual([undefined, undefined]);
@@ -252,6 +253,7 @@ describe("R307 T6 (b), unit: a disabled carry keeps the stranded skip", () => {
       carryRule: sameSourceRule(),
       ambiguousKeys: 0,
       nonCarryableRows: 0,
+      unreproducedKills: 0,
       strandedKeys: new Set([keyOfEntry(m)]),
     };
     expect(wasStranded(index, m)).toBe(true);
