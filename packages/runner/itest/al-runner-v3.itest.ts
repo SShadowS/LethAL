@@ -571,6 +571,8 @@ async function legXSleep(scratch: string): Promise<void> {
   const deps = await microsoftDeps(join(scratch, "x-d"));
   const run = async (tag: string, tamper?: (p: string) => Promise<void>) => {
     const dir = join(scratch, `xd-${tag}`);
+    // The results store opens `<dir>/lethal.sqlite`, so the folder must exist first.
+    await mkdir(dir, { recursive: true });
     const b = new AlRunnerV3Backend(
       backendCfg({
         instrumentedDir: join(dir, "b"),
