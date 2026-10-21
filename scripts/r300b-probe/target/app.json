@@ -20,7 +20,7 @@
     "allowDownloadingSource": true,
     "includeSourceInSymbolFile": true
   },
-  "runtime": "16.0",
+  "runtime": "17.0",
   "target": "OnPrem",
   "features": ["NoImplicitWith"]
 }

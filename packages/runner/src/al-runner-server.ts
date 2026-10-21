@@ -63,6 +63,8 @@
  *   (measured on 2.11.0, R319); the symbols are start-time flags, see the constructor.
  */
 
+import { type AlRunnerCompileEntry, compileEntriesOf } from "./al-runner-transport";
+
 /** The subset of a spawned process this client uses, so tests can supply one without a binary. */
 export interface ServerProcessHandle {
   write(line: string): void;
@@ -121,10 +123,17 @@ export interface ServerPerTestCoverage {
 }
 
 export interface ServerRunResult {
+  /** Each row's `name` is `Codeunit<id>.<CLR method>`: BC's C# name for the AL method
+   *  (`alRunnerMethodName`, R557), the same name `qualifiedTestName` builds. */
   readonly tests: readonly ServerTestLine[];
   readonly perTestCoverage: readonly ServerPerTestCoverage[];
+  /** The summary's own exit code, -1 when it carried none. R557 (I1): a missing row stops the
+   *  session only when this is 0 or 1 and every row is a pass or fail run row. */
   readonly exitCode: number;
   readonly total: number;
+  /** R583: the summary's `compilationErrors`. On 069cbf32 a bundle that lost objects to AL0666
+   *  still streams `pass` rows beside these, with `exitCode` 3. */
+  readonly compilationErrors: readonly AlRunnerCompileEntry[];
 }
 
 export interface ServerRunRequest {
@@ -395,6 +404,7 @@ export class AlRunnerServer {
         perTestCoverage: rawPtc as readonly ServerPerTestCoverage[],
         exitCode: typeof msg.exitCode === "number" ? msg.exitCode : -1,
         total: typeof msg.total === "number" ? msg.total : tests.length,
+        compilationErrors: compileEntriesOf(msg.compilationErrors),
       };
     }
   }

@@ -74,8 +74,10 @@ const MIN_PROTOCOL_VERSION = 2;
  *
  * Kept in LOCKSTEP with `extensions/lethal-control/app.json`'s `version`: raising this constant
  * without bumping that file makes a freshly built control app fail its own gate. Pinned by a test.
+ * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
+ * the runtime-16 build is refused before any gate measures against it.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.20";
+export const MIN_CONTROL_VERSION = "1.0.0.22";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is
@@ -552,7 +554,8 @@ export class HarnessVerifier {
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const query = params.size > 0 ? `?${params.toString()}` : "";
     // R441: fetch's URL parser drops tab, CR and LF, so check the parsed URL and send exactly that.
-    const sent = new URL(`${this.cfg.baseUrl}/${path}${query}`);
+    // R589: API rows from their own root when the config names one (BC on Linux's API port).
+    const sent = new URL(`${this.cfg.apiBaseUrl ?? this.cfg.baseUrl}/${path}${query}`);
     refuseUnfilteredExtensionsQuery(sent.pathname, [...sent.searchParams], this.cfg.tenant);
     const url = sent.href;
     let res: Response;

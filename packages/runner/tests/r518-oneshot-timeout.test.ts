@@ -150,8 +150,10 @@ describe("R518: a one-shot hang on al-runner goes through the cold confirm, not 
       ["M0001", "timeout-killed", 1],
       ["M0002", "timeout-killed", 1],
     ]);
-    // The baseline, then per mutant: ONE mutated spawn and exactly one unmutated confirm.
-    expect(spawns.map((s) => s.active)).toEqual(["", "M0001", "", "M0002", ""]);
+    // The baseline, then per mutant: ONE mutated spawn, exactly one unmutated confirm, and (R577,
+    // al-runner's rule is on) one reproduction under the mutant, which timed out again.
+    expect(spawns.map((s) => s.active)).toEqual(["", "M0001", "", "M0001", "M0002", "", "M0002"]);
+    expect(report.mutants.map((m) => m.killReproduced)).toEqual([true, true]);
     expect(spawns.every((s) => s.argv[s.argv.indexOf("--test") + 1] === WANTED)).toBe(true);
   });
 

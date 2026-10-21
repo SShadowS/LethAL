@@ -86,7 +86,6 @@ describe("gather + formatView", () => {
         `  R-214 (preproc) run 002 green: ${"x".repeat(200)}`,
         "  R-307 (code) no checkpoint",
         "lease Cronus28: code",
-        "lease Cronus284: free",
       ].join("\n"),
     );
   });
@@ -114,8 +113,8 @@ describe("root and containers follow KRAKEN_PROJECT", () => {
       expect(() => resolveRoot(env)).toThrow(/LETHAL_COORD_ROOT=\/a differs from CG_COORD_ROOT=/);
     }
   });
-  test("host: the fixed pair. kraken: this campaign's list in <root>/machine/allocation.json", () => {
-    expect(leasedContainers("/x", {})).toEqual(["Cronus28", "Cronus284"]);
+  test("host: the fixed list. kraken: this campaign's list in <root>/machine/allocation.json", () => {
+    expect(leasedContainers("/x", {})).toEqual(["Cronus28"]);
     const base = mkdtempSync(join(tmpdir(), "coord-status-k-"));
     const r = join(base, "coord");
     mkdirSync(r);

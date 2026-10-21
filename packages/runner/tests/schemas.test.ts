@@ -1119,6 +1119,32 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(conformsTo(reportSchema, withSelector("substring"))).not.toEqual([]);
   });
 
+  test("R577: killReproduced and reproducedFailure are additive under v3: without them, with them, and killReproduced only as true", () => {
+    // Optional, so R157's rule keeps v3 and the committed reports (bcdev, where the rule is off)
+    // are not regenerated.
+    const raw = readFileSync(
+      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+      "utf8",
+    );
+    expect(raw).not.toContain("killReproduced");
+    expect(raw).not.toContain("reproducedFailure");
+    const without = JSON.parse(raw) as { mutants: Record<string, unknown>[] };
+    const kills = without.mutants.filter((m) => m.verdict === "killed");
+    expect(kills.length).toBeGreaterThan(0);
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    const withMarker = (value: unknown) => {
+      const doc = JSON.parse(raw) as typeof without;
+      for (const m of doc.mutants) {
+        if (m.verdict !== "killed") continue;
+        m.killReproduced = value;
+        m.reproducedFailure = "Assert.AreEqual failed.";
+      }
+      return doc;
+    };
+    expect(conformsTo(reportSchema, withMarker(true))).toEqual([]);
+    expect(conformsTo(reportSchema, withMarker(false))).not.toEqual([]);
+  });
+
   test("R381: buildSymbols is additive under v3: optional, a report without it validates, and with it, [] included", () => {
     const without = JSON.parse(
       readFileSync(
@@ -1367,6 +1393,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v17.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -1602,6 +1640,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "timeout-unconfirmed",
         "runner-test-error",
         "runner-refused",
+        "kill-not-reproduced",
       ],
       "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
       // R273: new domains on the new optional `suggestions` (an optional additive field, so no
@@ -1666,6 +1705,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v15.schema.json")).toEqual(required("explain-v14.schema.json"));
     // R534's v16 added two cause values, not a required field.
     expect(required("explain-v16.schema.json")).toEqual(required("explain-v15.schema.json"));
+    // R577's v17 added a cause value, not a required field.
+    expect(required("explain-v17.schema.json")).toEqual(required("explain-v16.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

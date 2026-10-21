@@ -253,6 +253,7 @@ describe("R307 T6 (b), unit: a disabled carry keeps the stranded skip", () => {
       carryRule: sameSourceRule(),
       ambiguousKeys: 0,
       nonCarryableRows: 0,
+      unreproducedKills: 0,
       strandedKeys: new Set([keyOfEntry(m)]),
     };
     expect(wasStranded(index, m)).toBe(true);

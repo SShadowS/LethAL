@@ -50,14 +50,21 @@ export interface SpawnRecord {
   readonly serverArgv: string[][];
   /** Everything every daemon wrote to stderr, for the platform-app directory it names, if any. */
   serverStderr: string;
+  /** R577: the `runTests` requests written to every daemon: one per whole-suite run. */
+  serverRunTests: number;
 }
 
-/** Wraps the real spawns so the leg sees every argv and the daemons' stderr. */
+/** Wraps the real spawns so the leg sees every argv, the daemons' stderr and their suite runs. */
 export function recordSpawns(
   oneShot: SpawnFn,
   server: ServerSpawnFn,
 ): { record: SpawnRecord; spawn: SpawnFn; serverSpawn: ServerSpawnFn } {
-  const record: SpawnRecord = { oneShotArgv: [], serverArgv: [], serverStderr: "" };
+  const record: SpawnRecord = {
+    oneShotArgv: [],
+    serverArgv: [],
+    serverStderr: "",
+    serverRunTests: 0,
+  };
   const spawn: SpawnFn = (argv, opts) => {
     record.oneShotArgv.push([...argv]);
     return oneShot(argv, opts);
@@ -74,7 +81,11 @@ export function recordSpawns(
         }
       },
     };
-    const teed: ServerProcessHandle = { ...handle, stderr };
+    const write = (line: string): void => {
+      if (line.includes('"command":"runTests"')) record.serverRunTests += 1;
+      handle.write(line);
+    };
+    const teed: ServerProcessHandle = { ...handle, stderr, write };
     return teed;
   };
   return { record, spawn, serverSpawn };
@@ -135,6 +146,26 @@ export function watchResourceSelector(
     ev.alHashes.add(await alHash(activeDir));
   };
   return ev;
+}
+
+/**
+ * R583: a `selectorMode: "resource"` leg's proof that the resource channel ran, from
+ * `watchResourceSelector`. Every such leg is ONE batch, so: at least one deploy and activation, no
+ * problem (each deploy left the resource file, each activation wrote its id there) and exactly one
+ * distinct `*.al` text, i.e. one compile. Empty means it ran. A leg whose selector silently went
+ * static would leave no resource file and a new `*.al` text per mutant.
+ */
+export function resourceLegFailures(ev: ResourceEvidence): string[] {
+  const out: string[] = [];
+  if (ev.deploys === 0) out.push("resource: no deploy() was observed");
+  if (ev.activations === 0) out.push("resource: no activate() was observed");
+  out.push(...ev.problems.map((p) => `resource: ${p}`));
+  if (ev.alHashes.size !== 1) {
+    out.push(
+      `resource: the bundle's *.al text took ${ev.alHashes.size} distinct value(s) over ${ev.activations} activation(s); a one-batch resource leg compiles once`,
+    );
+  }
+  return out;
 }
 
 /**

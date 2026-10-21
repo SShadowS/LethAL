@@ -27,7 +27,7 @@ import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { formatFailure } from "../src/format-failure";
@@ -39,7 +39,14 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import {
+  assertLaunchMatchesConfig,
+  itestConfigName,
+  itestConfigPath,
+  itestLaunchPath,
+  printItestTarget,
+} from "./config-path";
+import { BCDEV_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
 import { assertDirectTransportReach, assertReachEvidence } from "./reach-evidence";
@@ -57,8 +64,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 // Committed per-mutant healthy-path baseline (Task 15, design spec §14) — see baseline-guard.ts.
 // Aggregate counts (EXPECTED below) are a smoke test; this catches a per-mutant verdict swap
 // that leaves the aggregate counts unchanged.
@@ -90,28 +98,28 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 const EXPECTED = {
   // R159's `shift-integer` moves this from 18 to 19: `LogAudit`'s `Amount <> 0` is an
   // equality-family comparison, so the operator claims the literal.
-  totalMutantSites: 19,
-  killed: 3,
+  totalMutantSites: BCDEV_FIGURES.totalMutantSites,
+  killed: BCDEV_FIGURES.killed,
   // R159's `shift-integer` moves this from 11 to 12: `Sandbox Logic.LogAudit`'s `Amount <> 0`
   // becomes `<> 1`. It survives because the guarded block is `Amount := Amount`, a self-assignment,
   // so changing WHICH inputs enter a block that does nothing is unobservable. Measured in the spike,
   // docs/superpowers/specs/2026-08-26-r159-shift-integer-spike.md.
-  survived: 12,
-  noCoverage: 4,
+  survived: BCDEV_FIGURES.survived,
+  noCoverage: BCDEV_FIGURES.noCoverage,
   /**
    * R198: one `RunMutantMany` call per mutant that reached the covering loop: 3 killed + 12
    * survived, the 4 no-coverage never reach it. Pinned as a NUMBER, not a predicate: a counter
    * that was never wired reports 0, and a predicate over an empty set is satisfied by it. This is
    * the anti-inertness pin for the grouped path; the tables gate carries the other (362).
    */
-  groupedCalls: 15,
+  groupedCalls: BCDEV_FIGURES.groupedCalls,
   /**
    * R206: how many of this gate's kills were measured at group position > 1. MEASURED from run
    * 304's store before the build (all three kills at position 1), and pre-committed in
    * docs/superpowers/specs/2026-09-03-r206-build-precommitment.md. `groupedCalls` above is
    * `scored + warmKills`, so a replay that ran here would move BOTH numbers.
    */
-  warmKills: 0,
+  warmKills: BCDEV_FIGURES.warmKills,
   /**
    * R132: this gate now carries the VACUOUS case for R121's assertion screen, which `itest:tables`
    * used to pin and gave up when its fixture grew a Library Assert arm.
@@ -126,7 +134,7 @@ const EXPECTED = {
    * assertion was ever run, along with the competing possibility (`no-text`, if no kill carried
    * failure text at all — R132's own table lists both because nobody had measured which).
    */
-  assertionScreenDiscrimination: "vacuous",
+  assertionScreenDiscrimination: BCDEV_FIGURES.assertionScreenDiscrimination,
 };
 
 // Sandbox target app id (fixtures/sandbox-app/app.json "id") — the RunMutant `targetAppId` and the
@@ -176,6 +184,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
 
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
+  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
 
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
@@ -198,6 +207,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -206,7 +216,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     defaultDeployerIo,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -219,6 +229,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       mcpCommand: bcdev.mcpCommand,
       project: PROJECT_DIR,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
       packageCachePath: bcdev.packageCachePath,

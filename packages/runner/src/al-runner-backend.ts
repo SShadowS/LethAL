@@ -29,11 +29,14 @@ import {
   OneShotTransport,
   alRunnerEnv,
   buildAlRunnerArgv,
+  compileFindingsOf,
+  compileScopeOf,
   isChildChosenExit,
+  noneSelectedRefusal,
   parseAlRunnerBcBuild,
   parseAlRunnerPlatformAppsDir,
   qualifiedTestName,
-  readAlRunnerEnvelope,
+  targetCompileMessage,
 } from "./al-runner-transport";
 import type {
   AlRunnerBcBuild,
@@ -143,6 +146,98 @@ export class AlRunnerServerStopUnsetError extends Error {
     );
   }
 }
+
+/**
+ * R583: the BASELINE (`activate(null)`) ran on a target bundle al-runner did not fully compile.
+ * Rethrown out of `run()`, so the session stops by name: a project al-runner did not compile
+ * cannot be measured. A mutant run gets per-test `error` instead.
+ */
+export class AlRunnerTargetCompileError extends Error {
+  constructor(detail: string) {
+    super(`AlRunnerBackend: baseline refused: ${detail}`);
+    this.name = "AlRunnerTargetCompileError";
+  }
+}
+
+/** R583: the target's `app.json` `runtime` cannot carry the resource selector (below 14.0). */
+export class ResourceSelectorRuntimeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResourceSelectorRuntimeError";
+  }
+}
+
+/**
+ * R557: al-runner has no row for a session-suite test under the name LethAL sent it
+ * (`alRunnerMethodName`). Thrown out of `run()`, so the session stops before any mutant is scored,
+ * as `AlRunnerServerStopUnsetError` does. Before R557 such a test read as a baseline `error`, left
+ * every covering set, and each mutant only it would kill read `survived` or `no-coverage`.
+ *
+ * Thrown only where a missing row can mean nothing else: a one-shot "selected no test" (exit 6) or
+ * a result with no row equal to the name sent, and a `--server` suite answer that is otherwise clean
+ * (I1) or in which the missing test's own codeunit ran at least one test (I2: an emit-excluded
+ * codeunit elsewhere makes every answer unclean). A test kept in an `#if` arm discovery could not
+ * decide keeps its per-test `error` (I3, `AL_RUNNER_UNDECIDED_ARM_MISSING`).
+ */
+export class AlRunnerTestNameError extends Error {
+  constructor(
+    /** Each missing test: its AL name `<Codeunit Name>.<method>`, and the name al-runner was sent. */
+    readonly missing: ReadonlyArray<{ readonly alName: string; readonly sent: string }>,
+    /** The BC build al-runner announced, when known. */
+    readonly build?: string,
+    /** The rows al-runner did return, when it returned any. */
+    readonly returned?: readonly string[],
+  ) {
+    super(
+      `al-runner has no row for ${missing.length === 1 ? "the test" : `${missing.length} tests`} ${missing
+        .map((m) => `${m.alName} (sent as ${m.sent})`)
+        .join(", ")}${build !== undefined ? ` on al-runner's BC ${build}` : ""}${
+        returned !== undefined
+          ? ` (it returned: ${returned.length > 0 ? returned.slice(0, 20).join(", ") : "<no tests>"}${returned.length > 20 ? `, and ${returned.length - 20} more` : ""})`
+          : ""
+      }. LethAL sends a test under BC's C# name for the AL method (alRunnerMethodName); al-runner's naming rule moved, or this build does not compile that test (for example an \`#if\` arm LethAL decided compiled-in that al-runner compiled out, R392). A test LethAL cannot run cannot kill a mutant, so the session stops rather than scoring its only-kills as survivors (R557).`,
+    );
+    this.name = "AlRunnerTestNameError";
+  }
+}
+
+/**
+ * R583: `true` when `runtime` is a readable major.minor below 14.0, or unreadable; `false` at 14.0
+ * or above, and when absent (al-runner then compiles at its newest runtime, measured on 069cbf32
+ * only). Compared as numbers: as strings "9.0" sorts above "14.0".
+ */
+export function runtimeBelow14(runtime: unknown): boolean {
+  if (runtime === undefined) return false;
+  const m = typeof runtime === "string" ? /^(\d+)\.(\d+)$/.exec(runtime.trim()) : null;
+  if (m === null) return true;
+  return Number(m[1]) < 14;
+}
+
+/**
+ * R583: refuses the resource selector on a target whose `runtime` is below 14.0. Its selector
+ * calls `NavApp.GetResourceAsText`, which alc refuses there (AL0666), and so does al-runner from
+ * f23b9b5f on, which compiles at the app's own runtime. No fallback before LethAL's release (R584).
+ * Called by the CLI before anything is instrumented, and by `deploy()` on `active/app.json`.
+ */
+export function assertResourceSelectorRuntime(
+  appJson: Readonly<Record<string, unknown>>,
+  selectorMode: "static" | "resource",
+): void {
+  if (selectorMode !== "resource" || !runtimeBelow14(appJson.runtime)) return;
+  const shown =
+    typeof appJson.runtime === "string" ? appJson.runtime : JSON.stringify(appJson.runtime);
+  throw new ResourceSelectorRuntimeError(
+    `runtime ${shown} is below 14.0, which the resource selector needs (NavApp.GetResourceAsText, AL0666); set app.json runtime ≥ 17.0 or alRunner.selectorMode static`,
+  );
+}
+
+/**
+ * R557 (I3): prefix on the `error` of a test kept in an `#if` arm LethAL could not decide (R403,
+ * `preproc-undecided-kept`) when al-runner has no row for it: al-runner may simply have compiled it
+ * out, so it is not a stop. The orchestrator names every such test in one warning per batch.
+ */
+export const AL_RUNNER_UNDECIDED_ARM_MISSING =
+  "al-runner has no row for this test, which sits in an #if arm LethAL could not decide (R403, R557)";
 
 /**
  * Prefix on the `failureMessage` of an al-runner `status: "error"` this build could not classify.
@@ -308,6 +403,45 @@ interface ServerSuiteResults {
   readonly wallMs: number;
   /** R517 (M3): the test whose timeout row ended the run; tests after it have no row. */
   readonly hungTest?: string;
+  /** R583: set when the summary says the target bundle did not fully compile; no row is scored. */
+  readonly targetCompile?: string;
+  /** R557 (I1): `runTests`' own `exitCode` (-1 when the summary carried none). */
+  readonly exitCode: number;
+}
+
+/** R557 (I1): an al-runner run row name, `Codeunit<id>.<CLR method>`. An emit-excluded row is
+ *  `<AL object>.<AL method>` instead, and a constructor failure is `Codeunit<id>.<ctor>`. */
+const RUN_ROW_NAME = /^Codeunit\d+\./;
+
+/**
+ * R557 (I1): the rows that make a `--server` answer unclean: a status other than `pass`/`fail`, or
+ * a name that is not a run row's. An answer is CLEAN when its exit code is 0 or 1 and this is empty.
+ */
+function uncleanRows(suite: ServerSuiteResults): string[] {
+  return [...suite.byName.values()]
+    .filter(
+      (t) =>
+        (t.status !== "pass" && t.status !== "fail") ||
+        !RUN_ROW_NAME.test(t.name) ||
+        t.name.endsWith(".<ctor>"),
+    )
+    .map((t) => `${t.name} (${t.status})`);
+}
+
+/** R557 (I2): own-codeunit rows that are not a test method's run. */
+const NOT_A_TEST_RUN = new Set(["<ctor>", "OnRun", "<event>"]);
+
+/**
+ * R557 (I2): al-runner ran at least one test of codeunit `codeunitId`: a row
+ * `Codeunit<id>.<method>` whose method is not `<ctor>`, `OnRun` or `<event>`. Then that codeunit
+ * compiled and ran, so a missing test in it is a naming miss even when another codeunit's
+ * emit-excluded row makes the whole answer unclean.
+ */
+function codeunitRan(suite: ServerSuiteResults, codeunitId: number): boolean {
+  const prefix = `Codeunit${codeunitId}.`;
+  return [...suite.byName.keys()].some(
+    (n) => n.startsWith(prefix) && !NOT_A_TEST_RUN.has(n.slice(prefix.length)),
+  );
 }
 
 /**
@@ -492,7 +626,8 @@ export function classifyTestExactProbe(
   if (raw.kind === "spawn-failed") {
     return { kind: "substring", reason: `spawn failed: ${raw.message}` };
   }
-  const code = testExactProbeCode(raw.exitCode, raw.stdout);
+  // R557: the same predicate the transport reads a "selected no test" answer with.
+  const code = noneSelectedRefusal(raw.exitCode, raw.stdout);
   if (code === undefined) return { kind: "exact" };
   const line = raw.stderr
     .split("\n")
@@ -504,24 +639,10 @@ export function classifyTestExactProbe(
   };
 }
 
-/** R551: why an exited probe is not accepted, or `undefined` when it is. */
-function testExactProbeCode(exitCode: number, stdout: string): string | undefined {
-  if (!isChildChosenExit(exitCode)) return `signal exit ${exitCode}`;
-  if (exitCode !== 6) return `exit ${exitCode}`;
-  let env: unknown;
-  try {
-    env = readAlRunnerEnvelope(stdout);
-  } catch {
-    return "exit 6 but no readable envelope";
-  }
-  const e = typeof env === "object" && env !== null ? (env as Record<string, unknown>) : {};
-  if (!Array.isArray(e.tests)) return "exit 6 but no readable envelope";
-  if (e.tests.length > 0) return `exit 6 but ${e.tests.length} test row(s)`;
-  if (e.exitCode !== 6) return `exit 6 but envelope exitCode ${String(e.exitCode)}`;
-  return undefined;
-}
-
 export class AlRunnerBackend implements ExecutionBackend {
+  /** R577: a kill must reproduce under the mutant (measured: a ~1% flaky Microsoft test became a
+   *  false kill on every transport). bcdev's switch is R582. */
+  readonly killsMustReproduce = true;
   /** R516 I1: one-shot's in-run limit is the budget (`oneShotLimits`); the daemon's is the one stop
    *  it was started with (R517: `inRunStopMs`), never the budget. */
   get inRunStopIsBudget(): boolean {
@@ -566,6 +687,11 @@ export class AlRunnerBackend implements ExecutionBackend {
   // callers may drive activate()/run() directly against cfg.instrumentedDir)
   // activeDir() falls back to the statically configured instrumented dir.
   private deployedDir: string | undefined;
+  /** R583: the selector mode `deploy()` decided for this bundle; `activate()` reads it, never the
+   *  config again. Undefined on the no-deploy path, which falls back to the config. */
+  private deployedSelectorMode: "static" | "resource" | undefined;
+  /** R583: the last `activate()` argument; `null` is the baseline. Undefined before any. */
+  private activeMutant: string | null | undefined;
   /** R220 — coverage scratch, created on first use so a `coverage: "none"` session makes none. */
   private coverageScratch: string | undefined;
   private coverageSeq = 0;
@@ -612,6 +738,50 @@ export class AlRunnerBackend implements ExecutionBackend {
    */
   useDiscoveredTests(tests: readonly TestMethodRef[]): void {
     this.discoveredTests = tests.map((t) => qualifiedTestName(t.codeunitId, t.method));
+  }
+
+  /** R557 (I3): the session suite, by al-runner name, with each test's ref. */
+  private sessionSuite: ReadonlyArray<{ readonly ref: TestMethodRef; readonly sent: string }> = [];
+  /** R557 (I3): the `preproc-undecided-kept` tests, by al-runner name. */
+  private undecidedKept: ReadonlySet<string> = new Set();
+
+  /** R557 (I3): see `ExecutionBackend.useSessionTests`. */
+  useSessionTests(suite: readonly TestMethodRef[], undecidedKept: readonly TestMethodRef[]): void {
+    this.sessionSuite = suite.map((ref) => ({
+      ref,
+      sent: qualifiedTestName(ref.codeunitId, ref.method),
+    }));
+    this.undecidedKept = new Set(
+      undecidedKept.map((r) => qualifiedTestName(r.codeunitId, r.method)),
+    );
+  }
+
+  /**
+   * R557: a row missing for `wanted`. An undecided-kept test keeps a per-test `error` (I3) and the
+   * caller returns it; any other test stops the session. `missing` lists every test to name.
+   */
+  private undecidedOrStop(
+    ref: TestMethodRef,
+    wanted: string,
+    detail: string,
+    durationMs: number,
+    missing: ReadonlyArray<{ readonly ref: TestMethodRef; readonly sent: string }>,
+    returned: readonly string[] | undefined,
+  ): TestVerdict {
+    if (this.undecidedKept.has(wanted)) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: `${AL_RUNNER_UNDECIDED_ARM_MISSING}: ${detail}`,
+        operation: "pre-dispatch-rejected",
+      };
+    }
+    throw new AlRunnerTestNameError(
+      missing.map((m) => ({ alName: `${m.ref.codeunitName}.${m.ref.method}`, sent: m.sent })),
+      this.observedBcBuild()?.build,
+      returned,
+    );
   }
 
   /**
@@ -740,6 +910,19 @@ export class AlRunnerBackend implements ExecutionBackend {
 
   observedMissingImplementation(): AlRunnerMissingImplementation | undefined {
     return this.transport.observedMissingImplementation();
+  }
+
+  /** R583: dependency `--server` summary entries; the daemon's stderr is never read per request. */
+  private readonly serverDependencyDrops = new Set<string>();
+
+  /** R583: every distinct dependency drop either transport saw; the session warns once for each. */
+  observedDependencyDrops(): readonly string[] {
+    return [
+      ...new Set([
+        ...(this.transport.observedDependencyDrops?.() ?? []),
+        ...this.serverDependencyDrops,
+      ]),
+    ];
   }
 
   observedBcBuild(): AlRunnerBcBuild | undefined {
@@ -1184,7 +1367,18 @@ export class AlRunnerBackend implements ExecutionBackend {
     // The selector AL written here never changes again; `activate()` only rewrites the text file.
     // AFTER the manifest validation above, so a corrupt manifest still fails with that message
     // rather than with whatever this helper would say about the same broken file.
-    if (this.selectorMode() === "resource") {
+    // R583: decided ONCE here and stored; `activate()` reads the stored mode. Refused below 14.0 on
+    // the manifest al-runner will actually compile.
+    const mode = this.selectorMode();
+    if (mode === "resource") {
+      const manifest = JSON.parse(await readFile(join(activeDir, "app.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      assertResourceSelectorRuntime(manifest, mode);
+    }
+    this.deployedSelectorMode = mode;
+    if (mode === "resource") {
       await this.installResourceSelector(activeDir, artifactId);
     }
     // R-307 section 4: with coverage on, the index is built HERE, before any baseline, rather than
@@ -1231,6 +1425,7 @@ export class AlRunnerBackend implements ExecutionBackend {
   private resetLayoutState(): void {
     this.coverageIndex = undefined;
     this.serverSuite = undefined;
+    this.deployedSelectorMode = undefined;
   }
 
   private activeDir(): string {
@@ -1327,6 +1522,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     // they are dropped BEFORE the change rather than after: a throw in between would otherwise
     // leave the previous mutant's verdicts cached against the next mutant's source.
     this.serverSuite = undefined;
+    this.activeMutant = mutantId;
     const dir = this.activeDir();
     // Belt-and-suspenders for the documented no-deploy path (deploy() never called, dir ===
     // cfg.instrumentedDir): deploy() already strips these when it runs, but a caller driving
@@ -1336,7 +1532,7 @@ export class AlRunnerBackend implements ExecutionBackend {
     for (const f of [CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME]) {
       await rm(join(dir, f), { force: true });
     }
-    if (this.selectorMode() === "resource") {
+    if ((this.deployedSelectorMode ?? this.selectorMode()) === "resource") {
       // R222: the whole point. One small text file, no AL rewritten, so al-runner's output cache
       // still HITS and the already-compiled bundle reads the new id at runtime.
       await writeFile(
@@ -1441,6 +1637,19 @@ export class AlRunnerBackend implements ExecutionBackend {
     const { res, coverageOut } = sent;
     const durationMs = Date.now() - started;
     if (res.kind === "deadline") return { ref, outcome: "deadline-exceeded", durationMs };
+    if (res.kind === "error" && res.targetCompile === true)
+      return this.targetCompileVerdict(ref, res.detail, durationMs);
+    // R557: the name sent selected nothing: a stop, or an undecided-kept test's `error` (I3).
+    if (res.kind === "none-selected") {
+      return this.undecidedOrStop(
+        ref,
+        wanted,
+        res.detail,
+        durationMs,
+        [{ ref, sent: wanted }],
+        undefined,
+      );
+    }
     if (res.kind === "error")
       return {
         ref,
@@ -1455,19 +1664,42 @@ export class AlRunnerBackend implements ExecutionBackend {
       found !== undefined && res.abortProven?.includes(found.name) === true
         ? { ...found, abortProven: true }
         : found;
-    if (!t)
-      return {
+    // R557: rows came back and none is the name sent (43f76177's exit 0 with zero rows included):
+    // a stop, or an undecided-kept test's `error` (I3). Naming both sides: a mismatch here means
+    // the runner ran something other than what we asked for.
+    if (!t) {
+      return this.undecidedOrStop(
         ref,
-        outcome: "error",
-        durationMs,
-        // Naming both sides: a mismatch here means the runner ran something other than what
-        // we asked for, and "missing the requested test" alone left nobody able to see which.
-        failureMessage: `al-runner output has no test named "${wanted}" (it returned: ${
+        wanted,
+        `al-runner output has no test named "${wanted}" (it returned: ${
           res.tests.map((x) => x.name).join(", ") || "<no tests>"
         })`,
-        operation: "pre-dispatch-rejected",
-      };
+        durationMs,
+        [{ ref, sent: wanted }],
+        res.tests.map((x) => x.name),
+      );
+    }
     return this.oneShotVerdict(ref, wanted, t, durationMs, coverageOut);
+  }
+
+  /**
+   * R583: a run on a target bundle al-runner did not fully compile. On the baseline the session
+   * stops by name; on a mutant every row is `error` with the message, never killed or survived.
+   * `completed-accepted`: al-runner answered, so re-sending is no recovery.
+   */
+  private targetCompileVerdict(
+    ref: TestMethodRef,
+    detail: string,
+    durationMs: number,
+  ): TestVerdict {
+    if (this.activeMutant === null) throw new AlRunnerTargetCompileError(detail);
+    return {
+      ref,
+      outcome: "error",
+      durationMs,
+      failureMessage: detail,
+      operation: "completed-accepted",
+    };
   }
 
   /** One one-shot invocation for `wanted`, excluding every sibling R488 knows for it. */
@@ -1581,6 +1813,9 @@ export class AlRunnerBackend implements ExecutionBackend {
         operation: "pre-dispatch-rejected",
       };
     }
+    if (suite.targetCompile !== undefined) {
+      return this.targetCompileVerdict(ref, suite.targetCompile, Date.now() - started);
+    }
     const t = suite.byName.get(wanted);
     if (t === undefined) {
       // Naming both sides, as the one-shot path does: a mismatch means the runner ran something
@@ -1603,11 +1838,40 @@ export class AlRunnerBackend implements ExecutionBackend {
           runnerRow: "runner-test-error",
         };
       }
+      // R557 (I3): an undecided-kept test may simply be compiled out: today's `error`, prefixed.
+      // (I1): a CLEAN answer stops (exit 0 or 1, every row a pass or fail run row). An unclean one
+      // whose test's own codeunit ran nothing is a compile or runner failure, not a naming one, so
+      // today's `error`, naming the rows that made it unclean.
+      // (I2): an unclean answer still stops when the test's own codeunit ran a test: one
+      // emit-excluded codeunit elsewhere must not turn the stop off for every missing test.
+      const unclean = uncleanRows(suite);
+      const clean = (suite.exitCode === 0 || suite.exitCode === 1) && unclean.length === 0;
+      if (this.undecidedKept.has(wanted) || clean || codeunitRan(suite, ref.codeunitId)) {
+        // The stop lists every SESSION-SUITE test with no row, never the unfiltered discovery,
+        // which holds tests a decided `#if` arm compiled out; on an unclean answer, only tests of
+        // a codeunit that ran.
+        const absent = this.sessionSuite.filter(
+          (s) =>
+            !suite.byName.has(s.sent) &&
+            !this.undecidedKept.has(s.sent) &&
+            (clean || codeunitRan(suite, s.ref.codeunitId)),
+        );
+        return this.undecidedOrStop(
+          ref,
+          wanted,
+          missing,
+          Date.now() - started,
+          absent.some((s) => s.sent === wanted) ? absent : [{ ref, sent: wanted }, ...absent],
+          [...suite.byName.keys()],
+        );
+      }
       return {
         ref,
         outcome: "error",
         durationMs: Date.now() - started,
-        failureMessage: missing,
+        failureMessage: `${missing}; al-runner's answer is not a clean run (exit ${suite.exitCode}${
+          unclean.length > 0 ? `, rows ${unclean.join(", ")}` : ""
+        }), so this is read as a compile or runner failure, not a naming one (R557)`,
         operation: "pre-dispatch-rejected",
       };
     }
@@ -1680,6 +1944,16 @@ export class AlRunnerBackend implements ExecutionBackend {
     // there (setup, unsupported signature, timeout). `hungTest` (M3's note) and the verdict still
     // read the wording, which since R534 includes the OnRun-trigger timeout
     // (RUNNER_ONRUN_TIMEOUT_MESSAGE).
+    // R583: until now `--server` read neither `exitCode` nor `compilationErrors`, so on 069cbf32 at
+    // runtime 13 the resource leg scored rows from a bundle al-runner had refused (false SURVIVES:
+    // baseline and every mutant behaved alike). Only the summary is read: the daemon's stderr spans
+    // its whole life, so a marker there could belong to any earlier request.
+    const compileFound = compileFindingsOf(
+      res.compilationErrors,
+      undefined,
+      compileScopeOf(this.activeDir(), this.cfg.testDir),
+    );
+    for (const d of compileFound.dependency) this.serverDependencyDrops.add(d);
     const hungTest = res.tests.find(isTimeoutRow)?.name;
     if (res.tests.some((t) => t.status !== "pass" && t.status !== "fail")) await server.close();
     await watch();
@@ -1703,6 +1977,10 @@ export class AlRunnerBackend implements ExecutionBackend {
       // which only over-states (the safe direction, see `runViaServer`).
       wallMs: Date.now() - t0,
       ...(hungTest !== undefined ? { hungTest } : {}),
+      ...(compileFound.refuse.length > 0
+        ? { targetCompile: targetCompileMessage(compileFound.refuse, res.exitCode) }
+        : {}),
+      exitCode: res.exitCode,
     };
     this.serverSuite = suite;
     return suite;

@@ -32,7 +32,8 @@ import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { hashPackage } from "../src/baseline-snapshot";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import {
-  odataBaseUrl,
+  devPortOf,
+  odataUrlsOf,
   resolveSelectorIds,
   validateBcDevConfig,
   validatePreprocessorSymbols,
@@ -58,7 +59,7 @@ import { scanTestPageTests } from "../src/testpage-scan";
 import { runVerify } from "../src/verify";
 import type { VerifyOutput } from "../src/verify";
 import { preflightReadOnlyBaseline, readGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { keyOf } from "./mutant-equality";
 import { assertFreshFullRun } from "./verify-agreement";
@@ -212,6 +213,7 @@ async function main(): Promise<void> {
 
   // ---- 1. Setup.
   const configPath = itestConfigPath(PROJECT_DIR);
+  printItestTarget(configPath);
   const configFile = await readJson<LethalConfigFile>(configPath, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
@@ -254,7 +256,7 @@ async function main(): Promise<void> {
   const outputDir = join(scratch, "publish");
   await mkdir(outputDir, { recursive: true });
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -269,6 +271,7 @@ async function main(): Promise<void> {
         mcpCommand: bcdev.mcpCommand,
         project: PROJECT_DIR,
         server: bcdev.server,
+        ...devPortOf(bcdev),
         serverInstance: bcdev.serverInstance,
         company: bcdev.company,
         packageCachePath: bcdev.packageCachePath,
@@ -288,6 +291,7 @@ async function main(): Promise<void> {
           {
             altoolPath: toolPaths.altoolPath,
             server: bcdev.server,
+            ...devPortOf(bcdev),
             serverInstance: bcdev.serverInstance,
             username: bcdev.username,
             password: bcdev.password,

@@ -72,6 +72,13 @@ export interface ContainerDeployerConfig {
   readonly server: string;
   readonly serverInstance: string;
   readonly tenant?: string;
+  /**
+   * R589: the dev-endpoint port. Absent, a port written into `server` is used, and with neither
+   * altool keeps its own default (7049), exactly as before. Needed because the BC on Linux servers
+   * share one host and differ only by port, and `altool publishapp --help` takes the port as its
+   * own `--port` flag.
+   */
+  readonly port?: number;
   // altool publishapp defaults --authentication to AAD; on-prem UserPassword auth (verified
   // against real altool.exe --help plus the BC_SERVER_USERNAME/BC_SERVER_PASSWORD strings in
   // Microsoft.Dynamics.Nav.Deployment.dll) needs these passed as env vars to the altool
@@ -129,8 +136,7 @@ export class ContainerDeployer implements AppPublisher {
         this.cfg.altoolPath,
         "publishapp",
         artifact.appPath,
-        "--server",
-        this.cfg.server,
+        ...altoolServerArgs(this.cfg),
         "--serverinstance",
         this.cfg.serverInstance,
         "--environmenttype",
@@ -172,6 +178,25 @@ export class ContainerDeployer implements AppPublisher {
       }
     });
   }
+}
+
+/**
+ * R589: `--server` and, when a port is known, `--port`. With no port in `cfg.port` or in the
+ * server URL, `server` goes through verbatim and no `--port` is sent, so a config that names no
+ * port (Cronus28) produces the argv it always did. With a port, the server URL is sent without
+ * it, so altool never sees the port twice.
+ */
+export function altoolServerArgs(cfg: Pick<ContainerDeployerConfig, "server" | "port">): string[] {
+  let url: URL | undefined;
+  try {
+    url = new URL(cfg.server);
+  } catch {
+    url = undefined;
+  }
+  const port = cfg.port ?? (url !== undefined && url.port !== "" ? Number(url.port) : undefined);
+  if (port === undefined) return ["--server", cfg.server];
+  const server = url === undefined ? cfg.server : `${url.protocol}//${url.hostname}`;
+  return ["--server", server, "--port", String(port)];
 }
 
 function compareVersions(v1: string, v2: string): number {

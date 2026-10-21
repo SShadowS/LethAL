@@ -301,7 +301,8 @@ async function measureOnce(
         "",
       );
     }
-    if (res.kind === "error") {
+    // R557: selecting nothing measured nothing, as a failed run did not.
+    if (res.kind === "error" || res.kind === "none-selected") {
       throw new AlRunnerPredefinedProbeError("the probe run failed", tail(res.detail));
     }
     const output = tail(JSON.stringify(res.tests));

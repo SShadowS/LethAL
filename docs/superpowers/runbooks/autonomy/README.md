@@ -35,18 +35,28 @@ next free id right before writing).
   red-going test for EACH direction; "it works both ways" is not evidence.
 - **Submit only on green CI, both jobs.** Push the task branch; `check` (Windows) and `unit-linux`
   must both pass, and the submit note names the run id. The container is Linux, so CI is the only
-  Windows check.
+  Windows check. A local verify quoted in a submit note is the `VERIFY FULL` line of
+  `bun scripts/verify.ts` with no arguments; `--changed` and package runs print `VERIFY PARTIAL`,
+  exit 4 even when every test passes, and are an inner loop only (R593).
 - **Never pipe a gating command into `grep` or `tail` before `&&`.** The pipeline's status is the
   last command's. Use `set -o pipefail;` if the output must be trimmed.
 - **A lone timeout in a full `verify` while another full `verify` overlaps is starvation, not a
   result** (R482): keep the log, re-run once, and investigate only if it fails again or fails with
   no overlap. Never raise a timeout to make it pass.
 - **At most two BaseApp-corpus jobs at once.** The container has 24 GB; a third census or diff
-  process gets OOM-killed (R-458 planner, 2026-10-05).
+  process gets OOM-killed (R-458 planner, 2026-10-05). The two-heavy-job limit counts corpus jobs and
+  local runners (itest:alrunner, the Rust runtime); a BC gate against a remote server (bc1/bc2/bc3) is
+  about 100 MB locally and does NOT count: run up to one per bc server in parallel, and back off if
+  `free -g` shows under 10 GB available (2026-10-21). A parallel itest counts as ONE job: count its
+  root `bun packages/runner/itest/` process (the one WITHOUT `--worker` in its argv), not its
+  workers; it runs at `--parallel` 3 or lower (about 4 GB), under the same 10 GB back-off.
 - **Push work early, but WIP pushes carry `[skip ci]`** in the head commit's message. Unplanned
   restarts happen, so push; but CI runs on every branch and every red run emails the owner. Push
   WITHOUT `[skip ci]` only when you want a real CI result (before submitting, or to reproduce a
-  Windows-only failure); the submitted head must have a CI run.
+  Windows-only failure); the submitted head must have a CI run. A clean MERGE commit as the
+  submit head may start no CI run at all when the same push also carries `[skip ci]` commits
+  (R-577, 1ab9cbdc): after pushing, check `gh run list --commit <sha>`; if there is no run, push an
+  empty "CI run for the submit" commit on top.
 - **Measure a corpus once per master commit, and reuse it (owner, 2026-10-08).** A full
   BC.History dump of master costs hours, and plan rounds repeated it. Keep master's dump in
   `/coord/cache/dumps/<master sha>/<set>/` (sets: `bch`, `cdo`, `dc`, `do`, `fixtures`), with a
@@ -54,7 +64,14 @@ next free id right before writing).
   have it. A build's dump re-reads only the projects its change can touch (the R-487 keydiff
   approach) and compares against the cached master. Re-dump master only when master moved and the
   move touches mutant generation. Say in your report which cache entry you used. A cache entry is
-  never edited, only replaced whole.
+  never edited, only replaced whole. The tool is `bun scripts/corpus-snapshot.ts snapshot <set>
+  --master` and `diff <set> --branch <worktree> [--projects ...]` (R593); it keys each entry by its
+  dumper (`<sha>/<set>/<dumperKey>/`) and takes one of two heavy slots, `/coord/locks/heavy.1` and
+  `heavy.2`, with `flock`. Known limit: two corpus jobs started from ONE shell (`a & b`) share a
+  process group and count as one, and a job on a corpus COPY is invisible to its `ps` scan; such
+  jobs take a slot themselves: `flock -n /coord/locks/heavy.<n> <cmd>`. A slot taken by hand like
+  that writes no pid, so the tool counts it twice: once as a held slot and once as a running job.
+  That errs on the safe side.
 - **A lane commits its own pre-commitment to `master` (owner, 2026-10-08).** Once a pre-commitment
   is written (and plan-reviewed), commit it yourself, specs-only, as
   `docs/superpowers/specs/<date>-<id>-...-precommitment.md` with `[skip ci]`, BEFORE any live run.
@@ -63,6 +80,28 @@ next free id right before writing).
   again. Touch nothing else in that commit. Send the orchestrator its sha
   with your next message. The rule is unchanged: the file lands on master before the run, and a
   differing result is a block, never a re-record. The orchestrator still commits the adopted plan.
+- **Speed rules (owner, 2026-10-21).** The waits, not the thinking, set our pace:
+  - **One deep plan review, not rounds.** Measure first. Then brief the opus reviewer to do it all
+    in ONE pass: attack every class-1 door, AND list every open "what else could break / what is
+    unmeasured" question, AND propose the narrowing for anything over a cost bar. Fold everything
+    in, and re-measure ONCE. A second review looks only at the changed parts (a delta brief, not the
+    whole plan). A third full round needs a reason in the message to the orchestrator.
+  - **Use the master dump cache (rule above) every time.** Before any master-leg dump, look in
+    `/coord/cache/dumps/<master sha>/`. After a fresh master dump, WRITE it there with `DONE`, so
+    the next lane and the next round reuse it. Branch legs re-dump only the projects the change can
+    touch. Say in every measure report which cache entry was used or written.
+  - **Nothing load-bearing in session scratch.** Restarts wipe it (three times in October). Tools go
+    in the repo under `scripts/` (committed with `[skip ci]`); outputs, logs and evidence go in
+    `/coord/handoff/<task>/` or `/coord/cache/`. A gate's log that is evidence for a submit is
+    written to `/coord/handoff/<task>/` as it runs.
+  - **Wait for at most one OTHER heavy job, not zero.** A driver that waits for an empty container
+    can starve for hours. The limit stays two heavy jobs container-wide.
+  - **Check before any status line (owner, 2026-10-21).** Before you report the state of background
+    work (a gate, a driver, a queue), read its log and the running processes with their working
+    directory. Never repeat the last state you remember: R-577 reported a confirm as "still waiting for
+    a slot" an hour after it had PASSED, because the confirm and the slice queue ran as one background
+    job, so the confirm's end raised no notification. Run each phase as its own background job (or
+    watch the log's phase lines), so every phase's end reaches you.
 
 ## coord
 
@@ -101,19 +140,59 @@ containers assigned to this project can be leased. A missing `allocation.json` t
 **The owner's host pause is not seen there.** To pause the container's sessions use
 `kraken tentacle stop` (host) or `bash scripts/coord.sh pause` (inside).
 
-- **LethAL may use `Cronus28` and `Cronus284`** (owner allocation 2026-09-25, Cronus284 added
-  2026-09-26, enforced by coord through `H:\cg-coord\allocation.json`). Cronus281, Cronus282 and
-  Cronus283 belong to CentralGauge; never lease or publish to them. **Owner (2026-09-27): load
-  balance across both.** Each container runs one gate at a time under a coord lease; the two lanes
-  use whichever is free (the orchestrator may assign one per lane). Cronus28 carries every fixture
-  (`sandbox-app`, `sandbox-data`, `sandbox-hang`, ...). Cronus284 carries the control app and the
-  `sandbox-data` pair only (others unpublished 2026-09-26). Which control version a container has
-  installed is machine state, not repo state: `lethal doctor --config <path>` reads it from the
-  server (its `control-version` check), and the client requires the version in
-  `extensions/lethal-control/app.json`. Publish a fixture pair on Cronus284 before its
-  first gate, and point a lane's gitignored `lethal.config.local.json` at `http://Cronus284` for that
-  run. Both have stalled on TestPage tests (R236, `docs/measurements/2026-09-27-nst-wedge-incidents.md`);
-  an unrecoverable container goes to the owner.
+- **LethAL uses the three BC on Linux servers `bc1`, `bc2` and `bc3`** (R589, owner allocation
+  2026-10-21, enforced by coord through the allocation file). **`Cronus28` is PARKED** (owner,
+  2026-10-21: unreachable at its new address; no lane waits for it, and the text about it below is
+  kept for when it returns). **Cronus284 is
+  CentralGauge's, not LethAL's** (owner, 2026-10-21; LethAL used it 2026-09-26 to 2026-10-20, and
+  the measurements from that time stay as history). Cronus281, Cronus282, Cronus283 and Cronus284
+  belong to CentralGauge; never lease or publish to them. Each server runs one gate at a time under
+  a coord lease; lanes use whichever is free AMONG the servers proven for that gate (the bullet on
+  proof below; the orchestrator may assign one per lane). Cronus28
+  carries every fixture (`sandbox-app`, `sandbox-data`, `sandbox-hang`, ...). Which control version
+  a server has installed is machine state, not repo state: `lethal doctor --config <path>` reads it
+  from the server (its `control-version` check), and the client requires the version in
+  `extensions/lethal-control/app.json`. Cronus28 has stalled on TestPage tests (R236,
+  `docs/measurements/2026-09-27-nst-wedge-incidents.md`); an unrecoverable container goes to the
+  owner.
+- **The BC on Linux servers (R589).** BC 28.4 on server1 (192.168.2.157), reachable from the kraken
+  container. W1 localization, company `CRONUS International Ltd.`, tenant `default`, instance `BC`,
+  Basic authentication.
+
+  | server | OData | dev endpoint | API |
+  |---|---|---|---|
+  | `bc1` | 7048 | 7049 | 7052 |
+  | `bc2` | 7148 | 7149 | 7152 |
+  | `bc3` | 7248 | 7249 | 7252 |
+
+  - **Their databases are in memory.** A container restart or a server1 reboot resets each one to
+    a fresh CRONUS, with no LethAL app on it. The fix is to re-run the setup script:
+    `bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` (add `--dry-run` to see the plan). It
+    takes and releases the coord lease itself, writes each fixture's config and paired launch
+    file, publishes LethAL Control and every app a BC gate needs (`sandbox-probes` included) over
+    the dev endpoint (Dev scope), skips what is already there, and ends with `lethal doctor` on
+    every config it wrote.
+  - No BcContainerHelper and no Windows Docker context: everything goes over the dev endpoint.
+  - The login is in the gitignored fixture config (`fixtures/<fixture>/lethal.config.<server>.json`,
+    written by the setup script) and in `/coord/secrets/bc-linux.env`, which only the owner writes.
+    Never print either. Select a server for a gate with `LETHAL_ITEST_CONFIG=lethal.config.bc1.json`;
+    it requires `.vscode/launch.bc1.json` naming the same server, and the gate's first line names
+    the target it measures.
+  - The company is W1 `CRONUS International Ltd.`, not Cronus28's DK `CRONUS Danmark A/S`.
+  - **Proof is PER SERVER (orchestrator ruling 2026-10-21).** A gate runs on a server only after
+    its frozen figures have reproduced per mutant on THAT server, under the current fixture builds;
+    any difference is a BLOCK. A proof on bc1 does not admit bc2: the servers can differ in app
+    builds and in what else is installed (bc3 carries the Continia stack). Admitting a new
+    (gate, server) pair is one ordinary run of the gate there. Proven 2026-10-21 under R-583's
+    runtime-17 fixtures (`/coord/handoff/R-583/gates.md`; R592 moves the table to
+    `docs/gates/servers.md`):
+    - `bc1`: bcdev, bcdev-wrapped, bcdev-names, tables, verify (R-595), verify-scale,
+      stale-publish, testapp, lease.
+    - `bc2`: chunked, hang, harden, agreement. (bcdev and verify-scale passed on bc2 only on the
+      pre-runtime-17 fixtures, so they are not admitted there yet.)
+    - `bc3`: bcdev and hang were proven on the PRE-runtime-17 fixtures only, and it now carries the
+      R594 CDO oracle; run `bc-linux-setup.ts --server bc3` and re-prove a gate there before using
+      it for that gate.
 - Before any work that touches it (live gates, control-app publish, fixture publish): check it
   is running (host only: `pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`;
   in the container, `kraken tentacle status`), then

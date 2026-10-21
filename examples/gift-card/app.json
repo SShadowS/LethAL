@@ -2,7 +2,7 @@
   "id": "4c29c981-10e1-4eb4-a0af-983e8b30b270",
   "name": "Gift Card Demo",
   "publisher": "LethAL",
-  "version": "1.0.0.0",
+  "version": "1.0.0.1",
   "brief": "A small gift card extension whose test suite is green and misses a real bug.",
   "description": "The demo application for LethAL: issue a gift card, redeem against it, block expired cards. Its test suite passes and does not notice that one line is wrong. See examples/gift-card/README.md. Not for production use.",
   "privacyStatement": "",
@@ -27,6 +27,6 @@
     "allowDownloadingSource": true,
     "includeSourceInSymbolFile": true
   },
-  "runtime": "13.0",
+  "runtime": "17.0",
   "features": []
 }

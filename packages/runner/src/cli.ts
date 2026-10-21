@@ -31,6 +31,8 @@ import {
   AlRunnerBackend,
   type AlRunnerConfig,
   type AlRunnerProvisionResult,
+  assertResourceSelectorRuntime,
+  runtimeBelow14,
 } from "./al-runner-backend";
 import { readAlRunnerCache } from "./al-runner-cache";
 import type { AlRunnerCacheReport } from "./al-runner-cache";
@@ -2178,8 +2180,15 @@ export interface BcDevConfigSection {
    * OData root, used VERBATIM when present. `odataBaseUrl` injects port 7048, which is right for a
    * container and wrong for an environment tool's `https://host/{envId}`. Set only by
    * `env-tool-session`; a hand-written bcdev section leaves it absent and keeps the derivation.
+   * R589: also how a hand-written section names an OData port other than 7048 (BC on Linux).
    */
   readonly baseUrl?: string;
+  /**
+   * R589: the API root (`<proto>//<host>:<apiPort>/<instance>`), used VERBATIM for the API calls
+   * (`api/v2.0/companies`, the automation `extensions` list). Absent, they go to the OData root,
+   * as they always did. BC on Linux serves its API on a separate port.
+   */
+  readonly apiBaseUrl?: string;
   /**
    * bc-dev-mcp connection port. Set only by `env-tool-session` (derived from `baseUrl` — see
    * `deriveMcpPort` there); a hand-written bcdev section leaves it absent, matching a container's
@@ -2270,13 +2279,19 @@ export function alRunnerAdvisory(
   /** The files the coverage guard named when it turned coverage off (set or on by default). The
    *  line then says why it is off instead of advising a key. */
   coverageTurnedOffFor: readonly string[] = [],
+  /** R583: the target `app.json`'s `runtime`. Below 14.0 the faster selector is not available. */
+  runtime?: unknown,
 ): string | undefined {
   const t = effectiveAlRunnerTransport(c);
   const notes: string[] = [];
   if (!t.serverMode) {
     notes.push('serverMode is false (one process per test; "alRunner.serverMode": true is faster)');
   }
-  if (t.selectorMode === "static") {
+  if (t.selectorMode === "static" && runtimeBelow14(runtime)) {
+    notes.push(
+      `selectorMode is "static" (a recompile per mutant); the faster "resource" selector needs app.json runtime 14.0 or above and this app declares ${JSON.stringify(runtime)}: raise its runtime to 17.0 to use it`,
+    );
+  } else if (t.selectorMode === "static") {
     notes.push(
       'selectorMode is "static" (a recompile per mutant; "alRunner.selectorMode": "resource" is faster)',
     );
@@ -2462,9 +2477,44 @@ export async function prepareAlRunnerSession(
     warn,
     opts,
   );
-  const advisory = alRunnerAdvisory(config.alRunner ?? {}, named);
+  const advisory = alRunnerAdvisory(
+    config.alRunner ?? {},
+    named,
+    (await targetAppJson(projectDir, opts.snapshot))?.runtime,
+  );
   if (advisory !== undefined) warn(advisory);
   return { config, admitMultiObjectFiles };
+}
+
+/** The target's `app.json` from the session snapshot (R205), else from disk; `undefined` when absent. */
+async function targetAppJson(
+  projectDir: string,
+  snapshot: ReadonlyMap<string, Buffer> | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  let raw = snapshot?.get("app.json")?.toString("utf8");
+  if (raw === undefined && snapshot === undefined) {
+    raw = await readFile(join(projectDir, "app.json"), "utf8").catch(() => undefined);
+  }
+  if (raw === undefined) return undefined;
+  return JSON.parse(raw.replace(/^﻿/, "")) as Record<string, unknown>;
+}
+
+/**
+ * R583: refuses an al-runner run whose effective selector is `resource` on a target below runtime
+ * 14.0, BEFORE anything is instrumented. `deploy()` checks again on the manifest al-runner compiles.
+ * Called for `run` (campaign stages run through it) and `run --dry-run`. `verify` is bcdev only.
+ */
+export async function refuseResourceSelectorRuntime(
+  config: LethalConfigFile,
+  projectDir: string,
+  snapshot: ReadonlyMap<string, Buffer>,
+): Promise<void> {
+  const appJson = await targetAppJson(projectDir, snapshot);
+  if (appJson === undefined) return; // buildBackend refuses a missing app.json by its own message
+  assertResourceSelectorRuntime(
+    appJson,
+    effectiveAlRunnerTransport(config.alRunner ?? {}).selectorMode,
+  );
 }
 
 export interface LethalConfigFile {
@@ -2594,6 +2644,15 @@ export function validateBcDevConfig(
   if (missing.length > 0) {
     throw new Error(
       `lethal.config.json "bcdev" section is missing required field(s): ${missing.join(", ")}`,
+    );
+  }
+  // R589: two places can state the dev port, and the readers disagree on which wins (altool and
+  // bc-dev-mcp take `port`, `devPackagesUrl` and the quarantine key take `server`). A config whose
+  // two say different ports would publish to one server and read another, so it is refused.
+  const serverPort = urlPortOf(String(raw.server));
+  if (raw.port !== undefined && serverPort !== undefined && raw.port !== serverPort) {
+    throw new Error(
+      `lethal.config.json "bcdev" section names two dev ports: "port" ${raw.port} and ${serverPort} in "server" (${raw.server}). Make them the same.`,
     );
   }
   return raw as BcDevConfigSection;
@@ -2732,6 +2791,36 @@ export function odataBaseUrl(server: string, serverInstance: string): string {
 }
 
 /**
+ * R589: the OData root a bcdev section names. `baseUrl` verbatim when the config gives one (the
+ * only way to reach a server whose OData is not on 7048, such as `bc2`'s 7148), else
+ * `odataBaseUrl`'s 7048 derivation, so a config without it (Cronus28) is unchanged. The ONE
+ * derivation `odataCfgFor` and every bcdev itest use.
+ */
+export function configuredOdataBaseUrl(
+  c: Pick<BcDevConfigSection, "baseUrl" | "server" | "serverInstance">,
+): string {
+  return c.baseUrl ?? odataBaseUrl(c.server, c.serverInstance);
+}
+
+/**
+ * R589: the OData root, plus the API root when the section names one. What every OData/API client
+ * built from a bcdev section (`odataCfgFor`, the bcdev itests) spreads in.
+ */
+export function odataUrlsOf(
+  c: Pick<BcDevConfigSection, "baseUrl" | "apiBaseUrl" | "server" | "serverInstance">,
+): { readonly baseUrl: string; readonly apiBaseUrl?: string } {
+  return {
+    baseUrl: configuredOdataBaseUrl(c),
+    ...(c.apiBaseUrl !== undefined ? { apiBaseUrl: c.apiBaseUrl } : {}),
+  };
+}
+
+/** R589: `{ port }` when the bcdev section names its dev port, else nothing (the 7049 default). */
+export function devPortOf(c: Pick<BcDevConfigSection, "port">): { readonly port?: number } {
+  return c.port !== undefined ? { port: c.port } : {};
+}
+
+/**
  * R51: the OData base URL a RECOVERY command (`force-reset-lease`) should call, given the tier the
  * operator named and whatever the config declares.
  *
@@ -2748,10 +2837,22 @@ export function odataBaseUrl(server: string, serverInstance: string): string {
  * REFUSED naming both rather than resolved by a precedence rule nobody would remember under
  * pressure. A config with no `baseUrl` keeps the container behaviour untouched.
  */
+/** The port written in a URL, or `undefined` when it states none or does not parse. */
+export function urlPortOf(url: string): number | undefined {
+  try {
+    const p = new URL(url).port;
+    return p !== "" ? Number(p) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function recoveryBaseUrl(
   server: string,
   serverInstance: string,
   configuredBaseUrl: string | undefined,
+  /** R589: the config's dev port (`bcdev.port`, else a port written in `bcdev.server`). */
+  configuredDevPort?: number,
 ): string {
   if (configuredBaseUrl === undefined || configuredBaseUrl === "") {
     return odataBaseUrl(server, serverInstance);
@@ -2760,11 +2861,34 @@ export function recoveryBaseUrl(
   // "a" is a substring of almost any hostname ("example.com"), so a mismatched tier would sail
   // through the check that exists to catch it. Caught by the test below, not by reading this.
   let segments: readonly string[];
+  let baseHost: string;
   try {
-    segments = new URL(configuredBaseUrl).pathname.split("/").filter((s) => s !== "");
+    const base = new URL(configuredBaseUrl);
+    segments = base.pathname.split("/").filter((s) => s !== "");
+    baseHost = base.hostname;
   } catch {
     throw new Error(
       `force-reset-lease: configured bcdev.baseUrl "${configuredBaseUrl}" is not a valid URL`,
+    );
+  }
+  // R589: three BC on Linux servers share one host and instance `BC`, so the instance check alone
+  // let `--server` name bc2 while the configured baseUrl reset bc1. The host must match, and the
+  // dev port `--server` names (if any) must be the config's.
+  let wanted: URL;
+  try {
+    wanted = new URL(server);
+  } catch {
+    throw new Error(`force-reset-lease: --server "${server}" is not a valid URL`);
+  }
+  const wantedPort = wanted.port !== "" ? Number(wanted.port) : undefined;
+  if (
+    wanted.hostname !== baseHost ||
+    (wantedPort !== undefined &&
+      configuredDevPort !== undefined &&
+      wantedPort !== configuredDevPort)
+  ) {
+    throw new Error(
+      `force-reset-lease: --server "${server}" is not the server the config describes (bcdev.baseUrl "${configuredBaseUrl}"${configuredDevPort !== undefined ? `, dev port ${configuredDevPort}` : ""}). This command clears safety state and will not reset a server you did not name — point --server at the config's server, or use that server's own config.`,
     );
   }
   if (!segments.includes(serverInstance)) {
@@ -2791,7 +2915,7 @@ export function recoveryBaseUrl(
  */
 export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
   return {
-    baseUrl: c.baseUrl ?? odataBaseUrl(c.server, c.serverInstance),
+    ...odataUrlsOf(c),
     company: c.company,
     username: c.username,
     password: c.password,
@@ -2929,6 +3053,7 @@ export function deployerFor(
           username: c.username,
           password: c.password,
           ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
+          ...devPortOf(c),
         },
         defaultDeployerIo,
       );
@@ -3942,6 +4067,10 @@ export async function runFromCli(
   // lines, the al-runner coverage guard and the session's build all use this snapshot, so an edit
   // landing later is never built; the session's last-batch re-read warns about it.
   const source = await readTargetSource(parsed.projectDir);
+  // R583: before any al-runner probe, instrumentation or build.
+  if (parsed.backendKind === "al-runner") {
+    await refuseResourceSelectorRuntime(configFile, parsed.projectDir, source);
+  }
   // Issue #19: before anything is provisioned, so a bad ref fails in seconds.
   const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn, source);
   // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
@@ -5790,7 +5919,13 @@ export async function forceResetLeaseFromCli(
     // R51: honours an explicit `bcdev.baseUrl` (the env-tool case — a path-routed HTTPS endpoint on
     // 443, which port-7048 injection can never reach), and refuses one that names a different tier
     // than --instance. See `recoveryBaseUrl`.
-    baseUrl: recoveryBaseUrl(parsed.server, parsed.serverInstance, c.baseUrl),
+    baseUrl: recoveryBaseUrl(
+      parsed.server,
+      parsed.serverInstance,
+      c.baseUrl,
+      c.port ?? urlPortOf(c.server),
+    ),
+    ...(c.apiBaseUrl !== undefined ? { apiBaseUrl: c.apiBaseUrl } : {}),
     company: c.company,
     username: c.username,
     password: c.password,
@@ -5857,6 +5992,51 @@ const NATIVE_CHECK_SNIPPET = `codeunit 50100 "Native Check"
 }
 `;
 
+/** `lethal run --dry-run`: list what would be mutated, executing nothing. Out of `main` (R583) so
+ *  its refusal is testable. */
+export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
+  // R221: the config's exclusions count here too. A `--dry-run` that answered for a wider scope
+  // than the real run is the failure `printDryRun`'s doc names, and forgetting the config is the
+  // easiest way to produce it -- the caller passed no flag, so nothing on the command line hints
+  // that a scope was in force.
+  const dryRunConfig = await loadDryRunConfig(parsed.configPath, parsed.configExplicit === true);
+  if (dryRunConfig === undefined) {
+    console.log(`no config at ${parsed.configPath}: planning from source only, no server lookups`);
+  }
+  const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
+  // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
+  const dryRunSource = await readTargetSource(parsed.projectDir);
+  // R583: a dry run refuses what the real run would refuse.
+  if (parsed.backendKind === "al-runner") {
+    await refuseResourceSelectorRuntime(dryRunConfig ?? {}, parsed.projectDir, dryRunSource);
+  }
+  const dryRunLines = await resolveLineRanges(parsed, defaultSpawn, dryRunSource);
+  await printDryRun(parsed.projectDir, parsed.only, {
+    dbPath: parsed.dbPath,
+    configPath: parsed.configPath,
+    source: dryRunSource,
+    ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
+    ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+    ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
+    ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
+    ...(dryRunConfig?.preprocessorSymbols !== undefined
+      ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
+      : {}),
+    ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
+    ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
+      ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
+      : {}),
+    // R565: the folders a real run searches, less al-runner's provisioned platform apps.
+    dependencyPackageDirs:
+      parsed.backendKind === "al-runner"
+        ? dryRunConfig?.alRunner?.packagesDir !== undefined
+          ? [dryRunConfig.alRunner.packagesDir]
+          : []
+        : [resolve(packageCachePathDefault(dryRunConfig?.bcdev, parsed.projectDir))],
+  });
+  return 0;
+}
+
 async function main(): Promise<number> {
   const parsed = parseCliConfig(process.argv.slice(2));
   if (parsed.mode === "help") {
@@ -5878,44 +6058,7 @@ async function main(): Promise<number> {
     return 0;
   }
   if (parsed.mode === "dry-run") {
-    // R221: the config's exclusions count here too. A `--dry-run` that answered for a wider scope
-    // than the real run is the failure `printDryRun`'s doc names, and forgetting the config is the
-    // easiest way to produce it -- the caller passed no flag, so nothing on the command line hints
-    // that a scope was in force.
-    const dryRunConfig = await loadDryRunConfig(parsed.configPath, parsed.configExplicit === true);
-    if (dryRunConfig === undefined) {
-      console.log(
-        `no config at ${parsed.configPath}: planning from source only, no server lookups`,
-      );
-    }
-    const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
-    // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
-    const dryRunSource = await readTargetSource(parsed.projectDir);
-    const dryRunLines = await resolveLineRanges(parsed, defaultSpawn, dryRunSource);
-    await printDryRun(parsed.projectDir, parsed.only, {
-      dbPath: parsed.dbPath,
-      configPath: parsed.configPath,
-      source: dryRunSource,
-      ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
-      ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
-      ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
-      ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
-      ...(dryRunConfig?.preprocessorSymbols !== undefined
-        ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
-        : {}),
-      ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
-      ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
-        ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
-        : {}),
-      // R565: the folders a real run searches, less al-runner's provisioned platform apps.
-      dependencyPackageDirs:
-        parsed.backendKind === "al-runner"
-          ? dryRunConfig?.alRunner?.packagesDir !== undefined
-            ? [dryRunConfig.alRunner.packagesDir]
-            : []
-          : [resolve(packageCachePathDefault(dryRunConfig?.bcdev, parsed.projectDir))],
-    });
-    return 0;
+    return await dryRunFromCli(parsed);
   }
   if (parsed.mode === "clear-quarantine") {
     return await clearQuarantineFromCli(parsed);

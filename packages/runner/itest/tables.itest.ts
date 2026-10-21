@@ -32,7 +32,7 @@ import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { formatFailure } from "../src/format-failure";
@@ -44,7 +44,14 @@ import { type SessionReport, mutantRef } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import {
+  assertLaunchMatchesConfig,
+  itestConfigName,
+  itestConfigPath,
+  itestLaunchPath,
+  printItestTarget,
+} from "./config-path";
+import { TABLES_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
@@ -69,8 +76,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 // Committed per-mutant baseline, see baseline-guard.ts. Since R332 a missing file is refused at
 // startup; record it only with LETHAL_ITEST_RECORD_BASELINE=tables.baseline.json (a record run
 // exits 3, never a pass). Never hand-write this file; it must come from a live run.
@@ -276,7 +284,7 @@ const EXPECTED = {
   // R-463 moves this from 422 to 428: `Data Band Ext`'s `CountBand` adds 4 deployed mutants plus the
   // 2 Tier-1 `void-method-call` that dedup removes under its two `remove-setrange` sites.
   // Pre-committed in docs/superpowers/specs/2026-10-09-r463-reportext-precommitment.md.
-  totalMutantSites: 428,
+  totalMutantSites: TABLES_FIGURES.totalMutantSites,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -386,7 +394,7 @@ const EXPECTED = {
   // `BandClassifiesDirectly` (the `Band` procedure) and `BandReportSumsBands` (the report run).
   // R-463 moves this from 310 to 314: all four of `CountBand`'s mutants are killed by
   // `BandCountsFromLow`, at position 1.
-  killed: 314,
+  killed: TABLES_FIGURES.killed,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -471,7 +479,7 @@ const EXPECTED = {
   // and never read `Amount`.
   // R254 moves this from 68 to 70: the arm's `Total := 0` in `OnPreReport` (its `empty-block` and
   // `remove-assignment`) is equivalent, since `Total` already starts at 0.
-  survived: 70,
+  survived: TABLES_FIGURES.survived,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -512,7 +520,7 @@ const EXPECTED = {
   // test calls.
   // R254 moves this from 18 to 22: the arm's `Unreached` procedure, which no test calls (M1
   // measured no coverage row for it), is its no-coverage control.
-  noCoverage: 22,
+  noCoverage: TABLES_FIGURES.noCoverage,
   // 183 / 214 does not reduce (183 is 3 x 61, 214 is 2 x 107). It is about 0.8551, DOWN from
   // 0.8626: a wave that adds six deliberate survivors is SUPPOSED to move the score down, and a
   // score that rose instead would mean the survivors did not arrive.
@@ -541,7 +549,7 @@ const EXPECTED = {
   // said so explicitly and did not, which cost a re-run.
   // R254 moves it to 310 / 380, about 0.81579 from 0.81572: nine kills against two survivors.
   // R-463 moves it to 314 / 384, about 0.81771: `CountBand`'s four kills and no survivors.
-  mutationScore: 314 / (314 + 70),
+  mutationScore: TABLES_FIGURES.killed / (TABLES_FIGURES.killed + TABLES_FIGURES.survived),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.
@@ -579,7 +587,7 @@ const EXPECTED = {
    * OVER-TAG: its kill is earned by the test's own Error. Pre-committed in
    * docs/superpowers/specs/2026-10-05-r457-forced-tag-precommitment.md before the run.
    */
-  platformArtifactKills: 4,
+  platformArtifactKills: TABLES_FIGURES.platformArtifactKills,
   /**
    * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
    * the point rather than an incidental extra.
@@ -605,7 +613,7 @@ const EXPECTED = {
    * avoid — so the assertions below pin the two POPULATIONS and the per-mutant membership, not a
    * number.
    */
-  assertionScreenDiscrimination: "partial",
+  assertionScreenDiscrimination: TABLES_FIGURES.assertionScreenDiscrimination,
   /**
    * `coverageFilter`'s FALLBACK 2 ("coverage places this table trigger nowhere, run every green
    * test") must fire for NOBODY here. This is the assertion `0a463fd` actually earns: before it,
@@ -619,7 +627,7 @@ const EXPECTED = {
    * everything), but it IS a change in what this gate proves, and must be explained before the
    * number is edited.
    */
-  untargetedTriggerCount: 0,
+  untargetedTriggerCount: TABLES_FIGURES.untargetedTriggerCount,
   /**
    * R198: one `RunMutantMany` call per mutant that reached the covering loop: 299 killed + 63
    * survived; the 15 no-coverage never reach it, and 299 + 63 + 15 = 377 deployed leaves no other
@@ -629,7 +637,7 @@ const EXPECTED = {
    * R-463: 314 killed + 70 survived scored, plus the same 15 replays (`CountBand`'s four kills are at
    * position 1: `BandCountsFromLow` is the only test covering that procedure).
    */
-  groupedCalls: 384 + 15,
+  groupedCalls: TABLES_FIGURES.groupedCalls,
   /**
    * R206: kills measured at group position > 1, each confirmed by replaying its call's prefix
    * unmutated (one extra `RunMutantMany` each, hence the `+ 13` above). MEASURED from run 334's
@@ -651,14 +659,8 @@ const EXPECTED = {
    * `BandClassifiesDirectly` and `BandReportSumsBands`) now covers object 79341 too, so two passing
    * tests run before the killer. Still warm kills, so the count stays 15.
    */
-  warmKills: 15,
-  killPositions: [
-    { mutantCode: "M0179", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
-    { mutantCode: "M0183", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
-    { mutantCode: "M0175", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
-    { mutantCode: "M0005", killingTest: "BandReportSumsBands", killPosition: 3 },
-    { mutantCode: "M0009", killingTest: "BandReportSumsBands", killPosition: 3 },
-  ],
+  warmKills: TABLES_FIGURES.warmKills,
+  killPositions: TABLES_FIGURES.killPositions,
   /**
    * Task 4 (excluded-sites-spine): the `notInstrumented` half's ONLY live proof, added because it
    * had none. Every other file in this fixture is a CARRIER kind (`CARRIER_KINDS` in
@@ -675,11 +677,7 @@ const EXPECTED = {
    * docs/superpowers/specs/2026-08-26-excluded-sites-fixture-precommitment.md for the measurement
    * and the reasoning pre-committed before any live run.
    */
-  notInstrumented: {
-    fileCount: 1,
-    siteCount: 5,
-    files: ["src/DataScopeQuery.Query.al"],
-  },
+  notInstrumented: TABLES_FIGURES.notInstrumented,
   /**
    * R144: the declarative surface LethAL REFUSES to mutate, which R135 ruled out permanently and
    * which the report now has to say out loud.
@@ -702,12 +700,7 @@ const EXPECTED = {
    * rise above 1 here therefore means the grammar or an operator's targeting changed, not that the
    * fixture grew.
    */
-  declarativeSites: {
-    siteCount: 1,
-    fileCount: 1,
-    file: "src/DataMainList.Page.al",
-    kinds: "page_declaration",
-  },
+  declarativeSites: TABLES_FIGURES.declarativeSites,
 };
 
 interface LaunchLocalConfig {
@@ -760,6 +753,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
   const launchCfg = await readOptionalLaunchConfig();
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
+  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
 
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
@@ -782,6 +776,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -790,7 +785,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     defaultDeployerIo,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -803,6 +798,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       mcpCommand: bcdev.mcpCommand,
       project: PROJECT_DIR,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
       packageCachePath: bcdev.packageCachePath,
@@ -990,7 +986,7 @@ function assertVerdictTable(report: SessionReport): void {
   );
   assert.deepEqual(
     report.testPageRefused?.tests,
-    ["Data Tests.PageActionComputesNonZero"],
+    TABLES_FIGURES.testPageRefused,
     "the only refused test must be the TestPage test, by name",
   );
   assert.ok(

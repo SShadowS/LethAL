@@ -1,5 +1,19 @@
 # R577 pre-commitment: "a kill must reproduce" on al-runner (2026-10-20, lethal-preproc)
 
+**Addendum (2026-10-21), written before the confirming run.** R-557 (master 0ca868e6) added the names legs
+(`fixtures/sandbox-names`; A1 and A2 one-shot, A3 and A4 `--server`; coverage `al-runner` and `none`). The
+merge into `lethal/r577` is 24d16995. Predicted, NOT measured:
+- **Verdicts:** every names leg is unchanged against `al-runner.names.baseline.json` (36 killed) and R-557's
+  own pre-committed table, per mutant.
+- **New figures:** every kill carries `killReproduced`, none is `kill-not-reproduced`, and
+  `killerRowsPerKill` is **2** for `names/one-shot` and `names/server`.
+- **Why 2:** in the orchestrator, both the store's `test_results.method` and `killing_test` come from the
+  same LethAL-side test reference; R-557 maps al-runner's mangled names back inside the backend. The
+  fixture's 12 test method names are unique.
+- A different figure is a BLOCK, reported as it is.
+
+Everything below stands.
+
 Written BEFORE the confirming `itest:alrunner` run and BEFORE the rule-on slice runs. Plan:
 `docs/superpowers/plans/2026-10-18-r577-kill-must-reproduce.md`. Branch `lethal/r577`. al-runner build
 `v2.12.0-main.f06ee78c` (`/work/tools/al-runner/current`).
