@@ -2,7 +2,14 @@
  * R589: bring one or more of the BC on Linux servers on server1 (bc1, bc2, bc3) to the state the
  * LethAL BC gates need, and check it with `lethal doctor`.
  *
- *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--dry-run]
+ *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--dry-run] [--with-continia]
+ *                                 [--held-lease <token>]
+ *
+ * `--with-continia` (R594) adds step (d2) after LethAL Control: check that the server's Microsoft
+ * apps are the R546 packagesDir's 28.4.53241.53758, then publish the 5 sha256-pinned Continia
+ * apps (Dev scope) that Continia Document Output depends on. `--held-lease` names a coord lease
+ * the caller already holds for that one server: the script heartbeats it but never takes or
+ * releases it.
  *
  * In order, per server:
  *   (a) read /coord/secrets/bc-linux.env in this process (exactly BC_DEV_USER and BC_DEV_PASSWORD);
@@ -595,27 +602,145 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export function parseArgs(argv: readonly string[]): { servers: ServerName[]; dryRun: boolean } {
+export interface SetupArgs {
+  readonly servers: ServerName[];
+  readonly dryRun: boolean;
+  readonly withContinia: boolean;
+  /** A lease token the CALLER holds and heartbeats; the script then neither takes nor releases one. */
+  readonly heldLease?: string;
+}
+
+const USAGE =
+  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--dry-run] [--with-continia] [--held-lease <token>]";
+
+export function parseArgs(argv: readonly string[]): SetupArgs {
   let server: string | undefined;
   let dryRun = false;
+  let withContinia = false;
+  let heldLease: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") dryRun = true;
+    else if (a === "--with-continia") withContinia = true;
     else if (a === "--server") server = argv[++i];
-    else throw new Error(`unknown argument ${JSON.stringify(a)}`);
+    else if (a === "--held-lease") {
+      heldLease = argv[++i];
+      if (heldLease === undefined || heldLease === "") throw new Error(USAGE);
+    } else throw new Error(`unknown argument ${JSON.stringify(a)}`);
   }
-  if (server === "all") return { servers: ["bc1", "bc2", "bc3"], dryRun };
+  const rest = { dryRun, withContinia, ...(heldLease !== undefined ? { heldLease } : {}) };
   if (server === "bc1" || server === "bc2" || server === "bc3")
-    return { servers: [server], dryRun };
-  throw new Error("usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--dry-run]");
+    return { servers: [server], ...rest };
+  // One token leases one server.
+  if (server === "all" && heldLease === undefined)
+    return { servers: ["bc1", "bc2", "bc3"], ...rest };
+  throw new Error(USAGE);
+}
+
+/** The caller holds the lease (R594): heartbeat it too, but never take or release it. */
+export function heldLeaseDeps(token: string): LeaseDeps {
+  return {
+    take: async () => token,
+    recordToken() {},
+    heartbeat: (server, t) => krakenLease.heartbeat(server, t),
+    release: async () => {},
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// (d2) the Continia stack (R594), for the R546 CDO slice
+
+/** The packagesDir R546 measured with, pinned by sha256 in the R396 pre-commitment, addendum 2. */
+export const CONTINIA_PACKAGES_DIR = "/work/lethal-wt/cdo-r396/Test/.alpackages";
+
+/** The 5 Continia apps, dependencies first (System Application, then Core, then its dependents). */
+export const CONTINIA_APPS = [
+  {
+    file: "Continia Software_Continia System Application_28.5.0.336834.app",
+    sha256: "5eee39f7f79dd7242e632c9bb3a8872870105618ac997f95fc2990ea6a0af7d4",
+  },
+  {
+    file: "Continia Software_Continia Core_28.5.0.336883.app",
+    sha256: "8b09259ac3d5d7fb407c4aa64e4df2311293879b6cffa37abea414eaebafa52d",
+  },
+  {
+    file: "Continia Software_Continia Connector App_28.5.0.336834.app",
+    sha256: "82487ec6ad0f2e5b105aecdd4b09060898e69f49a7cc6ada06d88664fd8b3966",
+  },
+  {
+    file: "Continia Software_Continia Delivery Network_28.5.0.336910.app",
+    sha256: "922e59ea6d22746714a032fe548d9dd8520757f6f6d5c560f1c1b5622f34cf6f",
+  },
+  {
+    file: "Continia Software_Continia Core Internal Activation App_28.0.0.218906.app",
+    sha256: "c57fb082a313d61c8e7b1b6811c9e220dd54af9916e7d9999ad5ea270f60d3b8",
+  },
+] as const;
+
+/** The Microsoft apps of that packagesDir, which the server must already hold at these versions. */
+export const PINNED_MICROSOFT = [
+  "Any",
+  "Application Test Library",
+  "Application",
+  "Base Application",
+  "Business Foundation",
+  "Library Assert",
+  "Permissions Mock",
+  "System Application Test Library",
+  "System Application",
+  "Test Runner",
+  "Tests-TestLibraries",
+] as const;
+export const PINNED_MICROSOFT_VERSION = "28.4.53241.53758";
+
+/**
+ * P1 then the install. Every Microsoft app must be resident at exactly the pinned version, or
+ * nothing is published: another build makes R546's frozen oracle incomparable. Then each Continia
+ * file is sha256-checked and published, skipped when the server holds exactly that version, and
+ * refused when it holds a different one (a third-party app is never replaced here).
+ */
+async function ensureContinia(c: Conn, summary: string[]): Promise<boolean> {
+  let ok = true;
+  for (const name of PINNED_MICROSOFT) {
+    const v = await residentVersion(c, "Microsoft", name);
+    const same = v === PINNED_MICROSOFT_VERSION;
+    summary.push(`  P1        Microsoft ${name}: ${v ?? "absent"}${same ? "" : " (DIFFERS)"}`);
+    ok &&= same;
+  }
+  if (!ok) {
+    summary.push(
+      `  STOPPED   the Microsoft apps are not all ${PINNED_MICROSOFT_VERSION}: no Continia app published`,
+    );
+    return false;
+  }
+  for (const app of CONTINIA_APPS) {
+    const bytes = readFileSync(join(CONTINIA_PACKAGES_DIR, app.file));
+    const sha = sha256Of(bytes);
+    if (sha !== app.sha256) throw new Error(`${app.file}: sha256 ${sha}, expected ${app.sha256}`);
+    const local = readAppIdentity(bytes);
+    const before = await residentVersion(c, local.publisher, local.name);
+    if (before === local.version) {
+      summary.push(`  skipped   ${local.name} ${before} (resident, equal)`);
+      continue;
+    }
+    if (before !== null) {
+      throw new Error(
+        `${c.server}: ${local.name} is resident at ${before}, not the pinned ${local.version}; not replacing it`,
+      );
+    }
+    const r = await ensureApp(c, bytes, local.name);
+    summary.push(`  ${r.outcome.padEnd(9)} ${local.name} ${r.version} (Dev scope, sha256 ${sha})`);
+  }
+  return true;
 }
 
 async function setupServer(
   server: ServerName,
   login: BcLogin,
-  dryRun: boolean,
+  args: SetupArgs,
   summary: string[],
 ): Promise<boolean> {
+  const { dryRun } = args;
   const symbols = join(STATE_ROOT, server, "symbols");
   const paths: ConfigPaths = {
     mcpCommand: bcDevMcpCommand(),
@@ -640,7 +765,7 @@ async function setupServer(
   if (dryRun) {
     for (const { path, launch } of configs) summary.push(`  would write ${path}, ${launch}`);
     summary.push(
-      `  would lease ${server}, publish LethAL Control, then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
+      `  would ${args.heldLease !== undefined ? "use the held lease on" : "lease"} ${server}, publish LethAL Control,${args.withContinia ? " check P1 and publish the 5 Continia apps," : ""} then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
     );
     return true;
   }
@@ -666,7 +791,8 @@ async function setupServer(
     server,
     authorization: `Basic ${Buffer.from(`${login.user}:${login.password}`).toString("base64")}`,
   };
-  return await withLease(server, krakenLease, async () => {
+  const lease = args.heldLease !== undefined ? heldLeaseDeps(args.heldLease) : krakenLease;
+  return await withLease(server, lease, async () => {
     // (d)
     const c = await ensureApp(conn, control, "LethAL Control");
     summary.push(
@@ -674,6 +800,8 @@ async function setupServer(
         ? `  skipped   LethAL Control: ${skipNote(c.version, "1.0.0.22")}`
         : `  published LethAL Control ${c.version}`,
     );
+    // (d2) before the fixtures, so a P1 stop leaves the fixtures as they were.
+    if (args.withContinia && !(await ensureContinia(conn, summary))) return false;
     rmSync(symbols, { recursive: true, force: true });
     mkdirSync(symbols, { recursive: true });
     let ok = true;
@@ -700,13 +828,14 @@ async function setupServer(
 }
 
 async function main(): Promise<number> {
-  const { servers, dryRun } = parseArgs(process.argv.slice(2));
+  const args = parseArgs(process.argv.slice(2));
+  const { servers, dryRun } = args;
   const login = readSecretFile();
   const summary = [`login: ${describeLogin(login)}`];
   let ok = true;
   for (const server of servers) {
     try {
-      ok = (await setupServer(server, login, dryRun, summary)) && ok;
+      ok = (await setupServer(server, login, args, summary)) && ok;
     } catch (err) {
       ok = false;
       summary.push(`  FAILED    ${server}: ${errText(err)}`);
