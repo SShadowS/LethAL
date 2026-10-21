@@ -9,7 +9,9 @@
  * Environment:
  * - `LETHAL_ALRUNNER_V3_PATH`: the binary (default `/work/tools/al-runner-v3/current/al-runner`).
  * - `LETHAL_ALRUNNER_V3_CANDIDATE=1`: the update gate's ungated candidate (relaxes the `.gated` check).
- * - `LETHAL_ALRUNNER_V3_CACHE`: `ALRUNNER_CACHE` (default `/work/tools/al-runtime-rs/cache`).
+ * - `LETHAL_ALRUNNER_V3_CACHE`: `ALRUNNER_CACHE` (default `/work/tools/al-runtime-rs/cache`, the
+ *   cache every R586 measurement used, so the gate runs on the artifacts the pre-commitment
+ *   measured; lane ruling 2026-10-21. `/work/tools/al-runner-v3/cache` is unused).
  * - `LETHAL_ALC_DIR`: the folder holding `alc`.
  * - `LETHAL_ITEST_V3_LEGS=C,S1,...`: a subset (default every leg that is configured).
  * - `LETHAL_ITEST_V3_CDO=<Continia Document Output checkout at 5f2a71d>`: the D legs (a corpus job).

@@ -575,8 +575,13 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         `exit ${hang.exitCode} ${JSON.stringify(h ?? null)} wall ${hang.wallMs} ms`,
       ),
     );
-    // timeout-is-cpu: a 3 s WALL spin at N=2 is stopped alone (it uses 3 s of CPU) and passes when
-    // it shares one core with a busy loop (about half that CPU). The stop counts CPU, not wall.
+    // timeout-is-cpu (lane ruling 2026-10-21, a deviation from plan §8's calibrated 1.7 s CPU loop
+    // at N=3): codeunit 50656's `WallSpin3s` spins on CurrentDateTime for 3 s of WALL time.
+    //   alone:  `<v3> test --output-json --isolation test ... --test-timeout-secs 2 --codeunit 50656`
+    //           -> it burns about 3 s of CPU: a notRun row "Test exceeded 2s timeout.";
+    //   shared: the same argv under `taskset -c 0`, beside `taskset -c 0 sh -c 'while :; do :; done'`
+    //           -> it burns about half (1.5 s of CPU) in its 3 s: a pass.
+    // A wall-time stop would stop both; a CPU-time stop separates them in both directions.
     if (env.tasksetPath === undefined) {
       facts.push(fact("timeout-is-cpu", "contract", "unmeasurable", "taskset available", "no taskset"));
     } else {
