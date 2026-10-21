@@ -559,7 +559,32 @@ ${extraVars}`,
   it("14. Step invariant (assigned 1 before the loop only): skipped", () => {
     expect(project(stepLoop(""))(C, "FEED")).toBe(false);
   });
-  it("14b. the non-zero rule: Step assigned from a variable before the loop: refused", () => {
+  /** Step also counted (`I += Step`), so the probed `Next(0)` fact does not cover it. */
+  const counted = (pre: string): Files =>
+    dLoop(
+      `            repeat
+                More := F.More();
+                I += Step;
+            until (R.Next(Step) = 0) or not More;`,
+      `        Step: Integer;
+        N: Integer;
+        I: Integer;`,
+      pre,
+    );
+  it("14b. the non-zero rule (Step also a counter step): assigned from a variable: refused", () => {
+    const files = counted("        Step := N;\n");
+    expect(project(files)(C, "FEED")).toBe(true);
+    expect(withSeam(r572RequireNonZeroStep, false, () => project(files)(C, "FEED"))).toBe(false);
+  });
+  it("14c. the non-zero rule (Step also a counter step): `Step := 1` only under an `if`: refused", () => {
+    const files = counted("        if N > 0 then\n            Step := 1;\n");
+    expect(project(files)(C, "FEED")).toBe(true);
+    expect(withSeam(r572RequireNonZeroStep, false, () => project(files)(C, "FEED"))).toBe(false);
+  });
+  it("14d. control: the counter loop with `Step := 1` before it on every path: skipped", () => {
+    expect(project(counted("        Step := 1;\n"))(C, "FEED")).toBe(false);
+  });
+  it("30. ruling 1: Step only a `Next` step, assigned from a variable (a mutant may zero it): ADMITTED", () => {
     const files = dLoop(
       `            repeat
                 More := F.More();
@@ -568,20 +593,57 @@ ${extraVars}`,
         N: Integer;`,
       "        Step := N;\n",
     );
-    expect(project(files)(C, "FEED")).toBe(true);
-    expect(withSeam(r572RequireNonZeroStep, false, () => project(files)(C, "FEED"))).toBe(false);
+    expect(project(files)(C, "FEED")).toBe(false);
   });
-  it("14c. the non-zero rule: `Step := 1` only under an `if` before the loop: refused", () => {
-    const files = dLoop(
+  it("30b. ruling 1: the same Step also a counter step (`I += Step`): REFUSED", () => {
+    expect(project(counted("        Step := N;\n"))(C, "FEED")).toBe(true);
+  });
+  /** `until (Adv(R, Step) = 0) or not More`, Step from a variable, the helper's body given. */
+  const viaHelper = (helperBody: string): Files =>
+    dLoop(
       `            repeat
                 More := F.More();
-            until (R.Next(Step) = 0) or not More;`,
+            until (Adv(R, Step) = 0) or not More;`,
       `        Step: Integer;
         N: Integer;`,
-      "        if N > 0 then\n            Step := 1;\n",
+      "        Step := N;\n",
+      `
+    var
+        Moved: Integer;
+
+    local procedure Adv(var B: Record "R572 Buf"; S: Integer): Integer
+    begin
+${helperBody}
+    end;`,
     );
+  it("30e. ruling 1: Step also handed to a codeunit's own `Next(Step)` (not a cursor): REFUSED", () => {
+    const files: Files = {
+      ...dLoop(
+        `            repeat
+                More := F.More();
+                Q.Next(Step);
+            until (R.Next(Step) = 0) or not More;`,
+        `        Step: Integer;
+        N: Integer;
+        Q: Codeunit "R572 Q";`,
+        "        Step := N;\n",
+      ),
+      "Q.Codeunit.al": `codeunit 57203 "R572 Q"
+{
+    procedure Next(S: Integer)
+    begin
+        Message('%1', S);
+    end;
+}`,
+    };
     expect(project(files)(C, "FEED")).toBe(true);
-    expect(withSeam(r572RequireNonZeroStep, false, () => project(files)(C, "FEED"))).toBe(false);
+  });
+  it("30c. ruling 1: a helper whose parameter is only a `Next` step: ADMITTED", () => {
+    expect(project(viaHelper("        exit(B.Next(S));"))(C, "FEED")).toBe(false);
+  });
+  it("30d. ruling 1: a custom Advance that also counts with the step: REFUSED", () => {
+    const files = viaHelper("        Moved += S;\n        exit(B.Next(S));");
+    expect(project(files)(C, "FEED")).toBe(true);
   });
   it("15. Step passed to a `var` parameter in the body: refused", () => {
     const files = stepLoop(
@@ -708,50 +770,38 @@ ${extraVars}`,
     };
     expect(withSeam(r572RequireNonZeroStep, false, () => project(files)(C, "FEED"))).toBe(true);
   });
-  it("23d. the non-zero rule takes a LOCAL only: a parameter set to 1 before the loop is refused", () => {
-    const files: Files = {
-      "Buf.Table.al": BUF,
-      [C]: FEED,
-      [L]: `codeunit 57201 "R572 Loop"
+  /** A by-value parameter Step; `pre` before the loop, `inBody` in it. */
+  const paramLoop = (pre: string, inBody: string): Files => ({
+    "Buf.Table.al": BUF,
+    [C]: FEED,
+    [L]: `codeunit 57201 "R572 Loop"
 {
     procedure Run(Step: Integer)
     var
         R: Record "R572 Buf";
         F: Codeunit "R572 Feed";
         More: Boolean;
+        I: Integer;
     begin
-        Step := 1;
-        if R.FindSet() then
+${pre}        if R.FindSet() then
             repeat
                 More := F.More();
+${inBody}
             until (R.Next(Step) = 0) or not More;
     end;
 }`,
-    };
+  });
+  it("23d. the non-zero rule takes a LOCAL only: a counted parameter set to 1 is refused", () => {
+    const files = paramLoop("        Step := 1;\n", "                I += Step;");
     expect(project(files)(C, "FEED")).toBe(true);
   });
-  it("23b. control: a by-value parameter step with the non-zero rule off is skipped", () => {
-    const files: Files = {
-      "Buf.Table.al": BUF,
-      [C]: FEED,
-      [L]: `codeunit 57201 "R572 Loop"
-{
-    procedure Run(Step: Integer)
-    var
-        R: Record "R572 Buf";
-        F: Codeunit "R572 Feed";
-        More: Boolean;
-    begin
-        if R.FindSet() then
-            repeat
-                More := F.More();
-            until (R.Next(Step) = 0) or not More;
-    end;
-}`,
-    };
+  it("23b. a by-value parameter step: skipped when only a `Next` step, refused when counted", () => {
+    const files = paramLoop("", "");
     expect(withSeam(r572RequireNonZeroStep, false, () => project(files)(C, "FEED"))).toBe(false);
-    // with the rule on (the default until the Next(0) probe), a parameter is not proven non-zero
-    expect(project(files)(C, "FEED")).toBe(true);
+    // ruling 1: the probed `Next(0)` fact covers a step that is only a `Next` step
+    expect(project(files)(C, "FEED")).toBe(false);
+    // ... and not one that is also counted: then the parameter is not proven non-zero
+    expect(project(paramLoop("", "                I += Step;"))(C, "FEED")).toBe(true);
   });
   it("24. Step assigned inside an inactive `#if` arm in the body: refused", () => {
     const files = stepLoop(`#if NEVERDEFINED
@@ -1296,6 +1346,100 @@ describe("R572 narrowing (b): writers of the value path", () => {
       ),
     });
     expect(at(C, "T27")).toBe(true);
+  });
+});
+
+/** Is the site whose text is exactly `text` in `path` refused for operator `op`? */
+function siteRefused(files: Files, path: string, text: string, op: string): boolean {
+  const parsed = Object.entries(files).map(([p, src]) => ({
+    path: p,
+    src,
+    root: wrapRoot(parseAL(src)),
+  }));
+  const arms = new Map(parsed.map((p) => [p.root, evaluateArms(p.root, p.src, [])]));
+  const ctx = buildSemanticContext(parsed, arms);
+  const f = parsed.find((p) => p.path === path);
+  if (f === undefined) throw new Error(`no file ${path}`);
+  let hit: ALSyntaxNode | undefined;
+  visit(f.root, (n: ALSyntaxNode) => {
+    if (hit === undefined && n.text === text) hit = n;
+  });
+  if (hit === undefined) throw new Error(`${text} not found in ${path}`);
+  return openItemHangRefuses(hit, ctx, op);
+}
+
+describe("R572 ruling 2: a guard that dominates a writer call in the loop body", () => {
+  const ITER = `codeunit 57202 "R572 GIter"
+{
+    var
+        Buffer: Text;
+        Pos: Integer;
+        Enabled: Boolean;
+
+    procedure GetNext(): Text
+    begin
+        exit(Buffer);
+    end;
+
+    procedure Advance()
+    begin
+        Pos += 1;
+        Buffer := Format(Pos);
+    end;
+
+    procedure ShouldAdvance(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'T29G';
+        exit(Enabled or (Pos < 10));
+    end;
+
+    procedure Probe(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'T29P';
+        exit(Enabled);
+    end;
+}`;
+  const guarded: Files = {
+    [C]: ITER,
+    [L]: loop(
+      `        It: Codeunit "R572 GIter";
+        Ok: Boolean;`,
+      `        while It.GetNext() <> 'x' do begin
+            Ok := It.Probe();
+            if It.ShouldAdvance() then
+                It.Advance();
+        end;`,
+    ),
+  };
+  it("29. the guard's callee (`It.ShouldAdvance()`) is refused", () => {
+    expect(project(guarded)(C, "T29G")).toBe(true);
+  });
+  it("29b. the guard site itself in the loop body is refused", () => {
+    expect(siteRefused(guarded, L, "It.ShouldAdvance()", "lethal.negate-conditional")).toBe(true);
+  });
+  it("29c. control: a body call that guards no writer (`Ok := It.Probe()`) is not refused", () => {
+    expect(project(guarded)(C, "T29P")).toBe(false);
+  });
+  it("29d. control: the same callee with the writer call NOT under it is not refused", () => {
+    const unguarded: Files = {
+      [C]: ITER,
+      [L]: loop(
+        `        It: Codeunit "R572 GIter";
+        Ok: Boolean;`,
+        `        while It.GetNext() <> 'x' do begin
+            Ok := It.ShouldAdvance();
+            It.Advance();
+        end;`,
+      ),
+    };
+    expect(project(unguarded)(C, "T29G")).toBe(false);
+    expect(siteRefused(unguarded, L, "It.ShouldAdvance()", "lethal.negate-conditional")).toBe(
+      false,
+    );
   });
 });
 

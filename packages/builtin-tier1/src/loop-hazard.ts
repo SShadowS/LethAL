@@ -806,6 +806,7 @@ export function openItemHangRefuses(
     altersBoundCall(node, ctx) ||
     inOneHopCallee(node, ctx) ||
     inR570Callee(node, ctx) ||
+    inR572Guard(node, ctx) ||
     altersSelfInsertFilter(node, ctx) ||
     altersOpenItemFilter(node, ctx) ||
     writesPresetExitName(node, ctx) ||
@@ -3380,12 +3381,61 @@ export const r572Seam = { on: true };
 export const r572InvariantStep = { on: true };
 
 /**
- * Under narrowing (a), X must also be a local that is assigned only non-zero integer literals
- * outside the loop, one of them before the loop on every path. ON (the conservative reading) until
- * a BC probe measures what `R.Next(0)` does: if it steps the cursor, a mutant that leaves X at 0
- * would loop for ever. With this on, a by-value parameter X is refused.
+ * The zero-step refusal under narrowing (a): X must be a local that is assigned only non-zero
+ * integer literals outside the loop, one of them before the loop on every path.
+ *
+ * MEASURED (orchestrator ruling 2 of 2026-10-21 on R572; /coord/handoff/R-572/next0-probe.md, BC
+ * build 28.4.53241.56590 on bc1): `Next(0)` on a Record (real, temporary or virtual) or a RecordRef
+ * returns 0 and leaves the cursor where it is, so a zero X ENDS `until R.Next(X) = 0`. The refusal
+ * is therefore LIFTED where the probed fact is all that X does in the loop: every read of X there
+ * is the step argument of `Next` on a Record or RecordRef (`r572OnlyNextUses`), or, for the helper
+ * form, an argument bound to a helper parameter whose every read is such a step. It is KEPT when X
+ * reaches anything else: an integer counter (`I += Step`), a custom `Advance(Step)` whose body is
+ * not a `Next(<step>)`. Seam: off lifts it everywhere (the pre-ruling measurement leg).
  */
 export const r572RequireNonZeroStep = { on: true };
+
+/**
+ * Is every read of the plain name `k` under `n` the step argument (argument 1) of `Next` on a
+ * Record or RecordRef (the implicit Rec included), or a call argument `extra` accepts?
+ */
+function r572OnlyNextUses(
+  n: ALSyntaxNode,
+  k: string,
+  ctx: SemanticContext,
+  extra?: (call: ALSyntaxNode, i: number) => boolean,
+): boolean {
+  let ok = true;
+  visitAll(n, (x) => {
+    if (!ok || !isIdentifierLike(x) || x.fieldName === "member") return;
+    if (normalizeAlName(x.text) !== k) return;
+    let call: ALSyntaxNode | null = x.parent;
+    for (let d = 0; call !== null && d < 2 && call.rawKind !== "call_expression"; d++)
+      call = call.parent;
+    const c = call === null || call.rawKind !== "call_expression" ? null : r531Call(call);
+    const i = c === null ? -1 : c.args.findIndex((a) => samePos(a, x));
+    if (call === null || c === null || i < 0) ok = false;
+    else if (c.method === "next" && i === 0 && r572CursorCall(call, ctx)) return;
+    else if (extra === undefined || !extra(call, i)) ok = false;
+  });
+  return ok;
+}
+
+/** Is call `l` made on a Record, a RecordRef or the implicit Rec? */
+function r572CursorCall(l: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const c = r531Call(l);
+  if (c === null || c.uncertain) return false;
+  if (c.recv === null) return r531Implicit(l, ctx);
+  if (c.recv === "") return true;
+  const recv = r572Receiver(l);
+  if (recv === null) return false;
+  const t = declaredType(recv, ctx);
+  const isRecRef =
+    normalizeAlName(
+      resolveVarRef(recv, ctx)?.node.childForFieldName("type")?.namedChildren[0]?.text ?? "",
+    ) === "recordref";
+  return isRecRef || (t !== null && t.kind === "table");
+}
 
 /**
  * Option D, precise (plan r2 review 2): the cursors (keyed in the loop's procedure) whose step
@@ -3414,7 +3464,12 @@ interface R572Frame {
   /** the loop's procedure or trigger */
   readonly scope: ALSyntaxNode;
   /** in a helper: the helper and the loop's call of it */
-  readonly helper: { readonly proc: ALSyntaxNode; readonly call: R531Call } | null;
+  readonly helper: {
+    readonly proc: ALSyntaxNode;
+    readonly call: R531Call;
+    /** the loop's call node */
+    readonly node: ALSyntaxNode;
+  } | null;
 }
 
 const r572Unparen = (n: ALSyntaxNode): ALSyntaxNode => {
@@ -3567,7 +3622,16 @@ function r572StepArgOk(
     const arg = h.call.args[i];
     if (arg === undefined) return false;
     if (/^-?\d+$/.test(arg.text.trim())) return true;
-    return isIdentifierLike(arg) && r572StepInvariant(arg, frame.loop, frame.scope, null, ctx);
+    // the zero-step waiver: the helper's parameter is only ever a `Next` step, so the loop's
+    // name may also be handed to this very call, at this position
+    const hb = h.proc.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+    const viaHelper =
+      hb !== null && r572OnlyNextUses(hb, k, ctx)
+        ? (cn: ALSyntaxNode, j: number) => samePos(cn, h.node) && j === i
+        : undefined;
+    return (
+      isIdentifierLike(arg) && r572StepInvariant(arg, frame.loop, frame.scope, null, ctx, viaHelper)
+    );
   }
 }
 
@@ -3591,6 +3655,7 @@ function r572StepInvariant(
   scope: ALSyntaxNode,
   next: ALSyntaxNode | null,
   ctx: SemanticContext,
+  viaHelper?: (call: ALSyntaxNode, i: number) => boolean,
 ): boolean {
   const k = normalizeAlName(x.text);
   if (!r572IntegerVar(x, ctx)) return false;
@@ -3606,6 +3671,8 @@ function r572StepInvariant(
   }
   if (r572WritesName(loop, k, new Set(next === null ? [] : [r572At(next)]), ctx)) return false;
   if (!r572RequireNonZeroStep.on) return true;
+  // the probed fact (see `r572RequireNonZeroStep`): X is only ever a cursor's `Next` step here
+  if (r572OnlyNextUses(loop, k, ctx, viaHelper)) return true;
   if (!local) return false;
   const body = scope.namedChildren.find((c) => c.rawKind === "code_block") ?? null;
   if (body === null) return false;
@@ -3705,7 +3772,11 @@ function r572HelperKeys(
     const stmts = body?.namedChildren.find((x) => x.rawKind === "statement_block")?.namedChildren;
     const last = stmts?.filter((x) => !x.rawKind.includes("comment")).at(-1);
     if (body === null || last === undefined || last.rawKind !== "exit_statement") return [];
-    const hf: R572Frame = { loop: frame.loop, scope: frame.scope, helper: { proc: t, call: c } };
+    const hf: R572Frame = {
+      loop: frame.loop,
+      scope: frame.scope,
+      helper: { proc: t, call: c, node: call },
+    };
     let keys: Set<string> | null = null;
     const steps = new Set<string>();
     let bad = false;
@@ -4009,11 +4080,17 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
   return rows;
 }
 
-/** Census (scripts/r572-flag-census.ts): every R572 row of the project, and the procedures R572
- *  adds to R570's own refusals (by procedure, not yet by name). */
-export function r572Census(ctx: SemanticContext): { rows: R572Row[]; extra: ALSyntaxNode[] } {
+/** Census (scripts/r572-flag-census.ts): every R572 row of the project, the procedures R572
+ *  adds to R570's own refusals (by procedure, not yet by name), and what the `r572-guard-writer`
+ *  reason refuses: its guard expressions in loop bodies and the procedures they call. */
+export function r572Census(ctx: SemanticContext): {
+  rows: R572Row[];
+  extra: ALSyntaxNode[];
+  guards: { sites: ALSyntaxNode[]; procs: ALSyntaxNode[] };
+} {
   const base = new Map<string, Set<string>>();
   const rows: R572Row[] = [];
+  const guards = { sites: [] as ALSyntaxNode[], procs: [] as ALSyntaxNode[] };
   for (const o of projectObjects(ctx))
     r531Walk(o, ctx, (loop) => {
       if (!LOOP_KINDS.has(loop.kind)) return;
@@ -4024,7 +4101,16 @@ export function r572Census(ctx: SemanticContext): { rows: R572Row[]; extra: ALSy
         for (const k of procNames(p)) set.add(k);
         base.set(objectKey(po), set);
       }
-      rows.push(...r572LoopRows(loop, o, ctx));
+      const lr = r572LoopRows(loop, o, ctx);
+      rows.push(...lr);
+      const refused = lr
+        .filter((r) => r.stateful)
+        .flatMap((r) => [...(r.wrapper === null ? [] : [r.wrapper]), ...r.chain, ...r.writers]);
+      if (refused.length > 0) {
+        const g = r572WriterGuards(loop, refused, ctx);
+        guards.sites.push(...g.exprs);
+        guards.procs.push(...g.procs);
+      }
     });
   const extra = new Map<string, ALSyntaxNode>();
   for (const r of rows) {
@@ -4036,7 +4122,7 @@ export function r572Census(ctx: SemanticContext): { rows: R572Row[]; extra: ALSy
       extra.set(`${po === null ? "" : objectKey(po)}|${p.startIndex}`, p);
     }
   }
-  return { rows, extra: [...extra.values()] };
+  return { rows, extra: [...extra.values()], guards };
 }
 
 function r572LoopRefusals(
@@ -4045,9 +4131,72 @@ function r572LoopRefusals(
   ctx: SemanticContext,
 ): ALSyntaxNode[] {
   if (!r572Seam.on) return [];
-  return r572LoopRows(loop, obj, ctx)
+  const refused = r572LoopRows(loop, obj, ctx)
     .filter((r) => r.stateful)
     .flatMap((r) => [...(r.wrapper === null ? [] : [r.wrapper]), ...r.chain, ...r.writers]);
+  if (refused.length === 0 || !r572GuardWriter.on) return refused;
+  const g = r572WriterGuards(loop, refused, ctx);
+  const sites = r572GuardSiteMap.get(ctx) ?? [];
+  sites.push(...g.exprs);
+  r572GuardSiteMap.set(ctx, sites);
+  return [...refused, ...g.procs];
+}
+
+/**
+ * Orchestrator ruling 2026-10-21 (R572 ruling 2), refusal reason `r572-guard-writer`: a guard
+ * that DOMINATES a call into a refused procedure inside the loop body
+ * (`if It.ShouldAdvance() then It.Advance()`) is part of the protected slice. A mutant there can
+ * keep the body from ever calling the writer, and the loop never ends. Refused: every site in such
+ * a guard expression (`inR572Guard`) and every procedure a call in it reaches (the callee, and its
+ * `exit(<call>)` chain when it is in another object). A call NOT under such a guard is unchanged.
+ * Test seam: off gives the plan-r4 rule (the re-price's off leg counts what this adds); the census
+ * (`r572Census().guards`, `scripts/r572-flag-census.ts`) counts the sites and procedures.
+ */
+export const r572GuardWriter = { on: true };
+
+/** ctx -> the guard expressions `r572-guard-writer` refuses (filled while `r570Reach` runs). */
+const r572GuardSiteMap = new WeakMap<object, ALSyntaxNode[]>();
+
+function r572WriterGuards(
+  loop: ALSyntaxNode,
+  refused: readonly ALSyntaxNode[],
+  ctx: SemanticContext,
+): { exprs: ALSyntaxNode[]; procs: ALSyntaxNode[] } {
+  const body = loop.childForFieldName("body");
+  if (body === null) return { exprs: [], procs: [] };
+  const ids = new Set(refused.map(r572Id));
+  const callsRefused = (n: ALSyntaxNode): boolean => {
+    const c = r531Call(n);
+    return c !== null && r570Targets(n, c, ctx).some((t) => ids.has(r572Id(t)));
+  };
+  const exprs = exitGuards(body, loop, callsRefused);
+  const obj = objectOf(loop);
+  const procs: ALSyntaxNode[] = [];
+  for (const e of exprs)
+    r531Walk(e, ctx, (n) => {
+      const c = r531Call(n);
+      if (c === null) return;
+      for (const q of r570Targets(n, c, ctx)) {
+        const qo = objectOf(q);
+        const same =
+          qo === null || obj === null || (samePos(qo, obj) && sameFile(rootOf(qo), rootOf(obj)));
+        procs.push(...(same ? [q] : r572Chain(q, 0, ctx)));
+      }
+    });
+  return { exprs, procs };
+}
+
+/** Is `node` inside a guard expression `r572-guard-writer` refuses? */
+function inR572Guard(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  r570Reach(ctx);
+  const root = rootOf(node);
+  return (r572GuardSiteMap.get(ctx) ?? []).some(
+    (e) =>
+      node.startIndex >= e.startIndex &&
+      node.endIndex <= e.endIndex &&
+      samePos(rootOf(e), root) &&
+      sameFile(rootOf(e), root),
+  );
 }
 
 /** `p` and the procedures its `exit(<call>)` chain reaches, no shape test (R570_HOPS deep). */

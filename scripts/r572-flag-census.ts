@@ -65,7 +65,7 @@ const nameOf = (p: ALSyntaxNode): string => {
   return `${o?.rawKind.replace("_declaration", "") ?? "?"} ${normalizeAlName(on)}.${normalizeAlName(pn)}`;
 };
 
-const { rows, extra } = r572Census(ctx);
+const { rows, extra, guards } = r572Census(ctx);
 const loops = new Set(rows.map((r) => where(r.loop)));
 const statefulLoops = new Set(rows.filter((r) => r.stateful).map((r) => where(r.loop)));
 // the stated limit: a PURE callee fed its own result, or whose result is accumulated into the flag
@@ -92,7 +92,12 @@ console.log(
     rows: rows.length,
     reopenSelfFeedPure: reopen.length,
     extraProcedures: extra.map(nameOf).sort(),
+    // refusal reason `r572-guard-writer` (ruling 2): guard expressions in loop bodies, and the
+    // procedures they call, by name
+    guardWriterSites: guards.sites.length,
+    guardWriterProcedures: [...new Set(guards.procs.map(nameOf))].sort(),
   }),
 );
+for (const s of guards.sites) console.log(`GUARD-WRITER\t${where(s)}`);
 if (reopen.length > 0) for (const r of reopen) console.log(`RE-OPEN SHAPE\t${line(r)}`);
 if (flag === "--rows") for (const r of rows) console.log(line(r));
