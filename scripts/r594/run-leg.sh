@@ -24,13 +24,15 @@ jq --arg m "$mode" --arg c "$CACHE" '{bcdev: .bcdev} | .bcdev.coverageMode = $m 
 DB=$OUT/bc-$leg$suffix.sqlite; rm -f "$DB"
 cd "$REPO"
 echo "leg $leg$suffix start $(date -u +%FT%TZ) lethal $(git rev-parse --short HEAD) cdo $(git -C $CDO rev-parse --short HEAD)"
+# A dry run refuses every flag that only matters when something executes, and writes no report.
+live=(--tests "$CDO/Test" --tests-only Src/Recipients/CDORecipientMgtTests.Codeunit.al
+  --selector-id 6175460 --control-id 6175459 --table-id 6175458
+  --stop-hung-sessions --out "$OUT/bc-$leg.report.json" --progress-out "$OUT/bc-$leg.events.ndjson")
+[ -n "$suffix" ] && live=()
 bun packages/runner/src/cli.ts run --backend bcdev --config "$CFG" \
-  --project "$CDO/Cloud" --tests "$CDO/Test" \
+  --project "$CDO/Cloud" \
   --only .dependencies/CDO/Codeunit/CDORecipientMgt.Codeunit.al \
-  --tests-only Src/Recipients/CDORecipientMgtTests.Codeunit.al \
-  --selector-id 6175460 --control-id 6175459 --table-id 6175458 \
-  --stop-hung-sessions --db "$DB" --out "$OUT/bc-$leg$suffix.report.json" \
-  --progress-out "$OUT/bc-$leg$suffix.events.ndjson" "$@"
+  --db "$DB" "${live[@]}" "$@"
 rc=$?
 echo "leg $leg$suffix exit $rc at $(date -u +%FT%TZ)"
 exit $rc
