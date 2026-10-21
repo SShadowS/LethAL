@@ -3474,7 +3474,10 @@ function r572Forcing(
       .trim()
       .toLowerCase();
     if (op !== (exitWhenTrue ? "or" : "and")) return [];
-    return [...r572Forcing(l, exitWhenTrue, frame, ctx), ...r572Forcing(r, exitWhenTrue, frame, ctx)];
+    return [
+      ...r572Forcing(l, exitWhenTrue, frame, ctx),
+      ...r572Forcing(r, exitWhenTrue, frame, ctx),
+    ];
   }
   if (e.rawKind === "comparison_expression") {
     const l = e.childForFieldName("left");
@@ -3559,13 +3562,17 @@ function r572StepArgOk(
     const p = r531Param(h.proc, i);
     if (p === null) return false;
     if (p[0] !== k) continue;
-    if (p[1] || h.call.uncertain || r572WritesName(h.proc, k, new Set([next]), ctx)) return false;
+    if (p[1] || h.call.uncertain || r572WritesName(h.proc, k, new Set([r572At(next)]), ctx))
+      return false;
     const arg = h.call.args[i];
     if (arg === undefined) return false;
     if (/^-?\d+$/.test(arg.text.trim())) return true;
     return isIdentifierLike(arg) && r572StepInvariant(arg, frame.loop, frame.scope, null, ctx);
   }
 }
+
+/** A node's position key: wrapper nodes are not identical objects across walks. */
+const r572At = (n: ALSyntaxNode): string => `${n.startIndex}|${n.endIndex}|${n.rawKind}`;
 
 const r572IntegerVar = (x: ALSyntaxNode, ctx: SemanticContext): boolean => {
   const t = normalizeAlName(resolveVarRef(x, ctx)?.typeText ?? "");
@@ -3597,7 +3604,7 @@ function r572StepInvariant(
     }
     if (!byValue) return false;
   }
-  if (r572WritesName(loop, k, new Set(next === null ? [] : [next]), ctx)) return false;
+  if (r572WritesName(loop, k, new Set(next === null ? [] : [r572At(next)]), ctx)) return false;
   if (!r572RequireNonZeroStep.on) return true;
   if (!local) return false;
   const body = scope.namedChildren.find((c) => c.rawKind === "code_block") ?? null;
@@ -3642,7 +3649,7 @@ function r572StepInvariant(
 function r572WritesName(
   n: ALSyntaxNode,
   k: string,
-  skip: ReadonlySet<ALSyntaxNode>,
+  skip: ReadonlySet<string>,
   ctx: SemanticContext,
   where: (n: ALSyntaxNode) => boolean = () => true,
   assigns = true,
@@ -3655,7 +3662,7 @@ function r572WritesName(
       if (assigns && l !== null && rootName(l) === k) hit = true;
       return;
     }
-    if (skip.has(x)) return;
+    if (skip.has(r572At(x))) return;
     const c = r531Call(x);
     if (c === null) return;
     c.args.forEach((a, i) => {
@@ -3700,7 +3707,7 @@ function r572HelperKeys(
     if (body === null || last === undefined || last.rawKind !== "exit_statement") return [];
     const hf: R572Frame = { loop: frame.loop, scope: frame.scope, helper: { proc: t, call: c } };
     let keys: Set<string> | null = null;
-    const steps = new Set<ALSyntaxNode>();
+    const steps = new Set<string>();
     let bad = false;
     visitAll(body, (x) => {
       if (bad || x.rawKind !== "exit_statement") return;
@@ -3710,7 +3717,7 @@ function r572HelperKeys(
       else keys = new Set(got.filter((g) => keys === null || keys.has(g)));
       if (v !== null)
         visitAll(v, (y) => {
-          if (r531Call(y)?.method === "next") steps.add(y);
+          if (r531Call(y)?.method === "next") steps.add(r572At(y));
         });
     });
     if (bad || keys === null) return [];
@@ -3728,7 +3735,8 @@ function r572HelperKey(t: ALSyntaxNode, k: string, c: R531Call): string {
     const p = r531Param(t, i);
     if (p === null) return k; // a global, or the implicit Rec
     const a = c.args[i];
-    if (p[1] && a !== undefined && isIdentifierLike(a) && r531Key(a) === k) return r531ParamKey(p[0]);
+    if (p[1] && a !== undefined && isIdentifierLike(a) && r531Key(a) === k)
+      return r531ParamKey(p[0]);
   }
 }
 
@@ -3741,7 +3749,7 @@ function r572HelperKey(t: ALSyntaxNode, k: string, c: R531Call): string {
 function r572HelperKeeps(
   t: ALSyntaxNode,
   key: string,
-  steps: ReadonlySet<ALSyntaxNode>,
+  steps: ReadonlySet<string>,
   ctx: SemanticContext,
 ): boolean {
   const body = t.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
@@ -3750,7 +3758,7 @@ function r572HelperKeeps(
   const global = !r531Declares(t, key, true);
   let moved = false;
   visitAll(body, (n) => {
-    if (moved || steps.has(n)) return;
+    if (moved || steps.has(r572At(n))) return;
     if (n.kind === ALNodeKind.assignment_statement) {
       const l = n.childForFieldName("left");
       if (l !== null && (r531Key(l) === key || rootName(l) === key)) moved = true;
@@ -3805,6 +3813,13 @@ function r572FlagKeys(
   const writes: ALSyntaxNode[] = [];
   let passed = false;
   visitAll(body, (n) => {
+    // a `continue` of THIS loop can skip the write, and with it the step
+    if (n.rawKind === "continue_statement") {
+      let a = n.parent;
+      while (a !== null && !BREAK_SCOPES.has(a.rawKind)) a = a.parent;
+      if (a !== null && samePos(a, frame.loop)) passed = true;
+      return;
+    }
     if (n.kind === ALNodeKind.assignment_statement) {
       const l = n.childForFieldName("left");
       if (l !== null && rootName(l) === k) writes.push(n);
@@ -3833,11 +3848,7 @@ const R572_READ_ONLY: ReadonlySet<string> = new Set(
   ).split(" "),
 );
 
-function r572LoopRows(
-  loop: ALSyntaxNode,
-  obj: ALSyntaxNode,
-  ctx: SemanticContext,
-): R572Row[] {
+function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContext): R572Row[] {
   const cond = loopConditionParts(loop);
   // the cursors whose step alone forces the exit; then a body exit guard can only end it sooner
   const forced = r572ForcedSteps(loop, ctx);
@@ -3949,7 +3960,7 @@ function r572LoopRows(
   const rows: R572Row[] = [];
   for (const { n, c, flag, varOut, additive, ts } of calls) {
     for (const q of ts) {
-      if (r572Seam.optionD && cursors.size > 0) {
+      if (cursors.size > 0) {
         const sh = shared(c, q);
         // option D: the loop's own step alone forces the exit and the callee does not get that
         // cursor, so the callee can only end the loop sooner
@@ -3957,7 +3968,6 @@ function r572LoopRows(
         // cursor touch (option b of R570): the callee gets the cursor but never moves, filters or
         // rewrites it (`r570Touches`): this ROW (this callee and its chain) is exempt
         if (
-          r572Seam.touch &&
           sh.every(
             (s) =>
               s.key !== R570_UNKNOWN &&
@@ -3981,10 +3991,7 @@ function r572LoopRows(
         flag !== "" &&
         !varOut &&
         c.args.some((a) => isIdentifierLike(a) && normalizeAlName(a.text) === flag);
-      const writers =
-        stateful && r572Seam.writers !== "none"
-          ? r572Writers(chain, loop, r572Seam.writers === "reach", ctx)
-          : [];
+      const writers = stateful ? r572ValueWriters(chain, loop, ctx) : [];
       rows.push({
         loop,
         call: n,
@@ -4280,85 +4287,227 @@ function r572StatefulOnce(p: ALSyntaxNode, hops: number, ctx: SemanticContext): 
 }
 const r572InProgress = new Set<string>();
 
-/** Item 3: the procedures of each chain object that WRITE a global the chain names: assign it, call
- *  a method on it other than a read-only record built-in, or pass it to a call. `reach`: only those
- *  reachable (R572_STATE_HOPS calls, any object, `Codeunit.Run` steps followed into `OnRun`) from
- *  the chain AND from every call in the loop's body (plan r2 review 1: a split iterator whose
- *  writer the body calls, `while It.HasNext() do V := It.Next()`, PowerBI's TransitionTo/Fail). */
-function r572Writers(
+/**
+ * Narrowing (b) with the plan-r4 fixpoint: the procedures that WRITE the chain's VALUE PATH.
+ *
+ * Candidates are the procedures reachable (R572_STATE_HOPS calls, any object, `Codeunit.Run` steps
+ * followed into `OnRun`) from the chain AND from every call in the loop's body (a split iterator
+ * whose writer the body calls: `while It.GetNext() <> '' do It.Advance()`, PowerBI's TransitionTo).
+ *
+ * The path starts, per chain object, as the globals each chain procedure's RESULT is computed from
+ * (`r572ValueNames`: exits, named return, `var` parameters, the guards above them, by name to a
+ * fixpoint). A candidate in that object that writes a path global (`r572WritesNode`) is a writer;
+ * every global it names joins the path, and this repeats until nothing changes (F1). Every writer
+ * found is refused. A global is written at RECORD level (F6): any method on it but a read-only one,
+ * any field assignment, any pass to a call but a resolved by-value parameter (F2).
+ */
+function r572ValueWriters(
   chain: ALSyntaxNode[],
   loop: ALSyntaxNode,
-  reach: boolean,
   ctx: SemanticContext,
 ): ALSyntaxNode[] {
-  const out: ALSyntaxNode[] = [];
-  let reached: Map<string, ALSyntaxNode> | null = null;
-  if (reach) {
-    reached = new Map(chain.map((p) => [r572Id(p), p]));
-    let todo: ALSyntaxNode[] = [...chain];
-    const body = loop.childForFieldName("body");
-    const step = (from: ALSyntaxNode): ALSyntaxNode[] => {
-      const next: ALSyntaxNode[] = [];
-      r531Walk(from, ctx, (n) => {
-        const c = r531Call(n);
-        if (c === null) return;
-        for (const t of [...r570Targets(n, c, ctx), ...r572RunTargets(n, c, ctx)]) {
-          const id = r572Id(t);
-          if (reached === null || reached.has(id)) continue;
-          reached.set(id, t);
-          next.push(t);
-        }
-      });
-      return next;
-    };
-    if (body !== null) todo.push(...step(body));
-    for (let d = 0; d < R572_STATE_HOPS && todo.length > 0; d++)
-      todo = todo.flatMap((x) => step(x));
-  }
-  for (const p of chain) {
-    const g = r572Globals(p, ctx);
+  const reached = new Map(chain.map((p) => [r572Id(p), p]));
+  let todo: ALSyntaxNode[] = [...chain];
+  const step = (from: ALSyntaxNode): ALSyntaxNode[] => {
+    const next: ALSyntaxNode[] = [];
+    r531Walk(from, ctx, (n) => {
+      const c = r531Call(n);
+      if (c === null) return;
+      for (const t of [...r570Targets(n, c, ctx), ...r572RunTargets(n, c, ctx)]) {
+        const id = r572Id(t);
+        if (reached.has(id)) continue;
+        reached.set(id, t);
+        next.push(t);
+      }
+    });
+    return next;
+  };
+  const body = loop.childForFieldName("body");
+  if (body !== null) todo.push(...step(body));
+  for (let d = 0; d < R572_STATE_HOPS && todo.length > 0; d++) todo = todo.flatMap((x) => step(x));
+  const objKey = (p: ALSyntaxNode): string | null => {
     const o = objectOf(p);
-    if (g.size === 0 || o === null) continue;
-    let procs: ALSyntaxNode[] = [];
-    if (reached !== null) {
-      procs = [...reached.values()].filter((t) => {
-        const to = objectOf(t);
-        return to !== null && samePos(to, o) && sameFile(rootOf(to), rootOf(o));
-      });
-    } else {
-      visitAll(o, (n) => {
-        if (n.rawKind === "procedure" || isProcedureLike(n)) procs.push(n);
-      });
-    }
-    for (const w of procs) {
-      const wg = r572Globals(w, ctx);
-      if (![...wg].some((k) => g.has(k))) continue;
+    return o === null ? null : `${r572Id(rootOf(o))}|${objectKey(o)}`;
+  };
+  // the value path, per chain object
+  const path = new Map<string, Set<string>>();
+  for (const p of chain) {
+    const k = objKey(p);
+    if (k === null) continue;
+    const g = r572Globals(p, ctx);
+    const names = cached(ctx, p, "r572valuenames", () => r572ValueNames(p, ctx, new Set()));
+    const set = path.get(k) ?? new Set<string>();
+    for (const x of g) if (names === null || names.has(x)) set.add(x);
+    path.set(k, set);
+  }
+  const out = new Map<string, ALSyntaxNode>();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [id, w] of reached) {
+      const k = objKey(w);
+      const g = k === null ? undefined : path.get(k);
+      if (out.has(id) || g === undefined) continue;
+      const wg = new Set([...r572Globals(w, ctx)].filter((x) => g.has(x)));
+      if (wg.size === 0) continue;
+      const wb = w.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
       let writes = false;
-      r531Walk(w, ctx, (n) => {
-        if (writes) return;
-        if (n.kind === ALNodeKind.assignment_statement) {
-          const l = n.childForFieldName("left");
-          const ln = l === null ? null : isIdentifierLike(l) ? l : l.childForFieldName("object");
-          if (ln !== null && g.has(normalizeAlName(ln.text))) writes = true;
+      if (wb !== null)
+        visitAll(wb, (n) => {
+          if (!writes && r572WritesNode(n, wg, ctx)) writes = true;
+        });
+      if (!writes) continue;
+      out.set(id, w);
+      // F1: what the writer reads joins the path
+      for (const x of r572Globals(w, ctx)) g.add(x);
+      changed = true;
+    }
+  }
+  return [...out.values()];
+}
+
+/** Global functions that never write an argument (anything else unresolved counts as writing). */
+const R572_NO_WRITE: ReadonlySet<string> = new Set(
+  "format strsubstno message error confirm strlen".split(" "),
+);
+
+/**
+ * Does node `n` (an assignment or a call) write one of `names` (plain names of the scope `n` is
+ * in)? An assignment whose target's ROOT is one of them (`G := `, `G.F := `, `G[i] := `). A call ON
+ * one of them, unless the method is read-only (a parenless `G.Insert` counts; a field read `G.F`
+ * does not). A call that gets one of them, or a member of one (`Buf.Val`, F2), as an argument,
+ * unless every target resolves with a by-value parameter there and the argument is not a record
+ * (a by-value temporary record shares its rows), or the call is a global function that never
+ * writes (`Format`). Uncertain arguments (R567) count as writes.
+ */
+function r572WritesNode(
+  n: ALSyntaxNode,
+  names: ReadonlySet<string>,
+  ctx: SemanticContext,
+): boolean {
+  if (n.kind === ALNodeKind.assignment_statement) {
+    const l = n.childForFieldName("left");
+    return l !== null && names.has(rootName(l));
+  }
+  const c = r531Call(n);
+  if (c === null) return false;
+  if (c.recv !== null && names.has(c.recv) && !R572_READ_ONLY.has(c.method)) {
+    if (n.rawKind !== "member_expression") return true;
+    if (R531_BUILTIN.has(c.method) || R572_ROWS.has(c.method)) return true;
+  }
+  let hit = false;
+  c.args.forEach((a, i) => {
+    if (hit || !names.has(rootName(a))) return;
+    if (c.uncertain) {
+      hit = true;
+      return;
+    }
+    const ts = r570Targets(n, c, ctx);
+    if (ts.length === 0) {
+      if (!(c.recv === null && R572_NO_WRITE.has(c.method))) hit = true;
+      return;
+    }
+    const recv = isIdentifierLike(a) ? declaredType(a, ctx) : null;
+    if (recv !== null && recv.kind === "table") hit = true;
+    for (const t of ts) {
+      const js = r531Positions(c, i, t);
+      if (js.length === 0) hit = true;
+      for (const j of js) {
+        const p = r531Param(t, j);
+        if (p === null || p[1]) hit = true;
+      }
+    }
+  });
+  return hit;
+}
+
+/**
+ * Narrowing (b): the plain names `p`'s RESULT is computed from (a backward slice, by name). Seeds:
+ * every `exit(...)` value, the named return, the `var` parameters, and the guards above every exit
+ * (F5). Then, to a fixpoint: an assignment to a path name adds its right side and the guards above
+ * it; a call that WRITES a path name (`r572WritesNode`: `Buf.SetRange(F, X)`, `Evaluate(V, S)`)
+ * adds its arguments and its guards; a path expression's call into a procedure of `p`'s own object
+ * adds that procedure's path globals. null: undecidable (a same-object callee with no body, an
+ * uncertain call in a path expression), so every global counts.
+ */
+function r572ValueNames(
+  p: ALSyntaxNode,
+  ctx: SemanticContext,
+  seen: Set<string>,
+): Set<string> | null {
+  const body = p.namedChildren.find((x) => x.rawKind === "code_block") ?? null;
+  if (body === null) return null;
+  const path = new Set<string>();
+  if (seen.has(r572Id(p))) return path;
+  seen.add(r572Id(p));
+  const obj = objectOf(p);
+  const rv = p.childForFieldName("return_value");
+  if (rv !== null) path.add(normalizeAlName(rv.text));
+  for (let i = 0; ; i++) {
+    const prm = r531Param(p, i);
+    if (prm === null) break;
+    if (prm[1]) path.add(r531ParamKey(prm[0]));
+  }
+  const exprs: ALSyntaxNode[] = [];
+  const guards = (n: ALSyntaxNode): void => {
+    for (let a = n.parent; a !== null && !samePos(a, p); a = a.parent)
+      exprs.push(...guardPartsOf(a));
+  };
+  visitAll(body, (x) => {
+    if (x.rawKind !== "exit_statement") return;
+    const v = x.childForFieldName("return_value");
+    if (v !== null) exprs.push(v);
+    guards(x);
+  });
+  let unknown = false;
+  const done = new Set<string>();
+  for (let changed = true; changed && !unknown; ) {
+    changed = false;
+    for (let e = exprs.pop(); e !== undefined && !unknown; e = exprs.pop())
+      r531Walk(e, ctx, (n) => {
+        if (isIdentifierLike(n) && n.fieldName !== "member") {
+          const k = normalizeAlName(n.text);
+          if (!path.has(k)) {
+            path.add(k);
+            changed = true;
+          }
           return;
         }
         const c = r531Call(n);
         if (c === null) return;
-        if (c.recv !== null && g.has(c.recv) && n.rawKind !== "member_expression") {
-          const readOnly =
-            R531_BUILTIN.has(c.method) &&
-            !R570_TOUCH.has(c.method) &&
-            c.method !== "insert" &&
-            c.method !== "init";
-          if (!readOnly) writes = true;
+        if (c.uncertain) unknown = true;
+        for (const t of r570Targets(n, c, ctx)) {
+          const to = objectOf(t);
+          if (
+            obj === null ||
+            to === null ||
+            !samePos(to, obj) ||
+            !sameFile(rootOf(to), rootOf(obj))
+          )
+            continue;
+          const s = r572ValueNames(t, ctx, seen);
+          if (s === null) unknown = true;
+          else
+            for (const x of r572Globals(t, ctx))
+              if (s.has(x) && !path.has(x)) {
+                path.add(x);
+                changed = true;
+              }
         }
-        if (c.args.some((a) => isIdentifierLike(a) && g.has(normalizeAlName(a.text))))
-          writes = true;
       });
-      if (writes) out.push(w);
-    }
+    visitAll(body, (n) => {
+      if (unknown || done.has(r572At(n)) || !r572WritesNode(n, path, ctx)) return;
+      done.add(r572At(n));
+      changed = true;
+      if (n.kind === ALNodeKind.assignment_statement) {
+        const r = n.childForFieldName("right");
+        const l = n.childForFieldName("left");
+        if (r !== null) exprs.push(r);
+        if (l !== null) exprs.push(l);
+      } else exprs.push(...(r531Call(n)?.args ?? []));
+      guards(n);
+    });
   }
-  return out;
+  return unknown ? null : path;
 }
 
 const R570_UNKNOWN = "\u0002";
@@ -5304,37 +5453,42 @@ function exitGuards(
     if (n !== null) out.set(n.startIndex, n);
   };
   const visitN = (n: ALSyntaxNode): void => {
-    if (isExit(n)) {
-      for (let a = n.parent; a !== null && !samePos(a, loop); a = a.parent) {
-        switch (a.rawKind) {
-          case "if_statement":
-          case "while_statement":
-          case "repeat_statement":
-            add(a.childForFieldName("condition"));
-            break;
-          case "case_statement":
-            add(a.childForFieldName("expression"));
-            break;
-          case "case_branch":
-            add(a.childForFieldName("pattern"));
-            break;
-          case "for_statement":
-            add(a.childForFieldName("start"));
-            add(a.childForFieldName("end"));
-            break;
-          case "foreach_statement":
-            add(a.childForFieldName("iterable"));
-            break;
-        }
-        for (const t of a.namedChildren) {
-          if (t.rawKind === "preproc_conditional_expression_tail") add(t);
-        }
-      }
-    }
+    if (isExit(n))
+      for (let a = n.parent; a !== null && !samePos(a, loop); a = a.parent)
+        for (const g of guardPartsOf(a)) add(g);
     for (const c of n.namedChildren) visitN(c);
   };
   visitN(body);
   return [...out.values()];
+}
+
+/** The parts of statement `a` that decide whether a statement inside it runs: an `if`/`while`/
+ *  `until` condition, a `case` expression or branch pattern, `for` bounds, a `foreach` iterable,
+ *  and the `#if` tails the grammar puts beside them. */
+function guardPartsOf(a: ALSyntaxNode): ALSyntaxNode[] {
+  const out: (ALSyntaxNode | null)[] = [];
+  switch (a.rawKind) {
+    case "if_statement":
+    case "while_statement":
+    case "repeat_statement":
+      out.push(a.childForFieldName("condition"));
+      break;
+    case "case_statement":
+      out.push(a.childForFieldName("expression"));
+      break;
+    case "case_branch":
+      out.push(a.childForFieldName("pattern"));
+      break;
+    case "for_statement":
+      out.push(a.childForFieldName("start"), a.childForFieldName("end"));
+      break;
+    case "foreach_statement":
+      out.push(a.childForFieldName("iterable"));
+      break;
+  }
+  for (const t of a.namedChildren)
+    if (t.rawKind === "preproc_conditional_expression_tail") out.push(t);
+  return out.filter((x): x is ALSyntaxNode => x !== null);
 }
 
 /**
