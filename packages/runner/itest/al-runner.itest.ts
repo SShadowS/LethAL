@@ -81,6 +81,7 @@ import {
   groupRanFailures,
   parallelVersionRefusal,
   parseGateArgs,
+  throwCollected,
   workerEnv,
 } from "./alrunner-legs";
 import { superviseGroups } from "./alrunner-supervisor";
@@ -179,10 +180,11 @@ try {
 }
 const args = gateArgs;
 
-// I2: the binary is resolved ONCE, so a moved `current` symlink cannot change it mid-run, and every
-// worker is handed this path. Narrowed to `string` and passed explicitly into runOnce() below
-// rather than closed over, since TS does not carry closure-captured narrowing across functions.
-const alRunnerPath: string = realpathSync(alRunnerPathEnv);
+// I2: the binary is resolved ONCE, at the top of `main()` (so a bad path fails inside its
+// handler and still writes a failed receipt), so a moved `current` symlink cannot change it
+// mid-run, and every worker is handed this path. Narrowed to `string` here.
+const alRunnerPathGiven: string = alRunnerPathEnv;
+let alRunnerPath: string = alRunnerPathGiven;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
@@ -720,48 +722,60 @@ async function runSymbolLegs(
     const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-sym-server-"));
     const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-sym-resource-"));
     try {
-      const oneShot = await legs.leg(ids.oneShot, async () => {
-        const r = await runOnce(oneShotDir, false, "static", fixture);
-        printSymbolTable(r, symbols, "one-shot");
-        await check(`one-shot ${label}`, async () => {
-          assertSymbolBuild(r, symbols, "one-shot");
-          await assertMatchesFrozenBaseline(
-            r,
-            symbolBaselinePath(symbols),
-            `al-runner itest ${label}`,
-            RECORD_SYMBOL_BASELINES,
-          );
-        });
-        return r;
-      });
+      const oneShot = await legs.leg(
+        ids.oneShot,
+        async () => {
+          const r = await runOnce(oneShotDir, false, "static", fixture);
+          printSymbolTable(r, symbols, "one-shot");
+          await check(`one-shot ${label}`, async () => {
+            assertSymbolBuild(r, symbols, "one-shot");
+            await assertMatchesFrozenBaseline(
+              r,
+              symbolBaselinePath(symbols),
+              `al-runner itest ${label}`,
+              RECORD_SYMBOL_BASELINES,
+            );
+          });
+          return r;
+        },
+        failures,
+      );
 
-      await legs.leg(ids.server, async () => {
-        const viaServer = await runOnce(serverDir, true, "static", fixture);
-        printSymbolTable(viaServer, symbols, "--server");
-        await check(`--server ${label}`, () => {
-          assert.deepEqual(
-            shape(viaServer),
-            shape(oneShot),
-            `R321 ${label}: the --server transport must reach the SAME per-mutant verdicts as the one-shot one`,
-          );
-          assertSymbolBuild(viaServer, symbols, "--server");
-        });
-        return viaServer;
-      });
+      await legs.leg(
+        ids.server,
+        async () => {
+          const viaServer = await runOnce(serverDir, true, "static", fixture);
+          printSymbolTable(viaServer, symbols, "--server");
+          await check(`--server ${label}`, () => {
+            assert.deepEqual(
+              shape(viaServer),
+              shape(oneShot),
+              `R321 ${label}: the --server transport must reach the SAME per-mutant verdicts as the one-shot one`,
+            );
+            assertSymbolBuild(viaServer, symbols, "--server");
+          });
+          return viaServer;
+        },
+        failures,
+      );
 
-      await legs.leg(ids.resource, async () => {
-        const viaResource = await runOnce(resourceDir, true, "resource", fixture);
-        printSymbolTable(viaResource, symbols, "resource");
-        await check(`resource ${label}`, () => {
-          assert.deepEqual(
-            shape(viaResource),
-            shape(oneShot),
-            `R321 ${label}: the resource selector must reach the SAME per-mutant verdicts as the one-shot one`,
-          );
-          assertSymbolBuild(viaResource, symbols, "resource");
-        });
-        return viaResource;
-      });
+      await legs.leg(
+        ids.resource,
+        async () => {
+          const viaResource = await runOnce(resourceDir, true, "resource", fixture);
+          printSymbolTable(viaResource, symbols, "resource");
+          await check(`resource ${label}`, () => {
+            assert.deepEqual(
+              shape(viaResource),
+              shape(oneShot),
+              `R321 ${label}: the resource selector must reach the SAME per-mutant verdicts as the one-shot one`,
+            );
+            assertSymbolBuild(viaResource, symbols, "resource");
+          });
+          return viaResource;
+        },
+        failures,
+      );
 
       console.log(
         `  symbol set ${label}: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}`,
@@ -772,11 +786,7 @@ async function runSymbolLegs(
       await rm(resourceDir, { recursive: true, force: true });
     }
   }
-  if (failures.length > 0) {
-    throw new Error(
-      `R321: ${failures.length} symbol-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
-    );
-  }
+  throwCollected("R321", "symbol-leg", failures);
 }
 
 /**
@@ -811,28 +821,32 @@ async function runLayoutLegs(legs: LegRunner): Promise<SessionReport> {
   const oneShotDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-layout-oneshot-"));
   const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-layout-server-"));
   try {
-    const oneShot = await legs.leg("layout-one-shot", async () => {
-      const r = await runOnce(oneShotDir, false, "static", fixture);
-      printLayoutTable(r, "one-shot");
-      check("layout one-shot", () => assertLayoutRun(r, "one-shot"));
-      return r;
-    });
+    const oneShot = await legs.leg(
+      "layout-one-shot",
+      async () => {
+        const r = await runOnce(oneShotDir, false, "static", fixture);
+        printLayoutTable(r, "one-shot");
+        check("layout one-shot", () => assertLayoutRun(r, "one-shot"));
+        return r;
+      },
+      failures,
+    );
 
-    await legs.leg("layout-server", async () => {
-      const viaServer = await runOnce(serverDir, true, "static", fixture);
-      printLayoutTable(viaServer, "--server");
-      check("layout --server", () => assertLayoutRun(viaServer, "--server"));
-      check("layout --server vs one-shot", () =>
-        assertLayoutLegsEqual(oneShot, viaServer, "--server"),
-      );
-      return viaServer;
-    });
+    await legs.leg(
+      "layout-server",
+      async () => {
+        const viaServer = await runOnce(serverDir, true, "static", fixture);
+        printLayoutTable(viaServer, "--server");
+        check("layout --server", () => assertLayoutRun(viaServer, "--server"));
+        check("layout --server vs one-shot", () =>
+          assertLayoutLegsEqual(oneShot, viaServer, "--server"),
+        );
+        return viaServer;
+      },
+      failures,
+    );
 
-    if (failures.length > 0) {
-      throw new Error(
-        `R353: ${failures.length} layout-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
-      );
-    }
+    throwCollected("R353", "layout-leg", failures);
     console.log(
       `  layout legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server identical`,
     );
@@ -882,40 +896,48 @@ async function runMultiObjectLegs(legs: LegRunner): Promise<SessionReport> {
   const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-server-"));
   const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-resource-"));
   try {
-    const oneShot = await legs.leg("multiobject-one-shot", async () => {
-      const r = await runOnce(oneShotDir, false, "static", fixture);
-      printMultiObjectTable(r, "one-shot");
-      check("multi-object one-shot", () => assertMultiObjectRun(r, "one-shot"));
-      return r;
-    });
+    const oneShot = await legs.leg(
+      "multiobject-one-shot",
+      async () => {
+        const r = await runOnce(oneShotDir, false, "static", fixture);
+        printMultiObjectTable(r, "one-shot");
+        check("multi-object one-shot", () => assertMultiObjectRun(r, "one-shot"));
+        return r;
+      },
+      failures,
+    );
 
-    await legs.leg("multiobject-server", async () => {
-      const viaServer = await runOnce(serverDir, true, "static", fixture);
-      printMultiObjectTable(viaServer, "--server");
-      check("multi-object --server", () => assertMultiObjectRun(viaServer, "--server"));
-      check("multi-object --server vs one-shot", () =>
-        assertMultiObjectLegsEqual(oneShot, viaServer, "--server"),
-      );
-      return viaServer;
-    });
+    await legs.leg(
+      "multiobject-server",
+      async () => {
+        const viaServer = await runOnce(serverDir, true, "static", fixture);
+        printMultiObjectTable(viaServer, "--server");
+        check("multi-object --server", () => assertMultiObjectRun(viaServer, "--server"));
+        check("multi-object --server vs one-shot", () =>
+          assertMultiObjectLegsEqual(oneShot, viaServer, "--server"),
+        );
+        return viaServer;
+      },
+      failures,
+    );
 
-    await legs.leg("multiobject-resource", async () => {
-      const viaResource = await runOnce(resourceDir, true, "resource", fixture);
-      printMultiObjectTable(viaResource, "--server + resource");
-      check("multi-object --server + resource", () =>
-        assertMultiObjectRun(viaResource, "--server + resource"),
-      );
-      check("multi-object --server + resource vs one-shot", () =>
-        assertMultiObjectLegsEqual(oneShot, viaResource, "--server + resource"),
-      );
-      return viaResource;
-    });
+    await legs.leg(
+      "multiobject-resource",
+      async () => {
+        const viaResource = await runOnce(resourceDir, true, "resource", fixture);
+        printMultiObjectTable(viaResource, "--server + resource");
+        check("multi-object --server + resource", () =>
+          assertMultiObjectRun(viaResource, "--server + resource"),
+        );
+        check("multi-object --server + resource vs one-shot", () =>
+          assertMultiObjectLegsEqual(oneShot, viaResource, "--server + resource"),
+        );
+        return viaResource;
+      },
+      failures,
+    );
 
-    if (failures.length > 0) {
-      throw new Error(
-        `R407: ${failures.length} multi-object-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
-      );
-    }
+    throwCollected("R407", "multi-object-leg", failures);
     console.log(
       `  multi-object legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server and --server + resource identical`,
     );
@@ -978,45 +1000,53 @@ async function runWrappedLegs(legs: LegRunner): Promise<SessionReport> {
   const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-wrapped-server-"));
   const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-wrapped-resource-"));
   try {
-    const oneShot = await legs.leg("wrapped-one-shot", async () => {
-      const r = await capture(oneShotDir, false, "static");
-      printWrappedTable(r.report, "one-shot");
-      check("wrapped one-shot", () => {
-        const reading = assertWrappedRun(r.report, "one-shot", r.warnings);
-        console.log(`  R-300b wrapped: al-runner's --define ${reading} app.json's symbols`);
-      });
-      return r.report;
-    });
+    const oneShot = await legs.leg(
+      "wrapped-one-shot",
+      async () => {
+        const r = await capture(oneShotDir, false, "static");
+        printWrappedTable(r.report, "one-shot");
+        check("wrapped one-shot", () => {
+          const reading = assertWrappedRun(r.report, "one-shot", r.warnings);
+          console.log(`  R-300b wrapped: al-runner's --define ${reading} app.json's symbols`);
+        });
+        return r.report;
+      },
+      failures,
+    );
 
-    await legs.leg("wrapped-server", async () => {
-      const viaServer = await capture(serverDir, true, "static");
-      printWrappedTable(viaServer.report, "--server");
-      check("wrapped --server", () => {
-        assertWrappedRun(viaServer.report, "--server", viaServer.warnings);
-      });
-      check("wrapped --server vs one-shot", () =>
-        assertWrappedLegsEqual(oneShot, viaServer.report, "--server"),
-      );
-      return viaServer.report;
-    });
+    await legs.leg(
+      "wrapped-server",
+      async () => {
+        const viaServer = await capture(serverDir, true, "static");
+        printWrappedTable(viaServer.report, "--server");
+        check("wrapped --server", () => {
+          assertWrappedRun(viaServer.report, "--server", viaServer.warnings);
+        });
+        check("wrapped --server vs one-shot", () =>
+          assertWrappedLegsEqual(oneShot, viaServer.report, "--server"),
+        );
+        return viaServer.report;
+      },
+      failures,
+    );
 
-    await legs.leg("wrapped-resource", async () => {
-      const viaResource = await capture(resourceDir, true, "resource");
-      printWrappedTable(viaResource.report, "resource");
-      check("wrapped resource", () => {
-        assertWrappedRun(viaResource.report, "resource", viaResource.warnings);
-      });
-      check("wrapped resource vs one-shot", () =>
-        assertWrappedLegsEqual(oneShot, viaResource.report, "resource"),
-      );
-      return viaResource.report;
-    });
+    await legs.leg(
+      "wrapped-resource",
+      async () => {
+        const viaResource = await capture(resourceDir, true, "resource");
+        printWrappedTable(viaResource.report, "resource");
+        check("wrapped resource", () => {
+          assertWrappedRun(viaResource.report, "resource", viaResource.warnings);
+        });
+        check("wrapped resource vs one-shot", () =>
+          assertWrappedLegsEqual(oneShot, viaResource.report, "resource"),
+        );
+        return viaResource.report;
+      },
+      failures,
+    );
 
-    if (failures.length > 0) {
-      throw new Error(
-        `R-300b: ${failures.length} wrapped-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
-      );
-    }
+    throwCollected("R-300b", "wrapped-leg", failures);
     const c = oneShot.counts;
     console.log(
       `  wrapped legs: one-shot killed=${c.killed} survived=${c.survived} noCoverage=${c.noCoverage}, --server and resource identical`,
@@ -1092,30 +1122,40 @@ async function runNamesLegs(legs: LegRunner): Promise<SessionReport> {
       await rm(dir, { recursive: true, force: true });
     }
   };
-  const a1 = await legs.leg("names-a1", () =>
-    runNamesLeg("A1-one-shot-al-runner", false, "al-runner"),
+  const a1 = await legs.leg(
+    "names-a1",
+    () => runNamesLeg("A1-one-shot-al-runner", false, "al-runner"),
+    failures,
   );
-  const a2 = await legs.leg("names-a2", async () => {
-    const r = await runNamesLeg("A2-one-shot-none", false, "none");
-    check("names A2 vs A1", () => assertNamesLegsEqual(a1, r, "A2 vs A1", false));
-    return r;
-  });
-  await legs.leg("names-a3", async () => {
-    const r = await runNamesLeg("A3-server-al-runner", true, "al-runner");
-    check("names A3 vs A1", () => assertNamesLegsEqual(a1, r, "A3 vs A1", true));
-    return r;
-  });
-  await legs.leg("names-a4", async () => {
-    const r = await runNamesLeg("A4-server-none", true, "none");
-    check("names A4 vs A1", () => assertNamesLegsEqual(a1, r, "A4 vs A1", false));
-    check("names A4 vs A2", () => assertNamesLegsEqual(a2, r, "A4 vs A2", true));
-    return r;
-  });
-  if (failures.length > 0) {
-    throw new Error(
-      `R557: ${failures.length} names-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
-    );
-  }
+  const a2 = await legs.leg(
+    "names-a2",
+    async () => {
+      const r = await runNamesLeg("A2-one-shot-none", false, "none");
+      check("names A2 vs A1", () => assertNamesLegsEqual(a1, r, "A2 vs A1", false));
+      return r;
+    },
+    failures,
+  );
+  await legs.leg(
+    "names-a3",
+    async () => {
+      const r = await runNamesLeg("A3-server-al-runner", true, "al-runner");
+      check("names A3 vs A1", () => assertNamesLegsEqual(a1, r, "A3 vs A1", true));
+      return r;
+    },
+    failures,
+  );
+  await legs.leg(
+    "names-a4",
+    async () => {
+      const r = await runNamesLeg("A4-server-none", true, "none");
+      check("names A4 vs A1", () => assertNamesLegsEqual(a1, r, "A4 vs A1", false));
+      check("names A4 vs A2", () => assertNamesLegsEqual(a2, r, "A4 vs A2", true));
+      return r;
+    },
+    failures,
+  );
+  throwCollected("R557", "names-leg", failures);
   const c = a1.counts;
   console.log(
     `  names legs: A1 killed=${c.killed} survived=${c.survived} noCoverage=${c.noCoverage}, A2-A4 equal per mutant`,
@@ -1414,9 +1454,16 @@ const GROUP_PROVISION: Readonly<
   multiobject: { testDir: MULTIOBJECT_TEST_DIR, symbols: [] },
   wrapped: { testDir: WRAPPED_TEST_DIR, symbols: WRAPPED_SYMBOLS },
   names: { testDir: NAMES_TEST_DIR, symbols: [] },
-  "symbols-lethala": { testDir: SYMBOL_TEST_DIR, symbols: ["LETHALA"] },
-  "symbols-lethalb": { testDir: SYMBOL_TEST_DIR, symbols: ["LETHALB"] },
+  "symbols-lethala": { testDir: SYMBOL_TEST_DIR, symbols: symbolSetOf("symbols-lethala") },
+  "symbols-lethalb": { testDir: SYMBOL_TEST_DIR, symbols: symbolSetOf("symbols-lethalb") },
 };
+
+/** The SYMBOL_SETS entry a symbol group runs, by the same name match as `runSymbolLegs`. */
+function symbolSetOf(group: keyof typeof SYMBOL_GROUP_LEGS): readonly string[] {
+  const set = SYMBOL_SETS.find((s) => `symbols-${s.join("-").toLowerCase()}` === group);
+  if (set === undefined) throw new Error(`R-587: no SYMBOL_SETS entry for group ${group}`);
+  return set;
+}
 
 /** B2: where this run's evidence goes. Every file carries `nonce`. */
 interface RunFiles {
@@ -1515,12 +1562,24 @@ async function runGroups(
   return legs.ran;
 }
 
-/** The last line, the exit code and, for a full run only, the receipt. */
-async function finish(ran: readonly LegId[]): Promise<number> {
-  console.log(finalLine(ran));
+/**
+ * The last line, the exit code and, for a full run only, the receipt. With `--reports`, a full
+ * PASS also writes `result.json` LAST, after the receipt, so `alrunner-legs-diff` can refuse the
+ * evidence of a run that did not pass (review I-1).
+ */
+async function finish(ran: readonly LegId[], files: RunFiles | undefined): Promise<number> {
+  const line = finalLine(ran);
+  console.log(line);
   const code = exitCodeFor(ran);
   if (code === 0) {
     await emitPassed("alrunner", { sublegs: fullRunSublegs(ran), artifacts: { reported: false } });
+    if (files !== undefined) {
+      writeJson(join(files.dir, "result.json"), {
+        runNonce: files.nonce,
+        exitCode: 0,
+        finalLine: line,
+      });
+    }
   } else {
     // Unreachable while `--legs` with a challenge is refused at start; kept so it can never pass.
     await emitFailed("alrunner", "partial run: not a gate pass");
@@ -1586,8 +1645,12 @@ async function warmUp(groups: readonly GroupName[]): Promise<void> {
       selectorObjectId: SELECTOR_IDS.selectorId,
     };
     const probe = new AlRunnerBackend({ ...base, testDir: TEST_DIR });
-    const selector = await probe.probeExactTestSelector();
-    await probe.close();
+    let selector: Awaited<ReturnType<AlRunnerBackend["probeExactTestSelector"]>>;
+    try {
+      selector = await probe.probeExactTestSelector();
+    } finally {
+      await probe.close();
+    }
     console.log(`warm-up: R551 --test-exact probe: ${selector.kind}`);
     const answers = new Map<string, string>();
     for (const g of groups) {
@@ -1599,8 +1662,12 @@ async function warmUp(groups: readonly GroupName[]): Promise<void> {
         testDir,
         ...(symbols.length > 0 ? { preprocessorSymbols: symbols } : {}),
       });
-      const p = await backend.provisionOnce();
-      await backend.close();
+      let p: Awaited<ReturnType<AlRunnerBackend["provisionOnce"]>>;
+      try {
+        p = await backend.provisionOnce();
+      } finally {
+        await backend.close();
+      }
       const answer = p.platformAppsDir ?? `NONE (${p.platformAppsRefusal ?? "no reason given"})`;
       answers.set(key, answer);
       console.log(`warm-up: provisionOnce ${key}: ${answer}`);
@@ -1677,7 +1744,7 @@ async function supervise(n: number, buildLine: string): Promise<number> {
       `R-587: ${failures.length} worker failure(s):\n${failures.map((f) => `  - ${f}`).join("\n")}`,
     );
   }
-  return finish(ran);
+  return finish(ran, files);
 }
 
 /**
@@ -1686,6 +1753,7 @@ async function supervise(n: number, buildLine: string): Promise<number> {
  * records a leg that disagrees), then runs the gate and exits: 0 full PASS, 4 partial. Failures throw.
  */
 async function main(): Promise<void> {
+  alRunnerPath = realpathSync(alRunnerPathGiven);
   preflightGateBaseline(BASELINE_PATH, "al-runner itest");
   preflightGateBaseline(CLI_DEFAULT_BASELINE_PATH, "al-runner itest cli-default");
   preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner itest layout");
@@ -1743,7 +1811,7 @@ async function gate(runners: GroupRunners): Promise<number> {
     files = startRunFiles(args.reports, buildLine, "sequential", groups);
     console.log(`mode: sequential; reports ${args.reports}; run nonce ${files.nonce}`);
   }
-  return finish(await runGroups(runners, groups, files));
+  return finish(await runGroups(runners, groups, files), files);
 }
 
 main().catch(async (err: unknown) => {

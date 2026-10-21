@@ -6,6 +6,7 @@ import {
   ALRUNNER_LEG_IDS,
   GROUP_NAMES,
   GateArgsRefusal,
+  type GroupName,
   type LegId,
   LegRunner,
   type WorkerResult,
@@ -20,6 +21,7 @@ import {
   parseGateArgs,
   resolveGroups,
   scheduleOrder,
+  throwCollected,
   workerEnv,
 } from "./alrunner-legs";
 
@@ -98,10 +100,21 @@ describe("the registry", () => {
     const src = readFileSync(join(import.meta.dir, "al-runner.itest.ts"), "utf8");
     for (const id of ALRUNNER_LEG_IDS) {
       const n =
-        src.match(new RegExp(`(?:legs\\.leg\\(|(?:oneShot|server|resource): )"${id}"`, "g"))
+        src.match(new RegExp(`(?:legs\\.leg\\(\\s*|(?:oneShot|server|resource): )"${id}"`, "g"))
           ?.length ?? 0;
       expect({ id, n }).toEqual({ id, n: 1 });
     }
+  });
+
+  test("I-2 wiring: the 15 leg calls of the collecting groups pass `failures`; 5 groups end in throwCollected", () => {
+    // 18 legs: layout 2, multiobject 3, wrapped 3, names 4, and 3 call sites that run both symbol
+    // sets. The sandbox group (5 legs) asserts directly, so a failed check there throws out of the leg.
+    const src = readFileSync(join(import.meta.dir, "al-runner.itest.ts"), "utf8");
+    expect(src.match(/[)}],\s*failures,?\s*\)/g)?.length ?? 0).toBe(15);
+    expect(src.match(/throwCollected\("/g)?.length ?? 0).toBe(5);
+    expect(src).not.toMatch(
+      /if \(failures\.length > 0\) \{\n\s*throw new Error\(\n\s*`R(321|353|407|-300b|557):/,
+    );
   });
 
   test("scheduleOrder is longest first, filtered to the selection", () => {
@@ -115,6 +128,12 @@ describe("the registry", () => {
       "layout",
     ]);
     expect(scheduleOrder(["layout", "wrapped"])).toEqual(["wrapped", "layout"]);
+  });
+
+  test("a group SCHEDULE does not name is a failure, never silently not started", () => {
+    expect(() => scheduleOrder(["layout", "brand-new" as GroupName])).toThrow(
+      /brand-new missing from SCHEDULE/,
+    );
   });
 });
 
@@ -218,6 +237,43 @@ describe("LegRunner (B1)", () => {
     expect(lines).toEqual(["leg layout-server: start", "leg layout-server: done in 1.5s"]);
   });
 
+  test("I-2: a leg whose group's collected failures grew is not recorded, but returns its report", async () => {
+    const lines: string[] = [];
+    const written: string[] = [];
+    const r = new LegRunner(new Set<LegId>(["layout-one-shot", "layout-server"]), {
+      log: (l) => lines.push(l),
+      onDone: (id) => {
+        written.push(id);
+      },
+    });
+    const failures: string[] = ["an earlier leg's failure"];
+    const one = await r.leg("layout-one-shot", async () => report(1), failures);
+    const two = await r.leg(
+      "layout-server",
+      async () => {
+        failures.push("layout --server vs one-shot: differs");
+        return report(2);
+      },
+      failures,
+    );
+    expect(one.mutants).toHaveLength(1);
+    expect(two.mutants).toHaveLength(2);
+    // A failure from before the leg does not count against it; one during it does.
+    expect(r.ran).toEqual(["layout-one-shot"]);
+    expect(written).toEqual(["layout-one-shot"]);
+    expect(lines).toContain("leg layout-server: FAILED 1 check(s); not recorded");
+    expect(lines.some((l) => l.startsWith("leg layout-server: done"))).toBe(false);
+    // So even if the group-end throw were dropped, the group fails on its own record.
+    expect(groupRanFailures("layout", r.ran).join()).toContain("not run: layout-server");
+  });
+
+  test("throwCollected: the group-end throw names its label and every failure, and only then", () => {
+    expect(() => throwCollected("R353", "layout-leg", [])).not.toThrow();
+    expect(() => throwCollected("R353", "layout-leg", ["a", "b"])).toThrow(
+      "R353: 2 layout-leg check(s) failed:\n  - a\n  - b",
+    );
+  });
+
   test("after stop(), the next leg throws without starting", async () => {
     const r = new LegRunner(new Set<LegId>(["layout-server"]), quiet);
     r.stop("SIGTERM");
@@ -271,6 +327,7 @@ describe("parseGateArgs", () => {
     refused(["--parallel=0"]);
     refused(["--parallel=4"]);
     refused(["--parallel=x"]);
+    expect(() => parseGateArgs(["--parallel", "3"], {})).toThrow(/write --parallel=3/);
     refused(["--worker", "--reports", "/x", "--nonce", N]);
     refused(["--worker", "--legs", "layout,names", "--reports", "/x", "--nonce", N]);
     refused(["--worker", "--legs", "layout", "--nonce", N]);

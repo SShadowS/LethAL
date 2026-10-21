@@ -5,16 +5,17 @@
  *
  *   bun scripts/alrunner-legs-diff.ts <S reports dir> <P reports dir>
  *
- * Each directory must hold the run's `run.json` (its nonce and al-runner build line), a
- * `<group>.done.json` for all 7 groups and a `<legId>.json` for each leg, every one carrying that
- * run's nonce. Per leg it runs `compareReports` (scripts/report-diff.ts: per `keyOf`, verdict,
+ * Each directory must hold a FULL run that PASSED: `run.json` (its nonce and al-runner build line),
+ * `result.json` (written only after a full PASS), a `<group>.done.json` for all 7 groups (each with
+ * run.json's build line) and a `<legId>.json` for each of the 23 legs, every one carrying that run's
+ * nonce. Per leg it runs `compareReports` (scripts/report-diff.ts: per `keyOf`, verdict,
  * killingTest, coverageFiltered, errorClass, mutated-text hash) and, on the names and wrapped legs,
  * also requires the same `killingTestFailure` per mutant code.
  *
- * Exit codes: 0 IDENTICAL; 1 DIFFERENT (any difference, or a leg missing on one side); 2 REFUSED
- * (a file absent, unreadable or from another run); 3 VOID (the two runs used different al-runner
- * build lines (I2), or a leg had a row whose mutated text could not be checked (I3), so equality
- * cannot be claimed).
+ * Exit codes: 0 IDENTICAL; 1 DIFFERENT (any per-leg difference); 2 REFUSED (any required file
+ * absent, unreadable, from another run, or from a run that did not pass); 3 VOID (the two runs
+ * used different al-runner build lines (I2), or a leg had a row whose mutated text could not be
+ * checked (I3), so equality cannot be claimed).
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -56,17 +57,32 @@ export function readRunDir(dir: string): RunDir {
   if (typeof nonce !== "string" || nonce === "" || typeof buildLine !== "string") {
     throw new LegsDiffRefusal(`${dir}/run.json has no runNonce or buildLine`);
   }
+  // I-1: only a run that ended in a full PASS writes result.json, after its receipt.
+  const resultPath = join(dir, "result.json");
+  if (!existsSync(resultPath)) {
+    throw new LegsDiffRefusal(`${resultPath} is missing: the run did not end in a full PASS`);
+  }
+  const result = readJson(resultPath);
+  if (result.runNonce !== nonce || result.exitCode !== 0) {
+    throw new LegsDiffRefusal(`${resultPath} is not this run's full PASS (nonce or exitCode)`);
+  }
   for (const g of GROUP_NAMES) {
     const path = join(dir, `${g}.done.json`);
     if (!existsSync(path))
       throw new LegsDiffRefusal(`${path} is missing: group ${g} did not finish in this run`);
-    if (readJson(path).runNonce !== nonce)
-      throw new LegsDiffRefusal(`${path} is from another run (nonce)`);
+    const done = readJson(path);
+    if (done.runNonce !== nonce) throw new LegsDiffRefusal(`${path} is from another run (nonce)`);
+    // I2, per worker: a group that ran another al-runner build is not this run's evidence.
+    if (done.buildLine !== buildLine) {
+      throw new LegsDiffRefusal(
+        `${path} ran al-runner "${String(done.buildLine)}", run.json "${buildLine}" (I2)`,
+      );
+    }
   }
   const legs = new Map<LegId, SessionReport>();
   for (const id of ALRUNNER_LEG_IDS) {
     const path = join(dir, `${id}.json`);
-    if (!existsSync(path)) continue;
+    if (!existsSync(path)) throw new LegsDiffRefusal(`${path} is missing`);
     const file = readJson(path);
     if (file.runNonce !== nonce) throw new LegsDiffRefusal(`${path} is from another run (nonce)`);
     const report = file.report as SessionReport | undefined;

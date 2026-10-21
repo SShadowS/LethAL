@@ -58,7 +58,12 @@ const SCHEDULE: readonly GroupName[] = [
   "layout",
 ];
 
+/** Throws for a selected group SCHEDULE does not name: never started would read PARTIAL, not failed. */
 export function scheduleOrder(groups: readonly GroupName[]): GroupName[] {
+  const unscheduled = groups.filter((g) => !SCHEDULE.includes(g));
+  if (unscheduled.length > 0) {
+    throw new Error(`R-587: group(s) ${unscheduled.join(", ")} missing from SCHEDULE`);
+  }
   return SCHEDULE.filter((g) => groups.includes(g));
 }
 
@@ -108,6 +113,15 @@ export function exitCodeFor(ran: readonly string[]): 0 | 4 {
   return isFullRun(ran) ? 0 : 4;
 }
 
+/** The end of a group with collected checks: throws `<label>: N <what> check(s) failed` when any did. */
+export function throwCollected(label: string, what: string, failures: readonly string[]): void {
+  if (failures.length > 0) {
+    throw new Error(
+      `${label}: ${failures.length} ${what} check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+    );
+  }
+}
+
 /** What a group's run must have recorded: exactly its own legs. Empty means it did. */
 export function groupRanFailures(group: GroupName, ran: readonly string[]): string[] {
   const want = groupLegs(group);
@@ -148,7 +162,16 @@ export class LegRunner {
     this.stopReason ??= reason;
   }
 
-  async leg(id: LegId, fn: () => Promise<SessionReport>): Promise<SessionReport> {
+  /**
+   * `failures` is the group's collected-check list, when it has one. A leg during which that list
+   * grew is NOT recorded (no `<id>.json`, no `done` line), but its report is still returned so the
+   * group's later legs and checks run as before; the group then throws (`throwCollected`).
+   */
+  async leg(
+    id: LegId,
+    fn: () => Promise<SessionReport>,
+    failures?: readonly unknown[],
+  ): Promise<SessionReport> {
     if (!this.selected.has(id)) {
       throw new Error(`R-587: leg ${id} is not selected; a group ran a leg it does not own`);
     }
@@ -159,9 +182,15 @@ export class LegRunner {
     const now = this.hooks.now ?? Date.now;
     const t0 = now();
     log(`leg ${id}: start`);
+    const mark = failures?.length ?? 0;
     const report = await fn();
     if (report.mutants.length === 0) {
       throw new Error(`R-587: leg ${id} returned a report with no mutant, so it measured nothing`);
+    }
+    const failed = (failures?.length ?? 0) - mark;
+    if (failed > 0) {
+      log(`leg ${id}: FAILED ${failed} check(s); not recorded`);
+      return report;
     }
     await this.hooks.onDone?.(id, report);
     this.done.push(id);
@@ -217,8 +246,12 @@ export function parseGateArgs(argv: readonly string[], env: Env): GateArgs {
     if (name === "--legs") legs = value();
     else if (name === "--reports") reports = value();
     else if (name === "--nonce") nonce = value();
-    else if (name === "--parallel") parallel = inline ?? String(MAX_PARALLEL);
-    else if (a === "--worker") worker = true;
+    else if (name === "--parallel") {
+      if (inline === undefined && /^\d+$/.test(argv[i + 1] ?? "")) {
+        throw new GateArgsRefusal(`--parallel ${argv[i + 1]}: write --parallel=${argv[i + 1]}`);
+      }
+      parallel = inline ?? String(MAX_PARALLEL);
+    } else if (a === "--worker") worker = true;
     else throw new GateArgsRefusal(`unknown argument ${JSON.stringify(a)}`);
   }
 
