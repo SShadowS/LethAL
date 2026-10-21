@@ -5,9 +5,10 @@ never terminate, and the gate scores them instead of setting them aside (R53). I
 gate that exercises the control app's stop (`StopHungRunAt`). So an AL edit to
 `extensions/lethal-control` is verified by an `alc` compile and by this gate. The connection comes
 from the gitignored config in `fixtures/sandbox-hang/` that `LETHAL_ITEST_CONFIG` names (see
-[servers.md](servers.md)). On 2026-10-21 it passed on `bc3` under master's code (the
-pre-runtime-17 fixtures, so `bc3` is not proven for it now) and on `bc2` under R-583's code
-(R-583).
+[servers.md](servers.md)). On 2026-10-21 it passed on `bc2` under R-583's code (R-583), and on
+`bc3` twice. The first `bc3` pass was under master's code with the pre-runtime-17 fixtures. The
+second, 18:25-18:35 UTC, was under R-389's code with the runtime-17 fixtures and LethAL Control
+1.0.0.23 (log `/coord/handoff/R-389/bc-live/hang-bc3.log`).
 
 It runs three legs, in this order on purpose:
 
@@ -55,3 +56,8 @@ R-204b's single-path leg was recorded on 2026-10-06 on Cronus28 (record run exit
 PASS), per `docs/superpowers/specs/2026-10-06-r204b-hang-single-path-precommitment.md`. R164 and
 R179 added the `NextRow` and `DrainQueue` arms, which measure the loop cessions. R196 refuses
 assignment sites that could hang. Their stories are in the comments on `EXPECTED_ON`.
+
+R-389 (2026-10-21) published LethAL Control 1.0.0.23, which adds `DependentCount`, to `bc3`. The
+gate then passed there with both the ON and SINGLE legs at 24 killed / 5 timeout-killed /
+9 survived. As a fact: another lane's 8-worker local unit run overlapped it from 18:29:01 to
+18:29:21 UTC (about 20 s), and another `itest:hang` ran beside it on `bc1`. No figure moved.

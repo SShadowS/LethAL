@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**80 of 593 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**81 of 595 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -154,7 +154,7 @@ that ordering is the priority.
 - **R372** · A test edited on disk but not republished runs its OLD body in lethal run, yet the run records the NEW body's digest, so verify reads the edit as already measured · [R372.md](docs/roadmap/R372.md) · done (ad8e544f)
 - **R374** · Identity ordinals are numbered per batch, so twins in two batches share one identity key and --skip-known-survivors can skip a mutant on its twin's verdict · [R374.md](docs/roadmap/R374.md) · done (eab7e089)
 - **R385** · lethal verify cannot see a Microsoft dependency rebuilt or upgraded on the server while the test app's declared minimum version stays the same · [R385.md](docs/roadmap/R385.md) · done (e64bc53e)
-- **R389** · lethal verify cannot see an edit to a test-app codeunit that external code runs through a Variant or interface the test passed it · [R389.md](docs/roadmap/R389.md) · open, filed 2026-10-01
+- **R389** · lethal verify cannot see an edit to a test-app codeunit that external code runs through a Variant or interface the test passed it · [R389.md](docs/roadmap/R389.md) · done (bdd95b17)
 - **R390** · R-371's reachable-set walk misses a test-app codeunit whose id the test reads from the platform (an AllObj loop); one item for shapes found after the build · [R390.md](docs/roadmap/R390.md) · open, filed 2026-10-01
 - **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · done (baaf290b)
 - **R402** · The hang tag misses a loop-condition operand that sits inside an ACTIVE #if · [R402.md](docs/roadmap/R402.md) · done (65e5cad2)
@@ -419,6 +419,8 @@ that ordering is the priority.
 - **R497** · BC paths score `#if`-wrapped objects (fenced under H1a, hub by name), and the line map's H1b rule is wrong for a bare object after a wrapper · [R497.md](docs/roadmap/R497.md) · done (e02c874b)
 - **R498** · A hook session whose test app carries no `.al` never proves its identity, so it never resumes, skips or reuses · [R498.md](docs/roadmap/R498.md) · done (e4907b30)
 - **R535** · A nested `#if` object wrapper is refused by name on every coverage path: BaseApp has 2 such files (70 sites), unmeasured · [R535.md](docs/roadmap/R535.md) · closed 2026-10-09 — 2 BaseApp files, 70 sites, refused by name on every coverage path; not worth an R-300b…
+- **R600** · lethal verify digests under the server's closed-world answer now, so an open-world source run on a closed server re-runs every test · [R600.md](docs/roadmap/R600.md) · open
+- **R601** · a closed-world run that ends before its post-execution re-ask stays pending forever, so --resume after a crash is off on a closed server · [R601.md](docs/roadmap/R601.md) · open
 
 ## Backends and tooling
 

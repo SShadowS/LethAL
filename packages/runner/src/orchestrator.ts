@@ -100,6 +100,16 @@ import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot"
 import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import {
+  type ClosedWorldResult,
+  PENDING_SUFFIX,
+  REVOKED_SUFFIX,
+  closedWorldGuard,
+  digestedAppOfPackage,
+  guardedTestAppHash,
+  isClosedWorld,
+  sameClosedWorld,
+} from "./closed-world";
+import {
   type DependencyReportSourceRecord,
   dependencyReportReader,
   dependencySourceDigest,
@@ -254,6 +264,8 @@ import {
   recordKill,
 } from "./test-order";
 import {
+  type ClosedWorld,
+  OPEN_WORLD,
   type TestAppModel,
   buildTestAppModel,
   readTestAppSources,
@@ -4334,6 +4346,8 @@ interface ScoreBatchInput {
     readonly batchDir: string;
     readonly testDir: string;
     readonly allowReuse: boolean;
+    /** R389: the session's closed-world answer, bound into the snapshot key like the run's. */
+    readonly closedWorld: ClosedWorld;
     /** R492 (sol run 001), R495: the session's PROVEN test app (`undefined`: unproven). Reuse
      *  needs the batch's own read to equal it: a later unpinned read can serve a
      *  published-but-not-installed package, whose snapshot another run did prove. A different
@@ -4828,11 +4842,13 @@ async function dispatchUnmutated(
 async function batchTestAppReader(
   backend: ExecutionBackend,
   testDir: string,
+  /** R389: the session's closed-world answer, bound into the hash as the run's identity is. */
+  closedWorld: ClosedWorld,
 ): Promise<() => Promise<string | undefined>> {
   const packageReader = backend.fetchPublishedAppPackage;
   const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
-  return () =>
-    testAppHashFor(
+  return async () => {
+    const h = await testAppHashFor(
       packageReader === undefined
         ? undefined
         : async () =>
@@ -4841,6 +4857,9 @@ async function batchTestAppReader(
               : packageReader.call(backend, { publisher: manifest.publisher, name: manifest.name }),
       testDir,
     );
+    // R389: a snapshot taken under another guard answer is never reused.
+    return h === undefined ? undefined : guardedTestAppHash(h, closedWorld);
+  };
 }
 
 /**
@@ -4908,9 +4927,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
   let hashTestApp: (() => Promise<string | undefined>) | undefined;
   if (input.snapshot !== undefined) {
-    const { batchDir, testDir, allowReuse, provenTestApp } = input.snapshot;
+    const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
-    hashTestApp = await batchTestAppReader(backend, testDir);
+    hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
     const testAppHash = await hashTestApp();
     // R495: before `select` carries anything or a snapshot is reused.
     assertNoTestAppDrift(store, runId, provenTestApp?.hash, testAppHash, batchIdx);
@@ -5024,7 +5043,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       runId,
       batchIndex: batchIdx,
       batchHash: snapshotKey.batchHash,
-      testAppHash,
+      // R389: a closed-world snapshot stays pending (unmatchable) until the run's recheck confirms.
+      testAppHash:
+        input.snapshot !== undefined && isClosedWorld(input.snapshot.closedWorld)
+          ? `${testAppHash}${PENDING_SUFFIX}`
+          : testAppHash,
       baseline: baseline as BaselineObservation[],
     });
   }
@@ -5662,18 +5685,29 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // snapshot, so each compiles exactly the hashed bytes.
   const sourceSnapshot = cfg.source ?? (await readTargetSource(cfg.projectDir));
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
-  const { testAppHash, testDigests, testDigestParts, testDigestDependencies } =
-    await testAppIdentity(
-      cfg,
-      publishedRead,
-      tests,
-      testModel,
-      emit,
-      // R403 phase B: R139's source-to-source comparison filters both sides alike.
-      armPolicyApplied ? testBuildSymbols : undefined,
-      sourceSnapshot,
-      envPublishes !== undefined,
-    );
+  const {
+    testAppHash,
+    testDigests,
+    testDigestParts,
+    testDigestDependencies,
+    closedWorld: pendingClosedWorld,
+  } = await testAppIdentity(
+    cfg,
+    publishedRead,
+    tests,
+    testModel,
+    emit,
+    // R403 phase B: R139's source-to-source comparison filters both sides alike.
+    armPolicyApplied ? testBuildSymbols : undefined,
+    sourceSnapshot,
+    envPublishes !== undefined,
+  );
+  // R389: the session's closed-world answer, bound into every test-app hash it reads or records.
+  const sessionClosedWorld = pendingClosedWorld?.guard.closedWorld ?? OPEN_WORLD;
+  // R389: a closed-world run's identity is recorded PENDING (unmatchable) until its
+  // post-execution recheck confirms it; a run killed before that never supplies a verdict.
+  const recordedTestAppHash = (h: string): string =>
+    pendingClosedWorld !== undefined ? `${h}${PENDING_SUFFIX}` : h;
   // R495: the identity resume, history and the R192 snapshot may use, `undefined` unless proven.
   // A hook session proves it after the hook, under the lease (below); this read may be outgoing.
   const provenTestAppHash =
@@ -5795,7 +5829,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // records all three under the lease, after its fingerprint is taken there.
     ...(alRunnerTestApp !== undefined
       ? {
-          testAppHash: alRunnerTestApp.hash,
+          testAppHash: recordedTestAppHash(alRunnerTestApp.hash),
           testAppProven: true,
           testAppDeps: alRunnerTestApp.deps,
         }
@@ -6348,7 +6382,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               ? `a dependency changed while this session waited for the lease (its digests were taken over dependencies ${pre}, and under the lease they are ${got.deps})`
               : undefined;
         if (why === undefined && "deps" in got) {
-          cfg.store.setRunTestAppHash(runId, provenTestAppHash, true, got.deps);
+          cfg.store.setRunTestAppHash(
+            runId,
+            recordedTestAppHash(provenTestAppHash),
+            true,
+            got.deps,
+          );
           historyTestApp = { hash: provenTestAppHash, deps: got.deps };
         } else {
           // In one step: no identity, no digests, one warning; `historyTestApp` stays undefined.
@@ -6489,7 +6528,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // whole-batch carry, history's known survivors, a compile failure's error rows or a baseline.
       // (`scoreBatch` reads again before its baseline.)
       if (historyTestApp !== undefined) {
-        const now = await (await batchTestAppReader(cfg.backend, cfg.testDir))();
+        const now = await (
+          await batchTestAppReader(cfg.backend, cfg.testDir, sessionClosedWorld)
+        )();
         assertNoTestAppDrift(cfg.store, runId, historyTestApp.hash, now, batchIdx);
       }
       // 1. write the instrumented project for this artifact — currently
@@ -7458,6 +7499,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           allowReuse:
             resumeState !== undefined &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
+          closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
         },
         select,
@@ -7547,6 +7589,35 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       code: "carry-refused-renumbered",
       message: `[lethal] ${carryCurrent.refused.size} mutant(s) matched a recorded verdict by identity key, but that verdict was not carried and the mutant is scored in this run: the source changed since the recorded run (or that run predates the record of it), and the mutant is a twin in its file in either run, or no record of it in its own file was found. A key holds no file, so after an edit it can name another twin (R391).`,
     });
+  }
+
+  // R389 (sol's review): zero dependents is a point-in-time answer. Asked again now, after
+  // execution: only the same closed answer upgrades the recorded open-world digests. Any other
+  // answer keeps them open and revokes the run's test-app identity, so nothing carries from it.
+  if (pendingClosedWorld !== undefined) {
+    const again = await pendingClosedWorld.recheck();
+    if (sameClosedWorld(pendingClosedWorld.guard, again)) {
+      // One transaction: the closed-world digests, and reuse enabled for the run and its snapshots.
+      // R495/R496: the row holds the pending identity only when it was recorded proven
+      // (`historyTestApp`); a run whose digests were withdrawn under the lease (F9) gets none back.
+      if (historyTestApp !== undefined) {
+        cfg.store.confirmClosedWorld(
+          runId,
+          PENDING_SUFFIX,
+          pendingClosedWorld.digests,
+          pendingClosedWorld.parts,
+        );
+      } else if (cfg.store.testDigests(runId) !== null) {
+        cfg.store.setTestDigests(runId, pendingClosedWorld.digests, pendingClosedWorld.parts);
+      }
+    } else {
+      if (historyTestApp !== undefined) cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX);
+      emit({
+        type: "warning",
+        code: "closed-world-changed",
+        message: `[lethal] the closed-world guard answered differently after execution (${again.why}), so this run records open-world test digests and no later run carries or reuses its verdicts`,
+      });
+    }
   }
 
   // Layer 5C-A Task 8, Task 10 (design §G): a quarantined run must NEVER be marked finished.
@@ -8888,6 +8959,14 @@ const NO_PUBLISHED_READ =
 const UNREADABLE =
   "the published test app could not be read (on an env-tool session this is the read before its own publish; the published-test-app-unreadable warning appears only if the read after the publish fails too)";
 
+/** R389: a closed-world answer not yet confirmed after execution, and the digests it would give. */
+interface PendingClosedWorld {
+  readonly guard: ClosedWorldResult;
+  readonly digests: Record<string, string>;
+  readonly parts: TestDigestParts;
+  readonly recheck: () => Promise<ClosedWorldResult>;
+}
+
 /**
  * R139 check 2 plus R-278's digests, from ONE package read. R-372: on a backend that publishes, the
  * digest is taken from the PUBLISHED source, never from disk: an edit that was not republished
@@ -8910,6 +8989,7 @@ async function testAppIdentity(
   testAppHash: string | undefined;
   testDigests?: Record<string, string>;
   testDigestParts?: TestDigestParts;
+  closedWorld?: PendingClosedWorld;
   /** R496 F9: the full dependency fingerprint the digests were taken over. */
   testDigestDependencies?: string;
 }> {
@@ -8939,11 +9019,33 @@ async function testAppIdentity(
   if (sources.kind === "unavailable" || sources.kind === "source-less") return none(sources.why);
   const got = await digestsOf(cfg, sources, tests, diskModel, source);
   if ("why" in got) return none(got.why);
+  // R389: the closed-world guard, asked for the package actually DIGESTED (the published one on
+  // bcdev; sol's review). The run records OPEN-world digests; the closed-world ones replace them
+  // only after the same question, asked again after execution, gets the same answer (`recheck`).
+  // An env-tool session returned above, so it stays open-world (the safe direction).
+  const digested = sources.kind === "published" ? digestedAppOfPackage(sources.pkg) : undefined;
+  const ask = () => closedWorldGuard(cfg.backend, cfg.testDir, digested);
+  const guard = await ask();
+  if (guard.warn) {
+    emit({
+      type: "warning",
+      code: "closed-world-unmeasured",
+      message: `[lethal] public and internal test-app procedures are digested open-world (the safe direction): ${guard.why}`,
+    });
+  }
+  const c = isClosedWorld(guard.closedWorld)
+    ? await digestsOf(cfg, sources, tests, diskModel, source, got.dependencies, guard.closedWorld)
+    : undefined;
+  if (c !== undefined && "why" in c) return none(c.why);
   return {
-    testAppHash,
+    testAppHash:
+      testAppHash === undefined ? undefined : guardedTestAppHash(testAppHash, guard.closedWorld),
     testDigests: got.digests,
     testDigestParts: got.parts,
     testDigestDependencies: got.dependencies,
+    ...(c !== undefined
+      ? { closedWorld: { guard, digests: c.digests, parts: c.parts, recheck: ask } }
+      : {}),
   };
 }
 
@@ -9031,6 +9133,8 @@ async function digestsOf(
   /** R496: the fingerprint already taken under the lease for this read-back, so it is not walked
    *  twice. Absent: walked here. */
   takenDependencies?: string,
+  /** R389: the closed-world answer the digests are taken under. Absent: open-world. */
+  closedWorld?: ClosedWorld,
 ): Promise<
   | {
       readonly digests: Record<string, string>;
@@ -9058,7 +9162,11 @@ async function digestsOf(
     const { digests, parts } = testDigestsOfModel(
       published ? buildTestAppModel(sources.files) : diskModel,
       tests,
-      { dependencies, buildInputs: inputs.buildInputs },
+      {
+        dependencies,
+        buildInputs: inputs.buildInputs,
+        ...(closedWorld !== undefined ? { closedWorld } : {}),
+      },
     );
     return { digests, parts, dependencies };
   } catch (err) {

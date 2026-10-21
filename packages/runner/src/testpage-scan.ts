@@ -286,6 +286,95 @@ function toRecv(n: ALSyntaxNode): Recv {
 
 const ARRAY_OF = /^\s*array\s*\[[^\]]*\]\s*of\s+([\s\S]*)$/i;
 
+/**
+ * R-389: one way a Variant variable of a procedure gets its value, as plain facts: assigned
+ * (`V := <recv>`), a `foreach` loop variable, or handed as an argument to a call (`callee` as
+ * written, `on` its receiver for a member call), which may fill it through a `var` parameter.
+ * An array or collection of Variant is never traced (the fallback), so it has no facts.
+ */
+type VariantSource =
+  | { readonly k: "assign"; readonly recv: Recv }
+  | { readonly k: "foreach" }
+  | {
+      readonly k: "passed";
+      readonly callee: string;
+      readonly args: number;
+      readonly at: number;
+      readonly on: Recv | undefined;
+    };
+
+const VARIANT_TYPE = /^\s*variant\s*$/i;
+const INTERFACE_TYPE = /^\s*interface\s+(.+?)\s*$/i;
+/** R-389 (option a): how many traced Variants (parameters and locals, across callers) deep a
+ *  trace goes before it falls back. */
+const MAX_CALLER_DEPTH = 32;
+
+/** The element types of a `List of [...]` / `Dictionary of [...]` text, split at top-level commas. */
+const elementTypes = (text: string): string[] => text.match(/(?:"[^"]*"|[^,"])+/g) ?? [];
+
+/** R-389: `plain` for a Variant, `container` for an array or collection that can hold one. */
+function variantShape(t: string): "plain" | "container" | undefined {
+  if (VARIANT_TYPE.test(t)) return "plain";
+  const arr = ARRAY_OF.exec(t)?.[1];
+  if (arr !== undefined) return variantShape(arr) === undefined ? undefined : "container";
+  const elems = COLLECTION_OF.exec(t)?.[1];
+  if (elems !== undefined && elementTypes(elems).some((e) => variantShape(e) !== undefined))
+    return "container";
+  return undefined;
+}
+
+const NO_SOURCES: ReadonlyMap<string, readonly VariantSource[]> = new Map();
+const NO_POSITIONS: ReadonlySet<number> = new Set();
+const NO_RECVS: readonly Recv[] = Object.freeze([]);
+
+/** R-389: how the Variant names `tracked` get their values in `block`, and every `exit(<value>)`. */
+function variantFacts(
+  block: ALSyntaxNode,
+  tracked: ReadonlySet<string>,
+  exits: boolean,
+): { sources: Map<string, VariantSource[]>; exitValues: Recv[] } {
+  const sources = new Map<string, VariantSource[]>();
+  const exitValues: Recv[] = [];
+  const add = (raw: string, s: VariantSource): void => {
+    const k = normalizeAlName(raw);
+    if (!tracked.has(k)) return;
+    const list = sources.get(k);
+    if (list === undefined) sources.set(k, [s]);
+    else list.push(s);
+  };
+  visit(block, (n) => {
+    if (n.rawKind === "assignment_statement") {
+      const l = n.childForFieldName("left");
+      const r = n.childForFieldName("right");
+      if (l === null || r === null) return;
+      if (NAME_KINDS.has(l.rawKind)) add(l.text, { k: "assign", recv: toRecv(r) });
+    } else if (n.rawKind === "foreach_statement") {
+      const v = n.childForFieldName("variable");
+      if (v !== null) add(v.text, { k: "foreach" });
+    } else if (n.rawKind === "exit_statement" && exits) {
+      const v = n.childForFieldName("return_value");
+      if (v !== null) exitValues.push(toRecv(v));
+    } else if (n.rawKind === "call_expression") {
+      const fn = n.childForFieldName("function");
+      const list = n.namedChildren.find((c) => c.rawKind === "argument_list");
+      const args = list === undefined ? [] : realChildren(list);
+      let callee: string | undefined;
+      let on: Recv | undefined;
+      if (fn !== null && NAME_KINDS.has(fn.rawKind)) callee = fn.text;
+      else if (fn !== null && fn.rawKind === "member_expression") {
+        const [recv, name] = realChildren(fn);
+        callee = name?.text;
+        on = recv === undefined ? undefined : toRecv(recv);
+      }
+      if (callee === undefined) return;
+      for (const [at, a] of args.entries())
+        if (NAME_KINDS.has(a.rawKind))
+          add(a.text, { k: "passed", callee, args: args.length, at, on });
+    }
+  });
+  return { sources, exitValues };
+}
+
 export interface Unit {
   /** R-371: `codeunit`, or the object kind of a non-codeunit unit (`table`, `pageextension`, ...). */
   readonly kind: string;
@@ -324,6 +413,26 @@ export interface Unit {
   /** R-371, an enum or enumextension: every implementation codeunit it names, as written
    *  (`Implementation = "I" = "C"` on a value, `DefaultImplementation`, ...). */
   readonly implementations: readonly string[];
+  /** R-389: a codeunit's `implements` interfaces, or an interface's `extends` ones, as written:
+   *  the interfaces whose variables can hold this codeunit (or an implementation of this one). */
+  readonly implements: readonly string[];
+  /** R-389: the file's `namespace` (normalised by `namespaceOf`), `""` for none. */
+  readonly namespace: string;
+  /** R-389: the file's `using` namespaces, normalised. */
+  readonly usings: readonly string[];
+}
+
+/** R-389: a namespace as written, normalised: each dotted segment unquoted and lower-cased. */
+function namespaceOf(text: string): string {
+  return (text.trim().match(/"[^"]*"|[^.]+/g) ?? [])
+    .map((s) => normalizeAlName(s.trim().replace(/^"|"$/g, "")))
+    .join(".");
+}
+
+/** R-389: a file's namespace and `using` directives, read once per file. */
+interface FileNamespace {
+  readonly namespace: string;
+  readonly usings: readonly string[];
 }
 
 export interface Proc {
@@ -351,6 +460,22 @@ export interface Proc {
   /** R-371: every `Codeunit::X` name and every integer literal of 1000 or more in the body, as
    *  written: where a codeunit id an Integer can carry may come from (`Scanner.foldIdTargets`). */
   readonly idRefs: readonly string[];
+  /** R-389: an attribute says the platform or another app calls it (`PLATFORM_CALLED`). */
+  readonly platformCalled: boolean;
+  /** R-389: declared `local`, so only its own object can call it. */
+  readonly local: boolean;
+  /** R389 guard: declared `internal`, so only the test app and an `internalsVisibleTo` app can. */
+  readonly internal: boolean;
+  /** R-389: the parameters' names as written, in order. */
+  readonly paramNames: readonly string[];
+  /** R-389: the positions of its `var` parameters. */
+  readonly varParams: ReadonlySet<number>;
+  /** R-389: how each Variant in its scope gets a value. */
+  readonly variantSources: ReadonlyMap<string, readonly VariantSource[]>;
+  /** R-389: every `exit(<value>)`, kept only when the return type is a Variant. */
+  readonly exitValues: readonly Recv[];
+  /** R-389: the named return value's name as written, when there is one. */
+  readonly returnName: string | undefined;
 }
 
 /** R-371: one parse of the test app, as plain facts, shared by the TestPage scan and the digest. */
@@ -463,6 +588,10 @@ function memberRun(decl: ALSyntaxNode, andTrivia = false): AttributeRun {
 
 const HANDLER_ATTRIBUTE = /^\[\s*HandlerFunctions\s*\(\s*'([^']*)'/i;
 const SUBSCRIBER_ATTRIBUTE = /^\[\s*EventSubscriber\s*\(/i;
+/** R-389: attributes under which the platform or another app calls the procedure: a subscriber,
+ *  a test, a UI handler (`[MessageHandler]`, ...), a web service or external business event. */
+const PLATFORM_CALLED =
+  /^\[\s*(?:EventSubscriber|Test|ServiceEnabled|ExternalBusinessEvent|\w*Handler)\b/i;
 const MANUAL_BINDING = /EventSubscriberInstance\s*=\s*Manual/i;
 
 /**
@@ -503,6 +632,8 @@ interface Header {
   readonly params: readonly ALSyntaxNode[];
   readonly returnType: string | undefined;
   readonly returnValue: ALSyntaxNode | undefined;
+  /** R-389: the access modifier as written (`local`, `internal`, `protected`), or undefined. */
+  readonly modifier: string | undefined;
   /** Every `var` section of the declaration: a plain procedure's one; a split arm's own (a
    *  preamble's) and the shared one. */
   readonly vars: readonly ALSyntaxNode[];
@@ -532,6 +663,7 @@ function procOf(
       params: plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [],
       returnType: p.childForFieldName("return_type")?.text,
       returnValue: p.childForFieldName("return_value") ?? undefined,
+      modifier: p.childForFieldName("modifier")?.text,
       vars: vars === undefined ? [] : [vars],
       block,
       run: memberRun(p),
@@ -585,6 +717,7 @@ function splitProcsOf(
         params: plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [],
         returnType: arm.find((c) => c.fieldName === "return_type")?.text,
         returnValue: arm.find((c) => c.fieldName === "return_value"),
+        modifier: arm.find((c) => c.fieldName === "modifier")?.text,
         vars: [...arm.filter((c) => c.rawKind === "var_section"), ...shared],
         block,
         run,
@@ -630,10 +763,17 @@ function procFrom(
 ): Proc {
   const id2 = h.name;
   const scope = new Map<string, string[]>();
-  for (const prm of h.params) {
+  const paramNames: string[] = [];
+  let varParams: Set<number> | undefined;
+  for (const [i, prm] of h.params.entries()) {
     const n = nameNode(prm);
     const t = prm.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
     if (n !== undefined) addType(scope, n.text, t);
+    paramNames.push(n === undefined ? "" : n.text);
+    if (prm.childForFieldName("modifier") !== null) {
+      varParams ??= new Set();
+      varParams.add(i);
+    }
   }
   // A named return value (`procedure H() R: Codeunit Lib`) is a variable in its procedure
   // (run 002 re-review): unscoped, `R.Helper()` read as an undeclared name and was dropped.
@@ -649,6 +789,14 @@ function procFrom(
       `${unit.display}.${id2.text}`,
       isTrigger || problems === null ? [] : problems,
     );
+  // R-389: only for the names a Variant can sit in, to keep the model small.
+  const tracked = new Set<string>();
+  for (const [n, ts] of scope) if (ts.some((t) => variantShape(t) === "plain")) tracked.add(n);
+  const exits = returnType !== undefined && variantShape(returnType) === "plain";
+  const facts =
+    h.block !== undefined && (tracked.size > 0 || exits)
+      ? variantFacts(h.block, tracked, exits)
+      : undefined;
   const attributes = [...h.own, ...run.attributes].map((x) => x.text.trim());
   // R420: where the run took an `#if`, every `[HandlerFunctions]` in it, so every arm's (the
   // union). Otherwise the pre-R420 reading: the nearest `[HandlerFunctions]`, duplicates kept.
@@ -692,6 +840,14 @@ function procFrom(
     spanHash: sha256(normalizeSource(spanText(source, run))),
     key: "",
     subscriber: attributes.some((t) => SUBSCRIBER_ATTRIBUTE.test(t)),
+    platformCalled: attributes.some((t) => PLATFORM_CALLED.test(t)),
+    local: h.modifier !== undefined && /^\s*local\s*$/i.test(h.modifier),
+    internal: h.modifier !== undefined && /^\s*internal\s*$/i.test(h.modifier),
+    paramNames,
+    varParams: varParams ?? NO_POSITIONS,
+    variantSources: facts === undefined || facts.sources.size === 0 ? NO_SOURCES : facts.sources,
+    exitValues: facts === undefined || facts.exitValues.length === 0 ? NO_RECVS : facts.exitValues,
+    returnName: returnValue?.text,
   };
   if (deferKey) {
     const pending = DEFERRED_KEYS.get(keys) ?? [];
@@ -727,6 +883,7 @@ function buildUnit(
   errors: readonly ErrorSite[],
   source: string,
   keys: Map<string, number>,
+  ns: FileNamespace,
 ): Unit {
   const id = Number(node.namedChildren.find((c) => c.rawKind === "integer")?.text);
   const display = (nameNode(node)?.text ?? "").replace(/^"|"$/g, "");
@@ -759,6 +916,12 @@ function buildUnit(
     baseKey: undefined,
     parts: [],
     implementations: [],
+    implements: node.namedChildren
+      .filter((c) => c.rawKind === "implements_clause")
+      .flatMap((c) => c.namedChildren.filter((i) => i.fieldName === "interface"))
+      .map((i) => i.text),
+    namespace: ns.namespace,
+    usings: ns.usings,
   };
   if (body !== undefined) {
     const members = flattenPreproc(body.namedChildren).flatMap((c) =>
@@ -816,6 +979,7 @@ function buildObjectUnit(
   baseKey: string | undefined,
   extendsText: string | undefined,
   keys: Map<string, number>,
+  ns: FileNamespace,
 ): Unit {
   const id = Number(node.namedChildren.find((c) => c.rawKind === "integer")?.text);
   const nameText = nameNode(node)?.text ?? "";
@@ -874,6 +1038,12 @@ function buildObjectUnit(
     baseKey,
     parts,
     implementations: kind.startsWith("enum") ? implementationsIn(text) : [],
+    implements:
+      kind === "interface"
+        ? node.namedChildren.filter((c) => c.fieldName === "extends_interface").map((c) => c.text)
+        : [],
+    namespace: ns.namespace,
+    usings: ns.usings,
   };
   const walk = (n: ALSyntaxNode): void => {
     if (isMemberKind(n.rawKind)) {
@@ -1017,6 +1187,8 @@ export interface ReachState {
   readonly units: Set<Unit>;
   /** Non-codeunit objects whose triggers were walked (`enterObject`), by base key. */
   readonly entered: Set<string>;
+  /** R-389: codeunits folded whole as entries (`Scanner.foldEntryUnit`), each checked once. */
+  readonly entryUnits: Set<Unit>;
   /** The first UNFOLLOWED edge met, in words; undefined while every edge was classified. */
   fallback: string | undefined;
 }
@@ -1025,6 +1197,7 @@ export const newReachState = (): ReachState => ({
   procs: new Set(),
   units: new Set(),
   entered: new Set(),
+  entryUnits: new Set(),
   fallback: undefined,
 });
 
@@ -1040,10 +1213,14 @@ function lastSegment(raw: string): string {
 /**
  * R-371 (the orchestrator's EXTERNAL condition): whether a reference is ONE plain name that the
  * test app's objects can be checked against: a bare identifier, or one quoted name (dots inside
- * the quotes are part of the name). An id, a namespace-qualified name and any other shape are
+ * the quotes are part of the name). R-389 (option a): also a namespace-qualified name, plain
+ * names joined by dots (`System.RestClient."Http Response Message"`): every resolver here matches
+ * a test-app object by the LAST segment (`unitsNamed`, `objectsNamed`, `implementationsOf`), so
+ * when none has that name the reference is a dependency's object. An id and any other shape are
  * not, and a reference the test app does not declare is then UNFOLLOWED, never EXTERNAL.
  */
-const PLAIN_NAME = /^\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)\s*$/;
+const PLAIN_NAME =
+  /^\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*))*\s*$/;
 
 const OBJ_TYPE =
   /^\s*(codeunit|record|page|report|query|xmlport|testpage|testrequestpage)\s+(.+?)(?:\s+temporary)?\s*$/i;
@@ -1109,6 +1286,19 @@ function implicitAt(p: Proc, key: string): readonly string[] | undefined {
   return p.unit.implicit.get(key);
 }
 
+/**
+ * R389 guard (`closed-world.ts`): whether only the test app can call its `public` (and
+ * `protected`) procedures, and its `internal` ones. True only when the server measured that no
+ * published app depends on the test app; `internal` also needs no `internalsVisibleTo`.
+ */
+export interface ClosedWorld {
+  readonly public: boolean;
+  readonly internal: boolean;
+}
+
+/** The guard's fall-back answer: every non-`local` procedure can be called from outside. */
+export const OPEN_WORLD: ClosedWorld = { public: false, internal: false };
+
 export class Scanner {
   /** Every unit by `String(id)` and by name, in `units` order: a linear filter per call site was
    *  349 of BaseApp's 415 s (CPU profile, R-236c round 2). */
@@ -1128,6 +1318,20 @@ export class Scanner {
   private readonly normCache = new Map<string, string>();
   /** `unitsFor` per distinct type text, once, for the same reason. */
   private readonly unitsForCache = new Map<string, Unit[]>();
+  /** R-389: interface name -> the test-app codeunits and interfaces naming it in `implements`. */
+  private readonly implementers = new Map<string, Unit[]>();
+  /** R-389: the normalised name of every interface the test app declares. */
+  private readonly testAppInterfaces = new Map<string, Set<string>>();
+  /** R-389: every test-app unit with an `implements` (or interface `extends`) list. */
+  private readonly implementing: Unit[] = [];
+  private unknownAncestryCache: Set<Unit> | undefined;
+  /** R-389 (option a): every name a `[HandlerFunctions]` lists (the platform calls those). */
+  private readonly handlerNames = new Set<string>();
+  /** R-389 (option a): `name|arity` -> every call site of that name and arity in the test app. */
+  private callSiteIndex: Map<string, Array<{ q: Proc; site: Site }>> | undefined;
+  private readonly allProcs: readonly Proc[];
+  /** R-389: `name|arity` -> the `var` positions of every test-app procedure of that name and arity. */
+  private readonly varPositions = new Map<string, Set<number>>();
 
   private norm(raw: string): string {
     let v = this.normCache.get(raw);
@@ -1138,7 +1342,10 @@ export class Scanner {
     return v;
   }
 
-  constructor(model: TestAppModel) {
+  constructor(
+    model: TestAppModel,
+    private readonly closedWorld: ClosedWorld = OPEN_WORLD,
+  ) {
     const add = (map: Map<string, Unit[]>, k: string, u: Unit): void => {
       const list = map.get(k);
       if (list === undefined) map.set(k, [u]);
@@ -1159,6 +1366,90 @@ export class Scanner {
     );
     this.anyDamage = model.damaged.length > 0;
     this.lowIds = model.units.some((u) => u.id < 1000);
+    this.allProcs = [...model.units, ...model.objects].flatMap((u) => [...u.procs, ...u.triggers]);
+    for (const u of [...model.units, ...model.objects]) {
+      for (const i of u.implements) add(this.implementers, lastSegment(i), u);
+      if (u.kind === "interface") {
+        const spaces = this.testAppInterfaces.get(u.name) ?? new Set<string>();
+        spaces.add(u.namespace);
+        this.testAppInterfaces.set(u.name, spaces);
+      }
+      if (u.implements.length > 0) this.implementing.push(u);
+      for (const p of u.procs) for (const h of p.handlers) this.handlerNames.add(h);
+      for (const p of u.procs) {
+        if (p.varParams.size === 0) continue;
+        const k = `${p.name}|${p.params}`;
+        const set = this.varPositions.get(k) ?? new Set<number>();
+        for (const i of p.varParams) set.add(i);
+        this.varPositions.set(k, set);
+      }
+    }
+  }
+
+  /**
+   * R-389: every test-app codeunit an `Interface <raw>` variable can hold: each codeunit that
+   * implements it, or implements an interface that extends it, transitively through the test
+   * app's own interfaces. A dependency's implementations are EXTERNAL (the dependency
+   * fingerprint). An interface the test app does not declare may also be extended by another
+   * interface the test app does not declare (`IDerived extends IBase` in a dependency), which the
+   * walk cannot see: so for such an interface, every test-app codeunit whose ancestry reaches a
+   * non-test-app interface counts too (final review, hole 3). A test-app interface cannot be
+   * extended by a dependency's (it cannot name the test app's types), so it needs only the first.
+   * Re-review #2: "the test app declares it" is decided with the namespace (`ownsInterface`), not
+   * the last name segment, so a test-app `Tests.IBase` does not hide a dependency's `Dep.IBase`.
+   */
+  private implementationsOf(raw: string, from: Unit): Unit[] {
+    const out = this.implementersOf([lastSegment(raw)]);
+    if (!this.ownsInterface(raw, from)) for (const u of this.unknownAncestry()) out.add(u);
+    return [...out];
+  }
+
+  /**
+   * R-389 re-review #2: whether the interface reference `raw`, written in `from`'s file, resolves to
+   * a test-app interface. A qualified name must equal a test-app interface's namespace plus name;
+   * an unqualified one resolves through the file's own namespace, its `using` directives, or no
+   * namespace. Anything else, an ambiguity with a dependency's interface included (the walk cannot
+   * see those), counts as not the test app's: the safe answer, since it adds the unknown-ancestry
+   * fold.
+   */
+  private ownsInterface(raw: string, from: Unit): boolean {
+    const segments = raw.trim().match(/"[^"]*"|[^.]+/g) ?? [raw];
+    const spaces = this.testAppInterfaces.get(lastSegment(raw));
+    if (spaces === undefined) return false;
+    if (segments.length > 1) return spaces.has(namespaceOf(segments.slice(0, -1).join(".")));
+    return [from.namespace, ...from.usings, ""].some((n) => spaces.has(n));
+  }
+
+  /** Every test-app codeunit implementing one of `names`, through test-app `extends`. */
+  private implementersOf(names: Iterable<string>): Set<Unit> {
+    const out = new Set<Unit>();
+    const seen = new Set<string>();
+    const go = (name: string): void => {
+      if (seen.has(name)) return;
+      seen.add(name);
+      for (const u of this.implementers.get(name) ?? []) {
+        if (u.kind === "codeunit") out.add(u);
+        else go(u.name);
+      }
+    };
+    for (const n of names) go(n);
+    return out;
+  }
+
+  /** Every test-app codeunit whose `implements` ancestry names an interface that does not resolve
+   *  to a test-app one (`ownsInterface`, in the declaring file), computed once. */
+  private unknownAncestry(): Set<Unit> {
+    if (this.unknownAncestryCache === undefined) {
+      const out = new Set<Unit>();
+      for (const u of this.implementing)
+        for (const i of u.implements) {
+          if (this.ownsInterface(i, u)) continue;
+          if (u.kind === "codeunit") out.add(u);
+          else for (const c of this.implementersOf([u.name])) out.add(c);
+        }
+      this.unknownAncestryCache = out;
+    }
+    return this.unknownAncestryCache;
   }
 
   /**
@@ -1600,8 +1891,10 @@ export class Scanner {
       if (f.k === "ref") {
         if (this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name))
           what = `${f.kind}::${f.name}`;
-      } else if (refsOnly) continue;
-      else what = this.argHolds(p, f.recv, st);
+      } else if (refsOnly) {
+        this.builtinArg(p, f.recv, label, st);
+        continue;
+      } else what = this.argHolds(p, f.recv, st, label);
       if (what !== undefined) {
         fallBack(st, `${label} is handed ${what}, a test-app object, by ${p.display}`);
         return;
@@ -1615,7 +1908,7 @@ export class Scanner {
    * scope (`this` is the caller's own object); a subscript or member of an array or a collection
    * whose element can hold a test-app object counts; a call or member is typed by its return.
    */
-  private argHolds(p: Proc, r: Recv, st: ReachState): string | undefined {
+  private argHolds(p: Proc, r: Recv, st: ReachState, label: string): string | undefined {
     switch (r.k) {
       case "value":
         return undefined;
@@ -1623,7 +1916,7 @@ export class Scanner {
         return `an argument of a shape the walk does not model (${r.kind})`;
       case "either":
         for (const o of r.options) {
-          const w = this.argHolds(p, o, st);
+          const w = this.argHolds(p, o, st, label);
           if (w !== undefined) return w;
         }
         return undefined;
@@ -1631,11 +1924,23 @@ export class Scanner {
         const key = this.norm(r.name);
         if (key === "this") return "this";
         const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key);
+        // Final review, hole 2: an undeclared name may be a parenthesis-less call.
+        const call = types === undefined ? this.parenless(p, r.name) : undefined;
+        if (call !== undefined) return this.argHolds(p, call, st, label);
         // A Variant or RecordRef may hold a record of any test-app table: every test-app table,
         // with its triggers and what they reach, is folded in (an unfollowed edge there falls
-        // back). Stated limit: a Variant holding a test-app codeunit or interface, run by the
-        // external code, is not seen.
+        // back).
         if (types?.some((t) => HOLDS_RECORD.test(ARRAY_OF.exec(t)?.[1] ?? t))) this.foldTables(st);
+        // R-389: a Variant can also hold a test-app codeunit, which the external code can run:
+        // what it can hold is traced in this procedure (`traceVariant`).
+        const shapes = new Set(types?.map(variantShape));
+        const why = `${label} is handed ${r.name} by ${p.display}`;
+        if (shapes.has("container"))
+          fallBack(
+            st,
+            `${why}: an array or collection of Variant, whose elements the walk cannot see`,
+          );
+        else if (shapes.has("plain")) this.traceVariant(p, r.name, why, st, false, []);
         const held = types?.find((t) => this.holdsTestApp(t));
         return held === undefined ? undefined : `${r.name} (${held.trim()})`;
       }
@@ -1654,6 +1959,9 @@ export class Scanner {
           (t) => (ARRAY_OF.test(t) || COLLECTION_OF.test(t)) && this.holdsTestApp(t),
         );
         if (coll !== undefined) return `an element of ${coll.trim()}`;
+        // R-389: an element of a Variant array or collection is not traced: the fallback.
+        const vcoll = baseTypes.find((t) => variantShape(t) === "container");
+        if (vcoll !== undefined) return `an element or a return of ${vcoll.trim()}`;
         if (r.k === "index") return undefined;
         break;
       }
@@ -1665,7 +1973,7 @@ export class Scanner {
     }
     const types = this.typesOf(p, r);
     if (typeof types === "string") return `an argument of unknown type (${types})`;
-    const held = types.find((t) => this.holdsTestApp(t));
+    const held = types.find((t) => this.holdsTestApp(t) || variantShape(t) !== undefined);
     return held === undefined ? undefined : `a value of ${held.trim()}`;
   }
 
@@ -1707,12 +2015,360 @@ export class Scanner {
    */
   foldImplementation(raw: string, label: string, st: ReachState): Unit[] {
     const us = this.unitsNamed(raw);
-    for (const u of us) {
-      this.reachUnit(u, st);
-      for (const c of [...u.procs, ...u.triggers]) this.reach(c, st);
-    }
+    for (const u of us) this.foldEntryUnit(u, st);
     if (us.length === 0) this.outside("codeunit", raw, label, st);
     return us;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // R-389 (plan docs/superpowers/plans/2026-10-04-R-389-variant-interface-reach.md, r2): a value
+  // handed to code the walk does not follow, in a Variant or an Interface, can be a test-app
+  // codeunit that code runs. Part 1: a Variant ARGUMENT is traced inside the procedure that hands
+  // it out. Part 2: an ENTRY procedure (one external code can call: a subscriber, every procedure
+  // of a codeunit folded whole) can hand a value back through a `var` parameter or its return.
+  // What the walk cannot see falls back (the whole-source digest); it never folds nothing.
+  // ---------------------------------------------------------------------------------------------
+
+  /** R-389: a codeunit external code can hold an instance of, folded whole: every procedure and
+   *  trigger, what they reach, and what each hands back (`handOuts`). Once per `ReachState`. */
+  foldEntryUnit(u: Unit, st: ReachState): void {
+    if (st.entryUnits.has(u)) return;
+    st.entryUnits.add(u);
+    this.reachUnit(u, st);
+    for (const c of [...u.procs, ...u.triggers]) this.foldEntryProc(c, st);
+  }
+
+  /** R-389: a procedure external code can call: reached, and its hand-outs read. */
+  foldEntryProc(p: Proc, st: ReachState): void {
+    this.reach(p, st);
+    this.handOuts(p, st);
+  }
+
+  /** R-389 part 2: every `var` parameter and the return value of `p`, as a hand-out. By-value
+   *  parameters are inputs: an assignment to one is not seen by the caller. */
+  private handOuts(p: Proc, st: ReachState): void {
+    for (const i of p.varParams) {
+      const name = p.paramNames[i];
+      if (name === undefined || name === "") continue;
+      for (const t of p.scope.get(this.norm(name)) ?? [])
+        this.handOutType(p, t, name, `${p.display} hands out ${name}`, st, false, false);
+    }
+    if (p.returnType !== undefined)
+      this.handOutType(
+        p,
+        p.returnType,
+        p.returnName,
+        `${p.display} hands out its return value`,
+        st,
+        true,
+        false,
+      );
+  }
+
+  private handOutType(
+    p: Proc,
+    t: string,
+    name: string | undefined,
+    why: string,
+    st: ReachState,
+    isReturn: boolean,
+    element: boolean,
+  ): void {
+    const arr = ARRAY_OF.exec(t)?.[1];
+    if (arr !== undefined) {
+      this.handOutType(p, arr, undefined, why, st, false, true);
+      return;
+    }
+    const elems = COLLECTION_OF.exec(t)?.[1];
+    if (elems !== undefined) {
+      for (const e of elementTypes(elems)) this.handOutType(p, e, undefined, why, st, false, true);
+      return;
+    }
+    const iface = INTERFACE_TYPE.exec(t)?.[1];
+    // The type alone bounds what an Interface can hold: no tracing.
+    if (iface !== undefined) this.foldInterface(iface, why, st, p.unit);
+    else if (/^\s*(recordref|fieldref)\b/i.test(t)) this.foldTables(st);
+    else if (!VARIANT_TYPE.test(t)) return;
+    else if (element)
+      fallBack(st, `${why}: an array or collection of Variant, whose elements the walk cannot see`);
+    else {
+      if (name !== undefined) this.traceVariant(p, name, why, st, true, []);
+      if (isReturn) for (const r of p.exitValues) this.traceValue(p, r, why, st, []);
+    }
+  }
+
+  /** R-389: every test-app implementation of an interface, folded whole as an entry. With none,
+   *  nothing is added, unless the name could hide one (`outside`'s condition). */
+  private foldInterface(raw: string, why: string, st: ReachState, from: Unit): void {
+    const us = this.implementationsOf(raw, from);
+    for (const u of us) this.foldEntryUnit(u, st);
+    if (us.length === 0) this.outside("interface", raw, why, st);
+  }
+
+  /**
+   * R-389: what the Variant `raw` of `p` can hold, folded. `root`: it is the hand-out's own `var`
+   * parameter or return value, so being a parameter is not by itself unseen. `path` holds the
+   * Variants being traced, so a cycle is unseen.
+   */
+  private traceVariant(
+    p: Proc,
+    raw: string,
+    why: string,
+    st: ReachState,
+    root: boolean,
+    path: readonly string[],
+  ): void {
+    const key = this.norm(raw);
+    const at = `${p.key}|${key}`;
+    if (path.includes(at)) {
+      fallBack(st, `${why}: ${raw} is assigned in a cycle`);
+      return;
+    }
+    if (!p.scope.has(key)) {
+      fallBack(st, `${why}: it can hold what the global ${raw} holds`);
+      return;
+    }
+    const here = [...path, at];
+    const param = p.paramNames.findIndex((n) => this.norm(n) === key);
+    if (!root && param >= 0) this.traceParam(p, raw, param, why, st, here);
+    for (const s of p.variantSources.get(key) ?? []) {
+      if (s.k === "foreach") fallBack(st, `${why}: ${raw} is a foreach variable`);
+      else if (s.k === "assign") this.traceValue(p, s.recv, why, st, here);
+      else if (this.varPositions.get(`${this.norm(s.callee)}|${s.args}`)?.has(s.at))
+        fallBack(st, `${why}: ${raw} is filled by ${s.callee} through a var parameter`);
+      else if (s.on !== undefined) {
+        const on = this.typesOf(p, s.on);
+        if (typeof on === "string" || on.some((t) => variantShape(t) === "container"))
+          fallBack(
+            st,
+            `${why}: ${raw} is filled by ${s.on.k === "name" ? s.on.name : "a value"}.${s.callee} from a collection`,
+          );
+      }
+    }
+  }
+
+  /**
+   * R-389, final review hole 1: a value handed to a BUILT-IN (`Format`, `StrSubstNo`, a system
+   * method). `Format` of a Variant holding a codeunit gives its object id (live probe R4d), and
+   * that text can reach a dependency's `Evaluate` + `Codeunit.Run` by any road the walk does not
+   * follow. So a Variant, an Interface or a test-app codeunit handed to a built-in is a hand-out:
+   * traced and folded, or the fallback when the walk cannot see what it holds. A record, a value
+   * or a system name is not (its text names no codeunit).
+   */
+  private builtinArg(p: Proc, r: Recv, label: string, st: ReachState): void {
+    const why = `${label} is handed ${r.k === "name" ? r.name : "a value"} by ${p.display}`;
+    let recv = r;
+    if (r.k === "name") {
+      const key = this.norm(r.name);
+      if (key === "this") {
+        // Re-review #3: `Format(this)` gives the codeunit's id, as `V := this` hands it out.
+        this.traceValue(p, r, why, st, []);
+        return;
+      }
+      const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key);
+      if (types === undefined) {
+        const call = this.parenless(p, r.name);
+        if (call === undefined) return; // a system name
+        recv = call;
+      } else {
+        if (types.some((t) => VARIANT_TYPE.test(t)))
+          this.traceVariant(p, r.name, why, st, false, []);
+        for (const t of types) this.builtinHolds(t, why, st, p.unit);
+        return;
+      }
+    }
+    const types = this.typesOf(p, recv);
+    if (typeof types === "string") {
+      fallBack(st, `${why}: a value of unknown type (${types})`);
+      return;
+    }
+    if (types.some((t) => VARIANT_TYPE.test(t))) this.traceValue(p, recv, why, st, []);
+    for (const t of types) this.builtinHolds(t, why, st, p.unit);
+  }
+
+  /** `builtinArg` for one non-Variant type: an Interface or a test-app codeunit is folded. */
+  private builtinHolds(t: string, why: string, st: ReachState, from: Unit): void {
+    const iface = INTERFACE_TYPE.exec(t)?.[1];
+    if (iface !== undefined) this.foldInterface(iface, why, st, from);
+    else if (CODEUNIT_TYPE.test(t)) for (const u of this.unitsFor(t)) this.foldEntryUnit(u, st);
+  }
+
+  /** R-389: `raw` as a parenthesis-less call of `p`'s own object's procedure, when it is one. */
+  private parenless(p: Proc, raw: string): Recv | undefined {
+    const name = this.norm(raw);
+    const has = (u: Unit): boolean => u.procs.some((c) => c.name === name && c.params === 0);
+    if (has(p.unit)) return { k: "call", name: raw, args: 0, inWith: false };
+    // An extension's code can call its base object's procedure (`reachOwn`), whose return
+    // `typesOf` does not read: unknown.
+    const kin = p.unit.baseKey === undefined ? [] : (this.otherByBase.get(p.unit.baseKey) ?? []);
+    if (p.unit.kind !== "codeunit" && kin.some(has))
+      return { k: "opaque", kind: `parenthesis-less call ${raw}` };
+    return undefined;
+  }
+
+  /**
+   * R-389 (option a): what the Variant parameter `raw` (position `at`) of `p` can be given: the
+   * union of what every test-app call site of that name and arity passes, each traced as usual.
+   * Over-approximated on purpose: a member call matches whatever its receiver (a dependency's
+   * procedure of the same name adds callers, never removes one), and a bare call in another
+   * object counts only inside a `with`. A caller the walk cannot list keeps the fallback: the
+   * platform or another app calling `p` (a subscriber, a test, a handler, a trigger, a web
+   * service), interface dispatch (any procedure of a codeunit that implements an interface), or
+   * a chain of callers deeper than `MAX_CALLER_DEPTH` (a cycle falls back in `traceVariant`).
+   * Re-review #1: so does any procedure that is not `local`. An app that DEPENDS on the test app
+   * can call a public procedure (and an `internal` one when the test app names it in
+   * `internalsVisibleTo`), for example from a subscriber to a test-app event, handing in a
+   * test-app codeunit; that app's code is in no digest. The R389 guard lifts this, and only
+   * this, when the server says no published app depends on the test app (`ClosedWorld`).
+   */
+  private traceParam(
+    p: Proc,
+    raw: string,
+    at: number,
+    why: string,
+    st: ReachState,
+    path: readonly string[],
+  ): void {
+    const callableOutside =
+      !p.local && !(p.internal ? this.closedWorld.internal : this.closedWorld.public);
+    const external =
+      callableOutside ||
+      p.platformCalled ||
+      p.subscriber ||
+      p.unit.triggers.includes(p) ||
+      this.handlerNames.has(p.name) ||
+      (p.unit.kind === "codeunit" && p.unit.implements.length > 0);
+    if (external) {
+      fallBack(
+        st,
+        `${why}: ${raw} is a parameter of ${p.display}, which can be called from outside the test app`,
+      );
+      return;
+    }
+    if (path.length > MAX_CALLER_DEPTH) {
+      fallBack(
+        st,
+        `${why}: ${raw} is passed down a chain of callers deeper than ${MAX_CALLER_DEPTH}`,
+      );
+      return;
+    }
+    const kin = p.unit.baseKey === undefined ? [] : (this.otherByBase.get(p.unit.baseKey) ?? []);
+    for (const { q, site } of this.callers(p.name, p.params)) {
+      if (site.kind === "bare" && !site.inWith && q.unit !== p.unit && !kin.includes(q.unit))
+        continue;
+      const f = site.argFacts.find((x) => x.at === at);
+      if (f === undefined) continue; // a literal or an operator's result: a value
+      if (f.k === "int") {
+        if (this.byNameAll(f.value).length > 0)
+          fallBack(st, `${why}: ${q.display} passes ${f.value}, a test-app codeunit's id`);
+      } else if (f.k === "ref") {
+        if (this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name))
+          fallBack(st, `${why}: ${q.display} passes ${f.kind}::${f.name}`);
+      } else this.traceValue(q, f.recv, why, st, path);
+    }
+  }
+
+  /** R-389 (option a): every call site of `name` with `args` arguments, indexed once. */
+  private callers(name: string, args: number): ReadonlyArray<{ q: Proc; site: Site }> {
+    if (this.callSiteIndex === undefined) {
+      const index = new Map<string, Array<{ q: Proc; site: Site }>>();
+      for (const q of this.allProcs)
+        for (const site of q.sites ?? []) {
+          const k = `${this.norm(site.kind === "bare" ? site.name : site.member)}|${site.args}`;
+          const list = index.get(k);
+          if (list === undefined) index.set(k, [{ q, site }]);
+          else list.push({ q, site });
+        }
+      this.callSiteIndex = index;
+    }
+    return this.callSiteIndex.get(`${name}|${args}`) ?? [];
+  }
+
+  /** R-389: what a value assigned to a traced Variant can be, folded (part 1's table). */
+  private traceValue(p: Proc, r: Recv, why: string, st: ReachState, path: readonly string[]): void {
+    switch (r.k) {
+      case "value":
+        return;
+      case "opaque":
+        fallBack(st, `${why}: assigned from a shape the walk does not model (${r.kind})`);
+        return;
+      case "either":
+        for (const o of r.options) this.traceValue(p, o, why, st, path);
+        return;
+      case "name": {
+        const key = this.norm(r.name);
+        if (key === "this") {
+          if (p.unit.kind === "codeunit") this.foldEntryUnit(p.unit, st);
+          else fallBack(st, `${why}: assigned from this in a ${p.unit.kind}`);
+          return;
+        }
+        const declared = p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key);
+        if (declared === undefined) {
+          // Final review, hole 2: a name no variable declares is a parenthesis-less call of the
+          // object's own procedure, traced as one; anything else is unknown, never harmless.
+          const call = this.parenless(p, r.name);
+          if (call !== undefined) this.traceValue(p, call, why, st, path);
+          else fallBack(st, `${why}: assigned from ${r.name}, which the walk cannot resolve`);
+          return;
+        }
+        const types = declared;
+        if (types.some((t) => VARIANT_TYPE.test(t)))
+          this.traceVariant(p, r.name, why, st, false, path);
+        for (const t of types) if (!VARIANT_TYPE.test(t)) this.holdType(t, r.name, why, st, p.unit);
+        return;
+      }
+      case "call":
+        if (!this.procNames.has(this.norm(r.name))) return; // a built-in
+        break;
+      case "index":
+      case "member": {
+        const base = this.typesOf(p, r.k === "index" ? r.base : r.recv);
+        const vcoll =
+          typeof base === "string" ? undefined : base.find((t) => variantShape(t) === "container");
+        if (vcoll !== undefined) {
+          fallBack(st, `${why}: assigned from an element of ${vcoll.trim()}`);
+          return;
+        }
+        break;
+      }
+    }
+    const types = this.typesOf(p, r);
+    if (typeof types === "string") {
+      fallBack(st, `${why}: assigned from a value of unknown type (${types})`);
+      return;
+    }
+    for (const t of types)
+      if (VARIANT_TYPE.test(t)) fallBack(st, `${why}: assigned from a value of Variant`);
+      else this.holdType(t, "a value", why, st, p.unit);
+  }
+
+  /** R-389: a non-Variant value of type `t` in a handed-out Variant (part 1's classes a to c). */
+  private holdType(t: string, what: string, why: string, st: ReachState, from: Unit): void {
+    if (ARRAY_OF.test(t) || COLLECTION_OF.test(t)) {
+      if (variantShape(t) !== undefined || this.holdsTestApp(t))
+        fallBack(st, `${why}: assigned from ${what}, an array or collection (${t.trim()})`);
+      return;
+    }
+    // A record: its table's triggers (class a; the argument site folded them already).
+    if (/^\s*(record|recordref|fieldref)\b/i.test(t)) {
+      this.foldTables(st);
+      return;
+    }
+    const iface = INTERFACE_TYPE.exec(t)?.[1];
+    if (iface !== undefined) {
+      this.foldInterface(iface, why, st, from);
+      return;
+    }
+    const m = OBJ_TYPE.exec(t);
+    const kw = m?.[1]?.toLowerCase();
+    const raw = m?.[2];
+    if (kw === undefined || raw === undefined) return;
+    if (kw === "codeunit") for (const u of this.unitsFor(t)) this.foldEntryUnit(u, st);
+    else
+      for (const u of this.objectsNamed(KIND_OF[kw] ?? kw, raw)) {
+        this.reachUnit(u, st);
+        if (u.baseKey !== undefined) this.enterObject(u.baseKey, st);
+      }
   }
 
   /** Every test-app table and tableextension, entered: its parts, its triggers, what they reach. */
@@ -1996,12 +2652,26 @@ function scanFile(
 ): void {
   const root = wrapRoot(parsed);
   const errors = errorOffsets(root);
-  const objects = flattenPreproc(root.namedChildren).filter(
+  const top = flattenPreproc(root.namedChildren);
+  const objects = top.filter(
     (c) => c.rawKind.endsWith("_declaration") && c.rawKind !== "namespace_declaration",
   );
+  // R-389: two `namespace` lines (in `#if` arms) leave the file's namespace unknown, which only
+  // `ownsInterface` reads, and an unknown one matches no test-app interface (the safe side).
+  const spaces = new Set(
+    top
+      .filter((c) => c.rawKind === "namespace_declaration")
+      .map((c) => namespaceOf(c.childForFieldName("name")?.text ?? "")),
+  );
+  const ns: FileNamespace = {
+    namespace: spaces.size === 0 ? "" : spaces.size === 1 ? ([...spaces][0] ?? "") : "\u0000",
+    usings: top
+      .filter((c) => c.rawKind === "using_statement")
+      .map((c) => namespaceOf(c.childForFieldName("namespace")?.text ?? "")),
+  };
   for (const o of objects) {
     if (o.rawKind === "codeunit_declaration") {
-      units.push(buildUnit(path, o, errors, source, keys));
+      units.push(buildUnit(path, o, errors, source, keys, ns));
       continue;
     }
     // R-371: every other object, for the digest's walk. The TestPage scan never reads these.
@@ -2027,6 +2697,7 @@ function scanFile(
         baseKey,
         extendsText,
         keys,
+        ns,
       ),
     );
   }
