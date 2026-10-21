@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import {
   type ALSyntaxNode,
   buildSemanticContext,
+  evaluateArms,
   initParser,
   parseAL,
   visit,
@@ -27,12 +28,15 @@ const VMC = "lethal.void-method-call";
 
 type Files = Record<string, string>;
 
+/** The project, built as production builds it: with an arm map, no preprocessor symbols. */
 function project(files: Files) {
   const parsed = Object.entries(files).map(([path, src]) => ({
     path,
+    src,
     root: wrapRoot(parseAL(src)),
   }));
-  const ctx = buildSemanticContext(parsed);
+  const arms = new Map(parsed.map((p) => [p.root, evaluateArms(p.root, p.src, [])]));
+  const ctx = buildSemanticContext(parsed, arms);
   /** Is the marker literal `'<tag>'` in `path` refused? */
   return (path: string, tag: string): boolean => {
     const f = parsed.find((p) => p.path === path);
@@ -287,36 +291,62 @@ describe("R572 rule P: the stateful chain is refused", () => {
     expect(at(C, "T7")).toBe(true);
   });
 
-  // 12. a cycle A(var T) -> B(T) -> A, read in both orders
+  // 12. a cycle P(var S) -> Q(T) -> P. X reaches it as X -> P -> Q, Y as Y -> Z -> Q, so both
+  // loops read Q at the same hop depth: a result cached while P was in progress (Q "stateless",
+  // the cycle cut) would answer Y's question wrongly. Read in both orders.
   const cyc = (pFirst: boolean): Files => {
     const lp = `        S := 'abc';
-        V := C.P(S);
+        V := C.X(S);
         while V <> '' do
-            V := C.P(S);`;
+            V := C.X(S);`;
     const lq = `        S := 'abc';
-        V := C.Q(S);
+        V := C.Y(S);
         while V <> '' do
-            V := C.Q(S);`;
+            V := C.Y(S);`;
     return {
       [C]: `codeunit 57202 "R572 Cyc"
 {
-    procedure P(var S: Text): Text
+    procedure X(T: Text): Text
     var
         Tag: Text;
         V: Text;
     begin
-        Tag := 'T12P';
+        Tag := 'T12X';
+        V := P(T);
+        exit(V);
+    end;
+
+    procedure Y(T: Text): Text
+    var
+        Tag: Text;
+        V: Text;
+    begin
+        Tag := 'T12Y';
+        V := Z(T);
+        exit(V);
+    end;
+
+    local procedure Z(T: Text): Text
+    var
+        V: Text;
+    begin
+        V := Q(T);
+        exit(V);
+    end;
+
+    local procedure P(var S: Text): Text
+    var
+        V: Text;
+    begin
         V := Q(S);
         S := CopyStr(S, 2);
         exit(V);
     end;
 
-    procedure Q(T: Text): Text
+    local procedure Q(T: Text): Text
     var
-        Tag: Text;
         V: Text;
     begin
-        Tag := 'T12Q';
         if T = '' then
             exit('');
         V := P(T);
@@ -345,11 +375,11 @@ ${pFirst ? lq : lp}
 }`,
     };
   };
-  it("12. a cycle P(var S) -> Q(T) -> P: both refused, whichever loop is read first", () => {
+  it("12. a cycle P(var S) -> Q(T) -> P: X and Y both refused, whichever loop is read first", () => {
     for (const first of [true, false]) {
       const at = project(cyc(first));
-      expect(at(C, "T12P")).toBe(true);
-      expect(at(C, "T12Q")).toBe(true);
+      expect(at(C, "T12X")).toBe(true);
+      expect(at(C, "T12Y")).toBe(true);
     }
   });
 
@@ -419,6 +449,23 @@ describe("R572 option D: the loop's own step forces the exit", () => {
                 More := F.More();`);
     expect(project(files)(C, "FEED")).toBe(true);
   });
+  it("9b. `until not ((R.Next() = 0) or More)`: the `not` flips the polarity, so refused", () => {
+    const files = dLoop(`            repeat
+                More := F.More();
+            until not ((R.Next() = 0) or More);`);
+    expect(project(files)(C, "FEED")).toBe(true);
+  });
+  it("9c. `until not ((R.Next() <> 0) and More)`: forced after the flip, so skipped", () => {
+    const files = dLoop(`            repeat
+                More := F.More();
+            until not ((R.Next() <> 0) and More);`);
+    expect(project(files)(C, "FEED")).toBe(false);
+  });
+  it("9d. `while More and (R.Next() = 0)`: the wrong comparison for a while, so refused", () => {
+    const files = dLoop(`            while More and (R.Next() = 0) do
+                More := F.More();`);
+    expect(project(files)(C, "FEED")).toBe(true);
+  });
   it("9. `until (not More) and (R.Next() = 0)`: not forced, so refused", () => {
     const files = dLoop(`            repeat
                 More := F.More();
@@ -459,6 +506,36 @@ describe("R572 option D: the loop's own step forces the exit", () => {
     });
     expect(at(C, "T11")).toBe(false);
   });
+  it("11b. the same callee re-finding the cursor (`B.FindFirst()`): refused", () => {
+    const at = project({
+      "Buf.Table.al": BUF,
+      [C]: `codeunit 57202 "R572 Peek"
+{
+    var
+        Seen: Integer;
+
+    procedure Check(var B: Record "R572 Buf"): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'T11B';
+        Seen += 1;
+        B.FindFirst();
+        exit(B.Val <> '');
+    end;
+}`,
+      [L]: loop(
+        `        P: Codeunit "R572 Peek";
+        Ok: Boolean;`,
+        `        if R.FindSet() then begin
+            Ok := P.Check(R);
+            while Ok and (R.Next() <> 0) do
+                Ok := P.Check(R);
+        end;`,
+      ),
+    });
+    expect(at(C, "T11B")).toBe(true);
+  });
 });
 
 describe("R572 narrowing (a): a forced step with an invariant argument", () => {
@@ -482,6 +559,30 @@ ${extraVars}`,
   it("14. Step invariant (assigned 1 before the loop only): skipped", () => {
     expect(project(stepLoop(""))(C, "FEED")).toBe(false);
   });
+  it("14b. the non-zero rule: Step assigned from a variable before the loop: refused", () => {
+    const files = dLoop(
+      `            repeat
+                More := F.More();
+            until (R.Next(Step) = 0) or not More;`,
+      `        Step: Integer;
+        N: Integer;`,
+      "        Step := N;\n",
+    );
+    expect(project(files)(C, "FEED")).toBe(true);
+    expect(withSeam(r572RequireNonZeroStep, false, () => project(files)(C, "FEED"))).toBe(false);
+  });
+  it("14c. the non-zero rule: `Step := 1` only under an `if` before the loop: refused", () => {
+    const files = dLoop(
+      `            repeat
+                More := F.More();
+            until (R.Next(Step) = 0) or not More;`,
+      `        Step: Integer;
+        N: Integer;`,
+      "        if N > 0 then\n            Step := 1;\n",
+    );
+    expect(project(files)(C, "FEED")).toBe(true);
+    expect(withSeam(r572RequireNonZeroStep, false, () => project(files)(C, "FEED"))).toBe(false);
+  });
   it("15. Step passed to a `var` parameter in the body: refused", () => {
     const files = stepLoop(
       "                Bump(Step);",
@@ -493,6 +594,21 @@ ${extraVars}`,
     end;`,
     );
     expect(project(files)(C, "FEED")).toBe(true);
+  });
+  it("15b. Step passed to a BY-VALUE parameter in the body: still skipped", () => {
+    const files = stepLoop(
+      "                Show(Step);",
+      "",
+      `
+    local procedure Show(S: Integer)
+    begin
+        Message('%1', S);
+    end;`,
+    );
+    expect(project(files)(C, "FEED")).toBe(false);
+  });
+  it("15c. Step passed to a built-in in the body (`Evaluate(Step, ..)`): refused", () => {
+    expect(project(stepLoop("                Evaluate(Step, '2');"))(C, "FEED")).toBe(true);
   });
   it("16. the step through a same-object helper, `until (Stepped(R) = 0) or not More`: skipped", () => {
     const files = dLoop(
@@ -508,6 +624,36 @@ ${extraVars}`,
     end;`,
     );
     expect(project(files)(C, "FEED")).toBe(false);
+  });
+  it("16b. a Boolean helper, `until AtEnd(R) or not More` (`exit(B.Next() = 0)`): skipped", () => {
+    const files = dLoop(
+      `            repeat
+                More := F.More();
+            until AtEnd(R) or not More;`,
+      "",
+      "",
+      `
+    local procedure AtEnd(var B: Record "R572 Buf"): Boolean
+    begin
+        exit(B.Next() = 0);
+    end;`,
+    );
+    expect(project(files)(C, "FEED")).toBe(false);
+  });
+  it("16c. a Boolean helper with the wrong polarity (`exit(B.Next() <> 0)`): refused", () => {
+    const files = dLoop(
+      `            repeat
+                More := F.More();
+            until AtEnd(R) or not More;`,
+      "",
+      "",
+      `
+    local procedure AtEnd(var B: Record "R572 Buf"): Boolean
+    begin
+        exit(B.Next() <> 0);
+    end;`,
+    );
+    expect(project(files)(C, "FEED")).toBe(true);
   });
   it("22. a record field as the step, `R.Next(R.Step) = 0`: refused", () => {
     const files = dLoop(`            repeat
@@ -540,6 +686,49 @@ ${extraVars}`,
     };
     expect(project(files)(C, "FEED")).toBe(true);
     expect(withSeam(r572RequireNonZeroStep, false, () => project(files)(C, "FEED"))).toBe(true);
+  });
+  it("23c. a `var` parameter as the step, with the non-zero rule off: refused", () => {
+    const files: Files = {
+      "Buf.Table.al": BUF,
+      [C]: FEED,
+      [L]: `codeunit 57201 "R572 Loop"
+{
+    procedure Run(var Step: Integer)
+    var
+        R: Record "R572 Buf";
+        F: Codeunit "R572 Feed";
+        More: Boolean;
+    begin
+        if R.FindSet() then
+            repeat
+                More := F.More();
+            until (R.Next(Step) = 0) or not More;
+    end;
+}`,
+    };
+    expect(withSeam(r572RequireNonZeroStep, false, () => project(files)(C, "FEED"))).toBe(true);
+  });
+  it("23d. the non-zero rule takes a LOCAL only: a parameter set to 1 before the loop is refused", () => {
+    const files: Files = {
+      "Buf.Table.al": BUF,
+      [C]: FEED,
+      [L]: `codeunit 57201 "R572 Loop"
+{
+    procedure Run(Step: Integer)
+    var
+        R: Record "R572 Buf";
+        F: Codeunit "R572 Feed";
+        More: Boolean;
+    begin
+        Step := 1;
+        if R.FindSet() then
+            repeat
+                More := F.More();
+            until (R.Next(Step) = 0) or not More;
+    end;
+}`,
+    };
+    expect(project(files)(C, "FEED")).toBe(true);
   });
   it("23b. control: a by-value parameter step with the non-zero rule off is skipped", () => {
     const files: Files = {
@@ -587,6 +776,37 @@ ${extraVars}`,
     );
     expect(project(files)(C, "FEED")).toBe(true);
   });
+  it("25b. a Boolean helper that can fall off its end (no final `exit`): refused", () => {
+    const files = dLoop(
+      `            repeat
+                More := F.More();
+            until AtEnd(R) or not More;`,
+      "",
+      "",
+      `
+    local procedure AtEnd(var B: Record "R572 Buf"): Boolean
+    begin
+        if B.Val <> '' then
+            exit(B.Next() = 0);
+    end;`,
+    );
+    expect(project(files)(C, "FEED")).toBe(true);
+  });
+  it("26b. a helper that steps a BY-VALUE copy of the cursor: refused", () => {
+    const files = dLoop(
+      `            repeat
+                More := F.More();
+            until (Stepped(R) = 0) or not More;`,
+      "",
+      "",
+      `
+    local procedure Stepped(B: Record "R572 Buf"): Integer
+    begin
+        exit(B.Next());
+    end;`,
+    );
+    expect(project(files)(C, "FEED")).toBe(true);
+  });
   it("26. a helper that re-finds, `B.FindFirst(); exit(B.Next())`: refused", () => {
     const files = dLoop(
       `            repeat
@@ -619,6 +839,31 @@ ${skip}
     ).toBe(true);
     // control: the same flag without the `continue` is forced, so skipped
     expect(project(base(""))(C, "FEED")).toBe(false);
+  });
+  /** `until EndLoop or not More`, where the body is `body`. */
+  const flagLoop = (body: string): Files =>
+    dLoop(
+      `            repeat
+                More := F.More();
+${body}
+            until EndLoop or not More;`,
+      `        EndLoop: Boolean;
+        Skip: Boolean;`,
+    );
+  it("28b. the flag written only under an `if`: refused", () => {
+    const files = flagLoop(`                if not Skip then
+                    EndLoop := R.Next() = 0;`);
+    expect(project(files)(C, "FEED")).toBe(true);
+  });
+  it("28c. the flag also handed to a call (`Clear(EndLoop)`): refused", () => {
+    const files = flagLoop(`                EndLoop := R.Next() = 0;
+                Clear(EndLoop);`);
+    expect(project(files)(C, "FEED")).toBe(true);
+  });
+  it("28d. the flag written twice in the body: refused", () => {
+    const files = flagLoop(`                EndLoop := R.Next() = 0;
+                EndLoop := false;`);
+    expect(project(files)(C, "FEED")).toBe(true);
   });
 });
 
@@ -702,6 +947,48 @@ describe("R572 narrowing (b): writers of the value path", () => {
     expect(at(C, "T17ADV")).toBe(true);
   });
 
+  it("17b. an undecidable value path (an uncertain call, R567): every global counts", () => {
+    const at = project({
+      [C]: `codeunit 57202 "R572 Iter"
+{
+    var
+        Status: Integer;
+        LastRead: Integer;
+
+    procedure GetStatus(): Integer
+    begin
+        LastRead := Status;
+        exit(Pick(Status,
+#pragma warning disable AA0001
+            0));
+    end;
+
+    local procedure Pick(A: Integer; B: Integer): Integer
+    begin
+        exit(A + B);
+    end;
+
+    procedure Touch()
+    var
+        Tag: Text;
+    begin
+        Tag := 'T17B';
+        LastRead := 0;
+    end;
+}`,
+      [L]: loop(
+        `        It: Codeunit "R572 Iter";
+        S: Integer;`,
+        `        S := It.GetStatus();
+        while S < 3 do begin
+            It.Touch();
+            S := It.GetStatus();
+        end;`,
+      ),
+    });
+    expect(at(C, "T17B")).toBe(true);
+  });
+
   it("18. GetNext/Advance/Refill: Advance (body-called, writes Pos) is refused", () => {
     const at = project({
       [C]: `codeunit 57202 "R572 Split"
@@ -746,6 +1033,47 @@ describe("R572 narrowing (b): writers of the value path", () => {
     expect(at(C, "T18ADV")).toBe(true);
   });
 
+  it("18b. the result read through a SECOND same-object procedure: its global's writer is refused", () => {
+    const at = project({
+      [C]: `codeunit 57202 "R572 Two"
+{
+    var
+        Total: Integer;
+
+    procedure GetNext(): Integer
+    var
+        V: Integer;
+    begin
+        V := Compute();
+        exit(V);
+    end;
+
+    local procedure Compute(): Integer
+    begin
+        exit(Total);
+    end;
+
+    procedure Add()
+    var
+        Tag: Text;
+    begin
+        Tag := 'T18B';
+        Total -= 1;
+    end;
+}`,
+      [L]: loop(
+        `        It: Codeunit "R572 Two";
+        V: Integer;`,
+        `        V := It.GetNext();
+        while V > 0 do begin
+            It.Add();
+            V := It.GetNext();
+        end;`,
+      ),
+    });
+    expect(at(C, "T18B")).toBe(true);
+  });
+
   it("19. a var-out result: the writer of the global copied into it is refused", () => {
     const at = project({
       [C]: `codeunit 57202 "R572 VarOut"
@@ -778,17 +1106,61 @@ describe("R572 narrowing (b): writers of the value path", () => {
     expect(at(C, "T19")).toBe(true);
   });
 
-  it("21. field-argument writes: `Evaluate(Buf.Val, ..)` and `H.Inc(Buf.Val)` (var): refused", () => {
+  it("19b. a named return value: the writer of the global copied into it is refused", () => {
     const at = project({
-      "Buf.Table.al": BUF,
-      "H.Codeunit.al": `codeunit 57203 "R572 H"
+      [C]: `codeunit 57202 "R572 Named"
+{
+    var
+        Cur: Integer;
+
+    procedure GetNext() Result: Integer
+    begin
+        Result := Cur;
+    end;
+
+    procedure Move()
+    var
+        Tag: Text;
+    begin
+        Tag := 'T19B';
+        Cur -= 1;
+    end;
+}`,
+      [L]: loop(
+        `        It: Codeunit "R572 Named";
+        V: Integer;`,
+        `        V := It.GetNext();
+        while V <> 0 do begin
+            It.Move();
+            V := It.GetNext();
+        end;`,
+      ),
+    });
+    expect(at(C, "T19B")).toBe(true);
+  });
+
+  /** GetNext returns a field of the global record `Buf`; the body calls four procedures that hand
+   *  that field to calls, or call a method on `Buf`. */
+  const FLD: Files = {
+    "Buf.Table.al": BUF,
+    "H.Codeunit.al": `codeunit 57203 "R572 H"
 {
     procedure Inc(var V: Text)
     begin
         V := V + 'x';
     end;
+
+    procedure Show(V: Text)
+    begin
+        Message(V);
+    end;
+
+    procedure ShowRec(B: Record "R572 Buf")
+    begin
+        Message(B.Val);
+    end;
 }`,
-      [C]: `codeunit 57202 "R572 Fld"
+    [C]: `codeunit 57202 "R572 Fld"
 {
     var
         Buf: Record "R572 Buf" temporary;
@@ -814,17 +1186,79 @@ describe("R572 narrowing (b): writers of the value path", () => {
         Tag := 'T21B';
         H.Inc(Buf.Val);
     end;
+
+    procedure Show()
+    var
+        Tag: Text;
+        L: Codeunit "R572 H";
+    begin
+        Tag := 'T21C';
+        L.Show(Buf.Val);
+    end;
+
+    procedure Revalidate()
+    var
+        Tag: Text;
+    begin
+        Tag := 'T21D';
+        Buf.Validate(Step, 1);
+    end;
+
+    procedure PassRec()
+    var
+        Tag: Text;
+        L: Codeunit "R572 H";
+    begin
+        Tag := 'T21E';
+        L.ShowRec(Buf);
+    end;
+
+    procedure Peek(): Integer
+    var
+        Tag: Text;
+        N: Integer;
+    begin
+        Tag := 'T21F';
+        N := Buf.Count();
+        exit(N);
+    end;
 }`,
-      [L]: loop(
-        `        It: Codeunit "R572 Fld";`,
-        `        while It.GetNext() <> 'xxx' do begin
+    [L]: loop(
+      `        It: Codeunit "R572 Fld";
+        N: Integer;`,
+      `        while It.GetNext() <> 'xxx' do begin
             It.Load('a');
             It.Bump();
+            It.Show();
+            It.Revalidate();
+            It.PassRec();
+            N := It.Peek();
         end;`,
-      ),
-    });
-    expect(at(C, "T21A")).toBe(true);
-    expect(at(C, "T21B")).toBe(true);
+    ),
+  };
+
+  it("21. field-argument writes: `Evaluate(Buf.Val, ..)` (a built-in): refused", () => {
+    expect(project(FLD)(C, "T21A")).toBe(true);
+  });
+
+  it("21 (cont.). ... and `H.Inc(Buf.Val)` (var): refused", () => {
+    expect(project(FLD)(C, "T21B")).toBe(true);
+  });
+
+  it("21b. the same field passed to a BY-VALUE parameter (`H.Show(Buf.Val)`): not a writer", () => {
+    expect(project(FLD)(C, "T21C")).toBe(false);
+  });
+
+  it("21c. a non-read-only method on the path record (`Buf.Validate(..)`): refused", () => {
+    expect(project(FLD)(C, "T21D")).toBe(true);
+  });
+
+  it("21d. the path record passed BY VALUE (a temporary copy shares its rows): refused", () => {
+    expect(project(FLD)(C, "T21E")).toBe(true);
+  });
+
+  it("21e. a read-only method on the path record (`Buf.Count()`): not a writer", () => {
+    expect(project(FLD)(C, "T21F")).toBe(false);
   });
 
   it("27. a guard-global writer (a branch condition on the result path): refused", () => {

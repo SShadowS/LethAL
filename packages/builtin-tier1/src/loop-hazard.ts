@@ -4334,10 +4334,13 @@ function r572ValueWriters(
   for (const p of chain) {
     const k = objKey(p);
     if (k === null) continue;
-    const g = r572Globals(p, ctx);
+    // the object's globals on the path; a slice name that a local of `p` shadows is kept too
+    // (over-refusal only), and so is every global a same-object callee's slice added
+    const o = objectOf(p);
     const names = cached(ctx, p, "r572valuenames", () => r572ValueNames(p, ctx, new Set()));
     const set = path.get(k) ?? new Set<string>();
-    for (const x of g) if (names === null || names.has(x)) set.add(x);
+    for (const x of o === null ? [] : objectGlobalNames(o))
+      if (names === null || names.has(x)) set.add(x);
     path.set(k, set);
   }
   const out = new Map<string, ALSyntaxNode>();
