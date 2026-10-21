@@ -168,7 +168,8 @@ containers assigned to this project can be leased. A missing `allocation.json` t
   - **Their databases are in memory.** A container restart or a server1 reboot resets each one to
     a fresh CRONUS, with no LethAL app on it. The fix is to re-run the setup script:
     `bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` (add `--dry-run` to see the plan). It
-    takes and releases the coord lease itself, writes each fixture's config and paired launch
+    takes and releases the coord lease itself, in your lane (`--lane`, else `KRAKEN_AGENT`; it refuses
+    with neither, R598), writes each fixture's config and paired launch
     file, publishes LethAL Control and every app a BC gate needs (`sandbox-probes` included) over
     the dev endpoint (Dev scope), skips what is already there, and ends with `lethal doctor` on
     every config it wrote.

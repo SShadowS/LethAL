@@ -1689,7 +1689,8 @@ authentication.
 | `bc2` | 7148 | 7149 | 7152 |
 | `bc3` | 7248 | 7249 | 7252 |
 
-`bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` prepares them. It writes one gitignored
+`bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` prepares them, under a coord lease in the caller's lane
+(`--lane`, else `KRAKEN_AGENT`; R598). It writes one gitignored
 `lethal.config.<server>.json` and `.vscode/launch.<server>.json` in each gate's fixture directory
 (`sandbox-app`, `sandbox-data`, `sandbox-hang`, `sandbox-harden`). It then publishes LethAL Control
 and every app a BC gate needs (`PUBLISH_PLAN`: `sandbox-probes` before `sandbox-app`, each fixture
