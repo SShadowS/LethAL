@@ -2,6 +2,18 @@
 
 Written BEFORE the confirming live run.
 
+**Addendum (2026-10-21, still before any live run): a FIFTH pinned id.** `verify.itest.ts` also pins
+`OVER_BUDGET_GAP_ID`. That is the gap of `IsOverBudget`'s three mutants, all killed, which the gate asserts
+carry one gap id and appear in neither explain list. R595 (filed by code) names it; the table below missed it.
+- **Mapped the same way:** `G9890e48cccd0` → `G1b3bb53143f8`. Its members are 3, identical to the three
+  `IsOverBudget` rows in `bcdev.baseline.json` (`4004a181…` return-value, `5c9b5c3e…` empty-block, `82a8a378…`
+  conditional-boundary).
+- **The re-pin:** it replaces this id too. It moves to `verify-gaps.ts` with its members, and the offline test
+  pins it the same way.
+- **Gaps today:** sandbox-app has six. The four predicted gaps, this one, and `Gb0848d8e882d`, which the gate
+  pins nowhere.
+- **Prediction:** the live run PASSES with `IsOverBudget`'s rows carrying `G1b3bb53143f8`, in neither list.
+
 **What happened.** R276 (db3fc886, 2026-10-06) changed `gapIdOf` (`packages/schemata/src/project.ts`) to hash
 a gap's LINE span and LF-normalised text. It re-pinned the unit tests and the five fixture manifests ("gapId
 values only, gap partition unchanged"), but not `PREDICTED_GAPS` in `packages/runner/itest/verify.itest.ts`.
