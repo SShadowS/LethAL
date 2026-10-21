@@ -51,13 +51,28 @@ export class AlRunnerV3CoverageJoinError extends Error {
 }
 
 /**
- * I-1, as narrowed by the delta review's F2 (ruling 2026-10-21). With any Sleep line indexed:
- * - TEST side, always: the called test codeunit's own file is always in its reach, so a document
- *   with no listed path under the test root means our keys and v3's paths are in different forms.
- * - TARGET side, only a REAL mismatch: a listed path that ends like an indexed target file (its
- *   path relative to the target root) but sits under another prefix. A target file simply absent
- *   from the document was not reached (v3 lists the call's whole reach), which is sound: a test
- *   codeunit that exercises only test-app or Microsoft code lists no target file at all.
+ * I-1, as narrowed by the delta reviews' F2 and G1 (rulings 2026-10-21).
+ *
+ * What v3 lists, MEASURED (docs/measurements/README.md, "al-runner v3"): the top-level `coverage`
+ * holds the files in the CALLED codeunit's static reach, each with every statement, zero-hit ones
+ * included; it is NOT every compiled file. `contract-alpha2/cov.json` (`--codeunit 50652` on the
+ * probe) lists 3 of the 10 compiled files, one of them reached by nothing with all its statements at
+ * 0 hits; the Q23 CDO call lists 478 of the 658 compiled files, unreached files included whole.
+ *
+ * With an EMPTY index (0 + 0) nothing can hide, so the function returns before any comparison.
+ * Otherwise:
+ * - TEST side, always strict: the called test codeunit's own file is always in its reach, so a
+ *   document with no listed path under the test root means our keys and v3's paths are in different
+ *   forms. A GLOBAL path-form change (a symlink, a relative form, a case or `..` change on both
+ *   folders) is caught here.
+ * - TARGET side, only a REAL mismatch: a listed path outside BOTH roots that ends like an indexed
+ *   target file (its path relative to the target root), or IS that relative path. A test-app file
+ *   with the same relative path is no mismatch (G1). A target file absent from the document is read
+ *   as outside the call's reach, so not run in that call (§6 case 2's own reading).
+ * RESIDUAL, stated plainly: a path-form change on the TARGET side only, with the endings changed as
+ * well (for example a staged copy under mangled names), leaves the indexed file absent with no ending
+ * to match, so a covered Sleep in it would read "not reached". It is not measured either way; the
+ * always-strict test side catches any change that also moves the test paths.
  * Returns the refusal, or `undefined`. An unavailable document is case 1's business.
  */
 export function sleepJoinRefusal(doc: V3CoverageRead, index: SleepIndex): string | undefined {
@@ -77,8 +92,10 @@ export function sleepJoinRefusal(doc: V3CoverageRead, index: SleepIndex): string
     .filter((k) => k.startsWith(index.roots.target))
     .map((k) => k.slice(index.roots.target.length));
   for (const l of listed) {
-    if (l.key.startsWith(index.roots.target)) continue;
-    const rel = targetRels.find((r) => l.key.endsWith(`/${r}`));
+    // G1: a file under either root joined; a test-app file may share a target file's relative path.
+    if (l.key.startsWith(index.roots.target) || l.key.startsWith(index.roots.test)) continue;
+    // G1: a bare relative label (`probesleeper.codeunit.al`) has no leading `/`.
+    const rel = targetRels.find((r) => l.key === r || l.key.endsWith(`/${r}`));
     if (rel !== undefined) {
       return why(
         `v3 lists ${l.file}, which ends like the indexed target file ${index.roots.target}${rel} but sits under another prefix`,

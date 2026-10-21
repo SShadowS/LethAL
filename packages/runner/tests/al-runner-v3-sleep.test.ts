@@ -93,6 +93,52 @@ describe("I-1: an index whose roots join no path of the document is a named refu
     expect(sleepJoinRefusal(listing(["/elsewhere/A.al"]), empty)).toBeUndefined();
     expect(sleepJoinRefusal(decodeV3Coverage(undefined), index)).toBeUndefined();
   });
+  test("G1: a TEST-app file with the same relative path as a Sleep-holding target file is not a mismatch", () => {
+    const helper: SleepIndex = {
+      byFile: new Map([[sleepFileKey("/x/active/src/Helper.Codeunit.al"), new Set([5])]]),
+      shown: new Map(),
+      sizes: { target: 1, test: 0 },
+      roots: { target: "/x/active/", test: "/x/tests/" },
+    };
+    expect(
+      sleepJoinRefusal(listing([TEST_FILE, "/x/tests/src/Helper.Codeunit.al"]), helper),
+    ).toBeUndefined();
+  });
+  test("G1: a bare relative label equal to an indexed target file's path is a mismatch", () => {
+    expect(sleepJoinRefusal(listing([TEST_FILE, "Logic.Codeunit.al"]), index)).toMatch(
+      /ends like the indexed target file/,
+    );
+  });
+  test("the empty-index early return is PINNED: with 0 + 0 the join is never reached, even on a document that would otherwise refuse", () => {
+    let reads = 0;
+    class CountingMap<K, V> extends Map<K, V> {
+      override keys(): MapIterator<K> {
+        reads += 1;
+        return super.keys();
+      }
+    }
+    const roots = {
+      get target(): string {
+        reads += 1;
+        return "/x/active/";
+      },
+      get test(): string {
+        reads += 1;
+        return "/x/tests/";
+      },
+    };
+    const empty: SleepIndex = {
+      byFile: new CountingMap(),
+      shown: new Map(),
+      sizes: { target: 0, test: 0 },
+      roots,
+    };
+    // Every rule would refuse this document: no test-root path, and a target ending under another
+    // prefix. With an empty index the function must return before looking at any of it.
+    const refusing = listing(["/elsewhere/x/active/logic.codeunit.al"]);
+    expect(sleepJoinRefusal(refusing, empty)).toBeUndefined();
+    expect(reads).toBe(0);
+  });
   test("the error class extends Error directly", () => {
     const e = new AlRunnerV3CoverageJoinError("x");
     expect(Object.getPrototypeOf(AlRunnerV3CoverageJoinError.prototype)).toBe(Error.prototype);

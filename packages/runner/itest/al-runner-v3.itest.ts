@@ -63,6 +63,7 @@ import {
   classifyLegC,
   classifyLegT,
   classifyXb,
+  dirtyFromStatus,
   failsClosedRefusal,
   gateOutcome,
   knownDifferencesRefusal,
@@ -945,10 +946,13 @@ async function main(): Promise<void> {
   const lethalHead = execFileSync("git", ["-C", REPO, "rev-parse", "HEAD"], {
     encoding: "utf8",
   }).trim();
-  const dirty = execFileSync("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=no"], {
-    encoding: "utf8",
-  }).trim();
-  console.log(`al-runner-v3 itest: LethAL ${lethalHead}${dirty === "" ? "" : " (DIRTY)"}`);
+  // G5: tracked changes, plus untracked files under fixtures/ and packages/ (`dirtyFromStatus`).
+  const statusNow = () =>
+    execFileSync("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=all"], {
+      encoding: "utf8",
+    });
+  const dirty = dirtyFromStatus(statusNow());
+  console.log(`al-runner-v3 itest: LethAL ${lethalHead}${dirty ? " (DIRTY)" : ""}`);
   console.log(
     `al-runner-v3 itest: ${version} sha256 ${sha} (${BIN})${CANDIDATE ? " CANDIDATE" : ""}; legs ${LEGS.join(",")}`,
   );
@@ -1042,11 +1046,7 @@ async function main(): Promise<void> {
         execFileSync("git", ["-C", REPO, "rev-parse", "HEAD"], { encoding: "utf8" }) as string
       ).trim(),
       // F5: checked again at the end, so a file changed during the run counts too.
-      dirty:
-        dirty !== "" ||
-        execFileSync("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=no"], {
-          encoding: "utf8",
-        }).trim() !== "",
+      dirty: dirty || dirtyFromStatus(statusNow()),
       outcome,
       legs,
       lines,

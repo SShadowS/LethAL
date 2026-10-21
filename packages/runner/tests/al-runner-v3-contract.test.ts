@@ -515,6 +515,7 @@ describe("T18: the .gated pin", () => {
     return bin;
   };
 
+  const COMMIT = "5eb544ef0aafeab402ac050e4a9e7481a8e67790";
   test("a matching .gated passes", async () => {
     const bin = await setup();
     await writeFile(
@@ -522,10 +523,21 @@ describe("T18: the .gated pin", () => {
       JSON.stringify({
         version: VERSION,
         binarySha256: await sha256OfFile(bin),
-        lethalCommit: "abcdef1",
+        lethalCommit: COMMIT,
       }),
     );
-    expect((await checkGated(bin, VERSION)).lethalCommit).toBe("abcdef1");
+    expect((await checkGated(bin, VERSION)).lethalCommit).toBe(COMMIT);
+  });
+
+  test("G5: a .gated whose lethalCommit is not the full 40-character sha is refused by name", async () => {
+    const bin = await setup();
+    for (const lethalCommit of ["abcdef1", COMMIT.slice(0, 39), `${COMMIT}0`]) {
+      await writeFile(
+        join(dir, ".gated"),
+        JSON.stringify({ version: VERSION, binarySha256: await sha256OfFile(bin), lethalCommit }),
+      );
+      await expect(checkGated(bin, VERSION)).rejects.toThrow(/has no lethalCommit/);
+    }
   });
 
   test("no .gated, another sha256 or another version is refused", async () => {
@@ -533,7 +545,7 @@ describe("T18: the .gated pin", () => {
     await expect(checkGated(bin, VERSION)).rejects.toBeInstanceOf(AlRunnerV3UngatedBuildError);
     await writeFile(
       join(dir, ".gated"),
-      JSON.stringify({ version: VERSION, binarySha256: "0".repeat(64), lethalCommit: "abcdef1" }),
+      JSON.stringify({ version: VERSION, binarySha256: "0".repeat(64), lethalCommit: COMMIT }),
     );
     await expect(checkGated(bin, VERSION)).rejects.toThrow(/sha256/);
     await writeFile(
@@ -541,7 +553,7 @@ describe("T18: the .gated pin", () => {
       JSON.stringify({
         version: "alrunner 3.0.0-alpha.3 (c893e3633)",
         binarySha256: await sha256OfFile(bin),
-        lethalCommit: "abcdef1",
+        lethalCommit: COMMIT,
       }),
     );
     await expect(checkGated(bin, VERSION)).rejects.toThrow(/pins/);
@@ -554,7 +566,7 @@ describe("T18: the .gated pin", () => {
     );
     expect(() => parseGated("{}", "x")).toThrow(AlRunnerV3UngatedBuildError);
     expect(() =>
-      parseGated('{"version":"v","binarySha256":"zz","lethalCommit":"abcdef1"}', "x"),
+      parseGated(`{"version":"v","binarySha256":"zz","lethalCommit":"${COMMIT}"}`, "x"),
     ).toThrow(/binarySha256/);
   });
 });

@@ -312,6 +312,22 @@ export function failsClosedRefusal(
   return undefined;
 }
 
+/**
+ * G5: the gate worktree is dirty when `git status --porcelain --untracked-files=all` shows any
+ * tracked change, or an UNTRACKED file under `fixtures/` or `packages/` (it would compile into a
+ * leg). Other untracked files are the gate's own outputs.
+ */
+export function dirtyFromStatus(porcelain: string): boolean {
+  return porcelain
+    .split("\n")
+    .filter((l) => l.trim() !== "")
+    .some((l) => {
+      if (!l.startsWith("??")) return true;
+      const path = l.slice(3).trim().replace(/^"/, "");
+      return path.startsWith("fixtures/") || path.startsWith("packages/");
+    });
+}
+
 /** A pre-committed figure differs: `gate-fail`. Extends `Error` directly. */
 export class V3LegFailure extends Error {
   constructor(message: string) {

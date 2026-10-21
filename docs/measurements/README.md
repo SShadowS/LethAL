@@ -1025,16 +1025,32 @@ the figures are pre-committed in `docs/superpowers/specs/2026-10-21-r586-alrunne
   its AL name.
 - **Time limit.** `--test-timeout-secs N` stops a test after N seconds of CPU time. Machine load
   does not count; a test that waits without computing is stopped at 10 x N of wall time.
-- **`Sleep` does nothing** (#5605): `Sleep(600000)` returns at once, with or without a time limit.
+- **`Sleep` returns at once on a VIRTUAL clock** (#5605): `Sleep(600000)` takes no wall time, with or
+  without a time limit, and moves `CurrentDateTime()` forward by 600000 ms (r6, c7c505e6). A test that
+  reads the clock after a Sleep behaves as on BC, but a wait never costs time and is never stopped.
+  `CurrentDateTime()` does not follow wall time either, so a loop on the clock is not a CPU burn (r4's
+  wall-clock `timeout-is-cpu` probe failed on exactly that).
 - **Code that does not compile runs** (#5602): a target with an AL0118 error ran, and its test passed.
 - **Duplicate key.** A statement-form duplicate-key `Insert()` does not raise (#5603).
 - **Isolation.** `Commit()` is refused under `--isolation test` (#5607), and `--isolation disabled`
   refuses every test (#5609). One refusal turns the codeunit's later failures into not-run (#5610).
 - **Coverage.** `--coverage-json` has two parts:
-  - a top-level `coverage` that lists every statement of every compiled file, with zero-hit ones;
-  - `perTestCoverage`, which lists only the statements each test hit.
+  - a top-level `coverage` that lists the files in the CALLED codeunit's static reach, each with every
+    statement, zero-hit ones included. It does NOT list every compiled file. Measured:
+    - `contract-alpha2/cov.json`, `--codeunit 50652` on `scripts/r586-probe`, lists 3 of the 10 compiled
+      files: `ProbeCoverage` (the called codeunit), `ProbePair` (6 of 7 statements hit) and `ProbeLogic`
+      (all 11 at 0 hits, reached by nothing). `ProbeCard`, `ProbeRow` and the five other test files are
+      absent;
+    - the Q23 CDO call (`--codeunit 68933` on D1c's `active/`) lists 478 of the 658 compiled `.al` files
+      (554 target including `.dependencies`, 104 test), 477 of them with zero-hit statements, among them
+      two files no test reaches (`6175274`, all 251 statements at 0 hits; `6175335`, all 120).
+  - `perTestCoverage`, which lists only the statements each test hit, with correct per-test hit counts,
+    one-shot and on `serve`.
 
-  Paths are absolute with forward slashes. Statement lines are FILE-relative.
+  Paths are absolute with forward slashes. Statement lines are FILE-relative. LethAL sends v3 the
+  `realpath` of the target and test folders and builds its Sleep index under the same real paths.
+  Whether a file reached only by a DYNAMIC call (a variable `Codeunit.Run`, an unnamed subscriber, an
+  interface) is listed is unmeasured ([[R610]]).
 - **Predefined symbols.** No arm is active over CLEAN, CLEANSCHEMA, CLEANSCHEMA1..40 or BC1..40.
 - **Target precedence.** The positional target folder wins over a higher-version `.app` of the same
   app in the test app's `.alpackages`.

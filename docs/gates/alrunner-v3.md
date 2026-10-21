@@ -50,13 +50,17 @@ The legs:
   - `held`: every difference is a move toward BC (a defect fact `defect-present` -> `gone`; X (b) once v3 refuses
     the broken target with its parsed compile diagnostic, AL0118, while a crash, a signal or unparseable output
     stays `gate-fail`; a leg-T known row reaching its BC row). Kept under `held/` for re-pre-commitment, never
-    blacklisted;
+    blacklisted. A #5602 fix that refuses the broken target WITHOUT writing an `--output-json` document reads
+    `gate-fail` (the safe direction: nothing is admitted); recover it with a LethAL change and `--regate`;
   - `infra-fail`: the environment (the CDO checkout guard, `al-runner-v3-itest-setup-does-not-compile`, an unset
     variable, an unmeasurable fact). Retried next run.
 - A `gate-fail` goes to `failed/<tag>@<lethalCommit>`: final for that build at that LethAL commit only, so a
   LethAL fix and a re-pre-commitment can gate the same build again.
 - The receipt must name the requested LethAL commit as the full, equal 40-character sha, record whether the gate
   worktree was dirty (a dirty `pass` is refused), and give its outcome from its legs over the exact leg set.
+  Dirty means any tracked change, or any untracked file under `fixtures/` or `packages/` (it would compile into
+  a leg); other untracked files are the gate's own outputs. `.gated`'s `lethalCommit` is also the full sha.
+  Existing fixture `.alpackages` are not yet checked against the pinned tar ([[R614]]).
 - `timeout-is-cpu` is GATE-ONLY: its burns are fixed iteration counts calibrated on one machine, so only leg C
   measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
   BUILD: a later LethAL change to how a call's timeout is sent (`v3CallArgv`, `stopSecondsOf`) is not covered by

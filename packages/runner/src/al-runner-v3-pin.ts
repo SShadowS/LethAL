@@ -46,7 +46,8 @@ export function parseGated(text: string, where: string): GatedBuild {
   if (typeof g.binarySha256 !== "string" || !/^[0-9a-f]{64}$/.test(g.binarySha256)) {
     throw new AlRunnerV3UngatedBuildError(`${where} has no binarySha256`);
   }
-  if (typeof g.lethalCommit !== "string" || !/^[0-9a-f]{7,40}$/.test(g.lethalCommit)) {
+  // G5 (with F6): the full 40-character sha; a short one would make every update run infra-fail.
+  if (typeof g.lethalCommit !== "string" || !/^[0-9a-f]{40}$/.test(g.lethalCommit)) {
     throw new AlRunnerV3UngatedBuildError(`${where} has no lethalCommit`);
   }
   return {

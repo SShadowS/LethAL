@@ -35,7 +35,7 @@ async function setup(gated: boolean, withSystemApp = true): Promise<{ bin: strin
       JSON.stringify({
         version: VERSION,
         binarySha256: await sha256OfFile(bin),
-        lethalCommit: "abcdef1",
+        lethalCommit: "5eb544ef0aafeab402ac050e4a9e7481a8e67790",
       }),
     );
   }

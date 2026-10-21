@@ -13,6 +13,7 @@ import {
   classifyLegC,
   classifyLegT,
   classifyXb,
+  dirtyFromStatus,
   failsClosedRefusal,
   gateOutcome,
   knownDifferenceKeys,
@@ -265,13 +266,30 @@ describe("RC-5 (M6): X (e)/(f) fail closed only on the five mutants", () => {
     expect(failsClosedRefusal([])).toMatch(/0 mutants, r5 5/);
     expect(failsClosedRefusal(five.slice(0, 4))).toMatch(/4 mutants/);
   });
-  test("a survivor, or M0002 not reading error, is a failure", () => {
+  test("G6: a survivor is a failure", () => {
     const survived = five.map((m) =>
       m.mutantCode === "M0003" ? { ...m, verdict: "survived" } : m,
     );
     expect(failsClosedRefusal(survived)).toMatch(/a survivor \(M0003\)/);
+  });
+  test("G6: the control M0002 not reading error (no survivor anywhere) is a failure", () => {
     const control = five.map((m) => (m.mutantCode === "M0002" ? { ...m, verdict: "killed" } : m));
-    expect(failsClosedRefusal(control)).toMatch(/M0002/);
+    expect(failsClosedRefusal(control)).toMatch(/the control M0002 does not read error/);
+  });
+});
+
+describe("G5: the gate worktree's dirty rule", () => {
+  test("a clean status is clean; an untracked file outside fixtures/ and packages/ (a gate output) is clean", () => {
+    expect(dirtyFromStatus("")).toBe(false);
+    expect(dirtyFromStatus("?? coverage.cobertura.xml\n?? scratch/out.log\n")).toBe(false);
+  });
+  test("any tracked change is dirty", () => {
+    expect(dirtyFromStatus(" M bun.lock\n")).toBe(true);
+    expect(dirtyFromStatus("D  scripts/x.ts\n")).toBe(true);
+  });
+  test("an UNTRACKED file under fixtures/ or packages/ is dirty (it would compile into a leg)", () => {
+    expect(dirtyFromStatus("?? fixtures/sandbox-app/src/Extra.Codeunit.al\n")).toBe(true);
+    expect(dirtyFromStatus("?? packages/runner/src/extra.ts\n")).toBe(true);
   });
 });
 
