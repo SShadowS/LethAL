@@ -242,8 +242,11 @@ function restatedFigures(source: string, exportName: string): string[] {
   return out;
 }
 
+/** Pages under docs/gates that describe no single gate, so carry no figure block. */
+const NOT_GATE_PAGES = new Set(["README.md", "servers.md"]);
+
 const pages = readdirSync(PAGES)
-  .filter((f) => f.endsWith(".md") && f !== "README.md")
+  .filter((f) => f.endsWith(".md") && !NOT_GATE_PAGES.has(f))
   .sort()
   .map((f) => {
     const text = readFileSync(join(PAGES, f), "utf8");

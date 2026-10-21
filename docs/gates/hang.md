@@ -4,7 +4,9 @@
 never terminate, and the gate scores them instead of setting them aside (R53). It is the only
 gate that exercises the control app's stop (`StopHungRunAt`). So an AL edit to
 `extensions/lethal-control` is verified by an `alc` compile and by this gate. The connection comes
-from the gitignored `fixtures/sandbox-hang/lethal.config.local.json`.
+from the gitignored config in `fixtures/sandbox-hang/` that `LETHAL_ITEST_CONFIG` names (see
+[servers.md](servers.md)). On 2026-10-21 it passed on `bc3` under master's code and on `bc2` under
+R-583's code (R-583).
 
 It runs three legs, in this order on purpose:
 

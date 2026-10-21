@@ -2,8 +2,9 @@
 
 `LETHAL_ITEST_TABLES=1 bun run itest:tables` runs the table fixture, `fixtures/sandbox-data` with
 `fixtures/sandbox-data-tests`. This is where Tier-2 operators and table-trigger mutation are
-measured. It needs a gitignored `fixtures/sandbox-data/lethal.config.local.json` (not
-sandbox-app's).
+measured. It reads the gitignored config in `fixtures/sandbox-data/` that `LETHAL_ITEST_CONFIG`
+names (not sandbox-app's; see [servers.md](servers.md)). On 2026-10-21 it passed on `bc1`, per
+mutant equal to its baseline, with the W1 company (R-583).
 
 ## Frozen figures
 

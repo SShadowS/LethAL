@@ -12,8 +12,9 @@ loaded.
   and S5 must still survive.
 
 The baseline is written only after both legs pass. The connection comes from the gitignored
-`fixtures/sandbox-harden/lethal.config.local.json`. Both test apps must be published to that
-container.
+config in `fixtures/sandbox-harden/` that `LETHAL_ITEST_CONFIG` names (see
+[servers.md](servers.md)). Both test apps must be published to that server; the setup script does
+it on `bc1` to `bc3`. On 2026-10-21 the gate passed on `bc2` (R-583).
 
 ## Frozen figures
 

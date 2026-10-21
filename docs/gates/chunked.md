@@ -7,7 +7,9 @@ tests in one call, so none of them can see this path.
 It runs two legs over `fixtures/sandbox-data --only src/DataMain.Table.al`, the only file whose
 kills reach ordered position 5. The control leg has no limit. The chunked leg runs with
 `--max-methods-per-call 2`. It takes about 95 s and uses `itest:tables`' connection
-(`fixtures/sandbox-data/lethal.config.local.json`).
+(the config in `fixtures/sandbox-data/` that `LETHAL_ITEST_CONFIG` names; see
+[servers.md](servers.md)). On 2026-10-21 it passed on `bc2`, both legs equal to the figures below
+(R-583).
 
 ## Frozen figures
 

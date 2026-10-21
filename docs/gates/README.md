@@ -19,6 +19,9 @@ figures, what they mean, and how they came to be.
 | hang | `LETHAL_ITEST_HANG=1 bun run itest:hang` | [hang.md](hang.md) | `hang.single.baseline.json` |
 | harden | `LETHAL_ITEST_HARDEN=1 bun run itest:harden` | [harden.md](harden.md) | `harden.baseline.json` |
 
+The BC gates run on the BC on Linux servers `bc1`, `bc2` and `bc3`: see [servers.md](servers.md).
+That page carries no figure block, because it describes no single gate.
+
 ## The figure block
 
 Each page has exactly one fenced block whose info string is `json gate-figures`. It sits in the
@@ -65,5 +68,5 @@ from LethAL Control 1.0.0.17. The session keys (`testRunsBefore`, `sessionId`), 
 and keyed by pair, and `suite-unresolved` exist only from 1.0.0.18. `ObservedActive` (whether the
 active mutant's own statement was reached, per test) exists only from 1.0.0.19. The client's
 minimum is `MIN_CONTROL_VERSION` in `packages/runner/src/harness.ts`. The version to publish is the
-one in `extensions/lethal-control/app.json`. On 2026-10-21, R-583 (branch `lethal/r583`, not yet
-on master) moves the app to runtime 17.0 and raises the minimum to its new build.
+one in `extensions/lethal-control/app.json`. R-583 (merged 2026-10-21) moved the app and every
+fixture to runtime 17.0, and made its runtime-17 build the minimum.

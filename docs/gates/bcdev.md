@@ -1,10 +1,10 @@
 # itest:bcdev
 
 `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` runs `fixtures/sandbox-app` with
-`fixtures/sandbox-tests` on a BC container, through the bcdev backend. This is the authoritative
+`fixtures/sandbox-tests` on a BC server, through the bcdev backend. This is the authoritative
 backend: its verdicts are the reference that other backends are compared with. The connection
-comes from the gitignored `fixtures/sandbox-app/lethal.config.local.json` and
-`.vscode/launch.local.json`.
+comes from the gitignored config in `fixtures/sandbox-app/` that `LETHAL_ITEST_CONFIG` names, and
+its paired `.vscode/launch.<x>.json` (see [servers.md](servers.md)).
 
 ## Frozen figures
 
@@ -55,5 +55,7 @@ What the figures mean:
   R197 made covering tests run killer-first.
 - Since R220 the al-runner gate is compared with this gate's table mutant by mutant; see
   [alrunner.md](alrunner.md).
-- R589 (2026-10-21): the BC on Linux servers `bc1` to `bc3` may carry this gate once its figures
-  reproduce there mutant by mutant. See CLAUDE.md §"Environment".
+- R589 (2026-10-21): the gate passed on `bc1`, `bc2` and `bc3`, per mutant equal to its baseline,
+  so the BC on Linux servers carry it. It passed on `bc1` again under R-583's runtime-17 code. The
+  baseline was recorded on Cronus28 (DK), so this also shows the W1 company changes no verdict
+  here. Cronus28 is now parked. See [servers.md](servers.md).
