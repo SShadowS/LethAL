@@ -65,3 +65,13 @@ localization.
 difference) and reported to the orchestrator, never reinterpreted and never re-recorded.
 
 bc2 and bc3 are held to the same row once their setup passes `doctor`.
+
+## Results (added 2026-10-21, after the runs; the claim above is unchanged)
+
+- **bc1, bc2, bc3: PASS.** `itest:bcdev` gave 3 / 12 / 4, per mutant equal to `bcdev.baseline.json`, and the
+  protocol-invariant probes passed. The final runs: bc1 and bc3 at f17a41d9, bc2 at 80ebe83f. Each log's first
+  line names its target. Logs: `/coord/handoff/R-589/runs/`.
+- **Cronus28 rows: NOT RUN** (environment). Cronus28 has been unreachable since about 14:16Z, at its new address
+  172.23.18.89. These rows did not pass, and they are not claimed. On the orchestrator's ruling, R-583's Cronus28
+  BC phase runs `itest:bcdev` and `itest:tables` under master's code with this change merged, and so stands in for
+  them. A difference there is a BLOCK on master.
