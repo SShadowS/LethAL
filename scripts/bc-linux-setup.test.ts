@@ -115,13 +115,17 @@ describe("config writer", () => {
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ a: 1 });
   });
 
-  test("a re-write onto an existing 644 file leaves it 600 (mode applies on create only)", () => {
-    const path = join(mkdtempSync(join(tmpdir(), "bc-linux-")), "lethal.config.bc1.json");
-    writeFileSync(path, "{}");
-    chmodSync(path, 0o644);
-    writeConfig(path, { a: 1 }, () => true);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-  });
+  // Windows has no POSIX mode bits (chmod there sets only read-only); the script runs in the Linux container.
+  test.skipIf(process.platform === "win32")(
+    "a re-write onto an existing 644 file leaves it 600 (mode applies on create only)",
+    () => {
+      const path = join(mkdtempSync(join(tmpdir(), "bc-linux-")), "lethal.config.bc1.json");
+      writeFileSync(path, "{}");
+      chmodSync(path, 0o644);
+      writeConfig(path, { a: 1 }, () => true);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    },
+  );
 
   test("the repo's .gitignore ignores the per-server configs and not app.json", () => {
     expect(gitIgnores("fixtures/sandbox-app/lethal.config.bc1.json")).toBe(true);
