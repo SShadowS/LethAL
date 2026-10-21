@@ -132,7 +132,7 @@ async function main(): Promise<number> {
       const heavy = matchingProcesses(sh(["ps", "-eo", "pid,args"]), wait, new Set([process.pid]));
       if (heavy.length === 0) break;
       console.log(
-        `${new Date().toISOString()} ${name}: waiting, heavy job running:\n  ${heavy.join("\n  ")}`,
+        `${new Date().toISOString()} ${name}: waiting, heavy job running:\n  ${heavy.map((l) => l.slice(0, 120)).join("\n  ")}`,
       );
       await Bun.sleep(30_000);
     }
