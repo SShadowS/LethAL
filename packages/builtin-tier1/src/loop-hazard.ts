@@ -4024,6 +4024,9 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
         const p = r531Param(q, j);
         if (p === null) out.push({ key: R570_UNKNOWN, byValue: false });
         else out.push({ key: c.uncertain ? R570_UNKNOWN : r531ParamKey(p[0]), byValue: !p[1] });
+        // R604 census (M3): a RecordRef cursor handed BY VALUE (its sharing is not measured)
+        if (r572GapSink !== null && p !== null && !p[1] && r572IsRecRef(a, ctx))
+          r572GapSink.m3RecRefByValue++;
       }
     });
     return out;
@@ -4054,7 +4057,12 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
         chain = r570ExitTargets(q, ctx)
           .filter((t) => !sameObject(t))
           .flatMap((t) => r572Chain(t, 1, ctx));
-        if (chain.length === 0) continue;
+        if (chain.length === 0) {
+          // R604 census (M1): a same-object callee that gets and TOUCHES the forced cursor, with no
+          // `exit(<call>)` into another object: nothing is refused
+          if (r572GapSink !== null && cursors.size > 0) r572GapSink.m1TouchViaWrapper++;
+          continue;
+        }
         wrapper = q;
       }
       const stateful = chain.some((p) => r572Stateful(p, R572_STATE_HOPS, ctx));
@@ -4080,6 +4088,50 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
   return rows;
 }
 
+/**
+ * R604: counters for the gaps master already has (R572 review r1 H2, M1, M2, M3), filled while
+ * `r572Census` runs and never read by the refusal itself. Each counts a SHAPE, not mutants:
+ * - `h2SplitQueue`: a pure (non-stateful) exit chain that reads a local REAL record of table T,
+ *   with a loop-body call into the same object that inserts, modifies, deletes or renames T;
+ * - `m1TouchViaWrapper`: under option D, a same-object callee that gets and touches the cursor
+ *   but has no `exit(<call>)` into another object;
+ * - `m2ReachCutOff`: a stateful chain whose writer reach stopped at the hop cap with calls unread;
+ * - `m3CopyShared`: a `Copy(X, true)` in a refused chain's object (an alias of shared state);
+ * - `m3RecRefByValue`: a forced RecordRef cursor handed BY VALUE to a callee.
+ */
+export interface R572Gaps {
+  h2SplitQueue: number;
+  m1TouchViaWrapper: number;
+  m2ReachCutOff: number;
+  m3CopyShared: number;
+  m3RecRefByValue: number;
+}
+let r572GapSink: R572Gaps | null = null;
+
+const r572IsRecRef = (a: ALSyntaxNode, ctx: SemanticContext): boolean =>
+  isIdentifierLike(a) &&
+  normalizeAlName(
+    resolveVarRef(a, ctx)?.node.childForFieldName("type")?.namedChildren[0]?.text ?? "",
+  ) === "recordref";
+
+/** The tables `p` reaches through LOCAL non-temporary records, with `methods` on them. */
+function r572LocalTables(
+  p: ALSyntaxNode,
+  methods: ReadonlySet<string>,
+  ctx: SemanticContext,
+): Set<string> {
+  const out = new Set<string>();
+  r531Walk(p, ctx, (n) => {
+    const c = r531Call(n);
+    if (c === null || c.recv === null || !methods.has(c.method)) return;
+    if (!r531Declares(p, c.recv, false)) return;
+    const recv = r572Receiver(n);
+    const t = recv === null ? null : declaredType(recv, ctx);
+    if (t !== null && t.kind === "table" && !t.temporary) out.add(t.name);
+  });
+  return out;
+}
+
 /** Census (scripts/r572-flag-census.ts): every R572 row of the project, the procedures R572
  *  adds to R570's own refusals (by procedure, not yet by name), and what the `r572-guard-writer`
  *  reason refuses: its guard expressions in loop bodies and the procedures they call. */
@@ -4087,10 +4139,37 @@ export function r572Census(ctx: SemanticContext): {
   rows: R572Row[];
   extra: ALSyntaxNode[];
   guards: { sites: ALSyntaxNode[]; procs: ALSyntaxNode[] };
+  gaps: R572Gaps;
+} {
+  const gaps: R572Gaps = {
+    h2SplitQueue: 0,
+    m1TouchViaWrapper: 0,
+    m2ReachCutOff: 0,
+    m3CopyShared: 0,
+    m3RecRefByValue: 0,
+  };
+  r572GapSink = gaps;
+  try {
+    return { ...r572CensusRun(ctx, gaps), gaps };
+  } finally {
+    r572GapSink = null;
+  }
+}
+
+const R572_READS: ReadonlySet<string> = new Set([...R570_CURSOR]);
+
+function r572CensusRun(
+  ctx: SemanticContext,
+  gaps: R572Gaps,
+): {
+  rows: R572Row[];
+  extra: ALSyntaxNode[];
+  guards: { sites: ALSyntaxNode[]; procs: ALSyntaxNode[] };
 } {
   const base = new Map<string, Set<string>>();
   const rows: R572Row[] = [];
   const guards = { sites: [] as ALSyntaxNode[], procs: [] as ALSyntaxNode[] };
+  const copyObjects = new Set<string>();
   for (const o of projectObjects(ctx))
     r531Walk(o, ctx, (loop) => {
       if (!LOOP_KINDS.has(loop.kind)) return;
@@ -4110,6 +4189,39 @@ export function r572Census(ctx: SemanticContext): {
         const g = r572WriterGuards(loop, refused, ctx);
         guards.sites.push(...g.exprs);
         guards.procs.push(...g.procs);
+      }
+      // R604 (M3): `Copy(X, true)` anywhere in a refused chain's object, once per object
+      for (const p of refused) {
+        const po = objectOf(p);
+        const key = po === null ? null : `${r572Id(rootOf(po))}|${objectKey(po)}`;
+        if (po === null || key === null || copyObjects.has(key)) continue;
+        copyObjects.add(key);
+        visitAll(po, (n) => {
+          const c = r531Call(n);
+          const share = c?.args[1]?.text.trim().toLowerCase();
+          if (c?.method === "copy" && c.args.length === 2 && share === "true") gaps.m3CopyShared++;
+        });
+      }
+      // R604 (H2): a pure exit chain reading a local real table T, and a body call into the same
+      // object that writes T
+      const body = loop.childForFieldName("body");
+      for (const r of lr) {
+        if (r.stateful || body === null) continue;
+        const reads = new Set(r.chain.flatMap((p) => [...r572LocalTables(p, R572_READS, ctx)]));
+        if (reads.size === 0) continue;
+        const objs = r.chain.map(objectOf).filter((x): x is ALSyntaxNode => x !== null);
+        let hit = false;
+        r531Walk(body, ctx, (n) => {
+          const c = hit ? null : r531Call(n);
+          if (c === null) return;
+          for (const t of r570Targets(n, c, ctx)) {
+            const to = objectOf(t);
+            if (to === null || !objs.some((x) => samePos(x, to) && sameFile(rootOf(x), rootOf(to))))
+              continue;
+            for (const w of r572LocalTables(t, R572_ROWS, ctx)) if (reads.has(w)) hit = true;
+          }
+        });
+        if (hit) gaps.h2SplitQueue++;
       }
     });
   const extra = new Map<string, ALSyntaxNode>();
@@ -4165,22 +4277,66 @@ function r572WriterGuards(
   const body = loop.childForFieldName("body");
   if (body === null) return { exprs: [], procs: [] };
   const ids = new Set(refused.map(r572Id));
+  const obj = objectOf(loop);
+  const sameObject = (q: ALSyntaxNode): boolean => {
+    const qo = objectOf(q);
+    return qo === null || obj === null || (samePos(qo, obj) && sameFile(rootOf(qo), rootOf(obj)));
+  };
+  /** Does same-object procedure `q` call a refused procedure, itself or through same-object calls
+   *  (R570_HOPS deep)? (review r1 P5: `if T.ShouldAdvance() then DoAdvance()`) */
+  const wraps = (q: ALSyntaxNode, depth: number, seen: Set<string>): boolean => {
+    if (depth >= R570_HOPS || seen.has(r572Id(q))) return false;
+    seen.add(r572Id(q));
+    let hit = false;
+    r531Walk(q, ctx, (n) => {
+      const c = hit ? null : r531Call(n);
+      if (c === null) return;
+      for (const t of r570Targets(n, c, ctx))
+        if (ids.has(r572Id(t)) || (sameObject(t) && wraps(t, depth + 1, seen))) hit = true;
+    });
+    return hit;
+  };
   const callsRefused = (n: ALSyntaxNode): boolean => {
     const c = r531Call(n);
-    return c !== null && r570Targets(n, c, ctx).some((t) => ids.has(r572Id(t)));
+    return (
+      c !== null &&
+      r570Targets(n, c, ctx).some(
+        (t) => ids.has(r572Id(t)) || (sameObject(t) && wraps(t, 0, new Set())),
+      )
+    );
   };
   const exprs = exitGuards(body, loop, callsRefused);
-  const obj = objectOf(loop);
+  // review r1 P1: the guard of a `continue` of THIS loop that comes before a writer call skips it
+  let lastWriter = -1;
+  visitAll(body, (n) => {
+    if (callsRefused(n)) lastWriter = Math.max(lastWriter, n.startIndex);
+  });
+  const skips = (n: ALSyntaxNode): boolean => {
+    if (n.rawKind !== "continue_statement" || n.startIndex >= lastWriter) return false;
+    let a = n.parent;
+    while (a !== null && !BREAK_SCOPES.has(a.rawKind)) a = a.parent;
+    return a !== null && samePos(a, loop);
+  };
+  exprs.push(...exitGuards(body, loop, skips));
+  // review r1 P2: what feeds a guard (`Adv := T.ShouldAdvance(); if Adv then ...`), R480's feeds
+  if (exprs.length > 0) exprs.push(...indirectFeeds(loop, [...exprs], ctx));
   const procs: ALSyntaxNode[] = [];
   for (const e of exprs)
     r531Walk(e, ctx, (n) => {
       const c = r531Call(n);
       if (c === null) return;
       for (const q of r570Targets(n, c, ctx)) {
-        const qo = objectOf(q);
-        const same =
-          qo === null || obj === null || (samePos(qo, obj) && sameFile(rootOf(qo), rootOf(obj)));
-        procs.push(...(same ? [q] : r572Chain(q, 0, ctx)));
+        if (!sameObject(q)) {
+          procs.push(...r572Chain(q, 0, ctx));
+          continue;
+        }
+        // review r1 P3: a same-object guard helper, and (I3b) its `exit(<call>)` into another object
+        procs.push(
+          q,
+          ...r570ExitTargets(q, ctx)
+            .filter((t) => !sameObject(t))
+            .flatMap((t) => r572Chain(t, 1, ctx)),
+        );
       }
     });
   return { exprs, procs };
@@ -4474,6 +4630,19 @@ function r572ValueWriters(
   const body = loop.childForFieldName("body");
   if (body !== null) todo.push(...step(body));
   for (let d = 0; d < R572_STATE_HOPS && todo.length > 0; d++) todo = todo.flatMap((x) => step(x));
+  // R604 census (M2): the reach was cut off with calls still unread, so a writer may lie deeper
+  // (read only: `step` would add to `reached`)
+  if (r572GapSink !== null) {
+    let cut = false;
+    for (const x of todo)
+      r531Walk(x, ctx, (n) => {
+        const c = cut ? null : r531Call(n);
+        if (c === null) return;
+        for (const t of [...r570Targets(n, c, ctx), ...r572RunTargets(n, c, ctx)])
+          if (!reached.has(r572Id(t))) cut = true;
+      });
+    if (cut) r572GapSink.m2ReachCutOff++;
+  }
   const objKey = (p: ALSyntaxNode): string | null => {
     const o = objectOf(p);
     return o === null ? null : `${r572Id(rootOf(o))}|${objectKey(o)}`;

@@ -65,7 +65,7 @@ const nameOf = (p: ALSyntaxNode): string => {
   return `${o?.rawKind.replace("_declaration", "") ?? "?"} ${normalizeAlName(on)}.${normalizeAlName(pn)}`;
 };
 
-const { rows, extra, guards } = r572Census(ctx);
+const { rows, extra, guards, gaps } = r572Census(ctx);
 const loops = new Set(rows.map((r) => where(r.loop)));
 const statefulLoops = new Set(rows.filter((r) => r.stateful).map((r) => where(r.loop)));
 // the stated limit: a PURE callee fed its own result, or whose result is accumulated into the flag
@@ -96,6 +96,8 @@ console.log(
     // procedures they call, by name
     guardWriterSites: guards.sites.length,
     guardWriterProcedures: [...new Set(guards.procs.map(nameOf))].sort(),
+    // R604: shape counts of the gaps master already has (H2, M1, M2, M3); shapes, not mutants
+    r604: gaps,
   }),
 );
 for (const s of guards.sites) console.log(`GUARD-WRITER\t${where(s)}`);

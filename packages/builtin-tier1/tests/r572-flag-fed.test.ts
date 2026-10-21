@@ -9,7 +9,13 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import { openItemHangRefuses } from "../src/index";
-import { r572InvariantStep, r572RequireNonZeroStep, r572Seam } from "../src/loop-hazard";
+import {
+  type R572Gaps,
+  r572Census,
+  r572InvariantStep,
+  r572RequireNonZeroStep,
+  r572Seam,
+} from "../src/loop-hazard";
 
 /**
  * R572 (coord task R-572, plan r4): a loop whose exit is fed by another object's STATEFUL procedure
@@ -1440,6 +1446,371 @@ describe("R572 ruling 2: a guard that dominates a writer call in the loop body",
     expect(siteRefused(unguarded, L, "It.ShouldAdvance()", "lethal.negate-conditional")).toBe(
       false,
     );
+  });
+});
+
+describe("R572 ruling 2, review r1 H1: guards that are not a direct ancestor of the writer call", () => {
+  /** `while T.GetStatus() < 3 do <body>`; `T.Advance` is the writer. */
+  const TRACKER = `codeunit 57202 "R572 HTracker"
+{
+    var
+        Status: Integer;
+
+    procedure GetStatus(): Integer
+    begin
+        exit(Status);
+    end;
+
+    procedure ShouldAdvance(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'H1SHOULD';
+        exit(true);
+    end;
+
+    procedure Skip(): Boolean
+    var
+        Tag: Text;
+    begin
+        Tag := 'H1SKIP';
+        exit(false);
+    end;
+
+    procedure Advance()
+    var
+        Tag: Text;
+    begin
+        Tag := 'H1ADV';
+        Status := Status + 1;
+    end;
+}`;
+  const files = (body: string, extra = ""): Files => ({
+    [C]: TRACKER,
+    [L]: `codeunit 57201 "R572 HLoop"
+{
+    var
+        T: Codeunit "R572 HTracker";
+
+    procedure Run()
+    var
+        Adv: Boolean;
+    begin
+        while T.GetStatus() < 3 do begin
+${body}
+        end;
+    end;
+${extra}
+}`,
+  });
+  it("31. (P1) a `continue` guard before the writer call: its callee is refused", () => {
+    const f = files(`            if T.Skip() then
+                continue;
+            T.Advance();`);
+    expect(project(f)(C, "H1SKIP")).toBe(true);
+  });
+  it("31b. control: the same `continue` guard AFTER the writer call: not refused", () => {
+    const f = files(`            T.Advance();
+            if T.Skip() then
+                continue;`);
+    expect(project(f)(C, "H1SKIP")).toBe(false);
+  });
+  it("32. (P2) a flag-fed guard (`Adv := T.ShouldAdvance(); if Adv then`): refused", () => {
+    const f = files(`            Adv := T.ShouldAdvance();
+            if Adv then
+                T.Advance();`);
+    expect(project(f)(C, "H1SHOULD")).toBe(true);
+  });
+  it("32b. control: the same flag set but guarding nothing: not refused", () => {
+    const f = files(`            Adv := T.ShouldAdvance();
+            T.Advance();`);
+    expect(project(f)(C, "H1SHOULD")).toBe(false);
+  });
+  it("33. (P3) the guard through a same-object helper (`exit(T.ShouldAdvance())`): refused", () => {
+    const f = files(
+      `            if LocalShould() then
+                T.Advance();`,
+      `
+    local procedure LocalShould(): Boolean
+    begin
+        exit(T.ShouldAdvance());
+    end;`,
+    );
+    expect(project(f)(C, "H1SHOULD")).toBe(true);
+  });
+  it("33b. control: the same helper called, guarding nothing: not refused", () => {
+    const f = files(
+      `            Adv := LocalShould();
+            T.Advance();`,
+      `
+    local procedure LocalShould(): Boolean
+    begin
+        exit(T.ShouldAdvance());
+    end;`,
+    );
+    expect(project(f)(C, "H1SHOULD")).toBe(false);
+  });
+  it("34. (P5) a guard around a same-object wrapper of the writer (`DoAdvance()`): refused", () => {
+    const f = files(
+      `            if T.ShouldAdvance() then
+                DoAdvance();`,
+      `
+    local procedure DoAdvance()
+    begin
+        T.Advance();
+    end;`,
+    );
+    expect(project(f)(C, "H1SHOULD")).toBe(true);
+  });
+  it("34b. control: a guard around a same-object procedure that writes nothing: not refused", () => {
+    const f = files(
+      `            if T.ShouldAdvance() then
+                DoNothing();
+            T.Advance();`,
+      `
+    local procedure DoNothing()
+    begin
+        Message('x');
+    end;`,
+    );
+    expect(project(f)(C, "H1SHOULD")).toBe(false);
+  });
+});
+
+/** R604's census counters over a project (`r572Census(..).gaps`). */
+function gapsOf(files: Files): R572Gaps {
+  const parsed = Object.entries(files).map(([path, src]) => ({
+    path,
+    src,
+    root: wrapRoot(parseAL(src)),
+  }));
+  const arms = new Map(parsed.map((p) => [p.root, evaluateArms(p.root, p.src, [])]));
+  return r572Census(buildSemanticContext(parsed, arms)).gaps;
+}
+
+describe("R604 census: one counter per gap master already has (not refusals)", () => {
+  const ZERO: R572Gaps = {
+    h2SplitQueue: 0,
+    m1TouchViaWrapper: 0,
+    m2ReachCutOff: 0,
+    m3CopyShared: 0,
+    m3RecRefByValue: 0,
+  };
+  const RESET = `codeunit 57202 "R572 Reset"
+{
+    var
+        Count: Integer;
+
+    procedure Maybe(var B: Record "R572 Buf"): Boolean
+    begin
+        Count += 1;
+        if Count = 1 then
+            B.FindFirst();
+        exit(Count > 0);
+    end;
+
+    procedure MaybeRef(RR: RecordRef): Boolean
+    begin
+        Count += 1;
+        if Count = 1 then
+            RR.FindFirst();
+        exit(Count > 0);
+    end;
+}`;
+  it("H2: a split real-table queue (pure HasNext, Advance deletes the same table)", () => {
+    const g = gapsOf({
+      "Buf.Table.al": BUF,
+      [C]: `codeunit 57202 "R572 Q"
+{
+    procedure HasNext(): Boolean
+    var
+        Q: Record "R572 Buf";
+    begin
+        exit(not Q.IsEmpty());
+    end;
+
+    procedure Advance()
+    var
+        Q: Record "R572 Buf";
+    begin
+        if Q.FindFirst() then
+            Q.Delete();
+    end;
+}`,
+      [L]: `codeunit 57201 "R572 Loop"
+{
+    procedure Run()
+    var
+        X: Codeunit "R572 Q";
+    begin
+        while X.HasNext() do
+            X.Advance();
+    end;
+}`,
+    });
+    expect(g).toEqual({ ...ZERO, h2SplitQueue: 1 });
+  });
+  it("M1: a touching callee reached through a same-object wrapper under option D", () => {
+    const g = gapsOf({
+      "Buf.Table.al": BUF,
+      [C]: RESET,
+      [L]: `codeunit 57201 "R572 Loop"
+{
+    var
+        X: Codeunit "R572 Reset";
+
+    procedure Run()
+    var
+        R: Record "R572 Buf";
+        More: Boolean;
+    begin
+        if R.FindSet() then
+            repeat
+                More := Wrap(R);
+            until (R.Next() = 0) or not More;
+    end;
+
+    local procedure Wrap(var B: Record "R572 Buf"): Boolean
+    var
+        Ok: Boolean;
+    begin
+        Ok := X.Maybe(B);
+        exit(Ok);
+    end;
+}`,
+    });
+    expect(g.m1TouchViaWrapper).toBeGreaterThan(0);
+  });
+  it("M2: a writer reach cut off at the hop cap", () => {
+    const deep = (n: number): string =>
+      Array.from({ length: n }, (_, i) =>
+        i === n - 1
+          ? `    local procedure A${i + 1}() begin T.Advance(); end;`
+          : `    local procedure A${i + 1}() begin A${i + 2}(); end;`,
+      ).join("\n");
+    const files = (n: number): Files => ({
+      [C]: `codeunit 57202 "R572 Tracker"
+{
+    var
+        Status: Integer;
+
+    procedure GetStatus(): Integer
+    begin
+        exit(Status);
+    end;
+
+    procedure Advance()
+    begin
+        Status += 1;
+    end;
+}`,
+      [L]: `codeunit 57201 "R572 Loop"
+{
+    var
+        T: Codeunit "R572 Tracker";
+
+    procedure Run()
+    begin
+        while T.GetStatus() < 3 do
+            A1();
+    end;
+${deep(n)}
+}`,
+    });
+    expect(gapsOf(files(5)).m2ReachCutOff).toBeGreaterThan(0);
+    expect(gapsOf(files(2)).m2ReachCutOff).toBe(0);
+  });
+  it("M3: `Copy(X, true)` in a refused chain's object", () => {
+    const g = gapsOf({
+      "Buf.Table.al": BUF,
+      [C]: `codeunit 57202 "R572 TQ"
+{
+    var
+        TempQ: Record "R572 Buf" temporary;
+        TempW: Record "R572 Buf" temporary;
+
+    procedure Init()
+    begin
+        TempW.Copy(TempQ, true);
+    end;
+
+    procedure HasNext(): Boolean
+    begin
+        exit(not TempQ.IsEmpty());
+    end;
+
+    procedure Advance()
+    begin
+        if TempW.FindFirst() then
+            TempW.Delete();
+    end;
+}`,
+      [L]: `codeunit 57201 "R572 Loop"
+{
+    procedure Run()
+    var
+        X: Codeunit "R572 TQ";
+    begin
+        X.Init();
+        while X.HasNext() do
+            X.Advance();
+    end;
+}`,
+    });
+    expect(g.m3CopyShared).toBe(1);
+  });
+  it("M3: a forced RecordRef cursor handed by value", () => {
+    const g = gapsOf({
+      "Buf.Table.al": BUF,
+      [C]: RESET,
+      [L]: `codeunit 57201 "R572 Loop"
+{
+    var
+        X: Codeunit "R572 Reset";
+
+    procedure Run()
+    var
+        RR: RecordRef;
+        More: Boolean;
+    begin
+        RR.Open(Database::"R572 Buf");
+        if RR.FindSet() then
+            repeat
+                More := X.MaybeRef(RR);
+            until (RR.Next() = 0) or not More;
+    end;
+}`,
+    });
+    expect(g.m3RecRefByValue).toBeGreaterThan(0);
+  });
+  it("control: test 2's tracker has none of the five", () => {
+    const g = gapsOf({
+      [C]: `codeunit 57202 "R572 Tracker"
+{
+    var
+        Status: Integer;
+
+    procedure GetStatus(): Integer
+    begin
+        exit(Status);
+    end;
+
+    procedure Advance()
+    begin
+        Status := Status + 1;
+    end;
+}`,
+      [L]: loop(
+        `        T: Codeunit "R572 Tracker";
+        S: Integer;`,
+        `        S := T.GetStatus();
+        while S < 3 do begin
+            T.Advance();
+            S := T.GetStatus();
+        end;`,
+      ),
+    });
+    expect(g).toEqual(ZERO);
   });
 });
 
