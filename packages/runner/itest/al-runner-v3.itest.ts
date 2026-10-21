@@ -53,13 +53,20 @@ import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import {
+  V3LegEnvironment,
+  V3LegFailure,
+  V3LegHeld,
   type V3LegOutcome,
   cdoCheckoutRefusal,
+  classifyLegC,
   classifyLegT,
+  classifyXb,
   gateOutcome,
-  knownDifferenceKeys,
+  knownDifferencesRefusal,
+  legOutcomeOfError,
   writeV3Receipt,
 } from "./al-runner-v3-gate";
+import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
   BaselineRecordedError,
   assertGateBaseline,
@@ -110,7 +117,8 @@ const ORACLE_BC_BUILD: Record<string, string> = {
   T: "none (own baseline; BC cross-check suspended)",
 };
 
-class LegFailure extends Error {}
+/** A pre-committed figure differs (gate-fail); `V3LegEnvironment` is the environment (infra-fail, M2). */
+const LegFailure = V3LegFailure;
 const must = (cond: boolean, what: string): void => {
   if (!cond) throw new LegFailure(what);
 };
@@ -264,11 +272,12 @@ async function legC(scratch: string): Promise<void> {
   ];
   for (const f of r.facts)
     console.log(`  C: ${f.fact} = ${f.verdict} | ${f.measured.slice(0, 200)}`);
-  const off = r.facts.filter(
-    (f) => f.verdict !== (DEFECTS.includes(f.fact) ? "defect-present" : "matches"),
-  );
-  must(off.length === 0, `C: ${off.map((f) => `${f.fact}=${f.verdict}`).join(", ")}`);
-  must(r.facts.length === 23, `C: ${r.facts.length} facts, expected 23`);
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail.
+  const c = classifyLegC(r.facts, DEFECTS, 23);
+  for (const l of c.lines) console.log(`  C: ${l}`);
+  if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);
+  if (c.outcome === "infra-fail") throw new V3LegEnvironment(`C: ${c.lines.join("; ")}`);
+  if (c.outcome === "held") throw new V3LegHeld(c.lines);
 }
 
 async function legS1(scratch: string): Promise<void> {
@@ -390,7 +399,7 @@ async function sandboxBatch(scratch: string): Promise<string> {
   for (const e of await readdir(instr, { withFileTypes: true, recursive: true })) {
     if (e.isFile() && e.name === "mutant-manifest.json") return e.parentPath;
   }
-  throw new LegFailure("X: no instrumented sandbox-app batch was written");
+  throw new V3LegEnvironment("X: no instrumented sandbox-app batch was written");
 }
 
 async function legX(scratch: string): Promise<void> {
@@ -442,6 +451,7 @@ async function legX(scratch: string): Promise<void> {
     }),
   );
   let b7 = "";
+  let xb = { exitCode: 0, passed: 0, notRun: 0 };
   try {
     execFileSync(
       BIN,
@@ -466,11 +476,21 @@ async function legX(scratch: string): Promise<void> {
     b7 = "exit 0";
   } catch (e) {
     const x = e as { status?: number; stdout?: string };
-    const doc = JSON.parse(x.stdout ?? "{}") as { passed?: number; notRun?: number };
+    let doc: { passed?: number; notRun?: number } = {};
+    try {
+      doc = JSON.parse(x.stdout ?? "{}") as { passed?: number; notRun?: number };
+    } catch {
+      doc = {};
+    }
+    xb = { exitCode: x.status ?? -1, passed: doc.passed ?? 0, notRun: doc.notRun ?? 0 };
     b7 = `exit ${x.status} passed ${doc.passed} notRun ${doc.notRun}`;
   }
   console.log(`  X (b): ${b7}`);
-  must(b7 === "exit 7 passed 1 notRun 1", `X (b): ${b7}`);
+  // I-2: v3 refusing the broken target is #5602's fix, a move toward BC: held, not gate-fail.
+  const xbOutcome = classifyXb(xb);
+  must(xbOutcome !== "gate-fail", `X (b): ${b7}`);
+  const xHeld: string[] =
+    xbOutcome === "held" ? [`X (b): ${b7}: v3 now refuses the broken target (#5602 fixed)`] : [];
   // (c1-c5) after a good deploy and activate("M0002").
   const tamper: [string, (active: string, tests: string, d: string) => Promise<void>][] = [
     ["c1", (a) => appendFile(join(a, "SandboxLogic.Codeunit.al"), " ")],
@@ -478,7 +498,7 @@ async function legX(scratch: string): Promise<void> {
       "c2",
       async (_a, t) => {
         const f = (await readdir(t)).find((n) => n.endsWith(".al"));
-        if (f === undefined) throw new LegFailure("X: no test .al");
+        if (f === undefined) throw new V3LegEnvironment("X: no test .al");
         await appendFile(join(t, f), " ");
       },
     ],
@@ -550,6 +570,7 @@ async function legX(scratch: string): Promise<void> {
     must(err instanceof AlRunnerV3UnprovenBatchError && b.spawnCount === before, `X (${name})`);
   }
   await legXSleep(scratch);
+  if (xHeld.length > 0) throw new V3LegHeld(xHeld);
 }
 
 /**
@@ -581,7 +602,7 @@ async function assertSetupCompiles(
     await compiler.compileProject({ projectDir: tests, packageCachePath: pc, name: "tests" });
   } catch (err) {
     if (!(err instanceof AlcCompileError)) throw err;
-    throw new LegFailure(
+    throw new V3LegEnvironment(
       `${leg}: al-runner-v3-itest-setup-does-not-compile: the scratch target or test app does not compile against the leg's deps (${deps}): ${err.message.slice(0, 600)}`,
     );
   }
@@ -720,14 +741,24 @@ async function legXSleep(scratch: string): Promise<void> {
     twin !== undefined && [...twin.values()].every((h) => h === 0),
     `X (d): M0002 hit a Sleep line ${JSON.stringify([...(twin ?? new Map())])}`,
   );
+  // M6 (RC-5): fail closed means the SAME five mutants, none survived, and the (d) control M0002
+  // (which survives there) reading error. An empty or short mutant list is a failure, not a pass.
+  const failsClosed = (tag: string, rep: SessionReport): void => {
+    must(rep.mutants.length === 5, `${tag}: ${rep.mutants.length} mutants, r5 5`);
+    must(
+      rep.mutants.every((m) => m.verdict !== "survived"),
+      `${tag}: a survivor (${rep.mutants.filter((m) => m.verdict === "survived").map((m) => m.mutantCode)})`,
+    );
+    must(
+      rep.mutants.find((m) => m.mutantCode === "M0002")?.verdict === "error",
+      `${tag}: the control M0002 does not read error`,
+    );
+  };
   // (e) the coverage document removed under every mutant: no pass survives.
   const e = await run("e", async (p) => {
     await rm(p, { force: true });
   });
-  must(
-    e.r.mutants.every((m) => m.verdict !== "survived"),
-    "X (e): a survivor with no coverage document",
-  );
+  failsClosed("X (e)", e.r);
   must(
     e.r.mutants
       .filter((m) => m.verdict === "error")
@@ -758,10 +789,7 @@ async function legXSleep(scratch: string): Promise<void> {
       j.perTestCoverage = j.perTestCoverage.filter((t) => !t.test.endsWith(".SleeperDoubles"));
     }),
   );
-  must(
-    f1.r.mutants.every((m) => m.verdict !== "survived"),
-    "X (f1): a survivor with no per-test entry",
-  );
+  failsClosed("X (f1)", f1.r);
   const f2 = await run(
     "f2",
     edit(async (j, sleepLines) => {
@@ -771,10 +799,7 @@ async function legXSleep(scratch: string): Promise<void> {
       }
     }),
   );
-  must(
-    f2.r.mutants.every((m) => m.verdict !== "survived"),
-    "X (f2): a survivor with an indexed line absent",
-  );
+  failsClosed("X (f2)", f2.r);
   const f3 = await run(
     "f3",
     edit(async (j, sleepLines) => {
@@ -788,14 +813,11 @@ async function legXSleep(scratch: string): Promise<void> {
       }
     }),
   );
-  must(
-    f3.r.mutants.every((m) => m.verdict !== "survived"),
-    "X (f3): a survivor with an unowned Sleep hit",
-  );
+  failsClosed("X (f3)", f3.r);
 }
 
 async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
-  if (CDO === undefined) throw new LegFailure(`${leg}: LETHAL_ITEST_V3_CDO unset`);
+  if (CDO === undefined) throw new V3LegEnvironment(`${leg}: LETHAL_ITEST_V3_CDO unset`);
   const git = (...a: string[]) => execFileSync("git", ["-C", CDO, ...a], { encoding: "utf8" });
   // `scripts/corpus-fingerprint.ts` (R187), run as a script: packages/ cannot import scripts/.
   const fpOut = execFileSync("bun", [join(REPO, "scripts", "corpus-fingerprint.ts"), CDO], {
@@ -810,7 +832,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
     porcelain: git("status", "--porcelain"),
     fingerprint: fp,
   });
-  if (refused !== undefined) throw new LegFailure(`${leg}: ${refused}`);
+  if (refused !== undefined) throw new V3LegEnvironment(`${leg}: ${refused}`);
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -927,25 +949,28 @@ async function main(): Promise<void> {
         else if (leg === "T") {
           const r = await legT(scratch);
           const record = recordRequested(TABLES_BASELINE_PATH);
+          const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
+          // A baseline row difference is a figure that differs (gate-fail), never infra (M2).
+          const compare = async (): Promise<void> => {
+            try {
+              await assertGateBaseline(r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
+            } catch (e) {
+              if (e instanceof BaselineRecordedError) throw e;
+              throw new LegFailure(`T: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          };
           if (record) {
-            // I-3 before anything is written: this run's rows differ from BC's on exactly the
-            // pre-committed 52 (41 Commit, 7 duplicate key, 4 TestPage), or nothing is recorded.
-            const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
-            const known = knownDifferenceKeys(bc, normalizeForComparison(r)).size;
-            console.log(
-              `  T: differs from BC's tables baseline on ${known} rows (pre-committed 52)`,
-            );
-            must(known === 52, `T: this run differs from BC's on ${known} rows, pre-committed 52`);
-            await assertGateBaseline(r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
+            // I-3 and M5 before anything is written: this run's rows differ from BC's on exactly
+            // the pinned 52, by key and transition (41 Commit, 7 duplicate key, 4 TestPage).
+            const why = knownDifferencesRefusal(bc, normalizeForComparison(r), TABLES_KNOWN_DIFFERENCES);
+            console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 52"}`);
+            must(why === undefined, `T: ${why}`);
+            await compare();
           } else {
             const own = (await readGateBaseline(TABLES_BASELINE_PATH)).entries;
-            const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
-            // I-3: the known differences are the pre-committed 52 (41 Commit, 7 duplicate key, 4 TestPage).
-            const known = knownDifferenceKeys(bc, own).size;
-            must(
-              known === 52,
-              `T: v3's own baseline differs from BC's on ${known} rows, pre-committed 52`,
-            );
+            // I-3 and M5: the committed own baseline differs from BC's on exactly the pinned 52.
+            const why = knownDifferencesRefusal(bc, own, TABLES_KNOWN_DIFFERENCES);
+            must(why === undefined, `T: v3's own baseline: ${why}`);
             const t = classifyLegT(own, normalizeForComparison(r), bc);
             for (const l of t.lines) console.log(`  T: ${l}`);
             lines.push(...t.lines);
@@ -953,9 +978,10 @@ async function main(): Promise<void> {
               legs[leg] = "held";
               continue;
             }
-            await assertGateBaseline(r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
+            must(t.outcome === "pass", `T: ${t.lines.join("; ")}`);
+            await compare();
           }
-        } else throw new LegFailure(`unknown leg ${leg}`);
+        } else throw new V3LegEnvironment(`unknown leg ${leg}`);
         legs[leg] = "pass";
         console.log(`leg ${leg}: PASS (${Math.round((Date.now() - t0) / 1000)} s)`);
       } catch (err) {
@@ -966,11 +992,10 @@ async function main(): Promise<void> {
           continue;
         }
         const msg = err instanceof Error ? err.message : String(err);
-        legs[leg] =
-          err instanceof LegFailure || /difference|BLOCK|differs/.test(msg)
-            ? "gate-fail"
-            : "infra-fail";
-        lines.push(`${leg}: ${msg.slice(0, 1000)}`);
+        // M2: by the error's TYPE only (legOutcomeOfError), never by its text.
+        legs[leg] = legOutcomeOfError(err);
+        if (err instanceof V3LegHeld) lines.push(...err.lines.map((l) => `${leg}: ${l}`));
+        else lines.push(`${leg}: ${msg.slice(0, 1000)}`);
         console.log(`leg ${leg}: ${legs[leg]?.toUpperCase()} ${formatFailure(err).slice(0, 2000)}`);
       }
     }

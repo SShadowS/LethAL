@@ -4,11 +4,19 @@ import {
   CDO_COMMIT,
   CDO_FINGERPRINT,
   V3_GATE_LEGS,
+  V3LegEnvironment,
+  V3LegFailure,
+  V3LegHeld,
   cdoCheckoutRefusal,
+  classifyLegC,
   classifyLegT,
+  classifyXb,
   gateOutcome,
   knownDifferenceKeys,
+  knownDifferencesRefusal,
+  legOutcomeOfError,
 } from "../itest/al-runner-v3-gate";
+import { TABLES_KNOWN_DIFFERENCES } from "../itest/al-runner-v3-tables-known";
 import type { NormalizedMutant } from "../itest/mutant-equality";
 
 describe("the D legs' CDO checkout guard (lane ruling 2026-10-21)", () => {
@@ -106,5 +114,82 @@ describe("the update-gate outcome", () => {
     expect(gateOutcome({ ...all("pass"), T: "held" })).toBe("held");
     expect(gateOutcome({ ...all("pass"), T: "held", S1: "gate-fail" })).toBe("gate-fail");
     expect(gateOutcome({ ...all("pass"), C: "infra-fail" })).toBe("infra-fail");
+  });
+  test("RC-2: C held plus T held is held", () => {
+    expect(gateOutcome({ ...all("pass"), C: "held", T: "held" })).toBe("held");
+  });
+});
+
+describe("RC-2 (I-2): leg C, a fixed defect is held, never a blacklisting", () => {
+  const DEFECTS = ["dup", "sleep"];
+  const f = (fact: string, verdict: string) => ({
+    fact,
+    kind: DEFECTS.includes(fact) ? ("defect" as const) : ("contract" as const),
+    verdict,
+  });
+  const asMeasured = [f("version", "matches"), f("dup", "defect-present"), f("sleep", "defect-present")];
+  test("everything as pre-committed is a pass", () => {
+    expect(classifyLegC(asMeasured, DEFECTS, 3).outcome).toBe("pass");
+  });
+  test("one defect fact moving defect-present -> gone is held", () => {
+    const r = classifyLegC([asMeasured[0], f("dup", "gone"), asMeasured[2]].flatMap((x) => (x === undefined ? [] : [x])), DEFECTS, 3);
+    expect(r.outcome).toBe("held");
+    expect(r.lines.join("\n")).toMatch(/held: dup: defect-present -> gone/);
+  });
+  test("a contract fact diverged is gate-fail, even beside a gone defect", () => {
+    expect(classifyLegC([f("version", "diverged"), f("dup", "gone"), f("sleep", "defect-present")], DEFECTS, 3).outcome).toBe("gate-fail");
+  });
+  test("a defect fact diverged is gate-fail", () => {
+    expect(classifyLegC([f("version", "matches"), f("dup", "diverged"), f("sleep", "defect-present")], DEFECTS, 3).outcome).toBe("gate-fail");
+  });
+  test("an unmeasurable fact is infra-fail; another fact count is gate-fail", () => {
+    expect(classifyLegC([f("version", "unmeasurable"), f("dup", "defect-present"), f("sleep", "defect-present")], DEFECTS, 3).outcome).toBe("infra-fail");
+    expect(classifyLegC(asMeasured.slice(0, 2), DEFECTS, 3).outcome).toBe("gate-fail");
+  });
+});
+
+describe("RC-2 (I-2): X (b) moving with #5602's fix is held", () => {
+  test("as measured (exit 7, 1 pass, 1 not run) is a pass", () => {
+    expect(classifyXb({ exitCode: 7, passed: 1, notRun: 1 })).toBe("pass");
+  });
+  test("v3 now refusing the broken target (non-zero exit, nothing passed) is held", () => {
+    expect(classifyXb({ exitCode: 1, passed: 0, notRun: 0 })).toBe("held");
+  });
+  test("anything else is gate-fail (a pass that should not be, or exit 0)", () => {
+    expect(classifyXb({ exitCode: 0, passed: 2, notRun: 0 })).toBe("gate-fail");
+    expect(classifyXb({ exitCode: 7, passed: 2, notRun: 0 })).toBe("gate-fail");
+    expect(classifyXb({ exitCode: 0, passed: 0, notRun: 0 })).toBe("gate-fail");
+  });
+});
+
+describe("RC-4 (M5): leg T's known set is pinned by key and transition", () => {
+  const pinned = [["K1", "killed", "survived", "DoubleInsert", null]] as const;
+  test("the measured set equal to the pinned one: no refusal", () => {
+    expect(knownDifferencesRefusal(bc, own, pinned)).toBeUndefined();
+  });
+  test("the same COUNT with another key is refused", () => {
+    const bc2 = [row("K1", "killed", "DoubleInsert"), row("K2", "killed", "T2"), row("K3", "killed", "T3")];
+    const own2 = [row("K1", "killed", "DoubleInsert"), row("K2", "killed", "T2"), row("K3", "survived")];
+    expect(knownDifferencesRefusal(bc2, own2, pinned)).toMatch(/K3/);
+  });
+  test("the same key with another transition is refused", () => {
+    const own3 = [row("K1", "no-coverage"), row("K2", "killed", "T2"), row("K3", "survived")];
+    expect(knownDifferencesRefusal(bc, own3, pinned)).toMatch(/K1/);
+  });
+  test("the committed table holds exactly 52 distinct keys", () => {
+    expect(new Set(TABLES_KNOWN_DIFFERENCES.map((d) => d[0])).size).toBe(52);
+  });
+});
+
+describe("M2: environment refusals are infra-fail, verdict failures gate-fail", () => {
+  test("each class maps by type, never by message text", () => {
+    expect(legOutcomeOfError(new V3LegEnvironment("x differs"))).toBe("infra-fail");
+    expect(legOutcomeOfError(new V3LegFailure("x"))).toBe("gate-fail");
+    expect(legOutcomeOfError(new V3LegHeld(["a"]))).toBe("held");
+    expect(legOutcomeOfError(new Error("a difference that differs, BLOCK"))).toBe("infra-fail");
+  });
+  test("the three classes extend Error directly", () => {
+    for (const C of [V3LegEnvironment, V3LegFailure, V3LegHeld])
+      expect(Object.getPrototypeOf(C.prototype)).toBe(Error.prototype);
   });
 });

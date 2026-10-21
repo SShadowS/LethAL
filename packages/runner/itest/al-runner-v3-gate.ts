@@ -115,6 +115,120 @@ export function classifyLegT(
   return { outcome: anyFail ? "gate-fail" : anyHeld ? "held" : "pass", lines };
 }
 
+/**
+ * M5: the BC-vs-own differences must be exactly `pinned`, by key AND by transition (BC verdict and
+ * killing test -> own verdict and killing test). Returns the refusal, or `undefined`.
+ */
+export function knownDifferencesRefusal(
+  bc: readonly NormalizedMutant[],
+  own: readonly NormalizedMutant[],
+  pinned: ReadonlyArray<readonly [string, string, string, string | null, string | null]>,
+): string | undefined {
+  const b = byKey(bc);
+  const o = byKey(own);
+  const measured = new Map<string, string>();
+  for (const k of knownDifferenceKeys(bc, own)) {
+    const bs = b.get(k) ?? [];
+    const os = o.get(k) ?? [];
+    measured.set(
+      k,
+      `${bs.map((r) => `${r.verdict}/${r.killingTest}`).join(",") || "absent"} -> ${os.map((r) => `${r.verdict}/${r.killingTest}`).join(",") || "absent"}`,
+    );
+  }
+  const want = new Map(pinned.map(([k, bv, ov, bk, ok]) => [k, `${bv}/${bk} -> ${ov}/${ok}`]));
+  const bad: string[] = [];
+  for (const [k, t] of measured)
+    if (want.get(k) !== t) bad.push(`${k}: ${t}${want.has(k) ? ` (pinned ${want.get(k)})` : " (not pinned)"}`);
+  for (const [k, t] of want) if (!measured.has(k)) bad.push(`${k}: pinned ${t}, not measured`);
+  return bad.length === 0
+    ? undefined
+    : `the BC-vs-own differences are not the pinned ${want.size}: ${bad.slice(0, 5).join("; ")}${bad.length > 5 ? ` (+${bad.length - 5} more)` : ""}`;
+}
+
+/**
+ * RC-2 (I-2): leg C's verdict. A contract fact must read `matches` and a defect fact (`defects`)
+ * `defect-present`. A defect fact reading `gone` (upstream fixed it) is `held`, for the orchestrator
+ * to re-pre-commit, never a blacklisting. Any `diverged`, or another fact count, is `gate-fail`. An
+ * `unmeasurable` fact is `infra-fail`. Precedence: gate-fail, infra-fail, held, pass.
+ */
+export function classifyLegC(
+  facts: ReadonlyArray<{ readonly fact: string; readonly verdict: string }>,
+  defects: readonly string[],
+  count: number,
+): { readonly outcome: "pass" | "held" | "gate-fail" | "infra-fail"; readonly lines: string[] } {
+  const lines: string[] = [];
+  let fail = facts.length !== count;
+  if (fail) lines.push(`gate-fail: ${facts.length} facts, pre-committed ${count}`);
+  let infra = false;
+  let held = false;
+  for (const f of facts) {
+    const want = defects.includes(f.fact) ? "defect-present" : "matches";
+    if (f.verdict === want) continue;
+    if (f.verdict === "unmeasurable") {
+      infra = true;
+      lines.push(`infra-fail: ${f.fact}: unmeasurable`);
+    } else if (want === "defect-present" && f.verdict === "gone") {
+      held = true;
+      lines.push(`held: ${f.fact}: defect-present -> gone (an upstream fix; re-pre-commit)`);
+    } else {
+      fail = true;
+      lines.push(`gate-fail: ${f.fact}: ${f.verdict}, pre-committed ${want}`);
+    }
+  }
+  return {
+    outcome: fail ? "gate-fail" : infra ? "infra-fail" : held ? "held" : "pass",
+    lines,
+  };
+}
+
+/**
+ * RC-2 (I-2): X (b), v3 alone on the broken target. As measured (#5602): exit 7, 1 pass, 1 not
+ * run. v3 now refusing it (a non-zero exit with nothing passed) is #5602's fix, a move toward BC:
+ * `held`. Anything else is `gate-fail`.
+ */
+export function classifyXb(r: {
+  readonly exitCode: number;
+  readonly passed: number;
+  readonly notRun: number;
+}): "pass" | "held" | "gate-fail" {
+  if (r.exitCode === 7 && r.passed === 1 && r.notRun === 1) return "pass";
+  if (r.exitCode !== 0 && r.passed === 0) return "held";
+  return "gate-fail";
+}
+
+/** A pre-committed figure differs: `gate-fail`. Extends `Error` directly. */
+export class V3LegFailure extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "V3LegFailure";
+  }
+}
+
+/** M2: the environment, not the build (a checkout, a setup, a variable): `infra-fail`. */
+export class V3LegEnvironment extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "V3LegEnvironment";
+  }
+}
+
+/** I-2: every difference is a move toward BC: `held`. */
+export class V3LegHeld extends Error {
+  readonly lines: readonly string[];
+  constructor(lines: readonly string[]) {
+    super(`held: ${lines.join("; ")}`);
+    this.name = "V3LegHeld";
+    this.lines = lines;
+  }
+}
+
+/** M2: a leg's outcome from its error, by TYPE only. Anything untyped is `infra-fail`. */
+export function legOutcomeOfError(err: unknown): V3LegOutcome {
+  if (err instanceof V3LegHeld) return "held";
+  if (err instanceof V3LegFailure) return "gate-fail";
+  return "infra-fail";
+}
+
 /** The run's outcome: `pass` only when EVERY leg of `V3_GATE_LEGS` passed. */
 export function gateOutcome(legs: Readonly<Record<string, V3LegOutcome>>): V3GateOutcome {
   const vals = V3_GATE_LEGS.map((l) => legs[l] ?? "skipped");
