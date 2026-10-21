@@ -35,7 +35,9 @@ next free id right before writing).
   red-going test for EACH direction; "it works both ways" is not evidence.
 - **Submit only on green CI, both jobs.** Push the task branch; `check` (Windows) and `unit-linux`
   must both pass, and the submit note names the run id. The container is Linux, so CI is the only
-  Windows check.
+  Windows check. A local verify quoted in a submit note is the `VERIFY FULL` line of
+  `bun scripts/verify.ts` with no arguments; `--changed` and package runs print `VERIFY PARTIAL`
+  and are an inner loop only (R593).
 - **Never pipe a gating command into `grep` or `tail` before `&&`.** The pipeline's status is the
   last command's. Use `set -o pipefail;` if the output must be trimmed.
 - **A lone timeout in a full `verify` while another full `verify` overlaps is starvation, not a
@@ -60,7 +62,12 @@ next free id right before writing).
   have it. A build's dump re-reads only the projects its change can touch (the R-487 keydiff
   approach) and compares against the cached master. Re-dump master only when master moved and the
   move touches mutant generation. Say in your report which cache entry you used. A cache entry is
-  never edited, only replaced whole.
+  never edited, only replaced whole. The tool is `bun scripts/corpus-snapshot.ts snapshot <set>
+  --master` and `diff <set> --branch <worktree> [--projects ...]` (R593); it keys each entry by its
+  dumper (`<sha>/<set>/<dumperKey>/`) and takes one of two heavy slots, `/coord/locks/heavy.1` and
+  `heavy.2`, with `flock`. Known limit: two corpus jobs started from ONE shell (`a & b`) share a
+  process group and count as one, and a job on a corpus COPY is invisible to its `ps` scan; such
+  jobs take a slot themselves: `flock -n /coord/locks/heavy.<n> <cmd>`.
 - **A lane commits its own pre-commitment to `master` (owner, 2026-10-08).** Once a pre-commitment
   is written (and plan-reviewed), commit it yourself, specs-only, as
   `docs/superpowers/specs/<date>-<id>-...-precommitment.md` with `[skip ci]`, BEFORE any live run.
