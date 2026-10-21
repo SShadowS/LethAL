@@ -49,12 +49,10 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { hashAlTree } from "./baseline-snapshot";
-import type { AlRunnerPredefinedProbe } from "./preprocessor-symbols";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, defaultSpawn } from "./publisher";
-import { symbolPackageId } from "./test-app-publish";
+import { TestAppError, symbolPackageId } from "./test-app-publish";
 
 /** `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`). */
 export const AL_RUNNER_V3_VERSION = /^al-?runner 3\.\d+\.\d+(?:-[\w.]+)? \([0-9a-f]+\)$/;
@@ -488,17 +486,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
   }
 
-  /** §8 `predefined-symbols`, every session (`runSession` refuses a non-empty set). */
-  measurePredefinedSymbols(): Promise<AlRunnerPredefinedProbe> {
-    return probeV3PredefinedSymbols({
-      alRunnerPath: this.cfg.alRunnerPath,
-      packagesDir: resolve(this.cfg.packagesDir),
-      bcVersion: this.cfg.bcVersion,
-      ...(this.cfg.cacheDir !== undefined ? { cacheDir: this.cfg.cacheDir } : {}),
-      spawn: this.spawn,
-    });
-  }
-
   useBuildSymbols(symbols: readonly string[]): void {
     this.buildSymbols = [...symbols];
   }
@@ -657,7 +644,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (!name.toLowerCase().endsWith(".app")) continue;
         const bytes = await readFile(join(this.cfg.packagesDir, name));
         // An entry we cannot identify could be a stale target: refused, never skipped.
-        if (symbolPackageId(bytes).toLowerCase() === targetId) continue;
+        let id: string;
+        try {
+          id = symbolPackageId(bytes).toLowerCase();
+        } catch (err) {
+          throw new TestAppError(
+            "symbols-unreadable",
+            `${join(this.cfg.packagesDir, name)}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        if (id === targetId) continue;
         await writeFile(join(staged, name), bytes);
       }
       await writeFile(join(staged, "lethal-v3-batch.app"), await readFile(batchApp));
@@ -670,7 +666,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         });
       } catch (err) {
         if (err instanceof AlcCompileError) {
-          throw new Error(
+          throw new TestAppError(
+            "compile-failed",
             `al-runner-v3: the test app does not compile against this batch, so no test of it can be trusted (R586 §3 step 2): ${err.message}`,
           );
         }

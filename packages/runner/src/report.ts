@@ -12,7 +12,7 @@ import {
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
 import type { BackendCapabilities, CoverageMode, TestMethodRef } from "./backend";
-import { isAlRunnerV2Backend, isBcdevBackend } from "./backend";
+import { isAlRunnerV2, isBcdev } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import {
   EQUIVALENCE_MARKS_FILENAME,
@@ -2320,7 +2320,7 @@ function measuredExecutionContext(
         "not separately measured by LethAL the way the fenced path was under R57 (R586)",
     };
   }
-  return isBcdevBackend(caps)
+  return isBcdev(caps.kind)
     ? {
         guiAllowed: false,
         clientType: "ODataV4",
@@ -2383,16 +2383,16 @@ function buildExecutionContexts(
   // observation onto it would be a provenance claim about a session this one never made.
   const bcFields = {
     // R586: the three are v2 observations (its `[bc]` line, R147 pin, R551 probe).
-    ...(alRunnerBcBuild !== undefined && isAlRunnerV2Backend(caps)
+    ...(alRunnerBcBuild !== undefined && isAlRunnerV2(caps.kind)
       ? { bcBuild: alRunnerBcBuild.build, bcBuildAnnouncement: alRunnerBcBuild.announcement }
       : {}),
     // R147, same two gates and for the same reason: a carried verdict's platform apps belong to the
     // run it came from, and bcdev has no such concept at all.
-    ...(alRunnerPlatformAppsDir !== undefined && isAlRunnerV2Backend(caps)
+    ...(alRunnerPlatformAppsDir !== undefined && isAlRunnerV2(caps.kind)
       ? { platformAppsDir: alRunnerPlatformAppsDir }
       : {}),
     // R558, same two gates: a carried verdict's selector belongs to the run it came from.
-    ...(alRunnerTestSelector !== undefined && isAlRunnerV2Backend(caps)
+    ...(alRunnerTestSelector !== undefined && isAlRunnerV2(caps.kind)
       ? {
           testSelector: alRunnerTestSelector.selector,
           ...(alRunnerTestSelector.reason !== undefined
@@ -3724,7 +3724,8 @@ export function renderConsole(r: SessionReport): string {
   // single mutant has run, which is exactly the "warning that scrolls past on a long run" pattern
   // that let the original static claim go unnoticed for a session's whole duration. The end of a
   // long run — right after the score — is where a reader actually is.
-  if (!r.authoritative && r.alRunnerCanary !== undefined) {
+  // R586: the canary is the v2 al-runner's (absent on v3 anyway).
+  if (r.backend === "al-runner" && r.alRunnerCanary !== undefined) {
     lines.push("");
     lines.push(...alRunnerCanaryWarnings(r.alRunnerCanary));
   }

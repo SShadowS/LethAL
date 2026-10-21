@@ -85,7 +85,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { isAlRunnerV2Backend, isBcdevBackend, stopIsRetrySafe } from "./backend";
+import { isAlRunnerV2, isBcdev, isLocalRunner, stopIsRetrySafe } from "./backend";
 import {
   decodeSource,
   hashAlTree,
@@ -4024,7 +4024,7 @@ function resolveResume(
     }
     if (row.backend !== backendName) {
       throw new Error(
-        `--resume-run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName} — verdicts are not interchangeable across backends (al-runner is not authoritative)`,
+        `--resume-run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName} — verdicts are not interchangeable across backends (neither local runner, al-runner or al-runner-v3, is authoritative)`,
       );
     }
     // R325: checked BEFORE the fingerprint, so the refusal names the real reason. The fingerprint
@@ -4368,7 +4368,7 @@ function assertLeaseConfigured(
   backend: ExecutionBackend,
   who: string,
 ): void {
-  if (isBcdevBackend(caps) && lease === undefined && isLeaseBindable(backend)) {
+  if (isBcdev(caps.kind) && lease === undefined && isLeaseBindable(backend)) {
     throw new Error(
       `${who}: this authoritative backend is lease-bindable (it exposes setLease) but no lease is configured — every RunMutant would run unfenced, and a lost lease could not be scoped to the batch whose verdicts it invalidates (design §6). Set SessionConfig.lease.`,
     );
@@ -4389,7 +4389,7 @@ async function consultQuarantine(a: {
   let resourceKey: string | undefined;
   let quarantineStore: QuarantineStore | undefined;
   if (
-    isBcdevBackend(a.caps) &&
+    isBcdev(a.caps.kind) &&
     a.resourceServer !== undefined &&
     a.resourceServerInstance !== undefined
   ) {
@@ -4405,7 +4405,7 @@ async function consultQuarantine(a: {
         `tier ${resourceKey} is quarantined (${existing.opKind}: ${existing.detail}, recorded ${existing.recordedAtIso}, generation ${existing.generation}). Recycle the tier and run 'lethal clear-quarantine' to clear it.`,
       );
     }
-  } else if (isBcdevBackend(a.caps)) {
+  } else if (isBcdev(a.caps.kind)) {
     // Safety net (Task 13 folded fix): an authoritative backend with NO tier identity means the
     // quarantine consult above is silently skipped — no prior strand is detected, and no NEW
     // strand can be durably recorded (see `quarantineInFlight`'s "no store" note). That is
@@ -5248,7 +5248,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // quarantine the container for the crime of having nothing left to do. A carried verdict is
   // not a verdict this artifact produced, so it is correctly outside this gate's scope.
   const contributed = toExecute.some((m) => (perMutantTests.get(m.mutantId)?.length ?? 0) > 0);
-  if (isBcdevBackend(caps) && contributed && !attestation.clean) {
+  if (isBcdev(caps.kind) && contributed && !attestation.clean) {
     const note = `unattested artifact: no covered run observed the deployed binary's selector (artifactId ${input.artifactId ?? "unknown"}) — verdicts discarded, container quarantined (design §G)`;
     emit({ type: "batch-invalidated", batchIndex: batchIdx, reason: note });
     // R47: and durably, in the store. `--resume` reads a run's stored verdicts by
@@ -5522,25 +5522,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // Structural, like `provisionOnce`: only the al-runner backend can answer.
   let buildBackend: BuildBackend = { kind: "bcdev" };
   if (caps.kind === "al-runner-v3") {
-    // R586: v3 runs the source LethAL's alc proof compiled (`AlRunnerV3Backend.deploy`), and alc
-    // predefines no symbol, so v3 must predefine none either or the two would compile different
-    // arms. Measured per session like R392, and refused, never adopted.
-    const prober = cfg.backend as {
-      measurePredefinedSymbols?: () => Promise<AlRunnerPredefinedProbe>;
-    };
-    if (typeof prober.measurePredefinedSymbols !== "function") {
-      throw new Error(
-        "runSession: this al-runner-v3 backend cannot measure the preprocessor symbols v3 predefines (it has no measurePredefinedSymbols); refusing rather than assuming none (R586, R392).",
-      );
-    }
-    const predefined = await prober.measurePredefinedSymbols();
-    if (predefined.symbols.length > 0) {
-      throw new Error(
-        `runSession: al-runner v3 predefines ${predefined.symbols.join(", ")}, which LethAL's alc compile proof does not, so the proof would compile other #if arms than v3 runs; refusing (R586 plan §8, predefined-symbols).`,
-      );
-    }
+    // R586 (plan r2 §9): v3 runs only what LethAL's alc proof compiled, and alc predefines no
+    // symbol. That v3 predefines none either is the contract probe's `predefined-symbols` fact,
+    // measured in the backend's `status()` (a `diverged` fact refuses the session), never R392's
+    // v2 probe here.
     buildBackend = { kind: "al-runner-v3" };
-  } else if (isAlRunnerV2Backend(caps)) {
+  } else if (isAlRunnerV2(caps.kind)) {
     const prober = cfg.backend as {
       measurePredefinedSymbols?: (platformAppsDir?: string) => Promise<AlRunnerPredefinedProbe>;
     };
@@ -5600,7 +5587,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // and the `tests-compiled-out` / `test-symbols-unverified` caveats.
   // R373/R486: what the env-tool hook will publish, read once here, before the lease. `undefined`
   // when no hook runs under a lease (and on al-runner, which publishes nothing).
-  const envPublishes = buildBackend.kind !== "bcdev" ? undefined : await envToolPublishes(cfg);
+  const envPublishes = isLocalRunner(buildBackend.kind) ? undefined : await envToolPublishes(cfg);
   const { evidence: testArmEvidence, deferredCheck: deferredTestAppCheck } = resolveTestArmEvidence(
     buildBackend.kind,
     publishedRead,
@@ -5651,7 +5638,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // (The parser was initialised before discovery, R403.)
   // R-371: ONE parse of the test sources, shared by the scan and the digests.
   const testModel = buildTestAppModel(await readTestAppSources(cfg.testDir));
-  const testPageRefused: ReadonlyMap<string, string> = isBcdevBackend(caps)
+  const testPageRefused: ReadonlyMap<string, string> = isBcdev(caps.kind)
     ? scanTestPageModel(testModel, tests)
     : new Map();
   const testPageRefusedNames = tests
@@ -5705,7 +5692,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // package folders) is complete here and is recorded with the run row. Every other session takes
   // it under the lease (below).
   let alRunnerTestApp: TestAppIdentity | undefined;
-  if (provenTestAppHash !== undefined && buildBackend.kind !== "bcdev") {
+  if (provenTestAppHash !== undefined && isLocalRunner(buildBackend.kind)) {
     const got = await takeTestAppDependencies(cfg, "not-published", sourceSnapshot);
     if ("deps" in got) alRunnerTestApp = { hash: provenTestAppHash, deps: got.deps };
     else
@@ -5831,7 +5818,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // own app.json version instead of the placeholder when the caller didn't already supply one.
     appVersion:
       cfg.appVersion ??
-      (isBcdevBackend(caps) ? undefined : readAppVersionBestEffort(sourceSnapshot)) ??
+      (isBcdev(caps.kind) ? undefined : readAppVersionBestEffort(sourceSnapshot)) ??
       "0.0.0.0",
   });
   // stream-started: the header event, carrying the run's own id. Emitted HERE, immediately after
@@ -5955,7 +5942,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R497: on bcdev the BC shape rule under this build's arms admits the measured wrapped shapes,
   // and a key two compiled files declare is refused there too.
   const bcArms = new Map(
-    backendName === "bcdev"
+    isBcdev(backendName)
       ? allFiles.map((f) => [f.root, evaluateArms(f.root, f.source, buildSymbols)] as const)
       : [],
   );
@@ -5963,7 +5950,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...coverageRefusedObjects(
       allFiles,
       backendName,
-      backendName === "bcdev"
+      isBcdev(backendName)
         ? (f) => bcArms.get(f.root) ?? evaluateArms(f.root, f.source, buildSymbols)
         : undefined,
     ),
@@ -6117,7 +6104,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // silently cross-attribute a verdict to the wrong mutant. Cross-process safety (a real lease)
   // is 5C-B; for now this must fail loudly rather than let it happen. al-runner (non-
   // authoritative) has its own per-worker process/backend and is unaffected.
-  if (isBcdevBackend(caps) && workers > 1) {
+  if (isBcdev(caps.kind) && workers > 1) {
     throw new Error(
       `runSession: workers=${workers} > 1 is rejected for an authoritative (bcdev) backend in Layer 5C-A — the single LC Mutation Active row is not lease-protected against parallel RunMutant calls (cross-process safety is 5C-B).`,
     );
@@ -6355,7 +6342,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // from the pre-lease walk: another lease holder may have published a dependency while this
     // session waited. Before the batch loop, so before any carry, history skip or snapshot reuse.
     if (envPublishes === undefined) {
-      if (buildBackend.kind !== "bcdev") {
+      if (isLocalRunner(buildBackend.kind)) {
         // No lease and no server: taken before the run row and recorded with it.
         historyTestApp = alRunnerTestApp;
       } else if (provenTestAppHash !== undefined) {
@@ -8399,7 +8386,7 @@ async function runProbes(
         // R514: a probe's baseline is this run's own (`runNamedMutants` never reuses a snapshot).
         baselineReused: undefined,
       });
-      if (isBcdevBackend(scope.caps) && !attestation.clean) {
+      if (isBcdev(scope.caps.kind) && !attestation.clean) {
         for (const [i, o] of outcomes.entries()) {
           outcomes[i] = {
             mutant: o.mutant,
@@ -8759,7 +8746,7 @@ function resolveTestArmEvidence(
   file: { readonly path: string; readonly bytes: Uint8Array } | undefined,
 ): { evidence: TestArmEvidence; deferredCheck?: string } {
   // R586: a local runner (v2 or v3) compiles the test app from the source this session read.
-  if (backendKind !== "bcdev") return { evidence: { kind: "derived" } };
+  if (isLocalRunner(backendKind)) return { evidence: { kind: "derived" } };
   if (file !== undefined) {
     const m = compiledMembershipOf(file.bytes);
     if (m.kind === "none") {
@@ -9125,11 +9112,11 @@ interface EnvToolPublishes {
  */
 async function provenWithoutHook(
   cfg: SessionConfig,
-  backendKind: string,
+  backendKind: BuildBackend["kind"],
   read: PublishedTestAppRead,
 ): Promise<boolean> {
   // R586: v3 also reads the test source itself (and its compile proof hashes that dir per run).
-  if (backendKind !== "bcdev") return read.kind === "no-fetch";
+  if (isLocalRunner(backendKind)) return read.kind === "no-fetch";
   if (read.kind !== "bytes") return false;
   let got: ReturnType<typeof readAppIdentity>;
   try {

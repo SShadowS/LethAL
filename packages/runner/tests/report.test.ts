@@ -102,7 +102,13 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
       tableGlobalVar: "defect-confirmed",
       transactionRollback: "defect-not-reproduced",
     };
-    const out = renderConsole({ ...baseReport, authoritative: true, alRunnerCanary: canary });
+    // R586: the reiteration keys on the v2 backend, so a bcdev report is labelled bcdev.
+    const out = renderConsole({
+      ...baseReport,
+      backend: "bcdev",
+      authoritative: true,
+      alRunnerCanary: canary,
+    });
     expect(out).not.toContain("R7");
     expect(out).not.toContain("R8");
   });

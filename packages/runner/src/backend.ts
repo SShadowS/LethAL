@@ -265,13 +265,18 @@ export type CoverageMode = "none" | "procedure" | "line" | "fenced" | "al-runner
 export type BackendKind = "bcdev" | "al-runner" | "al-runner-v3";
 
 /** R586: the backend publishes to a BC server (leases, attestation, quarantine, TestPage scan). */
-export function isBcdevBackend(caps: Pick<BackendCapabilities, "kind">): boolean {
-  return caps.kind === "bcdev";
+export function isBcdev(kind: BackendKind): boolean {
+  return kind === "bcdev";
 }
 
 /** R586: the frozen .NET al-runner (v2): its predefined-symbol probe, R557 names, R147 pin. */
-export function isAlRunnerV2Backend(caps: Pick<BackendCapabilities, "kind">): boolean {
-  return caps.kind === "al-runner";
+export function isAlRunnerV2(kind: BackendKind): boolean {
+  return kind === "al-runner";
+}
+
+/** R586: a backend that publishes nothing and compiles the source it was given (v2 or v3). */
+export function isLocalRunner(kind: BackendKind): boolean {
+  return kind === "al-runner" || kind === "al-runner-v3";
 }
 
 export interface BackendCapabilities {

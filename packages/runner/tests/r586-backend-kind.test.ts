@@ -31,6 +31,9 @@ const SHAPES: readonly RegExp[] = [
   /=\s*"al-runner"\s*[,;)]/,
   /case\s+"al-runner"\s*:/,
   /\?\?\s*"al-runner"/,
+  // Plan r2 §9: the bcdev compares too.
+  /[=!]==\s*"bcdev"/,
+  /"bcdev"\s*[=!]==/,
 ];
 
 /**
@@ -40,7 +43,11 @@ const SHAPES: readonly RegExp[] = [
  * `config` (the CLI's backend argument / config section), `predicate` (the predicate itself).
  */
 const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  "backend.ts": { 'return caps.kind === "al-runner";': "predicate" },
+  "backend.ts": {
+    'return kind === "bcdev";': "predicate",
+    'return kind === "al-runner";': "predicate",
+    'return kind === "al-runner" || kind === "al-runner-v3";': "predicate",
+  },
   "verify-reach.ts": { 'case "al-runner":': "coverage-mode" },
   // The v2 coverage index's own refusal sentences; v3 reuses the index (plan M1, the safe direction).
   "al-runner-coverage.ts": {
@@ -59,14 +66,18 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'return run.backend !== "al-runner" || run.alRunnerNames;': "v2",
     'if (names !== undefined && run.backend === "al-runner") {': "v2",
   },
-  "line-map.ts": { 'const alRunner = backendKind === "al-runner";': "v2" },
+  // R-300b: bcdev's shape rule with arms; v2's measured admission; v3 takes neither (refused).
+  "line-map.ts": {
+    'const alRunner = backendKind === "al-runner";': "v2",
+    'if (backendKind === "bcdev" && arms !== undefined) {': "bcdev",
+  },
   "preprocessor-symbols.ts": {
     'const predefined = backend.kind === "al-runner" ? backend.predefined.symbols : [];': "v2",
   },
   "report.ts": {
     "authoritative: input.caps.authoritative,": "report-field",
     "if (!r.authoritative) {": "report-field",
-    "if (!r.authoritative && r.alRunnerCanary !== undefined) {": "report-field",
+    'if (r.backend === "al-runner" && r.alRunnerCanary !== undefined) {': "v2",
   },
   "orchestrator.ts": {
     'backendName === "al-runner"': "v2",
@@ -85,6 +96,12 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (parsed.backendKind === "al-runner") {': "config",
     'if (paths.backendKind === "al-runner") {': "config",
     'parsed.backendKind === "al-runner"': "config",
+    'if (backendArg === "bcdev" && workers > 1) {': "bcdev",
+    'if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {': "bcdev",
+    'if (parsed.backendKind !== "bcdev") return {};': "bcdev",
+    '} else if (paths.backendKind === "bcdev") {': "bcdev",
+    '...(parsed.backendKind === "bcdev"': "bcdev",
+    'if (highestPublished !== undefined && parsed.backendKind === "bcdev") {': "bcdev",
   },
 };
 
@@ -267,21 +284,35 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
-  test("a v3 that predefines a symbol is refused (alc's proof would compile other arms)", async () => {
+  test("T27: v3 never takes v2's predefined-probe branch, and its build set has no predefined symbol", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
-      await expect(
-        v3Session(root, store, withProbe(new V3KindStub(undefined), ["CLEANSCHEMA25"])),
-      ).rejects.toThrow(/predefines CLEANSCHEMA25/);
+      let probed = 0;
+      const b = Object.assign(new V3KindStub(undefined), {
+        measurePredefinedSymbols: async (): Promise<AlRunnerPredefinedProbe> => {
+          probed += 1;
+          return { symbols: ["CLEANSCHEMA25"] };
+        },
+      });
+      await v3Session(root, store, b);
+      expect(probed).toBe(0);
+      expect(store.getRun(1)?.buildSymbols).toEqual([]);
     });
   });
 
-  test("a v3 backend with no predefined-symbol probe is refused, never assumed empty", async () => {
+  test("T27 (other direction): a v2-kind backend without the R392 probe is still refused", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
-      await expect(
-        v3Session(root, store, withProbe(new V3KindStub(undefined), undefined)),
-      ).rejects.toThrow(/cannot measure the preprocessor symbols v3 predefines/);
+      const v2 = Object.assign(new V3KindStub(undefined), {
+        capabilities: (): BackendCapabilities => ({
+          kind: "al-runner",
+          coverage: "none",
+          deploy: "none",
+          isolation: "session",
+          authoritative: false,
+        }),
+      });
+      await expect(v3Session(root, store, v2)).rejects.toThrow(/measurePredefinedSymbols/);
     });
   });
 
