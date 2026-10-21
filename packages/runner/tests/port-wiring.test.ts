@@ -15,6 +15,8 @@ import {
   deployerFor,
   devPortOf,
   odataCfgFor,
+  recoveryBaseUrl,
+  validateBcDevConfig,
 } from "../src/cli";
 import { HarnessVerifier } from "../src/harness";
 import { ContainerDeployer, type ContainerDeployerConfig } from "../src/publisher";
@@ -172,14 +174,52 @@ describe("every bcdev itest takes its ports from the config", () => {
   });
 
   test("every ContainerDeployer and BcDevMcpBackend an itest builds is given devPortOf", () => {
+    // Per constructor, not per file: a count per file let an extra `devPortOf` elsewhere mask a
+    // constructor without one. Each config object names `server` within its first few lines.
     const short: string[] = [];
+    let built = 0;
     for (const f of itests) {
       const text = readFileSync(join(dir, f), "utf8");
-      const built = (text.match(/new (ContainerDeployer|BcDevMcpBackend)\(/g) ?? []).length;
-      const ported = (text.match(/\.\.\.devPortOf\(bcdev\)/g) ?? []).length;
-      if (ported < built) short.push(`${f}: ${built} built, ${ported} given the port`);
+      for (const m of text.matchAll(/new (ContainerDeployer|BcDevMcpBackend)\(/g)) {
+        built += 1;
+        const window = text.slice(m.index ?? 0, (m.index ?? 0) + 500);
+        if (!window.includes("...devPortOf(bcdev)")) short.push(`${f}: ${m[1]} at ${m.index}`);
+      }
     }
     expect(short).toEqual([]);
-    expect(itests.length).toBeGreaterThan(10);
+    expect(built).toBeGreaterThan(20);
+  });
+});
+
+describe("one config, one dev port (R589 review M1)", () => {
+  test("a server port and a bcdev.port that agree pass", () => {
+    expect(validateBcDevConfig({ ...BC2 }).port).toBe(7149);
+    expect(validateBcDevConfig({ ...BASE }).server).toBe("http://Cronus28");
+  });
+
+  test("a server port and a bcdev.port that disagree are refused", () => {
+    // A bc3 config copied from bc2's with `port` edited and `server` not.
+    expect(() => validateBcDevConfig({ ...BC2, port: 7249 })).toThrow(/two dev ports/);
+  });
+});
+
+describe("force-reset-lease resets only the server --server names (R589 review M4)", () => {
+  const bc1Base = "http://192.168.2.157:7048/BC";
+
+  test("--server naming bc2's dev port against a bc1 config is refused", () => {
+    expect(() => recoveryBaseUrl("http://192.168.2.157:7149", "BC", bc1Base, 7049)).toThrow(
+      /not the server the config describes/,
+    );
+  });
+
+  test("--server naming another host is refused", () => {
+    expect(() => recoveryBaseUrl("http://Cronus28", "BC", bc1Base, 7049)).toThrow(
+      /not the server the config describes/,
+    );
+  });
+
+  test("--server naming the config's own host and dev port passes", () => {
+    expect(recoveryBaseUrl("http://192.168.2.157:7049", "BC", bc1Base, 7049)).toBe(bc1Base);
+    expect(recoveryBaseUrl("http://192.168.2.157", "BC", bc1Base, 7049)).toBe(bc1Base);
   });
 });

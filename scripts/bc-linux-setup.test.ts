@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import {
   type LeaseDeps,
+  LeaseLostError,
   NotIgnoredError,
   PUBLISH_PLAN,
   SecretFileError,
@@ -112,6 +113,14 @@ describe("config writer", () => {
     expect(existsSync(path)).toBe(false);
     writeConfig(path, { a: 1 }, () => true);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ a: 1 });
+  });
+
+  test("a re-write onto an existing 644 file leaves it 600 (mode applies on create only)", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "bc-linux-")), "lethal.config.bc1.json");
+    writeFileSync(path, "{}");
+    chmodSync(path, 0o644);
+    writeConfig(path, { a: 1 }, () => true);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   test("the repo's .gitignore ignores the per-server configs and not app.json", () => {
@@ -243,5 +252,33 @@ describe("withLease", () => {
     );
     expect(calls.filter((c) => c === "heartbeat").length).toBeGreaterThan(0);
     expect(calls.at(-1)).toBe("release:tok");
+  });
+
+  test("a failed heartbeat fails the run, and the lease is still released", async () => {
+    const calls: string[] = [];
+    const deps: LeaseDeps = {
+      ...fakeLease(calls),
+      heartbeat: async () => {
+        throw new Error("coord down");
+      },
+    };
+    await expect(
+      withLease("bc1", deps, async () => new Promise((r) => setTimeout(r, 35)), 10),
+    ).rejects.toThrow(LeaseLostError);
+    expect(calls.at(-1)).toBe("release:tok");
+  });
+
+  test("a failed release does not replace the body's own error", async () => {
+    const deps: LeaseDeps = {
+      ...fakeLease([]),
+      release: async () => {
+        throw new Error("release failed");
+      },
+    };
+    await expect(
+      withLease("bc1", deps, async () => {
+        throw new Error("publish failed");
+      }),
+    ).rejects.toThrow("publish failed");
   });
 });

@@ -2603,6 +2603,15 @@ export function validateBcDevConfig(
       `lethal.config.json "bcdev" section is missing required field(s): ${missing.join(", ")}`,
     );
   }
+  // R589: two places can state the dev port, and the readers disagree on which wins (altool and
+  // bc-dev-mcp take `port`, `devPackagesUrl` and the quarantine key take `server`). A config whose
+  // two say different ports would publish to one server and read another, so it is refused.
+  const serverPort = urlPortOf(String(raw.server));
+  if (raw.port !== undefined && serverPort !== undefined && raw.port !== serverPort) {
+    throw new Error(
+      `lethal.config.json "bcdev" section names two dev ports: "port" ${raw.port} and ${serverPort} in "server" (${raw.server}). Make them the same.`,
+    );
+  }
   return raw as BcDevConfigSection;
 }
 
@@ -2785,10 +2794,22 @@ export function devPortOf(c: Pick<BcDevConfigSection, "port">): { readonly port?
  * REFUSED naming both rather than resolved by a precedence rule nobody would remember under
  * pressure. A config with no `baseUrl` keeps the container behaviour untouched.
  */
+/** The port written in a URL, or `undefined` when it states none or does not parse. */
+export function urlPortOf(url: string): number | undefined {
+  try {
+    const p = new URL(url).port;
+    return p !== "" ? Number(p) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function recoveryBaseUrl(
   server: string,
   serverInstance: string,
   configuredBaseUrl: string | undefined,
+  /** R589: the config's dev port (`bcdev.port`, else a port written in `bcdev.server`). */
+  configuredDevPort?: number,
 ): string {
   if (configuredBaseUrl === undefined || configuredBaseUrl === "") {
     return odataBaseUrl(server, serverInstance);
@@ -2797,11 +2818,34 @@ export function recoveryBaseUrl(
   // "a" is a substring of almost any hostname ("example.com"), so a mismatched tier would sail
   // through the check that exists to catch it. Caught by the test below, not by reading this.
   let segments: readonly string[];
+  let baseHost: string;
   try {
-    segments = new URL(configuredBaseUrl).pathname.split("/").filter((s) => s !== "");
+    const base = new URL(configuredBaseUrl);
+    segments = base.pathname.split("/").filter((s) => s !== "");
+    baseHost = base.hostname;
   } catch {
     throw new Error(
       `force-reset-lease: configured bcdev.baseUrl "${configuredBaseUrl}" is not a valid URL`,
+    );
+  }
+  // R589: three BC on Linux servers share one host and instance `BC`, so the instance check alone
+  // let `--server` name bc2 while the configured baseUrl reset bc1. The host must match, and the
+  // dev port `--server` names (if any) must be the config's.
+  let wanted: URL;
+  try {
+    wanted = new URL(server);
+  } catch {
+    throw new Error(`force-reset-lease: --server "${server}" is not a valid URL`);
+  }
+  const wantedPort = wanted.port !== "" ? Number(wanted.port) : undefined;
+  if (
+    wanted.hostname !== baseHost ||
+    (wantedPort !== undefined &&
+      configuredDevPort !== undefined &&
+      wantedPort !== configuredDevPort)
+  ) {
+    throw new Error(
+      `force-reset-lease: --server "${server}" is not the server the config describes (bcdev.baseUrl "${configuredBaseUrl}"${configuredDevPort !== undefined ? `, dev port ${configuredDevPort}` : ""}). This command clears safety state and will not reset a server you did not name — point --server at the config's server, or use that server's own config.`,
     );
   }
   if (!segments.includes(serverInstance)) {
@@ -5828,7 +5872,12 @@ export async function forceResetLeaseFromCli(
     // R51: honours an explicit `bcdev.baseUrl` (the env-tool case — a path-routed HTTPS endpoint on
     // 443, which port-7048 injection can never reach), and refuses one that names a different tier
     // than --instance. See `recoveryBaseUrl`.
-    baseUrl: recoveryBaseUrl(parsed.server, parsed.serverInstance, c.baseUrl),
+    baseUrl: recoveryBaseUrl(
+      parsed.server,
+      parsed.serverInstance,
+      c.baseUrl,
+      c.port ?? urlPortOf(c.server),
+    ),
     ...(c.apiBaseUrl !== undefined ? { apiBaseUrl: c.apiBaseUrl } : {}),
     company: c.company,
     username: c.username,

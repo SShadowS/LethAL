@@ -41,8 +41,25 @@ interface TargetFields {
 export function itestTargetLine(configName: string, bcdev: TargetFields): string {
   const u = new URL(bcdev.server);
   const devPort = bcdev.port ?? (u.port !== "" ? Number(u.port) : undefined);
-  const odata = configuredOdataBaseUrl(bcdev);
-  return `[itest target] config=${configName} server=${u.hostname}:${devPort ?? "7049 (default)"} odata=${odata} api=${bcdev.apiBaseUrl ?? odata}`;
+  const odata = withoutUserinfo(configuredOdataBaseUrl(bcdev));
+  const api = bcdev.apiBaseUrl !== undefined ? withoutUserinfo(bcdev.apiBaseUrl) : odata;
+  return `[itest target] config=${configName} server=${u.hostname}:${devPort ?? `${DEFAULT_DEV_PORT} (default)`} odata=${odata} api=${api}`;
+}
+
+/** BC's dev-endpoint port when nothing states one (bc-dev-mcp's and altool's default). */
+const DEFAULT_DEV_PORT = 7049;
+
+/** A URL with any `user:pass@` removed, so a login written into a URL cannot reach the line. */
+function withoutUserinfo(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.username === "" && u.password === "") return url;
+    u.username = "";
+    u.password = "";
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return "(unparseable URL)";
+  }
 }
 
 /** Prints `itestTargetLine` for a config file, reading only its `bcdev` target fields. */
@@ -156,9 +173,10 @@ function hostAndPort(url: string, what: string): { host: string; port?: number }
 
 /**
  * R589: refuses when the launch file and the selected lethal config name different servers. It
- * compares the host, and the dev port where both state one (`port`, or a port written into
- * `server`). A launch file that names no server is not compared. Reads only `server` and `port`
- * from each side, so nothing else in either file reaches a message.
+ * compares the host and the EFFECTIVE dev port (`port`, else a port written into `server`, else
+ * BC's default 7049), so a port stated on one side only is compared with the default rather than
+ * waved through. A launch file that names no server is not compared. Reads only `server` and
+ * `port` from each side, so nothing else in either file reaches a message.
  */
 export function assertLaunchMatchesConfig(
   launch: object,
@@ -169,14 +187,11 @@ export function assertLaunchMatchesConfig(
   if (typeof l.server !== "string" || l.server === "") return;
   const fromLaunch = hostAndPort(l.server, launchPath);
   const fromConfig = hostAndPort(bcdev.server, "the lethal config");
-  const launchPort = typeof l.port === "number" ? l.port : fromLaunch.port;
-  const configPort = bcdev.port ?? fromConfig.port;
-  const hostDiffers = fromLaunch.host !== fromConfig.host;
-  const portDiffers =
-    launchPort !== undefined && configPort !== undefined && launchPort !== configPort;
-  if (hostDiffers || portDiffers) {
+  const launchPort = (typeof l.port === "number" ? l.port : fromLaunch.port) ?? DEFAULT_DEV_PORT;
+  const configPort = bcdev.port ?? fromConfig.port ?? DEFAULT_DEV_PORT;
+  if (fromLaunch.host !== fromConfig.host || launchPort !== configPort) {
     throw new ItestLaunchPairError(
-      `${launchPath} names ${fromLaunch.host}${launchPort !== undefined ? `:${launchPort}` : ""}, but the selected lethal config names ${fromConfig.host}${configPort !== undefined ? `:${configPort}` : ""}. The pair must describe one server.`,
+      `${launchPath} names ${fromLaunch.host}:${launchPort}, but the selected lethal config names ${fromConfig.host}:${configPort} (an unstated dev port is BC's default ${DEFAULT_DEV_PORT}). The pair must describe one server.`,
     );
   }
 }

@@ -117,6 +117,55 @@ describe("the launch file and the lethal config must name one server (R589)", ()
       assertLaunchMatchesConfig({ server: "http://192.168.2.157", port: 7149 }, bc1, "l.json"),
     ).toThrow(ItestLaunchPairError);
   });
+
+  test("a port stated on one side only is compared with the default 7049, not waved through", () => {
+    // A launch copied from launch.local.json (no port) with only the host changed, against bc2.
+    expect(() =>
+      assertLaunchMatchesConfig(
+        { server: "http://192.168.2.157" },
+        { server: "http://192.168.2.157:7149", port: 7149 },
+        "l.json",
+      ),
+    ).toThrow(ItestLaunchPairError);
+    // The other way: the launch names bc2's port, the config states none (so 7049).
+    expect(() =>
+      assertLaunchMatchesConfig(
+        { server: "http://192.168.2.157", port: 7149 },
+        { server: "http://192.168.2.157" },
+        "l.json",
+      ),
+    ).toThrow(ItestLaunchPairError);
+    // One side stating the default itself matches the other side's silence.
+    expect(() =>
+      assertLaunchMatchesConfig(
+        { server: "http://Cronus28", port: 7049 },
+        { server: "http://Cronus28" },
+        "l",
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe("every BC itest prints its target and guards its launch pair (R589)", () => {
+  const here = import.meta.dir;
+  const itests = readdirSync(here).filter((f) => f.endsWith(".itest.ts"));
+  const text = (f: string) => readFileSync(join(here, f), "utf8");
+
+  test("an itest that takes LETHAL_ITEST_CONFIG calls printItestTarget", () => {
+    const missing = itests.filter(
+      (f) => /itestConfigPath\(/.test(text(f)) && !/printItestTarget\(/.test(text(f)),
+    );
+    expect(missing).toEqual([]);
+    expect(itests.filter((f) => /itestConfigPath\(/.test(text(f))).length).toBeGreaterThan(10);
+  });
+
+  test("an itest that reads a launch file calls assertLaunchMatchesConfig", () => {
+    const missing = itests.filter(
+      (f) => /itestLaunchPath\(/.test(text(f)) && !/assertLaunchMatchesConfig\(/.test(text(f)),
+    );
+    expect(missing).toEqual([]);
+    expect(itests.filter((f) => /itestLaunchPath\(/.test(text(f))).length).toBeGreaterThan(8);
+  });
 });
 
 describe("the target line an itest prints first (R589)", () => {
@@ -172,6 +221,18 @@ describe("the target line an itest prints first (R589)", () => {
     expect(lines[0]).toContain("config=lethal.config.bc1.json server=192.168.2.157:7049");
     expect(lines[0]).not.toContain("SYNTH-USER");
     expect(lines[0]).not.toContain("synth-pass");
+  });
+
+  test("a login written into a URL is stripped from the line", () => {
+    const line = itestTargetLine("lethal.config.bc1.json", {
+      server: "http://192.168.2.157:7049",
+      serverInstance: "BC",
+      baseUrl: "http://SYNTH-USER:synth-pass@192.168.2.157:7048/BC",
+      apiBaseUrl: "http://SYNTH-USER:synth-pass@192.168.2.157:7052/BC",
+    });
+    expect(line).not.toContain("SYNTH-USER");
+    expect(line).not.toContain("synth-pass");
+    expect(line).toContain("odata=http://192.168.2.157:7048/BC api=http://192.168.2.157:7052/BC");
   });
 });
 

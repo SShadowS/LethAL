@@ -27,7 +27,7 @@
  * login, which is why they must be git-ignored.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { compareAppVersions } from "../packages/runner/src/app-version.ts";
@@ -277,6 +277,9 @@ export function writeConfig(
     );
   }
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  // `mode` applies only when the file is CREATED. A re-run (after every server1 reboot) or a file
+  // someone made by hand would keep 644 while holding the login, so set it on every write.
+  chmodSync(path, 0o600);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -289,9 +292,15 @@ export interface LeaseDeps {
   release(server: ServerName, token: string): Promise<void>;
 }
 
+export class LeaseLostError extends Error {}
+
 /**
  * Takes the lease, records its token BEFORE anything else runs (so a crash leaves a token someone
  * can release with), heartbeats while `body` runs, and releases in a `finally`.
+ *
+ * A failed heartbeat fails the run (`LeaseLostError` after the body): the lease may have lapsed and
+ * another lane may hold the server now, so a PASS would claim work done under a lease nobody held.
+ * A failed release never replaces the body's own error.
  */
 export async function withLease<T>(
   server: ServerName,
@@ -301,18 +310,37 @@ export async function withLease<T>(
 ): Promise<T> {
   const token = await deps.take(server);
   let timer: ReturnType<typeof setInterval> | undefined;
+  let heartbeatError: string | undefined;
+  let result:
+    | { readonly ok: true; readonly value: T }
+    | { readonly ok: false; readonly error: unknown };
   try {
     deps.recordToken(server, token);
     timer = setInterval(() => {
       deps.heartbeat(server, token).catch((err) => {
-        console.error(`  [warn] heartbeat for ${server} failed: ${errText(err)}`);
+        heartbeatError ??= errText(err);
+        console.error(`  [FAIL] heartbeat for ${server} failed: ${errText(err)}`);
       });
     }, heartbeatMs);
-    return await body();
-  } finally {
-    if (timer !== undefined) clearInterval(timer);
-    await deps.release(server, token);
+    const value = await body();
+    if (heartbeatError !== undefined) {
+      throw new LeaseLostError(
+        `${server}: a heartbeat failed during the run (${heartbeatError}); the lease may have lapsed, so the run is not trusted`,
+      );
+    }
+    result = { ok: true, value };
+  } catch (error) {
+    result = { ok: false, error };
   }
+  if (timer !== undefined) clearInterval(timer);
+  try {
+    await deps.release(server, token);
+  } catch (err) {
+    if (result.ok) throw err;
+    console.error(`  [FAIL] releasing ${server} failed too: ${errText(err)}`);
+  }
+  if (!result.ok) throw result.error;
+  return result.value;
 }
 
 async function kraken(args: readonly string[]): Promise<string> {
@@ -475,6 +503,11 @@ async function alcCompile(
   }
 }
 
+/** A skip says what it did NOT check: a same-version build with other contents is kept. */
+function skipNote(resident: string, local: string): string {
+  return `the server holds ${resident} (app.json ${local}): same or higher version, contents not compared`;
+}
+
 /** Target first, then each dependent compiled against the target package the SERVER now holds. */
 async function ensureStep(
   c: Conn,
@@ -492,7 +525,7 @@ async function ensureStep(
   const t = manifest(targetDir);
   const tBefore = await residentVersion(c, t.publisher, t.name);
   if (tBefore !== null && compareAppVersions(tBefore, t.version) >= 0) {
-    log.push(`  skipped   ${t.name}: the server holds ${tBefore} (app.json ${t.version})`);
+    log.push(`  skipped   ${t.name}: ${skipNote(tBefore, t.version)}`);
   } else {
     const out = join(build, "target.app");
     await alcCompile(alc, targetDir, symbols, out, step.defines);
@@ -505,7 +538,7 @@ async function ensureStep(
     const s = manifest(depDir);
     const sBefore = await residentVersion(c, s.publisher, s.name);
     if (sBefore !== null && compareAppVersions(sBefore, s.version) >= 0) {
-      log.push(`  skipped   ${s.name}: the server holds ${sBefore} (app.json ${s.version})`);
+      log.push(`  skipped   ${s.name}: ${skipNote(sBefore, s.version)}`);
       continue;
     }
     const cache = join(build, `${dependent}-symbols`);
@@ -636,7 +669,11 @@ async function setupServer(
   return await withLease(server, krakenLease, async () => {
     // (d)
     const c = await ensureApp(conn, control, "LethAL Control");
-    summary.push(`  ${c.outcome.padEnd(9)} LethAL Control ${c.version}`);
+    summary.push(
+      c.outcome === "skipped"
+        ? `  skipped   LethAL Control: ${skipNote(c.version, "1.0.0.22")}`
+        : `  published LethAL Control ${c.version}`,
+    );
     rmSync(symbols, { recursive: true, force: true });
     mkdirSync(symbols, { recursive: true });
     let ok = true;
