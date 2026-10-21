@@ -68,7 +68,7 @@ its baseline or frozen table where the gate has mutants:
 | server | gates proven on it |
 |---|---|
 | `bc1` | `itest:bcdev`, `itest:bcdev-wrapped`, `itest:bcdev-names`, `itest:tables`, `itest:verify` (R-595, `/coord/handoff/R-595/itest-verify-bc1-e2e-PASS.log`), `itest:verify-scale`, `itest:stale-publish`, `itest:testapp`, `itest:lease` |
-| `bc2` | `itest:bcdev`, `itest:chunked`, `itest:hang`, `itest:harden`, `itest:agreement` (R-583's code only) |
+| `bc2` | `itest:chunked`, `itest:hang`, `itest:harden`, `itest:agreement` (R-583's code only) |
 | `bc3` | none under the current fixtures. `itest:bcdev` and `itest:hang` passed there on the pre-runtime-17 fixtures only, and it now carries the R594 CDO oracle. Run `bc-linux-setup.ts --server bc3` and re-prove a gate there before using it for that gate |
 
 `itest:stale-publish` and `itest:lease` have no per-mutant figures; they passed their own checks.

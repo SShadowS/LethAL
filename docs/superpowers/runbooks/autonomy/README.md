@@ -179,7 +179,8 @@ containers assigned to this project can be leased. A missing `allocation.json` t
     `docs/gates/servers.md`):
     - `bc1`: bcdev, bcdev-wrapped, bcdev-names, tables, verify (R-595), verify-scale,
       stale-publish, testapp, lease.
-    - `bc2`: bcdev, chunked, hang, harden, agreement.
+    - `bc2`: chunked, hang, harden, agreement. (bcdev and verify-scale passed on bc2 only on the
+      pre-runtime-17 fixtures, so they are not admitted there yet.)
     - `bc3`: bcdev and hang were proven on the PRE-runtime-17 fixtures only, and it now carries the
       R594 CDO oracle; run `bc-linux-setup.ts --server bc3` and re-prove a gate there before using
       it for that gate.
