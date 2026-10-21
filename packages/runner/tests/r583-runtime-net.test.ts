@@ -223,6 +223,63 @@ describe("R583 §3: a run al-runner did not fully compile is never scored", () =
     }
   });
 
+  // R557 x R583 (review r3): a target compile error beside R557's naming signals is the target's.
+  test("13 (one-shot): exit 6 with no rows AND a target compilationErrors entry is the target-compile refusal", async () => {
+    const { backend } = await oneShotBackend((dir) => ({
+      exitCode: 6,
+      envelope: {
+        tests: [],
+        exitCode: 6,
+        compilationErrors: [{ file: dir, errors: ["<bundled>: EMIT-ZERO (1 AL error(s))"] }],
+      },
+    }));
+    await backend.activate("M0001");
+    const v = await backend.run(ref, OPTS);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("the target bundle did not fully compile");
+    await backend.activate(null);
+    await expect(backend.run(ref, OPTS)).rejects.toBeInstanceOf(AlRunnerTargetCompileError);
+  });
+
+  test("13 (--server): a missing row I2 would stop on, AND target compilationErrors, is the target-compile refusal", async () => {
+    const dir = scratch("lethal-r583-server-i2-");
+    await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    await writeFile(
+      join(dir, "mutant-manifest.json"),
+      JSON.stringify({ artifactId: "a".repeat(32), mutants: [] }),
+      "utf8",
+    );
+    // The wanted row is absent; another test of the same codeunit ran (I2), and exit 0 (I1).
+    const server = fakeAlRunnerServer([{ name: "Codeunit79100.OtherTest", status: "pass" }], {
+      summary: {
+        exitCode: 0,
+        compilationErrors: [{ file: "V2_active", errors: [AL0666("/x/active")] }],
+      },
+    });
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        serverMode: true,
+      },
+      undefined,
+      server.spawn,
+    );
+    backend.useMutantBudgetFloor(180_000, 120_000);
+    try {
+      await backend.activate("M0001");
+      const v = await backend.run(ref, OPTS);
+      expect(v.outcome).toBe("error");
+      expect(v.failureMessage).toContain("the target bundle did not fully compile: V2_active");
+      await backend.activate(null);
+      await expect(backend.run(ref, OPTS)).rejects.toBeInstanceOf(AlRunnerTargetCompileError);
+    } finally {
+      await backend.close();
+    }
+  });
+
   test("9 (one-shot): each stderr marker counts with an empty compilationErrors, and only for its own invocation", async () => {
     const req = {
       sourceDir: "/instr/active",
