@@ -1,6 +1,16 @@
-import { copyFile, link, mkdtemp, readFile, readdir, rename, rm } from "node:fs/promises";
+import {
+  copyFile,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { FLAT_NAMES_FILENAME, type MutantManifest } from "@lethal/schemata";
 import type { DeploymentVerification, PublishOutcome } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
@@ -154,6 +164,12 @@ function packageCacheListOf(cache: string, copy: string | undefined): string {
 /** R552: the file name LethAL's control symbol takes in a package-cache copy. */
 export const CONTROL_SYMBOL_FILE = "lethal-control.app";
 
+/** R552: whether a file is a `lethal-control.app` (by base name, any case), as an older LethAL
+ *  left in a user's cache. The copy leaves it out and the leftover warning names it. */
+export function isControlSymbolName(path: string): boolean {
+  return basename(path).toLowerCase() === CONTROL_SYMBOL_FILE;
+}
+
 /** R552: the two file operations `buildPackageCacheCopy` uses; a seam for the EXDEV/EPERM test. */
 export interface PackageCacheCopyFs {
   readonly link: (from: string, to: string) => Promise<void>;
@@ -162,12 +178,14 @@ export interface PackageCacheCopyFs {
 
 /**
  * R552 (owner ruling 2026-10-21: one path, no two-path form): build a LethAL-owned package cache
- * under `root`, `lethal-pkgcache-<random>`. It holds every `*.app` in `userCache` plus
- * `controlSymbolPath` as `lethal-control.app`. A `lethal-control.app` an older LethAL left in
- * `userCache` is skipped by name, so the copy holds exactly one LethAL Control package. Each file
- * goes in by hard link (one inode, never written), or by copy where linking fails with EXDEV
- * (another volume) or EPERM (no hard links there). `userCache` is only read. A throw removes the
- * partial copy. The caller owns the result and removes it.
+ * under `root`, `lethal-pkgcache-<random>`. It holds every `*.app` in `userCache`, subfolders
+ * included at the same relative path (alc searches them; measured on Linux alc), plus
+ * `controlSymbolPath` as `lethal-control.app` at the top. A leftover `lethal-control.app` (any
+ * case, any depth) is left out; a control package under another file name is not recognised.
+ * Each file goes in by hard link (one inode, never written), or by copy where linking fails with
+ * EXDEV (another volume) or EPERM (no hard links there); any other failure is an
+ * `ArtifactPrepareError` naming the file. `userCache` is only read. A throw removes the partial
+ * copy. The caller owns the result and removes it.
  */
 export async function buildPackageCacheCopy(
   userCache: string,
@@ -177,10 +195,12 @@ export async function buildPackageCacheCopy(
 ): Promise<string> {
   const copy = await mkdtemp(join(root, "lethal-pkgcache-"));
   try {
-    for (const name of await readdir(userCache)) {
-      const lower = name.toLowerCase();
-      if (!lower.endsWith(".app") || lower === CONTROL_SYMBOL_FILE) continue;
-      await linkOrCopy(fs, join(userCache, name), join(copy, name));
+    for (const rel of await readdir(userCache, { recursive: true })) {
+      if (!rel.toLowerCase().endsWith(".app") || isControlSymbolName(rel)) continue;
+      const from = join(userCache, rel);
+      if (!(await stat(from)).isFile()) continue;
+      await mkdir(dirname(join(copy, rel)), { recursive: true });
+      await linkOrCopy(fs, from, join(copy, rel));
     }
     await linkOrCopy(fs, controlSymbolPath, join(copy, CONTROL_SYMBOL_FILE));
   } catch (e) {
@@ -198,10 +218,21 @@ export async function removePackageCacheCopy(copy: string): Promise<void> {
 async function linkOrCopy(fs: PackageCacheCopyFs, from: string, to: string): Promise<void> {
   try {
     await fs.link(from, to);
+    return;
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
-    if (code !== "EXDEV" && code !== "EPERM") throw e;
+    if (code !== "EXDEV" && code !== "EPERM") {
+      throw new ArtifactPrepareError(
+        `could not hard-link ${from} into LethAL's package-cache copy ${to}: ${describeThrown(e)}. Only EXDEV and EPERM fall back to a copy (R552).`,
+      );
+    }
+  }
+  try {
     await fs.copyFile(from, to);
+  } catch (e) {
+    throw new ArtifactPrepareError(
+      `could not copy ${from} into LethAL's package-cache copy ${to}: ${describeThrown(e)} (R552).`,
+    );
   }
 }
 

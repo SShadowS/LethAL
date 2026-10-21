@@ -557,8 +557,52 @@ describe("R552: buildPackageCacheCopy, the one package cache alc gets", () => {
         throw new Error("copyFile must not be reached");
       },
     }).catch((e: unknown) => e);
-    expect((err as NodeJS.ErrnoException).code).toBe("EIO");
+    expect(err).toBeInstanceOf(ArtifactPrepareError);
+    expect(err).not.toBeInstanceOf(AlcCompileError);
+    expect(String((err as Error).message)).toContain("EIO");
+    expect(String((err as Error).message)).toContain(cache);
     expect(await readdir(root)).toEqual([]);
+  });
+
+  test("a copy that fails after EXDEV is an ArtifactPrepareError naming the file (F5)", async () => {
+    const { cache, root, control } = await fixture();
+    const err = await buildPackageCacheCopy(cache, control, root, {
+      link: async () => {
+        throw errno("EXDEV");
+      },
+      copyFile: async () => {
+        throw errno("ENOSPC");
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ArtifactPrepareError);
+    expect(String((err as Error).message)).toContain("ENOSPC");
+    expect(String((err as Error).message)).toContain(cache);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  test("packages in SUBFOLDERS of the cache are copied at the same relative path (F1: alc searches them)", async () => {
+    const { cache, root, control } = await fixture();
+    await mkdir(join(cache, "Microsoft", "deep"), { recursive: true });
+    await Bun.write(join(cache, "Microsoft", "Microsoft_Application_3.0.0.0.app"), "application");
+    await Bun.write(join(cache, "Microsoft", "deep", "Microsoft_Nested_4.0.0.0.app"), "nested");
+    const copy = await buildPackageCacheCopy(cache, control, root);
+    expect(
+      await readFile(join(copy, "Microsoft", "Microsoft_Application_3.0.0.0.app"), "utf8"),
+    ).toBe("application");
+    expect(
+      await readFile(join(copy, "Microsoft", "deep", "Microsoft_Nested_4.0.0.0.app"), "utf8"),
+    ).toBe("nested");
+  });
+
+  test("a leftover lethal-control.app in a SUBFOLDER, any case, is left out too (F1)", async () => {
+    const { cache, root, control } = await fixture();
+    await mkdir(join(cache, "old"), { recursive: true });
+    await Bun.write(join(cache, "old", "Lethal-Control.app"), "nested-leftover");
+    await Bun.write(join(cache, "old", "Microsoft_Old_1.0.0.0.app"), "old");
+    const copy = await buildPackageCacheCopy(cache, control, root);
+    const all = (await readdir(copy, { recursive: true })).map(String);
+    expect(all.filter((n) => /lethal-control/i.test(n))).toEqual(["lethal-control.app"]);
+    expect(await readFile(join(copy, "old", "Microsoft_Old_1.0.0.0.app"), "utf8")).toBe("old");
   });
 });
 

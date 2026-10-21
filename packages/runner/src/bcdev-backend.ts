@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
@@ -14,6 +14,7 @@ import {
   DeploymentError,
   InstalledArtifactError,
   buildPackageCacheCopy,
+  isControlSymbolName,
   removePackageCacheCopy,
 } from "./artifact";
 import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
@@ -70,12 +71,20 @@ import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
 
 /**
  * R552: the warning for a `lethal-control.app` an older LethAL left in the user's package cache, or
- * `undefined` when there is none. The file is never deleted or overwritten: it may be the user's own
- * copy, and a cache shared by two sessions would race.
+ * `undefined` when there is none. Matched by `isControlSymbolName` (any case, any depth), the same
+ * test `buildPackageCacheCopy` leaves it out by. The file is never deleted or overwritten: it may be
+ * the user's own copy, and a cache shared by two sessions would race.
  */
 export function controlLeftoverWarning(packageCachePath: string): string | undefined {
-  const leftover = join(packageCachePath, "lethal-control.app");
-  if (!existsSync(leftover)) return undefined;
+  let names: string[];
+  try {
+    names = readdirSync(packageCachePath, { recursive: true }).map(String);
+  } catch {
+    return undefined; // no cache folder: nothing left over in it
+  }
+  const found = names.filter(isControlSymbolName).map((n) => join(packageCachePath, n));
+  if (found.length === 0) return undefined;
+  const leftover = found.join(", ");
   return `[lethal] ${leftover} is a leftover from an older LethAL, which copied the LethAL Control symbol into your package cache (R552). LethAL now compiles against its own copy of this cache, which leaves this file out, and never writes this cache; the file is unused and safe to delete.`;
 }
 

@@ -19,7 +19,11 @@ import {
 import type { ArtifactIo, CompileInput, CompiledArtifact } from "../src/artifact";
 import type { BoundArtifact, TestMethodRef } from "../src/backend";
 import { hashPackage } from "../src/baseline-snapshot";
-import { PublishFailedError, BcDevMcpBackend as RealBcDevMcpBackend } from "../src/bcdev-backend";
+import {
+  PublishFailedError,
+  BcDevMcpBackend as RealBcDevMcpBackend,
+  controlLeftoverWarning,
+} from "../src/bcdev-backend";
 import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import {
@@ -4004,6 +4008,15 @@ describe("R552: the user's package cache is never written", () => {
       await rmStaged(dir);
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("the leftover warning matches the name case-insensitively, as the skip does (F3)", async () => {
+    const dir = scratch("lethal-r552-warn-case-");
+    const cache = join(dir, "cache");
+    await mkdir(cache, { recursive: true });
+    expect(controlLeftoverWarning(cache)).toBeUndefined();
+    await Bun.write(join(cache, "Lethal-Control.app"), "stale");
+    expect(controlLeftoverWarning(cache)).toContain(join(cache, "Lethal-Control.app"));
   });
 
   /** A spawn that records each alc call's `/packagecachepath:` args and what the copy held. */

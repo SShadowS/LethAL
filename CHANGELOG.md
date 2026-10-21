@@ -792,12 +792,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   has `additionalProperties: false`, so a validator still holding the previous `stream-v1` rejects
   a new stream for the `kind` field alone.
 - **bcdev no longer writes `lethal-control.app` into `packageCachePath`** (R552). alc now gets ONE
-  package-cache path: a LethAL-owned directory (`pkgcache-<random>` under the temp directory), made
-  once per backend, holding a hard link (a copy where linking fails) to every `.app` in the user's
-  cache plus LethAL's own `lethal-control.app`. It is removed when the backend closes. The user's
-  cache is only read. A `lethal-control.app` an older LethAL left there is skipped by name, so the
-  copy holds exactly one LethAL Control package; it gets one warning (safe to delete) and is never
-  touched. A `;` or `,` in that path is refused before alc runs, because alc splits its
+  package-cache path: a LethAL-owned directory (`lethal-pkgcache-<random>` under the temp
+  directory), made once per backend, holding a hard link (a copy where linking fails with EXDEV or
+  EPERM, which inside kraken and for a cache off C: on Windows is the usual case) to every `.app` in
+  the user's cache, subfolders included, plus LethAL's own `lethal-control.app`. It is removed when
+  the backend closes. The user's cache is only read. The leftover `lethal-control.app` an older
+  LethAL left there (any case, any depth) is left out of the copy; it gets one warning (safe to
+  delete) and is never touched. Any other link or copy failure is an `ArtifactPrepareError` naming
+  the file. A `;` or `,` in that path is refused before alc runs, because alc splits its
   package-cache list on both. `scripts/campaign/compile-only.ts` and the `stale-publish` itest do
   the same.
 - **`lethal verify` sees an edit to a test-app codeunit handed out in a Variant or interface**
