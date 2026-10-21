@@ -65,6 +65,7 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "store.ts": {
     'return run.backend !== "al-runner" || run.alRunnerNames;': "v2",
     'if (names !== undefined && run.backend === "al-runner") {': "v2",
+    'if (run.backend === "al-runner" && ctx.renamed !== undefined) {': "v2",
   },
   // R-300b: bcdev's shape rule with arms; v2's measured admission; v3 takes neither (refused).
   "line-map.ts": {
@@ -226,6 +227,9 @@ class V3KindStub implements ExecutionBackend {
   async run(ref: TestMethodRef): Promise<TestVerdict> {
     return { ref, outcome: "pass", durationMs: 1 };
   }
+  async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+    return { version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: "b".repeat(64) };
+  }
 }
 /** The probe only where the stub was given a measured set. */
 function withProbe(b: V3KindStub, set: readonly string[] | undefined): ExecutionBackend {
@@ -281,6 +285,18 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
       expect(store.getRun(1)?.backend).toBe("al-runner-v3");
       // R557's stamp is the v2 mark: a v3 run must not carry it.
       expect(store.getRun(1)?.alRunnerNames).toBe(false);
+      // R586: the build `runMayLend` lends under.
+      expect(store.getRun(1)?.runnerBuild).toBe(`alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)}`);
+    });
+  });
+
+  test("a v3 backend that cannot name its build is refused (its run would lend under none)", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const b = Object.assign(new V3KindStub(undefined), {
+        runnerBuild: async () => ({ version: "", binarySha256: "" }),
+      });
+      await expect(v3Session(root, store, b)).rejects.toThrow(/named no usable build/);
     });
   });
 

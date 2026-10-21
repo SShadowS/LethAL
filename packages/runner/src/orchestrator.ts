@@ -231,7 +231,12 @@ import {
   isRunMutantLineCountMessage,
   testAppRefusal,
 } from "./stale-test-app";
-import { runLendsAlRunnerNames, sameHiddenFiles } from "./store";
+import {
+  type LendingSession,
+  backendBuildRefusal,
+  runLendsAlRunnerNames,
+  sameHiddenFiles,
+} from "./store";
 import type { ResultsStore } from "./store";
 import type { CarryHidden, MutantVerdict, RunRow, RunnerKind, TestAppIdentity } from "./store";
 import { TestAppError } from "./test-app-publish";
@@ -3934,10 +3939,19 @@ function resolveResume(
   /** R492: an env-tool hook will publish the test app under the lease, so the pre-lease read can
    *  hold the OUTGOING one: the test app is compared after the hook (`runSession`), not here. */
   testAppAfterHook = false,
+  /** R586: `runMayLend` step 1's session side; absent lends no v3 run (unit callers). */
+  lendingSession?: LendingSession,
 ):
   | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
   | undefined {
   if (cfg.resume === undefined) return undefined;
+  // R586: step 1 on the resumed row, first among the trust checks below.
+  const assertLends = (row: RunRow, flag: string): void => {
+    const why = backendBuildRefusal(row, lendingSession);
+    if (why !== undefined) {
+      throw new Error(`${flag}: ${why}; none of its verdicts is carried. Drop the resume flag to run from scratch.`);
+    }
+  };
   const sameTestApp = (row: RunRow | null, flag: string): void => {
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash);
     else if (row === null)
@@ -3958,6 +3972,9 @@ function resolveResume(
       // R52: one source of truth for what "resumable" means — a run holding only errors, or nothing
       // at all, has nothing to carry and must not shadow an older run that does.
       carryableVerdicts: [...CARRYABLE_VERDICTS],
+      ...(lendingSession?.runnerBuild !== undefined
+        ? { runnerBuild: lendingSession.runnerBuild }
+        : {}),
     });
     if (found === null) {
       // R325: an unfinished run keyed under another identity scheme has a different fingerprint,
@@ -4003,6 +4020,7 @@ function resolveResume(
     priorRunId = found;
     const foundRow = cfg.store.getRun(found);
     priorRow = foundRow;
+    if (foundRow !== null) assertLends(foundRow, `--resume: run ${found}`);
     // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL) must
     // still never be read as a match.
     sameTestApp(foundRow, "--resume");
@@ -4027,6 +4045,7 @@ function resolveResume(
         `--resume-run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName} — verdicts are not interchangeable across backends (neither local runner, al-runner or al-runner-v3, is authoritative)`,
       );
     }
+    assertLends(row, `--resume-run ${cfg.resume}`);
     // R325: checked BEFORE the fingerprint, so the refusal names the real reason. The fingerprint
     // carries the scheme too and would refuse this run anyway, as "scoped differently".
     if (row.identityScheme !== IDENTITY_SCHEME) {
@@ -4340,6 +4359,9 @@ interface ScoreBatchInput {
      *  read stops the session (`assertNoTestAppDrift`). R496: with its dependency fingerprint,
      *  which a reused snapshot's run must have recorded too. */
     readonly provenTestApp?: TestAppIdentity;
+    /** R586: `runMayLend` step 1's session side; a snapshot from another backend or v3 build is
+     *  not reused. Absent: no v3 snapshot is reused. */
+    readonly lendingSession?: LendingSession;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
   readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
@@ -4928,6 +4950,20 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     // is not reused, and this batch re-runs its baseline under the name al-runner has.
     // (I1): first the snapshot run's R557 mark (`runLendsAlRunnerNames`), then its own errors.
     const snapshotRun = reused !== undefined ? store.getRun(reused.runId) : null;
+    // R586: `runMayLend` step 1 first: `findBaselineSnapshot` selects by hash and coverage mode,
+    // not by backend, and v3 shares coverage mode "al-runner" with v2.
+    const lendWhy =
+      snapshotRun !== null
+        ? backendBuildRefusal(snapshotRun, input.snapshot.lendingSession)
+        : undefined;
+    if (reused !== undefined && lendWhy !== undefined) {
+      emit({
+        type: "warning",
+        code: "snapshot-backend-build-changed",
+        message: `[lethal] run ${reused.runId}'s batch ${reused.batchIndex} baseline snapshot is not reused: ${lendWhy}. Batch ${batchIdx}'s baseline is re-run.`,
+      });
+      reused = undefined;
+    }
     if (reused !== undefined && snapshotRun !== null && !runLendsAlRunnerNames(snapshotRun)) {
       emit({
         type: "warning",
@@ -5709,6 +5745,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R377: the backend is decided once (above, with R392's measured set), and the same value
   // reaches generation below.
   const backendName = buildBackend.kind;
+  // R586 (plan r2 §10): the run row's `runner_build` and `runMayLend` step 1's session side.
+  const lendingSession: LendingSession = {
+    backend: backendName,
+    runnerBuild: await runnerBuildOf(cfg.backend, caps.kind),
+  };
   const buildSymbols = await effectiveBuildSymbols(
     cfg.projectDir,
     cfg.preprocessorSymbols ?? [],
@@ -5781,6 +5822,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     buildSymbols,
     testPageRefusedNames,
     envPublishes !== undefined,
+    lendingSession,
   );
 
   const runId = cfg.store.createRun({
@@ -5789,6 +5831,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // R557 (I1): this session sends al-runner tests under `alRunnerMethodName`; the mark is what
     // lets its verdicts be lent (`runLendsAlRunnerNames`).
     ...(backendName === "al-runner" ? { alRunnerNames: true } : {}),
+    // R586: a v3 run records its build; `runMayLend` lends it only to that build.
+    ...(lendingSession.runnerBuild !== undefined
+      ? { runnerBuild: lendingSession.runnerBuild }
+      : {}),
     coverageMode: caps.coverage,
     // R391: rule 1's "same source" fact, recorded with the row so no mutant row exists without it.
     generationSourceSha256: sourceHashAtGeneration,
@@ -6143,6 +6189,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const plainBuild = firstCallOnly(checkPlainBuild);
   // R325: the history filter runs per batch; its scheme warning is said once per session.
   let historySchemeWarned = false;
+  let historyBackendWarned = false;
   let historySymbolsWarned = false;
   // R354: likewise for its coverage-mode warning.
   let historyCoverageModeWarned = false;
@@ -6689,6 +6736,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         buildSymbols,
         carryHidden.files,
         {
+          // R586: `runMayLend` step 1, first.
+          session: lendingSession,
+          backendBuildRefused: (old) => {
+            if (historyBackendWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyBackendWarned = true;
+            emit({
+              type: "warning",
+              code: "history-backend-build-changed",
+              message: `[lethal] --skip-known-survivors: ${old.why}, so no survivor from it is skipped: every mutant is executed.`,
+            });
+          },
           schemeChanged: (old) => {
             if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
             historySchemeWarned = true;
@@ -7472,6 +7530,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             resumeState !== undefined &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
+          lendingSession,
         },
         select,
         ...(workers > 1 ? { executeCovering } : {}),
@@ -10797,6 +10856,29 @@ async function runMutantsOnBackend(args: {
     // rejecting.
     if (args.safety.isUnsafe) break;
   }
+}
+
+/**
+ * R586: `<--version line> <binary sha256>` of an al-runner-v3 backend (structural, like
+ * `observedBcBuild`), `undefined` on every other backend. A v3 backend that cannot say refuses the
+ * session: its run row would lend under no build.
+ */
+async function runnerBuildOf(
+  backend: ExecutionBackend,
+  kind: BackendCapabilities["kind"],
+): Promise<string | undefined> {
+  if (kind !== "al-runner-v3") return undefined;
+  const b = backend as {
+    runnerBuild?: () => Promise<{ readonly version: string; readonly binarySha256: string }>;
+  };
+  if (typeof b.runnerBuild !== "function") {
+    throw new Error("runSession: this al-runner-v3 backend cannot name its build (runnerBuild); refusing (R586)");
+  }
+  const { version, binarySha256 } = await b.runnerBuild();
+  if (version === "" || !/^[0-9a-f]{64}$/.test(binarySha256)) {
+    throw new Error(`runSession: al-runner-v3 named no usable build ("${version}", "${binarySha256}"); refusing (R586)`);
+  }
+  return `${version} ${binarySha256}`;
 }
 
 async function pathExists(p: string): Promise<boolean> {
