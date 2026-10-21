@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import {
   DEFAULT_ITEST_CONFIG,
+  DEFAULT_ITEST_LAUNCH,
   ItestConfigNameError,
   itestConfigName,
   itestConfigPath,
+  itestLaunchName,
+  itestLaunchPath,
 } from "./config-path";
 
 describe("the default is unchanged", () => {
@@ -28,6 +33,38 @@ describe("selecting the agent config", () => {
     expect(p.replace(/\\/g, "/")).toBe(
       "U:/Git/LethAL/fixtures/sandbox-data/lethal.config.agent.json",
     );
+  });
+});
+
+describe("the launch file follows the selected config (R589)", () => {
+  const dir = "/repo/fixtures/sandbox-app";
+  const posix = (p: string) => p.replace(/\\/g, "/");
+
+  test("unset keeps launch.local.json, as before", () => {
+    expect(itestLaunchName({})).toBe(DEFAULT_ITEST_LAUNCH);
+    expect(itestLaunchName({ LETHAL_ITEST_CONFIG: "lethal.config.local.json" })).toBe(
+      "launch.local.json",
+    );
+    expect(posix(itestLaunchPath(dir, {}, () => false))).toBe(`${dir}/.vscode/launch.local.json`);
+  });
+
+  test("lethal.config.bc1.json pairs with launch.bc1.json", () => {
+    const env = { LETHAL_ITEST_CONFIG: "lethal.config.bc1.json" };
+    expect(itestLaunchName(env)).toBe("launch.bc1.json");
+    expect(posix(itestLaunchPath(dir, env, () => true))).toBe(`${dir}/.vscode/launch.bc1.json`);
+  });
+
+  test("no itest joins a fixed launch filename itself", () => {
+    const here = import.meta.dir;
+    const fixed = readdirSync(here)
+      .filter((f) => f.endsWith(".itest.ts"))
+      .filter((f) => /"\.vscode",\s*"launch\./.test(readFileSync(join(here, f), "utf8")));
+    expect(fixed).toEqual([]);
+  });
+
+  test("an absent paired file falls back to launch.local.json (agent, cronus* configs)", () => {
+    const env = { LETHAL_ITEST_CONFIG: "lethal.config.agent.json" };
+    expect(posix(itestLaunchPath(dir, env, () => false))).toBe(`${dir}/.vscode/launch.local.json`);
   });
 });
 

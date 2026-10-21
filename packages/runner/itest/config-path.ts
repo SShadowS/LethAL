@@ -19,6 +19,7 @@
  * would make an env var enough to aim a publish anywhere.
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 /** Thrown for a malformed `LETHAL_ITEST_CONFIG`. Never falls back to the default silently. */
@@ -50,4 +51,37 @@ export function itestConfigName(env: NodeJS.ProcessEnv = process.env): string {
 /** The config path for a fixture directory, honouring `LETHAL_ITEST_CONFIG`. */
 export function itestConfigPath(projectDir: string, env: NodeJS.ProcessEnv = process.env): string {
   return join(projectDir, itestConfigName(env));
+}
+
+/** The launch file every itest read before R589, and still reads when nothing is selected. */
+export const DEFAULT_ITEST_LAUNCH = "launch.local.json";
+
+/**
+ * R589: the `.vscode` launch file that pairs with the selected config: `lethal.config.<name>.json`
+ * pairs with `launch.<name>.json`, so the default `lethal.config.local.json` keeps
+ * `launch.local.json` and `lethal.config.bc1.json` reads `launch.bc1.json`.
+ */
+export function itestLaunchName(env: NodeJS.ProcessEnv = process.env): string {
+  const name = /^lethal\.config\.([A-Za-z0-9-]+)\.json$/.exec(itestConfigName(env))?.[1];
+  if (name === undefined)
+    throw new ItestConfigNameError("unreachable: itestConfigName validated it");
+  return `launch.${name}.json`;
+}
+
+/**
+ * The launch path for a fixture directory. When the paired file is absent, `launch.local.json` is
+ * used and a line says so. That fallback is deliberate: the itests read only `environmentType` and
+ * `environmentName` from it, and the configs selected before R589 (`agent`, `cronus*`) were always
+ * run with `launch.local.json`, so refusing would break them for a file with no server in it.
+ */
+export function itestLaunchPath(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (path: string) => boolean = existsSync,
+): string {
+  const named = join(projectDir, ".vscode", itestLaunchName(env));
+  const fallback = join(projectDir, ".vscode", DEFAULT_ITEST_LAUNCH);
+  if (named === fallback || exists(named)) return named;
+  console.log(`[itest] ${named} is absent; using ${fallback} (environmentType/Name only)`);
+  return fallback;
 }

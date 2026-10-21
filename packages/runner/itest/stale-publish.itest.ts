@@ -68,7 +68,7 @@ import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { ContainerDeployerIo, SpawnFn } from "../src/publisher";
 import { RunMutantTransport } from "../src/run-mutant-transport";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, itestLaunchPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
@@ -84,7 +84,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 
 // Same ids as bcdev.itest.ts / al-runner.itest.ts — must live inside the fixture's declared

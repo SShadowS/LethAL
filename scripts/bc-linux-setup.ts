@@ -29,7 +29,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { compareAppVersions } from "../packages/runner/src/app-version.ts";
 import { bcFetch } from "../packages/runner/src/bc-fetch.ts";
 import { devPackagesUrl } from "../packages/runner/src/bcdev-backend.ts";
@@ -145,6 +145,36 @@ export interface ConfigPaths {
 
 export function configFileName(server: ServerName): string {
   return `lethal.config.${server}.json`;
+}
+
+/** The `.vscode` launch file the itests pair with `configFileName` (`itestLaunchName`). */
+export function launchFileName(server: ServerName): string {
+  return `launch.${server}.json`;
+}
+
+/**
+ * The launch file for one server. The itests read only `environmentType` and `environmentName`
+ * from it (`LaunchLocalConfig` in each itest); the rest is the AL launch shape, so the same file
+ * also connects VS Code or `altool --project` to this server. An AL launch file carries no
+ * password, and this one carries no login at all.
+ */
+export function buildLaunch(server: ServerName): object {
+  return {
+    version: "0.2.0",
+    configurations: [
+      {
+        name: `LethAL ${server} (R589)`,
+        type: "al",
+        request: "launch",
+        environmentType: "OnPrem",
+        server: HOST,
+        port: SERVERS[server].dev,
+        serverInstance: "BC",
+        tenant: "default",
+        authentication: "UserPassword",
+      },
+    ],
+  };
 }
 
 /**
@@ -520,25 +550,31 @@ async function setupServer(
   const configs = GATE_FIXTURES.map((f) => ({
     fixture: f,
     path: join(REPO, "fixtures", f.configDir, configFileName(server)),
+    launch: join(REPO, "fixtures", f.configDir, ".vscode", launchFileName(server)),
   }));
 
   // (b) Check every path before writing any, so a refusal leaves nothing half-written.
-  for (const { path } of configs) {
-    if (!gitIgnores(path)) throw new NotIgnoredError(`${path} is not ignored by .gitignore`);
+  for (const { path, launch } of configs) {
+    for (const p of [path, launch]) {
+      if (!gitIgnores(p)) throw new NotIgnoredError(`${p} is not ignored by .gitignore`);
+    }
   }
   summary.push(
     `${server} (OData ${SERVERS[server].odata}, dev ${SERVERS[server].dev}, API ${SERVERS[server].api})`,
   );
   if (dryRun) {
-    for (const { path } of configs) summary.push(`  would write ${path}`);
+    for (const { path, launch } of configs) summary.push(`  would write ${path}, ${launch}`);
     summary.push(
       `  would lease ${server}, publish LethAL Control and ${GATE_FIXTURES.length} pairs, run doctor`,
     );
     return true;
   }
-  for (const { path } of configs) {
+  for (const { path, launch } of configs) {
     writeConfig(path, buildConfig(server, login, paths));
+    mkdirSync(dirname(launch), { recursive: true });
+    writeConfig(launch, buildLaunch(server));
     summary.push(`  wrote     ${path}`);
+    summary.push(`  wrote     ${launch}`);
   }
 
   const control = readFileSync(CONTROL_APP);

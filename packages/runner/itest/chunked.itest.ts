@@ -73,7 +73,7 @@ import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src
 import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, itestLaunchPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertReachEvidence, assertReachIdenticalAcrossLegs } from "./reach-evidence";
 
@@ -87,7 +87,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
 

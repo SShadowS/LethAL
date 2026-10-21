@@ -2,13 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import {
   type LeaseDeps,
   NotIgnoredError,
   SecretFileError,
   buildConfig,
+  buildLaunch,
+  configFileName,
   describeLogin,
   gitIgnores,
+  launchFileName,
   parseSecretEnv,
   readSecretFile,
   withLease,
@@ -113,6 +117,31 @@ describe("config writer", () => {
     expect(gitIgnores("fixtures/sandbox-app/lethal.config.bc1.json")).toBe(true);
     expect(gitIgnores("fixtures/sandbox-harden/lethal.config.bc3.json")).toBe(true);
     expect(gitIgnores("fixtures/sandbox-app/app.json")).toBe(false);
+  });
+
+  test("the launch file the script writes is ignored and is the one the itests pair with", () => {
+    expect(gitIgnores("fixtures/sandbox-app/.vscode/launch.bc1.json")).toBe(true);
+    expect(gitIgnores("fixtures/sandbox-data/.vscode/launch.bc3.json")).toBe(true);
+    for (const s of ["bc1", "bc2", "bc3"] as const) {
+      expect(launchFileName(s)).toBe(itestLaunchName({ LETHAL_ITEST_CONFIG: configFileName(s) }));
+    }
+  });
+
+  test("bc2's launch file is OnPrem on bc2's dev port and carries no login", () => {
+    const launch = buildLaunch("bc2");
+    expect(launch).toMatchObject({
+      configurations: [
+        {
+          environmentType: "OnPrem",
+          server: "http://192.168.2.157",
+          port: 7149,
+          tenant: "default",
+        },
+      ],
+    });
+    // `authentication: "UserPassword"` names the scheme; no KEY may hold a login.
+    const keys = JSON.stringify(launch).match(/"[^"]+":/g) ?? [];
+    expect(keys.filter((k) => /password|user/i.test(k))).toEqual([]);
   });
 });
 

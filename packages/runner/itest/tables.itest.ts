@@ -44,7 +44,7 @@ import { type SessionReport, mutantRef } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, itestLaunchPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
@@ -69,7 +69,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 // Committed per-mutant baseline, see baseline-guard.ts. Since R332 a missing file is refused at
 // startup; record it only with LETHAL_ITEST_RECORD_BASELINE=tables.baseline.json (a record run

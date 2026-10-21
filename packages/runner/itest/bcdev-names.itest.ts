@@ -32,7 +32,7 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, itestLaunchPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   NAMES_PROJECT_DIR,
@@ -52,7 +52,7 @@ if (!process.env.LETHAL_ITEST_BCDEV) {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONNECTION_DIR = join(HERE, "..", "..", "..", "fixtures", "sandbox-app");
-const LAUNCH_LOCAL_PATH = join(CONNECTION_DIR, ".vscode", "launch.local.json");
+const LAUNCH_LOCAL_PATH = itestLaunchPath(CONNECTION_DIR);
 const CONFIG_LOCAL_PATH = itestConfigPath(CONNECTION_DIR);
 const BASELINE_PATH = join(HERE, "bcdev.names.baseline.json");
 

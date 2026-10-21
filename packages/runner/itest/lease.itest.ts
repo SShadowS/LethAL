@@ -154,7 +154,7 @@ import type { QuarantineRecord } from "../src/quarantine-store";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { RunMutantTransport } from "../src/run-mutant-transport";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { itestConfigName, itestConfigPath, itestLaunchPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
@@ -169,7 +169,7 @@ if (!process.env.LETHAL_ITEST_BCDEV) {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 
 // Frozen sandbox target app id (fixtures/sandbox-app/app.json "id"), same constant bcdev.itest.ts /

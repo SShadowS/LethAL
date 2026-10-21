@@ -160,7 +160,9 @@ export function killTextDifferences(report: WrappedReport): string[] {
     const m = report.mutants.find((x) => x.mutantCode === code);
     if (m === undefined) out.push(`${code}: missing (its kill text is pinned)`);
     else if (!(m.killingTestFailure ?? "").includes(text))
-      out.push(`${code}: killingTestFailure ${JSON.stringify(m.killingTestFailure)} lacks ${JSON.stringify(text)}`);
+      out.push(
+        `${code}: killingTestFailure ${JSON.stringify(m.killingTestFailure)} lacks ${JSON.stringify(text)}`,
+      );
   }
   return out;
 }
@@ -221,7 +223,16 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
     "ClampTriggerTwin",
     TRIG_TWIN_TESTS,
   ),
-  row("M0045", TRIG_TWIN, 21, "remove-assignment", "", "killed", "ClampTriggerTwin", TRIG_TWIN_TESTS),
+  row(
+    "M0045",
+    TRIG_TWIN,
+    21,
+    "remove-assignment",
+    "",
+    "killed",
+    "ClampTriggerTwin",
+    TRIG_TWIN_TESTS,
+  ),
   row("M0046", TRIG_TWIN, 21, "shift-integer", "", "killed", "ClampTriggerTwin", TRIG_TWIN_TESTS),
   row("M0047", TRIG_TWIN, 35, "empty-block", "Doubled", "killed", "DoubledTriggerTwin"),
   row("M0048", TRIG_TWIN, 36, "return-value", "Doubled", "killed", "DoubledTriggerTwin"),
@@ -272,12 +283,30 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0086", BAND_TWIN, 23, "remove-assignment", "", "killed", "BandYRunTwin", BAND_TWIN_TESTS),
   row("M0087", BAND_TWIN, 42, "empty-block", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
   row("M0088", BAND_TWIN, 43, "remove-assignment", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
-  row("M0089", BAND_TWIN, 43, "flip-boolean-literal", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
+  row(
+    "M0089",
+    BAND_TWIN,
+    43,
+    "flip-boolean-literal",
+    "",
+    "survived",
+    "BandYRunTwin",
+    BAND_TWIN_TESTS,
+  ),
   row("M0090", BAND_TWIN, 52, "empty-block", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
   row("M0091", BAND_TWIN, 53, "remove-assignment", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
   row("M0092", BAND_TWIN, 53, "shift-integer", "", "killed", "BandYRunTwin", BAND_TWIN_TESTS),
   row("M0093", BAND_TWIN, 57, "empty-block", "Band", "killed", "BandYDirectTwin", BAND_TWIN_TESTS),
-  row("M0094", BAND_TWIN, 58, "conditional-boundary", "Band", "killed", "BandYDirectTwin", BAND_TWIN_TESTS),
+  row(
+    "M0094",
+    BAND_TWIN,
+    58,
+    "conditional-boundary",
+    "Band",
+    "killed",
+    "BandYDirectTwin",
+    BAND_TWIN_TESTS,
+  ),
   row("M0095", BAND_TWIN, 59, "return-value", "Band", "killed", "BandYDirectTwin", BAND_TWIN_TESTS),
   row("M0096", BAND_TWIN, 60, "return-value", "Band", "killed", "BandYDirectTwin", BAND_TWIN_TESTS),
   row("M0097", BAND_TWIN, 64, "empty-block", "GetTotal", "killed", "BandYRunTwin"),
