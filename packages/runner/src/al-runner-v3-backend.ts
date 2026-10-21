@@ -820,6 +820,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage);
     if (this.lastActivated === null) return verdict;
     // A covering pass under a mutant: §6.
+    // §6 on RAW lines whatever the session's coverage mode (none, or refused for a multi-object
+    // or wrapped file): every call requested --coverage-json (`v3CallArgv`).
     if (verdict.outcome === "pass") {
       const index = this.sleepIndex;
       if (index === undefined) throw new Error("al-runner-v3: no Sleep index for the deployed batch");

@@ -768,6 +768,51 @@ describe("§6 the Sleep rule through the backend (T12, T31, T32)", () => {
     expect((await runA(b)).failureMessage).toMatch(/unattributed Sleep hit/);
   });
 
+  test("item 6: coverage none (refused for a multi-object file) still requests --coverage-json and still applies §6 on raw lines", async () => {
+    // Two objects in one file, the Sleep in the SECOND: the shape whose coverage the v3 backend
+    // refuses (multi-object), so the session runs coverage "none". The Sleep rule must not care.
+    const MULTI = `codeunit 79001 "First"
+{
+    procedure One(): Integer
+    begin
+        exit(1);
+    end;
+}
+
+codeunit 79000 "Logic"
+{
+    procedure Twice(X: Integer): Integer
+    begin
+        Sleep(600000);
+        exit(X * 2);
+    end;
+}
+`;
+    const l = await layout(MULTI);
+    const cov = (_id: string, active: string, testDir: string) => {
+      const target = join(active, "Logic.Codeunit.al");
+      return {
+        coverage: [{ file: target, statements: [{ line: 13, hits: 1 }, { line: 14, hits: 1 }] }],
+        perTestCoverage: ["A", "B"].map((m) => ({
+          test: `Codeunit${CU}.${m}`,
+          coverage: [
+            { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+            ...(m === "A" ? [{ file: target, statements: [{ line: 13, hits: 1 }] }] : []),
+          ],
+        })),
+      };
+    };
+    const v3 = fakeV3(allPass, { coverage: cov });
+    const b = backendOf(l, v3.spawn, fakeAlc().io, { coverage: "none" });
+    await b.deploy(l.batch);
+    expect(b.sleepIndexSize()).toEqual({ target: 1, test: 0 });
+    await b.activate("M0001");
+    const v = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    expect(v3.calls[0]).toContain("--coverage-json");
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-refused"]);
+    expect(v.failureMessage?.startsWith("[v3-sleep-noop] covered Sleep at")).toBe(true);
+  });
+
   test("T31: a second deploy rebuilds the index (a batch without the Sleep indexes 0)", async () => {
     const { b, l } = await sleeper(sleepCoverage());
     await writeFile(join(l.batch, "Logic.Codeunit.al"), TARGET_AL);
