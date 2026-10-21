@@ -3,7 +3,9 @@
  * alpha.2). Plan `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md` §11-§12; every
  * figure is pre-committed in `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment.md`
  * (dcdd1489), leg X (d) by its r5 delta
- * `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r5-xd.md` (abe76fa6).
+ * `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r5-xd.md` (abe76fa6), leg C's
+ * clock facts and X (d)'s baseline by r6
+ * `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r6.md` (c7c505e6).
  * A differing verdict, killing test, note set, refusal set or Sleep index size is a BLOCK.
  *
  *   LETHAL_ITEST_ALRUNNER_V3=1 bun run itest:alrunner-v3
