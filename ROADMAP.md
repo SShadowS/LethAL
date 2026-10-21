@@ -643,6 +643,7 @@ that ordering is the priority.
 - **R605** · The dev endpoint refuses a publish below the installed-version record after an unpublish, so a minted gate version cannot be replaced by the app.json build on the Linux bc servers · [R605.md](docs/roadmap/R605.md) · open
 - **R606** · al-runner v3 serve: resources are in the warm compile key, so a changed resource file forces a full recompile although resources reach the VM only at run time (upstream #5635's first half; local build and measurement only, no PR) · [R606.md](docs/roadmap/R606.md) · open, filed 2026-10-21
 - **R612** · On al-runner v3, the v2-era serve rule "close the daemon after any non-pass/fail row" makes every suite run cold-start, because #5607's Commit tests are always not run · [R612.md](docs/roadmap/R612.md) · open
+- **R613** · al-runner v3: one routine lowering cannot handle (a [RunOnClient] DotNet call) anywhere in a subscriber's static reach makes the reach "not known", so every test is refused although the routine never runs (upstream #5641; local fix only, no PR) · [R613.md](docs/roadmap/R613.md) · open, filed 2026-10-21
 
 ---
 
