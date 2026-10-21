@@ -49,6 +49,14 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
+import {
+  type V3ContractResult,
+  runV3ContractProbe,
+  v3ContractRefusals,
+  v3ContractSummary,
+  v3DefectsGone,
+} from "./al-runner-v3-contract";
+import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
 import { hashAlTree } from "./baseline-snapshot";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, defaultSpawn } from "./publisher";
@@ -105,8 +113,8 @@ export class AlRunnerV3ResourceSelectorRefusedError extends Error {
 export interface AlRunnerV3Config {
   /** The v3 binary (`alrunner` / `al-runner`). */
   readonly alRunnerPath: string;
-  /** Its pinned sha256 (`.gated`); `status()` refuses another binary. Absent: not checked. */
-  readonly binarySha256?: string;
+  /** §12: the update gate's run of an ungated CANDIDATE build; only the `.gated` check is relaxed. */
+  readonly candidate?: boolean;
   /** LethAL-owned scratch; `active/`, `alc-out/` and `cov/` go under it. */
   readonly instrumentedDir: string;
   readonly testDir: string;
@@ -459,31 +467,50 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         details: `${this.cfg.alRunnerPath} reports "${reported.slice(0, 200)}", which is not an al-runner v3 build (R586)`,
       };
     }
-    if (this.cfg.binarySha256 !== undefined) {
-      const sha = await fileSha256(this.cfg.alRunnerPath).catch(() => "unreadable");
-      if (sha !== this.cfg.binarySha256) {
-        return {
-          ok: false,
-          details: `${this.cfg.alRunnerPath} has sha256 ${sha}, not the pinned ${this.cfg.binarySha256} (R586 §12)`,
-        };
-      }
+    // §12: only a gated build runs (the update gate's candidate excepted).
+    try {
+      const gated = await checkGated(this.cfg.alRunnerPath, reported, {
+        ...(this.cfg.candidate === true ? { candidate: true } : {}),
+      });
+      this.build = { version: reported, binarySha256: gated.binarySha256 };
+    } catch (err) {
+      if (err instanceof AlRunnerV3UngatedBuildError) return { ok: false, details: err.message };
+      throw err;
     }
-    this.versionLine = reported;
-    return { ok: true, details: reported };
+    // §8: the contract probe, once per backend (one session), after the version and pin checks.
+    this.contract ??= await runV3ContractProbe({
+      alRunnerPath: this.cfg.alRunnerPath,
+      expectedVersion: reported,
+      packagesDir: resolve(this.cfg.packagesDir),
+      bcVersion: this.cfg.bcVersion,
+      alcPath: this.cfg.alcPath,
+      ...(this.cfg.cacheDir !== undefined ? { cacheDir: this.cfg.cacheDir } : {}),
+      ...(Bun.which("taskset") !== null ? { tasksetPath: Bun.which("taskset") ?? "" } : {}),
+      spawn: this.spawn,
+    });
+    for (const line of v3DefectsGone(this.contract)) console.warn(line);
+    const refusals = v3ContractRefusals(this.contract);
+    if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
+    return { ok: true, details: `${reported}; ${v3ContractSummary(this.contract)}` };
   }
 
-  private versionLine: string | undefined;
+  /** §8: the measured contract, for the gate's leg C and the report line. */
+  private contract: V3ContractResult | undefined;
 
-  /** Provenance for the run row and the report: `<--version> sha256:<binary>`. After `status()`. */
+  contractResult(): V3ContractResult | undefined {
+    return this.contract;
+  }
+
+  private build: { readonly version: string; readonly binarySha256: string } | undefined;
+
+  /** Provenance for the run row and the report: the `--version` line and the binary's sha256. */
   async runnerBuild(): Promise<{ readonly version: string; readonly binarySha256: string }> {
-    if (this.versionLine === undefined) {
+    if (this.build === undefined) {
       const s = await this.status();
       if (!s.ok) throw new Error(s.details);
     }
-    return {
-      version: this.versionLine ?? "",
-      binarySha256: this.cfg.binarySha256 ?? (await fileSha256(this.cfg.alRunnerPath)),
-    };
+    if (this.build === undefined) throw new Error("al-runner-v3: status() named no build");
+    return this.build;
   }
 
   useBuildSymbols(symbols: readonly string[]): void {
