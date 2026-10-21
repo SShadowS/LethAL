@@ -56,6 +56,7 @@ What the figures mean:
 - Since R220 the al-runner gate is compared with this gate's table mutant by mutant; see
   [alrunner.md](alrunner.md).
 - R589 (2026-10-21): the gate passed on `bc1`, `bc2` and `bc3`, per mutant equal to its baseline,
-  so the BC on Linux servers carry it. It passed on `bc1` again under R-583's runtime-17 code. The
+  on the pre-runtime-17 fixtures. It passed on `bc1` again under R-583's runtime-17 code. The
   baseline was recorded on Cronus28 (DK), so this also shows the W1 company changes no verdict
-  here. Cronus28 is now parked. See [servers.md](servers.md).
+  here. Cronus28 is now parked. Which servers the gate may run on now: the proof table in
+  [servers.md](servers.md) (proof is per server).

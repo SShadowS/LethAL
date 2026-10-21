@@ -1,8 +1,10 @@
 # itest:bcdev-names
 
 `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-names` runs `fixtures/sandbox-names` with
-`fixtures/sandbox-names-tests` on `itest:bcdev`'s connection (the same config files). It runs one
-fenced leg. It is kept out of `itest:bcdev` so that gate's figures cannot move with it.
+`fixtures/sandbox-names-tests` on `itest:bcdev`'s connection: the config in `fixtures/sandbox-app/`
+that `LETHAL_ITEST_CONFIG` names (`CONNECTION_DIR` in the itest; see [servers.md](servers.md)). It
+runs one fenced leg. It is kept out of `itest:bcdev` so that gate's figures cannot move with it. On
+2026-10-21 it passed on `bc1` under R-583's runtime-17 fixtures (R-583).
 
 The suite has 12 tests. Each is the only test that kills its procedure. al-runner renames 10 of
 the test names: they contain a space, `-`, `()`, `.`, `/`, `&`, a leading digit, the unquoted

@@ -1,7 +1,10 @@
 # itest:bcdev-wrapped
 
 `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-wrapped` runs `fixtures/sandbox-wrapped` with
-`fixtures/sandbox-wrapped-tests` on `itest:bcdev`'s connection. The fixture's objects are wrapped
+`fixtures/sandbox-wrapped-tests` on `itest:bcdev`'s connection: the config in
+`fixtures/sandbox-app/` that `LETHAL_ITEST_CONFIG` names (`CONNECTION_DIR` in the itest; see
+[servers.md](servers.md)). On 2026-10-21 it passed on `bc1` under R-583's runtime-17 fixtures,
+fenced and hub legs equal (R-583). The fixture's objects are wrapped
 in `#if` blocks. It runs two legs, one session each: `coverageMode: "fenced"` and
 `coverageMode: "procedure"` (the hub).
 

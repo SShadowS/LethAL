@@ -27,8 +27,11 @@ server it:
 2. writes one gitignored `fixtures/<fixture>/lethal.config.<server>.json` per gate fixture, and the
    paired `fixtures/<fixture>/.vscode/launch.<server>.json`;
 3. takes the coord lease for the server, and releases it at the end;
-4. publishes LethAL Control, then each gate's fixture pair (target before tests), in Dev scope over
-   the dev endpoint, skipping an app the server already holds at the same or a higher version;
+4. publishes its pinned LethAL Control build (`CONTROL_APP`, checked against `CONTROL_SHA256`;
+   after a control-app bump, update both first), then every app a BC gate needs (`PUBLISH_PLAN`:
+   `sandbox-probes`, each gate's fixture pair with the target before its tests, and
+   `sandbox-harden-answers`), in Dev scope over the dev endpoint, skipping an app the server already
+   holds at the same or a higher version;
 5. runs `lethal doctor` on every config it wrote.
 
 The databases are in memory. A container restart or a server1 reboot resets each server to a fresh
@@ -36,8 +39,11 @@ CRONUS with no LethAL app on it. The script is idempotent, so re-running it is t
 
 ## How a gate reads a server
 
-- `LETHAL_ITEST_CONFIG=lethal.config.<x>.json` selects the config file in the gate's own fixture
-  directory. Without it, a gate reads `lethal.config.local.json`, which pointed at Cronus28.
+- `LETHAL_ITEST_CONFIG=lethal.config.<x>.json` selects the config file in one of the four fixture
+  directories the setup script writes (`sandbox-app`, `sandbox-data`, `sandbox-hang`,
+  `sandbox-harden`). Each gate reads one of them; its page says which. `itest:bcdev-names` and
+  `itest:bcdev-wrapped` read `sandbox-app`'s (`CONNECTION_DIR` in each itest). Without the variable,
+  a gate reads `lethal.config.local.json`, which names the parked Cronus28, so always set it.
 - `lethal.config.<x>.json` requires `.vscode/launch.<x>.json` naming the same server. The itest
   refuses otherwise.
 - The itests take the ports from the config: OData from `bcdev.baseUrl`, API from
@@ -48,25 +54,30 @@ CRONUS with no LethAL app on it. The script is idempotent, so re-running it is t
 
 ## Proof that the gates reproduce here
 
-A gate's frozen figures must reproduce per mutant on a server before that server is used for it.
-On 2026-10-21 (R-583, `/coord/handoff/R-583/gates.md`), each of these passed, per mutant equal to
-its baseline or frozen table, on the server named:
+**Proof is per server** (orchestrator ruling, 2026-10-21). A gate runs on a server only after its
+frozen figures have reproduced per mutant on THAT server, under the current fixture builds; any
+difference is a BLOCK. A proof on `bc1` does not admit `bc2`: the servers can differ in app builds
+and in what else is installed (`bc3` carries the Continia stack). Admitting a new (gate, server)
+pair is one ordinary run of the gate there; add the pair to this table when it passes.
 
-| gate | server |
+This table is the record. It lists the pairs exactly as the autonomy runbook
+(`docs/superpowers/runbooks/autonomy/README.md`, "Proof is PER SERVER") does. Each passed on
+2026-10-21 under R-583's runtime-17 fixtures (`/coord/handoff/R-583/gates.md`), per mutant equal to
+its baseline or frozen table where the gate has mutants:
+
+| server | gates proven on it |
 |---|---|
-| `itest:bcdev` | `bc1`, `bc2` and `bc3` (R589), and `bc1` again under R-583's code |
-| `itest:tables` | `bc1` |
-| `itest:chunked` | `bc2` |
-| `itest:hang` | `bc3` (master's code), `bc2` (R-583's code) |
-| `itest:harden` | `bc2` |
-| `itest:agreement` | `bc2` |
-| `itest:bcdev-wrapped` | `bc1` |
-| `itest:bcdev-names` | `bc1` |
-| `itest:verify-scale` | `bc2` (master's code), `bc1` (R-583's code) |
-| `itest:stale-publish`, `itest:testapp`, `itest:lease` | `bc1` |
+| `bc1` | `itest:bcdev`, `itest:bcdev-wrapped`, `itest:bcdev-names`, `itest:tables`, `itest:verify` (R-595, `/coord/handoff/R-595/itest-verify-bc1-e2e-PASS.log`), `itest:verify-scale`, `itest:stale-publish`, `itest:testapp`, `itest:lease` |
+| `bc2` | `itest:bcdev`, `itest:chunked`, `itest:hang`, `itest:harden`, `itest:agreement` (R-583's code only) |
+| `bc3` | none under the current fixtures. `itest:bcdev` and `itest:hang` passed there on the pre-runtime-17 fixtures only, and it now carries the R594 CDO oracle. Run `bc-linux-setup.ts --server bc3` and re-prove a gate there before using it for that gate |
 
-Not proven there: `itest:verify` (blocked by stale gap pins, R595, not a server difference) and
-`itest:envtool` (host-only). `itest:alrunner` needs no BC server.
+`itest:stale-publish` and `itest:lease` have no per-mutant figures; they passed their own checks.
+`itest:envtool` is host-only and not proven on any bc server. `itest:alrunner` and
+`itest:growth` need no BC server.
+
+Earlier proofs not in the table: `itest:verify-scale` also passed on `bc2` under master's code before
+R-583 merged, and `itest:bcdev` passed on all three servers in R589, before the runtime-17
+fixtures.
 
 ## Other servers
 
