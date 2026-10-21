@@ -40,8 +40,9 @@ const REPO = join(import.meta.dir, "..");
 export const SECRET_PATH = "/coord/secrets/bc-linux.env";
 export const EXPECTED_KEYS = ["BC_DEV_USER", "BC_DEV_PASSWORD"] as const;
 // R389: the 1.0.0.23 build (adds `DependentCount`), compiled clean with alc and published to bc3.
-const CONTROL_APP = "/coord/handoff/R-389/control-1.0.0.23/LethAL_LethAL Control_1.0.0.23.app";
-const CONTROL_SHA256 = "c2a959480579943a667cab5fc4abe581e2741307561a05890ce735e54a37d4bd";
+export const CONTROL_APP =
+  "/coord/handoff/R-389/control-1.0.0.23/LethAL_LethAL Control_1.0.0.23.app";
+export const CONTROL_SHA256 = "c2a959480579943a667cab5fc4abe581e2741307561a05890ce735e54a37d4bd";
 const CONTROL_VERSION = "1.0.0.23";
 const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");

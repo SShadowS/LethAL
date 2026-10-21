@@ -37,14 +37,20 @@ server it:
 The databases are in memory. A container restart or a server1 reboot resets each server to a fresh
 CRONUS with no LethAL app on it. The script is idempotent, so re-running it is the fix.
 
-The setup compares versions, not contents (R599). To replace a stale same-version build, use
-`bun scripts/bc-republish.ts republish --server bcN --lane <your lane> [--mint <target>]... <fixture>...`:
-it compiles first, then uninstalls and unpublishes (dependents first, adding any fixture that
-depends on a named app), publishes (targets first) and reads back each app's version and sha256.
-A target that a gate left at a minted version can only go back at a newer minted version (`--mint`,
-R605). `bc-republish.ts alpackages --server bcN <tests fixture>...` fills a tests fixture's
-gitignored `.alpackages` from that server, which `itest:testapp`, `:verify`, `:verify-scale` and
-`:agreement` need.
+The setup compares versions, not contents (R599). `scripts/bc-republish.ts` fixes that, and every
+one of its modes works only under a coord lease in your own lane (`--lane <lane> --token-dir <dir>`,
+both required):
+- `republish --server bcN [--mint <target>]... <fixture>...` replaces a stale build. It compiles
+  first, then REFUSES before removing anything if the server holds a planned app above the version
+  it would publish (R605: BC refuses the lower publish after an unpublish, which would leave the
+  app off the server). Otherwise it uninstalls and unpublishes (dependents first, adding any fixture
+  that depends on a named app), publishes (targets first) and reads back each app's version and
+  sha256, stopping at the first failure and naming every app left off. A target that a gate left at
+  a minted version can only go back at a newer minted version (`--mint`).
+- `control --server bcN` moves LethAL Control up to the pinned build (`CONTROL_APP`,
+  `CONTROL_SHA256`) as an upgrade over the dev endpoint, never removing it, and reads it back.
+- `alpackages --server bcN <tests fixture>...` fills a tests fixture's gitignored `.alpackages`
+  from that server, which `itest:testapp`, `:verify`, `:verify-scale` and `:agreement` need.
 
 ## How a gate reads a server
 
@@ -70,12 +76,20 @@ and in what else is installed (`bc3` carries the Continia stack). Admitting a ne
 pair is one ordinary run of the gate there; add the pair to this table when it passes.
 
 This table is the record. It lists the pairs exactly as the autonomy runbook
-(`docs/superpowers/runbooks/autonomy/README.md`, "Proof is PER SERVER") does. **Every one of the 13
-BC gates is proven on every one of the three servers.** Each pair below PASSED on 2026-10-21 under
-the runtime-17 fixtures, per mutant equal to its baseline or frozen table where the gate has mutants,
-with no baseline re-recorded. The control column is the LethAL Control version the server held
-during that proof (read by `lethal doctor`'s `control-version` check). It matters: 1.0.0.22 and
-1.0.0.23 take different paths in some gates, so a proof holds for the version it ran under.
+(`docs/superpowers/runbooks/autonomy/README.md`, "Proof is PER SERVER") does. Each pair below
+PASSED on 2026-10-21 under the runtime-17 fixtures, per mutant equal to its baseline or frozen table
+where the gate has mutants, with no baseline re-recorded. The control column is the LethAL Control
+version the server held during that proof (read by `lethal doctor`'s `control-version` check). It
+matters: 1.0.0.22 and 1.0.0.23 take different paths in some gates, so **a proof holds only for the
+control version it ran under**. Read that way, as of 2026-10-21:
+
+- **`bc3`** (holds 1.0.0.23, the pinned build): all 13 BC gates are proven under its current control.
+- **`bc1`** (now holds 1.0.0.23): only `itest:chunked`, `itest:hang`, `itest:harden` and
+  `itest:agreement` are proven under its current control. Its other 9 rows are R-583 proofs under
+  1.0.0.22 (`itest:verify`'s control was not recorded), and each needs a re-proof on the build app.json pins.
+- **`bc2`** (holds 1.0.0.22, below the pinned 1.0.0.23 in `extensions/lethal-control/app.json`): all
+  13 are proven, but only under 1.0.0.22. Upgrading bc2 to the pinned build (for example by
+  `bc-linux-setup.ts --server bc2`) voids all 13, and each then needs a re-proof.
 
 | server | gate | LethAL Control | proof (log) |
 |---|---|---|---|
@@ -85,7 +99,7 @@ during that proof (read by `lethal doctor`'s `control-version` check). It matter
 | `bc1` | `itest:hang` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-hang.log` |
 | `bc1` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-harden.log` |
 | `bc1` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-agreement.log` |
-| `bc2` | `itest:chunked`, `itest:hang`, `itest:harden`, `itest:agreement` | 1.0.0.22 | R-583 phase 2, `/coord/handoff/R-583/gates/p2-<gate>-bc2.log` |
+| `bc2` | `itest:chunked`, `itest:hang`, `itest:harden`, `itest:agreement` | 1.0.0.22 | R-583 phase 2, `/coord/handoff/R-583/gates/p2-<gate>-bc2.log`. For `itest:agreement`, R-583's earlier run of master's code there was NOT REPRODUCED (an ordering deviation, `p2-master-agreement-bc2.log`); the orchestrator accepted the R-583-code PASS in its place (`/coord/handoff/R-583/gates.md`) |
 | `bc2` | `itest:bcdev` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-bcdev.log` |
 | `bc2` | `itest:bcdev-wrapped` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-bcdev-wrapped.log` |
 | `bc2` | `itest:bcdev-names` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-bcdev-names.log` |
@@ -113,15 +127,18 @@ during that proof (read by `lethal doctor`'s `control-version` check). It matter
 `itest:envtool` is host-only and not proven on any bc server. `itest:alrunner` and
 `itest:growth` need no BC server.
 
-**bc3's fixture apps (R599, R605).** Before its R-604 proofs, bc3's stale `Sandbox App`, `Sandbox
-Hang`, `Sandbox Names` and `Sandbox Names Tests` were replaced with the current builds by
-`scripts/bc-republish.ts` (uninstall, the bound `Microsoft.NAV.unpublish` action, publish, then read
-back the version and sha256). `Sandbox Tests` and `Sandbox Hang Tests` had to come off and go back
-with their targets. BC refused the app.json build of a target that a gate had left at a minted
-version (R605), so the three targets went back at versions minted by `reserveAppVersion`; the test
-apps are at their app.json versions. Logs: `/coord/handoff/R-604/republish-bc3.log` (the refusal)
-and `republish-bc3-restore.log`. No bc3 result differed from bc1's or bc2's, so nothing there is a
-Continia-stack difference.
+**bc3's fixture apps (R599, R605).** R-604's pre-commitment predicted that bc3's four stale apps
+(`Sandbox App`, `Sandbox Hang`, `Sandbox Names`, `Sandbox Names Tests`) would end up resident at
+their app.json versions after uninstall, the bound `Microsoft.NAV.unpublish` action, and a publish.
+**That prediction FAILED.** The removal worked (`Sandbox Tests` and `Sandbox Hang Tests` had to come
+off too, as dependents), but the dev endpoint then refused `Sandbox App` 1.0.0.2 with HTTP 422,
+because a gate had left it at the minted 1.0.20747.27757 (R605; `/coord/handoff/R-604/republish-bc3.log`).
+R-604 stopped on bc3 and reported it. The restore that followed was NOT the plan: it was done under
+the orchestrator's ruling (a) of 2026-10-21 (`/coord/handoff/R-604/rulings.md`). Under that ruling,
+the three targets went back at versions minted by `reserveAppVersion` (`--mint`), the three test
+apps at their app.json versions, each read back by version and sha256 (`republish-bc3-restore.log`).
+`itest:hang` was re-proven first, and the rest followed only after it passed. No bc3 result differed
+from bc1's or bc2's, so nothing there is a Continia-stack difference.
 
 Earlier proofs not in the table: `itest:verify-scale` also passed on `bc2` under master's code before
 R-583 merged, and `itest:bcdev` passed on all three servers in R589, before the runtime-17
