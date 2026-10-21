@@ -395,7 +395,16 @@ export function resolveLane(
   cliLane: string | undefined,
   env: Record<string, string | undefined>,
 ): string {
-  if (cliLane !== undefined && cliLane !== "") return cliLane;
+  if (cliLane !== undefined && cliLane !== "") {
+    // The likeliest slip is the agent name (`lane-preproc`): kraken would lease under that holder,
+    // which is no lane, so the holder shown to other lanes would be wrong again.
+    if (cliLane.startsWith("lane-")) {
+      throw new LaneUnknownError(
+        `--lane ${JSON.stringify(cliLane)} is an agent name, not a lane; pass --lane ${JSON.stringify(cliLane.slice("lane-".length))}`,
+      );
+    }
+    return cliLane;
+  }
   const agent = env.KRAKEN_AGENT;
   if (agent === "orchestrator") return "orchestrator";
   if (agent?.startsWith("lane-") && agent.length > "lane-".length)

@@ -323,6 +323,14 @@ describe("R598: the coord lease is taken in the caller's lane, never a fixed one
     };
   }
 
+  test("--lane with an agent name (lane-<x>) is refused and names the lane to pass", () => {
+    expect(() => resolveLane("lane-preproc", { KRAKEN_AGENT: "lane-preproc" })).toThrow(
+      LaneUnknownError,
+    );
+    expect(() => resolveLane("lane-preproc", {})).toThrow(/pass --lane "preproc"/);
+    expect(resolveLane("preproc", {})).toBe("preproc");
+  });
+
   test("no --lane and no kraken identity: refused by name, before any lease call", () => {
     expect(() => resolveLane(undefined, {})).toThrow(LaneUnknownError);
     expect(() => resolveLane(undefined, {})).toThrow(/--lane/);
