@@ -12,6 +12,8 @@ export function fakeAlRunnerServer(
     perTestCoverage?: readonly unknown[];
     /** R557: the summary's `exitCode`, 0 unless set. */
     exitCode?: number;
+    /** Extra summary fields, merged last (R583: `exitCode`, `compilationErrors`). */
+    summary?: Record<string, unknown>;
   } = {},
 ): { spawn: ServerSpawnFn; runs: () => number } {
   let runs = 0;
@@ -41,6 +43,7 @@ export function fakeAlRunnerServer(
               ...(opts.perTestCoverage !== undefined
                 ? { perTestCoverage: opts.perTestCoverage }
                 : {}),
+              ...opts.summary,
             }),
           );
         }

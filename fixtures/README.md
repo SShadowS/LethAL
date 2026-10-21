@@ -57,7 +57,7 @@ first live bcdev compile.
 
 Since Layer 5C-A the bcdev backend no longer drives per-mutant tests through the hub. Instead a
 separate BC extension, **`LethAL Control`** (`extensions/lethal-control/`, app id
-`5e7a1c00-1111-4c00-8c00-1e7a1c000701`, runtime 16, ids 91000–91099), owns a single OData action
+`5e7a1c00-1111-4c00-8c00-1e7a1c000701`, runtime 17 (so BC 28+), ids 91000–91099), owns a single OData action
 `LethALControl_RunMutant` that, in one server-side call, **activates a mutant → runs exactly one
 named test method under Codeunit isolation → clears the active mutant** (always, on every terminal
 path, so the container is left unmutated after each call). The instrumented target's
