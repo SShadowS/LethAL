@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import {
+  GATE_FIXTURES,
   type LeaseDeps,
   LeaseLostError,
   NotIgnoredError,
@@ -137,7 +138,7 @@ describe("config writer", () => {
   };
 
   test("bc2's config names bc2's three ports and the W1 company", () => {
-    expect(buildConfig("bc2", login, paths)).toEqual({
+    expect(buildConfig("bc2", login, paths, "sandbox-app")).toEqual({
       bcdev: {
         mcpCommand: paths.mcpCommand,
         server: "http://192.168.2.157:7149",
@@ -154,6 +155,24 @@ describe("config writer", () => {
         env: { BC_DEV_USER: "BCRUNNER", BC_DEV_PASSWORD: SECRET, BC_DEV_API_PORT: "7152" },
       },
     });
+  });
+
+  // R596: itest:agreement refuses unless the harden config's selectorIds equal its SELECTOR_IDS.
+  test("sandbox-harden's config carries itest:agreement's selectorIds; no other fixture's does", () => {
+    const itest = readFileSync(
+      join(import.meta.dir, "../packages/runner/itest/verify-agreement.itest.ts"),
+      "utf8",
+    );
+    const m = /const SELECTOR_IDS = \{ selectorId: (\d+), controlId: (\d+), tableId: (\d+) \}/.exec(
+      itest,
+    );
+    if (m === null) throw new Error("verify-agreement.itest.ts: SELECTOR_IDS line not found");
+    const wanted = { selectorId: Number(m[1]), controlId: Number(m[2]), tableId: Number(m[3]) };
+    for (const f of GATE_FIXTURES) {
+      const cfg = buildConfig("bc1", login, paths, f.configDir) as { selectorIds?: unknown };
+      if (f.configDir === "sandbox-harden") expect(cfg.selectorIds).toEqual(wanted);
+      else expect(cfg.selectorIds).toBeUndefined();
+    }
   });
 
   test("a path git does not ignore is refused and nothing is written", () => {

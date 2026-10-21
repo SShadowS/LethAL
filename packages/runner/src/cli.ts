@@ -31,6 +31,8 @@ import {
   AlRunnerBackend,
   type AlRunnerConfig,
   type AlRunnerProvisionResult,
+  assertResourceSelectorRuntime,
+  runtimeBelow14,
 } from "./al-runner-backend";
 import { readAlRunnerCache } from "./al-runner-cache";
 import type { AlRunnerCacheReport } from "./al-runner-cache";
@@ -2277,13 +2279,19 @@ export function alRunnerAdvisory(
   /** The files the coverage guard named when it turned coverage off (set or on by default). The
    *  line then says why it is off instead of advising a key. */
   coverageTurnedOffFor: readonly string[] = [],
+  /** R583: the target `app.json`'s `runtime`. Below 14.0 the faster selector is not available. */
+  runtime?: unknown,
 ): string | undefined {
   const t = effectiveAlRunnerTransport(c);
   const notes: string[] = [];
   if (!t.serverMode) {
     notes.push('serverMode is false (one process per test; "alRunner.serverMode": true is faster)');
   }
-  if (t.selectorMode === "static") {
+  if (t.selectorMode === "static" && runtimeBelow14(runtime)) {
+    notes.push(
+      `selectorMode is "static" (a recompile per mutant); the faster "resource" selector needs app.json runtime 14.0 or above and this app declares ${JSON.stringify(runtime)}: raise its runtime to 17.0 to use it`,
+    );
+  } else if (t.selectorMode === "static") {
     notes.push(
       'selectorMode is "static" (a recompile per mutant; "alRunner.selectorMode": "resource" is faster)',
     );
@@ -2469,9 +2477,44 @@ export async function prepareAlRunnerSession(
     warn,
     opts,
   );
-  const advisory = alRunnerAdvisory(config.alRunner ?? {}, named);
+  const advisory = alRunnerAdvisory(
+    config.alRunner ?? {},
+    named,
+    (await targetAppJson(projectDir, opts.snapshot))?.runtime,
+  );
   if (advisory !== undefined) warn(advisory);
   return { config, admitMultiObjectFiles };
+}
+
+/** The target's `app.json` from the session snapshot (R205), else from disk; `undefined` when absent. */
+async function targetAppJson(
+  projectDir: string,
+  snapshot: ReadonlyMap<string, Buffer> | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  let raw = snapshot?.get("app.json")?.toString("utf8");
+  if (raw === undefined && snapshot === undefined) {
+    raw = await readFile(join(projectDir, "app.json"), "utf8").catch(() => undefined);
+  }
+  if (raw === undefined) return undefined;
+  return JSON.parse(raw.replace(/^﻿/, "")) as Record<string, unknown>;
+}
+
+/**
+ * R583: refuses an al-runner run whose effective selector is `resource` on a target below runtime
+ * 14.0, BEFORE anything is instrumented. `deploy()` checks again on the manifest al-runner compiles.
+ * Called for `run` (campaign stages run through it) and `run --dry-run`. `verify` is bcdev only.
+ */
+export async function refuseResourceSelectorRuntime(
+  config: LethalConfigFile,
+  projectDir: string,
+  snapshot: ReadonlyMap<string, Buffer>,
+): Promise<void> {
+  const appJson = await targetAppJson(projectDir, snapshot);
+  if (appJson === undefined) return; // buildBackend refuses a missing app.json by its own message
+  assertResourceSelectorRuntime(
+    appJson,
+    effectiveAlRunnerTransport(config.alRunner ?? {}).selectorMode,
+  );
 }
 
 export interface LethalConfigFile {
@@ -4024,6 +4067,10 @@ export async function runFromCli(
   // lines, the al-runner coverage guard and the session's build all use this snapshot, so an edit
   // landing later is never built; the session's last-batch re-read warns about it.
   const source = await readTargetSource(parsed.projectDir);
+  // R583: before any al-runner probe, instrumentation or build.
+  if (parsed.backendKind === "al-runner") {
+    await refuseResourceSelectorRuntime(configFile, parsed.projectDir, source);
+  }
   // Issue #19: before anything is provisioned, so a bad ref fails in seconds.
   const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn, source);
   // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
@@ -5945,6 +5992,51 @@ const NATIVE_CHECK_SNIPPET = `codeunit 50100 "Native Check"
 }
 `;
 
+/** `lethal run --dry-run`: list what would be mutated, executing nothing. Out of `main` (R583) so
+ *  its refusal is testable. */
+export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
+  // R221: the config's exclusions count here too. A `--dry-run` that answered for a wider scope
+  // than the real run is the failure `printDryRun`'s doc names, and forgetting the config is the
+  // easiest way to produce it -- the caller passed no flag, so nothing on the command line hints
+  // that a scope was in force.
+  const dryRunConfig = await loadDryRunConfig(parsed.configPath, parsed.configExplicit === true);
+  if (dryRunConfig === undefined) {
+    console.log(`no config at ${parsed.configPath}: planning from source only, no server lookups`);
+  }
+  const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
+  // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
+  const dryRunSource = await readTargetSource(parsed.projectDir);
+  // R583: a dry run refuses what the real run would refuse.
+  if (parsed.backendKind === "al-runner") {
+    await refuseResourceSelectorRuntime(dryRunConfig ?? {}, parsed.projectDir, dryRunSource);
+  }
+  const dryRunLines = await resolveLineRanges(parsed, defaultSpawn, dryRunSource);
+  await printDryRun(parsed.projectDir, parsed.only, {
+    dbPath: parsed.dbPath,
+    configPath: parsed.configPath,
+    source: dryRunSource,
+    ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
+    ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+    ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
+    ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
+    ...(dryRunConfig?.preprocessorSymbols !== undefined
+      ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
+      : {}),
+    ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
+    ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
+      ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
+      : {}),
+    // R565: the folders a real run searches, less al-runner's provisioned platform apps.
+    dependencyPackageDirs:
+      parsed.backendKind === "al-runner"
+        ? dryRunConfig?.alRunner?.packagesDir !== undefined
+          ? [dryRunConfig.alRunner.packagesDir]
+          : []
+        : [resolve(packageCachePathDefault(dryRunConfig?.bcdev, parsed.projectDir))],
+  });
+  return 0;
+}
+
 async function main(): Promise<number> {
   const parsed = parseCliConfig(process.argv.slice(2));
   if (parsed.mode === "help") {
@@ -5966,44 +6058,7 @@ async function main(): Promise<number> {
     return 0;
   }
   if (parsed.mode === "dry-run") {
-    // R221: the config's exclusions count here too. A `--dry-run` that answered for a wider scope
-    // than the real run is the failure `printDryRun`'s doc names, and forgetting the config is the
-    // easiest way to produce it -- the caller passed no flag, so nothing on the command line hints
-    // that a scope was in force.
-    const dryRunConfig = await loadDryRunConfig(parsed.configPath, parsed.configExplicit === true);
-    if (dryRunConfig === undefined) {
-      console.log(
-        `no config at ${parsed.configPath}: planning from source only, no server lookups`,
-      );
-    }
-    const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
-    // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
-    const dryRunSource = await readTargetSource(parsed.projectDir);
-    const dryRunLines = await resolveLineRanges(parsed, defaultSpawn, dryRunSource);
-    await printDryRun(parsed.projectDir, parsed.only, {
-      dbPath: parsed.dbPath,
-      configPath: parsed.configPath,
-      source: dryRunSource,
-      ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
-      ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
-      ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
-      ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
-      ...(dryRunConfig?.preprocessorSymbols !== undefined
-        ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
-        : {}),
-      ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
-      ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
-        ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
-        : {}),
-      // R565: the folders a real run searches, less al-runner's provisioned platform apps.
-      dependencyPackageDirs:
-        parsed.backendKind === "al-runner"
-          ? dryRunConfig?.alRunner?.packagesDir !== undefined
-            ? [dryRunConfig.alRunner.packagesDir]
-            : []
-          : [resolve(packageCachePathDefault(dryRunConfig?.bcdev, parsed.projectDir))],
-    });
-    return 0;
+    return await dryRunFromCli(parsed);
   }
   if (parsed.mode === "clear-quarantine") {
     return await clearQuarantineFromCli(parsed);
