@@ -3,10 +3,11 @@
  * F6 and r4's I-3): the al-runner v3 update gate. Separate from `al-runner-update.sh` (the frozen
  * .NET al-runner). Daily, or by hand:
  *
- *   bun scripts/al-runner-v3-update.ts [--regate <lethal commit>] [--dry-run]
+ *   bun scripts/al-runner-v3-update.ts [--regate <lethal commit>]
+ *   bun scripts/al-runner-v3-update.ts --edge        (the daily edge-by-download path, `edgeOnce`)
  *
  * 1. Candidates: `v3.0.0-alpha.N` releases of aldevtools/BusinessCentral.AL.Runner with N above the
- *    gated build's. Never `edge`.
+ *    gated build's. `edge` only through `--edge`, never as an alpha candidate.
  * 2. The linux-x64 tarball and SHA256SUMS go into a NEW empty folder; a checksum mismatch is
  *    `infra-fail` and the tarball is NEVER extracted. Extraction goes into another new folder.
  * 3. The gate runs in a detached worktree at `.gated`'s `lethalCommit` (never a moving master), with
@@ -272,6 +273,53 @@ export async function updateOnce(
   return out;
 }
 
+/**
+ * The daily EDGE path (owner request, via the orchestrator): upstream's `edge` release by download.
+ * - Skipped for the day, with the reason logged, when 2 or more heavy jobs run container-wide or
+ *   `free -g` shows under 10 GB available.
+ * - A NO-OP when edge's commit equals the one last seen (`<root>/edge.last-seen`).
+ * - Otherwise the candidate goes through `gateOne`: the checksum is checked before anything is
+ *   extracted, the receipt is matched by nonce and sha256, the gate runs at `.gated`'s commit, and
+ *   only a `pass` moves `current`. `held` is kept, never blacklisted.
+ * The commit is recorded as seen once the gate gave an answer other than `infra-fail`, so an
+ * infrastructure failure is retried the next day.
+ */
+export interface EdgeDeps {
+  /** Edge's commit (short or full sha), from `gh release view edge`. */
+  edgeCommit(): Promise<string>;
+  /** Heavy jobs running container-wide (bun itests, `cli.ts run`, corpus jobs, verify). */
+  heavyJobs(): Promise<number>;
+  /** `free -g`'s available column. */
+  freeGb(): Promise<number>;
+}
+
+export type EdgeResult = "skipped" | "no-op" | Outcome;
+
+export async function edgeOnce(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult> {
+  const heavy = await deps.heavyJobs();
+  if (heavy >= 2) {
+    await deps.log(`${deps.now()} edge: skipped for the day: ${heavy} heavy jobs are running (limit: 1 other)`);
+    return "skipped";
+  }
+  const free = await deps.freeGb();
+  if (free < 10) {
+    await deps.log(`${deps.now()} edge: skipped for the day: ${free} GB available (needs 10)`);
+    return "skipped";
+  }
+  const commit = (await deps.edgeCommit()).trim();
+  if (!/^[0-9a-f]{7,40}$/.test(commit)) throw new Error(`edge's commit "${commit}" is not a sha`);
+  const seenFile = join(deps.root, "edge.last-seen");
+  const seen = existsSync(seenFile) ? (await readFile(seenFile, "utf8")).trim() : "";
+  if (seen === commit) {
+    await deps.log(`${deps.now()} edge: no-op: commit ${commit} was already gated`);
+    return "no-op";
+  }
+  const current = await readCurrentGated(deps.root);
+  const outcome = await gateOne(deps, `edge-${commit}`, current);
+  if (outcome !== "infra-fail") await writeFile(seenFile, `${commit}\n`);
+  return outcome;
+}
+
 /** Real side effects. */
 export function realDeps(root = ROOT): UpdateDeps {
   const run = async (argv: string[], env: Record<string, string> = {}, cwd?: string) => {
@@ -314,7 +362,7 @@ export function realDeps(root = ROOT): UpdateDeps {
         "gh",
         "release",
         "download",
-        tag,
+        tag.startsWith("edge-") ? "edge" : tag,
         "--repo",
         REPO,
         "--dir",
@@ -376,7 +424,55 @@ export function realDeps(root = ROOT): UpdateDeps {
   };
 }
 
-if (import.meta.main) {
+/** The edge path's real side effects, with the per-day log. */
+export function realEdgeDeps(root = ROOT): UpdateDeps & EdgeDeps {
+  const base = realDeps(root);
+  const day = new Date().toISOString().slice(0, 10);
+  const log = `/coord/handoff/al-runner-v3-update/${day}.log`;
+  return {
+    ...base,
+    log: async (line) => {
+      console.log(line);
+      await mkdir("/coord/handoff/al-runner-v3-update", { recursive: true }).catch(() => {});
+      await writeFile(log, `${line}\n`, { flag: "a" }).catch(() => {});
+    },
+    edgeCommit: async () => {
+      const p = Bun.spawn(["gh", "release", "view", "edge", "--repo", REPO, "--json", "targetCommitish,name,body"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = await new Response(p.stdout).text();
+      if ((await p.exited) !== 0) throw new Error("gh release view edge failed");
+      const j = JSON.parse(out) as { targetCommitish?: string; name?: string; body?: string };
+      const sha = [j.targetCommitish, j.name, j.body]
+        .map((s) => /\b[0-9a-f]{7,40}\b/.exec(s ?? "")?.[0])
+        .find((s) => s !== undefined);
+      if (sha === undefined) throw new Error("edge names no commit");
+      return sha;
+    },
+    heavyJobs: async () => {
+      let n = 0;
+      for (const pid of await readdir("/proc")) {
+        if (!/^\d+$/.test(pid)) continue;
+        const cmd = (await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")).replaceAll("\0", " ");
+        if (/^bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|^bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/.test(cmd)) n++;
+      }
+      return n;
+    },
+    freeGb: async () => {
+      const p = Bun.spawn(["free", "-g"], { stdout: "pipe" });
+      const out = await new Response(p.stdout).text();
+      const mem = out.split("\n").find((l) => l.startsWith("Mem:"))?.trim().split(/\s+/);
+      const avail = Number(mem?.[6]);
+      if (!Number.isFinite(avail)) throw new Error(`cannot read free -g: ${out}`);
+      return avail;
+    },
+  };
+}
+
+if (import.meta.main && process.argv.includes("--edge")) {
+  console.log(`al-runner-v3-update --edge: ${await edgeOnce(realEdgeDeps())}`);
+} else if (import.meta.main) {
   const i = process.argv.indexOf("--regate");
   const regateAt = i >= 0 ? process.argv[i + 1] : undefined;
   if (i >= 0 && (regateAt === undefined || !/^[0-9a-f]{7,40}$/.test(regateAt))) {

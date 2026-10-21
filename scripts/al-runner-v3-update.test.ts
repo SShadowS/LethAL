@@ -9,6 +9,7 @@ import {
   type Outcome,
   type UpdateDeps,
   candidates,
+  edgeOnce,
   expectedSha,
   updateOnce,
 } from "./al-runner-v3-update";
@@ -188,5 +189,71 @@ describe("T19: the v3 update gate", () => {
     expect(seen.gates).toEqual(["1234567abcdef"]);
     const g = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
     expect(g.lethalCommit).toBe("1234567abcdef");
+  });
+});
+
+describe("the daily edge path (edgeOnce)", () => {
+  const edge = (o: Parameters<typeof fake>[0], e: { commit?: string; heavy?: number; free?: number } = {}) => {
+    const f = fake(o);
+    return {
+      ...f,
+      deps: {
+        ...f.deps,
+        edgeCommit: async () => e.commit ?? "c893e3633",
+        heavyJobs: async () => e.heavy ?? 0,
+        freeGb: async () => e.free ?? 20,
+      },
+    };
+  };
+
+  test("an unchanged edge commit is a no-op: nothing downloaded or gated", async () => {
+    await setup();
+    await writeFile(join(root, "edge.last-seen"), "c893e3633\n");
+    const { deps, seen } = edge({ outcome: "pass" });
+    expect(await edgeOnce(deps)).toBe("no-op");
+    expect(seen.gates).toEqual([]);
+    expect(seen.extracts).toBe(0);
+  });
+
+  test("a new commit is gated; a pass moves the pointer and records the commit as seen", async () => {
+    await setup();
+    await writeFile(join(root, "edge.last-seen"), "0000000aaa\n");
+    const { deps, seen } = edge({ outcome: "pass" });
+    expect(await edgeOnce(deps)).toBe("pass");
+    expect(seen.gates).toEqual([GATED_COMMIT]);
+    expect(await current()).not.toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
+    expect((await readFile(join(root, "edge.last-seen"), "utf8")).trim()).toBe("c893e3633");
+  });
+
+  test("a bad hash is refused and nothing is extracted; the commit is NOT marked seen (retried)", async () => {
+    await setup();
+    const { deps, seen } = edge({ outcome: "pass", badSums: true });
+    expect(await edgeOnce(deps)).toBe("infra-fail");
+    expect(seen.extracts).toBe(0);
+    expect(existsSync(join(root, "edge.last-seen"))).toBe(false);
+  });
+
+  test("a gate-fail leaves the pointer unmoved; held is kept, not blacklisted", async () => {
+    await setup();
+    expect(await edgeOnce(edge({ outcome: "gate-fail" }).deps)).toBe("gate-fail");
+    expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
+    await rm(join(root, "edge.last-seen"));
+    expect(await edgeOnce(edge({ outcome: "held" }, { commit: "d00d00d00" }).deps)).toBe("held");
+    expect(existsSync(join(root, "held", "edge-d00d00d00"))).toBe(true);
+    expect(existsSync(join(root, "failed", "edge-d00d00d00"))).toBe(false);
+    expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
+  });
+
+  test("skipped with 2 heavy jobs or under 10 GB; 1 heavy job and 10 GB proceed", async () => {
+    await setup();
+    const a = edge({ outcome: "pass" }, { heavy: 2 });
+    expect(await edgeOnce(a.deps)).toBe("skipped");
+    expect(a.seen.logs.join("\n")).toMatch(/2 heavy jobs/);
+    const b = edge({ outcome: "pass" }, { free: 9 });
+    expect(await edgeOnce(b.deps)).toBe("skipped");
+    expect(b.seen.logs.join("\n")).toMatch(/9 GB/);
+    expect(a.seen.gates.length + b.seen.gates.length).toBe(0);
+    const c = edge({ outcome: "pass" }, { heavy: 1, free: 10 });
+    expect(await edgeOnce(c.deps)).toBe("pass");
   });
 });
