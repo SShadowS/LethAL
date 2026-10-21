@@ -45,3 +45,18 @@ export const LOG_THEN_GAP = {
   ],
 };
 export const PREDICTED_GAPS = [CLAMP_GAP, APPLY_GAP, LOG_BODY_GAP, LOG_THEN_GAP];
+/**
+ * `IsOverBudget`'s three rows, all killed: the gate asserts they carry this one gap id and appear
+ * in neither explain list. Re-pinned for R276 too (pre-commitment addendum, R-595).
+ */
+export const OVER_BUDGET_GAP = {
+  name: "IsOverBudget body",
+  gapId: "G1b3bb53143f8",
+  keys: [
+    "4004a181f8c0dc8bbe0c7c3051d719211b1ca22dadad08ae600b2df9f72fbe82|Sandbox Logic|IsOverBudget|lethal.return-value|1",
+    "5c9b5c3e0234666484725bd281b0610957f03a54fadff8a87364e8cf29fd8222|Sandbox Logic|IsOverBudget|lethal.empty-block|1",
+    "82a8a37831dd57841652a34ad1f5567a0c073ca19774f619b2022729a64fb9dc|Sandbox Logic|IsOverBudget|lethal.conditional-boundary|1",
+  ],
+};
+/** Every gap id `itest:verify` pins, for `gap-pins.test.ts`. */
+export const PINNED_GAPS = [...PREDICTED_GAPS, OVER_BUDGET_GAP];

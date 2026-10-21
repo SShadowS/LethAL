@@ -3,12 +3,12 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { PREDICTED_GAPS } from "../itest/verify-gaps";
+import { PINNED_GAPS } from "../itest/verify-gaps";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import { removeScratchDir } from "./helpers/scratch";
 
 /**
- * R-595: `itest:verify` pins four gap ids (`verify-gaps.ts`). R276 changed `gapIdOf` and the pins
+ * R-595: `itest:verify` pins five gap ids (`verify-gaps.ts`). R276 changed `gapIdOf` and the pins
  * went stale for two weeks, because only the live gate read them. This test emits sandbox-app's
  * manifest the way `fixture-emission.test.ts` does (that path calls `gapIdOf`) and checks every
  * pinned gap: its id exists and its members are exactly the pinned ones, compared by identity key
@@ -55,7 +55,7 @@ test("itest:verify's pinned gap ids and members match sandbox-app's emitted mani
     members.set(m.gapId, [...(members.get(m.gapId) ?? []), key.join("|")]);
   }
   const withoutOrdinal = (k: string) => k.replace(/\|\d+$/, "");
-  for (const gap of PREDICTED_GAPS) {
+  for (const gap of PINNED_GAPS) {
     expect(
       { name: gap.name, keys: (members.get(gap.gapId) ?? []).sort() },
       `${gap.name}: no gap ${gap.gapId} with these members (re-derive with scripts/r595-gap-map.ts)`,

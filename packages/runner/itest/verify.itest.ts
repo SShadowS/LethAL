@@ -58,7 +58,7 @@ import {
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
-import { LOG_THEN_GAP, PREDICTED_GAPS } from "./verify-gaps";
+import { LOG_THEN_GAP, OVER_BUDGET_GAP, PREDICTED_GAPS } from "./verify-gaps";
 import { assertReachFields } from "./verify-reach-fields";
 
 if (!process.env.LETHAL_ITEST_VERIFY) {
@@ -107,7 +107,7 @@ const PREDICTED_NO_COVERAGE_KEYS = [
   "98656555452a91ccc91c88a8a0bc3f58192db5f5153792b959447d06cff62cf1|Sandbox Pricing|DiscountedPrice|lethal.return-value|1",
   "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.swap-additive|1",
 ];
-const OVER_BUDGET_GAP_ID = "G9890e48cccd0";
+const OVER_BUDGET_GAP_ID = OVER_BUDGET_GAP.gapId;
 /** A well-formed gap id that no block of sandbox-app has (step 5c asserts that first). */
 const UNKNOWN_GAP_ID = "G000000000000";
 
