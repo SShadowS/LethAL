@@ -20,7 +20,8 @@
  *   reaches every worker (both measured, and pinned by spawn tests in verify.test.ts).
  * The first line names the mode and the last line is the receipt. Only a run with NO arguments is
  * FULL, prints `test (all)` and `VERIFY FULL`; a partial run says PARTIAL on both lines and is
- * refused under CI. A full run also checks that bun ran every test file bun's own discovery rule
+ * refused under CI. Exit codes: 0 only for a FULL pass, 4 for a PARTIAL pass (so `verify && git push`
+ * cannot push on a subset), 1 for any failure, 2 for refused arguments. A full run also checks that bun ran every test file bun's own discovery rule
  * finds (`discoverTestFiles`), so a worker that silently drops a file cannot pass as full.
  *
  * R393 (snapshot late write). A test that times out keeps running, and its late `toMatchSnapshot()`
@@ -452,7 +453,18 @@ export function receipt(
       : `${summary.pass} pass / ${summary.skip} skip / ${summary.fail} fail`;
   const tail = `${guardOff ? " (snapshot guard OFF)" : ""} [${seconds.toFixed(1)} s]`;
   if (mode.kind === "full") return `VERIFY FULL: ${ok ? "PASS" : "FAIL"} (${counts})${tail}`;
-  return `VERIFY PARTIAL: ${ok ? "PASS" : "FAIL"} (${counts})${tail} -- run \`bun scripts/verify.ts\` with no arguments before submit`;
+  return `VERIFY PARTIAL: ${ok ? `PASS, exit ${PARTIAL_PASS_EXIT}` : "FAIL"} (${counts})${tail} -- run \`bun scripts/verify.ts\` with no arguments before submit`;
+}
+
+/**
+ * Orchestrator amendment (2026-10-21): a PARTIAL run that passes exits 4, never 0, so a
+ * `verify && git push` chain cannot push on a subset. A failure stays 1; only FULL exits 0. R-587's
+ * partial gates exit 4 too.
+ */
+export const PARTIAL_PASS_EXIT = 4;
+
+export function exitCode(mode: VerifyMode, code: number): number {
+  return code === 0 && mode.kind !== "full" ? PARTIAL_PASS_EXIT : code;
 }
 
 export interface VerifyIo extends TestStepIo {
@@ -493,7 +505,7 @@ export function runVerify(
   const guardOff = io.env[ALLOW_SNAPSHOT_CREATE] === "1";
   const done = (code: number, summary: TestSummary | null): { code: number; lines: string[] } => {
     say(receipt(mode, code === 0, summary, guardOff, (io.now() - t0) / 1000));
-    return { code, lines };
+    return { code: exitCode(mode, code), lines };
   };
 
   const tc = io.exec(["bun", "run", "typecheck"], io.env);

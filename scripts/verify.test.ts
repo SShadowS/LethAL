@@ -131,16 +131,28 @@ describe("A2 a partial run never reads as full, over EVERY line it prints", () =
   for (const argv of [["--changed"], ["--changed=abc"], ["runner"], ["runner", "engine"]]) {
     test(`partial: ${argv.join(" ")}`, () => {
       const r = runVerify(argv, io());
-      expect(r.code).toBe(0);
       const all = r.lines.join("\n");
       expect(all).not.toContain("test (all)");
       expect(all).not.toContain("VERIFY FULL");
       expect(r.lines[0]).toContain("PARTIAL");
       expect(r.lines[0]).toContain("NOT a submit");
-      expect(r.lines.at(-1)).toContain("VERIFY PARTIAL: PASS");
+      expect(r.lines.at(-1)).toContain("VERIFY PARTIAL: PASS, exit 4");
       expect(r.lines.at(-1)).toContain("before submit");
     });
   }
+  // Orchestrator amendment: `verify && git push` must not push on a subset.
+  test("exit codes: an all-pass PARTIAL run exits 4, a failing one 1, an all-pass FULL run 0", () => {
+    for (const argv of [["--changed"], ["--changed=abc"], ["runner"], ["runner", "engine"]]) {
+      expect(runVerify(argv, io()).code, argv.join(" ")).toBe(4);
+      const failing = {
+        ...io(),
+        exec: (cmd: string[]) =>
+          cmd[1] === "test" ? { code: 1, output: " 2 pass\n 1 fail\n" } : { code: 0, output: "" },
+      };
+      expect(runVerify(argv, failing).code, `${argv.join(" ")} failing`).toBe(1);
+    }
+    expect(runVerify([], io()).code).toBe(0);
+  });
   test("--changed names the resolved sha and the blind spot", () => {
     const all = runVerify(["--changed"], io()).lines.join("\n");
     expect(all).toContain("test (changed since sha456)");
