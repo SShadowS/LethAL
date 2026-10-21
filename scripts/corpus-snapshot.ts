@@ -625,6 +625,31 @@ function guardInSlot(mine: number, print: (l: string) => void): void {
 function prepareTree(sha: string, tmpRoot: string, print: (l: string) => void): string {
   const tree = join(tmpRoot, `${sha}-${process.pid}`);
   mkdirSync(tree, { recursive: true });
+  try {
+    fillTree(sha, tree, print);
+    return tree;
+  } catch (e) {
+    rmSync(tree, { recursive: true, force: true });
+    throw e;
+  }
+}
+
+/**
+ * node_modules from this checkout: hard links (`cp -al`) when the tree is on the same mount, a real
+ * copy otherwise (/coord and /work are separate mounts here, so links fail with EXDEV, measured in the
+ * R-588 smoke). A copy, never a symlink: the workspace links inside are relative, and through a
+ * symlink they would resolve to THIS checkout's packages instead of the tree's.
+ */
+function copyModules(from: string, to: string): string {
+  const linked = Bun.spawnSync(["cp", "-al", from, to], { stderr: "pipe" });
+  if (linked.exitCode === 0) return "link-copied";
+  rmSync(to, { recursive: true, force: true });
+  const copied = Bun.spawnSync(["cp", "-a", from, to], { stderr: "pipe" });
+  if (copied.exitCode !== 0) throw new Error(`cp -a ${from}: ${copied.stderr.toString()}`);
+  return "copied (hard links refused across mounts)";
+}
+
+function fillTree(sha: string, tree: string, print: (l: string) => void): void {
   const archive = Bun.spawnSync(["bash", "-c", `git archive ${sha} | tar -x -C "${tree}"`], {
     cwd: REPO_ROOT,
     stdout: "pipe",
@@ -639,12 +664,12 @@ function prepareTree(sha: string, tmpRoot: string, print: (l: string) => void): 
       "node_modules",
       ...readdirSync(join(REPO_ROOT, "packages")).map((p) => `packages/${p}/node_modules`),
     ];
+    let how = "";
     for (const d of dirs) {
       if (!existsSync(join(REPO_ROOT, d))) continue;
-      const r = Bun.spawnSync(["cp", "-al", join(REPO_ROOT, d), join(tree, d)], { stderr: "pipe" });
-      if (r.exitCode !== 0) throw new Error(`cp -al ${d}: ${r.stderr.toString()}`);
+      how = copyModules(join(REPO_ROOT, d), join(tree, d));
     }
-    print("tree: node_modules link-copied (bun.lock identical)");
+    print(`tree: node_modules ${how} (bun.lock identical)`);
   } else {
     const r = Bun.spawnSync(["bun", "install", "--frozen-lockfile"], {
       cwd: tree,
@@ -658,7 +683,6 @@ function prepareTree(sha: string, tmpRoot: string, print: (l: string) => void): 
   mkdirSync(join(tree, vendor), { recursive: true });
   for (const f of readdirSync(join(REPO_ROOT, vendor)))
     copyFileSync(join(REPO_ROOT, vendor, f), join(tree, vendor, f));
-  return tree;
 }
 
 /** The native parser copied from this checkout is refused when stale: rebuild it in the tree. */
