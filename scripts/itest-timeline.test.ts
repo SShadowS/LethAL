@@ -18,14 +18,16 @@ describe("legWindows (R-587 M5)", () => {
 
   test("a parallel run: interleaved legs keep their own windows and groups", () => {
     const w = legWindows([
-      { elapsed: 5, text: "[wrapped] leg wrapped-one-shot: start" },
-      { elapsed: 6, text: "[layout] leg layout-one-shot: start" },
-      { elapsed: 50, text: "[layout] leg layout-one-shot: done in 44.0s" },
-      { elapsed: 90, text: "[wrapped] leg wrapped-one-shot: done in 85.0s" },
+      // The first to start ends first, so a done line that closed "the last open window" would
+      // close the wrong leg.
+      { elapsed: 5, text: "[layout] leg layout-one-shot: start" },
+      { elapsed: 6, text: "[wrapped] leg wrapped-one-shot: start" },
+      { elapsed: 50, text: "[layout] leg layout-one-shot: done in 45.0s" },
+      { elapsed: 90, text: "[wrapped] leg wrapped-one-shot: done in 84.0s" },
     ]);
     expect(w).toEqual([
-      { leg: "wrapped-one-shot", group: "wrapped", start: 5, end: 90 },
-      { leg: "layout-one-shot", group: "layout", start: 6, end: 50 },
+      { leg: "layout-one-shot", group: "layout", start: 5, end: 50 },
+      { leg: "wrapped-one-shot", group: "wrapped", start: 6, end: 90 },
     ]);
   });
 });

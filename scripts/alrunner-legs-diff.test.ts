@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALRUNNER_LEG_IDS, GROUP_NAMES } from "../packages/runner/itest/alrunner-legs.ts";
-import { LegsDiffRefusal, diffRunDirs, readRunDir } from "./alrunner-legs-diff.ts";
+import { diffRunDirs, readRunDir } from "./alrunner-legs-diff.ts";
 
 function mutant(over: Record<string, unknown> = {}) {
   return {
@@ -108,10 +108,13 @@ describe("alrunner-legs-diff", () => {
 
   test("B2: a leg file from another run, or a group that did not finish, is refused", () => {
     const stale = runDir({ leg: { id: "cli-default", nonce: "c".repeat(32) } });
-    expect(() => readRunDir(stale)).toThrow(/cli-default.json is from another run/);
     const unfinished = runDir({ dropDone: "wrapped" });
-    expect(() => readRunDir(unfinished)).toThrow(LegsDiffRefusal);
-    rmSync(stale, { recursive: true, force: true });
-    rmSync(unfinished, { recursive: true, force: true });
+    try {
+      expect(() => readRunDir(stale)).toThrow(/cli-default.json is from another run/);
+      expect(() => readRunDir(unfinished)).toThrow(/wrapped.done.json is missing/);
+    } finally {
+      rmSync(stale, { recursive: true, force: true });
+      rmSync(unfinished, { recursive: true, force: true });
+    }
   });
 });
