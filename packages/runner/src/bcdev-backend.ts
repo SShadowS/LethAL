@@ -76,7 +76,7 @@ import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
 export function controlLeftoverWarning(packageCachePath: string): string | undefined {
   const leftover = join(packageCachePath, "lethal-control.app");
   if (!existsSync(leftover)) return undefined;
-  return `[lethal] ${leftover} is a leftover from an older LethAL, which copied the LethAL Control symbol into your package cache (R552). LethAL now compiles against its own copy and never writes this cache; the file is safe to delete. While it stays, alc sees it beside LethAL's copy and picks the higher version, so a newer leftover wins, and which one a SAME-version leftover with different contents resolves to is not measured.`;
+  return `[lethal] ${leftover} is a leftover from an older LethAL, which copied the LethAL Control symbol into your package cache (R552). LethAL now compiles against its own copy of this cache, which leaves this file out, and never writes this cache; the file is unused and safe to delete.`;
 }
 
 export interface BcDevConfig {
