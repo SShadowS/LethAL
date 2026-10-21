@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**89 of 604 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**88 of 604 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -629,7 +629,7 @@ that ordering is the priority.
 - **R580** · A #if-wrapped CODE-FREE object (enum, interface, permission set, control add-in, dotnet, enumextension) turns al-runner coverage off for its whole project, though it has no coverage identity: 42 files in 12 BC.History projects · [R580.md](docs/roadmap/R580.md) · open, filed 2026-10-11
 - **R581** · An al-runner --server baseline that fails before running any test reports "returned: <no tests>" and hides al-runner's own reason ("BC version selection failed ... minimum 28.6") · [R581.md](docs/roadmap/R581.md) · open, filed 2026-10-11
 - **R583** · al-runner 069cbf32 fails itest:alrunner's --server + resource-selector leg: NavNclResourceNotFoundException for 'active-mutant.txt' · [R583.md](docs/roadmap/R583.md) · done (3d826909)
-- **R586** · The al-runner-v3 backend: the Rust al-runner v3 (formerly al-runtime-rs), its contract measured first (owner request) · [R586.md](docs/roadmap/R586.md) · open
+- **R586** · The al-runner-v3 backend: the Rust al-runner v3 (formerly al-runtime-rs), its contract measured first (owner request) · [R586.md](docs/roadmap/R586.md) · done (a6c189b6)
 - **R584** · Backwards compatibility for user apps below runtime 17 (after LethAL's release) · [R584.md](docs/roadmap/R584.md) · open, filed 2026-10-18
 - **R594** · Owner step: install the Continia stack on a Linux BC server, so the CDO slice can be measured live again now that Cronus28 is parked · [R594.md](docs/roadmap/R594.md) · done (c9fc4573)
 - **R589** · Three extra BC 28.4 servers (BC on Linux) on server1 for parallel LethAL gates: bc1, bc2, bc3 · [R589.md](docs/roadmap/R589.md) · done (f17a41d9)
