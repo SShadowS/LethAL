@@ -1,0 +1,53 @@
+// R389 probe: routes that do NOT compile. Kept out of the build (the .txt extension), with the
+// exact diagnostic, measured 2026-10-04 with alc 18.0.41.45789 (AL extension 18.0.2732683, Linux),
+// runtime 16.0, against System 28.0.47067.0 symbols. Each lived in codeunit 91502 "R389 Probe Routes".
+
+// ---- R1a: implicit Variant -> Interface assignment ----
+// error AL0122: Cannot implicitly convert type 'Variant' to 'Interface LethAL.R389Probe."R389 Probe Iface"'. Use an explicit conversion or change the type.
+    procedure R1a_IfaceAssign(V: Variant): Text
+    var
+        I: Interface "R389 Probe Iface";
+    begin
+        I := V;
+        exit(I.Ping('R1a'));
+    end;
+
+// ---- R1b: Variant passed where an Interface parameter is expected ----
+// error AL0133: Argument 1: cannot convert from 'Variant' to 'Interface LethAL.R389Probe."R389 Probe Iface"'
+    procedure R1b_IfaceParam(V: Variant): Text
+    begin
+        exit(C0_CallIface(V));
+    end;
+
+// ---- R4g: Variant.IsInterface() (there is no such method) ----
+// error AL0132: 'Variant' does not contain a definition for 'IsInterface'
+    procedure T3(V: Variant): Boolean
+    begin
+        exit(V.IsInterface());
+    end;
+
+// ---- R4h: Codeunit variable cast to an interface with `as` ----
+// (External code holding the Variant in a Codeunit variable of its OWN type, R4a, then casting.)
+// error AL0851: The type 'Codeunit' doesn't support casting.
+    procedure T4(V: Variant): Text
+    var
+        I: Interface "R389 Probe Iface";
+        C: Codeunit "R389 Probe Helper";
+    begin
+        C := V;
+        I := C as "R389 Probe Iface";
+        exit(I.Ping('x'));
+    end;
+
+// ---- R4i: a Codeunit variable of a type that does NOT implement the interface, assigned to it ----
+// error AL0122: Cannot implicitly convert type 'Codeunit LethAL.R389Probe."R389 Probe Helper"' to 'Interface LethAL.R389Probe."R389 Probe Iface"'. Use an explicit conversion or change the type.
+// (Expected: R389 Probe Helper does not implement the interface. Listed for completeness only.)
+    procedure T5(V: Variant): Text
+    var
+        I: Interface "R389 Probe Iface";
+        C: Codeunit "R389 Probe Helper";
+    begin
+        C := V;
+        I := C;
+        exit(I.Ping('x'));
+    end;

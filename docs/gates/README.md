@@ -70,4 +70,6 @@ and keyed by pair, and `suite-unresolved` exist only from 1.0.0.18. `ObservedAct
 active mutant's own statement was reached, per test) exists only from 1.0.0.19. The client's
 minimum is `MIN_CONTROL_VERSION` in `packages/runner/src/harness.ts`. The version to publish is the
 one in `extensions/lethal-control/app.json`. R-583 (merged 2026-10-21) moved the app and every
-fixture to runtime 17.0, and made its runtime-17 build the minimum.
+fixture to runtime 17.0, and made its runtime-17 build the minimum. `DependentCount` (R389's
+closed-world guard) exists only from 1.0.0.23. The client treats it as optional: an older control
+app answers 404 and the guard falls back to open-world, so the minimum was not raised for it.

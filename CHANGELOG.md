@@ -807,6 +807,39 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`lethal verify` sees an edit to a test-app codeunit handed out in a Variant or interface**
+  (R389). Code in another app can run a test-app codeunit it receives in a Variant (measured live),
+  and a test's digest did not cover it, so an edit there left the test read as unchanged. The digest
+  now traces what a handed-out Variant is assigned from, a Variant parameter through every test-app
+  caller, and folds that codeunit, or every test-app implementation of an interface; a subscriber
+  or folded codeunit handing a value back through a `var` parameter or its return value is read the
+  same way, and so is a Variant handed to a built-in such as `Format` (whose text can carry the
+  codeunit's id). Where the walk cannot see the value (a global, a collection element, a procedure
+  the platform calls) the test takes the whole-source digest. A namespace-qualified name the test
+  app does not declare now reads as a dependency's object instead of falling back. No scheme
+  change: a test whose digest covers more, or that leaves the whole-source digest, gets a new
+  digest and reads as new once (the safe direction), and every other test keeps its digest. Measured: 5 of 1,854 DC
+  tests and 2 of 1,986 DO tests newly take the whole-source digest, CDO none; every DO test's
+  digest moves once, because test-app codeunits implementing dependency interfaces now fold into
+  every digest. A Variant parameter is traced through its callers only where no other app can call
+  the procedure: always for a `local` one, and for a `public` or `internal` one only when the
+  server reports that no published app depends on the test app (the new `DependentCount` action
+  of LethAL Control 1.0.0.23, on bcdev; `internal` also needs no `internalsVisibleTo` in the test
+  app.json). Otherwise (al-runner, an env-tool session, an older control app, an error, a
+  dependent app) the test takes the whole-source digest: on DC that is every test. The answer is
+  part of every digest, so a run and a verify that got different answers share no digest.
+  `MIN_CONTROL_VERSION` stays 1.0.0.22.
+  After the upgrade, the first run whose guard answers closed-world gives every test a new digest
+  (the answer is a line in each one), so the next verify re-runs every test once. The guard asks
+  about the package actually digested (the published test app), asks again after execution and
+  keeps open-world digests unless the answer held, and is part of the run's test-app identity, so
+  `--resume`, `--skip-known-survivors` and baseline reuse carry nothing across a changed answer.
+  Until that recheck confirms it, a closed-world run and its baseline snapshots are recorded as
+  pending and are never reused, so a run killed before it supplies nothing. Verify fails with
+  `ClosedWorldChangedError` when the answer changed while it ran. Stated limit: LethAL assumes that
+  no app depending on the test app is published, installed, uninstalled or unpublished between the
+  first guard query and the post-execution recheck; the run does not detect a violation, and a
+  concurrent publish already breaks the fenced run's assumptions in other ways.
 - **al-runner: the resource selector is refused below runtime 14.0, and a run al-runner did not
   fully compile is never scored** (R583).
   - **The cause.** From upstream f23b9b5f, al-runner compiles at the app's own `runtime`. The

@@ -19,7 +19,7 @@
  *       does not ignore;
  *   (c) take the coord lease for the server, record its token at once, heartbeat, release in a
  *       `finally`;
- *   (d) publish, in Dev scope over the dev endpoint (`dev/apps`), LethAL Control 1.0.0.22 and then
+ *   (d) publish, in Dev scope over the dev endpoint (`dev/apps`), LethAL Control (`CONTROL_APP`) and then
  *       each gate's fixture pair, target before tests, skipping an app the server already holds at
  *       the same or a higher version;
  *   (e) run `lethal doctor` on every written config;
@@ -49,8 +49,10 @@ import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
 const REPO = join(import.meta.dir, "..");
 export const SECRET_PATH = "/coord/secrets/bc-linux.env";
 export const EXPECTED_KEYS = ["BC_DEV_USER", "BC_DEV_PASSWORD"] as const;
-const CONTROL_APP = "/coord/handoff/R-583/LethAL_LethAL Control_1.0.0.22.app";
-const CONTROL_SHA256 = "248ab98cad0d31c8bc8d3e63304f8e7e2eef4d27c45898bf66219f49a780212d";
+// R389: the 1.0.0.23 build (adds `DependentCount`), compiled clean with alc and published to bc3.
+const CONTROL_APP = "/coord/handoff/R-389/control-1.0.0.23/LethAL_LethAL Control_1.0.0.23.app";
+const CONTROL_SHA256 = "c2a959480579943a667cab5fc4abe581e2741307561a05890ce735e54a37d4bd";
+const CONTROL_VERSION = "1.0.0.23";
 const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");
 const BC_DEV_MCP = "/home/dev/src/bc-dev-mcp";
@@ -912,7 +914,7 @@ async function setupServer(
     const c = await ensureApp(conn, control, "LethAL Control");
     summary.push(
       c.outcome === "skipped"
-        ? `  skipped   LethAL Control: ${skipNote(c.version, "1.0.0.22")}`
+        ? `  skipped   LethAL Control: ${skipNote(c.version, CONTROL_VERSION)}`
         : `  published LethAL Control ${c.version}`,
     );
     // (d2) before the fixtures, so a P1 stop leaves the fixtures as they were.
