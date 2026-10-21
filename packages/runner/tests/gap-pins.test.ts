@@ -12,7 +12,8 @@ import { removeScratchDir } from "./helpers/scratch";
  * went stale for two weeks, because only the live gate read them. This test emits sandbox-app's
  * manifest the way `fixture-emission.test.ts` does (that path calls `gapIdOf`) and checks every
  * pinned gap: its id exists and its members are exactly the pinned ones, compared by identity key
- * without the ordinal (every pinned key has ordinal 1, the manifest leaves it unset).
+ * without the ordinal. `gapIdOf` never reads the ordinal, so leaving it out loses nothing here; the
+ * live gate checks the full key, ordinal included.
  */
 const dirs: string[] = [];
 afterAll(() => {
