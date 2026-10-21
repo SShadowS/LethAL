@@ -11,6 +11,13 @@ export {
   SELECTOR_RESOURCE_NONE,
 } from "./selector";
 export type { SelectorConfig } from "./selector";
+export {
+  FLAT_NAMES_FILENAME,
+  displayPathsOf,
+  flatNamesFor,
+  flatNamesSidecar,
+} from "./flat-names";
+export type { FlatNames } from "./flat-names";
 export { wrapStatement } from "./wrap";
 export type { WrapInput } from "./wrap";
 export { liftExpression } from "./lift";

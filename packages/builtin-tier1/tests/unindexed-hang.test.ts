@@ -36,8 +36,24 @@ function load(src: string, symbols?: readonly string[]) {
   return { root, ctx: buildSemanticContext([{ path: "t.al", root }], arms) };
 }
 
-/** `#if not CLEANX` around `body`, built under `[]`: the object is in `unindexedObjects`. */
-const wrapped = (body: string): string => `#if not CLEANX\n${body}\n#endif\n`;
+/**
+ * `#if not CLEANX` around `body`, built under `[]`, with a stray `Bogus` after the object's opening
+ * brace. R343 indexes a wrapped object the build compiles when it parses CLEANLY, so the by-name
+ * fallback these tests pin now applies only to an UNCLEAN one (an ERROR inside it): that is the
+ * shape built here, and `unindexedW` asserts it (opus, R-343 plan review I1). The procedure, and
+ * every statement these tests read, still parse (measured).
+ */
+const wrapped = (body: string): string =>
+  `#if not CLEANX\n${body.replace("{", "{ Bogus")}\n#endif\n`;
+
+/** The premise: the wrapped object named "W" is unindexed (the fallback is what is under test). */
+function unindexedW(ctx: ReturnType<typeof load>["ctx"]): void {
+  expect(
+    ctx.symbols.unindexedObjects.some(
+      (o) => o.rawKind.endsWith("_declaration") && o.text.includes('"W"'),
+    ),
+  ).toBe(true);
+}
 
 /** The first node of `kind` (text exactly `text`, when given) inside a node whose text is
  *  `within`, when given. */
@@ -175,6 +191,7 @@ describe("R-364: classifyHangCapable in an UNINDEXED object (name fallback)", ()
   it("the wrapped object is unindexed and its local does NOT resolve (the fallback is needed)", () => {
     const { root, ctx } = load(unit("while I < N do I := 0;"), []);
     expect(ctx.symbols.unindexedObjects.length).toBe(1);
+    unindexedW(ctx);
     const target = assignmentTargetOf(assignment(root, "I := 0"));
     if (target === null) throw new Error("no target");
     expect(resolveVarRef(target, ctx)).toBeNull();
@@ -185,6 +202,7 @@ describe("R-364: classifyHangCapable in an UNINDEXED object (name fallback)", ()
       unit("while I < N do I := 0; repeat Done := true; until J > 0 or Done;"),
       [],
     );
+    unindexedW(ctx);
     expect(classifyHangCapable(assignment(root, "I := 0"), ctx)).toBe("loop-condition-target");
     expect(classifyHangCapable(assignment(root, "Done := true"), ctx)).toBe(
       "loop-condition-target",
@@ -193,6 +211,7 @@ describe("R-364: classifyHangCapable in an UNINDEXED object (name fallback)", ()
 
   it("DECLINES a name no enclosing loop condition reads (not a blanket refusal)", () => {
     const { root, ctx } = load(unit("while I < N do J := 0;"), []);
+    unindexedW(ctx);
     expect(classifyHangCapable(assignment(root, "J := 0"), ctx)).toBeNull();
   });
 
@@ -220,6 +239,7 @@ describe("R-364: classifyHangCapable in an UNINDEXED object (name fallback)", ()
       ),
       [],
     );
+    unindexedW(ctx);
     expect(classifyHangCapable(assignment(root, "R.Done := true"), ctx)).toBe(
       "loop-condition-target",
     );
@@ -232,6 +252,7 @@ describe("R-364: classifyHangCapable in an UNINDEXED object (name fallback)", ()
       unit("while R.Amount < 10 do Amount := 5;", "R: Record Customer; Amount: Decimal;"),
       [],
     );
+    unindexedW(ctx);
     expect(classifyHangCapable(assignment(root, "Amount := 5"), ctx)).toBeNull();
   });
 
@@ -240,6 +261,7 @@ describe("R-364: classifyHangCapable in an UNINDEXED object (name fallback)", ()
       unit('while not "Line Done" do "LINE DONE" := true;', '"Line Done": Boolean;'),
       [],
     );
+    unindexedW(ctx);
     expect(classifyHangCapable(assignment(root, '"LINE DONE" := true'), ctx)).toBe(
       "loop-condition-target",
     );
@@ -252,11 +274,13 @@ describe("R-364: classifyHangCapable in an UNINDEXED object (name fallback)", ()
 #endif
     do begin I := 0; J := 0; end;`;
     const off = load(unit(body), []);
+    unindexedW(off.ctx);
     expect(classifyHangCapable(assignment(off.root, "J := 0"), off.ctx)).toBeNull();
     expect(classifyHangCapable(assignment(off.root, "I := 0"), off.ctx)).toBe(
       "loop-condition-target",
     );
     const on = load(unit(body), ["LETHALX"]);
+    unindexedW(on.ctx);
     expect(classifyHangCapable(assignment(on.root, "J := 0"), on.ctx)).toBe(
       "loop-condition-target",
     );
@@ -267,12 +291,12 @@ describe("R-364: classifyHangCapable in an UNINDEXED object (name fallback)", ()
 codeunit 50374 "Gone" { }
 #else
 #if not CLEANY
-codeunit 50375 "W" { procedure P() var I: Integer; N: Integer; begin while I < N do I := 0; end; }
+codeunit 50375 "W" { Bogus procedure P() var I: Integer; N: Integer; begin while I < N do I := 0; end; }
 #endif
 #endif
 `;
     const { root, ctx } = load(src, []);
-    expect(ctx.symbols.unindexedObjects.some((o) => o.text.includes('"W"'))).toBe(true);
+    unindexedW(ctx);
     expect(classifyHangCapable(assignment(root, "I := 0"), ctx)).toBe("loop-condition-target");
   });
 
@@ -282,6 +306,7 @@ codeunit 50375 "W" { procedure P() var I: Integer; N: Integer; begin while I < N
         trigger OnInsert() var N: Integer; begin while N < 3 do N := 0; end; }`),
       [],
     );
+    unindexedW(ctx);
     const a = assignment(root, "N := 0");
     const target = assignmentTargetOf(a);
     if (target === null) throw new Error("no target");
@@ -303,6 +328,7 @@ codeunit 50375 "W" { procedure P() var I: Integer; N: Integer; begin while I < N
         trigger OnInsert() var K: Integer; begin while N < 3 do K := 0; end; }`),
       [],
     );
+    unindexedW(ctx);
     const a = assignment(root, "K := 0");
     const target = assignmentTargetOf(a);
     if (target === null) throw new Error("no target");
@@ -375,6 +401,7 @@ describe("R-364: all four operators in an unindexed object", () => {
   for (const c of CASES) {
     it(`${c.op.name}: ${c.body} is a candidate, refused and counted; its sibling is emitted`, () => {
       const { root, ctx } = load(src(c.body), []);
+      unindexedW(ctx);
       const refused = nodeAt(root, c.kind, c.refused, c.refusedWithin);
       const claimed = nodeAt(root, c.kind, c.claimed, c.claimedWithin);
       // Candidacy: every check but the hang check admits the site (R447's counter), so without the
@@ -389,6 +416,7 @@ describe("R-364: all four operators in an unindexed object", () => {
 
   it("swap-additive: `I + 1` has unresolved operands, so the type guard declines it first", () => {
     const { root, ctx } = load(src("while I < N do I := I + 1;"), []);
+    unindexedW(ctx);
     const node = nodeAt(root, "additive_expression", "I + 1");
     expect(swapAdditive.targets(node, ctx)).toBe(false);
     expect(swapAdditive.refusesHangCapable?.(node, ctx)).toBe(false);
@@ -407,6 +435,7 @@ describe("R-364: all four operators in an unindexed object", () => {
     expect(swapAdditive.generate(openNode, open.ctx).length).toBe(1);
     // Wrapped, the name fallback refuses it, and it counts as hang-refused.
     const { root, ctx } = load(src("while I < N do I := 1 + 1;"), []);
+    unindexedW(ctx);
     const node = nodeAt(root, "additive_expression", "1 + 1");
     expect(swapAdditive.refusesHangCapable?.(node, ctx)).toBe(true);
     expect(swapAdditive.targets(node, ctx)).toBe(false);

@@ -3,7 +3,7 @@
 Mutation testing for Microsoft Dynamics 365 Business Central AL code. It tells you which of your AL tests actually catch bugs.
 
 [![Release](https://img.shields.io/badge/release-0.1.0--alpha.3-orange)](CHANGELOG.md)
-[![TypeScript](https://img.shields.io/badge/typescript-5.0-blue)](https://typescriptlang.org)
+[![TypeScript](https://img.shields.io/badge/typescript-7.0-blue)](https://typescriptlang.org)
 [![Bun](https://img.shields.io/badge/runtime-bun-black)](https://bun.sh)
 [![AL](https://img.shields.io/badge/target-Business%20Central-orange)](https://learn.microsoft.com/dynamics365/business-central/dev-itpro/developer/devenv-dev-overview)
 
@@ -461,7 +461,9 @@ and reads `not-rerun` (verify schema v6). The filter sees only code a new test r
 that fails only because an EARLIER test in the same call left state behind (SingleInstance
 globals, committed data), or because of code run in another session (StartSession, a scheduled
 task, the job queue), is not sent to that survivor. A fresh `lethal run` has the same blind spot.
-Pass `--no-reach-filter` to send every new test to every survivor, as before R-384.
+Pass `--no-reach-filter` to send every new test to every survivor, as before R-384. On apps that
+use background sessions, the job queue or SingleInstance state (most real apps), prefer
+`--no-reach-filter` when a missed kill would matter (R426).
 
 Two documents collect that contract so nobody has to derive it from the source:
 
@@ -592,7 +594,7 @@ That selects which mutants run and cannot change a verdict.
 | `lethal.remove-commit` | 1.1.0 | `Commit()` → _(deleted)_ | reliance on an implicit commit |
 | `lethal.swap-rec-xrec` | 1.0.0 | `xRec.Amount` → `Rec.Amount` | before-value gaps in `OnValidate` and `OnRename` |
 | `lethal.swap-find-direction` | 1.0.0 | `Cust.FindFirst()` → `Cust.FindLast()` | a suite whose fixture only ever holds one row |
-| `lethal.validate-to-assign` | 1.1.0 | `Rec.Validate(Name, NewName)` → `Rec.Name := NewName` | the field value asserted, the `OnValidate` side effect not |
+| `lethal.validate-to-assign` | 1.2.0 | `Rec.Validate(Name, NewName)` → `Rec.Name := NewName` | the field value asserted, the `OnValidate` side effect not |
 | `lethal.flip-filter-literal` | 1.0.0 | `Cust.SetFilter("No.", '<>%1', No)` → `Cust.SetFilter("No.", '=%1', No)` | a filter string BC re-parses at run time, never asserted |
 | `lethal.swap-enum-member` | 1.0.0 | `"S"::Open` → `"S"::Released` | a state machine whose resulting state nothing asserts |
 <!-- /operators: tier2 -->
@@ -704,12 +706,13 @@ a LethAL feature or a mode.
   a startup canary re-measures it against the installed binary every session (`defect-not-reproduced`
   on v2.10.0.0). Both later reasons have moved too (R220): LethAL can read al-runner's own
   `--coverage`, and on 2.11.0 the canary reports that a row written inside `Codeunit.Run` IS
-  discarded by the error. What remains is that coverage is OFF by default and CONDITIONAL when on:
-  `lethal run` uses it only with `"alRunner": { "coverage": "al-runner" }`, and a file declaring more
-  than one object or holding a `#if`-wrapped object turns it off for the whole run, with a warning
-  naming the file. The multi-object reason moved in R383: upstream #3713 (objects after a file's
-  first were lost) is fixed, but al-runner v2.12.0-main.c39ad5de reports those objects' lines in a
-  frame LethAL cannot convert, so they land in the wrong object (R407 tracks re-admission). The
+  discarded by the error. What remains is that coverage is CONDITIONAL: `lethal run` uses it by
+  default since R394 (`"alRunner": { "coverage": "none" }` turns it off), and a file holding a
+  `#if`-wrapped object turns it off for the whole run, with a warning naming the file. A file
+  declaring more than one object turns it off too, unless a once-per-session frame probe admits the
+  installed al-runner build (R407): al-runner v2.12.0-main.c39ad5de reports those objects' lines in
+  a frame LethAL cannot convert, so they would land in the wrong object (R383), while 43f76177 and
+  c5bbaf89 (measured) report them correctly; the probe decides for any other build. A warning line names the probe's answer and the build either way. The
   `#if` reason is R298, pending R300. Without coverage a mutant no test reaches is run against every
   test and comes back `survived` rather than `no-coverage`. That is one measured route to a false survivor. No measurement has shown a false
   kill from this backend, but none rules one out either; in particular, a pinned platform-app directory
@@ -717,7 +720,8 @@ a LethAL feature or a mode.
 - **`al-runner` settings (R387).** The `alRunner` config section takes `alRunnerPath`, `packagesDir`,
   `serverMode`, `selectorMode` and `coverage`; any other key is refused by name. By default `lethal run`
   uses al-runner's warm `--server` daemon (one per worker under `--workers`) and the resource selector,
-  which compiles each batch once instead of once per mutant. `"serverMode": false` goes back to one
+  which compiles each batch once instead of once per mutant, and reads al-runner's coverage (R394;
+  `"coverage": "none"` turns it off). `"serverMode": false` goes back to one
   process per test, and then the selector defaults to `"static"`. A run with a slow setting prints one
   `[lethal] al-runner settings:` line naming it. Verdicts are the same per mutant on the fixtures the
   gate measures; under `--server` a hung test becomes an error after one long suite deadline (at least
@@ -837,6 +841,6 @@ per-mutant baseline**, where a differing verdict is a regression, never "close e
 | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | End-to-end verdicts against real BC | 3 killed / 12 survived / 4 no-coverage |
 | `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 299 / 63 / 15 over 377 deployed |
 | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 12 / 4 |
-| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend, plus `sandbox-symbols` under `[LETHALA]` and `[LETHALB]` (R321), plus the CLI's own defaults (R387) | 3 / 12 / 4; 5 / 8 / 0 per symbol set; 3 / 16 / 0 CLI-default leg (recorded per mutant as pre-committed) |
+| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend, plus `sandbox-symbols` under `[LETHALA]` and `[LETHALB]` (R321), plus the CLI's own defaults (R387) | 3 / 12 / 4; 5 / 8 / 0 per symbol set; 3 / 12 / 4 CLI-default leg, equal per mutant to leg A since R394 (recorded per mutant as pre-committed) |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` | Publish serialization and staleness | n/a |

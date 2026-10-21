@@ -28,7 +28,9 @@ const OPERATOR_VERSION = "1.0.0";
  * user's own server.
  *
  * `while false` asks the same question — does anything notice if this body does not run — and cannot
- * hang on any input. That is exactly `loop-truncate`'s relationship to `negate-conditional` at
+ * hang THIS loop on any input. An ENCLOSING loop can still spin when its own progress lives in the
+ * skipped body (in an open report data item, the item is that loop); R501 refuses every operator,
+ * this one included, in such code at the orchestrator's dispatch. That is exactly `loop-truncate`'s relationship to `negate-conditional` at
  * `repeat`, which R164 accepted; there the raw count was 334 so the bar question never arose.
  *
  * **The ruling this required, recorded because it was not previously explicit:** R13's >=13-site bar

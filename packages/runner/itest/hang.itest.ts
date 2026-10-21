@@ -29,8 +29,11 @@
  * that switch, so the branch is unreachable in both legs. It is recorded here because an untested
  * claim about what a gate catches is exactly the defect this repo keeps finding.
  *
- * ORDER IS DELIBERATE: the ON leg runs FIRST, because it leaves the tier clean. The OFF leg
- * quarantines by design and is torn down afterwards.
+ * ORDER IS DELIBERATE: the ON leg runs FIRST, because it leaves the tier clean. The SINGLE leg
+ * (R-204b) runs second: the ON leg's flag with `--no-group-runs`, so every covering test goes
+ * through `RunMutant` alone, which is the only path R-204b's Part A changes and which the grouped
+ * ON leg cannot reach. It also leaves the tier clean. The OFF leg quarantines by design and is
+ * torn down afterwards.
  *
  * Connection details are never committed; this reads the gitignored
  *   fixtures/sandbox-hang/lethal.config.local.json
@@ -45,7 +48,7 @@ import { fileURLToPath } from "node:url";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import type { EventSubscriber } from "../src/events";
@@ -58,7 +61,8 @@ import type { QuarantineRecord } from "../src/quarantine-store";
 import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
+import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   type QuarantineDiagnostic,
@@ -81,6 +85,13 @@ const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-hang");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-hang-tests");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+/**
+ * R-204b: the SINGLE leg's committed per-mutant baseline (R332: refused when missing, recorded
+ * once with `LETHAL_ITEST_RECORD_BASELINE=hang.single.baseline.json`, exit 3, never a pass). The ON
+ * and OFF legs keep their inline tables.
+ */
+const SINGLE_BASELINE_PATH = join(HERE, "hang.single.baseline.json");
 
 // Inside sandbox-hang's declared idRanges (79400-79449) — alc enforces app.json idRanges (AL0297)
 // for the injected objects too.
@@ -212,6 +223,90 @@ const EXPECTED_ON: ReadonlyArray<{
 /** R206: the warm kills of the ON leg, all in the new arm: three warm fails and one warm timeout. */
 const EXPECTED_WARM_KILLS = 4;
 
+/**
+ * R516: the cold confirms of the position-1 timeouts, pinned as NUMBERS, never read back from the
+ * report (`docs/superpowers/specs/2026-10-08-r516-hang-confirm-every-timeout-precommitment.md`).
+ * ON: lines 37, 43, 44 and 73 (line 145 is at position 2 and is confirmed by its replay instead).
+ * SINGLE: the same four plus line 145, every call holding one method.
+ */
+const EXPECTED_COLD_CONFIRMS_ON = 4;
+const EXPECTED_COLD_CONFIRMS_SINGLE = 5;
+
+/**
+ * R516: every position-1 timeout is confirmed by ONE unmutated `RunMutant` call before it is
+ * scored. A cold confirm row is exactly `mutant_code IS NULL AND op_kind IS NULL` (a replay row is
+ * op_kind `many`; never "op_kind not many", which SQL would compare as unknown for NULL). For each
+ * `timeout-killed` mutant at position 1, keyed by the `mutant_row_id` of its own timeout row: exactly
+ * one such row, for the killing test, outcome `pass`, inside half the budget (R53's margin). On the
+ * ON leg the position-2 timeout (line 145) has none.
+ */
+function assertColdConfirms(label: string, leg: LegResult, expected: number): void {
+  const { report, testRows } = leg;
+  const coldConfirmsOf = (m: SessionReport["mutants"][number]) => {
+    const stopped = testRows.find((r) => r.mutant_code === m.mutantCode && r.outcome === "timeout");
+    assert.ok(stopped !== undefined, `[${label}] R516: ${m.mutantCode} has no timeout row`);
+    assert.ok(
+      stopped.mutant_row_id !== null,
+      `[${label}] R516: ${m.mutantCode}'s timeout row has no mutant_row_id`,
+    );
+    return testRows.filter(
+      (r) =>
+        r.mutant_row_id === stopped.mutant_row_id && r.mutant_code === null && r.op_kind === null,
+    );
+  };
+  const timeoutKilled = report.mutants.filter((m) => m.verdict === "timeout-killed");
+  let total = 0;
+  for (const m of timeoutKilled) {
+    const rows = coldConfirmsOf(m);
+    if (m.killPosition !== 1) {
+      assert.equal(
+        rows.length,
+        0,
+        `[${label}] R516: ${m.mutantCode} (line ${m.line}) is a position-${m.killPosition} timeout, confirmed by its replay; it must have no cold confirm row, got ${rows.length}`,
+      );
+      continue;
+    }
+    assert.equal(
+      rows.length,
+      1,
+      `[${label}] R516: ${m.mutantCode} (line ${m.line}) must have exactly one cold confirm row, got ${rows.length}`,
+    );
+    const [row] = rows;
+    assert.ok(row !== undefined);
+    assert.equal(
+      row.method,
+      m.killingTest,
+      `[${label}] R516: ${m.mutantCode}'s confirm ran ${row.method}`,
+    );
+    assert.equal(
+      row.outcome,
+      "pass",
+      `[${label}] R516: ${m.mutantCode}'s confirm answered ${row.outcome}`,
+    );
+    assert.ok(
+      2 * row.duration_ms <= BUDGET_MS,
+      `[${label}] R516: ${m.mutantCode}'s confirm took ${row.duration_ms} ms, more than half the ${BUDGET_MS} ms budget`,
+    );
+    total += 1;
+  }
+  assert.equal(
+    total,
+    expected,
+    `[${label}] R516: expected ${expected} cold confirms of position-1 timeouts, got ${total}`,
+  );
+  if (label === "ON") {
+    const line145 = timeoutKilled.find(
+      (m) => m.line === 145 && m.operatorName === "lethal.void-method-call",
+    );
+    assert.ok(line145 !== undefined, "[ON] R516: line 145's timeout-killed mutant is missing");
+    assert.equal(
+      coldConfirmsOf(line145).length,
+      0,
+      "[ON] R516: line 145 must have no cold confirm row",
+    );
+  }
+}
+
 async function readJson<T>(path: string, what: string): Promise<T> {
   let text: string;
   try {
@@ -229,7 +324,11 @@ interface LegResult {
   /** `test_results` rows for this run, so the gate can assert BC's own words, not just a verdict. */
   readonly testRows: ReadonlyArray<{
     readonly op_kind: string | null;
-    mutant_code: string;
+    /** NULL on a confirm row (R514/R516's cold confirm, R206's replay). */
+    mutant_code: string | null;
+    /** R516: the mutant row a test row belongs to, a confirm row included. */
+    mutant_row_id: number | null;
+    method: string;
     outcome: string;
     duration_ms: number;
     failure_message: string | null;
@@ -247,7 +346,11 @@ interface LegResult {
   readonly warnings: readonly WarningDiagnostic[];
 }
 
-async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<LegResult> {
+/** `single` is R-204b's leg: `--stop-hung-sessions` with `--no-group-runs`. */
+type LegMode = "on" | "single" | "off";
+
+async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
+  const stopHungSessions = mode !== "off";
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
@@ -255,7 +358,7 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
     throw new Error("could not locate alc.exe/altool.exe under the AL Language extension install");
   }
 
-  const outputDir = join(scratchRoot, stopHungSessions ? "publish-on" : "publish-off");
+  const outputDir = join(scratchRoot, `publish-${mode}`);
   await mkdir(outputDir, { recursive: true });
   const compiler = new ArtifactCompiler(
     { alcPath: toolPaths.alcPath, packageCachePath: bcdev.packageCachePath, outputDir },
@@ -265,6 +368,7 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -273,7 +377,7 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
     defaultDeployerIo,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -285,6 +389,7 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
       mcpCommand: bcdev.mcpCommand,
       project: PROJECT_DIR,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
       packageCachePath: bcdev.packageCachePath,
@@ -300,16 +405,15 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
       verifier: new DeploymentVerifier(odataCfg),
       harnessVerifier,
     },
-    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
 
   // A SCRATCH quarantine dir: the OFF leg quarantines BY DESIGN, and one landing in the real
   // ~/.lethal store would poison every later gate run on this container until an operator deleted
   // it by hand. Same reasoning as bcdev.itest.ts, load-bearing here rather than defensive.
-  const quarantineDir = join(scratchRoot, stopHungSessions ? "quarantine-on" : "quarantine-off");
-  const store = new ResultsStore(
-    join(scratchRoot, `hang-${stopHungSessions ? "on" : "off"}.sqlite`),
-  );
+  const quarantineDir = join(scratchRoot, `quarantine-${mode}`);
+  const store = new ResultsStore(join(scratchRoot, `hang-${mode}.sqlite`));
   const warnings: WarningDiagnostic[] = [];
   const collectWarnings: EventSubscriber = (event) => {
     if (event.type === "warning") warnings.push({ code: event.code, message: event.message });
@@ -320,10 +424,12 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
       store,
       projectDir: PROJECT_DIR,
       testDir: TEST_DIR,
-      instrumentedDir: join(scratchRoot, stopHungSessions ? "instr-on" : "instr-off"),
+      instrumentedDir: join(scratchRoot, `instr-${mode}`),
       selectorIds: SELECTOR_IDS,
       mutantTimeoutMs: BUDGET_MS,
       ...(stopHungSessions ? { stopHungSessions: true } : {}),
+      // R-204b: the CLI's `--no-group-runs`, so every covering test is one `RunMutant` call.
+      ...(mode === "single" ? { groupRuns: { enabled: false } } : {}),
       lease: {
         client: new LeaseClient(odataCfg),
         serverGeneration: async () => (await harnessVerifier.verify()).serverGeneration,
@@ -335,7 +441,7 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
     });
     const testRows = store.db
       .query(
-        "SELECT mutant_code, outcome, duration_ms, failure_message, op_kind FROM test_results ORDER BY id",
+        "SELECT mutant_code, mutant_row_id, method, outcome, duration_ms, failure_message, op_kind FROM test_results ORDER BY id",
       )
       .all() as LegResult["testRows"];
     const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
@@ -598,6 +704,81 @@ function assertOnLeg(leg: LegResult): void {
       `${m.mutantCode}'s timeout row must come from a grouped call (op_kind many), got ${stopped?.op_kind}`,
     );
   }
+  assertColdConfirms("ON", leg, EXPECTED_COLD_CONFIRMS_ON);
+}
+
+/**
+ * R-204b's SINGLE leg: the ON leg's flag with `--no-group-runs`. Pre-committed: every mutant
+ * scores the ON leg's verdict (`EXPECTED_ON`), every hang stays `timeout-killed` with BC's own stop
+ * words on a single-call row, every kill sits at position 1 (one method per call, so the line-145
+ * hang is no longer a position-2 warm kill), and NO mutant ends `stopped-after-completion` (Part A
+ * must not swallow a real hang) or `stop-outcome-unconfirmed` (R202's 400; if it appears live it
+ * is a gate failure to re-run once, never a baseline value). `main()` then checks the per-mutant
+ * baseline.
+ */
+function assertSingleLeg(leg: LegResult): void {
+  const { report, testRows } = leg;
+  dump("stop-hung-sessions SINGLE (--no-group-runs)", report);
+  assertHangRefusedRow("SINGLE", report);
+  assert.equal(report.baselineGreen, true, "[SINGLE] baseline must be green");
+  assert.equal(report.mutants.length, EXPECTED_ON.length, "[SINGLE] every mutant must be scored");
+  for (const cause of ["stopped-after-completion", "stop-outcome-unconfirmed"] as const) {
+    const hit = report.mutants.filter((m) => m.cause === cause);
+    assert.equal(
+      hit.length,
+      0,
+      `[SINGLE] R-204b: ${hit.length} mutant(s) with cause ${cause} (${hit.map((m) => `${m.mutantCode} line ${m.line}`).join(", ")}) — a real hang must stay timeout-killed`,
+    );
+  }
+  assert.equal(
+    report.counts.errors,
+    0,
+    "[SINGLE] no mutant may error when the stop path is available",
+  );
+  for (const want of EXPECTED_ON) {
+    const got = report.mutants.find(
+      (m) => m.line === want.line && m.operatorName === want.operator,
+    );
+    assert.ok(got !== undefined, `[SINGLE] no mutant at line ${want.line} for ${want.operator}`);
+    assert.equal(
+      got.verdict,
+      want.verdict,
+      `[SINGLE] ${want.operator} at line ${want.line}: expected ${want.verdict} (the ON leg's), got ${got.verdict}`,
+    );
+    if (got.verdict === "killed" || got.verdict === "timeout-killed") {
+      assert.equal(
+        got.killPosition,
+        1,
+        `[SINGLE] ${want.operator} at line ${want.line}: killPosition ${got.killPosition}, expected 1 (one method per call)`,
+      );
+    }
+  }
+  const timeoutKilled = report.mutants.filter((m) => m.verdict === "timeout-killed");
+  assert.equal(timeoutKilled.length, 5, "[SINGLE] the same five hangs as the ON leg");
+  for (const m of timeoutKilled) {
+    const stopped = testRows.find((r) => r.mutant_code === m.mutantCode && r.outcome === "timeout");
+    assert.ok(stopped !== undefined, `[SINGLE] ${m.mutantCode}: no test row with outcome timeout`);
+    const msg = stopped.failure_message ?? "";
+    assert.match(msg, /stopped the session/i, `[SINGLE] ${m.mutantCode}: no BC stop confirmation`);
+    assert.match(msg, /StopSession/i, `[SINGLE] ${m.mutantCode}: BC names no AL StopSession call`);
+    assert.ok(
+      stopped.duration_ms >= BUDGET_MS && stopped.duration_ms < BUDGET_MS + STOP_GRACE_MS,
+      `[SINGLE] ${m.mutantCode}: duration ${stopped.duration_ms}ms is outside [${BUDGET_MS}, ${BUDGET_MS + STOP_GRACE_MS})`,
+    );
+    assert.notEqual(
+      stopped.op_kind,
+      "many",
+      `[SINGLE] ${m.mutantCode}'s timeout row must come from a single RunMutant call, got op_kind ${stopped.op_kind}`,
+    );
+  }
+  assert.equal(report.groupedCalls ?? 0, 0, "[SINGLE] --no-group-runs: no RunMutantMany call");
+  assert.equal(report.warmKills ?? 0, 0, "[SINGLE] one method per call: no warm kill");
+  assert.ok(
+    report.validity.caveats.includes("stop-hung-sessions"),
+    `[SINGLE] the report must carry the stop-hung-sessions caveat; got ${JSON.stringify(report.validity.caveats)}`,
+  );
+  assert.equal(report.quarantined, undefined, "[SINGLE] the leg must leave the tier unquarantined");
+  assertColdConfirms("SINGLE", leg, EXPECTED_COLD_CONFIRMS_SINGLE);
 }
 
 function assertOffLeg(leg: LegResult): void {
@@ -674,12 +855,14 @@ async function teardown(odataCfg: ActivationConfig): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // R332: refuse in seconds, before any live work, when the SINGLE leg's baseline is missing.
+  preflightGateBaseline(SINGLE_BASELINE_PATH, "hang itest SINGLE leg");
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-hang-itest-"));
   let odataCfg: ActivationConfig | undefined;
   try {
     // ON first: it leaves the tier clean, so a failure here is not confounded by the OFF leg's
     // deliberate quarantine.
-    const on = await runLeg(scratchRoot, true);
+    const on = await runLeg(scratchRoot, "on");
     odataCfg = on.odataCfg;
     try {
       assertOnLeg(on);
@@ -688,7 +871,18 @@ async function main(): Promise<void> {
       throw err;
     }
 
-    const off = await runLeg(scratchRoot, false);
+    // R-204b: the single path, second, because it too leaves the tier clean.
+    const single = await runLeg(scratchRoot, "single");
+    odataCfg = single.odataCfg;
+    try {
+      assertSingleLeg(single);
+    } catch (err) {
+      await printLegFailureDiagnostics("stop-hung-sessions SINGLE", single);
+      throw err;
+    }
+    await assertGateBaseline(single.report, SINGLE_BASELINE_PATH, "hang itest SINGLE leg");
+
+    const off = await runLeg(scratchRoot, "off");
     odataCfg = off.odataCfg;
     try {
       assertOffLeg(off);
@@ -699,7 +893,7 @@ async function main(): Promise<void> {
 
     console.log("hang itest: PASS");
     await emitPassed("hang", {
-      sublegs: ["stop-hung-sessions-on", "stop-hung-sessions-off"],
+      sublegs: ["stop-hung-sessions-on", "stop-hung-sessions-single", "stop-hung-sessions-off"],
       artifacts: { reported: false },
     });
   } finally {
@@ -717,5 +911,6 @@ try {
   // cannot hide it.
   console.error(formatFailure(err));
   await emitFailed("hang", err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  // R332: a record run wrote the SINGLE leg's baseline and is never a pass.
+  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 }

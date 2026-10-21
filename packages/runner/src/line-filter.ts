@@ -409,3 +409,25 @@ export function spanTouches(
     (r) => r.file.toLowerCase() === f && r.start <= lastLine && firstLine <= r.end,
   );
 }
+
+/**
+ * R277: does the union of the file's ranges cover EVERY line `firstLine..lastLine`? Then every site
+ * inside that span touched a range (`spanTouches`), so the filter dropped none of them. Same file
+ * matching as `spanTouches`.
+ */
+export function spanCovered(
+  ranges: readonly LineRange[],
+  file: string,
+  firstLine: number,
+  lastLine: number,
+): boolean {
+  const f = normalizeRelPath(file).toLowerCase();
+  const mine = ranges.filter((r) => r.file.toLowerCase() === f).sort((a, b) => a.start - b.start);
+  let next = firstLine; // the first line not yet covered
+  for (const r of mine) {
+    if (r.start > next) break;
+    next = Math.max(next, r.end + 1);
+    if (next > lastLine) return true;
+  }
+  return next > lastLine;
+}

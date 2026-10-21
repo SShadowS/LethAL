@@ -1,10 +1,27 @@
 import { readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { MutantManifest } from "@lethal/schemata";
+import { FLAT_NAMES_FILENAME, type MutantManifest } from "@lethal/schemata";
 import type { DeploymentVerification, PublishOutcome } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
+
+/**
+ * R219: one line naming each file the batch wrote under a disambiguated flat name, or `undefined`
+ * when it renamed none (no `FLAT_NAMES_FILENAME`).
+ */
+async function flatNamesNote(projectDir: string): Promise<string | undefined> {
+  let sidecar: string;
+  try {
+    sidecar = await readFile(join(projectDir, FLAT_NAMES_FILENAME), "utf8");
+  } catch {
+    return undefined;
+  }
+  const pairs = Object.entries(JSON.parse(sidecar) as Record<string, string>)
+    .map(([flat, project]) => `${flat} is ${project}`)
+    .join("; ");
+  return `files this batch wrote under a disambiguated flat name (R219): ${pairs}`;
+}
 
 /**
  * A deterministic compiler rejection: alc ran and said no. This is the ONLY error the bisection
@@ -241,6 +258,11 @@ export class ArtifactCompiler {
       // R461: a failed compile or placement can leave alc's partial output; removed best-effort,
       // never masking the original error.
       await rm(scratch, { force: true }).catch(() => {});
+      // R219: alc names a file by its flat name in the batch; one the batch renamed is named back.
+      if (err instanceof AlcCompileError) {
+        const note = await flatNamesNote(projectDir);
+        if (note !== undefined) throw new AlcCompileError(`${err.message}\n${note}`);
+      }
       throw err;
     }
   }

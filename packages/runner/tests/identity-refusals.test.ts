@@ -34,6 +34,8 @@ import { type ResumeIndex, buildResumeIndex, carriedVerdictFor, wasStranded } fr
 import { identityKeyOf, serializeKey, twinSiteOf } from "../src/selection";
 import type { MutantVerdict, MutantVerdictRow } from "../src/store";
 import { ResultsStore } from "../src/store";
+import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R307 Task 6: identity when a file is refused (plan section 3).
@@ -46,8 +48,8 @@ import { ResultsStore } from "../src/store";
  */
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 beforeAll(async () => {
   await initParser();
@@ -176,8 +178,8 @@ function verdictRow(m: MutantManifestEntry, verdict: MutantVerdict): MutantVerdi
 /** R391: a carry rule under which the recorded run had the same source (rule 1: by key). */
 function sameSourceRule(): NonNullable<ResumeIndex["carryRule"]> {
   return {
-    recorded: { hash: "same", twins: null },
-    current: { hash: "same", twins: new Set(), refused: new Set() },
+    recorded: { hash: "same", twins: null, dependencyHash: "dep" },
+    current: { hash: "same", twins: new Set(), dependencyHash: "dep", refused: new Set() },
   };
 }
 
@@ -231,8 +233,8 @@ describe("R307 T6 (a): an exact refusal reserves its sites, so the twins keep th
     const edited = {
       ...index,
       carryRule: {
-        recorded: { hash: "run1", twins },
-        current: { hash: "run2", twins, refused: new Set<string>() },
+        recorded: { hash: "run1", twins, dependencyHash: "dep" },
+        current: { hash: "run2", twins, dependencyHash: "dep", refused: new Set<string>() },
       },
     };
     expect(run2.map((m) => carriedVerdictFor(edited, m))).toEqual([undefined, undefined]);
@@ -251,6 +253,7 @@ describe("R307 T6 (b), unit: a disabled carry keeps the stranded skip", () => {
       carryRule: sameSourceRule(),
       ambiguousKeys: 0,
       nonCarryableRows: 0,
+      unreproducedKills: 0,
       strandedKeys: new Set([keyOfEntry(m)]),
     };
     expect(wasStranded(index, m)).toBe(true);
@@ -360,6 +363,10 @@ const skipSelectorIds = { selectorId: 60000, controlId: 60001, tableId: 60002 };
 /** Every test passes and covers `Good.Compute`, so every mutant survives. */
 class SurviveBackend implements ExecutionBackend {
   private active: string | null = null;
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
     return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
   }
@@ -422,6 +429,7 @@ async function survivedRun() {
   await Bun.write(join(projectDir, "app.json"), SKIP_APP_JSON);
   await Bun.write(join(projectDir, GOOD_FILE), GOOD_AL);
   await Bun.write(join(testDir, "GoodTests.Codeunit.al"), TEST_AL);
+  await Bun.write(join(testDir, "app.json"), testAppJson());
   const dirs = { projectDir, testDir, instrumentedDir };
   const store = new ResultsStore(":memory:");
   const first = await runSession({
@@ -574,6 +582,10 @@ class LogBackend implements ExecutionBackend {
   deploys = 0;
   private active: string | null = null;
   constructor(private readonly covered: readonly Covered[]) {}
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
     return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
   }
@@ -639,6 +651,7 @@ async function r442World(files: Readonly<Record<string, string>>) {
   await Bun.write(join(projectDir, "app.json"), SKIP_APP_JSON);
   for (const [p, text] of Object.entries(files)) await Bun.write(join(projectDir, p), text);
   await Bun.write(join(testDir, "GoodTests.Codeunit.al"), TEST_AL);
+  await Bun.write(join(testDir, "app.json"), testAppJson());
   const store = new ResultsStore(":memory:");
   const run = async (over: R442Over = {}) => {
     const backend = new LogBackend(COVERED);
@@ -880,7 +893,9 @@ describe("R442: a site hidden from numbering in one run poisons no key in the ne
     // A run row written before generation, then verdict rows, and no list: what a run that died
     // between `createRun` and the setter would look like if a row had slipped in.
     w.store.db.run(
-      "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, test_app_hash) SELECT project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, test_app_hash FROM runs WHERE id = ?",
+      // R495: with its proven flag, which `createRun` writes with the hash. R496: and its
+      // dependency fingerprint, which the flag requires.
+      "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps) SELECT project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps FROM runs WHERE id = ?",
       [first.runId],
     );
     const seeded = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;

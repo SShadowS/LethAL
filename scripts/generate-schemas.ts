@@ -17,7 +17,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 import { CAMPAIGN_COMPARE_SCHEMA_VERSION } from "../packages/runner/src/campaign-subcommands";
 import { STREAM_SCHEMA_VERSION } from "../packages/runner/src/events";
 import { REPORT_SCHEMA_VERSION } from "../packages/runner/src/report";
@@ -41,6 +41,7 @@ const FILES = [
   "operation-outcome.ts",
   "line-filter.ts",
   "campaign-subcommands.ts",
+  "dependency-report-source.ts",
 ].map((f) => join(SRC, f));
 
 /** Types the report references from OTHER packages. Listed explicitly for the same reason as above:
@@ -343,7 +344,7 @@ const targets = [
         "CampaignCompareResult",
         `campaign-compare-v${CAMPAIGN_COMPARE_SCHEMA_VERSION}.schema.json`,
         "LethAL campaign compare result",
-        "The JSON document `lethal campaign compare --json` prints on stdout. GENERATED from the CampaignCompareResult TypeScript declaration by scripts/generate-schemas.ts. `coverage.verified: false` always carries a `statement`: a comparison whose coverage mode could not be checked is never a bare match. A stage and report that record DIFFERENT coverage modes are a refusal (an error on stderr) and print no document.",
+        "The JSON document `lethal campaign compare --json` prints on stdout. GENERATED from the CampaignCompareResult TypeScript declaration by scripts/generate-schemas.ts. `coverage.verified: false` always carries a `statement`: a comparison whose coverage mode could not be checked is never a bare match. A stage and report that record DIFFERENT coverage modes are a refusal (an error on stderr) and print no document. v2 (R556) added the required `identity` and widened `identical` to the verdicts and the mutated text where both sides record a hash; `identity.verified: false` always carries a `statement` saying what could not be checked (a stage frozen before R556, a redacted report, an identity scheme change).",
       ),
       "campaignCompareSchemaVersion",
       CAMPAIGN_COMPARE_SCHEMA_VERSION,

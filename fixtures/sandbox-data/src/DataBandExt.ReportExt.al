@@ -39,6 +39,16 @@ reportextension 79341 "Data Band Ext" extends "Data Band Report"
         exit(0);
     end;
 
+    // R-463 arm: a typed record declared in the extension, so Tier 2 claims its calls.
+    procedure CountBand(Low: Integer): Integer
+    var
+        Rel: Record "Data Related";
+    begin
+        Rel.SetRange("Main No.", 'BAND');
+        Rel.SetRange("Entry No.", Low, 99);
+        exit(Rel.Count());
+    end;
+
     var
         Total: Integer;
 }

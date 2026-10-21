@@ -6,7 +6,7 @@
  * and its code is in no digest); `internal` also needs no `internalsVisibleTo`, in the test
  * project's app.json nor in the digested package.
  *
- * The count comes from the control app's `DependentCount` (1.0.0.21), so only bcdev can answer.
+ * The count comes from the control app's `DependentCount` (1.0.0.23), so only bcdev can answer.
  * It is asked for the app whose source is DIGESTED (the published package on bcdev), and only when
  * that id equals the test project's app.json id (sol's review: a disk id naming another app would
  * count that app's dependents). Every other case falls back (`OPEN_WORLD`): al-runner, an older
@@ -82,7 +82,7 @@ export async function closedWorldOf(
     count = await backend.dependentCount(digested.appId);
   } catch (err) {
     if (err instanceof DependentCountUnavailableError)
-      return open("the deployed LethAL Control predates DependentCount (1.0.0.21)");
+      return open("the deployed LethAL Control predates DependentCount (1.0.0.23)");
     return open(`DependentCount failed: ${err instanceof Error ? err.message : String(err)}`, true);
   }
   if (count > 0) return open(`${count} published app(s) declare the test app as a dependency`);

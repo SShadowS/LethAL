@@ -27,7 +27,13 @@ import {
 // workspace packages stay at 0.0.0 and are private.
 import rootPackageJson from "../../../package.json" with { type: "json" };
 import type { ActivationConfig, FetchFn } from "./activation";
-import { AlRunnerBackend } from "./al-runner-backend";
+import {
+  AlRunnerBackend,
+  type AlRunnerConfig,
+  type AlRunnerProvisionResult,
+  assertResourceSelectorRuntime,
+  runtimeBelow14,
+} from "./al-runner-backend";
 import { readAlRunnerCache } from "./al-runner-cache";
 import type { AlRunnerCacheReport } from "./al-runner-cache";
 import {
@@ -37,6 +43,11 @@ import {
 } from "./al-runner-canary";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { alRunnerCoverageSupport } from "./al-runner-coverage";
+import {
+  type AlRunnerFrameProbeRequest,
+  type AlRunnerFrameProbeResult,
+  probeAlRunnerCoverageFrame,
+} from "./al-runner-frame-probe";
 import {
   predefinedSymbolsChangedWarning,
   probeAlRunnerPredefinedSymbols,
@@ -71,15 +82,17 @@ import {
 } from "./env-tool-session";
 import type { EnvToolSession } from "./env-tool-session";
 import { loadEquivalenceMarks } from "./equivalence-marks";
+import { watchProjectInputs } from "./source-drift";
 
 // Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
 export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
 import type { EventSubscriber } from "./events";
-import { assertExplainableReport, explain } from "./explain";
+import { type ExplainOutput, assertExplainableReport, explain } from "./explain";
+import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
-import { HarnessVerifier } from "./harness";
+import { HarnessVerifier, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
-import { LeaseClient } from "./lease";
+import { type ForceResetOutcome, LeaseClient, LeaseUnavailableError } from "./lease";
 import { changedLinesSince, parseLineArg } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { toMutationElements } from "./mutation-elements";
@@ -116,6 +129,7 @@ import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
 import {
+  TestProjectNestedError,
   VERIFY_EXIT,
   VerifyError,
   type VerifyOutput,
@@ -126,6 +140,7 @@ import {
   parseVerifyRequest,
   refusalOutput,
   runVerify,
+  testProjectNestedProblem,
 } from "./verify";
 
 /**
@@ -711,6 +726,10 @@ export interface ExplainCliConfig {
    * what it dropped.
    */
   readonly topSurvivors?: number;
+  /** R274: `--project <dir>`, the target whose source `gaps[].source` renders. */
+  readonly projectDir?: string;
+  /** R273: `--suggest`, the opt-in suggestions section (explain-suggest.ts). */
+  readonly suggest?: boolean;
 }
 
 /**
@@ -892,7 +911,7 @@ USAGE
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>] [--tests <dir>] [--json]
-  lethal explain           <report.json> [--top <n>]
+  lethal explain           <report.json> [--top <n>] [--project <dir>] [--suggest]
   lethal export            <report.json> --format mutation-elements --project <dir> --out <path>
                                          [--thresholds <high,low>]
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
@@ -1083,6 +1102,18 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
                              docs/campaign/2026-08-03-do/rung2.report.json (473 mutants, 125
                              survivors) projects to 243 KB, 206 KB of it survivors; --top 15 makes
                              it 30 KB. The uncapped output does not fit an agent's context window
+  --project <dir>            also read the target project at <dir> and give each gap its block's
+                             source lines with every survivor's site marked ('gaps[].source').
+                             <dir> must hash to the report's 'sourceSha256' (every .al file the
+                             target build compiles plus app.json, raw bytes, with the config's
+                             preprocessor symbols); any difference, or a report from before
+                             R274, is REFUSED with nothing on stdout. The output then holds
+                             TARGET SOURCE: do not publish it for a third party's code
+  --suggest                  add a separate 'suggestions' section: a suggested fix kind per gap,
+                             LABELLED as a suggestion, not a measurement, derived only from each
+                             survivor's measured reach and coverage attribution ('undecided' where
+                             the report cannot tell). Everything else in the output is unchanged.
+                             Refused on a report without gap ids
 
 CAMPAIGN — the measurement gates, with 'committed before the run' machine-checked
   A measurement campaign states what it expects in a file, COMMITS it, and only then runs. These
@@ -1114,10 +1145,15 @@ CAMPAIGN — the measurement gates, with 'committed before the run' machine-chec
             freeze. R355: refused when the stage and the report both record a coverage mode and
             they differ. A stage frozen before R355 (or a report from before R252) records none:
             it is still compared, but the result says the mode is UNVERIFIED, never a bare
-            "identical". Freeze refuses a report with no coverageMode, so new stages are strict
+            "identical". Freeze refuses a report with no coverageMode, so new stages are strict.
+            R556: a stage records the identity scheme and a hash of each mutant's text, so a
+            mutant changed under an unchanged key is a difference; a stage frozen before R556,
+            a redacted report or a scheme change is compared and says the identity is
+            UNVERIFIED. Freeze refuses a redacted report
   --json                     compare only: print the result as one JSON object on stdout
-                             (campaignCompareSchemaVersion, identical, differences, coverage); the
-                             lines go to stderr. Exit code unchanged: 0 identical, 1 different
+                             (campaignCompareSchemaVersion, identical, differences, coverage,
+                             identity); the lines go to stderr. Exit code unchanged: 0
+                             identical, 1 different
 
 VERIFY — prove named survivors are now killed, on the build the run left installed (bcdev only)
   Compiles and publishes the test project once, then runs each named survivor's covering tests
@@ -1245,6 +1281,8 @@ export const RUN_FLAGS = {
   // R150: `lethal explain --top <n>`. In the shared table for the same reason as every flag above —
   // `parseArgs` runs in strict mode over ONE option set for every subcommand.
   top: { type: "string" },
+  // R273: `lethal explain --suggest`, the opt-in suggestions section. Owned by `explain` alone.
+  suggest: { type: "boolean", default: false },
   // R178: `lethal export`. In the shared table for the same strict-mode reason as every flag above,
   // and owned by `export` alone in FLAG_OWNERS so another subcommand cannot swallow one silently.
   format: { type: "string" },
@@ -1327,7 +1365,16 @@ export const FLAG_OWNERS: ReadonlyArray<{
 }> = [
   {
     flag: "project",
-    owners: ["run", "init", "clear-ceiling", "force-reset-lease", "doctor", "export", "campaign"],
+    owners: [
+      "run",
+      "init",
+      "clear-ceiling",
+      "force-reset-lease",
+      "doctor",
+      "explain",
+      "export",
+      "campaign",
+    ],
   },
   { flag: "tests", owners: ["run", "doctor", "verify"] },
   { flag: "config", owners: ["run", "clear-ceiling", "force-reset-lease", "doctor", "verify"] },
@@ -1360,6 +1407,11 @@ export const FLAG_OWNERS: ReadonlyArray<{
     instead: "It pre-commits a mutant count for `lethal campaign freeze`.",
   },
   { flag: "top", owners: ["explain"], instead: "It bounds `lethal explain`'s survivor list." },
+  {
+    flag: "suggest",
+    owners: ["explain"],
+    instead: "It adds `lethal explain`'s opt-in suggestions section.",
+  },
   {
     flag: "format",
     owners: ["export"],
@@ -1792,6 +1844,14 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     // was wrong. `explain()` refuses the same values again on its own account — this is a second
     // check of the same contract at a different layer, not the only one.
     const top = values.top;
+    const project = values.project;
+    if (project === "") {
+      throw new Error("--project needs the target project directory the report's run measured.");
+    }
+    const projectOpt = {
+      ...(project !== undefined ? { projectDir: project } : {}),
+      ...(values.suggest === true ? { suggest: true } : {}),
+    };
     if (top !== undefined) {
       const n = Number(top);
       if (!Number.isInteger(n) || n < 1) {
@@ -1799,9 +1859,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
           `--top must be a positive integer (the maximum number of survivors to keep), got ${JSON.stringify(top)}. Omit it to get every survivor.`,
         );
       }
-      return { mode: "explain", reportPath, topSurvivors: n };
+      return { mode: "explain", reportPath, topSurvivors: n, ...projectOpt };
     }
-    return { mode: "explain", reportPath };
+    return { mode: "explain", reportPath, ...projectOpt };
   }
 
   if (subcommand === "campaign") {
@@ -2120,8 +2180,15 @@ export interface BcDevConfigSection {
    * OData root, used VERBATIM when present. `odataBaseUrl` injects port 7048, which is right for a
    * container and wrong for an environment tool's `https://host/{envId}`. Set only by
    * `env-tool-session`; a hand-written bcdev section leaves it absent and keeps the derivation.
+   * R589: also how a hand-written section names an OData port other than 7048 (BC on Linux).
    */
   readonly baseUrl?: string;
+  /**
+   * R589: the API root (`<proto>//<host>:<apiPort>/<instance>`), used VERBATIM for the API calls
+   * (`api/v2.0/companies`, the automation `extensions` list). Absent, they go to the OData root,
+   * as they always did. BC on Linux serves its API on a separate port.
+   */
+  readonly apiBaseUrl?: string;
   /**
    * bc-dev-mcp connection port. Set only by `env-tool-session` (derived from `baseUrl` — see
    * `deriveMcpPort` there); a hand-written bcdev section leaves it absent, matching a container's
@@ -2167,9 +2234,10 @@ export interface AlRunnerConfigSection {
    */
   readonly selectorMode?: "static" | "resource";
   /**
-   * R387: R220's `--coverage`. OFF by default in this release (plan section 2b). When set to
-   * `"al-runner"`, `runFromCli` first asks `alRunnerCoverageSupport` and falls back to `"none"`,
-   * with one named warning, for a project holding a multi-object or `#if`-wrapped object file.
+   * R387: R220's `--coverage`. ON (`"al-runner"`) by default since R394 (`effectiveAlRunnerTransport`);
+   * R387 shipped it off. Whether set or defaulted, `runFromCli` first asks `alRunnerCoverageSupport`
+   * and falls back to `"none"`, with one named warning, for a project holding a multi-object file
+   * the R407 frame probe refuses or an `#if`-wrapped object file R298 refuses. `"none"` turns it off.
    */
   readonly coverage?: "al-runner" | "none";
 }
@@ -2196,7 +2264,8 @@ export function effectiveAlRunnerTransport(c: Partial<AlRunnerConfigSection>): {
   return {
     serverMode,
     selectorMode: c.selectorMode ?? (serverMode ? "resource" : "static"),
-    coverage: c.coverage ?? "none",
+    // R394: on by default (R387 shipped "none"). The coverage guard still runs on it.
+    coverage: c.coverage ?? "al-runner",
   };
 }
 
@@ -2207,16 +2276,22 @@ export function effectiveAlRunnerTransport(c: Partial<AlRunnerConfigSection>): {
  */
 export function alRunnerAdvisory(
   c: Partial<AlRunnerConfigSection>,
-  /** The files the coverage guard named when it turned a requested coverage off. The user already
-   *  set the coverage key, so the line then says why it is off instead of advising to set it. */
+  /** The files the coverage guard named when it turned coverage off (set or on by default). The
+   *  line then says why it is off instead of advising a key. */
   coverageTurnedOffFor: readonly string[] = [],
+  /** R583: the target `app.json`'s `runtime`. Below 14.0 the faster selector is not available. */
+  runtime?: unknown,
 ): string | undefined {
   const t = effectiveAlRunnerTransport(c);
   const notes: string[] = [];
   if (!t.serverMode) {
     notes.push('serverMode is false (one process per test; "alRunner.serverMode": true is faster)');
   }
-  if (t.selectorMode === "static") {
+  if (t.selectorMode === "static" && runtimeBelow14(runtime)) {
+    notes.push(
+      `selectorMode is "static" (a recompile per mutant); the faster "resource" selector needs app.json runtime 14.0 or above and this app declares ${JSON.stringify(runtime)}: raise its runtime to 17.0 to use it`,
+    );
+  } else if (t.selectorMode === "static") {
     notes.push(
       'selectorMode is "static" (a recompile per mutant; "alRunner.selectorMode": "resource" is faster)',
     );
@@ -2231,8 +2306,9 @@ export function alRunnerAdvisory(
       `coverage is "none" (turned off for this run because al-runner's coverage lines cannot be placed in ${coverageTurnedOffFor.join(", ")}; the warning above says why)`,
     );
   } else if (t.coverage === "none") {
+    // R394: reached only when the config sets "none"; the default is "al-runner" and prints nothing.
     notes.push(
-      'coverage is "none" (every mutant runs every green test; "alRunner.coverage": "al-runner" runs only the covering tests, and reports an unreached mutant no-coverage instead of survived)',
+      'coverage is "none", set by "alRunner.coverage": "none" (an unreached mutant reads survived instead of no-coverage, and every mutant runs every green test; remove the key to turn coverage back on)',
     );
   }
   if (notes.length === 0) return undefined;
@@ -2240,53 +2316,141 @@ export function alRunnerAdvisory(
 }
 
 /**
- * R387: an `alRunner.coverage: "al-runner"` request, checked against the project before anything
- * is built. al-runner reports every object after a file's first in a frame LethAL cannot convert
- * (R383, measured on v2.12.0-main.c39ad5de; upstream #3713's object loss is fixed, this is a
- * different defect), and the index drops a file holding a `#if`-wrapped object
- * (`fileHoldsWrappedObject`, R298, pending R300), so either would turn real coverage into wrong
- * coverage. Such a run falls back to `"none"` with ONE warning naming the files. Called once per
- * session, so the warning is not repeated per worker.
+ * R387: al-runner coverage (set by `alRunner.coverage: "al-runner"`, or on by default since R394),
+ * checked against the project before anything is built. The index drops a file holding a `#if`-wrapped object of a shape it does not admit
+ * (`alRunnerAdmitsWrappedFile`, R298, R-300b), which would turn real coverage into wrong coverage,
+ * so such a run falls back to `"none"` with ONE warning naming the files. Called once per session,
+ * so the warning is not repeated per worker.
+ *
+ * R407: a multi-object file is admitted only when THIS al-runner passes the coverage-frame probe
+ * (`probeAlRunnerCoverageFrame`), run on the transport the session will use. On
+ * v2.12.0-main.c39ad5de al-runner reported every object after a file's first at the wrong line
+ * (R383); upstream #5249 fixed it, and the probe tells the two apart. Refused, the run falls back
+ * to `"none"` exactly as before, and the warning names the probe's reason and the build.
  */
 export async function withAlRunnerCoverageGuard(
   configFile: LethalConfigFile,
   projectDir: string,
   warn: (line: string) => void = console.warn,
+  opts: AlRunnerCoverageGuardOptions = {},
 ): Promise<LethalConfigFile> {
-  return (await applyAlRunnerCoverageGuard(configFile, projectDir, warn)).config;
+  return (await applyAlRunnerCoverageGuard(configFile, projectDir, warn, opts)).config;
 }
 
-/** The guard, also returning the files it named (empty when it did not fall back). */
-async function applyAlRunnerCoverageGuard(
+/** R407: what the guard needs beyond the config, and its seams for tests. */
+export interface AlRunnerCoverageGuardOptions {
+  /** R205: the session's source snapshot, so the guard judges the files the build uses. */
+  readonly snapshot?: ReadonlyMap<string, Buffer>;
+  /** The session's test project: a one-shot probe provisions on it for the R147 pin. */
+  readonly testDir?: string;
+  readonly frameProbe?: (req: AlRunnerFrameProbeRequest) => Promise<AlRunnerFrameProbeResult>;
+  readonly provision?: (cfg: AlRunnerConfig) => Promise<AlRunnerProvisionResult>;
+}
+
+/**
+ * The guard, also returning the files it named (empty when it did not fall back) and whether
+ * multi-object files are admitted (R407). `admitMultiObjectFiles` is true only when coverage stays
+ * `"al-runner"`, the project holds a multi-object file, and the frame probe admitted.
+ */
+export async function applyAlRunnerCoverageGuard(
   configFile: LethalConfigFile,
   projectDir: string,
   warn: (line: string) => void,
-  snapshot?: ReadonlyMap<string, Buffer>,
-): Promise<{ readonly config: LethalConfigFile; readonly named: readonly string[] }> {
-  const section = configFile.alRunner;
-  if (section?.coverage !== "al-runner") return { config: configFile, named: [] };
-  const support = await alRunnerCoverageSupport(projectDir, snapshot);
-  if (support.multiObjectFiles.length === 0 && support.wrappedObjectFiles.length === 0) {
-    return { config: configFile, named: [] };
+  opts: AlRunnerCoverageGuardOptions = {},
+): Promise<{
+  readonly config: LethalConfigFile;
+  readonly named: readonly string[];
+  readonly admitMultiObjectFiles: boolean;
+}> {
+  const section = configFile.alRunner ?? {};
+  // R394: the EFFECTIVE coverage, so a config with no coverage key (on by default) is guarded too.
+  if (effectiveAlRunnerTransport(section).coverage !== "al-runner") {
+    return { config: configFile, named: [], admitMultiObjectFiles: false };
+  }
+  const support = await alRunnerCoverageSupport(projectDir, opts.snapshot);
+  let probe: AlRunnerFrameProbeResult | undefined;
+  if (support.multiObjectFiles.length > 0) {
+    probe = await runFrameProbe(configFile, projectDir, opts);
+    if (probe.outcome === "admitted") {
+      warn(
+        `[lethal] al-runner-coverage-frame-admitted: ${support.multiObjectFiles.join(", ")} (more than one object) keep al-runner coverage: the frame probe (${probe.transport}) found every object reported in the instrumented frame, labelled inside the bundle (Probe B at lines ${probe.lines.join(", ")}). al-runner build: ${probe.build ?? "<not printed>"} (R407).`,
+      );
+    }
+  }
+  const multi = probe?.outcome === "admitted" ? [] : support.multiObjectFiles;
+  if (multi.length === 0 && support.wrappedObjectFiles.length === 0) {
+    return { config: configFile, named: [], admitMultiObjectFiles: probe?.outcome === "admitted" };
   }
   const named = [
-    ...support.multiObjectFiles.map((f) => `${f} (more than one object)`),
+    ...multi.map((f) => `${f} (more than one object)`),
     ...support.wrappedObjectFiles.map((f) => `${f} (an #if-wrapped object)`),
   ];
   const why = [
-    ...(support.multiObjectFiles.length > 0
+    ...(probe?.outcome === "refused"
       ? [
-          "al-runner reports every object after a file's first at the wrong line (measured on v2.12.0-main.c39ad5de, R383)",
+          `al-runner reports every object after a file's first at the wrong line on some builds (measured on v2.12.0-main.c39ad5de, R383), and the frame probe (${probe.transport}) REFUSED this one: ${probe.refusal}: ${probe.reason}. al-runner build: ${probe.build ?? "<not printed>"} (R407)`,
         ]
       : []),
     ...(support.wrappedObjectFiles.length > 0
-      ? ["how a compiled #if arm is numbered is not measured (R300)"]
+      ? ["the #if object wrapper is of a shape not measured on al-runner (R300)"]
       : []),
   ];
   warn(
-    `[lethal] al-runner-coverage-unsupported: "alRunner.coverage": "al-runner" is IGNORED for this run, which runs with coverage "none" instead. al-runner's coverage cannot be placed in ${named.join(", ")}: ${why.join("; ")}. Trusting it would credit those objects' mutants to the wrong tests, or report them no-coverage while tests do reach them.`,
+    `[lethal] al-runner-coverage-unsupported: al-runner coverage (${section.coverage === "al-runner" ? 'set by "alRunner.coverage": "al-runner"' : "on by default"}) is turned OFF for this run, which runs with coverage "none" instead. al-runner's coverage cannot be placed in ${named.join(", ")}: ${why.join("; ")}. Trusting it would credit those objects' mutants to the wrong tests, or report them no-coverage while tests do reach them.`,
   );
-  return { config: { ...configFile, alRunner: { ...section, coverage: "none" } }, named };
+  return {
+    config: { ...configFile, alRunner: { ...section, coverage: "none" } },
+    named,
+    admitMultiObjectFiles: false,
+  };
+}
+
+/**
+ * R407: the frame probe on the session's transport. A one-shot session's probe takes the R147 pin
+ * from one `provisionOnce` on the session's test project, as the session's own runs will; the
+ * daemon never takes one (R242).
+ */
+async function runFrameProbe(
+  configFile: LethalConfigFile,
+  projectDir: string,
+  opts: AlRunnerCoverageGuardOptions,
+): Promise<AlRunnerFrameProbeResult> {
+  const section = configFile.alRunner ?? {};
+  const { alRunnerPath, packagesDir } = section;
+  if (alRunnerPath === undefined || alRunnerPath === "") {
+    throw new Error("the al-runner coverage guard needs alRunner.alRunnerPath to probe (R407)");
+  }
+  const preprocessorSymbols = validatePreprocessorSymbols(configFile.preprocessorSymbols);
+  const { serverMode } = effectiveAlRunnerTransport(section);
+  let platformAppsDir: string | undefined;
+  if (!serverMode) {
+    if (opts.testDir === undefined) {
+      throw new Error(
+        'the al-runner coverage guard needs the test project for a one-shot probe (R407); set "alRunner.coverage": "none" to run without coverage',
+      );
+    }
+    const cfg: AlRunnerConfig = {
+      alRunnerPath,
+      instrumentedDir: opts.testDir,
+      testDir: opts.testDir,
+      selectorObjectId: 0,
+      ...(packagesDir !== undefined ? { packagesDir } : {}),
+      ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
+    };
+    // ponytail: a throwaway backend, only for `provisionOnce`'s argv and pin checks.
+    const provisioned = await (opts.provision ?? ((c) => new AlRunnerBackend(c).provisionOnce()))(
+      cfg,
+    );
+    if ("platformAppsDir" in provisioned) platformAppsDir = provisioned.platformAppsDir;
+  }
+  return (opts.frameProbe ?? probeAlRunnerCoverageFrame)({
+    alRunnerPath,
+    projectDir,
+    serverMode,
+    ...(platformAppsDir !== undefined ? { platformAppsDir } : {}),
+    ...(packagesDir !== undefined ? { packagesDir } : {}),
+    ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
+  });
 }
 
 /**
@@ -2294,25 +2458,63 @@ async function applyAlRunnerCoverageGuard(
  * the section (the same call `buildBackend` makes), apply the coverage guard, and print the ONE
  * advisory line. Returns the config every backend of the session is built from. A config with no
  * `alRunner` section is returned untouched, so `buildBackend` still throws its own targeted error.
- * R205: `snapshot` is the session's source snapshot, so the guard judges the files the build uses.
+ * R205: `opts.snapshot` is the session's source snapshot, so the guard judges the files the build uses.
+ * R407: also returns whether multi-object files are admitted, which `buildBackend` hands to every
+ * backend it builds. It is never a config key.
  */
 export async function prepareAlRunnerSession(
   configFile: LethalConfigFile,
   projectDir: string,
   warn: (line: string) => void = console.warn,
-  snapshot?: ReadonlyMap<string, Buffer>,
-): Promise<LethalConfigFile> {
-  if (configFile.alRunner === undefined) return configFile;
+  opts: AlRunnerCoverageGuardOptions = {},
+): Promise<{ readonly config: LethalConfigFile; readonly admitMultiObjectFiles: boolean }> {
+  if (configFile.alRunner === undefined)
+    return { config: configFile, admitMultiObjectFiles: false };
   validateAlRunnerConfig(configFile.alRunner);
-  const { config: sessionConfig, named } = await applyAlRunnerCoverageGuard(
+  const { config, named, admitMultiObjectFiles } = await applyAlRunnerCoverageGuard(
     configFile,
     projectDir,
     warn,
-    snapshot,
+    opts,
   );
-  const advisory = alRunnerAdvisory(sessionConfig.alRunner ?? {}, named);
+  const advisory = alRunnerAdvisory(
+    config.alRunner ?? {},
+    named,
+    (await targetAppJson(projectDir, opts.snapshot))?.runtime,
+  );
   if (advisory !== undefined) warn(advisory);
-  return sessionConfig;
+  return { config, admitMultiObjectFiles };
+}
+
+/** The target's `app.json` from the session snapshot (R205), else from disk; `undefined` when absent. */
+async function targetAppJson(
+  projectDir: string,
+  snapshot: ReadonlyMap<string, Buffer> | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  let raw = snapshot?.get("app.json")?.toString("utf8");
+  if (raw === undefined && snapshot === undefined) {
+    raw = await readFile(join(projectDir, "app.json"), "utf8").catch(() => undefined);
+  }
+  if (raw === undefined) return undefined;
+  return JSON.parse(raw.replace(/^﻿/, "")) as Record<string, unknown>;
+}
+
+/**
+ * R583: refuses an al-runner run whose effective selector is `resource` on a target below runtime
+ * 14.0, BEFORE anything is instrumented. `deploy()` checks again on the manifest al-runner compiles.
+ * Called for `run` (campaign stages run through it) and `run --dry-run`. `verify` is bcdev only.
+ */
+export async function refuseResourceSelectorRuntime(
+  config: LethalConfigFile,
+  projectDir: string,
+  snapshot: ReadonlyMap<string, Buffer>,
+): Promise<void> {
+  const appJson = await targetAppJson(projectDir, snapshot);
+  if (appJson === undefined) return; // buildBackend refuses a missing app.json by its own message
+  assertResourceSelectorRuntime(
+    appJson,
+    effectiveAlRunnerTransport(config.alRunner ?? {}).selectorMode,
+  );
 }
 
 export interface LethalConfigFile {
@@ -2442,6 +2644,15 @@ export function validateBcDevConfig(
   if (missing.length > 0) {
     throw new Error(
       `lethal.config.json "bcdev" section is missing required field(s): ${missing.join(", ")}`,
+    );
+  }
+  // R589: two places can state the dev port, and the readers disagree on which wins (altool and
+  // bc-dev-mcp take `port`, `devPackagesUrl` and the quarantine key take `server`). A config whose
+  // two say different ports would publish to one server and read another, so it is refused.
+  const serverPort = urlPortOf(String(raw.server));
+  if (raw.port !== undefined && serverPort !== undefined && raw.port !== serverPort) {
+    throw new Error(
+      `lethal.config.json "bcdev" section names two dev ports: "port" ${raw.port} and ${serverPort} in "server" (${raw.server}). Make them the same.`,
     );
   }
   return raw as BcDevConfigSection;
@@ -2580,6 +2791,36 @@ export function odataBaseUrl(server: string, serverInstance: string): string {
 }
 
 /**
+ * R589: the OData root a bcdev section names. `baseUrl` verbatim when the config gives one (the
+ * only way to reach a server whose OData is not on 7048, such as `bc2`'s 7148), else
+ * `odataBaseUrl`'s 7048 derivation, so a config without it (Cronus28) is unchanged. The ONE
+ * derivation `odataCfgFor` and every bcdev itest use.
+ */
+export function configuredOdataBaseUrl(
+  c: Pick<BcDevConfigSection, "baseUrl" | "server" | "serverInstance">,
+): string {
+  return c.baseUrl ?? odataBaseUrl(c.server, c.serverInstance);
+}
+
+/**
+ * R589: the OData root, plus the API root when the section names one. What every OData/API client
+ * built from a bcdev section (`odataCfgFor`, the bcdev itests) spreads in.
+ */
+export function odataUrlsOf(
+  c: Pick<BcDevConfigSection, "baseUrl" | "apiBaseUrl" | "server" | "serverInstance">,
+): { readonly baseUrl: string; readonly apiBaseUrl?: string } {
+  return {
+    baseUrl: configuredOdataBaseUrl(c),
+    ...(c.apiBaseUrl !== undefined ? { apiBaseUrl: c.apiBaseUrl } : {}),
+  };
+}
+
+/** R589: `{ port }` when the bcdev section names its dev port, else nothing (the 7049 default). */
+export function devPortOf(c: Pick<BcDevConfigSection, "port">): { readonly port?: number } {
+  return c.port !== undefined ? { port: c.port } : {};
+}
+
+/**
  * R51: the OData base URL a RECOVERY command (`force-reset-lease`) should call, given the tier the
  * operator named and whatever the config declares.
  *
@@ -2596,10 +2837,22 @@ export function odataBaseUrl(server: string, serverInstance: string): string {
  * REFUSED naming both rather than resolved by a precedence rule nobody would remember under
  * pressure. A config with no `baseUrl` keeps the container behaviour untouched.
  */
+/** The port written in a URL, or `undefined` when it states none or does not parse. */
+export function urlPortOf(url: string): number | undefined {
+  try {
+    const p = new URL(url).port;
+    return p !== "" ? Number(p) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function recoveryBaseUrl(
   server: string,
   serverInstance: string,
   configuredBaseUrl: string | undefined,
+  /** R589: the config's dev port (`bcdev.port`, else a port written in `bcdev.server`). */
+  configuredDevPort?: number,
 ): string {
   if (configuredBaseUrl === undefined || configuredBaseUrl === "") {
     return odataBaseUrl(server, serverInstance);
@@ -2608,11 +2861,34 @@ export function recoveryBaseUrl(
   // "a" is a substring of almost any hostname ("example.com"), so a mismatched tier would sail
   // through the check that exists to catch it. Caught by the test below, not by reading this.
   let segments: readonly string[];
+  let baseHost: string;
   try {
-    segments = new URL(configuredBaseUrl).pathname.split("/").filter((s) => s !== "");
+    const base = new URL(configuredBaseUrl);
+    segments = base.pathname.split("/").filter((s) => s !== "");
+    baseHost = base.hostname;
   } catch {
     throw new Error(
       `force-reset-lease: configured bcdev.baseUrl "${configuredBaseUrl}" is not a valid URL`,
+    );
+  }
+  // R589: three BC on Linux servers share one host and instance `BC`, so the instance check alone
+  // let `--server` name bc2 while the configured baseUrl reset bc1. The host must match, and the
+  // dev port `--server` names (if any) must be the config's.
+  let wanted: URL;
+  try {
+    wanted = new URL(server);
+  } catch {
+    throw new Error(`force-reset-lease: --server "${server}" is not a valid URL`);
+  }
+  const wantedPort = wanted.port !== "" ? Number(wanted.port) : undefined;
+  if (
+    wanted.hostname !== baseHost ||
+    (wantedPort !== undefined &&
+      configuredDevPort !== undefined &&
+      wantedPort !== configuredDevPort)
+  ) {
+    throw new Error(
+      `force-reset-lease: --server "${server}" is not the server the config describes (bcdev.baseUrl "${configuredBaseUrl}"${configuredDevPort !== undefined ? `, dev port ${configuredDevPort}` : ""}). This command clears safety state and will not reset a server you did not name — point --server at the config's server, or use that server's own config.`,
     );
   }
   if (!segments.includes(serverInstance)) {
@@ -2639,7 +2915,7 @@ export function recoveryBaseUrl(
  */
 export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
   return {
-    baseUrl: c.baseUrl ?? odataBaseUrl(c.server, c.serverInstance),
+    ...odataUrlsOf(c),
     company: c.company,
     username: c.username,
     password: c.password,
@@ -2777,6 +3053,7 @@ export function deployerFor(
           username: c.username,
           password: c.password,
           ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
+          ...devPortOf(c),
         },
         defaultDeployerIo,
       );
@@ -2912,7 +3189,9 @@ export async function resolveEnvToolSession(
 export type BackendInputs = Pick<
   RunCliConfig,
   "backendKind" | "projectDir" | "testDir" | "stopHungSessions"
->;
+> &
+  // R505: the run's own output files, which the source-drift watch must not count.
+  Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
 export async function buildBackend(
   parsed: BackendInputs,
@@ -2940,6 +3219,8 @@ export async function buildBackend(
   selectorIds: SelectorConfig = DEFAULT_SELECTOR_IDS,
   /** R205: the session's source snapshot, so the id check reads the source the build uses. */
   source?: ReadonlyMap<string, Buffer>,
+  /** R407: the coverage guard's frame-probe admission (`prepareAlRunnerSession`), never config. */
+  admitMultiObjectFiles = false,
 ): Promise<ExecutionBackend> {
   // R101(c): validated FIRST, for both backends, before anything is constructed — a typo'd symbol
   // list must fail immediately rather than after a compile that silently used the other branch.
@@ -2959,11 +3240,20 @@ export async function buildBackend(
         alRunnerPath: c.alRunnerPath,
         instrumentedDir: join(scratchDir, "al-runner-active"),
         testDir: parsed.testDir,
+        sourceProjectDir: parsed.projectDir,
+        // R505: with coverage on, al-runner labels it from the LIVE project; read it only while
+        // the project still equals the session snapshot.
+        ...(t.coverage !== "none" && source !== undefined
+          ? {
+              projectWatch: watchProjectInputs(parsed.projectDir, source, runOutputPaths(parsed)),
+            }
+          : {}),
         ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
         selectorObjectId: selectorIds.selectorId,
         serverMode: t.serverMode,
         selectorMode: t.selectorMode,
         coverage: t.coverage,
+        ...(admitMultiObjectFiles ? { admitMultiObjectFiles: true } : {}),
         // R101(c): the same list the bcdev path's `alc` step gets below. Both compile paths must
         // select the same branch, or their verdicts describe two different programs.
         ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
@@ -3070,7 +3360,8 @@ export async function buildBackend(
     bcDevBackendConfig(c, parsed.projectDir, parsed.stopHungSessions),
     undefined,
     { compiler, deployer, verifier, harnessVerifier },
-    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
 }
 
@@ -3336,6 +3627,8 @@ export async function printDryRun(
     readonly backendKind?: "bcdev" | "al-runner";
     /** R392: the config's al-runner binary, probed once when `backendKind` is `al-runner`. */
     readonly alRunnerPath?: string;
+    /** R565: the dependency package folders the config names (`MutationSetOptions`). */
+    readonly dependencyPackageDirs?: readonly string[];
   },
   spawn: SpawnFn = defaultSpawn,
 ): Promise<void> {
@@ -3357,11 +3650,18 @@ export async function printDryRun(
     const changed = predefinedSymbolsChangedWarning(predefined);
     if (changed !== undefined) console.warn(changed);
     backend = { kind: "al-runner", predefined };
+    // R565: a real run provisions and searches al-runner's platform apps first; a dry run does not.
+    console.warn(
+      "[lethal] dry run on al-runner: no platform-apps folder is provisioned, so Microsoft reports the project calls are read only from alRunner.packagesDir, and the refused set can differ from a real run's (R565).",
+    );
   } else if (paths.backendKind === "bcdev") {
     backend = { kind: "bcdev" };
   }
   const { files, skipped, totalFiles, excludedByOnly, excludedByOperator, excludedByLines } =
     await generateMutationSet(projectDir, {
+      ...(paths.dependencyPackageDirs !== undefined
+        ? { dependencyPackageDirs: paths.dependencyPackageDirs }
+        : {}),
       ...(only !== undefined ? { only } : {}),
       ...(exclude !== undefined ? { exclude } : {}),
       ...(operators !== undefined ? { operators } : {}),
@@ -3712,12 +4012,13 @@ async function removeScratchQuietly(dir: string): Promise<void> {
  * copies them into a batch dir: the results database and its SQLite sidecars, `--out`, and
  * `--progress-out`.
  */
-export function runOutputPaths(parsed: RunCliConfig): readonly string[] {
+export function runOutputPaths(
+  parsed: Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>,
+): readonly string[] {
   return [
-    parsed.dbPath,
-    `${parsed.dbPath}-wal`,
-    `${parsed.dbPath}-shm`,
-    `${parsed.dbPath}-journal`,
+    ...(parsed.dbPath !== undefined
+      ? [parsed.dbPath, `${parsed.dbPath}-wal`, `${parsed.dbPath}-shm`, `${parsed.dbPath}-journal`]
+      : []),
     ...(parsed.outPath !== undefined ? [parsed.outPath] : []),
     ...(parsed.progressOutPath !== undefined ? [parsed.progressOutPath] : []),
   ];
@@ -3745,6 +4046,9 @@ export async function runFromCli(
     /** R123: same injection point and same reason as `runAlRunnerCanary` above — a test drives a
      *  canned contract result without spawning a real al-runner. */
     runAlRunnerContractProbe?: typeof runAlRunnerContractProbe;
+    /** R407: the coverage guard's frame probe and its one-shot provisioning, for tests. */
+    alRunnerFrameProbe?: AlRunnerCoverageGuardOptions["frameProbe"];
+    alRunnerProvision?: AlRunnerCoverageGuardOptions["provision"];
     /** GH-25: the spawn `--changed-since` runs git through, so a test can neutralise the
      *  machine's inherited git config (a global `*.al -diff` would make an edit look binary). */
     gitSpawn?: SpawnFn;
@@ -3753,11 +4057,20 @@ export async function runFromCli(
     quarantineDir?: string;
   } = {},
 ): Promise<SessionReport> {
+  // R-445: a test project inside the target (or containing it) is refused by name before anything
+  // reads or builds the target: the build copies every .al under the target, so its tests would be
+  // mutated and published as target code. Campaign stages run through here too.
+  const nested = await testProjectNestedProblem(parsed.projectDir, parsed.testDir, "lethal run");
+  if (nested !== null) throw new TestProjectNestedError(nested);
   const configFile = await loadLethalConfigFile(parsed.configPath);
   // R205: the target's source, read ONCE before anything else reads it. The `--changed-since`
   // lines, the al-runner coverage guard and the session's build all use this snapshot, so an edit
   // landing later is never built; the session's last-batch re-read warns about it.
   const source = await readTargetSource(parsed.projectDir);
+  // R583: before any al-runner probe, instrumentation or build.
+  if (parsed.backendKind === "al-runner") {
+    await refuseResourceSelectorRuntime(configFile, parsed.projectDir, source);
+  }
   // Issue #19: before anything is provisioned, so a bad ref fails in seconds.
   const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn, source);
   // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
@@ -3823,6 +4136,8 @@ export async function runFromCli(
     // R387: the config every backend of this session is built from. Differs from `configFile` only
     // when the al-runner coverage guard below turned a requested coverage off.
     let sessionConfig = configFile;
+    // R407: the guard's frame-probe admission, handed to the main backend AND every worker.
+    let admitMultiObjectFiles = false;
     if (parsed.backendKind === "al-runner") {
       // R123: the contract first — if it has moved, nothing measured after it can be trusted,
       // including the canary. Throws on a divergence; see `announceAlRunnerContract`.
@@ -3848,12 +4163,14 @@ export async function runFromCli(
         );
       }
       // R387: once per session, here rather than in `buildBackend`, which runs once per worker.
-      sessionConfig = await prepareAlRunnerSession(
-        configFile,
-        parsed.projectDir,
-        console.warn,
-        source,
-      );
+      const prepared = await prepareAlRunnerSession(configFile, parsed.projectDir, console.warn, {
+        snapshot: source,
+        testDir: parsed.testDir,
+        ...(deps.alRunnerFrameProbe !== undefined ? { frameProbe: deps.alRunnerFrameProbe } : {}),
+        ...(deps.alRunnerProvision !== undefined ? { provision: deps.alRunnerProvision } : {}),
+      });
+      sessionConfig = prepared.config;
+      admitMultiObjectFiles = prepared.admitMultiObjectFiles;
     }
 
     // Task 7: resolves the bcdev section EXACTLY ONCE (see `resolveEnvToolSession`'s doc comment)
@@ -3920,6 +4237,7 @@ export async function runFromCli(
             {},
             selectorIds,
             source,
+            admitMultiObjectFiles,
           );
           // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
           // without awaiting — see orchestrator.ts), but building a worker's backend
@@ -3949,6 +4267,7 @@ export async function runFromCli(
                   {},
                   selectorIds,
                   source,
+                  admitMultiObjectFiles,
                 ),
               );
             }
@@ -4034,6 +4353,15 @@ export async function runFromCli(
             ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
             ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
             ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
+            // R565: bcdev and envtool read dependency reports from the package cache alc compiles
+            // against; al-runner's folders come from the backend and its provisioning.
+            ...(parsed.backendKind === "bcdev"
+              ? {
+                  dependencyPackageDirs: [
+                    resolve(packageCachePathDefault(effectiveConfig.bcdev, parsed.projectDir)),
+                  ],
+                }
+              : {}),
             // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
             // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
             preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
@@ -5249,9 +5577,21 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
       `explain: ${parsed.reportPath} is not valid JSON — ${err instanceof Error ? err.message : String(err)}.`,
     );
   }
-  const options = parsed.topSurvivors !== undefined ? { topSurvivors: parsed.topSurvivors } : {};
-  const out = explain(assertExplainableReport(parsedJson), options);
-  console.log(JSON.stringify(out, null, 2));
+  // R274: read once; `explain` hashes and renders this same map. An unreadable project throws
+  // `SourceSnapshotUnreadableError` before anything is printed.
+  const options = {
+    ...(parsed.topSurvivors !== undefined ? { topSurvivors: parsed.topSurvivors } : {}),
+    ...(parsed.projectDir !== undefined
+      ? { projectSource: await readTargetSource(parsed.projectDir) }
+      : {}),
+  };
+  const report = assertExplainableReport(parsedJson);
+  const out = explain(report, options);
+  // R273: composed HERE, never inside `explain()`, so the default output is unchanged by
+  // construction. Built before anything prints, so a refusal leaves stdout empty.
+  const printed: ExplainOutput | ExplainSuggestedOutput =
+    parsed.suggest === true ? { ...out, suggestions: suggest(report, out) } : out;
+  console.log(JSON.stringify(printed, null, 2));
   // R265: the mark keys for a human, on STDERR so stdout stays one JSON document. Each key sits
   // under its survivor; the stale statement, when there is one, comes first.
   if (out.markKeysStale !== undefined) {
@@ -5477,8 +5817,21 @@ export async function performForceResetLease(
   cfg: ActivationConfig,
   fetchFn: FetchFn = bcFetch,
 ): Promise<ForceResetLeaseResult> {
+  // A refusal from this read passes through untouched: nothing was sent to reset yet.
   const { serverGeneration } = await new HarnessVerifier(cfg, fetchFn).verify();
-  const resetOutcome = await new LeaseClient(cfg, fetchFn).forceResetLease(serverGeneration);
+  let resetOutcome: ForceResetOutcome;
+  try {
+    resetOutcome = await new LeaseClient(cfg, fetchFn).forceResetLease(serverGeneration);
+  } catch (err) {
+    // R507: ForceResetLease WAS sent, and BC answered with a refused redirect: the reset may
+    // have landed. Still the refusal itself, so the run-ending class is kept.
+    if (err instanceof UnfilteredExtensionsQueryError) {
+      throw new UnfilteredExtensionsQueryError(
+        `ForceResetLease was sent and BC answered with a refused redirect, so the reset may have been applied; re-run \`lethal force-reset-lease\` (safe). ${err.message}`,
+      );
+    }
+    throw err;
+  }
   if (resetOutcome.reset) {
     return {
       outcome: "reset",
@@ -5566,7 +5919,13 @@ export async function forceResetLeaseFromCli(
     // R51: honours an explicit `bcdev.baseUrl` (the env-tool case — a path-routed HTTPS endpoint on
     // 443, which port-7048 injection can never reach), and refuses one that names a different tier
     // than --instance. See `recoveryBaseUrl`.
-    baseUrl: recoveryBaseUrl(parsed.server, parsed.serverInstance, c.baseUrl),
+    baseUrl: recoveryBaseUrl(
+      parsed.server,
+      parsed.serverInstance,
+      c.baseUrl,
+      c.port ?? urlPortOf(c.server),
+    ),
+    ...(c.apiBaseUrl !== undefined ? { apiBaseUrl: c.apiBaseUrl } : {}),
     company: c.company,
     username: c.username,
     password: c.password,
@@ -5581,6 +5940,16 @@ export async function forceResetLeaseFromCli(
   try {
     result = await performForceResetLease(odataCfg, deps.fetchFn ?? bcFetch);
   } catch (err) {
+    // R507: R-496's refusal is never wrapped in a plain Error.
+    if (err instanceof UnfilteredExtensionsQueryError) throw err;
+    // R504: only the ForceResetLease call throws this class here (HarnessVerifier has its own).
+    // It was sent. R506 (R-504 minor 3): only an error status (`rejectedStatus`) proves it was
+    // not applied; every other failure means the reset may have landed.
+    if (err instanceof LeaseUnavailableError && err.rejectedStatus === undefined) {
+      throw new Error(
+        `force-reset-lease: the ForceResetLease call gave no usable answer, so ForceResetLease may have been applied; re-run \`lethal force-reset-lease\` to read the current generation and reset again (a re-run is safe). Underlying error: ${err.message}`,
+      );
+    }
     throw new Error(
       `force-reset-lease: could not complete the reset — the HarnessInfo/ForceResetLease call failed. Is the "LethAL Control" extension deployed and the NST at ${parsed.server}/${parsed.serverInstance} reachable? If you have not already, restart the NST/container first (design §8 step 1), then retry. Underlying error: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -5623,6 +5992,51 @@ const NATIVE_CHECK_SNIPPET = `codeunit 50100 "Native Check"
 }
 `;
 
+/** `lethal run --dry-run`: list what would be mutated, executing nothing. Out of `main` (R583) so
+ *  its refusal is testable. */
+export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
+  // R221: the config's exclusions count here too. A `--dry-run` that answered for a wider scope
+  // than the real run is the failure `printDryRun`'s doc names, and forgetting the config is the
+  // easiest way to produce it -- the caller passed no flag, so nothing on the command line hints
+  // that a scope was in force.
+  const dryRunConfig = await loadDryRunConfig(parsed.configPath, parsed.configExplicit === true);
+  if (dryRunConfig === undefined) {
+    console.log(`no config at ${parsed.configPath}: planning from source only, no server lookups`);
+  }
+  const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
+  // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
+  const dryRunSource = await readTargetSource(parsed.projectDir);
+  // R583: a dry run refuses what the real run would refuse.
+  if (parsed.backendKind === "al-runner") {
+    await refuseResourceSelectorRuntime(dryRunConfig ?? {}, parsed.projectDir, dryRunSource);
+  }
+  const dryRunLines = await resolveLineRanges(parsed, defaultSpawn, dryRunSource);
+  await printDryRun(parsed.projectDir, parsed.only, {
+    dbPath: parsed.dbPath,
+    configPath: parsed.configPath,
+    source: dryRunSource,
+    ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
+    ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+    ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
+    ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
+    ...(dryRunConfig?.preprocessorSymbols !== undefined
+      ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
+      : {}),
+    ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
+    ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
+      ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
+      : {}),
+    // R565: the folders a real run searches, less al-runner's provisioned platform apps.
+    dependencyPackageDirs:
+      parsed.backendKind === "al-runner"
+        ? dryRunConfig?.alRunner?.packagesDir !== undefined
+          ? [dryRunConfig.alRunner.packagesDir]
+          : []
+        : [resolve(packageCachePathDefault(dryRunConfig?.bcdev, parsed.projectDir))],
+  });
+  return 0;
+}
+
 async function main(): Promise<number> {
   const parsed = parseCliConfig(process.argv.slice(2));
   if (parsed.mode === "help") {
@@ -5644,37 +6058,7 @@ async function main(): Promise<number> {
     return 0;
   }
   if (parsed.mode === "dry-run") {
-    // R221: the config's exclusions count here too. A `--dry-run` that answered for a wider scope
-    // than the real run is the failure `printDryRun`'s doc names, and forgetting the config is the
-    // easiest way to produce it -- the caller passed no flag, so nothing on the command line hints
-    // that a scope was in force.
-    const dryRunConfig = await loadDryRunConfig(parsed.configPath, parsed.configExplicit === true);
-    if (dryRunConfig === undefined) {
-      console.log(
-        `no config at ${parsed.configPath}: planning from source only, no server lookups`,
-      );
-    }
-    const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
-    // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
-    const dryRunSource = await readTargetSource(parsed.projectDir);
-    const dryRunLines = await resolveLineRanges(parsed, defaultSpawn, dryRunSource);
-    await printDryRun(parsed.projectDir, parsed.only, {
-      dbPath: parsed.dbPath,
-      configPath: parsed.configPath,
-      source: dryRunSource,
-      ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
-      ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
-      ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
-      ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
-      ...(dryRunConfig?.preprocessorSymbols !== undefined
-        ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
-        : {}),
-      ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
-      ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
-        ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
-        : {}),
-    });
-    return 0;
+    return await dryRunFromCli(parsed);
   }
   if (parsed.mode === "clear-quarantine") {
     return await clearQuarantineFromCli(parsed);

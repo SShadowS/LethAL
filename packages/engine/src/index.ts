@@ -53,7 +53,14 @@ export {
 } from "./ast/tree-walks";
 export type { MemberPlace, PlacedMember } from "./ast/tree-walks";
 export { evaluateArms, hasDirectiveLine, startsInInactiveArm } from "./ast/preproc-arms";
-export { countArguments, exactArguments, soleArgument } from "./ast/arguments";
+export {
+  argumentList,
+  argumentsReadable,
+  countArguments,
+  exactArguments,
+  soleArgument,
+} from "./ast/arguments";
+export { fieldSegments, lastFieldChild, nameSegments } from "./ast/qualified-name";
 export type { ArmEvaluation } from "./ast/preproc-arms";
 
 // Semantic
@@ -68,9 +75,13 @@ export type {
 export {
   buildSymbolTable,
   collectVarDeclarations,
+  declaredNames,
+  enclosingTrigger,
   extensionScopeKey,
   objectScopeKey,
   objectScopeKeyOfNode,
+  qualifiedObjectName,
+  triggerLocalNames,
 } from "./semantic/symbol-table";
 export type { CFG, BasicBlock } from "./semantic/cfg";
 export { buildCFG } from "./semantic/cfg";
@@ -88,11 +99,15 @@ export {
   resolveReceiverTable,
   recordScopesAt,
   bareReceiverText,
+  bareFieldAssignable,
+  identifierTokens,
+  recordTableObjectOfName,
+  tableObjectOfRef,
 } from "./semantic/receiver";
 export type { RecordScope } from "./semantic/receiver";
 export type { CallerIndex, CallSite } from "./semantic/callers";
 export { buildCallerIndex } from "./semantic/callers";
-export type { NodeArm, SemanticContext } from "./semantic/context";
+export type { DependencyReport, NodeArm, SemanticContext } from "./semantic/context";
 export { armOfNode, buildSemanticContext, rawArmOf } from "./semantic/context";
 export { normalizeAlName, resolveVarRef } from "./semantic/resolve-var-ref";
 export type { HarmlessTriggerKind, RunTriggerKind } from "./semantic/trigger-skip";

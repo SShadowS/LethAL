@@ -18,6 +18,7 @@ import {
 } from "../src/preprocessor-symbols";
 import { type SessionReport, collapseNumberedRuns, renderConsole } from "../src/report";
 import { ResultsStore } from "../src/store";
+import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
 
 /**
  * R-381: `SessionReport.buildSymbols` is the target's EFFECTIVE build symbols (app.json, config and
@@ -89,7 +90,11 @@ const CLEANSCHEMA_LITERAL = [
 
 class StubBackend implements ExecutionBackend {
   private active: string | null = null;
-  constructor(private readonly authoritative: boolean) {}
+  constructor(private readonly authoritative: boolean) {
+    // R495: as bcdev, a served test app, installed, so the run's identity is proven (as a real
+    // bcdev's is). As al-runner, no package read: it compiles the test source it hashed.
+    if (authoritative) Object.assign(this, servesTestApp());
+  }
   capabilities(): BackendCapabilities {
     return {
       coverage: "procedure",
@@ -251,6 +256,8 @@ describe("R-381: report.buildSymbols equals the effective set", () => {
 
   test("a resumed run's report carries the same buildSymbols as the original's", async () => {
     await withProject(["APPSYM"], async (root) => {
+      // R495: names the served package, so the bcdev run's identity is proven and resumable.
+      await Bun.write(join(root, "tests", "app.json"), testAppJson());
       const store = new ResultsStore(":memory:");
       const first = await session(root, store, true, { preprocessorSymbols: ["CFG"] });
       const resumed = await session(root, store, true, {

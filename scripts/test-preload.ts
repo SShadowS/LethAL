@@ -41,15 +41,31 @@ process.env.HOME = fake;
  * which runs after the last test, so nothing is judged earlier. An entry made in a `beforeAll`
  * is outside every test; the run-end check catches it, without a file name.
  *
- * A child process does NOT see this redirect: Bun gives a child the environment the parent
- * STARTED with unless `env` is passed explicitly (measured 2026-09-30), so a child's temp files
- * land in the real temp folder, outside this guard. A full run left nothing there on 2026-09-30.
+ * R359: a child process sees this redirect and the fake home too (`withPreloadEnv`, below).
  */
 const tmp = join(runDir, "tmp");
 mkdirSync(tmp);
 process.env.TEMP = tmp;
 process.env.TMP = tmp;
 process.env.TMPDIR = tmp;
+
+/**
+ * R359: `Bun.spawn` and `Bun.spawnSync` give a child the environment the process STARTED with
+ * unless `env` is passed (measured on Bun 1.4.2, 2026-10-06: the child saw the real HOME and TMPDIR;
+ * `node:child_process` and `Bun.$` already pass the current `process.env`). So a child started by a
+ * test or by product code under test could read the real home or write the real temp folder. Both
+ * are replaced, for this process only, by versions that default `env` to the current
+ * `process.env`; an explicit `env` still wins. `real-home-guard.test.ts` checks a child's view.
+ */
+type SpawnOptions = { env?: Record<string, string | undefined> } & Record<string, unknown>;
+function withPreloadEnv<F extends (...a: never[]) => unknown>(spawn: F): F {
+  return ((first: unknown, opts?: SpawnOptions) => {
+    if (Array.isArray(first)) return spawn(...([first, { env: process.env, ...opts }] as never[]));
+    return spawn(...([{ env: process.env, ...(first as SpawnOptions) }] as never[]));
+  }) as unknown as F;
+}
+Bun.spawn = withPreloadEnv(Bun.spawn);
+Bun.spawnSync = withPreloadEnv(Bun.spawnSync);
 
 const lethalEntries = (): string[] => readdirSync(tmp).filter((e) => e.startsWith("lethal-"));
 const leaks: string[] = [];

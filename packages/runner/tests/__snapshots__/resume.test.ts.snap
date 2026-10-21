@@ -283,6 +283,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
             "codeunitId": 79100,
             "codeunitName": "Sandbox Tests",
             "file": "SandboxTests.Codeunit.al",
+            "line": 6,
             "method": "OverBudgetDetected",
           },
         ],
@@ -292,7 +293,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "code": "test-digests-unavailable",
-        "message": "[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: the published test app could not be requested from the server (no dev server, no dev-endpoint credentials, or no readable test app.json), and the source on disk is not known to be the body it runs",
+        "message": "[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: the published test app "Sandbox Tests" carries no AL source, so the body the server runs cannot be digested. Build the test app so its .app includes its source",
         "seq": 4,
         "type": "warning",
       },
@@ -338,6 +339,8 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "tuples": [],
         },
         "declarativeSiteFiles": [],
+        "dependencyReportSources": [],
+        "dependencySourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "deployedCount": 6,
         "excludedByExclude": 0,
         "excludedByOnly": 0,
@@ -349,6 +352,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "preprocExcludedFiles": [],
         "seq": 9,
         "siteCount": 6,
+        "sourceSha256": "b5663472c6745b2debcef8680592ede36d8859b8dbf05a2a79e20358103d9530",
         "totalFiles": 2,
         "twinSites": [],
         "type": "mutation-set-generated",
@@ -370,6 +374,10 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       },
     },
     {
+      "call": "fetchPublishedAppPackage",
+      "tag": "primary",
+    },
+    {
       "event": {
         "batchIndex": 0,
         "coverageAttribution": "exact",
@@ -385,7 +393,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "codeunitName": "Sandbox Extra",
           "endIndex": 147,
           "file": "SandboxExtra.Codeunit.al",
-          "gapId": "G9a5bf4ba41d5",
+          "gapId": "Ga913e02e3ae2",
           "identityOrdinal": 0,
           "memberHash": "f9d3228f0d97c0de8aa722235f039641681c305615e93fd2822bae96e00c7350",
           "mutantId": "M0001",
@@ -427,7 +435,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "codeunitName": "Sandbox Extra",
           "endIndex": 138,
           "file": "SandboxExtra.Codeunit.al",
-          "gapId": "G9a5bf4ba41d5",
+          "gapId": "Ga913e02e3ae2",
           "identityOrdinal": 0,
           "memberHash": "f9d3228f0d97c0de8aa722235f039641681c305615e93fd2822bae96e00c7350",
           "mutantId": "M0002",
@@ -465,7 +473,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "codeunitName": "Sandbox Extra",
           "endIndex": 137,
           "file": "SandboxExtra.Codeunit.al",
-          "gapId": "G9a5bf4ba41d5",
+          "gapId": "Ga913e02e3ae2",
           "identityOrdinal": 0,
           "memberHash": "f9d3228f0d97c0de8aa722235f039641681c305615e93fd2822bae96e00c7350",
           "mutantId": "M0003",
@@ -506,6 +514,10 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "unplaceableMutants": [],
         "untargetedTriggerCount": 0,
       },
+    },
+    {
+      "call": "fetchPublishedAppPackage",
+      "tag": "primary",
     },
     {
       "event": {
@@ -555,7 +567,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "code": "resume-baseline-reused",
-        "message": "[lethal] --resume: batch 1's baseline was not re-run. Its instrumented source and the published test app hash the same as run 1's batch 1, so that run's 1 baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here.",
+        "message": "[lethal] --resume: batch 1's baseline was not re-run. Its instrumented source and the published test app hash the same as run 1's batch 1, so that run's 1 baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).",
         "seq": 21,
         "type": "warning",
       },
@@ -604,7 +616,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "codeunitName": "Sandbox Logic",
           "endIndex": 151,
           "file": "SandboxLogic.Codeunit.al",
-          "gapId": "G72d9fc182da7",
+          "gapId": "G6f267d61cf49",
           "identityOrdinal": 0,
           "memberHash": "432d3a98bec97b5e2ede70dd76cf4bed42b2fd7404ae3bdb1224e0408d2087e5",
           "mutantId": "M0001",
@@ -665,7 +677,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "codeunitName": "Sandbox Logic",
           "endIndex": 142,
           "file": "SandboxLogic.Codeunit.al",
-          "gapId": "G72d9fc182da7",
+          "gapId": "G6f267d61cf49",
           "identityOrdinal": 0,
           "memberHash": "432d3a98bec97b5e2ede70dd76cf4bed42b2fd7404ae3bdb1224e0408d2087e5",
           "mutantId": "M0002",
@@ -715,7 +727,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "codeunitName": "Sandbox Logic",
           "endIndex": 141,
           "file": "SandboxLogic.Codeunit.al",
-          "gapId": "G72d9fc182da7",
+          "gapId": "G6f267d61cf49",
           "identityOrdinal": 0,
           "memberHash": "432d3a98bec97b5e2ede70dd76cf4bed42b2fd7404ae3bdb1224e0408d2087e5",
           "mutantId": "M0003",

@@ -4,6 +4,7 @@ import {
   type ALSyntaxNode,
   type ArmEvaluation,
   buildSemanticContext,
+  claimedRunTriggerSkip,
   evaluateArms,
   findAll,
   initParser,
@@ -384,6 +385,93 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     expect(tagged(resolvedNonRecord)).toEqual(["true->false -", "true->false -", "true->false -"]);
   });
 
+  // F13 (R479). The BARE form of F10/F12: in a pageextension the implicit `Rec` is the extended
+  // page's `SourceTable`, which the project cannot see, so `claimsRecordMethod` refuses the call
+  // (and `swap-modify-flag` does not claim it: `claimedRunTriggerSkip` stays null) and this operator
+  // flips it. Nothing proves the trigger harmless, so both directions keep their tag, as
+  // `Rec.Insert(true)` in the same place already does; a reportextension `modify(X)` trigger the
+  // same. Revert: give `receiverUnresolved` back `target.receiver === null -> false` (every bare
+  // row goes untagged).
+  it("tags a bare RunTrigger call on a pageextension's implicit Rec, both directions", () => {
+    const body =
+      "Insert(true); Modify(true); Delete(true); Insert(false); Modify(false); Delete(false); Rec.Insert(true);";
+    const ext = `pageextension 50310 "Ext" extends "Customer Card" { trigger OnOpenPage() begin ${body} end; }`;
+    expect(tagged({ "O.al": ext })).toEqual([
+      "true->false run-trigger-skipped-insert",
+      "true->false run-trigger-skipped-modify",
+      "true->false run-trigger-skipped-delete",
+      "false->true run-trigger-forced",
+      "false->true run-trigger-forced",
+      "false->true run-trigger-forced",
+      "true->false run-trigger-skipped-insert",
+    ]);
+    const root = wrapRoot(parseAL(ext));
+    const ctx = buildSemanticContext([{ path: "O.al", root }]);
+    const calls = findAll(root, ALNodeKind.procedure_call);
+    expect(calls.length).toBe(7);
+    for (const c of calls) expect(claimedRunTriggerSkip(c, ctx)).toBeNull();
+    const repExt = `reportextension 50314 "RX" extends "Customer - List" { dataset { modify(Customer) { trigger OnAfterAfterGetRecord() begin Modify(true); Insert(false); end; } } }`;
+    // R487 blanket rule: the base report is in the project and its `Customer` item walks a real
+    // table (bounded), so the modify block keeps the R-452 tags. With the base ABSENT the block
+    // counts as open and both flips are refused (the open twin).
+    const base = `report 50315 "Customer - List" { dataset { dataitem(Customer; Customer) { } } }`;
+    expect(tagged({ "O.al": repExt, "B.al": base })).toEqual([
+      "true->false run-trigger-skipped-modify",
+      "false->true run-trigger-forced",
+    ]);
+    expect(tagged({ "O.al": repExt })).toEqual([]);
+  });
+
+  // F14 (R479). Controls: a bare call whose binding IS known keeps today's behaviour.
+  // - a page whose `SourceTable` (Par, no triggers) resolves: `Modify(true)` is ceded to
+  //   `swap-modify-flag` (no flip) and `Modify(false)` is proven harmless (untagged).
+  //   Revert: stop ceding in `isCededRunTriggerFlag` (a `true->false` row appears).
+  // - the same page on a Par that DECLARES `Modify`: rule 3 refuses the claim, the call is Par's own
+  //   procedure, untagged. Revert: drop `scope.table !== null` in `implicitRecordUnresolved`.
+  // - a pageextension that declares its own `Delete`: untagged. Revert: drop the
+  //   `declaresProcedure` guard.
+  // - `with Mgt do Modify(true)`, Mgt a codeunit: untagged. Revert: drop the non-record check.
+  it("keeps a bare call untagged where its binding is known (resolved Rec, namesake, codeunit with)", () => {
+    const page = `page 50311 "Pg" { SourceTable = "Par"; trigger OnOpenPage() begin Modify(true); Modify(false); end; }`;
+    expect(tagged({ "P.al": par(""), "O.al": page })).toEqual(["false->true -"]);
+    const own = par("    procedure Modify(Run: Boolean) begin end;\n");
+    expect(tagged({ "P.al": own, "O.al": page })).toEqual(["true->false -", "false->true -"]);
+    const extOwn = `pageextension 50312 "Ext2" extends "Customer Card" { trigger OnOpenPage() begin Delete(true); Delete(false); end; local procedure Delete(Run: Boolean) begin end; }`;
+    expect(tagged({ "O.al": extOwn })).toEqual(["true->false -", "false->true -"]);
+    const mgt = `codeunit 50303 "Mgt" { procedure Modify(Run: Boolean) begin end; }`;
+    const withCu = `pageextension 50313 "Ext3" extends "Customer Card" { trigger OnOpenPage() var Mgt: Codeunit "Mgt"; begin with Mgt do begin Modify(true); Modify(false); end; end; }`;
+    expect(tagged({ "M.al": mgt, "O.al": withCu })).toEqual(["true->false -", "false->true -"]);
+  });
+
+  // F15 (R479, sol final r1; R-463). Since R-463 an added dataitem on Par RESOLVES (the extension is
+  // a claimable object kind): `Modify(true)` is ceded to `swap-modify-flag` and `Modify(false)` on a
+  // Par without triggers is untagged, exactly like F14's page. Red: drop `reportextension` from
+  // receiver.ts's OBJECT_KINDS (both flips come back tagged). On a Par that DECLARES `Modify` the
+  // call is Par's own procedure, untagged. `with Mgt do`, Mgt a codeunit declared in the extension:
+  // untagged. Revert: drop the `withSubjectIsNonRecord` check.
+  it("resolves a reportextension's added dataitem; its bare project procedure and codeunit `with` stay untagged", () => {
+    const rx = (body: string, vars = "") =>
+      `reportextension 50315 "RX2" extends "Customer - List" { dataset { add(Customer) { dataitem(ParItem; "Par") { trigger OnAfterGetRecord() ${vars} begin ${body} end; } } } }`;
+    const both = "Modify(true); Modify(false);";
+    // R487 r6: an `add(Customer)` block runs inside base item Customer. The base report is in the
+    // project and walks a real table (bounded), so the R-452 metadata below is unchanged. With the
+    // base ABSENT the added item counts as open and every flip is refused (the open twin, last).
+    const B = `report 50316 "Customer - List" { dataset { dataitem(Customer; Customer) { } } }`;
+    expect(tagged({ "P.al": par(""), "B.al": B, "O.al": rx(both) })).toEqual(["false->true -"]);
+    const own = par("    procedure Modify(Run: Boolean) begin end;\n");
+    expect(tagged({ "P.al": own, "B.al": B, "O.al": rx(both) })).toEqual([
+      "true->false -",
+      "false->true -",
+    ]);
+    const mgt = `codeunit 50303 "Mgt" { procedure Modify(Run: Boolean) begin end; }`;
+    const withCu = rx(`with Mgt do begin ${both} end;`, `var Mgt: Codeunit "Mgt";`);
+    expect(tagged({ "P.al": par(""), "B.al": B, "M.al": mgt, "O.al": withCu })).toEqual([
+      "true->false -",
+      "false->true -",
+    ]);
+    expect(tagged({ "P.al": par(""), "O.al": rx(both) })).toEqual([]);
+  });
+
   // F8. Revert: drop `claimsRecordMethod` (tag by method name alone).
   it("does NOT tag a codeunit's or a table procedure's ModifyAll/DeleteAll", () => {
     const mgt = `codeunit 50303 "Mgt" { procedure ModifyAll(A: Integer; B: Integer; Run: Boolean) begin end; procedure DeleteAll(Run: Boolean) begin end; }`;
@@ -400,17 +488,22 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     expect(tagged(files)).toEqual(["true->false -", "true->false -", "true->false -"]);
   });
 
-  // F11 (R-254, review R-254-001). Inside a `reportextension` (admitted by R-254) the receiver is
-  // treated as UNRESOLVED for tagging, so every RunTrigger flip keeps its tag even on a `Par` with
-  // no triggers. Controls: the same calls from a codeunit keep today's behaviour (resolved receiver,
-  // no trigger, untagged). Revert: `receiverUnresolved` returns false outside `OBJECT_KINDS`.
-  it("KEEPS the RunTrigger tags inside a reportextension (receiver unresolved for tagging)", () => {
+  // F11 (R-254, review R-254-001; R-463). Inside a `reportextension` a receiver the extension
+  // DECLARES now resolves, so its flips are untagged exactly as from a codeunit (the control below).
+  // Red: drop `reportextension` from receiver.ts's OBJECT_KINDS (tags come back). A receiver the
+  // extension does not declare (`G`, e.g. a base report's `protected var`) stays unresolved and
+  // keeps its tag. Red: `receiverUnresolved` answers false for an unresolved qualified receiver.
+  it("resolves a declared receiver inside a reportextension; an undeclared one keeps its tag", () => {
     const body = "Par.Insert(false); Par.ModifyAll(Amount, 1, true); Par.DeleteAll(true);";
-    const repExt = `reportextension 50304 "RX" extends "Base"\n{\n    procedure P()\n    var\n        Par: Record "Par";\n    begin\n        ${body}\n    end;\n}\n`;
-    expect(tagged({ "P.al": par(""), "O.al": repExt })).toEqual([
+    const repExt = (b: string) =>
+      `reportextension 50304 "RX" extends "Base"\n{\n    procedure P()\n    var\n        Par: Record "Par";\n    begin\n        ${b}\n    end;\n}\n`;
+    expect(tagged({ "P.al": par(""), "O.al": repExt(body) })).toEqual([
+      "false->true -",
+      "true->false -",
+      "true->false -",
+    ]);
+    expect(tagged({ "P.al": par(""), "O.al": repExt("G.Insert(false);") })).toEqual([
       "false->true run-trigger-forced",
-      "true->false run-trigger-skipped-modify",
-      "true->false run-trigger-skipped-delete",
     ]);
     expect(tagged({ "P.al": par(""), "O.al": caller(body) })).toEqual([
       "false->true -",
@@ -582,6 +675,213 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
         "O.al": caller("Par.Modify(false);"),
       };
       expect(tagged(files, [])).toEqual([PLAIN]);
+    });
+
+    // R485: an `#if`-wrapped object is read for THIS table when it parses cleanly, and by its whole
+    // text for any table when it does not. Each test names the revert that turns it red.
+    describe("unindexed objects, scoped to the table (R485)", () => {
+      const wrap = (object: string): string => `#if X\n${object}\n#endif\n`;
+      const subOn = (target: string, event: string): string =>
+        `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, ${target}, '${event}', '', false, false)]\n  local procedure X(var Rec: Record "Par"; RunTrigger: Boolean) begin end;\n}`;
+      const SKIPPED_MODIFY = "true->false run-trigger-skipped-modify";
+
+      // Revert: drop the clean-codeunit `subscribes(n)` arm (return false there).
+      it("an unindexed subscriber of THIS table keeps the tag", () => {
+        const s = wrap(subOn(`Database::"Par"`, "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Revert: the old any-table text rule for a clean codeunit.
+      it("an unindexed subscriber of ANOTHER table drops it", () => {
+        const s = wrap(subOn(`Database::"Oth"`, "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // A custom event's subscriber, its signature matching the publisher's (no parameters).
+      const customSub = (objectType: string, target: string): string =>
+        `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::${objectType}, ${target}, 'OnAfterModifyCheck', '', false, false)]\n  local procedure Observe() begin Error('forced'); end;\n}`;
+      // Sol, R-485 run 001: a split-header extension (invisible, R494) raises a CUSTOM event from
+      // its OnAfterModify, and a wrapped codeunit subscribes to it on this table.
+      const splitExt = (table: string, body = "OnAfterModifyCheck();", vars = "") =>
+        `#if A\ntableextension 50305 "Ext A" extends "${table}"\n#else\ntableextension 50305 "Ext B" extends "${table}"\n#endif\n{\n    trigger OnAfterModify()\n${vars}    begin\n        ${body}\n    end;\n\n    [IntegrationEvent(false, false)]\n    local procedure OnAfterModifyCheck()\n    begin\n    end;\n}\n`;
+      it("sol run 001: a hidden extension's custom event, subscribed on THIS table, keeps it", () => {
+        const files = {
+          "P.al": par(""),
+          "X.al": splitExt("Par"),
+          "S.al": wrap(customSub("Table", `Database::"Par"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Sol, R-485 run 002: the hidden extension calls a CODEUNIT's event, so the subscriber's
+      // object type is Codeunit. Revert: drop the `opaque` guard (read structurally anyway).
+      it("sol run 002: a hidden extension calling a codeunit's event keeps it", () => {
+        const publisher = `codeunit 50303 "Publisher"\n{\n    [IntegrationEvent(false, false)]\n    procedure OnAfterModifyCheck()\n    begin\n    end;\n}\n`;
+        const files = {
+          "P.al": par(""),
+          "X.al": splitExt(
+            "Par",
+            "Publisher.OnAfterModifyCheck();",
+            `    var\n        Publisher: Codeunit "Publisher";\n`,
+          ),
+          "C.al": publisher,
+          "S.al": wrap(customSub("Codeunit", `Codeunit::"Publisher"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Nothing hidden: the structural reading decides. Revert: decide the clean codeunit by
+      // `subscribes(n)` (the two built-in event names only).
+      it("nothing hidden: a subscriber to a custom event of THIS table keeps it", () => {
+        const files = {
+          "P.al": par(""),
+          "S.al": wrap(customSub("Table", `Database::"Par"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Control. Revert: keep the tag for a subscriber of any table.
+      it("nothing hidden: a subscriber to a custom event of ANOTHER table drops it", () => {
+        const files = {
+          "P.al": par(""),
+          "S.al": wrap(customSub("Table", `Database::"Oth"`)),
+          "O.al": caller("Par.Modify(false);"),
+        };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // A half-parsed object with only a MISSING node (no ERROR node, so not in `unparsedObjects`)
+      // makes the project opaque too: the other-table subscriber is then read by its text and
+      // keeps. Revert: drop `unindexedObjects.some((n) => n.hasError)` from `opaque`.
+      // A codeunit missing its `var` semicolon: a MISSING node and no ERROR node (asserted).
+      const missingOnly = `codeunit 50306 "Broken"\n{\n    procedure X()\n    var N: Integer\n    begin\n    end;\n}`;
+      const expectMissingOnly = (src: string): void => {
+        const root = wrapRoot(parseAL(src));
+        const kinds = (n: ALSyntaxNode): { missing: boolean; error: boolean } =>
+          n.children.reduce(
+            (acc, c) => {
+              const k = kinds(c);
+              return { missing: acc.missing || k.missing, error: acc.error || k.error };
+            },
+            { missing: n.isMissing, error: n.rawKind === "ERROR" },
+          );
+        expect(root.hasError).toBe(true);
+        expect(kinds(root)).toEqual({ missing: true, error: false });
+      };
+      for (const [where, broken] of [
+        ["an #if-wrapped", wrap(missingOnly)],
+        ["an indexed (unwrapped)", missingOnly],
+      ] as const) {
+        // Revert: drop `symbols.parseDamaged` from `opaque`.
+        it(`${where} object with only a MISSING node makes the project opaque: the old text rule keeps it`, () => {
+          expectMissingOnly(broken);
+          const files = {
+            "P.al": par(""),
+            "B.al": broken,
+            "S.al": wrap(customSub("Table", `Database::"Oth"`)),
+            "O.al": caller("Par.Modify(false);"),
+          };
+          expect(tagged(files)).toEqual([FORCED]);
+        });
+      }
+      // Sol, run 003: a QUOTED target is a name, never an id. Revert: normalise any all-digit text
+      // as a number (then "050301" reads as 50301, matches neither name nor id, and drops).
+      it("a subscriber naming THIS table by a quoted all-digit NAME keeps it", () => {
+        const digitsTable = `table 50300 "050301"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+        const s = wrap(
+          `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::"050301", 'OnAfterModifyEvent', '', false, false)]\n  local procedure X(var Rec: Record "050301"; RunTrigger: Boolean) begin end;\n}`,
+        );
+        const files = {
+          "P.al": digitsTable,
+          "S.al": s,
+          "O.al": caller(`D.Modify(false);`, `D: Record "050301";`),
+        };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Revert: delete the integer branch (a bare id then counts as unreadable and keeps).
+      it("a subscriber naming ANOTHER table by a bare id drops it", () => {
+        const s = wrap(subOn("50399", "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // Revert: compare the id as text (`targetKey` without the integer normalisation).
+      it("a subscriber naming THIS table by a leading-zero id keeps it", () => {
+        const s = wrap(subOn("050300", "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Only an `[EventSubscriber]` observes: a clean wrapped codeunit whose attributes are all
+      // something else drops it. Revert: count any attribute as a subscriber of this table.
+      it("an unindexed codeunit with only non-subscriber attributes drops it", () => {
+        const s = wrap(
+          `codeunit 50304 "Helper"\n{\n    [Scope('OnPrem')]\n    procedure Touch(var Rec: Record "Par")\n    begin\n    end;\n}`,
+        );
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // Revert: drop `subscribesToTable`'s integer-target match.
+      it("an unindexed subscriber naming the table by a bare id keeps it", () => {
+        const s = wrap(subOn("50300", "OnAfterModifyEvent"));
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Revert: the old any-table substring rule for a clean tableextension.
+      it("an unindexed tableextension of ANOTHER table whose text names this one drops it", () => {
+        const x = wrap(
+          `tableextension 50306 "Oth Ext" extends "Oth"\n{\n    procedure P()\n    var R: Record "Par";\n    begin\n    end;\n}`,
+        );
+        const files = { "P.al": par(""), "X.al": x, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([PLAIN]);
+      });
+      // Revert: read a `hasError` object structurally (drop the `!n.hasError &&` guards).
+      it("a half-parsed unindexed tableextension naming the table keeps it by its whole text", () => {
+        const x = wrap(
+          `tableextension 50306 "Q Ext" extends Microsoft.Sales.Par\n{\n    trigger OnBeforeModify()\n    begin\n    end;\n}`,
+        );
+        const files = { "P.al": par(""), "X.al": x, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Revert: make `textObserves` return false for an unparsed (ERROR) object.
+      // The codeunit half of the `hasError` guard alone. Its subscription names ANOTHER table, so
+      // only the whole-text fallback keeps the tag. Revert: drop `!n.hasError &&` on the codeunit
+      // branch.
+      it("a half-parsed unindexed codeunit keeps it by its whole text", () => {
+        const s = wrap(
+          `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::"Oth", 'OnAfterModifyEvent', '', false, false)]\n  local procedure X(var Rec: Record "Par"; RunTrigger: Boolean)\n  var N: Integer;\n  begin\n    N := ;\n  end;\n}`,
+        );
+        const files = { "P.al": par(""), "S.al": s, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      it("an unparsed ERROR object still keeps the any-table text rule", () => {
+        const broken = `@@ OnBeforeModify @@ )))\n`;
+        const files = { "P.al": par(""), "B.al": broken, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // Any kind but a clean tableextension or codeunit keeps the any-table text rule. Revert:
+      // return false for other kinds instead of `textObserves`.
+      it("an unindexed object of another kind naming On(Before|After)Modify keeps it by its text", () => {
+        const pg = wrap(
+          `page 50308 "Par Page"\n{\n    trigger OnOpenPage()\n    begin\n        OnBeforeModifyShown();\n    end;\n    local procedure OnBeforeModifyShown() begin end;\n}`,
+        );
+        const files = { "P.al": par(""), "G.al": pg, "O.al": caller("Par.Modify(false);") };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+      // The insert kind, both directions. Revert: judge insert by another kind's events.
+      it("insert: an unindexed subscriber keeps it only for THIS table", () => {
+        const mine = wrap(subOn(`Database::"Par"`, "OnAfterInsertEvent"));
+        const other = wrap(subOn(`Database::"Oth"`, "OnAfterInsertEvent"));
+        const o = caller("Par.Insert(false);");
+        expect(tagged({ "P.al": par(""), "S.al": mine, "O.al": o })).toEqual([FORCED]);
+        expect(tagged({ "P.al": par(""), "S.al": other, "O.al": o })).toEqual([PLAIN]);
+      });
+      // A SKIPPED tag (`skipCanRaise` shares `projectObserves`), both directions.
+      // No `OnModify`, so only an observer can keep the skipped tag.
+      it("a skipped modify: an unindexed subscriber keeps it only for THIS table", () => {
+        const mine = wrap(subOn(`Database::"Par"`, "OnAfterModifyEvent"));
+        const other = wrap(subOn(`Database::"Oth"`, "OnAfterModifyEvent"));
+        const o = caller("Par.ModifyAll(Amount, 1, true);");
+        expect(tagged({ "P.al": par(""), "S.al": mine, "O.al": o })).toEqual([SKIPPED_MODIFY]);
+        expect(tagged({ "P.al": par(""), "S.al": other, "O.al": o })).toEqual(["true->false -"]);
+      });
     });
 
     // Revert: drop the unindexed-object check in `projectObserves`.

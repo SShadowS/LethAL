@@ -215,9 +215,10 @@ describe("swap-modify-flag extension to Insert/Delete (R136)", () => {
     expect(specs.map((s) => s.after.text)).toEqual(["Rec.Insert(false)", "Rec.Delete(false)"]);
   });
 
-  // R463 (kept by R-254 review R-254-001): a site inside a `reportextension` is never claimed, even
-  // where Tier-1's RunTrigger tag now treats its receiver as unresolved. Control: the codeunit above.
-  it("does NOT claim Insert/Modify/Delete inside a reportextension", () => {
+  // R-463: a typed record declared inside a `reportextension` resolves like one in a codeunit, so
+  // its RunTrigger calls are claimed (before R-463 none were). Red: drop `reportextension` from
+  // receiver.ts's OBJECT_KINDS.
+  it("claims Insert/Modify/Delete on a typed record inside a reportextension", () => {
     const src = `reportextension 50158 "RX" extends "Base"
     {
       procedure P()
@@ -228,7 +229,11 @@ describe("swap-modify-flag extension to Insert/Delete (R136)", () => {
         Rec.Delete(true);
       end;
     }`;
-    expect(specsFor(src)).toEqual([]);
+    expect(specsFor(src).map((s) => s.after.text)).toEqual([
+      "Rec.Insert(false)",
+      "Rec.Modify(false)",
+      "Rec.Delete(false)",
+    ]);
   });
 
   /**

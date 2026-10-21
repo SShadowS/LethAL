@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
@@ -14,6 +14,7 @@ import {
   planArtifacts,
 } from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R421: discovered paths are normalised to `/` ONCE, at discovery, so a project gives the same
@@ -26,8 +27,8 @@ import { identityKeyOf, serializeKey } from "../src/selection";
  */
 
 const dirs: string[] = [];
-afterAll(async () => {
-  for (const d of dirs) await rm(d, { recursive: true, force: true });
+afterAll(() => {
+  for (const d of dirs) removeScratchDir(d);
 });
 
 async function tempDir(): Promise<string> {
@@ -213,7 +214,12 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // R459 re-pinned (was b1d589cd...5e21): provenance only, every `flip-boolean-literal` entry's
   // operatorVersion 1.0.0 -> 1.1.0; sites, tags and ids unchanged.
   // R474 re-pinned (was 105d129b...b83f): every entry gains `memberHash`, the only change.
-  const pinned = "db5aef548546072c265799037b2c9800e3636cf3812277394831a26d77c8b4e7";
+  // R477 re-pinned (was db5aef54...b4e7): provenance only, `validate-to-assign` 1.1.0 -> 1.2.0.
+  // R276 re-pinned (was 59942c7a...4e81): `gapId` values only (a gap's line span and LF text are
+  // hashed instead of its byte offsets and raw text); sites, ids and every other field unchanged.
+  // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
+  // c83bdd08...23eb); 4 new arm entries, ids +4 after DataBandExt, proven in id-shift-proof.txt.
+  const pinned = "dc2c1f197b0932e58f3d1cc1fde4f4c6a80a11f9a66d221c3090af766986da48";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(

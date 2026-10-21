@@ -28,12 +28,14 @@ const kill = (
   failure: string,
 ): ArmOracleRow => ({ line, operator, verdict: "killed", killingTest, killPosition, failure });
 
+// R-463 r2 (measured): lines 12 and 20's kills move from position 2 to 3. `BandCountsFromLow` now covers
+// object 79341, and these trigger mutants take the object-level fallback, so it runs before the killer.
 export const R254_ARM_ORACLE: readonly ArmOracleRow[] = [
-  kill(12, "empty-block", "BandReportSumsBands", 2, SUM0),
+  kill(12, "empty-block", "BandReportSumsBands", 3, SUM0),
   kill(13, "remove-assignment", "BandReportSumsBands", 1, SUM0),
   { line: 19, operator: "empty-block", verdict: "survived" },
   { line: 20, operator: "remove-assignment", verdict: "survived" },
-  kill(20, "shift-integer", "BandReportSumsBands", 2, "band total should be 6, got 7"),
+  kill(20, "shift-integer", "BandReportSumsBands", 3, "band total should be 6, got 7"),
   kill(24, "empty-block", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 0"),
   kill(25, "conditional-boundary", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 1"),
   kill(26, "return-value", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 0"),
@@ -44,6 +46,14 @@ export const R254_ARM_ORACLE: readonly ArmOracleRow[] = [
   { line: 37, operator: "conditional-boundary", verdict: "no-coverage" },
   { line: 38, operator: "return-value", verdict: "no-coverage" },
   { line: 38, operator: "swap-additive", verdict: "no-coverage" },
+  // R-463 (docs/superpowers/specs/2026-10-09-r463-reportext-precommitment.md): `CountBand`, a typed
+  // record in the extension. The two `remove-setrange` rows are `void-method-call` under master's code,
+  // so a reverted R-463 fails here as two rows "not in the oracle". Line 47's count is not pinned:
+  // any `Data Related` row in [3, 99] other than BAND 3 and 4 adds to it.
+  kill(46, "empty-block", "BandCountsFromLow", 1, "CountBand(3) should be 2, got 0"),
+  kill(47, "remove-setrange", "BandCountsFromLow", 1, "CountBand(3) should be 2, got"),
+  kill(48, "remove-setrange", "BandCountsFromLow", 1, "CountBand(3) should be 2, got 4"),
+  kill(49, "return-value", "BandCountsFromLow", 1, "CountBand(3) should be 2, got 0"),
 ];
 
 /** The fields of a report mutant the oracle reads. */

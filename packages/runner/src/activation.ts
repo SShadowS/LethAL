@@ -1,10 +1,14 @@
-import { bcFetch } from "./bc-fetch";
-import { ActivationFailure } from "./failure-classes";
-
 export type FetchFn = typeof fetch;
 
 export interface ActivationConfig {
   readonly baseUrl: string;
+  /**
+   * R589: the root the API calls (`api/v2.0/companies`, the automation `extensions` list) go to.
+   * Absent, they go to `baseUrl`, which is right where one port serves OData and API (Cronus28).
+   * BC on Linux serves the API on its own port: measured 2026-10-21 on bc1, `api/v2.0/companies`
+   * under the OData root answers 404 "Resource not found for the segment 'BC'".
+   */
+  readonly apiBaseUrl?: string;
   readonly company: string;
   readonly username: string;
   readonly password: string;
@@ -19,101 +23,7 @@ export interface ActivationConfig {
   // Observed directly against a real BC server (2026-07-18): the OData/web-service pipeline
   // can wedge and stop answering ANY request (even unrelated ones, like a plain entity read)
   // for an extended period, with no HTTP response ever arriving — `fetch()` has no default
-  // timeout, so without one this call (and orchestrator.ts's `activateOnce`, which retries a
-  // `pre-dispatch-rejected` activation exactly once and never retries anything else — the old
-  // `activateWithRetry` this comment used to name was deleted in Task 10) would hang the whole
-  // session forever rather than surfacing a retryable/session-aborting error.
+  // timeout, so every BC client built from this config bounds its call with this many ms
+  // (R506: the headers AND the body) rather than hanging the whole session forever.
   readonly timeoutMs?: number;
-}
-
-const DEFAULT_TIMEOUT_MS = 30_000;
-
-/**
- * Shapes and sends one authenticated OData POST against the `MutationControl_*` unbound
- * actions/functions on the target BC server — base URL, `company`/`tenant` query params, Basic
- * auth, and a manual abort-based timeout. Shared by `MutationControlClient` (SetActive/
- * ClearActive) and `DeploymentVerifier` (Identity) so this request-shaping exists exactly once.
- */
-export async function postOData(
-  cfg: ActivationConfig,
-  fetchFn: FetchFn,
-  action: string,
-  body?: Record<string, unknown>,
-): Promise<unknown> {
-  const params = new URLSearchParams({ company: cfg.company });
-  if (cfg.tenant !== undefined) params.set("tenant", cfg.tenant);
-  const url = `${cfg.baseUrl}/ODataV4/MutationControl_${action}?${params.toString()}`;
-  // NOTE: AbortSignal.timeout() is unreliable in this Bun/Windows environment — verified
-  // directly (2026-07-18): its "abort" event never fired even 20s after a 50ms timeout, in
-  // isolation, with nothing else running. A manual AbortController + setTimeout (confirmed
-  // working the same way) is used instead.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  let res: Response;
-  try {
-    res = await fetchFn(url, {
-      method: "POST",
-      headers: {
-        authorization: `Basic ${btoa(`${cfg.username}:${cfg.password}`)}`,
-        "content-type": "application/json",
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    });
-  } catch (err) {
-    // No HTTP response ever arrived. If our own timeout aborted it, the request may have reached
-    // the server → ambiguous. A pre-response network throw (DNS/connect refused) never dispatched.
-    const aborted = controller.signal.aborted;
-    throw new ActivationFailure(
-      `MutationControl_${action} ${aborted ? "timed out" : "failed pre-dispatch"}: ${String(err)}`,
-      aborted ? "in-flight-unknown" : "pre-dispatch-rejected",
-    );
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!res.ok) {
-    // The server answered with a non-2xx. The request was dispatched and the codeunit MAY have
-    // committed before the error surfaced → effect unknown, not a clean pre-dispatch rejection.
-    throw new ActivationFailure(
-      `MutationControl_${action} failed: HTTP ${res.status}`,
-      "completed-effect-unknown",
-    );
-  }
-  return await res.json().catch(() => ({}));
-}
-
-export class MutationControlClient {
-  constructor(
-    private readonly cfg: ActivationConfig,
-    private readonly fetchFn: FetchFn = bcFetch,
-  ) {}
-
-  private post(action: string, body?: Record<string, unknown>): Promise<unknown> {
-    return postOData(this.cfg, this.fetchFn, action, body);
-  }
-
-  // The `{ mutantId }` body key (camelCase) is CONFIRMED correct against a real BC server
-  // (2026-07-18) — sending the raw AL parameter name instead (`{ MutantId }`, matching
-  // `SetActive(MutantId: Text)`'s declaration exactly) gets rejected immediately by OData's
-  // parameter binding with "not a valid parameter for the operation", while `mutantId` is
-  // accepted and reaches the codeunit. The `{ value: ... }` echo shape could not be fully
-  // re-confirmed after that: an earlier client-timed-out call while testing left a lock on
-  // the "Mutation Active" table that never cleared, hanging every subsequent call that
-  // reaches the codeunit's `Insert`/`Commit` (regardless of parameter name) for the rest of
-  // the session — a real BC session artifact, not a code defect (see the integration-fixes
-  // report). Left as originally assumed, matching standard OData v4 scalar-action-return
-  // convention.
-  async setActive(mutantId: string): Promise<void> {
-    const payload = (await this.post("SetActive", { mutantId })) as { value?: string };
-    if (payload.value !== mutantId) {
-      throw new ActivationFailure(
-        `activation echo mismatch: sent ${mutantId}, got ${String(payload.value)}`,
-        "completed-effect-unknown",
-      );
-    }
-  }
-
-  async clearActive(): Promise<void> {
-    await this.post("ClearActive");
-  }
 }

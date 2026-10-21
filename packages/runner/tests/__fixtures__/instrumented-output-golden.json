@@ -45,16 +45,16 @@
       "mutants": 11
     },
     "fixtures/sandbox-data-tests/src/DataTests.Codeunit.al": {
-      "sha256": "ab1aa9f8623b7aa686dd5a247af7bcbf386446d763ce442176d905d05f41a29a",
-      "mutants": 548
+      "sha256": "f6909bf98151c8c0c3f6c82c0a1fa16179a7be95d637266393e2d9007486f8d8",
+      "mutants": 559
     },
     "fixtures/sandbox-data/src/DataAssertOps.Codeunit.al": {
       "sha256": "ab73e45da78c6edd02e17cf89592632809f5de666029cdb79dbe96f91c41c217",
       "mutants": 4
     },
     "fixtures/sandbox-data/src/DataBandExt.ReportExt.al": {
-      "sha256": "49f5318b439f664dfc8f3f4e8ddd621039e38f6f5033841d402890f66003ff8c",
-      "mutants": 15
+      "sha256": "ff1c0d72bcaeaa4f3616ec91858be0daa809c073a5925206d9a84098fe34b66f",
+      "mutants": 19
     },
     "fixtures/sandbox-data/src/DataBlankOps.Codeunit.al": {
       "sha256": "3b070898d4aa27f35d8504da4b7001ba449a8fa065354826c17894513c245c2b",
@@ -216,6 +216,14 @@
       "sha256": "2ab477f5f2d3dbee917471ab112ff66d26110a293398accce510ac83283f691d",
       "mutants": 10
     },
+    "fixtures/sandbox-names-tests/src/NamesTests.Codeunit.al": {
+      "sha256": "1a17b04c07e7c12acee2e7460259988ca1df16d9a60095f6c47b4cf42b81d5f7",
+      "mutants": 48
+    },
+    "fixtures/sandbox-names/src/NamesCalc.Codeunit.al": {
+      "sha256": "b102d523d8b0b80708ca9401af8ad6e1bfcbdbf3e3000c3ce2ddbdf4758bd04a",
+      "mutants": 36
+    },
     "fixtures/sandbox-probes/src/CommitProbe.Codeunit.al": {
       "sha256": "24ce825bce711fe4517e465e3e4803bd82258bab2cccc5af150bea826a993140",
       "mutants": 31
@@ -323,6 +331,66 @@
     "fixtures/sandbox-tests/src/SandboxTests.Codeunit.al": {
       "sha256": "632f256da86a3d28c6277b52bf02e0c0c88fedc4216d6cd64bedfbce5e0ababa",
       "mutants": 10
+    },
+    "fixtures/sandbox-wrapped-tests/src/WrappedTests.Codeunit.al": {
+      "sha256": "6ff11f2ae54a42d29a31af37dc4c16a179cc19a7739ac78f70f9ae28e461465a",
+      "mutants": 119
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedArms.Codeunit.al": {
+      "sha256": "db5dba667bbfc23a2a618be821a6a75500d499d7464bb979f615bb8c3b0511d7",
+      "mutants": 3
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedPairA.Codeunit.al": {
+      "sha256": "c6baf4cfce926215bc8c53c95b1d6eb668929b613de20c5c4dd07ca8875484a4",
+      "mutants": 3
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedPre.Codeunit.al": {
+      "sha256": "51a9e3a8c749af47429839023ed9c662cb5a8db649df69ebfd0dfbd112724188",
+      "mutants": 7
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedPreTwin.Codeunit.al": {
+      "sha256": "e456a604d359f88a0f97ed3eda68976e490beabbde9e214e3b8a349a9b3eb445",
+      "mutants": 7
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTop.Codeunit.al": {
+      "sha256": "32b103960c86d39cda86043ae533f3e5d2d83fb15e277a8f3e2a21bce0bb503d",
+      "mutants": 8
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTopTwin.Codeunit.al": {
+      "sha256": "457f08db1d8aedd8e638dff84e45e770a48b7c56d46bbbf287da3787ea4c4495",
+      "mutants": 8
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTrigger.Table.al": {
+      "sha256": "ec7079b1c5fc06cb8b03dea2e8abfdad43819b8b3a54a7d1845a8347246778fe",
+      "mutants": 6
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedTriggerTwin.Table.al": {
+      "sha256": "b63fbdf3a251ea9b5af35b3b1b9e6f00fd3953f0e301628ccd93c7a4f74249a8",
+      "mutants": 6
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedView.Page.al": {
+      "sha256": "9657ea20b4e2e3f08c3ab2fcb7010e13edc50044696a83b988d95572f3489ea2",
+      "mutants": 5
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedViewTwin.Page.al": {
+      "sha256": "09ffa62b3a8759d4f06480fe98b9542f547b11c54055ac5f3bca2f4573618993",
+      "mutants": 5
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedXtra.PageExt.al": {
+      "sha256": "fa1e7c80223f2bbae647abf41abdae68b09ce57306581d91033946e7af444e16",
+      "mutants": 6
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedXtraTwin.PageExt.al": {
+      "sha256": "97c642e74da46bb83a4a7c2d78c584e0ea93166c766196e70241a56e545459d5",
+      "mutants": 6
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedYBand.Report.al": {
+      "sha256": "20f09782eb6d627f83d4093c855e203884f940debf33b0a369f4a8f5baf23402",
+      "mutants": 14
+    },
+    "fixtures/sandbox-wrapped[WRAPDEF]/src/WrappedYBandTwin.Report.al": {
+      "sha256": "4653a3f9a323ab8a0356a876adfbf3116086893219b5f49a316b3771b09b252e",
+      "mutants": 14
     }
   }
 }

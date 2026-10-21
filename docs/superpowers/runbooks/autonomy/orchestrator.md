@@ -31,11 +31,13 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 3. `coord stale`: message the lane once; a dead session with a live claim -> `coord abandon`
    only when no live gate of that run is still running, otherwise `coord ask`.
 4. New questions: push-notify the owner with the id and first line.
-5. Once per day run `bash scripts/al-runner-update.sh` from the main checkout. It builds
+5. Pre-commitments are committed by the lanes themselves (README); check each one landed on
+   master before its live run (`git log origin/master -- docs/superpowers/specs/<file>`).
+6. Once per day run `bash scripts/al-runner-update.sh` from the main checkout. It builds
    upstream al-runner `main` and moves `/work/tools/al-runner/current` onto it only if
    `itest:alrunner` passes. On failure keep working on the current build and file what broke
    (a roadmap item with the failing summary the script printed).
-6. Rewrite your handoff file. Next sweep in 5 to 10 minutes while work is active, 20 to 30
+7. Rewrite your handoff file. Next sweep in 5 to 10 minutes while work is active, 20 to 30
    when waiting on long gates.
 
 ## Review and integration
@@ -46,6 +48,13 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 3. **GitHub CI on the submitted branch must be green on BOTH jobs** (`gh run list --branch <branch> --limit 1`; `check` is Windows, `unit-linux` is Linux). This container is Linux, so a Windows-only failure (path separators, CRLF, platform APIs) never shows locally: CI is the only Windows check we have. Red or missing: send it back. Merge onto current `master` in the main checkout. Run on that exact tree: `bun run typecheck`,
    `rm -rf packages/*/dist`, `bun test`, `bunx biome check <touched files>`, and
    `bun run compile:fixtures` when fixtures changed. Live gates the plan names: run them yourself on Cronus28 under `coord lease Cronus28 orchestrator` (standing owner authorization, README), one at a time; a moved figure is a block for the owner.
+   **Merge-time gates (owner, 2026-10-08): run a gate on the merged tree only when the merge can
+   change what it measures.** Re-run `itest:alrunner` only when the merged diff touches the
+   al-runner path (`packages/runner/src/al-runner*`, coverage/line-map/selection/orchestrator
+   scoring, `packages/schemata`, mutant generation, the fixtures or their itest files) AND master
+   moved in that path since the lane's own gate run. Otherwise the lane's own PASS on its branch
+   stands. When several submissions are waiting, merge them in sequence and run ONE gate on the
+   final tree before a single push.
 4. Commit the merge, `git push origin master`, check master's CI run on the next loop tick (`gh run list --branch master --limit 3`; red master is the next dispatch, ahead of the queue), `coord accept <id> <run> <sha>`, close the issue
    (`gh issue close <n> -R SShadowS/LethAL --comment "Done in <sha>"`), message the lane
    `accepted <id>` and `master moved to <sha>: merge it`; tell the other lane `master moved to <sha>` too.

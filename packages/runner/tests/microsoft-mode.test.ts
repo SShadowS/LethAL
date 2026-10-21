@@ -12,7 +12,7 @@ import { DependencyUnreadableError } from "../src/digest-inputs";
 const CFG = {
   mcpCommand: ["bun", "x", "bc-dev-mcp"],
   project: "/project",
-  server: "http://Cronus284",
+  server: "http://Cronus28",
   serverInstance: "BC",
   packageCachePath: "/cache",
   controlSymbolPath: "/control.app",

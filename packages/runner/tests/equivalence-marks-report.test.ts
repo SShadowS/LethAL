@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -23,6 +23,7 @@ import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/o
 import { buildReport } from "../src/report";
 import type { SessionReport } from "../src/report";
 import { identityKeyOf, numberingDigestOf, serializeKey, twinSitesOf } from "../src/selection";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * A reader mark round-trips through the REAL path: a small AL project is mutated by the real
@@ -45,8 +46,8 @@ const roots: string[] = [];
 beforeAll(async () => {
   await initParser();
 });
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 /** R443: the numbering facts `runSession` puts on `mutation-set-generated`. */

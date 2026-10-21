@@ -30,6 +30,7 @@
  * attribution rather than the operators.
  */
 import { readFile } from "node:fs/promises";
+import { memberOf } from "./lib/member-key";
 
 /**
  * One report per distinct mutant SET. `rung1`, `rung1.resumed-run` and `rung3.redcheck` are the same
@@ -151,18 +152,19 @@ console.log("rate   = share of those pairs whose kill/survive verdicts DISAGREE 
 // three grains answers it: nothing about the operators changes between these rows.
 const GRAINS: ReadonlyArray<{
   readonly name: string;
-  readonly of: (m: Mutant & { procedureName?: string }) => string;
+  readonly of: (m: Mutant & { procedureName?: string; triggerName?: string }) => string;
 }> = [
   { name: "line (file:line)", of: (m) => `${m.file}:${m.line}` },
-  { name: "procedure", of: (m) => `${m.file}:${m.procedureName ?? ""}` },
+  // R347: a trigger row's procedureName is "", so the trigger's name keys it.
+  { name: "procedure", of: (m) => `${m.file}:${memberOf(m)}` },
   { name: "file", of: (m) => m.file },
 ];
 
-const all: (Mutant & { procedureName?: string })[] = [];
+const all: (Mutant & { procedureName?: string; triggerName?: string })[] = [];
 for (const path of REPORTS) {
   try {
     const r = JSON.parse(await readFile(path, "utf8")) as {
-      mutants?: (Mutant & { procedureName?: string })[];
+      mutants?: (Mutant & { procedureName?: string; triggerName?: string })[];
     };
     all.push(...(r.mutants ?? []));
   } catch {
@@ -175,7 +177,7 @@ console.log(
   `${"grain".padEnd(20)}${"groups".padStart(9)}${"solo mutants".padStart(15)}${"marginal".padStart(11)}`,
 );
 for (const g of GRAINS) {
-  const by = new Map<string, (Mutant & { procedureName?: string })[]>();
+  const by = new Map<string, (Mutant & { procedureName?: string; triggerName?: string })[]>();
   for (const m of all) {
     const k = g.of(m);
     const l = by.get(k);

@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as engineModule from "@lethal/engine";
@@ -28,6 +28,8 @@ import {
   noTestArmEvidence,
 } from "../src/test-membership";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { servesTestApp } from "./helpers/proven-test-app";
+import { removeScratchDirs } from "./helpers/scratch";
 
 /**
  * R403 phase A, through `runSession`: discovery evaluates the TEST app's `#if` arms under the test
@@ -71,7 +73,15 @@ class StubBackend implements ExecutionBackend {
   private active: string | null = null;
   /** Every method the baseline (no active mutant) asked for. */
   readonly baselineMethods: string[] = [];
-  constructor(private readonly authoritative: boolean) {}
+  constructor(private readonly authoritative: boolean) {
+    // R495: as bcdev, a served test app, installed, so the run's identity is proven (as a real
+    // bcdev's is). It carries no SymbolReference.json, so the suite and its evidence are what no
+    // read gives. As al-runner, no package read: it compiles the test source it hashed. A subclass
+    // that serves its own package keeps it.
+    if (authoritative && !("fetchPublishedAppPackage" in this)) {
+      Object.assign(this, servesTestApp());
+    }
+  }
   capabilities(): BackendCapabilities {
     return {
       coverage: "procedure",
@@ -116,8 +126,8 @@ beforeAll(async () => {
 });
 
 const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((r) => rm(r, { recursive: true, force: true })));
+afterEach(() => {
+  removeScratchDirs(roots.splice(0));
 });
 
 /** A target `app/` and a test project `tests/`, each with its own `app.json` symbols. */

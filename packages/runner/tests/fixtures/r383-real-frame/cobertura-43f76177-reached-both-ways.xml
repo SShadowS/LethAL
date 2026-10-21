@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R-407 step 1 (copied from /coord/handoff/R-407/captures/43f76177-oneshot-same-ReachedBothWays.xml): al-runner v2.12.0-main.43f76177, one-shot with coverage, SAME app id as the source project (the R383 layout that broke on c39ad5de), baseline run of Codeunit79850.ReachedBothWays. Bundle work/inst/active = LethAL's instrumented sandbox-multiobject bundle, MultiPair.Codeunit.al byte-identical to the one beside this file; work/fixtures/sandbox-multiobject (same app id) beside the test project; cwd = work/, so the label is relative to it. Trimmed to the MultiPair class; every kept line verbatim. -->
+<coverage line-rate="0.2245" branch-rate="0" lines-covered="11" lines-valid="49" version="1.0" timestamp="1791546311">
+  <packages>
+    <package name="al-source">
+      <classes>
+        <class name="MultiPair.Codeunit" filename="inst/active/MultiPair.Codeunit.al" line-rate="0.2424" branch-rate="0">
+          <lines>
+            <line number="8" hits="0" />
+            <line number="9" hits="0" />
+            <line number="10" hits="0" />
+            <line number="12" hits="0" />
+            <line number="14" hits="0" />
+            <line number="16" hits="0" />
+            <line number="20" hits="0" />
+            <line number="33" hits="2" />
+            <line number="34" hits="0" />
+            <line number="35" hits="2" />
+            <line number="37" hits="0" />
+            <line number="38" hits="0" />
+            <line number="39" hits="0" />
+            <line number="40" hits="2" />
+            <line number="42" hits="0" />
+            <line number="43" hits="0" />
+            <line number="44" hits="0" />
+            <line number="45" hits="2" />
+            <line number="47" hits="0" />
+            <line number="48" hits="0" />
+            <line number="49" hits="0" />
+            <line number="50" hits="2" />
+            <line number="52" hits="0" />
+            <line number="53" hits="0" />
+            <line number="54" hits="0" />
+            <line number="57" hits="2" />
+            <line number="58" hits="1" />
+            <line number="59" hits="1" />
+            <line number="64" hits="0" />
+            <line number="65" hits="0" />
+            <line number="66" hits="0" />
+            <line number="68" hits="0" />
+            <line number="72" hits="0" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>

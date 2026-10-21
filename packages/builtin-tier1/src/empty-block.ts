@@ -58,7 +58,9 @@ export const emptyBlock: MutationOperator = {
     // `--stop-hung-sessions` is off because it ends a session on the user's own server.
     //
     // `loop-skip` asks the same question, "does anything notice if this body does not run", as
-    // `while false`, and cannot hang on any input. This is `loop-truncate`'s relationship to
+    // `while false`, and cannot hang THAT loop on any input. An enclosing loop that relies on the
+    // body can still spin (an open report data item is one); R501 refuses every operator in such
+    // code at the orchestrator's dispatch. This is `loop-truncate`'s relationship to
     // `negate-conditional` at `repeat` (R164), one visibility level out.
     //
     // POSITIONAL on purpose. The precise rule would be "refuse where the body advances the

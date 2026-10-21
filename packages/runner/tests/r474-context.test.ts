@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -22,6 +22,8 @@ import { runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { carryRecord, memberSiteOf, twinSiteOf } from "../src/selection";
 import { ResultsStore } from "../src/store";
+import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R474 (sol, review of R-391's plan): rule 2 matched a mutant on (file, tuple) alone, so `exit(1);`
@@ -89,8 +91,8 @@ const A = "A_Twin.Table.al";
 const B = "B_Twin.Codeunit.al";
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 type Outcome = "pass" | "fail" | "abort";
@@ -100,6 +102,10 @@ class SiteBackend implements ExecutionBackend {
   private byId = new Map<string, MutantManifestEntry>();
   readonly activated: string[] = [];
   constructor(private readonly outcomes: Readonly<Record<string, Outcome>>) {}
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
     return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
   }
@@ -171,6 +177,7 @@ async function project(a: readonly string[], b: readonly string[]) {
   await Bun.write(join(projectDir, B), CODEUNIT_AL(b));
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "TwinTests.Codeunit.al"), TEST_AL);
+  await Bun.write(join(testDir, "app.json"), testAppJson());
   return {
     dirs: { projectDir, testDir, instrumentedDir },
     dbPath: join(root, "lethal.sqlite"),
@@ -283,6 +290,7 @@ describe("R474: rule 2 carries only into an unchanged enclosing member", () => {
     await Bun.write(join(dirs.projectDir, file), before);
     await Bun.write(join(dirs.projectDir, "app.json"), APP_JSON);
     await Bun.write(join(dirs.testDir, "TwinTests.Codeunit.al"), TEST_AL);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
     const store = new ResultsStore(":memory:");
     const sRow = (r: SessionReport, line: number) =>
       r.mutants
@@ -501,8 +509,8 @@ ${guard}        ${S}
     expect(
       carryRecord(
         m,
-        { hash: "old", twins: new Set() },
-        { hash: "new", twins: new Set(), refused },
+        { hash: "old", twins: new Set(), dependencyHash: "dep" },
+        { hash: "new", twins: new Set(), dependencyHash: "dep", refused },
         answer,
         answer,
       ),
@@ -513,8 +521,8 @@ ${guard}        ${S}
     expect(
       carryRecord(
         { ...m, memberHash: "x" },
-        { hash: "old", twins: new Set() },
-        { hash: "new", twins: new Set(), refused: new Set() },
+        { hash: "old", twins: new Set(), dependencyHash: "dep" },
+        { hash: "new", twins: new Set(), dependencyHash: "dep", refused: new Set() },
         () => undefined,
         (s) => (s === memberSiteOf(site, "x") ? "carried" : undefined),
       ),

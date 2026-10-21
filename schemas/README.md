@@ -5,7 +5,12 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 
 | File | Describes | Version constant |
 |---|---|---|
-| [`explain-v12.schema.json`](explain-v12.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 12 |
+| [`explain-v17.schema.json`](explain-v17.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 17 |
+| [`explain-v16.schema.json`](explain-v16.schema.json) | the same, from builds before R577; kept so a stored v16 document stays checkable (v17 added the cause `kill-not-reproduced`) | `EXPLAIN_SCHEMA_VERSION` = 16 |
+| [`explain-v15.schema.json`](explain-v15.schema.json) | the same, from builds before R534; kept so a stored v15 document stays checkable (v16 added the causes `runner-test-error` and `runner-refused`) | `EXPLAIN_SCHEMA_VERSION` = 15 |
+| [`explain-v14.schema.json`](explain-v14.schema.json) | the same, from builds before R516; kept so a stored v14 document stays checkable (v15 added the cause `timeout-unconfirmed`) | `EXPLAIN_SCHEMA_VERSION` = 14 |
+| [`explain-v13.schema.json`](explain-v13.schema.json) | the same, from builds before R514; kept so a stored v13 document stays checkable (v14 added the cause `reused-budget-stale`) | `EXPLAIN_SCHEMA_VERSION` = 13 |
+| [`explain-v12.schema.json`](explain-v12.schema.json) | the same, from builds before R-204b; kept so a stored v12 document stays checkable (v13 added the cause `stop-outcome-unconfirmed`) | `EXPLAIN_SCHEMA_VERSION` = 12 |
 | [`explain-v11.schema.json`](explain-v11.schema.json) | the same, from builds before R443; kept so a stored v11 document stays checkable (v12 added `survivors[].mark`, and a mark with `markKey` alone is now refused) | `EXPLAIN_SCHEMA_VERSION` = 11 |
 | [`explain-v10.schema.json`](explain-v10.schema.json) | the same, from builds before R307; kept so a stored v10 document stays checkable (v11 added the caveat `files-refused`) | `EXPLAIN_SCHEMA_VERSION` = 10 |
 | [`explain-v9.schema.json`](explain-v9.schema.json) | the same, from builds before R403; kept so a stored v9 document stays checkable (v10 added the caveats `tests-compiled-out` and `test-symbols-unverified`) | `EXPLAIN_SCHEMA_VERSION` = 9 |
@@ -14,7 +19,8 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`explain-v6.schema.json`](explain-v6.schema.json) | the same, from builds before R265; kept so a stored v6 document stays checkable (v7 added the required `survivors[].markKey` and `markIdentityScheme`, and `markKeysStale`) | `EXPLAIN_SCHEMA_VERSION` = 6 |
 | [`explain-v5.schema.json`](explain-v5.schema.json) | the same, from builds before R-236c; kept so a stored v5 document stays checkable (v6 added the caveat `tests-testpage-refused`) | `EXPLAIN_SCHEMA_VERSION` = 5 |
 | [`explain-v4.schema.json`](explain-v4.schema.json) | the same, from builds before GH-24; kept so a stored v4 document stays checkable (its value sets drifted, see `docs/roadmap/R233.md`) | `EXPLAIN_SCHEMA_VERSION` = 4 |
-| [`campaign-compare-v1.schema.json`](campaign-compare-v1.schema.json) | `lethal campaign compare --json` on stdout (R357); a coverage-mode mismatch is a refusal and prints none | `CAMPAIGN_COMPARE_SCHEMA_VERSION` = 1 |
+| [`campaign-compare-v2.schema.json`](campaign-compare-v2.schema.json) | `lethal campaign compare --json` on stdout (R357); a coverage-mode mismatch is a refusal and prints none | `CAMPAIGN_COMPARE_SCHEMA_VERSION` = 2 |
+| [`campaign-compare-v1.schema.json`](campaign-compare-v1.schema.json) | the same, from builds before R556; kept so a stored v1 document stays checkable (v2 added `identity` and widened `identical`) | `CAMPAIGN_COMPARE_SCHEMA_VERSION` = 1 |
 | [`doctor-v1.schema.json`](doctor-v1.schema.json) | `lethal doctor --json` on stdout | `DOCTOR_SCHEMA_VERSION` = 1 |
 | [`verify-v8.schema.json`](verify-v8.schema.json) | `lethal verify` on stdout | `VERIFY_SCHEMA_VERSION` = 8 |
 | [`verify-v7.schema.json`](verify-v7.schema.json) | the same, from builds before R259; kept so a stored v7 document stays checkable (v8 added `results[].sameProcedure`) | `VERIFY_SCHEMA_VERSION` = 7 |
@@ -28,10 +34,10 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`report-v2.schema.json`](report-v2.schema.json) | the same, from builds before R231; frozen so an archived v2 report stays checkable (v3 writes each run-level mutant list entry as `<batchIndex>/<mutantCode>` and adds `batchIndex` to reader-mark entries, because mutant codes restart per batch) | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Of the twenty-one files, seventeen are hand-written and four were generated, and the split is about SIZE
-rather than principle.** `explain` (a few dozen leaves; v11 and the kept v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
-`verify` (small, like `doctor`; v8 and the kept v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v11, `doctor` and
-verify v8 are pinned against their declarations, and explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
+**Of the twenty-eight files, twenty-three are hand-written and five were generated, and the split is about SIZE
+rather than principle.** `explain` (a few dozen leaves; v17 and the kept v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
+`verify` (small, like `doctor`; v8 and the kept v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v17, `doctor` and
+verify v8 are pinned against their declarations, and explain v16, explain v15, explain v14, explain v13, explain v12, explain v11, explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
 verify v7, verify v6, verify v5, verify v4, verify v3, verify v2 and verify v1 are frozen as they were published.
 Verify v5 bumped for two ADDED fields, which this page's rule alone would not do: their absence
 means "not decided" only from v5 on, while in a v4 document it means the document predates the
@@ -40,7 +46,7 @@ stopped before deciding (not decided). Verify v8 bumped for an added field by th
 `results[].sameProcedure` is present on every row killed by a new test, so its absence there means
 "not measured" only from v8 on. `report`, `stream` and `campaign-compare` are generated; report v2 is frozen as the
 generator last wrote it.
-`SessionReport` walks out to 130 leaves and the stream is a union of 22 event shapes; at that size a
+`SessionReport` walks out to 130 leaves and the stream is a union of 23 event shapes; at that size a
 hand-written file stops being a guarantee and becomes a second copy of the type that someone
 forgets, so `bun scripts/generate-schemas.ts` emits them, and `--check` fails when a committed file
 no longer matches the type.
@@ -66,7 +72,7 @@ worse than no schema at all — it calls a correct document invalid, at every co
    current explain schema is ALSO pinned against a literal list (R233), so a value added without a
    version bump fails.
 3. **Real data.** The projection of a committed campaign report is validated against
-   `explain-v12.schema.json`, capped and uncapped.
+   `explain-v17.schema.json`, capped and uncapped.
 
 The validator in that test is small on purpose — type, const, enum, required, properties,
 additionalProperties, items, minItems, local `$ref`. It is not a JSON Schema implementation and must

@@ -23,7 +23,9 @@ export interface PreprocExcludedFile {
   readonly detail: string;
 }
 
-/** R447: a file where R196's hang check refused sites an operator would otherwise have claimed. */
+/** R447: a file where a hang check refused sites an operator would otherwise have claimed: R196's
+ *  (a write to a variable an enclosing loop's condition reads) or R501's (open report data-item
+ *  code, R487's scope, or a bounded item's only bound). */
 export interface HangRefusedFile {
   readonly file: string;
   readonly kinds: string;
@@ -80,7 +82,8 @@ export interface ExcludedSiteFile {
    *    `canCarryMutationSelectorVar` check.
    *  - `compiled-out` (R214) counts RAW specs, before validation, dedup and the operator or line
    *    filters.
-   *  - `hang-refused` (R447) counts (node, operator) pairs R196's hang check refused, AFTER the
+   *  - `hang-refused` (R447) counts (node, operator) pairs a hang check refused (R196's, or R501's
+   *    dispatch-level check, which skips declarative sites so they stay `declarative`), AFTER the
    *    `--operator` and `--lines` filters and outside inactive `#if` arms. They never became specs,
    *    so no other row counts them.
    *

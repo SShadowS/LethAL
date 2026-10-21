@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { oneShotLimits } from "../src/al-runner-backend";
 import {
   OneShotTransport,
+  alRunnerMethodName,
   buildAlRunnerArgv,
+  isNoneSelectedExit,
   parseAlRunnerPayload,
   qualifiedTestName,
+  timeoutAbortTests,
 } from "../src/al-runner-transport";
 import type { SpawnFn } from "../src/publisher";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
@@ -183,11 +187,11 @@ describe("OneShotTransport", () => {
   // runner-confirmed `outcome: "timeout"` path would be unreachable in real execution — every
   // genuine hang would be misclassified as infrastructure noise instead of a real timeout.
   // Pinned directly from the spawned env (no real-timer race) against several representative
-  // budgets — the same margin formula AlRunnerBackend uses (`Math.max(1,
-  // Math.floor(deadlineMs / 2000))`).
+  // budgets, through the same `oneShotLimits` AlRunnerBackend uses (R516: in-run limit = the
+  // budget rounded up to whole seconds, client deadline = twice the budget).
   test("the runner's own per-test budget always leaves real margin below the client deadline", async () => {
-    for (const deadlineMs of [2000, 5000, 14000, 120000]) {
-      const testTimeoutSeconds = Math.max(1, Math.floor(deadlineMs / 2000));
+    for (const budgetMs of [2000, 5000, 14000, 120000]) {
+      const { testTimeoutSeconds, deadlineMs } = oneShotLimits(budgetMs);
       const { envs, spawn } = recording({ tests: [] });
       await new OneShotTransport("al-runner", spawn).send({
         ...req,
@@ -195,10 +199,6 @@ describe("OneShotTransport", () => {
         deadlineMs,
       });
       const seconds = Number(envs[0]?.AL_RUNNER_TEST_TIMEOUT_SEC);
-      // Sub-second edge case: budgets under ~2000ms clamp to the 1s floor, at which
-      // point the client may still win the race. Acceptable and honest — not
-      // something to engineer around — so this isn't asserted for every budget below
-      // the threshold, only for the representative set above where real margin exists.
       expect(seconds * 1000).toBeLessThan(deadlineMs);
     }
   });
@@ -241,5 +241,388 @@ describe("buildAlRunnerArgv — --auto-provision (R125)", () => {
       "--package-cache",
       "C:/proj/.alpackages",
     ]);
+  });
+});
+
+// R551: `--test-exact <name>` rides right after `--test <name>`, only when asked for.
+describe("buildAlRunnerArgv — --test-exact (R551)", () => {
+  const argvReq = {
+    sourceDir: "C:/proj/app",
+    testDir: "C:/proj/tests",
+    qualifiedTest: "Codeunit78950.GrowPre",
+  };
+
+  test("A1: testExact gives --test X --test-exact X, adjacent, once, and no --exclude-test", () => {
+    const argv = buildAlRunnerArgv("al-runner", { ...argvReq, testExact: true });
+    const t = argv.indexOf("--test");
+    expect(argv.slice(t, t + 4)).toEqual([
+      "--test",
+      argvReq.qualifiedTest,
+      "--test-exact",
+      argvReq.qualifiedTest,
+    ]);
+    expect(argv.filter((a) => a === "--test-exact").length).toBe(1);
+    expect(argv).not.toContain("--exclude-test");
+  });
+
+  test("A2: without testExact the argv is today's, element for element", () => {
+    expect(
+      buildAlRunnerArgv("al-runner", {
+        ...argvReq,
+        excludeTests: ["Codeunit78950.GrowPreTwin"],
+      }),
+    ).toEqual([
+      "al-runner",
+      "--output-json",
+      "--isolation",
+      "test",
+      "--test",
+      "Codeunit78950.GrowPre",
+      "--exclude-test",
+      "Codeunit78950.GrowPreTwin",
+      "--auto-provision",
+      "C:/proj/app",
+      "C:/proj/tests",
+    ]);
+  });
+});
+
+/**
+ * R518. al-runner 2.12.0-main.43f76177 exits 3 on a one-shot test timeout: a bundle that RAN has a
+ * TEST-TIMEOUT-ABORT suite error. Exit 3 is read as results ONLY when the envelope proves that
+ * (`timeoutAbortTests`); every other exit 3 stays `kind: "error"`.
+ */
+describe("OneShotTransport exit 3: read only a proven test-timeout abort (R518)", () => {
+  // /coord/handoff/R-518/measure.md run 1: the stdout al-runner printed, byte for byte.
+  const RUN1_STDOUT = String.raw`{
+  "tests": [
+    {
+      "name": "Codeunit79620.LongSpin",
+      "status": "error",
+      "durationMs": 20072,
+      "message": "Test exceeded 20s timeout.",
+      "stackTrace": "\u0022R517 Probe Logic\u0022(CodeUnit 79600).SpinFor line 8 - R517 Probe by LethAL version 1.0.0.0\n\u0022R517 Probe Tests\u0022(CodeUnit 79620).LongSpin line 5 - R517 Probe Tests by LethAL version 1.0.0.0"
+    }
+  ],
+  "passed": 0,
+  "failed": 0,
+  "errors": 1,
+  "skipped": 0,
+  "total": 1,
+  "exitCode": 3,
+  "seed": 598161538,
+  "suiteErrors": [
+    {
+      "file": "/work/lethal-wt/r518/scripts/r517-probe/tests",
+      "errors": [
+        "tests: TEST-TIMEOUT-ABORT: R517 Probe Tests (Codeunit79620).LongSpin: watchdog timeout aborted the run \u2014 0 further [Test] method(s) in this codeunit did not run (0 total)"
+      ]
+    }
+  ],
+  "wallSeconds": 21.8637794
+}
+`;
+  // measure.md run 3: a TEST-app compile error, also exit 3 (the scratch path shortened).
+  const RUN3_STDOUT = String.raw`{
+  "tests": [],
+  "passed": 0,
+  "failed": 0,
+  "errors": 0,
+  "skipped": 0,
+  "total": 0,
+  "exitCode": 3,
+  "seed": 41286883,
+  "compilationErrors": [
+    {
+      "file": "/tmp/scratchpad/badtests",
+      "errors": [
+        "\u003Cbundled\u003E: EMIT-ZERO (1 AL error(s))"
+      ]
+    }
+  ],
+  "wallSeconds": 4.4625051
+}
+`;
+
+  const NAME = "Codeunit79620.LongSpin";
+  const ABORT_LINE =
+    "tests: TEST-TIMEOUT-ABORT: R517 Probe Tests (Codeunit79620).LongSpin: watchdog timeout aborted the run — 0 further [Test] method(s) in this codeunit did not run (0 total)";
+  const ROW = {
+    name: NAME,
+    status: "error",
+    durationMs: 20072,
+    message: "Test exceeded 20s timeout.",
+  };
+  function envelope(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      tests: [ROW],
+      exitCode: 3,
+      suiteErrors: [{ file: "/tests", errors: [ABORT_LINE] }],
+      ...over,
+    };
+  }
+  async function sendExit3(stdout: string, testDir = req.testDir) {
+    const spawn: SpawnFn = async () => ({ exitCode: 3, stdout, stderr: "stderr text" });
+    return new OneShotTransport("al-runner", spawn).send({ ...req, testDir, qualifiedTest: NAME });
+  }
+
+  test("run 1's envelope, verbatim, on exit 3 is kind=tests with the rows unchanged", async () => {
+    const res = await sendExit3(RUN1_STDOUT);
+    expect(res.kind).toBe("tests");
+    if (res.kind === "tests") expect(res.tests).toEqual(JSON.parse(RUN1_STDOUT).tests);
+  });
+
+  test("the same envelope behind al-runner's banner is accepted too", async () => {
+    expect((await sendExit3(alRunnerStdout(envelope()))).kind).toBe("tests");
+  });
+
+  test("(a) a second suite-error line that is not a timeout abort refuses", async () => {
+    // The EXEC-FAIL line names the row too, so only the marker check can refuse it.
+    const errors = [ABORT_LINE, ABORT_LINE.replace("TEST-TIMEOUT-ABORT", "EXEC-FAIL")];
+    const res = await sendExit3(
+      alRunnerStdout(envelope({ suiteErrors: [{ file: "/t", errors }] })),
+    );
+    expect(res.kind).toBe("error");
+  });
+
+  test("(b) compilationErrors beside a valid abort refuses", async () => {
+    const compilationErrors = [{ file: "/x", errors: ["x: COMPILE-FAIL"] }];
+    expect((await sendExit3(alRunnerStdout(envelope({ compilationErrors })))).kind).toBe("error");
+  });
+
+  test("(c) executionErrors beside a valid abort refuses", async () => {
+    const executionErrors = [{ file: "/x", errors: ["x: EXEC-FAIL"] }];
+    expect((await sendExit3(alRunnerStdout(envelope({ executionErrors })))).kind).toBe("error");
+  });
+
+  test("null compilationErrors and executionErrors count as absent", async () => {
+    const env = envelope({ compilationErrors: null, executionErrors: null });
+    expect((await sendExit3(alRunnerStdout(env))).kind).toBe("tests");
+  });
+
+  test("(d) an abort naming a test with no row, or naming a row that passed, refuses", async () => {
+    const other = ABORT_LINE.replace(").LongSpin:", ").Other:");
+    const noRow = envelope({ suiteErrors: [{ file: "/t", errors: [other] }] });
+    expect((await sendExit3(alRunnerStdout(noRow))).kind).toBe("error");
+    const passed = envelope({ tests: [{ ...ROW, status: "pass" }] });
+    expect((await sendExit3(alRunnerStdout(passed))).kind).toBe("error");
+  });
+
+  test("(e) no suite error refuses: absent, [], [{ errors: [] }], null", async () => {
+    const { suiteErrors: _absent, ...absent } = envelope();
+    for (const env of [
+      absent,
+      envelope({ suiteErrors: [] }),
+      envelope({ suiteErrors: [{ file: "/t", errors: [] }] }),
+      envelope({ suiteErrors: null }),
+    ]) {
+      expect((await sendExit3(alRunnerStdout(env))).kind).toBe("error");
+    }
+  });
+
+  test("(f) a non-string suite-error entry refuses", async () => {
+    const env = envelope({ suiteErrors: [{ file: "/t", errors: [ABORT_LINE, 42] }] });
+    expect((await sendExit3(alRunnerStdout(env))).kind).toBe("error");
+    // Refused, not thrown: `send` would turn a throw into an error too, hiding a missing guard.
+    expect(timeoutAbortTests(alRunnerStdout(env))).toBeUndefined();
+  });
+
+  test("(f) an envelope exitCode other than 3 on a process exit 3 refuses; null is absent", async () => {
+    expect((await sendExit3(alRunnerStdout(envelope({ exitCode: 1 })))).kind).toBe("error");
+    expect((await sendExit3(alRunnerStdout(envelope({ exitCode: null })))).kind).toBe("tests");
+  });
+
+  test("(g) run 3's compile-error envelope, verbatim, stays kind=error", async () => {
+    // R583: its `file` is the TEST project, so it keeps today's error, not the target refusal.
+    const res = await sendExit3(RUN3_STDOUT, "/tmp/scratchpad/badtests");
+    expect(res.kind).toBe("error");
+    if (res.kind === "error") {
+      expect(res.detail).toBe("stderr text");
+      expect(res.targetCompile).toBeUndefined();
+    }
+  });
+
+  test("marker near-miss: TEST-TIMEOUT-ABORTED and TEST-TIMEOUT refuse (equality, not prefix)", async () => {
+    for (const marker of ["TEST-TIMEOUT-ABORTED", "TEST-TIMEOUT"]) {
+      const line = ABORT_LINE.replace("TEST-TIMEOUT-ABORT", marker);
+      const env = envelope({ suiteErrors: [{ file: "/t", errors: [line] }] });
+      expect((await sendExit3(alRunnerStdout(env))).kind).toBe("error");
+    }
+  });
+
+  test("timeoutAbortTests never throws on unreadable stdout", () => {
+    expect(timeoutAbortTests("")).toBeUndefined();
+    expect(timeoutAbortTests("{ not json")).toBeUndefined();
+    expect(timeoutAbortTests("[1,2]")).toBeUndefined();
+  });
+
+  test("an exit-3 envelope with no `tests` key is refused, not thrown", async () => {
+    const { tests: _tests, ...noTests } = envelope();
+    expect(() => timeoutAbortTests(alRunnerStdout(noTests))).not.toThrow();
+    expect(timeoutAbortTests(alRunnerStdout(noTests))).toBeUndefined();
+    expect((await sendExit3(alRunnerStdout(noTests))).kind).toBe("error");
+  });
+
+  test("a suite-error entry with no `errors` array is refused, not thrown", () => {
+    const env = envelope({ suiteErrors: [{ file: "/t" }] });
+    expect(() => timeoutAbortTests(alRunnerStdout(env))).not.toThrow();
+    expect(timeoutAbortTests(alRunnerStdout(env))).toBeUndefined();
+  });
+});
+
+/**
+ * R557: every AL test name al-runner was MEASURED to report, beside the row method it reported,
+ * byte for byte (each non-ASCII or control UTF-16 unit is a `\u` escape, so nothing invisible is
+ * lost). Rows are identical on al-runner v2.12.0-main.c5bbaf89 and .43f76177.
+ * - r1 (`/coord/handoff/R557/measure.md` Q2 and R557.md): Gravel tests, and `Plus+Paren(x)`.
+ * - measure M3 (`r557plan/p1`, `out-c5bbaf89/o-1.txt`): 19 names, one per rule step.
+ * - the review's u1 (`r557rev/u1`, `names-c5bbaf89.txt`): 29 Unicode names.
+ * - the review's u2 (`r557rev/u2`, `names2.txt`): 6 names with format (Cf) characters.
+ */
+const MEASURED_NAMES: ReadonlyArray<readonly [string, string]> = [
+  // r1 (R557 Q2 and the R557 row)
+  ["Stone Quoted", "Stone_Quoted"],
+  ["Dot.Name", "Dota46Name"],
+  ["Pond", "Pond"],
+  ["2Lead", "_2Lead"],
+  ["Plus+Paren(x)", "Plusa43Parena40xa41"],
+  // p1 (measure M3)
+  ["Two  Spaces", "Two__Spaces"],
+  ["Dash-Name", "Dasha45Name"],
+  ["Paren(x)", "Parena40xa41"],
+  ["Slash/Name", "Slasha47Name"],
+  ["Amp&Name", "Ampa38Name"],
+  ["9Lead", "_9Lead"],
+  ["Ærø Løb", "Ærø_Løb"],
+  ["Plus+Pct%Colon:Comma,Quote'", "Plusa43Pcta37Colona58Commaa44Quotea39"],
+  ["New", "_New"],
+  ["Default", "_Default"],
+  ["Delegate", "_Delegate"],
+  ["Record", "Record"],
+  ["Finalize", "_Finalize"],
+  ["Class", "_Class"],
+  ["_Under", "_Under"],
+  [" Lead Space", "_Lead_Space"],
+  ["Trail Space ", "Trail_Space_"],
+  ["PlainCase", "PlainCase"],
+  // u1 (review I2)
+  ["Æble Øl Å", "Æble_Øl_Å"],
+  ["Blåbær grød", "Blåbær_grød"],
+  ["Straße", "Straße"],
+  ["Claß", "Claß"],
+  ["ﬁxed", "ﬁxed"],
+  ["Café", "Café"],
+  ["́Lead", "_́Lead"],
+  ["Smile😀", "Smilea55357a56832"],
+  ["Hash#At@", "Hasha35Ata64"],
+  ["Euro€", "Euroa8364"],
+  ["Nb sp", "Nba160sp"],
+  ["Mid·dot", "Mida183dot"],
+  ["Zw‍j", "Zwj"],
+  ["ⅫRoman", "ⅫRoman"],
+  ["²Sup", "a178Sup"],
+  ["٣Arabic", "_٣Arabic"],
+  ["ınt", "ınt"],
+  ["default", "_default"],
+  ["Ελλάδα", "Ελλάδα"],
+  ["İstanbul", "İstanbul"],
+  ["Back\\slash", "Backa92slash"],
+  ["Base", "_Base"],
+  ["Var", "Var"],
+  ["ſtatic", "_ſtatic"],
+  ["KelvinK", "KelvinK"],
+  ["Tab\u0009X", "Taba9X"],
+  ["Under_Score", "Under_Score"],
+  ["Ünïcödé", "Ünïcödé"],
+  ["æøålower", "æøålower"],
+  // u2 (review I2)
+  ["‍Lead", "_Lead"],
+  ["Soft­Hyphen", "SoftHyphen"],
+  ["Zw​Sp", "ZwSp"],
+  ["﻿Bom", "_Bom"],
+  ["Mid‎dir", "Middir"],
+  ["Plain", "Plain"],
+];
+
+describe("alRunnerMethodName: BC's C# identifier for an AL test name (R557)", () => {
+  test("T1a: every measured name maps to the row al-runner reported, byte for byte", () => {
+    // 5 + 18 + 29 + 6 (`Dot.Name` is measured in r1 and p1 and listed once).
+    expect(MEASURED_NAMES.length).toBe(58);
+    expect(MEASURED_NAMES.map(([al]) => [al, alRunnerMethodName(al)])).toEqual(
+      MEASURED_NAMES.map(([al, row]) => [al, row]),
+    );
+  });
+
+  test("T1a: the steps one name each shows, so a red names the step", () => {
+    const step = (al: string) => alRunnerMethodName(al);
+    expect(step("Stone Quoted")).toBe("Stone_Quoted"); // a: space
+    expect(step("Dash-Name")).toBe("Dasha45Name"); // c: a<code>
+    expect(step("2Lead")).toBe("_2Lead"); // b: a digit first
+    expect(step("Default")).toBe("_Default"); // d: keyword, unquoted
+    expect(step("Claß")).toBe("Claß"); // d: ASCII-only compare (JS gives CLASS)
+    expect(step("ﬁxed")).toBe("ﬁxed"); // d: ASCII-only compare (JS gives FIXED)
+    expect(step("ınt")).toBe("ınt"); // d: ASCII-only compare (JS gives INT)
+    expect(step("ſtatic")).toBe("_ſtatic"); // d: the long s maps to s
+    expect(step("Soft­Hyphen")).toBe("SoftHyphen"); // e: Cf deleted
+    expect(step("‍Lead")).toBe("_Lead"); // e after b: the `_` stays, the ZWJ goes
+    expect(step("﻿Bom")).toBe("_Bom"); // e after b
+    expect(step("Smile😀")).toBe("Smilea55357a56832"); // c per UTF-16 unit
+  });
+
+  test("T1b: names the rule must NOT change", () => {
+    const same = [
+      "PlainCase",
+      "Pond",
+      "_Under",
+      "Record",
+      "Var",
+      "Under_Score",
+      "Straße",
+      "Ελλάδα",
+      "İstanbul",
+      "KelvinK",
+      "ⅫRoman",
+    ];
+    expect(same.map(alRunnerMethodName)).toEqual(same);
+  });
+
+  test("qualifiedTestName sends the mangled method", () => {
+    expect(qualifiedTestName(78850, "Dash-Step")).toBe("Codeunit78850.Dasha45Step");
+    expect(qualifiedTestName(78850, "PlainControl")).toBe("Codeunit78850.PlainControl");
+  });
+});
+
+describe("isNoneSelectedExit (R557 T7)", () => {
+  const empty = (exitCode: number) =>
+    alRunnerStdout({ tests: [], passed: 0, failed: 0, errors: 0, total: 0, exitCode });
+
+  test("exit 6 with an empty envelope whose exitCode is 6 is none-selected", () => {
+    expect(isNoneSelectedExit(6, empty(6))).toBe(true);
+  });
+
+  test("exit 6 with rows is not", () => {
+    const rows = alRunnerStdout({
+      tests: [{ name: "Codeunit1.A", status: "pass" }],
+      exitCode: 6,
+    });
+    expect(isNoneSelectedExit(6, rows)).toBe(false);
+  });
+
+  test("an envelope exitCode of 0, another exit code, or no envelope is not", () => {
+    expect(isNoneSelectedExit(6, empty(0))).toBe(false);
+    expect(isNoneSelectedExit(0, empty(6))).toBe(false);
+    expect(isNoneSelectedExit(1, empty(6))).toBe(false);
+    expect(isNoneSelectedExit(6, "")).toBe(false);
+  });
+
+  test("OneShotTransport returns none-selected on it, and error on another exit 6", async () => {
+    const t = (stdout: string) =>
+      new OneShotTransport("al-runner", async () => ({
+        exitCode: 6,
+        stdout,
+        stderr: "--test selected no test in this run\n",
+      })).send(req);
+    expect((await t(empty(6))).kind).toBe("none-selected");
+    expect((await t(empty(0))).kind).toBe("error");
   });
 });

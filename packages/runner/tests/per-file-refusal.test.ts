@@ -7,6 +7,7 @@ import { initParser } from "@lethal/engine";
 import * as schemata from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R307 Task 3: `generateMutationSet` runs the writer's own per-file steps (`instrumentOneFile`) as
@@ -231,8 +232,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "lethal-r307-pin-"));
   });
-  afterAll(async () => {
-    await rm(dir, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(dir);
   });
   test("manifest and instrumented files", async () => {
     const REPO = join(import.meta.dir, "../../..");
@@ -251,7 +252,11 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     expect(createHash("sha256").update(manifest).digest("hex")).toBe(
       // R459: flip-boolean-literal's operatorVersion 1.1.0 is the only change (was b1d589cd...5e21).
       // R474: every entry gains `memberHash`, the only change (was 105d129b...b83f).
-      "db5aef548546072c265799037b2c9800e3636cf3812277394831a26d77c8b4e7",
+      // R477: validate-to-assign's operatorVersion 1.2.0 is the only change (was db5aef54...b4e7).
+      // R276: `gapId` values only, the gap partition unchanged (was 59942c7a...4e81).
+      // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
+      // c83bdd08...23eb); 4 new arm entries, ids +4 after DataBandExt, proven in id-shift-proof.txt.
+      "dc2c1f197b0932e58f3d1cc1fde4f4c6a80a11f9a66d221c3090af766986da48",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -263,8 +268,15 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // entries carry operatorVersion 1.1.0, so this moved again (R470 alone gave 4dfb9b56...a329).
     // R474: the manifest's `memberHash` alone moved it (was 4fb14bca...b9e6; the same files with
     // that key removed from the manifest give 4fb14bca...b9e6 again).
+    // R477: only the manifest moved it, by validate-to-assign's operatorVersion 1.2.0 (was
+    // e166345f...1358, which the same tree at 1.1.0 still gives).
+    // R276: only the manifest moved it, by its `gapId` values (was 3e3a8ec9...f6ae); gap ids are not
+    // in the instrumented AL.
+    // R-463: re-recorded for R-463's DataBandExt arm, ruling orchestrator 2026-10-09 (was
+    // d77b17a3...49ea); DataBandExt gains 4 mutants, ids +4 after DataBandExt, proven in
+    // id-shift-proof.txt (/coord/handoff/R-463/).
     expect(all.digest("hex")).toBe(
-      "e166345f7bc2286dfff7bac0091cc90da3029d14239a418cf80d8cdf5cad1358",
+      "0e1a6cbb7b0cd434b8e7de141ccf567a2d483a112f21611429daf22027c82166",
     );
   }, 60_000);
 });

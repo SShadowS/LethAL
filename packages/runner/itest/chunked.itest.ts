@@ -62,7 +62,7 @@ import { fileURLToPath } from "node:url";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { formatFailure } from "../src/format-failure";
@@ -73,7 +73,13 @@ import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src
 import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import {
+  assertLaunchMatchesConfig,
+  itestConfigName,
+  itestConfigPath,
+  itestLaunchPath,
+  printItestTarget,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertReachEvidence, assertReachIdenticalAcrossLegs } from "./reach-evidence";
 
@@ -87,8 +93,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
 
 /** The slice: the only file in this fixture whose kills reach ordered position 5. */
@@ -204,6 +211,7 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
   const launchCfg = await readOptionalLaunchConfig();
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
+  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
     throw new Error("could not locate alc.exe/altool.exe under the AL Language extension install");
@@ -219,6 +227,7 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -227,7 +236,7 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
     defaultDeployerIo,
   );
   const odataCfg: ActivationConfig = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -240,6 +249,7 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
       mcpCommand: bcdev.mcpCommand,
       project: PROJECT_DIR,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
       packageCachePath: bcdev.packageCachePath,
@@ -256,7 +266,8 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
     },
     undefined,
     { compiler, deployer, verifier, harnessVerifier },
-    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
 
   // A SCRATCH store, not the fixture's own lethal.sqlite: this gate runs a NARROWED slice twice
@@ -353,6 +364,7 @@ function assertNoNewCauses(report: SessionReport, leg: string): void {
     "warm-prefix-unstable",
     "warm-timeout-unconfirmed",
     "warm-confirmation-incomplete",
+    "stop-outcome-unconfirmed",
     "unstable",
   ] as const) {
     const hit = report.mutants.filter((m) => m.cause === cause);

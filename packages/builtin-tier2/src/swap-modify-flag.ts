@@ -173,11 +173,13 @@ const OPERATOR_VERSION = "1.2.0";
  *   - (spec §4 table) only observable when the table's `OnModify`/`OnInsert`/`OnDelete` does
  *     something the test asserts. The semantic layer cannot see base-app triggers, so equivalent
  *     mutants on base-app records cannot be hinted away.
- *   - Both `tableextension` and `pageextension` ARE admitted as enclosing objects (R30): a site
- *     written inside either can be claimed. Only a `pageextension`'s implicit `Rec` is refused,
- *     because its record is the extended page's `SourceTable`, usually invisible to this project;
- *     a `tableextension`'s implicit `Rec` resolves fully, to the extended table. See `OBJECT_KINDS`
- *     in `./receiver.ts` for the rest of that predicate's documented limits.
+ *   - `tableextension`, `pageextension` (R30) and `reportextension` (R-463) ARE admitted as
+ *     enclosing objects: a site written inside any of them can be claimed. A `pageextension`'s
+ *     implicit `Rec` is refused, because its record is the extended page's `SourceTable`, usually
+ *     invisible to this project, and so is a `reportextension`'s `modify(X)` record; a
+ *     `tableextension`'s implicit `Rec` resolves fully, to the extended table, and a data item a
+ *     `reportextension` adds to its own table. See `OBJECT_KINDS` in the engine's
+ *     `semantic/receiver.ts` for the rest of that predicate's documented limits.
  */
 export const swapModifyFlag: MutationOperator = {
   name: "lethal.swap-modify-flag",

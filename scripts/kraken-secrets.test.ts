@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { removeScratchDir } from "../packages/runner/tests/helpers/scratch";
 import {
   CONTAINER_MAP,
   SwapRecoveryError,
@@ -48,7 +49,7 @@ test("describeError names a file-system failure without any value", () => {
 });
 const temps: string[] = [];
 afterEach(() => {
-  for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
+  for (const t of temps.splice(0)) removeScratchDir(t);
 });
 function temp(): string {
   const d = mkdtempSync(join(tmpdir(), "kraken-secrets-"));

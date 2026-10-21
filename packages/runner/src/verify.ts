@@ -1,6 +1,6 @@
 import { realpath, stat } from "node:fs/promises";
 import nodePath, { join, resolve } from "node:path";
-import { initParser, parseAL, wrapRoot } from "@lethal/engine";
+import { evaluateArms, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import {
   type MutantManifest,
   type MutantManifestEntry,
@@ -306,6 +306,8 @@ export interface VerifySource {
   /** R443: the source run's numbering digest, which a mark's proof is checked against, and
    *  copied onto verify's run row with `twin_tuples`. `null` (before R443): no mark applies. */
   readonly numberingDigest: string | null;
+  /** R565: the source run's dependency source digest, copied with the generation hash. */
+  readonly dependencySourceSha256: string | null;
   readonly targets: ReadonlyArray<{
     readonly batchIndex: number;
     readonly mutantCode: string;
@@ -633,6 +635,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     generationSourceSha256: run.generationSourceSha256,
     twinTuples: run.twinTuples,
     numberingDigest: run.numberingDigest,
+    dependencySourceSha256: run.dependencySourceSha256,
     targets,
     rows: [...rows.values()].map((r) => ({
       mutantCode: r.mutantCode,
@@ -687,29 +690,48 @@ export async function assertTestProjectSeparate(
   projectPath: string,
   testDir: string,
 ): Promise<void> {
+  const problem = await testProjectNestedProblem(projectPath, testDir, "verify");
+  if (problem !== null) throw new VerifyError("test-project-nested", problem);
+}
+
+/**
+ * R-445: R-260's rule, shared by `lethal verify` and `lethal run`: the message naming why the two
+ * folders are not apart, or `null` when they are. `run` adds this because the target build copies
+ * every .al under the target, so a nested test project is mutated and published as target code.
+ */
+export async function testProjectNestedProblem(
+  projectPath: string,
+  testDir: string,
+  tool: "verify" | "lethal run",
+): Promise<string | null> {
   const fix =
-    "Move the test project out of the target folder so it sits beside the target, update the --tests you pass to both lethal run and lethal verify to that folder, run lethal run again, then verify with its artifact id.";
+    tool === "verify"
+      ? "Move the test project out of the target folder so it sits beside the target, update the --tests you pass to both lethal run and lethal verify to that folder, run lethal run again, then verify with its artifact id."
+      : "Move the test project out of the target folder so it sits beside the target, update the --tests you pass to both lethal run and lethal verify to that folder, then run lethal run again.";
   let target: string;
   let tests: string;
   try {
     [target, tests] = await Promise.all([realpath(projectPath), realpath(testDir)]);
   } catch (e) {
-    throw new VerifyError(
-      "test-project-nested",
-      `cannot resolve the real path of the target ${projectPath} or the test project ${testDir} (${e instanceof Error ? e.message : String(e)}), so verify cannot show the test project lies outside the target. Check that --tests names an existing folder. ${fix}`,
-    );
+    // `run` needs no refusal here: a folder it cannot resolve fails its own read straight after.
+    if (tool === "lethal run") return null;
+    return `cannot resolve the real path of the target ${projectPath} or the test project ${testDir} (${e instanceof Error ? e.message : String(e)}), so ${tool} cannot show the test project lies outside the target. Check that --tests names an existing folder. ${fix}`;
   }
   if (isSameOrInside(target, tests)) {
-    throw new VerifyError(
-      "test-project-nested",
-      `the test project ${tests} ${tests === target ? "is" : "lies inside"} the target project ${target}: the target build compiles every .al under its folder, so these tests are part of the installed target app. ${fix}`,
-    );
+    return `the test project ${tests} ${tests === target ? "is" : "lies inside"} the target project ${target}: the target build compiles every .al under its folder, so these tests are part of the ${tool === "verify" ? "installed target app" : "target app this run would build"}. ${fix}`;
   }
   if (isSameOrInside(tests, target)) {
-    throw new VerifyError(
-      "test-project-nested",
-      `the test project ${tests} contains the target project ${target}, so the target's code is part of the test build. ${fix}`,
-    );
+    return `the test project ${tests} contains the target project ${target}, so the target's code is part of the test build. ${fix}`;
+  }
+  return null;
+}
+
+/** R-445: `lethal run` refuses a test project nested in the target (or containing it) by name,
+ *  before anything reads the target. */
+export class TestProjectNestedError extends Error {
+  constructor(message: string) {
+    super(`test-project-nested: ${message} (R445)`);
+    this.name = "TestProjectNestedError";
   }
 }
 
@@ -1756,7 +1778,11 @@ export async function runVerify(
             coveringKeys: plan.covering,
             newTests: plan.newTests,
             baseline,
-            refusedObjects: refusedObjectsOfSources(ctx.alSources),
+            refusedObjects: refusedObjectsOfSources(
+              ctx.alSources,
+              ctx.buildSymbols,
+              ctx.backendRefused,
+            ),
           });
           // The cap, check 2: no mutant is in flight yet, and runNamedMutants releases the lease
           // on the way out, so the refusal is safe here.
@@ -1837,6 +1863,7 @@ export async function runVerify(
         generationSourceSha256: source.generationSourceSha256,
         twinTuples: source.twinTuples,
         numberingDigest: source.numberingDigest,
+        dependencySourceSha256: source.dependencySourceSha256,
         // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
         coverageMode,
         // R247: the test app this run measures against, the one it is about to publish. The
@@ -2103,11 +2130,26 @@ function memberOf(e: MutantManifestEntry): string {
  * parses them. These are the files `attach` built the fenced line map from, so the coverage lines
  * were placed in them; the project on disk may have changed since, the installed build has not.
  * The parser was initialised by `planVerify`.
+ *
+ * R536: read under the source run's build symbols, as the run's selection read them (R497's BC
+ * shape rule: an admitted wrapped object is placeable, every other shape refused by name), joined
+ * with what the attached line map itself refuses (a key two compiled files declare, an unmapped
+ * object), so verify refuses exactly what the run refused.
  */
-function refusedObjectsOfSources(sources: readonly AlSource[]): ReadonlyMap<string, string> {
-  return coverageRefusedObjects(
-    sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
-  );
+function refusedObjectsOfSources(
+  sources: readonly AlSource[],
+  buildSymbols: readonly string[],
+  backendRefused: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  const files = sources.map((s) => ({
+    path: s.path,
+    root: wrapRoot(parseAL(s.text)),
+    text: s.text,
+  }));
+  return new Map([
+    ...backendRefused,
+    ...coverageRefusedObjects(files, "bcdev", (f) => evaluateArms(f.root, f.text, buildSymbols)),
+  ]);
 }
 
 /** R-384 rules 7 and 8: the `verify-reach-fail-closed` warnings and the state lines. */

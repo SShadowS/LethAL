@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 
 /**
  * R-307 O2, source scan part 1. Every `FileRefusedError` is built at one of thirteen named sites
@@ -195,12 +195,16 @@ const NEITHER_MODULES = [
   "packages/engine/src/ast/parser-wasm.ts",
   "packages/engine/src/ast/parser.ts",
   "packages/engine/src/ast/preproc-arms.ts",
+  /** R502: the segments of a namespace-qualified name. */
+  "packages/engine/src/ast/qualified-name.ts",
   "packages/engine/src/ast/syntax-node.ts",
   "packages/engine/src/ast/tree-walks.ts",
   "packages/schemata/src/dedup.ts",
   /** The re-export barrel. No PLAN, EMIT or composition module may import it. */
   "packages/schemata/src/dispatch.ts",
   "packages/schemata/src/duplicate.ts",
+  /** R219: a batch file's flat name and the way back; refuses nothing per file. */
+  "packages/schemata/src/flat-names.ts",
   "packages/schemata/src/id-ranges.ts",
   "packages/schemata/src/ids.ts",
   "packages/schemata/src/index.ts",

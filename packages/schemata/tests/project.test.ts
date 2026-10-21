@@ -1669,8 +1669,9 @@ describe("GH-24: the manifest records each mutant's reach grain", () => {
 });
 
 // C02-09: two procedures, one mutant in each, so the writer sees two distinct gap blocks.
-function twoProcedureInput(): WriteInput {
-  const src = `codeunit 51950 "Two" { procedure A() begin X := 1; end; procedure B() begin Y := 2; end; }`;
+function twoProcedureInput(
+  src = `codeunit 51950 "Two" { procedure A() begin X := 1; end; procedure B() begin Y := 2; end; }`,
+): WriteInput {
   const root = wrapRoot(parseAL(src));
   const specs: MutationSpec[] = findAll(root, ALNodeKind.assignment_statement).map((a) => ({
     operatorName: "op.flip",
@@ -1710,6 +1711,38 @@ describe("gap ids (C02-09)", () => {
     // Same length, same position, one character different: the review's stale-id case.
     const before = gapIdOf("src/A.al", 100, 117, "begin X := 1; end");
     expect(gapIdOf("src/A.al", 100, 117, "begin X := 2; end")).not.toBe(before);
+  });
+
+  it("R276: a CRLF and an LF checkout of the same source give the same gap ids", async () => {
+    const lf = [
+      'codeunit 51950 "Two"',
+      "{",
+      "    procedure A()",
+      "    begin",
+      "        X := 1;",
+      "    end;",
+      "",
+      "    procedure B()",
+      "    begin",
+      "        Y := 2;",
+      "    end;",
+      "}",
+    ].join("\n");
+    const idsOf = async (src: string): Promise<string[]> => {
+      const input = twoProcedureInput(src);
+      try {
+        await writeInstrumentedProject(input);
+        const manifest = JSON.parse(
+          await readFile(join(input.targetDir, "mutant-manifest.json"), "utf8"),
+        ) as { mutants: { gapId: string }[] };
+        return manifest.mutants.map((m) => m.gapId);
+      } finally {
+        await rm(input.targetDir, { recursive: true, force: true });
+      }
+    };
+    const fromLf = await idsOf(lf);
+    expect(new Set(fromLf).size).toBe(2);
+    expect(await idsOf(lf.replaceAll("\n", "\r\n"))).toEqual(fromLf);
   });
 
   it("the WRITER refuses two blocks that hash to one id, never merges them", async () => {

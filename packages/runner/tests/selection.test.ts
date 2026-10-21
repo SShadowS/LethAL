@@ -61,9 +61,14 @@ describe("filterHistory", () => {
   const prior = {
     keys: new Set([survivorKey]),
     sites: new Set<string>(),
-    recorded: { hash: "same", twins: null },
+    recorded: { hash: "same", twins: null, dependencyHash: "dep" },
   };
-  const current = () => ({ hash: "same", twins: new Set<string>(), refused: new Set<string>() });
+  const current = () => ({
+    hash: "same",
+    twins: new Set<string>(),
+    dependencyHash: "dep",
+    refused: new Set<string>(),
+  });
   test("default: everything executes", () => {
     const s = filterHistory([entry()], prior, { skipKnownSurvivors: false, current: current() });
     expect(s.execute.length).toBe(1);

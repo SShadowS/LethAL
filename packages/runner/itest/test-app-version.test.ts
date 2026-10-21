@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeScratchDir } from "../tests/helpers/scratch";
 import { TestAppVersionError, expectedTestAppVersion } from "./test-app-version";
 
 describe("expectedTestAppVersion", () => {
@@ -11,8 +12,8 @@ describe("expectedTestAppVersion", () => {
     dir = await mkdtemp(join(tmpdir(), "lethal-testappver-"));
   });
 
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+  afterEach(() => {
+    removeScratchDir(dir);
   });
 
   test("reads the version field from app.json", async () => {

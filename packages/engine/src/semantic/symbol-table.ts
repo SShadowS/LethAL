@@ -45,6 +45,11 @@ export interface ObjectSymbol {
   readonly id: number;
   readonly name: string;
   readonly node: ALSyntaxNode;
+  /**
+   * R502: the file's `namespace` (`Contoso.Sales`), segments unquoted and joined by `.`; absent
+   * when the file declares none. Read by `qualifiedObjectName`, never by an unqualified lookup.
+   */
+  readonly namespace?: string;
 }
 
 /**
@@ -175,6 +180,15 @@ export interface SymbolTable {
    * see `projectDeclaresProcedureOnTable`.
    */
   readonly unparsedObjects: readonly ALSyntaxNode[];
+  /**
+   * R485: every object declaration whose HEADER is split by `#if` (`preproc_split_declaration`),
+   * at any depth (top-level or inside a `#if` wrapper). Indexed nowhere else (R494), so a reader
+   * that must know whether every object of the project is visible to it asks here.
+   */
+  readonly splitObjects: readonly ALSyntaxNode[];
+  /** R485: some input file has parse damage, an ERROR or a MISSING node, in ANY object (indexed
+   *  ones included), so its structure cannot be trusted to show every trigger. */
+  readonly parseDamaged: boolean;
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
   /**
    * Every field of a table, by the table's own name, INCLUDING fields a project `tableextension`
@@ -260,6 +274,43 @@ export function extensionScopeKey(kind: ExtensionKind, extensionName: string): s
  */
 export function objectScopeKey(kind: ObjectSymbol["kind"], objectName: string): string {
   return `${kind}:${objectName}`;
+}
+
+/**
+ * R502: the name to look a referenced object up by, from the reference's segments
+ * (`fieldSegments`/`nameSegments`). One segment is returned as it is, so an unqualified reference
+ * reads exactly as before. A qualified one (`Microsoft.Sales.Customer`) is returned as its last
+ * segment only when the project declares EXACTLY ONE object of that kind and name and that object's
+ * file declares exactly the qualifier as its namespace. Otherwise it is the dotted text with every
+ * segment quoted (`"Microsoft"."Sales"."Customer"`), which names no project object, so the
+ * reference stays UNRESOLVED as before R502.
+ *
+ * Why so strict (opus, R-502 plan review, C1): a qualified name is the spelling AL needs precisely
+ * when a name collides. Binding `Microsoft.Sales.Customer` to the project's own `Contoso.Sales`
+ * `Customer` would read the wrong table's triggers and drop a trigger-skip tag, the unsafe
+ * direction for a screen. And `resolveObject` returns the FIRST same-named object, so a second
+ * same-named object in another namespace would make even a matching namespace unsafe to return.
+ * Returns null for no segments.
+ */
+export function qualifiedObjectName(
+  segments: readonly string[],
+  kind: ObjectSymbol["kind"],
+  symbols: Pick<SymbolTable, "objects">,
+): string | null {
+  const name = segments.at(-1);
+  if (name === undefined) return null;
+  if (segments.length === 1) return name;
+  const qualifier = segments.slice(0, -1).join(".").toLowerCase();
+  const same = symbols.objects.filter(
+    (o) => o.kind === kind && o.name.toLowerCase() === name.toLowerCase(),
+  );
+  const [only] = same;
+  if (same.length === 1 && only !== undefined && only.namespace?.toLowerCase() === qualifier) {
+    return only.name;
+  }
+  // Every segment quoted: no object name can contain `"`, so this can never resolve, not even to a
+  // project table literally named `"Sales.Setup"` (opus, R-502 build review, minor 1).
+  return segments.map((s) => `"${s}"`).join(".");
 }
 
 /**
@@ -444,18 +495,51 @@ export function buildSymbolTable(
 
   const unindexedObjects: ALSyntaxNode[] = [];
   const unparsedObjects: ALSyntaxNode[] = [];
+  const splitObjects: ALSyntaxNode[] = [];
   for (const file of files) {
     const collectErrors = (n: ALSyntaxNode): void => {
       for (const c of n.children) {
         if (c.rawKind === "ERROR") unparsedObjects.push(c);
-        else collectErrors(c);
+        else {
+          if (c.rawKind === "preproc_split_declaration") splitObjects.push(c);
+          collectErrors(c);
+        }
       }
     };
     collectErrors(file.root);
-    for (const c of file.root.namedChildren)
-      if (c.rawKind === "preproc_conditional_object")
-        unindexedObjects.push(...objectDeclarationsOf(c));
-    for (const objectNode of file.root.children) {
+    // R502: `namespace Contoso.Sales;` -> "Contoso.Sales", for `qualifiedObjectName`.
+    const namespaceName = file.root.namedChildren
+      .find((c) => c.rawKind === "namespace_declaration")
+      ?.childForFieldName("name");
+    const fileNamespace =
+      namespaceName === undefined || namespaceName === null
+        ? undefined
+        : namespaceName.namedChildren.map((c) => stripQuotes(c.text)).join(".");
+    // R343: an object wrapped whole in `#if` is indexed like a root object when the BUILD compiles
+    // it (its arm decided active under the build's symbols). Anything else stays unindexed, as R331
+    // and R-364 rely on: no arm map (every arm would look live), an inactive or undecided arm, or a
+    // node that is not a clean object declaration. A `namespace` declared inside the wrapper's
+    // active arm is that object's namespace (R502).
+    const wrappedLive: ALSyntaxNode[] = [];
+    const namespaceOf = new Map<ALSyntaxNode, string>();
+    for (const c of file.root.namedChildren) {
+      if (c.rawKind !== "preproc_conditional_object") continue;
+      let armNamespace: string | undefined;
+      for (const o of objectDeclarationsOf(c)) {
+        const live = armOf !== undefined && armOf(o) === "active";
+        if (live && o.rawKind === "namespace_declaration") {
+          const name = o.childForFieldName("name");
+          if (name !== null)
+            armNamespace = name.namedChildren.map((n) => stripQuotes(n.text)).join(".");
+        }
+        if (live && isCleanObjectDeclaration(o)) {
+          wrappedLive.push(o);
+          const ns = armNamespace ?? fileNamespace;
+          if (ns !== undefined) namespaceOf.set(o, ns);
+        } else unindexedObjects.push(o);
+      }
+    }
+    for (const objectNode of [...file.root.children, ...wrappedLive]) {
       // R162: enums are indexed for their VALUES only. They declare no procedures and no variables,
       // so they deliberately do not enter `objects` and nothing below needs to know about them.
       if (objectNode.rawKind === "enum_declaration") {
@@ -506,7 +590,12 @@ export function buildSymbolTable(
       }
       const header = parseObjectHeader(objectNode);
       if (header === null) continue;
-      objects.push({ ...header, node: objectNode });
+      const objectNamespace = namespaceOf.get(objectNode) ?? fileNamespace;
+      objects.push({
+        ...header,
+        node: objectNode,
+        ...(objectNamespace !== undefined ? { namespace: objectNamespace } : {}),
+      });
       if (header.kind === "table") indexFields(objectNode, header.name);
       // R70: scope is keyed by (kind, name). A bare-name key let a page named after its table
       // overwrite the table's variables wholesale.
@@ -531,7 +620,9 @@ export function buildSymbolTable(
 
   return {
     resolveObject({ kind, idOrName }) {
-      const id = Number.parseInt(idOrName, 10);
+      // R510: an id only when the reference is all digits. `parseInt` read `50000 Foo` as 50000, so
+      // a table named so bound to table 50000 and its triggers decided the tag.
+      const id = /^\d+$/.test(idOrName.trim()) ? Number(idOrName) : Number.NaN;
       for (const o of objects) {
         if (o.kind !== kind) continue;
         if (!Number.isNaN(id) && o.id === id) return o;
@@ -543,6 +634,8 @@ export function buildSymbolTable(
     resolveProcedureAt,
     unindexedObjects,
     unparsedObjects,
+    splitObjects,
+    parseDamaged: files.some((f) => f.root.hasError),
     uniqueProcedure(ownerName, procName) {
       const list = procedureNames.get(ownerName)?.get(stripQuotes(procName).toLowerCase()) ?? [];
       const [only] = list;
@@ -691,6 +784,33 @@ export function triggerLocalNames(trigger: ALSyntaxNode): ReadonlySet<string> {
 }
 
 /**
+ * R340: a trigger's header as a procedure's (`parseProcedure`'s rules, read from the trigger node
+ * itself, so a trigger name repeated across an object does not matter): its parameters, its plain
+ * `var` locals and its named return value (R323) with their declared types, and the names it
+ * declares inside a `#if` region of its own header, which stay unknown (R330's
+ * `conditionallyDeclared`).
+ */
+export function triggerHeaderSymbols(trigger: ALSyntaxNode): {
+  readonly parameters: readonly VarSymbol[];
+  readonly locals: readonly VarSymbol[];
+  readonly ambiguous: readonly string[];
+} {
+  const paramsNode = trigger.namedChildren.find((c) => c.kind === ALNodeKind.parameter_list);
+  const parameters = paramsNode === undefined ? [] : collectParameters(paramsNode);
+  const varSection = trigger.namedChildren.find((c) => c.kind === ALNodeKind.var_section);
+  const locals = varSection === undefined ? [] : collectVarDeclarations(varSection);
+  const returnTypeNode = trigger.childForFieldName("return_type");
+  const returnValue = trigger.childForFieldName("return_value");
+  if (returnValue !== null && returnTypeNode !== null)
+    locals.push({
+      name: stripQuotes(returnValue.text),
+      typeText: returnTypeNode.text,
+      node: returnValue,
+    });
+  return { parameters, locals, ambiguous: conditionallyDeclared(trigger) };
+}
+
+/**
  * R330: the lowercase names a member's HEADER declares inside a `#if` region of its own (a
  * `preproc_conditional_var_block`, R303's shape, or a conditional parameter). Neither parser
  * indexes them as locals or parameters, and which of them exists depends on symbols the engine
@@ -823,7 +943,7 @@ export function collectVarDeclarations(varSection: ALSyntaxNode): VarSymbol[] {
  * declaration (`collectVarDeclarations`, `triggerLocalNames`, `conditionallyDeclared`,
  * `parseSplitProcedure`) all go through this, so they cannot drift apart.
  */
-function declaredNames(decl: ALSyntaxNode): string[] {
+export function declaredNames(decl: ALSyntaxNode): string[] {
   return decl.children
     .filter((c) => c.fieldName === "name" && c.text !== "")
     .map((c) => stripQuotes(c.text));
@@ -835,6 +955,16 @@ function declaredNames(decl: ALSyntaxNode): string[] {
 function declarationSymbols(decl: ALSyntaxNode): VarSymbol[] {
   const typeText = decl.childForFieldName("type")?.text ?? "";
   return declaredNames(decl).map((name) => ({ name, typeText, node: decl }));
+}
+
+/** R343: an OBJECT declaration that parsed cleanly (no ERROR or MISSING node anywhere in it). A
+ *  `namespace_declaration` is a declaration too, but no object. */
+function isCleanObjectDeclaration(node: ALSyntaxNode): boolean {
+  return (
+    node.rawKind.endsWith("_declaration") &&
+    node.rawKind !== "namespace_declaration" &&
+    !node.hasError
+  );
 }
 
 function stripQuotes(s: string): string {

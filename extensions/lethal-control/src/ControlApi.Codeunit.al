@@ -250,7 +250,7 @@ codeunit 91003 "LC Control API"
         exit(State.RegisteredArtifact(TargetAppId));
     end;
 
-    /// <summary>R389 (1.0.0.21): how many PUBLISHED packages (any version, installed or not) declare
+    /// <summary>R389 (1.0.0.23): how many PUBLISHED packages (any version, installed or not) declare
     /// AppId as a dependency. Counting published rather than installed is a superset, the safe
     /// direction for the client, which treats any count above 0 as "another app may call this app's
     /// public procedures". Measured on Cronus284 (2026-10-05): exact counts, under 1 ms per call.

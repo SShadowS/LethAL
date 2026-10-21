@@ -239,6 +239,182 @@ describe("R446: a body-exit guard's write is refused AND counted, its sibling em
   }
 });
 
+/** R480: shapes 1, 2, 3n and 4n are refused AND counted, their siblings emitted. 4n through all four
+ *  operators (M1). */
+describe("R480: the new shapes are refused AND counted, their siblings emitted", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const cu = (id: number, vars: string, body: string) =>
+    `codeunit ${id} "R" { procedure P() var ${vars} begin ${body} end; }`;
+  const FOR_HEAD = "for Step := 5 downto 1 do begin";
+  const R480: (Case & { shape: string })[] = [
+    {
+      shape: "1",
+      op: removeAssignment,
+      src: cu(
+        50490,
+        "Go: Boolean; Pending: Integer; Total: Integer;",
+        "while Go do begin Pending += 1; Total += 1; if Pending > 3 then exit; end;",
+      ),
+      kind: "assignment_statement",
+      refused: "Pending += 1",
+      claimed: "Total += 1",
+    },
+    {
+      shape: "2",
+      op: shiftInteger,
+      src: cu(
+        50491,
+        "Done: Boolean; Pending: Integer; Total: Integer;",
+        "while true do begin Pending += 1; Total += 1; Done := Pending >= 3; if Done then exit; end;",
+      ),
+      kind: "integer",
+      refused: "1",
+      refusedWithin: "Pending += 1",
+      claimed: "1",
+      claimedWithin: "Total += 1",
+    },
+    {
+      shape: "3n",
+      op: swapAdditive,
+      src: cu(
+        50492,
+        "Pending: Integer; Total: Integer;",
+        "while Ready() do begin Pending := Pending + 1; Total := Total + 1; if Pending > 3 then exit; end;",
+      ),
+      kind: "additive_expression",
+      refused: "Pending + 1",
+      claimed: "Total + 1",
+    },
+    {
+      shape: "4n",
+      op: removeAssignment,
+      src: cu(50493, "Step: Integer; Total: Integer;", `${FOR_HEAD} Step += 1; Total += 1; end;`),
+      kind: "assignment_statement",
+      refused: "Step += 1",
+      claimed: "Total += 1",
+    },
+    {
+      shape: "4n",
+      op: shiftInteger,
+      src: cu(50494, "Step: Integer; Total: Integer;", `${FOR_HEAD} Step := 1; Total := 7; end;`),
+      kind: "integer",
+      refused: "1",
+      refusedWithin: "Step := 1",
+      claimed: "7",
+    },
+    {
+      shape: "4n",
+      op: swapAdditive,
+      src: cu(
+        50495,
+        "Step: Integer; Total: Integer;",
+        `${FOR_HEAD} Step := Step + 1; Total := Total + 1; end;`,
+      ),
+      kind: "additive_expression",
+      refused: "Step + 1",
+      claimed: "Total + 1",
+    },
+    {
+      shape: "4n",
+      op: flipBooleanLiteral,
+      src: cu(
+        50496,
+        "Step: Integer; Total: Integer;",
+        `${FOR_HEAD} Step := Step + Delta(true); Total := Total + Delta(true); end;`,
+      ),
+      kind: "boolean",
+      refused: "true",
+      refusedWithin: "Step := Step + Delta(true)",
+      claimed: "true",
+      claimedWithin: "Total := Total + Delta(true)",
+    },
+  ];
+
+  for (const c of R480) {
+    it(`shape ${c.shape}, ${c.op.name}: refused AND counted, the sibling emitted`, () =>
+      assertCounted(c));
+  }
+});
+
+/** R484, R487 blanket rule: every site in an open `Integer` data item is refused AND counted,
+ *  through all four operators; the claimed control sits in a BOUNDED sibling item (`B`). The
+ *  refused sites write names (`J`, `Done`) no guard reads, so only the blanket rule refuses them. */
+describe("R484/R487: an open data item's sites are refused AND counted, a bounded item's emitted", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const REPORT = `report 50490 "R" { dataset { dataitem(D; "Integer") {
+      trigger OnAfterGetRecord() begin
+        J := J + 1; J := 4; Done := false;
+        if (I > 3) or not Continue then CurrReport.Break();
+      end; }
+      dataitem(B; "Integer") { MaxIteration = 1;
+      trigger OnAfterGetRecord() begin
+        Total := Total + 1; Flag := true; Total := 7;
+      end; } }
+      var Continue: Boolean; Done: Boolean; Flag: Boolean; I: Integer; J: Integer; Total: Integer; }`;
+  const ITEM: Case[] = [
+    {
+      op: removeAssignment,
+      src: REPORT,
+      kind: "assignment_statement",
+      refused: "J := J + 1",
+      claimed: "Total := Total + 1",
+    },
+    {
+      op: shiftInteger,
+      src: REPORT,
+      kind: "integer",
+      refused: "4",
+      refusedWithin: "J := 4",
+      claimed: "7",
+      claimedWithin: "Total := 7",
+    },
+    {
+      op: flipBooleanLiteral,
+      src: REPORT,
+      kind: "boolean",
+      refused: "false",
+      refusedWithin: "Done := false",
+      claimed: "true",
+      claimedWithin: "Flag := true",
+    },
+    // swap-additive claims only operands the type table resolves. In a data-item trigger a bare
+    // global is not resolved (an implicit-record field could shadow it, R294); a literal operand is,
+    // and that site goes through the same hang check.
+    {
+      op: swapAdditive,
+      src: `report 50491 "R" { dataset { dataitem(D; "Integer") {
+      trigger OnAfterGetRecord() begin
+        J := 2 - 1;
+        if I = 1 then CurrReport.Break();
+      end; }
+      dataitem(B; "Integer") { MaxIteration = 1;
+      trigger OnAfterGetRecord() begin Total := 2 + 1; end; } }
+      var I: Integer; J: Integer; Total: Integer; }`,
+      kind: "additive_expression",
+      refused: "2 - 1",
+      claimed: "2 + 1",
+    },
+  ];
+
+  for (const c of ITEM) {
+    it(`${c.op.name}: refused AND counted in the open item, emitted in the bounded one`, () =>
+      assertCounted(c));
+  }
+
+  it("lethal.swap-additive: a bare-global operand is not a site in a data-item trigger", () => {
+    const { root, ctx } = load(REPORT);
+    const n = nodeAt(root, "additive_expression", "Total + 1");
+    expect(swapAdditive.targets(n, ctx)).toBe(false);
+    expect(swapAdditive.refusesHangCapable?.(n, ctx)).toBe(false);
+  });
+});
+
 describe("R447: an earlier check refuses, the hang check would not (5.1b)", () => {
   beforeAll(async () => {
     await initParser();

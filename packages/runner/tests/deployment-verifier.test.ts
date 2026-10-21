@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { CompiledArtifact } from "../src/artifact";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
+import { deafBody, deafFetch, emptyBody, notJsonBody, stalledBody } from "./helpers/lease-wire";
 
 describe("decidePublishOutcome", () => {
   it("accepts only when the publish succeeded AND identity matches", () => {
@@ -168,5 +169,53 @@ describe("DeploymentVerifier.verify", () => {
     expect(calls[0]?.url).toBe(
       "http://bc:7048/BC/ODataV4/LethALControl_RegisteredArtifact?company=CRONUS&tenant=default",
     );
+  });
+});
+
+// R506: the RegisteredArtifact read is bounded through its body, and an unread body is never an
+// empty `{}` (which read as "did not report an artifact id"). No wall-clock asserts.
+describe("R506: DeploymentVerifier bounds the body read", () => {
+  const FAST = { ...CFG, timeoutMs: 20 };
+
+  async function unavailable(fetchFn: typeof fetch): Promise<string> {
+    const v = await new DeploymentVerifier(FAST, fetchFn).verify(fakeArtifact());
+    expect(v.status).toBe("unavailable");
+    if (v.status !== "unavailable") throw new Error(`expected unavailable, got ${v.status}`);
+    expect(v.detail).toContain("RegisteredArtifact");
+    return v.detail;
+  }
+
+  for (const [name, make] of [
+    ["D1 a stalled body", () => stalledBody().fetchFn],
+    ["D2 a deaf body", deafBody],
+    ["D2 a deaf fetch", deafFetch],
+  ] as const) {
+    it(`${name} is unavailable with a timeout phrase, never accepted or mismatch`, async () => {
+      expect(await unavailable(make())).toMatch(
+        /body not read within 20 ms|gave no answer within 20 ms/,
+      );
+    });
+  }
+
+  for (const [name, make] of [
+    ["not JSON", notJsonBody],
+    ["empty", emptyBody],
+  ] as const) {
+    it(`D3 a ${name} 2xx body is unavailable 'could not be read or parsed', not 'did not report'`, async () => {
+      const detail = await unavailable(make());
+      expect(detail).toContain("could not be read or parsed");
+      expect(detail).not.toContain("did not report an artifact id");
+    });
+  }
+
+  // D4, over-strict control: a PARSED body must not become a read failure.
+  it("D4 a parsed 200 {} is still 'did not report an artifact id'", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({}), { status: 200 })) as unknown as typeof fetch;
+    const v = await new DeploymentVerifier(FAST, fetchFn).verify(fakeArtifact());
+    expect(v).toEqual({
+      status: "unavailable",
+      detail: "server did not report an artifact id (missing or non-string `value`)",
+    });
   });
 });

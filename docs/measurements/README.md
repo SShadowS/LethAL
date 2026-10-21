@@ -1002,6 +1002,52 @@ here as measured and neither was.**
 
 ## al-runner v2 — the CLI and wire contract, measured against the released binary
 
+### A test row's name is BC's C# name for the AL method (measured 2026-10-09, c5bbaf89 and 43f76177; R557)
+
+al-runner names each row `Codeunit<id>.<CLR method>`, and the CLR method is the C# identifier BC's
+compiler emits for the AL method name, not the AL name. `--test`, `--test-exact` and
+`--exclude-test` all select by that name, and `--server`'s rows and `perTestCoverage[].test` carry
+it. The rule, walking UTF-16 code units (`alRunnerMethodName`, `al-runner-transport.ts`):
+
+1. a space or `"` becomes `_`;
+2. a C# identifier-part unit (Unicode L, Nl, Nd, Mn, Mc, Pc, Cf) is kept, with a `_` before a
+   FIRST unit that cannot start an identifier (a digit, a combining mark);
+3. any other unit becomes `a` + its decimal code (`-` `a45`, `.` `a46`, `(` `a40`, NBSP `a160`, a
+   surrogate pair two codes);
+4. when the result, with `ſ` read as `s`, is ASCII and its upper case is a Roslyn reserved keyword
+   (`GetReservedKeywordKinds`, so `__arglist` and friends too) or `FINALIZE`, a `_` goes before it.
+   Contextual keywords (`Record`, `Var`) are not prefixed, and neither are `Claß`, `ﬁxed` or `ınt`
+   (JS `toUpperCase` would wrongly make them `CLASS`, `FIXED`, `INT`);
+5. every Cf unit (ZWJ, soft hyphen, BOM, LRM) is deleted, after step 4.
+
+Measured on 58 names (R557's measure, Q2 and M3, and its review's u1 and u2), identical on both
+builds: all in `al-runner-transport.test.ts`. Steps 1 to 4 are al-runner's own port,
+`RunnerPageInstance.EmittedIdentifier` (`AlRunner/Patches/RunnerPageInstance.cs`), of BC's
+`Utilities.StringExtensions.MangleIdentifierName`; step 5 is not in that port but is what BC's
+emitter does. Two AL names that map to one CLR name are refused by al-runner's compiler (AL0757) and
+never reach row pairing. The AL name never reaches a row (`TestExecutor.TestAlName` reads it only for
+test-runner events); upstream al-runner #5572 asks for it on the row.
+
+A selection by the AL name selects nothing: exit 6 with an empty envelope on c5bbaf89, exit 0 with
+zero rows when `--exclude-test` empties it on 43f76177. LethAL stops the session by name on either
+(`AlRunnerTestNameError`) rather than reading a baseline `error`. The R123 contract probe checks the
+rule once per session (fact `test-name-mangling`): one `--test Codeunit50012.` run over eleven
+probe methods, one per step, whose row set must EQUAL the rule's names, both directions.
+
+### `--test-exact NAME` (measured 2026-10-09, c5bbaf89 and 43f76177; R551)
+
+On `v2.12.0-main.c5bbaf89`, `--test-exact NAME` selects the WHOLE qualified name, case-insensitively.
+It is repeatable, it intersects `--test` (same name: that test alone; disjoint: nothing), and it exits
+6 when nothing is selected. It is refused with `--server` (exit 2 at startup). On `43f76177` and
+earlier it is an unknown option (exit 2, `Unknown option '--test-exact'`).
+
+LethAL's session probe (`--output-json --test-exact Codeunit0.LethalR551NoSuchTest <empty dir>`) shows
+only that a build PARSES the flag: exit 6 on an empty bundle comes from al-runner's selection audit,
+not the executor. The whole-name guarantee is `--test` kept in the argv plus the refusal of any other
+test's row. The R123 contract probe's argv deliberately does not carry the flag; the fields it reads
+were measured identical with and without it (R551 plan review, M3). The plan
+(`docs/superpowers/plans/2026-10-09-r551-test-exact-probe.md`) summarises the measurements.
+
 ### A bundle's `.al` files must all sit at one directory level (measured 2026-09-08, v2.11.0)
 
 **al-runner does not compile a root-level `.al` together with one in a subdirectory of the same
@@ -1180,6 +1226,35 @@ the provisioning call is already verbose (R235) and still gets its `[pkg-cache] 
 line. `itest:alrunner` on 2.12.0: PASS, 3 / 12 / 4 on all four legs, identical per mutant, pin
 engaged on both one-shot legs, and both R321 symbol sets 5 / 8 / 0 on every leg.
 
+### Multi-object coverage frame: fixed upstream, checked per session by a probe (R407, 2026-10-09)
+
+**On v2.12.0-main.c39ad5de** a file declaring two objects was reported in a mixed frame (R383): with
+a source project of the same app id beside the test app, al-runner labelled coverage with the SOURCE
+path and reported every object after the first at (previous object's end in the SOURCE) + (distance
+in the INSTRUMENTED text). **Upstream #5249 (merged 2026-10-02) fixed it.** Measured on
+v2.12.0-main.43f76177 and c5bbaf89, one-shot and `--server`, in the layout that broke: every object
+in the instrumented frame, labelled with the bundle path (`inst/active/...`, cwd-relative on
+one-shot, absolute on the daemon); the same-id rows equal the fresh-app-id control row for row.
+
+LethAL does not trust a build list for this. When a project holds a multi-object file and coverage is
+`"al-runner"`, the CLI guard runs `probeAlRunnerCoverageFrame` once, on the session's transport: a
+scratch layout with a source sibling (`src/`), the bundle (`inst/active/`) and a batch sibling
+(`inst/batch-1/`), all one app id, and a pair file whose first object is a table with a trigger and
+whose second is a codeunit, longer in the bundle than in the source. Admitted only when the probe
+test passes, every label for the pair file is inside `inst/active/`, the table has no hit, and the
+codeunit's hit lines equal the measured set (45, 46, 47 on 43f76177, both transports;
+`packages/runner/tests/fixtures/r407-frame-probe/`). Anything else is a named refusal and the run
+falls back to coverage `"none"`.
+
+Measured with the production probe from the repo root: 43f76177 admitted on both transports;
+c39ad5de (built from source) refused on both, labelled `src/...` with the codeunit 12 lines early,
+inside the table. On c39ad5de a same-id BATCH sibling alone is also discovered and used as the label
+(with `src/` deleted: label `inst/batch-1/...`, lines right), so only the label check catches that
+case; with both siblings deleted c39ad5de is admitted. Cost on 43f76177 (warm caches): one-shot
+about 2.7 s plus a 2 s provisioning call for the pin; `--server` about 7 s (daemon start, one
+`runTests`, one `--version`). The daemon prints only `[bc] selected BC <build>`, never its own
+version, so the server probe reads `--version` for the build banner its warning line quotes.
+
 ### It runs on Windows
 
 R98 recorded that upstream `main` P/Invoked `libc`'s `mprotect` and died before any test ran. On the
@@ -1280,6 +1355,40 @@ of false SURVIVORS is `parseAlRunnerPayload` refusing an unreadable envelope ins
 `[]`. R123's contract probe therefore measures the PROPERTY — "a compile failure must not yield a
 readable envelope naming the requested test" — rather than pinning either exit code, because the
 first draft pinned exit 3 and was measuring a case that never happens.
+
+### A test timeout IS exit 3 (R518)
+
+Measured 2026-10-08 on `2.12.0-main.43f76177` (`/coord/handoff/R-518/measure.md`), one-shot, with
+LethAL's own argv. A test that hits its in-run stop exits **3**: the bundle RAN, and al-runner
+counts a watchdog abort as a suite error (#2415, #2762). The envelope keeps the row
+(`status: "error"`, `Test exceeded <N>s timeout.`) and adds
+`suiteErrors: [{ file, errors: ["tests: TEST-TIMEOUT-ABORT: <Display> (<cu>).<m>: watchdog timeout aborted the run — ..."] }]`,
+with no `compilationErrors` and no `executionErrors`. A TEST-app compile error also exits 3, but
+with `compilationErrors`, `tests: []` and no `suiteErrors`; a TARGET compile error is still exit 1
+with empty stdout (above). The two exit-3 shapes are told apart on the envelope alone:
+`timeoutAbortTests` in `al-runner-transport.ts` reads an exit 3 as results only when every suite
+error's marker is exactly `TEST-TIMEOUT-ABORT` and names a row that did not pass or fail. R123's
+`timeout-exit-readable` fact checks this shape on the probe's own hang run, in the CLI's
+pre-session probe and, inside a session, wherever the session pins the platform-app directory (the
+one-shot runs).
+
+### Rows that are not a verdict about the mutant (R534)
+
+Measured 2026-10-09 on `2.12.0-main.43f76177` (`/coord/handoff/R-534/measure.md`), both transports,
+and read from its source at 43f7617. Each row is an ANSWER: al-runner ran the test and reported.
+
+| Shape | One-shot exit / row | `--server` row | LethAL since R534 |
+|---|---|---|---|
+| Hang in the test codeunit's `OnRun` | 3, `error`, `The test codeunit's OnRun trigger exceeded the {N}s timeout, so none of its test methods ran.`, a TEST-TIMEOUT-ABORT line naming the test | `error`, same message, `errorKind: "timeout"` | `timeout` in the OnRun, confirmed unmutated on the confirm's WALL clock (no pass row reports the OnRun's time: 66 ms body beside a 4 s OnRun) |
+| Unexecuted UI handler | 1, `error`, `The following UI handlers were not executed: <h>` | same, `errorKind: "runtime"` | `error`, cause `runner-test-error`, not re-sent |
+| `OnRun` throws | 1, `error`, `The test codeunit's OnRun trigger failed, so none of its test methods ran (as in BC): <Type>: <msg>` | same, `errorKind: "setup"` | `runner-test-error`, or `runner-refused` when `<msg>` is a refusal |
+| Out-of-scope refusal in a test BODY | 1, **`fail`**, `<Type>: out-of-scope: <api> — ...` (measured with `RunnerOutOfScopeException`; other types, such as `NavNCLDialogException` and `InvalidOperationException`, read from source, not measured) | same, `errorKind: "runtime"` | `error`, cause `runner-refused`, never a kill |
+| `--server`, a test after a hung one | - | no row | `runner-test-error` (presumed after the hang, not measured) |
+
+`errorKind` is on the `--server` wire only; the one-shot row has no such field. The OnRun runs
+under the same `TestTimeout()` as a test body, so `N` is the same stop. Before R534 every one of
+these rows except the body refusal was re-sent and then aborted the whole session under spec §11;
+the body refusal was scored a kill.
 
 ### Passing the same bundle dir twice CRASHES the runner
 

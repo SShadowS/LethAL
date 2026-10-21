@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { generateMutationSet } from "../src/orchestrator";
 import { buildReport, renderConsole } from "../src/report";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R447: R196 refuses a mutation that could make an enclosing loop never end. Those refusals are
@@ -65,8 +66,8 @@ const roots: string[] = [];
 beforeAll(async () => {
   await initParser();
 });
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 async function project(files: Readonly<Record<string, string>>): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "lethal-r447-"));
@@ -141,7 +142,7 @@ describe("R447: generation", () => {
     );
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain(
-      `"lethal.remove-assignment" had site(s) refused as hang-capable (R196: each writes a variable an enclosing loop's condition reads): ${HANG} (1)`,
+      `"lethal.remove-assignment" had site(s) refused as hang-capable (each writes a variable an enclosing loop's condition reads, R196, or is code of an unbounded report data item or a bounded item's only bound, R487/R501): ${HANG} (1)`,
     );
   });
 });
@@ -194,7 +195,7 @@ describe("R447: report", () => {
     expect(r.excludedSites?.files).toEqual([{ ...ROW(HANG, 2), reason: "hang-refused" }]);
     expect(r.validity.caveats).toEqual([]);
     expect(renderConsole(r)).toContain(
-      "HANG-REFUSED SITES: 2 site(s) in 1 file(s) write a variable an enclosing loop's condition reads; no mutant was made there (R196). They are absent from every count above.",
+      "HANG-REFUSED SITES: 2 site(s) in 1 file(s) could hang the run if mutated: each writes a variable an enclosing loop's condition reads (R196), or is code of an unbounded report data item or a bounded item's only bound (R487/R501). No mutant was made there. They are absent from every count above.",
     );
   });
 

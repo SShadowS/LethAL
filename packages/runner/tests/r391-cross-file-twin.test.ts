@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -17,6 +17,9 @@ import type { RunEvent } from "../src/events";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
+import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R391: an identity key carries no file. Twins (one identity tuple: here a table and a codeunit
@@ -86,6 +89,40 @@ const APP_JSON = JSON.stringify({
   idRanges: [{ from: 50000, to: 50299 }],
 });
 
+/** R565: a codeunit declaring a `Report` outside the project (no code, so no mutant). */
+const USES_DEP_AL = `codeunit 50101 "Uses Dep"
+{
+    var
+        Rep: Report "Dep Rep";
+}
+`;
+const DEP_REP_AL = `report 70000 "Dep Rep"
+{
+    procedure Other()
+    begin
+    end;
+}`;
+/** R565: a folder holding one plain dependency package that ships `Dep Rep`'s source as `src`. */
+async function depFolder(src: string): Promise<string> {
+  const d = await mkdtemp(join(tmpdir(), "lethal-r565dep-"));
+  roots.push(d);
+  await Bun.write(
+    join(d, "Dep.app"),
+    buildFakeAppWithEntries([
+      [
+        "NavxManifest.xml",
+        '<Package><App Id="437dbf0e-84ff-417a-965d-ed2bb9650972" Name="Dep" Publisher="P" Version="1.0.0.0" /></Package>',
+      ],
+      [
+        "SymbolReference.json",
+        JSON.stringify({ Reports: [{ Name: "Dep Rep", ReferenceSourceFileName: "DepRep.al" }] }),
+      ],
+      ["src/DepRep.al", src],
+    ]),
+  );
+  return d;
+}
+
 const selectorIds = { selectorId: 50290, controlId: 50291, tableId: 50292 };
 const OP = "lethal.remove-assignment";
 const TWIN = "X := X + 1;";
@@ -93,8 +130,8 @@ const A = "A_Twin.Table.al";
 const B = "B_Twin.Codeunit.al";
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 type Outcome = "pass" | "fail" | "abort";
@@ -110,6 +147,10 @@ class SiteBackend implements ExecutionBackend {
   /** `<file basename>:<line>` of every mutant activated, so a test can tell "ran" from "carried". */
   readonly activated: string[] = [];
   constructor(private readonly outcomes: Readonly<Record<string, Outcome>>) {}
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
     return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
   }
@@ -180,6 +221,7 @@ async function project(a: readonly string[], b: readonly string[]) {
   await Bun.write(join(projectDir, B), CODEUNIT_AL(b));
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "TwinTests.Codeunit.al"), TEST_AL);
+  await Bun.write(join(testDir, "app.json"), testAppJson());
   return {
     dirs: { projectDir, testDir, instrumentedDir },
     dbPath: join(root, "lethal.sqlite"),
@@ -458,6 +500,76 @@ describe("R391: a recorded verdict carries only under rule 1 or rule 2", () => {
     expect(rowsB(second)).toEqual([`${B} @8 known-survivor`, `${B} @9 known-survivor`]);
   });
 
+  // R565 test 8 (plan r2 item 4). Red: drop the dependency digest from `carryRecord`'s rule 1.
+  test("R565: same source, same-file twins, a changed dependency report entry: history carries nothing", async () => {
+    const p = await project(["X := 2;"], [TWIN, TWIN]);
+    await Bun.write(join(p.dirs.projectDir, "C_Uses.Codeunit.al"), USES_DEP_AL);
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new SiteBackend({}),
+      store,
+      ...p.dirs,
+      selectorIds,
+      dependencyPackageDirs: [await depFolder(DEP_REP_AL)],
+    });
+    expect(rowsB(first)).toEqual([`${B} @8 survived`, `${B} @9 survived`]);
+    // the digest reaches the run row and the report (the SessionReport ripple)
+    const row = store.db.query("SELECT dependency_source_sha256 AS d FROM runs").get() as {
+      d: string;
+    };
+    expect(first.dependencySourceSha256).toBe(row.d);
+    expect(first.dependencyReportSources?.map((r) => `${r.report} ${r.outcome}`)).toEqual([
+      "dep rep ok",
+    ]);
+
+    // the same bytes: carried (rule 1)
+    const same = await runSession({
+      backend: new SiteBackend({ [`${B}:8`]: "fail", [`${B}:9`]: "fail" }),
+      store,
+      ...p.dirs,
+      selectorIds,
+      skipKnownSurvivors: true,
+      dependencyPackageDirs: [await depFolder(DEP_REP_AL)],
+    });
+    expect(rowsB(same)).toEqual([`${B} @8 known-survivor`, `${B} @9 known-survivor`]);
+
+    // one byte of the dependency entry changed, the project source not: the twins run
+    const edited = await runSession({
+      backend: new SiteBackend({ [`${B}:8`]: "fail", [`${B}:9`]: "fail" }),
+      store,
+      ...p.dirs,
+      selectorIds,
+      skipKnownSurvivors: true,
+      dependencyPackageDirs: [await depFolder(`${DEP_REP_AL}\n`)],
+    });
+    expect(edited.sourceSha256).toBe(same.sourceSha256);
+    expect(edited.dependencySourceSha256).not.toBe(same.dependencySourceSha256);
+    expect(rowsB(edited)).toEqual([`${B} @8 killed`, `${B} @9 killed`]);
+  });
+
+  // R565 test 9, through the store: a run row from before R565 holds NULL. Red: read a NULL digest
+  // as equal (to anything, or to NULL).
+  test("R565: a NULL dependency digest (a row from before R565), same source, twins: history carries nothing", async () => {
+    const p = await project(["X := 2;"], [TWIN, TWIN]);
+    const store = new ResultsStore(p.dbPath);
+    try {
+      await runSession({ backend: new SiteBackend({}), store, ...p.dirs, selectorIds });
+      const db = new Database(p.dbPath);
+      db.run("UPDATE runs SET dependency_source_sha256 = NULL");
+      db.close();
+      const second = await runSession({
+        backend: new SiteBackend({ [`${B}:8`]: "fail", [`${B}:9`]: "fail" }),
+        store,
+        ...p.dirs,
+        selectorIds,
+        skipKnownSurvivors: true,
+      });
+      expect(rowsB(second)).toEqual([`${B} @8 killed`, `${B} @9 killed`]);
+    } finally {
+      store.close();
+    }
+  });
+
   test("control: an interrupted run (no source_sha256) resumed with no edit carries its same-file twins under rule 1", async () => {
     // A (batch 0) holds the twins and dies on `Y := 5;`; B is batch 1 and is never prepared, so
     // the run records no `source_sha256`. Only `generation_source_sha256` can say "same source".
@@ -568,6 +680,7 @@ describe("R391: a recorded verdict carries only under rule 1 or rule 2", () => {
     await Bun.write(join(dirs.projectDir, Z), CODEUNIT_AL([TWIN]));
     await Bun.write(join(dirs.projectDir, "app.json"), APP_JSON);
     await Bun.write(join(dirs.testDir, "TwinTests.Codeunit.al"), TEST_AL);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
     const set = await generateMutationSet(dirs.projectDir, { emit: () => {} });
     const maxGuardsPerBatch = set.files.find((f) => f.path.endsWith(AA))?.specs.length;
     if (maxGuardsPerBatch === undefined) throw new Error("Aa produced no specs");

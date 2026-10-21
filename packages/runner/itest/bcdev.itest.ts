@@ -27,7 +27,7 @@ import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { formatFailure } from "../src/format-failure";
@@ -39,7 +39,13 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import {
+  assertLaunchMatchesConfig,
+  itestConfigName,
+  itestConfigPath,
+  itestLaunchPath,
+  printItestTarget,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
 import { assertDirectTransportReach, assertReachEvidence } from "./reach-evidence";
@@ -57,8 +63,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 // Committed per-mutant healthy-path baseline (Task 15, design spec §14) — see baseline-guard.ts.
 // Aggregate counts (EXPECTED below) are a smoke test; this catches a per-mutant verdict swap
 // that leaves the aggregate counts unchanged.
@@ -176,6 +183,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
 
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
+  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
 
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
@@ -198,6 +206,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -206,7 +215,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     defaultDeployerIo,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -219,6 +228,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       mcpCommand: bcdev.mcpCommand,
       project: PROJECT_DIR,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
       packageCachePath: bcdev.packageCachePath,
@@ -234,7 +244,8 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     },
     undefined,
     { compiler, deployer, verifier, harnessVerifier },
-    (targetAppId, artifactId) => new RunMutantTransport(odataCfg, targetAppId, artifactId),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
 
   // Persistent, NOT `:memory:` — historical run data (priorSurvivorKeys) is a supported

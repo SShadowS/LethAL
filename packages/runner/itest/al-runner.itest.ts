@@ -7,8 +7,14 @@
  * picked up by `bun test`.
  * R321: also runs fixtures/sandbox-symbols under [LETHALA] and [LETHALB], all three transports (symbol-fixture.ts).
  * R353: also runs fixtures/sandbox-layout at two batches, one-shot and --server (layout-fixture.ts).
+ * R-300b: also runs fixtures/sandbox-wrapped (#if-wrapped objects alone in their files, unwrapped
+ * twins, a --define-decided duplicate pair, a two-arm control) one-shot, --server and resource
+ * (wrapped-fixture.ts).
+ * R557: also runs fixtures/sandbox-names (twelve tests al-runner renames, or controls) one-shot and
+ * --server, under coverage al-runner and none (names-fixture.ts).
  * R387: LAST, runs sandbox-app through the CLI's own `buildBackend` with no transport key, and
  * checks that its defaults (`--server`, the resource selector) actually ran (cli-default-leg.ts).
+ * Since R394 coverage is on by default too, so its verdict table equals leg A's per mutant.
  *
  * Skips cleanly (exit 0) when LETHAL_ITEST_ALRUNNER is unset, so CI/local
  * `bun test` runs are unaffected and a developer without al-runner installed
@@ -41,9 +47,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AlRunnerBackend, defaultServerSpawn } from "../src/al-runner-backend";
+import { runAlRunnerContractProbe } from "../src/al-runner-contract";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import type { ExecutionBackend } from "../src/backend";
-import { buildBackend, withAlRunnerCoverageGuard } from "../src/cli";
+import { applyAlRunnerCoverageGuard, buildBackend } from "../src/cli";
+import type { RunEvent } from "../src/events";
 import { formatFailure } from "../src/format-failure";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { defaultSpawn } from "../src/publisher";
@@ -57,8 +65,10 @@ import {
   preflightGateBaseline,
 } from "./baseline-guard";
 import {
+  CLI_DEFAULT_COVERAGE_SPEC,
   CLI_DEFAULT_SPEC,
   cliDefaultMechanismFailures,
+  cliDefaultSelectorFailures,
   daemonPlatformAppsLines,
   expectedCliDefaultShape,
   expectedOneShotArgvs,
@@ -66,6 +76,9 @@ import {
   oneShotArgvSummary,
   platformAppsAgreement,
   recordSpawns,
+  reportTestSelectorFailures,
+  resourceLegFailures,
+  testSelectorLineFailures,
   watchResourceSelector,
 } from "./cli-default-leg";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
@@ -83,16 +96,33 @@ import {
   MULTIOBJECT_SELECTOR_IDS,
   MULTIOBJECT_TEST_DIR,
   assertMultiObjectLegsEqual,
-  assertMultiObjectRefusal,
   assertMultiObjectRun,
   printMultiObjectTable,
 } from "./multiobject-fixture";
+import {
+  NAMES_PROJECT_DIR,
+  NAMES_SELECTOR_IDS,
+  NAMES_TEST_DIR,
+  assertNamesLegsEqual,
+  assertNamesRun,
+  printNamesTable,
+} from "./names-fixture";
 import {
   assertEveryMutantHasReachGrain,
   assertNoReachAttestation,
   printReachSummary,
 } from "./reach-evidence";
+import { killReproductionFailures, unmeasuredReproductionFigures } from "./kill-reproduction";
 import { SYMBOL_SETS, assertSymbolBuild, printSymbolTable, symbolSetLabel } from "./symbol-fixture";
+import {
+  WRAPPED_PROJECT_DIR,
+  WRAPPED_SELECTOR_IDS,
+  WRAPPED_SYMBOLS,
+  WRAPPED_TEST_DIR,
+  assertWrappedLegsEqual,
+  assertWrappedRun,
+  printWrappedTable,
+} from "./wrapped-fixture";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER) {
   console.log("skipped (set LETHAL_ITEST_ALRUNNER=1 and LETHAL_ALRUNNER_PATH=<path> to run)");
@@ -131,6 +161,10 @@ const LAYOUT_BASELINE_PATH = join(HERE, "al-runner.layout.baseline.json");
 const MULTIOBJECT_BASELINE_PATH = join(HERE, "al-runner.multiobject.baseline.json");
 /** R387: the CLI-default leg (`buildBackend`, no transport key), recorded only through R332. */
 const CLI_DEFAULT_BASELINE_PATH = join(HERE, "al-runner.cli-default.baseline.json");
+/** R-300b: the wrapped fixture's one-shot leg, recorded only through R332's record path. */
+const WRAPPED_BASELINE_PATH = join(HERE, "al-runner.wrapped.baseline.json");
+/** R557: the names fixture's leg A1 (one-shot, coverage al-runner), recorded only through R332. */
+const NAMES_BASELINE_PATH = join(HERE, "al-runner.names.baseline.json");
 
 // R321: the symbol fixture pair, its own app and id range (79600-79699), so no other gate moves;
 // selector ids at the top of the target's range, per the `pickSelectorIds` convention.
@@ -147,6 +181,8 @@ function symbolBaselinePath(symbols: readonly string[]): string {
 }
 
 interface GateFixture {
+  /** R577: the fixture half of the leg's name in `REPRODUCTION_EXPECTED`. */
+  readonly name: string;
   readonly projectDir: string;
   readonly testDir: string;
   readonly selectorIds: typeof SELECTOR_IDS;
@@ -158,6 +194,7 @@ interface GateFixture {
 }
 
 const SANDBOX: GateFixture = {
+  name: "sandbox",
   projectDir: PROJECT_DIR,
   testDir: TEST_DIR,
   selectorIds: SELECTOR_IDS,
@@ -225,11 +262,20 @@ const shape = (r: SessionReport) =>
     .map((m) => ({ mutantCode: m.mutantCode, verdict: m.verdict, killingTest: m.killingTest }))
     .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode));
 
+/** R557: what a names leg collects from its session beyond the report (`runNamesLegs`). */
+interface LegObserver {
+  readonly warningCodes: string[];
+  readonly contractLines: string[];
+  /** The R123 `test-name-mangling` fact's verdict, per contract probe the session ran. */
+  readonly nameFacts: string[];
+}
+
 async function runOnce(
   scratchRoot: string,
   serverMode = false,
   selectorMode: "static" | "resource" = "static",
   fixture: GateFixture = SANDBOX,
+  observer?: LegObserver,
 ): Promise<SessionReport> {
   const store = new ResultsStore(":memory:");
   // `cfg.backend` is CALLER-owned and `runSession` never closes it -- see the ownership note on
@@ -242,13 +288,32 @@ async function runOnce(
     // R220: the caller decides, having first asked whether al-runner can report this project's
     // coverage correctly at all. `capabilities()` is read at the top of `runSession`, before an
     // instrumented bundle exists, so the answer has to come from the source tree.
-    // R383: the multi-object legs pass `coverage: "none"`, as the CLI guard decided for them.
+    // R407: a fixture with a multi-object file runs the CLI's own coverage guard, on THIS leg's
+    // transport, so the frame probe answers for the transport the leg uses. The gate REQUIRES
+    // `admitted` there; any other answer stops the leg by name.
     const coverage = fixture.coverage ?? "al-runner";
     const support = await alRunnerCoverageSupport(fixture.projectDir);
+    let admitMultiObjectFiles = false;
     if (coverage === "al-runner" && !support.supported) {
-      throw new Error(
-        `al-runner coverage is unsupported for this fixture, which it must not be: ${support.multiObjectFiles.join(", ")}`,
+      const warned: string[] = [];
+      const guarded = await applyAlRunnerCoverageGuard(
+        {
+          alRunner: { alRunnerPath, coverage, serverMode },
+          ...(fixture.symbols.length > 0 ? { preprocessorSymbols: fixture.symbols } : {}),
+        },
+        fixture.projectDir,
+        (line) => {
+          console.warn(line);
+          warned.push(line);
+        },
+        { testDir: fixture.testDir },
       );
+      admitMultiObjectFiles = guarded.admitMultiObjectFiles;
+      if (!admitMultiObjectFiles) {
+        throw new Error(
+          `R407: the coverage-frame probe (${serverMode ? "--server" : "one-shot"}) did not admit ${support.multiObjectFiles.join(", ")}; this gate requires "admitted". Guard said: ${warned.join(" | ")}`,
+        );
+      }
     }
     const backend = new AlRunnerBackend({
       alRunnerPath,
@@ -256,13 +321,29 @@ async function runOnce(
       testDir: fixture.testDir,
       selectorObjectId: fixture.selectorIds.selectorId,
       coverage,
+      ...(admitMultiObjectFiles ? { admitMultiObjectFiles: true } : {}),
       ...(serverMode ? { serverMode: true } : {}),
       ...(selectorMode === "resource" ? { selectorMode } : {}),
       // R321: the one-shot argv (`buildAlRunnerArgv`) and the daemon's start argv (R319) read this.
       ...(fixture.symbols.length > 0 ? { preprocessorSymbols: fixture.symbols } : {}),
     });
     backendRef = backend;
-    return await runSession({
+    // R583: a resource leg proves the resource channel ran; it never trusts the absence of a
+    // fallback warning. `deploy()` copies each batch to `<instrumentedDir>/active`.
+    const resourceEv =
+      selectorMode === "resource"
+        ? watchResourceSelector(backend, join(scratchRoot, "instrumented", "active"))
+        : undefined;
+    // R518: the R123 contract line runSession emits after pinning (one-shot legs only). A fact that
+    // does not match already makes runSession THROW; this also prints the line and asserts the new
+    // `timeout-exit-readable` fact was measured and matched, so its absence cannot pass.
+    const contractLines: string[] = [];
+    // M2: the summary line says only `=matches`, and the fact matches on exit 1 too, so keep the
+    // fact's own measured text (it begins `exit N`) to show whether the probe's hang exited 3.
+    const exitFacts: string[] = [];
+    // R551: the `--test-exact` probe's line. Exactly one on a one-shot leg, none on a server leg.
+    const selectorLines: string[] = [];
+    const report = await runSession({
       backend,
       store,
       projectDir: fixture.projectDir,
@@ -274,7 +355,59 @@ async function runOnce(
       ...(fixture.maxGuardsPerBatch !== undefined
         ? { maxGuardsPerBatch: fixture.maxGuardsPerBatch }
         : {}),
+      emit: [
+        (e) => {
+          if (e.type === "warning" && e.code === "al-runner-contract-pinned")
+            contractLines.push(e.message);
+          if (e.type === "warning" && e.code === "al-runner-test-selector")
+            selectorLines.push(e.message);
+          if (e.type === "warning") observer?.warningCodes.push(e.code);
+        },
+      ],
+      alRunnerContractProbe: async (...args) => {
+        const result = await runAlRunnerContractProbe(...args);
+        const f = result.facts.find((x) => x.fact === "timeout-exit-readable");
+        exitFacts.push(f === undefined ? "<fact missing>" : `${f.verdict}: ${f.measured}`);
+        // R557 (M1): the names legs assert this fact on the one-shot legs.
+        const names = result.facts.find((x) => x.fact === "test-name-mangling");
+        observer?.nameFacts.push(names === undefined ? "<fact missing>" : names.verdict);
+        if (names !== undefined)
+          console.log(`  R557 test-name-mangling: ${names.verdict}: ${names.measured}`);
+        return result;
+      },
     });
+    if (report.validity.executionContexts.some((c) => c.platformAppsDir !== undefined)) {
+      const [line] = contractLines;
+      assert.ok(
+        line?.includes("timeout-exit-readable=matches") === true,
+        `R518: a pinned one-shot leg must emit the R123 contract line with timeout-exit-readable=matches; got ${JSON.stringify(contractLines)}`,
+      );
+      console.log(`  ${line}`);
+      console.log(`  R518 timeout-exit-readable (pinned probe): ${exitFacts.join(" | ")}`);
+    }
+    // R551: printed, not asserted by value (that would need a build table; the pre-commitment pins
+    // it per run). The COUNT is asserted.
+    for (const line of selectorLines) console.log(`  ${line}`);
+    const selectorFailures = [
+      ...testSelectorLineFailures(selectorLines, !serverMode),
+      // R558: the same choice, recorded in the report on a one-shot leg and absent on --server.
+      ...reportTestSelectorFailures(report, !serverMode),
+    ];
+    assert.deepEqual(selectorFailures, [], selectorFailures.join("; "));
+    if (resourceEv !== undefined) {
+      const rf = resourceLegFailures(resourceEv);
+      assert.deepEqual(rf, [], `R583: the resource channel did not run: ${rf.join("; ")}`);
+    }
+    // R577: the reproduction ran on this leg, by marker and by its exact store rows.
+    const transport = !serverMode
+      ? "one-shot"
+      : selectorMode === "resource"
+        ? "resource"
+        : "server";
+    const reproFailures = killReproductionFailures(`${fixture.name}/${transport}`, report, store);
+    assert.deepEqual(reproFailures, [], reproFailures.join("; "));
+    observer?.contractLines.push(...contractLines);
+    return report;
   } finally {
     store.close();
     await backendRef?.close();
@@ -522,6 +655,7 @@ async function runSymbolLegs(): Promise<void> {
   for (const symbols of SYMBOL_SETS) {
     const label = symbolSetLabel(symbols);
     const fixture: GateFixture = {
+      name: `symbols-${symbols.join("-")}`,
       projectDir: SYMBOL_PROJECT_DIR,
       testDir: SYMBOL_TEST_DIR,
       selectorIds: SYMBOL_SELECTOR_IDS,
@@ -593,6 +727,7 @@ async function runSymbolLegs(): Promise<void> {
  */
 async function runLayoutLegs(): Promise<SessionReport> {
   const fixture: GateFixture = {
+    name: "layout",
     projectDir: LAYOUT_PROJECT_DIR,
     testDir: LAYOUT_TEST_DIR,
     selectorIds: LAYOUT_SELECTOR_IDS,
@@ -639,34 +774,29 @@ async function runLayoutLegs(): Promise<SessionReport> {
 }
 
 /**
- * R383: `sandbox-multiobject`, one-shot then `--server`, under the multi-object REFUSAL. Two
- * codeunits in one file, whose later object al-runner reports in a frame LethAL cannot undo, so
- * the CLI guard must turn the requested coverage off, by name, before either leg runs. Both legs
- * then run with coverage "none" and must equal the pre-committed refusal table per mutant,
- * covering tests included, and each other.
+ * R383/R407: `sandbox-multiobject`, one-shot, `--server`, then `--server` + resource selector. Two
+ * codeunits in one file. Each leg requests coverage "al-runner" and `runOnce` runs the CLI's
+ * coverage guard on that leg's transport; the gate REQUIRES the frame probe to say `admitted` (R407
+ * plan r2), and a refusal stops the leg by name. Every leg must equal the pre-committed table per
+ * mutant, covering tests included, and the one-shot leg. The resource leg is the DEFAULT user
+ * combination, added by docs/superpowers/specs/2026-10-09-r407-resource-leg-addendum.md because the
+ * probe does not vary with the selector mode.
+ *
+ * R407: `EXPECTED_MULTIOBJECT` is the admission table (bc2511ba, adopted by
+ * docs/superpowers/specs/2026-10-09-r407-multiobject-admission-precommitment.md: 6 / 1 / 5), and
+ * `al-runner.multiobject.baseline.json` is re-frozen to it under R332.
  *
  * Checks are collected and thrown once, so a failure shows both legs. Returns the one-shot report
  * for `main()` to compare with the frozen baseline LAST, after every table check passed.
  */
 async function runMultiObjectLegs(): Promise<SessionReport> {
-  const warnings: string[] = [];
-  const guarded = await withAlRunnerCoverageGuard(
-    { alRunner: { alRunnerPath, coverage: "al-runner" } },
-    MULTIOBJECT_PROJECT_DIR,
-    (line) => {
-      console.warn(line);
-      warnings.push(line);
-    },
-  );
-  const coverage = guarded.alRunner?.coverage;
-  // Thrown at once: without the refusal there is nothing for the legs to measure.
-  assertMultiObjectRefusal(coverage, warnings);
   const fixture: GateFixture = {
+    name: "multiobject",
     projectDir: MULTIOBJECT_PROJECT_DIR,
     testDir: MULTIOBJECT_TEST_DIR,
     selectorIds: MULTIOBJECT_SELECTOR_IDS,
     symbols: [],
-    coverage: coverage === "none" ? "none" : "al-runner",
+    coverage: "al-runner",
   };
   const failures: string[] = [];
   const check = (what: string, fn: () => void): void => {
@@ -680,6 +810,7 @@ async function runMultiObjectLegs(): Promise<SessionReport> {
   };
   const oneShotDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-oneshot-"));
   const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-server-"));
+  const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-resource-"));
   try {
     const oneShot = await runOnce(oneShotDir, false, "static", fixture);
     printMultiObjectTable(oneShot, "one-shot");
@@ -692,19 +823,205 @@ async function runMultiObjectLegs(): Promise<SessionReport> {
       assertMultiObjectLegsEqual(oneShot, viaServer, "--server"),
     );
 
+    const viaResource = await runOnce(resourceDir, true, "resource", fixture);
+    printMultiObjectTable(viaResource, "--server + resource");
+    check("multi-object --server + resource", () =>
+      assertMultiObjectRun(viaResource, "--server + resource"),
+    );
+    check("multi-object --server + resource vs one-shot", () =>
+      assertMultiObjectLegsEqual(oneShot, viaResource, "--server + resource"),
+    );
+
     if (failures.length > 0) {
       throw new Error(
-        `R383: ${failures.length} multi-object-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+        `R407: ${failures.length} multi-object-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
       );
     }
     console.log(
-      `  multi-object legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server identical`,
+      `  multi-object legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server and --server + resource identical`,
     );
     return oneShot;
   } finally {
     await rm(oneShotDir, { recursive: true, force: true });
     await rm(serverDir, { recursive: true, force: true });
+    await rm(resourceDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * R-300b: `sandbox-wrapped`, one-shot, `--server` and resource, at one batch, with WRAPDEF sent
+ * as `--define` while the target's app.json defines WRAPAPP. Every leg must equal the
+ * pre-committed table (the C1 pair under ONE reading of `--define`, `wrapped-fixture.ts`), each
+ * admitted wrapped file must equal its unwrapped twin per mutant, and no leg may print an R383
+ * "position wins" or an R-300b "line is dropped" warning, so `console.warn` is captured per leg.
+ * The server legs must also equal the one-shot leg per mutant.
+ *
+ * Checks are collected and thrown once. Returns the one-shot report for `main()` to compare with
+ * the frozen baseline LAST, so a record run never records a leg that disagrees with the table.
+ */
+async function runWrappedLegs(): Promise<SessionReport> {
+  const fixture: GateFixture = {
+    name: "wrapped",
+    projectDir: WRAPPED_PROJECT_DIR,
+    testDir: WRAPPED_TEST_DIR,
+    selectorIds: WRAPPED_SELECTOR_IDS,
+    symbols: WRAPPED_SYMBOLS,
+  };
+  const failures: string[] = [];
+  const check = (what: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`  FAILED ${what}: ${message}`);
+      failures.push(message);
+    }
+  };
+  /** One leg, with every `console.warn` line it printed (still printed, also kept). */
+  const leg = async (
+    dir: string,
+    serverMode: boolean,
+    selectorMode: "static" | "resource",
+  ): Promise<{ report: SessionReport; warnings: string[] }> => {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+      original(...args);
+    };
+    try {
+      return { report: await runOnce(dir, serverMode, selectorMode, fixture), warnings };
+    } finally {
+      console.warn = original;
+    }
+  };
+  const oneShotDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-wrapped-oneshot-"));
+  const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-wrapped-server-"));
+  const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-wrapped-resource-"));
+  try {
+    const oneShot = await leg(oneShotDir, false, "static");
+    printWrappedTable(oneShot.report, "one-shot");
+    check("wrapped one-shot", () => {
+      const reading = assertWrappedRun(oneShot.report, "one-shot", oneShot.warnings);
+      console.log(`  R-300b wrapped: al-runner's --define ${reading} app.json's symbols`);
+    });
+
+    const viaServer = await leg(serverDir, true, "static");
+    printWrappedTable(viaServer.report, "--server");
+    check("wrapped --server", () => {
+      assertWrappedRun(viaServer.report, "--server", viaServer.warnings);
+    });
+    check("wrapped --server vs one-shot", () =>
+      assertWrappedLegsEqual(oneShot.report, viaServer.report, "--server"),
+    );
+
+    const viaResource = await leg(resourceDir, true, "resource");
+    printWrappedTable(viaResource.report, "resource");
+    check("wrapped resource", () => {
+      assertWrappedRun(viaResource.report, "resource", viaResource.warnings);
+    });
+    check("wrapped resource vs one-shot", () =>
+      assertWrappedLegsEqual(oneShot.report, viaResource.report, "resource"),
+    );
+
+    if (failures.length > 0) {
+      throw new Error(
+        `R-300b: ${failures.length} wrapped-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+      );
+    }
+    const c = oneShot.report.counts;
+    console.log(
+      `  wrapped legs: one-shot killed=${c.killed} survived=${c.survived} noCoverage=${c.noCoverage}, --server and resource identical`,
+    );
+    return oneShot.report;
+  } finally {
+    await rm(oneShotDir, { recursive: true, force: true });
+    await rm(serverDir, { recursive: true, force: true });
+    await rm(resourceDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * R557: `sandbox-names`, four legs at one batch: A1 one-shot with coverage `al-runner`, A2 one-shot
+ * with `none`, A3 `--server` with `al-runner`, A4 `--server` with `none`, coverage set EXPLICITLY on
+ * each (R394: the backend's own default is `none`, the CLI's is `al-runner`). Every leg must equal
+ * the pre-committed table per mutant (`names-fixture.ts`): verdict, killing test, kill text, and the
+ * covering set its coverage gives. A2 to A4 must equal A1 per mutant, and A3 must equal A1's
+ * covering sets too, A4 A2's. M1: the one-shot legs carry the R123 `test-name-mangling` fact,
+ * `matches`; the `--server` legs print no contract line. No leg may warn
+ * `al-runner-undecided-test-missing`.
+ *
+ * Cost (M3): A2 sends each mutant's 12 green tests killer-first, about 115 one-shot invocations
+ * (10-11 min at 5.4 s); A1 about 48; A3 and A4 one daemon suite per mutant.
+ *
+ * Checks are collected and thrown once. Returns A1 for `main()` to compare with the frozen
+ * baseline LAST, so a record run never records a leg that disagrees with the table.
+ */
+async function runNamesLegs(): Promise<SessionReport> {
+  const failures: string[] = [];
+  const check = (what: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`  FAILED ${what}: ${message}`);
+      failures.push(message);
+    }
+  };
+  const leg = async (
+    name: string,
+    serverMode: boolean,
+    coverage: "al-runner" | "none",
+  ): Promise<SessionReport> => {
+    const dir = await mkdtemp(join(tmpdir(), `lethal-itest-alrunner-names-${name}-`));
+    const observer: LegObserver = { warningCodes: [], contractLines: [], nameFacts: [] };
+    try {
+      const fixture: GateFixture = {
+        // R577: one row per transport in REPRODUCTION_EXPECTED; the two coverage legs share it.
+        name: "names",
+        projectDir: NAMES_PROJECT_DIR,
+        testDir: NAMES_TEST_DIR,
+        selectorIds: NAMES_SELECTOR_IDS,
+        symbols: [],
+        coverage,
+      };
+      const report = await runOnce(dir, serverMode, "static", fixture, observer);
+      printNamesTable(report, name);
+      const [nameFact] = observer.nameFacts;
+      check(`names ${name}`, () =>
+        assertNamesRun(report, name, {
+          coverage,
+          transport: serverMode ? "server" : "one-shot",
+          seen: {
+            warningCodes: observer.warningCodes,
+            contractLines: observer.contractLines,
+            ...(nameFact !== undefined ? { nameFact } : {}),
+          },
+        }),
+      );
+      return report;
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  };
+  const a1 = await leg("A1-one-shot-al-runner", false, "al-runner");
+  const a2 = await leg("A2-one-shot-none", false, "none");
+  check("names A2 vs A1", () => assertNamesLegsEqual(a1, a2, "A2 vs A1", false));
+  const a3 = await leg("A3-server-al-runner", true, "al-runner");
+  check("names A3 vs A1", () => assertNamesLegsEqual(a1, a3, "A3 vs A1", true));
+  const a4 = await leg("A4-server-none", true, "none");
+  check("names A4 vs A1", () => assertNamesLegsEqual(a1, a4, "A4 vs A1", false));
+  check("names A4 vs A2", () => assertNamesLegsEqual(a2, a4, "A4 vs A2", true));
+  if (failures.length > 0) {
+    throw new Error(
+      `R557: ${failures.length} names-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+    );
+  }
+  const c = a1.counts;
+  console.log(
+    `  names legs: A1 killed=${c.killed} survived=${c.survived} noCoverage=${c.noCoverage}, A2-A4 equal per mutant`,
+  );
+  return a1;
 }
 
 /** R387: the BC build and platform-app directory a report records, for printing beside another. */
@@ -722,8 +1039,9 @@ function provenance(report: SessionReport): { bcBuild: string; platformAppsDir: 
  * so the leg measures what `lethal run --backend al-runner` does with no config. Runs after every
  * other leg (R345: one al-runner session at a time).
  *
- * Its table is pre-committed against leg A (`expectedCliDefaultShape`, CLI_DEFAULT_SPEC): equal per
- * mutant except `SandboxPricing`'s four, which are `survived` because coverage is off by default.
+ * Its table is pre-committed against leg A (`expectedCliDefaultShape`, CLI_DEFAULT_COVERAGE_SPEC):
+ * equal per mutant, since R394 turned coverage on by default (under R387 `SandboxPricing`'s four
+ * read `survived` here, because coverage was off by default).
  * The table cannot tell the fast path from the one-shot static path, so the mechanism is checked
  * independently (`cliDefaultMechanismFailures`). Checks are collected and thrown once; the frozen
  * baseline is compared by `main()` AFTER they pass, so a record run never records a wrong leg.
@@ -750,6 +1068,9 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
     backend = built;
     // `buildBackend` gives the backend `<scratch>/al-runner-active`; `deploy()` copies into `active`.
     const resource = watchResourceSelector(backend, join(scratch, "al-runner-active", "active"));
+    // R551 I3: every event this session emits, so "no selector warning" is read off a hook that
+    // demonstrably received the session's other events (`cliDefaultSelectorFailures`).
+    const events: RunEvent[] = [];
     const report = await runSession({
       backend,
       store,
@@ -757,6 +1078,7 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
       testDir: TEST_DIR,
       instrumentedDir: join(scratch, "instrumented"),
       selectorIds: SELECTOR_IDS,
+      emit: [(e) => events.push(e)],
     });
 
     console.log(
@@ -812,15 +1134,15 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
           survived: report.counts.survived,
           noCoverage: report.counts.noCoverage,
         },
-        { killed: 3, survived: 16, noCoverage: 0 },
-        `R387: the cli-default leg must be 3 / 16 / 0 (${CLI_DEFAULT_SPEC})`,
+        { killed: 3, survived: 12, noCoverage: 4 },
+        `R394: the cli-default leg must be 3 / 12 / 4 (${CLI_DEFAULT_COVERAGE_SPEC})`,
       );
     });
     check("cli-default table", () =>
       assert.deepEqual(
         legShape(report),
         expectedCliDefaultShape(legA),
-        `R387: per-mutant verdicts differ from the pre-committed table (${CLI_DEFAULT_SPEC})`,
+        `R394: per-mutant verdicts differ from the pre-committed table (${CLI_DEFAULT_COVERAGE_SPEC})`,
       ),
     );
     check("cli-default mechanism", () =>
@@ -834,6 +1156,27 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
         ),
         [],
         "R387: the CLI defaults did not take effect (--server and the resource selector)",
+      ),
+    );
+    check("cli-default selector (R551 I3)", () =>
+      assert.deepEqual(
+        cliDefaultSelectorFailures(events),
+        [],
+        "R551: the --test-exact probe must not run under --server",
+      ),
+    );
+    check("cli-default kill reproduction (R577)", () => {
+      const reproFailures = killReproductionFailures("cli-default", report, store, {
+        activations: resource.activations,
+        serverSuiteRuns: rec.record.serverRunTests,
+      });
+      assert.deepEqual(reproFailures, [], reproFailures.join("; "));
+    });
+    check("cli-default report selector (R558)", () =>
+      assert.deepEqual(
+        reportTestSelectorFailures(report, false),
+        [],
+        "R558: a --server session's report must record no testSelector",
       ),
     );
     if (failures.length > 0) {
@@ -854,6 +1197,8 @@ async function main(): Promise<void> {
   preflightGateBaseline(CLI_DEFAULT_BASELINE_PATH, "al-runner itest cli-default");
   preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner itest layout");
   preflightGateBaseline(MULTIOBJECT_BASELINE_PATH, "al-runner itest multiobject");
+  preflightGateBaseline(WRAPPED_BASELINE_PATH, "al-runner itest wrapped");
+  preflightGateBaseline(NAMES_BASELINE_PATH, "al-runner itest names");
   // Check BOTH symbol baselines before either leg runs: a missing file fails at startup rather
   // than after a live run, and record mode starts only when both files are in the state it needs.
   for (const symbols of SYMBOL_SETS) {
@@ -948,6 +1293,12 @@ async function main(): Promise<void> {
   const multiOneShot = await runMultiObjectLegs();
   await assertGateBaseline(multiOneShot, MULTIOBJECT_BASELINE_PATH, "al-runner itest multiobject");
 
+  const wrappedOneShot = await runWrappedLegs();
+  await assertGateBaseline(wrappedOneShot, WRAPPED_BASELINE_PATH, "al-runner itest wrapped");
+
+  const namesA1 = await runNamesLegs();
+  await assertGateBaseline(namesA1, NAMES_BASELINE_PATH, "al-runner itest names");
+
   await runSymbolLegs();
   if (RECORD_SYMBOL_BASELINES) {
     // Decision 6: recording is not a measurement against a frozen table, so it is never a pass.
@@ -963,6 +1314,14 @@ async function main(): Promise<void> {
   const cliDefault = await runCliDefaultLeg(legA);
   await assertGateBaseline(cliDefault, CLI_DEFAULT_BASELINE_PATH, "al-runner itest cli-default");
 
+  // R577: a figure still null in REPRODUCTION_EXPECTED was printed by its leg, never checked.
+  const blanks = unmeasuredReproductionFigures();
+  if (blanks.length > 0) {
+    throw new Error(
+      `R577: ${blanks.length} figure(s) in REPRODUCTION_EXPECTED (itest/kill-reproduction.ts) are not yet measured; this run measured: ${blanks.join("; ")}`,
+    );
+  }
+
   console.log("al-runner itest: PASS");
   await emitPassed("alrunner", {
     sublegs: [
@@ -974,6 +1333,14 @@ async function main(): Promise<void> {
       "layout-server",
       "multiobject-one-shot",
       "multiobject-server",
+      "multiobject-resource",
+      "wrapped-one-shot",
+      "wrapped-server",
+      "wrapped-resource",
+      "names-one-shot-al-runner",
+      "names-one-shot-none",
+      "names-server-al-runner",
+      "names-server-none",
       "cli-default",
     ],
     artifacts: { reported: false },

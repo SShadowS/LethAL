@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -29,6 +29,8 @@ import type { SessionReport } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
 import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
+import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R374: identity ordinals are numbered once over the whole RUN, never per batch. Before, twins in
@@ -107,8 +109,8 @@ const selectorIds = { selectorId: 50290, controlId: 50291, tableId: 50292 };
 const OP = "lethal.remove-assignment";
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+afterAll(() => {
+  for (const r of roots) removeScratchDir(r);
 });
 
 async function makeProject(codeunit: string) {
@@ -122,6 +124,7 @@ async function makeProject(codeunit: string) {
   await Bun.write(join(projectDir, "B_Twin.Codeunit.al"), codeunit);
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "TwinTests.Codeunit.al"), TEST_AL);
+  await Bun.write(join(testDir, "app.json"), testAppJson());
   return { root, projectDir, testDir, instrumentedDir };
 }
 
@@ -188,6 +191,10 @@ class TwinBackend implements ExecutionBackend {
     private readonly killBatches: ReadonlySet<number>,
     private readonly abortInBatch?: number,
   ) {}
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
     return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
   }

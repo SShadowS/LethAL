@@ -1,6 +1,6 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import { compareAppVersions } from "./app-version";
-import { bcFetch } from "./bc-fetch";
+import { BcAnswerUnreadError, bcFetch, readJsonBody, withDeadline } from "./bc-fetch";
 
 /**
  * The `LethAL Control` extension's own app id and the protocol version this client speaks. A
@@ -74,12 +74,14 @@ const MIN_PROTOCOL_VERSION = 2;
  *
  * Never AHEAD of `extensions/lethal-control/app.json`'s `version`: raising this constant without
  * bumping that file makes a freshly built control app fail its own gate. Pinned by a test. It may
- * lag behind for an action the client treats as optional: 1.0.0.21 adds R389's `DependentCount`,
+ * lag behind for an action the client treats as optional: 1.0.0.23 adds R389's `DependentCount`,
  * which an older control app answers with 404, read as "unknown" (the guard falls back).
  * Raise it (to app.json's version) whenever a client path REQUIRES a new control action and has
  * no fallback: that is why the two were once pinned equal.
+ * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
+ * the runtime-16 build is refused before any gate measures against it.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.20";
+export const MIN_CONTROL_VERSION = "1.0.0.22";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is
@@ -111,8 +113,8 @@ export class HarnessVerificationError extends Error {
 }
 
 /**
- * R389: the deployed control app has no `DependentCount` action (it predates 1.0.0.21; BC answers
- * 404). Not a failure: `MIN_CONTROL_VERSION` stays below 1.0.0.21 on purpose, and the closed-world
+ * R389: the deployed control app has no `DependentCount` action (it predates 1.0.0.23; BC answers
+ * 404). Not a failure: `MIN_CONTROL_VERSION` stays below 1.0.0.23 on purpose, and the closed-world
  * guard reads this as "unknown" and falls back. Extends `Error` directly (CLAUDE.md).
  */
 export class DependentCountUnavailableError extends Error {
@@ -165,7 +167,7 @@ function decodePercentEscapes(path: string): { text: string; leftover: boolean }
  *  query or fragment, and the query must be exactly one `$filter: "id eq <GUID>"` plus at most one
  *  `tenant` equal to `tenant`, the configured one. `query` is a LIST (R-441 review): a map would
  *  keep one of two `$filter`s while the URL sends both. */
-function refuseUnfilteredExtensionsQuery(
+export function refuseUnfilteredExtensionsQuery(
   path: string,
   query: readonly (readonly [string, string])[],
   tenant: string | undefined,
@@ -421,7 +423,7 @@ export class HarnessVerifier {
   }
 
   /**
-   * R389: how many PUBLISHED apps declare `appId` as a dependency (control app 1.0.0.21,
+   * R389: how many PUBLISHED apps declare `appId` as a dependency (control app 1.0.0.23,
    * `DependentCount`). Refuses a non-GUID before any request. Throws on every answer it cannot
    * read as that app's count, never a plausible 0; `DependentCountUnavailableError` for a control
    * app without the action (404).
@@ -614,11 +616,28 @@ export class HarnessVerifier {
   }
 
   /** One GET against a BC API list endpoint, returning its `value` rows. The company parameter is
-   *  never sent: these endpoints address the company in the path, or list across companies. */
-  private async fetchApiRows(
+   *  never sent: these endpoints address the company in the path, or list across companies.
+   *  R506: the bound spans the headers AND the body; an unread body throws, never an empty value. */
+  private fetchApiRows(
     path: string,
     what: string,
     extra: Readonly<Record<string, string>> = {},
+  ): Promise<readonly unknown[]> {
+    const ms = this.cfg.timeoutMs ?? 30_000;
+    return withDeadline(
+      ms,
+      what,
+      (signal) => this.readApiRows(path, what, extra, signal, ms),
+      (m, kind) => new BcAnswerUnreadError(m, kind),
+    );
+  }
+
+  private async readApiRows(
+    path: string,
+    what: string,
+    extra: Readonly<Record<string, string>>,
+    signal: AbortSignal,
+    ms: number,
   ): Promise<readonly unknown[]> {
     // R433: before the URL is built, so a refused query never reaches the network.
     // `extra` comes from a caller, so no tenant is allowed in it: the configured one is added below.
@@ -627,11 +646,10 @@ export class HarnessVerifier {
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const query = params.size > 0 ? `?${params.toString()}` : "";
     // R441: fetch's URL parser drops tab, CR and LF, so check the parsed URL and send exactly that.
-    const sent = new URL(`${this.cfg.baseUrl}/${path}${query}`);
+    // R589: API rows from their own root when the config names one (BC on Linux's API port).
+    const sent = new URL(`${this.cfg.apiBaseUrl ?? this.cfg.baseUrl}/${path}${query}`);
     refuseUnfilteredExtensionsQuery(sent.pathname, [...sent.searchParams], this.cfg.tenant);
     const url = sent.href;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -640,12 +658,32 @@ export class HarnessVerifier {
           authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
           accept: "application/json",
         },
-        signal: controller.signal,
+        // R-496 review: a followed redirect would send a request the guard above never saw.
+        redirect: "manual",
+        signal,
       });
     } catch (err) {
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
+      // R506: our own abort is a timeout, never "unreachable".
+      if (signal.aborted) {
+        throw new BcAnswerUnreadError(
+          `${what} gave no answer within ${ms} ms: ${String(err)}`,
+          "timeout",
+        );
+      }
       throw new HarnessVerificationError(`${what} unreachable: ${String(err)}`);
-    } finally {
-      clearTimeout(timer);
+    }
+    if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
+      // Never followed. A destination the guard refuses throws the guard's own error, so it
+      // propagates like any refused extensions query; any other redirect fails as a transport error.
+      const location = res.headers.get("location");
+      if (location !== null) {
+        const dest = new URL(location, sent);
+        refuseUnfilteredExtensionsQuery(dest.pathname, [...dest.searchParams], this.cfg.tenant);
+      }
+      throw new HarnessVerificationError(
+        `${what} failed: HTTP ${res.status} redirect to ${JSON.stringify(location)} was not followed; BC API lists are read only at the URL the guard checked (R-496)`,
+      );
     }
     if (!res.ok) {
       let bodyText = "";
@@ -663,12 +701,9 @@ export class HarnessVerifier {
         `${what} failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
       );
     }
-    let value: unknown;
-    try {
-      value = ((await res.json()) as { value?: unknown }).value;
-    } catch {
-      value = undefined;
-    }
+    const value = odataValue(
+      await readJsonBody(res, signal, what, ms, (m, kind) => new BcAnswerUnreadError(m, kind)),
+    );
     if (!Array.isArray(value)) {
       throw new HarnessVerificationError(`${what} returned no \`value\` array`);
     }
@@ -815,13 +850,24 @@ export class HarnessVerifier {
     return "enforced";
   }
 
-  private async fetchHarnessInfo(): Promise<HarnessInfo> {
+  /** R506: the bound spans the headers AND the body; an unread body throws, never an empty
+   *  value. A timeout or an unreadable 2xx is `BcAnswerUnreadError`, never
+   *  `HarnessVerificationError`, so it is never read as "the control app is missing". */
+  private fetchHarnessInfo(): Promise<HarnessInfo> {
+    const ms = this.cfg.timeoutMs ?? 30_000;
+    return withDeadline(
+      ms,
+      "HarnessInfo",
+      (signal) => this.readHarnessInfo(signal, ms),
+      (m, kind) => new BcAnswerUnreadError(m, kind),
+    );
+  }
+
+  private async readHarnessInfo(signal: AbortSignal, ms: number): Promise<HarnessInfo> {
     const params = new URLSearchParams({ company: this.cfg.company });
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_HarnessInfo?${params.toString()}`;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -834,12 +880,19 @@ export class HarnessVerifier {
         // refused by the OData layer before HarnessInfo's own check ever runs — that asymmetry
         // is what makes v1↔v2 incompatible by construction, so this key must always be sent.
         body: JSON.stringify({ clientProtocol: CLIENT_PROTOCOL_VERSION }),
-        signal: controller.signal,
+        signal,
       });
     } catch (err) {
+      // R-496: a redirect to an unfiltered extensions list, refused by `bcFetch`, stays itself.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
+      // R506: our own abort is a timeout, never "unreachable" (which would republish).
+      if (signal.aborted) {
+        throw new BcAnswerUnreadError(
+          `HarnessInfo gave no answer within ${ms} ms: ${String(err)}`,
+          "timeout",
+        );
+      }
       throw new HarnessVerificationError(`HarnessInfo unreachable: ${String(err)}`);
-    } finally {
-      clearTimeout(timer);
     }
     if (!res.ok) {
       // R25: read the body BEFORE throwing — BC's own rejection text is the only evidence that
@@ -869,12 +922,15 @@ This is an AUTHENTICATION failure, not a missing or stale control app: the reque
         `HarnessInfo failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
       );
     }
-    let value: unknown;
-    try {
-      value = ((await res.json()) as { value?: unknown }).value;
-    } catch {
-      value = undefined;
-    }
+    const value = odataValue(
+      await readJsonBody(
+        res,
+        signal,
+        "HarnessInfo",
+        ms,
+        (m, kind) => new BcAnswerUnreadError(m, kind),
+      ),
+    );
     if (typeof value !== "string") {
       throw new HarnessVerificationError("HarnessInfo returned no string `value`");
     }
@@ -884,6 +940,13 @@ This is an AUTHENTICATION failure, not a missing or stale control app: the reque
       throw new HarnessVerificationError(`HarnessInfo value is not JSON: ${value}`);
     }
   }
+}
+
+/** A parsed body's OData `value`, or `undefined` when the body is not an object. */
+function odataValue(body: unknown): unknown {
+  return typeof body === "object" && body !== null
+    ? (body as { value?: unknown }).value
+    : undefined;
 }
 
 function asStringArray(v: unknown): string[] {

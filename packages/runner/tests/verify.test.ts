@@ -476,6 +476,7 @@ describe("assertSourceUnchanged", () => {
       generationSourceSha256: null,
       twinTuples: null,
       numberingDigest: null,
+      dependencySourceSha256: null,
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
       rows: [],
     };
@@ -738,6 +739,7 @@ describe("planVerify", () => {
       generationSourceSha256: null,
       twinTuples: [],
       numberingDigest: SOURCE_DIGEST,
+      dependencySourceSha256: null,
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
       rows: [],
     };
@@ -2555,6 +2557,10 @@ describe("C02-09: gap ids", () => {
       o: {
         readonly seen?: NamedMutantsConfig[];
         readonly alSources?: readonly { path: string; text: string }[];
+        /** R536: the source run's symbols and the attached line map's refused set, as
+         *  runNamedMutants hands them to `narrow`. */
+        readonly buildSymbols?: readonly string[];
+        readonly backendRefused?: ReadonlyMap<string, string>;
         readonly outcome?: Readonly<Record<string, TestOutcome>>;
         /** R-427: a backend that ignores `notRerun`: reruns every method, reports no notRerun. */
         readonly ignoreNotRerun?: boolean;
@@ -2584,7 +2590,12 @@ describe("C02-09: gap ids", () => {
           };
           return { ref, verdict };
         });
-        const n = cfg.narrow?.(rows, { coverage: "fenced", alSources: o.alSources ?? [] });
+        const n = cfg.narrow?.(rows, {
+          coverage: "fenced",
+          alSources: o.alSources ?? [],
+          buildSymbols: o.buildSymbols ?? [],
+          backendRefused: o.backendRefused ?? new Map(),
+        });
         const unreached = n === undefined ? undefined : [...n.unreached];
         const outcomes = cfg.requests
           .filter((r) => !(unreached ?? []).includes(r.mutantId))
@@ -2692,7 +2703,8 @@ describe("C02-09: gap ids", () => {
     });
 
     // RO: refusedObjects come from the INSTALLED sources narrow is handed, never the project on
-    // disk (which holds `Logic` unwrapped here).
+    // disk (which holds `Logic` unwrapped here). R536: under the source run's symbols ([]), so the
+    // shape decides; a nested wrapper (compiled) is a shape BC was never measured on: refused.
     test("RO: a survivor in an #if-wrapped object of the stored sources takes every new test", async () => {
       const events: Array<{ code: string; message: string }> = [];
       const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
@@ -2705,7 +2717,7 @@ describe("C02-09: gap ids", () => {
             alSources: [
               {
                 path: "src/Logic.Codeunit.al",
-                text: '#if FOO\ncodeunit 50000 "Logic"\n{\n    procedure Post()\n    begin\n    end;\n}\n#endif\n',
+                text: '#if not FOO\n#if not BAR\ncodeunit 50000 "Logic"\n{\n    procedure Post()\n    begin\n    end;\n}\n#endif\n#endif\n',
               },
             ],
           },
@@ -2725,6 +2737,73 @@ describe("C02-09: gap ids", () => {
             "1 survivor(s) take every new test because coverage cannot place their code (R175/R298): 0/M0001",
         },
       ]);
+      w.store.close();
+    });
+
+    // R536 part 2, the other direction: a bare object before a one-arm wrapper the source run's
+    // symbols compile is a shape the run scored (R497), so verify places the survivor and narrows
+    // like an unwrapped one. Under OTHER symbols ([]) the wrapper's object is compiled out, a shape
+    // that refuses its bare neighbour too, so the result pins WHICH symbols were read.
+    test("R536: a survivor in an admitted #if-wrapped object (compiled under the source's symbols) is narrowed", async () => {
+      const events: Array<{ code: string; message: string }> = [];
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        runNamed: reachRunNamed(
+          { M: POST, N1: POST, N2: OTHER },
+          {
+            buildSymbols: ["LETHALQ"],
+            alSources: [
+              {
+                path: "src/Logic.Codeunit.al",
+                text: 'codeunit 50000 "Logic"\n{\n    procedure Post()\n    begin\n    end;\n}\n#if LETHALQ\ncodeunit 50001 "Extra"\n{\n    procedure Other()\n    begin\n    end;\n}\n#endif\n',
+              },
+            ],
+          },
+        ),
+        emit: [
+          (e) => {
+            if (e.type === "warning") events.push({ code: e.code, message: e.message });
+          },
+        ],
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.results.map((r) => r.testsRun)).toEqual([["T.M", "New.N1"]]);
+      expect(events.filter((e) => e.code === "verify-reach-fail-closed")).toEqual([]);
+      w.store.close();
+    });
+
+    // R536 (review I2): what the attached line map refuses (here an unwrapped object, as a
+    // duplicate or unmapped key would be) is refused by verify too, never read as "no new test
+    // reaches it".
+    test("R536: an object the attached line map refuses takes every new test", async () => {
+      const events: Array<{ code: string; message: string }> = [];
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        runNamed: reachRunNamed(
+          { M: POST, N1: POST, N2: OTHER },
+          {
+            backendRefused: new Map([["codeunit:50000", "declared in two compiled files"]]),
+            alSources: [
+              {
+                path: "src/Logic.Codeunit.al",
+                text: 'codeunit 50000 "Logic"\n{\n    procedure Post()\n    begin\n    end;\n}\n',
+              },
+            ],
+          },
+        ),
+        emit: [
+          (e) => {
+            if (e.type === "warning") events.push({ code: e.code, message: e.message });
+          },
+        ],
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.results.map((r) => r.testsRun)).toEqual([["T.M", "New.N1", "New.N2"]]);
+      expect(events.map((e) => e.code)).toEqual(["verify-reach-fail-closed"]);
       w.store.close();
     });
 
@@ -3624,7 +3703,8 @@ describe("C02-09: gap ids", () => {
         w.store.priorSurvivorKeys(
           run.project_path,
           info.coverageMode,
-          info.testAppHash,
+          // R496: the next run's identity is the hash and its own dependency fingerprint.
+          { hash: info.testAppHash, deps: info.testAppDeps ?? "the next run's" },
           info.buildSymbols ?? [],
           info.carryHidden.files,
         ).keys.size,

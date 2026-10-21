@@ -120,6 +120,48 @@ export class TestAppDiffersError extends Error {
   }
 }
 
+/**
+ * R486, R492: an env-tool session's resume is compared, after its hook published `publishApps`,
+ * with the test app the resumed run PROVED it measured (its recorded hash, with digests). It refuses
+ * unless the test app read back now is proven installed and is that one. Carrying a verdict across a
+ * difference would report kills measured under another test app as this run's (a false kill), so it
+ * refuses before the first baseline. `reason` says which check failed.
+ */
+export class TestAppRepublishedError extends Error {
+  readonly code = "test-app-republished" as const;
+  readonly flag: string;
+
+  constructor(flag: string, recorded: string | null, reason: string) {
+    super(
+      `${flag}: the resumed run recorded test app ${recorded ?? "unknown"}, and ${reason}, so the verdicts it would carry are not known to have been measured against the test app that runs. Refusing before the first baseline (R486, R492). Drop the flag to run from scratch.`,
+    );
+    this.name = "TestAppRepublishedError";
+    this.flag = flag;
+  }
+}
+
+/** R495: a session that PROVED its test app read a different one at a batch. Its run's identity is
+ *  cleared first (no later session borrows from it), and that batch records nothing: carrying a
+ *  verdict, skipping a survivor or reusing a snapshot there would rest on the proven app, not the
+ *  one that now runs. */
+export class TestAppDriftedError extends Error {
+  readonly code = "test-app-drifted" as const;
+  readonly proven: string;
+  /** `undefined`: the read failed, so the proven app is no longer known to run. */
+  readonly now: string | undefined;
+  readonly batchIndex: number;
+
+  constructor(proven: string, now: string | undefined, batchIndex: number) {
+    super(
+      `the test app changed during the session, or can no longer be read: it was proven to be ${proven}, and at batch ${batchIndex} it reads ${now ?? "nothing (the read failed)"}. Verdicts carried, survivors skipped and snapshots reused from there would describe the proven test app, not the one that runs, so the session stops before batch ${batchIndex} records anything, and its run keeps no test-app identity (R495). Re-run once nothing republishes the test app mid-run.`,
+    );
+    this.name = "TestAppDriftedError";
+    this.proven = proven;
+    this.now = now;
+    this.batchIndex = batchIndex;
+  }
+}
+
 /** R403 phase B: an env-tool `publishApps` file that cannot be read as a BC app package before the
  *  lease. Every such file is published under the lease, where it would fail too (an unreadable one
  *  is `publishFile`'s pre-publish `ArtifactPrepareError`; a non-package one is refused by the

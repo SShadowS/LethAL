@@ -15,6 +15,8 @@
     "build:binaries": "bun scripts/build-binary.ts --all",
     "itest:alrunner": "bun packages/runner/itest/al-runner.itest.ts",
     "itest:bcdev": "bun packages/runner/itest/bcdev.itest.ts",
+    "itest:bcdev-names": "bun packages/runner/itest/bcdev-names.itest.ts",
+    "itest:bcdev-wrapped": "bun packages/runner/itest/bcdev-wrapped.itest.ts",
     "itest:envtool": "bun packages/runner/itest/envtool.itest.ts",
     "itest:growth": "bun packages/runner/itest/growth.itest.ts",
     "itest:lease": "bun packages/runner/itest/lease.itest.ts",
@@ -33,7 +35,8 @@
     "@biomejs/biome": "^1.9.4",
     "@stryker-mutator/core": "^10.0.0",
     "@types/bun": "latest",
+    "@typescript/typescript6": "^6.0.2",
     "mutation-testing-report-schema": "^3.9.0",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   }
 }

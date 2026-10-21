@@ -2916,6 +2916,51 @@ describe("R-303 run 002: a directive around a member's var section never carries
     // Control: the real, unmoved section anchors on its declaration.
     expect(latchAnchorInVarSection(vars)?.rawKind).toBe("variable_declaration");
   });
+
+  it("R279: a var section holding nothing, or only a comment, takes the latch after its var keyword: one var per member", () => {
+    // tree-sitter-al gives such a section no `var_body`; alc compiles it (measured, R-279b). The
+    // corpora hold 111 empty and 2 comment-only member var sections.
+    const src = [
+      "codeunit 50390 R279",
+      "{",
+      "    procedure Empty(A: Integer)",
+      "    var",
+      "    begin",
+      "        A := 1;",
+      "    end;",
+      "",
+      "    procedure CommentOnly(A: Integer)",
+      "    var",
+      "        // only a comment",
+      "    begin",
+      "        A := 2;",
+      "    end;",
+      "",
+      "    procedure Plain(A: Integer)",
+      "    var",
+      "        B: Integer;",
+      "    begin",
+      "        B := 3;",
+      "    end;",
+      "}",
+    ].join("\n");
+    const root = wrapRoot(parseAL(src));
+    const specs = findAll(root, ALNodeKind.assignment_statement).map((a) =>
+      spec(a, "A := 0", "lethal.op"),
+    );
+    expect(specs.length).toBe(3);
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const out = compileSchemataForFile(src, root, specs, ided);
+    const L = `${REACH_LATCH}: Boolean;`;
+    expect(out).toContain(`    var ${L}\n    begin`);
+    expect(out).toContain(`    var ${L}\n        // only a comment\n    begin`);
+    expect(out).toContain(`        B: Integer; ${L}`);
+    // Exactly one `var` keyword per member: a second section would fail the whole artifact.
+    for (const name of ["Empty", "CommentOnly", "Plain"]) {
+      const member = out.slice(out.indexOf(`procedure ${name}(`)).split("end;")[0] ?? "";
+      expect(member.match(/\bvar\b/g)?.length).toBe(1);
+    }
+  });
 });
 
 /** R309, R316: split-header procedures whose #if arms each hold their own header and var section. Hand-written. */

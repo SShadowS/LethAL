@@ -274,8 +274,8 @@ async function main(): Promise<void> {
       verifier: new DeploymentVerifier(odataCfg),
       harnessVerifier,
     },
-    (targetAppId, artifactId) =>
-      new RunMutantTransport(odataCfg, targetAppId, artifactId, measuringFetch),
+    (targetAppId, artifactId, controlState) =>
+      new RunMutantTransport(odataCfg, targetAppId, artifactId, measuringFetch, { controlState }),
   );
   const backend = new CoverageRecordingBackend(inner);
 

@@ -10,7 +10,10 @@
  *   bun scripts/campaign/compile-only.ts --project <dir> \
  *     --selector-id <n> --control-id <n> --table-id <n> \
  *     --alc <path/to/alc.exe> --package-cache <dir> \
- *     --control-symbol <path/to/lethal-control.app>
+ *     --control-symbol <path/to/lethal-control.app> [--config <lethal.config.json>]
+ *
+ * `--config` (default `<project>/lethal.config.json`, as `lethal run`) supplies the
+ * `preprocessorSymbols` a real run builds with, for both enumeration and alc (R379).
  *
  * `--control-symbol` is staged into `--package-cache` here, exactly as
  * `BcDevMcpBackend.stageForCompile` does for a real run — so gate 0 imposes no setup step that a
@@ -31,11 +34,12 @@ import { validateSelectorIdsForProject } from "../../packages/runner/src/cli";
 // script expect.
 import {
   type CompileOnlyArgs,
+  compileOnlyMutationSet,
   parseCompileOnlyArgs,
 } from "../../packages/runner/src/compile-only-args";
 import { injectControlDependency } from "../../packages/runner/src/harness";
 import {
-  generateMutationSet,
+  batchFlatNames,
   identityOrdinalsOf,
   operatorTiers,
   prepareBatchProject,
@@ -46,13 +50,55 @@ import { writeInstrumentedProject } from "../../packages/schemata/src/project";
 export type { CompileOnlyArgs } from "../../packages/runner/src/compile-only-args";
 export { parseCompileOnlyArgs } from "../../packages/runner/src/compile-only-args";
 
+/**
+ * The batch a compile-only check compiles, written as a real run writes it: the instrumented files,
+ * then app.json and every other source and resource file (`prepareBatchProject`, which skips any
+ * flat name `writeInstrumentedProject` already wrote). R219 (sol run 001): ONE flat-name map
+ * (`batchFlatNames`) for both writers. A map over `set.files` alone would name an instrumented
+ * duplicate by its plain basename while the copy named both originals by their folders, and alc
+ * would see that file twice. R-422: `prepareBatchProject` also writes `/` for `\` in app.json's
+ * logo, screenshots and resourceFolders and returns what it changed; ignored here on purpose (a
+ * compile-only tool has no run to warn through, and the normalised app.json is what it needs).
+ */
+export async function stageCompileOnlyBatch(input: {
+  readonly projectDir: string;
+  readonly target: string;
+  readonly set: Awaited<ReturnType<typeof compileOnlyMutationSet>>["set"];
+  readonly selectorIds: CompileOnlyArgs["selectorIds"];
+  readonly artifactId: string;
+  readonly targetAppId: string;
+  readonly appManifest: Record<string, unknown>;
+}): Promise<void> {
+  const flatNames = await batchFlatNames(input.projectDir);
+  await writeInstrumentedProject({
+    targetDir: input.target,
+    files: input.set.files,
+    identityOrdinals: identityOrdinalsOf(input.set),
+    selectorIds: input.selectorIds,
+    artifactId: input.artifactId,
+    targetAppId: input.targetAppId,
+    operatorTiers,
+    flatNames,
+  });
+  await prepareBatchProject(
+    input.projectDir,
+    input.target,
+    input.appManifest,
+    String(input.appManifest.version),
+    undefined,
+    [],
+    flatNames,
+  );
+}
+
 export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
   // 1. The check --dry-run never reaches. Throws naming the offending id and range.
   await validateSelectorIdsForProject(args.projectDir, args.selectorIds);
   console.log(`[compile-only] selector ids validated against ${args.projectDir}/app.json`);
 
-  // 2. Generate + instrument, exactly as a real run does.
-  const set = await generateMutationSet(args.projectDir);
+  // 2. Generate + instrument, exactly as a real run does: under the config's preprocessor symbols
+  //    plus app.json's (R379).
+  const { set, configSymbols } = await compileOnlyMutationSet(args);
   const specCount = set.files.reduce((n, f) => n + f.specs.length, 0);
   console.log(
     `[compile-only] ${set.totalFiles} .al file(s), ${set.files.length} instrumentable, ${specCount} raw spec(s)`,
@@ -70,23 +116,15 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
   const outputDir = await mkdtemp(join(tmpdir(), "lethal-compile-only-out-"));
 
   try {
-    await writeInstrumentedProject({
-      targetDir: target,
-      files: set.files,
-      identityOrdinals: identityOrdinalsOf(set),
+    await stageCompileOnlyBatch({
+      projectDir: args.projectDir,
+      target,
+      set,
       selectorIds: args.selectorIds,
       artifactId,
       targetAppId,
-      operatorTiers,
+      appManifest,
     });
-    // `writeInstrumentedProject` only wrote the files carrying >=1 mutant spec. `alc` needs the
-    // WHOLE project — app.json plus every other source/resource file — so stamp and copy the
-    // rest exactly as a real run's batch-prep step does (orchestrator.ts's `prepareBatchProject`;
-    // it skips any basename `writeInstrumentedProject` already wrote, so the two never collide).
-    // R-422: it also writes `/` for `\` in app.json's logo, screenshots and resourceFolders and
-    // returns what it changed. That return value is ignored here on purpose: a compile-only
-    // campaign tool has no run to warn through, and the normalised app.json is what it needs.
-    await prepareBatchProject(args.projectDir, target, appManifest, String(appManifest.version));
 
     // The delegating selector schemata/project.ts just wrote always references
     // `Codeunit "LC Control State"` (packages/schemata/src/selector.ts), which resolves only
@@ -129,6 +167,8 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
         alcPath: args.alcPath,
         packageCachePath: args.packageCachePath,
         outputDir,
+        // R379: alc builds under the config's symbols too, as a real run's compile does.
+        ...(configSymbols.length > 0 ? { preprocessorSymbols: configSymbols } : {}),
       },
       defaultArtifactIo,
     );

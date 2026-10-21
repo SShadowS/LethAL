@@ -15,12 +15,15 @@ import { ALNodeKind, isBinaryExpressionKind } from "../ast/node-kinds";
  *   - Literal kinds are `integer`, `decimal`, `string_literal`, `boolean`
  *     (mapped via ALNodeKind.integer_literal etc.).
  */
+import { nameSegments } from "../ast/qualified-name";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { declarationMembers, findEnclosingProcedure } from "../ast/tree-walks";
 import {
   enclosingObjectScopeKey,
   enclosingTrigger,
   objectScopeKey,
+  qualifiedObjectName,
+  triggerHeaderSymbols,
   triggerLocalNames,
 } from "./symbol-table";
 import type { SourceFile, SymbolTable } from "./symbol-table";
@@ -74,13 +77,37 @@ function computeType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
 }
 
 /** `Record "Data Main"` / `Record DataMain` -> `Data Main`; anything else -> `null`. */
-function recordTableName(typeText: string | null): string | null {
+function recordTableName(typeText: string | null, symbols: SymbolTable): string | null {
   if (typeText === null) return null;
   const match = /^\s*Record\s+(.+?)\s*$/i.exec(typeText);
   const raw = match?.[1];
   if (raw === undefined) return null;
-  const unquoted = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+  const unquoted = objectNameIn(raw, "table", symbols);
   return unquoted.length === 0 ? null : unquoted;
+}
+
+/** A name, possibly dotted (`System.Utilities.Integer`, `"Sales Line"`). */
+const NAME_PATH = /^(?:"[^"]*"|[^\s".]+)(?:\.(?:"[^"]*"|[^\s".]+))*$/;
+
+/**
+ * R509: the keyword a `Record` type may end in. It is part of the type TEXT, never of the name, and
+ * leaving it on made every temporary record's name unreadable, so its fields had no type.
+ */
+const TEMPORARY_SUFFIX = /\s+temporary$/i;
+
+/**
+ * R502: the object name a type's reference text means. A clean dotted path
+ * (`System.Utilities.Integer`) goes through `qualifiedObjectName`, as the receiver's AST reads do;
+ * anything else is unquoted as before. R509: a trailing `temporary` is dropped first.
+ */
+function objectNameIn(
+  typeRef: string,
+  kind: "table" | "codeunit",
+  symbols: Pick<SymbolTable, "objects">,
+): string {
+  const raw = typeRef.replace(TEMPORARY_SUFFIX, "");
+  if (NAME_PATH.test(raw)) return qualifiedObjectName(nameSegments(raw), kind, symbols) ?? "";
+  return raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
 }
 
 /**
@@ -104,7 +131,7 @@ function memberType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
   // Only a plain identifier receiver. A chained `A.B.C` would need the middle to resolve to a
   // record type, which this layer does not model, so it refuses rather than guessing.
   if (objectNode.kind !== ALNodeKind.identifier) return null;
-  const tableName = recordTableName(resolveIdentifierType(objectNode, symbols));
+  const tableName = recordTableName(resolveIdentifierType(objectNode, symbols), symbols);
   if (tableName === null) return null;
   const memberName = stripQuotes(memberNode.text).toLowerCase();
   for (const field of symbols.fieldsOf(tableName)) {
@@ -154,8 +181,8 @@ function callType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
     const match = /^\s*(?:Codeunit|Record)\s+(.+?)\s*$/i.exec(receiverType);
     const raw = match?.[1];
     if (raw === undefined) return null;
-    const ownerName = stripQuotes(raw);
     const kind = /^\s*Codeunit\b/i.test(receiverType) ? "codeunit" : "table";
+    const ownerName = objectNameIn(raw, kind, symbols);
     return (
       symbols.uniqueProcedure(objectScopeKey(kind, ownerName), method.text)?.returnType ?? null
     );
@@ -252,10 +279,29 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
   // R330 (run 002 fix round): inside a trigger, a name the trigger declares in its own header is
   // unknown. Without this it fell through to the object's globals, and since R322 also to a global
   // whose casing differs: an `alc`-failing swap (AL0175).
+  // R340: such a name is now typed by its own declaration in the trigger header, as a procedure's
+  // is; a name declared in a `#if` region of the header, or any header name not parsed as a plain
+  // parameter, local or named return, stays unknown (it still hides the global).
   if (proc === null) {
     const trigger = enclosingTrigger(node);
-    if (trigger !== null && triggerLocalNames(trigger).has(stripQuotes(node.text).toLowerCase()))
+    const name = stripQuotes(node.text).toLowerCase();
+    if (trigger !== null && triggerLocalNames(trigger).has(name)) {
+      // R340 (review M1): a trigger that parsed with an ERROR (a header split by `#if`, which the
+      // grammar attaches to one arm) types nothing, as an unindexed procedure has since R331.
+      if (trigger.hasError) return null;
+      const header = triggerHeaderSymbols(trigger);
+      // A name declared in a `#if` region of the header. Unreachable by any shape measured today
+      // (R-340 red-check): a `#if` var block's names never enter `locals` (direct children only),
+      // and a `#if` inside the parameter list parses with an ERROR (caught above). Kept because
+      // `collectParameters` walks recursively: if the grammar ever parsed a conditional parameter
+      // cleanly, both arms would land in `parameters`, and this keeps such a name unknown.
+      if (header.ambiguous.includes(name)) return null;
+      const local = header.locals.find((v) => sameName(v.name, node.text));
+      if (local !== undefined) return extractType(local.typeText);
+      const param = header.parameters.find((p) => sameName(p.name, node.text));
+      if (param !== undefined) return extractType(param.typeText);
       return null;
+    }
   }
   // A member-level declaration wins over an object-level one, which is AL's own shadowing rule:
   // a procedure's local or parameter hides a global of the same name.

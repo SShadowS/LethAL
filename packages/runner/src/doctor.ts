@@ -1,7 +1,7 @@
 import { describeAlRunnerCache } from "./al-runner-cache";
 import type { AlRunnerCacheReport } from "./al-runner-cache";
 import { compareAppVersions } from "./app-version";
-import { MIN_CONTROL_VERSION } from "./harness";
+import { MIN_CONTROL_VERSION, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
 
 /**
@@ -226,6 +226,9 @@ async function runCheck(name: string, fn: () => Promise<DoctorCheck>): Promise<D
   try {
     return await fn();
   } catch (err) {
+    // R-496 review: a refused extensions query is a caller-contract violation inside LethAL, not
+    // a statement about the server, so it rejects the whole run rather than reading as one failed check.
+    if (err instanceof UnfilteredExtensionsQueryError) throw err;
     return { name, ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
 }

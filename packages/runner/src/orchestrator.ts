@@ -1,7 +1,7 @@
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { tier1Operators } from "@lethal/builtin-tier1";
+import { openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
   ALNodeKind,
@@ -11,6 +11,7 @@ import {
   FileRefusedError,
   type MutationOperator,
   type MutationSpec,
+  type SemanticContext,
   buildSemanticContext,
   buildSpanIndex,
   evaluateArms,
@@ -25,6 +26,8 @@ import {
 } from "@lethal/engine";
 import {
   CARRIER_KINDS,
+  FLAT_NAMES_FILENAME,
+  type FlatNames,
   IDENTITY_SCHEME,
   type IdentityEntry,
   type InstrumentedFile,
@@ -37,6 +40,8 @@ import {
   coarseIdentityTupleOf,
   dedupeSpecs,
   describeObjectKinds,
+  flatNamesFor,
+  flatNamesSidecar,
   identityEntriesOf,
   identityFieldsOf,
   identitySiteKey,
@@ -49,9 +54,11 @@ import {
   varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
-import type { AlRunnerProvisionResult } from "./al-runner-backend";
+import { AL_RUNNER_UNDECIDED_ARM_MISSING } from "./al-runner-backend";
+import type { AlRunnerProvisionResult, TestSelectorProbe } from "./al-runner-backend";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { predefinedSymbolsChangedWarning } from "./al-runner-predefined-probe";
+import { alRunnerRenamed } from "./al-runner-transport";
 import type { AlRunnerBcBuild } from "./al-runner-transport";
 import {
   confirmedDowngradeRefusal,
@@ -78,7 +85,9 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
+import { stopIsRetrySafe } from "./backend";
 import {
+  decodeSource,
   hashAlTree,
   hashPackage,
   hashSourceSnapshot,
@@ -100,11 +109,18 @@ import {
   isClosedWorld,
   sameClosedWorld,
 } from "./closed-world";
+import {
+  type DependencyReportSourceRecord,
+  dependencyReportReader,
+  dependencySourceDigest,
+  dependencySourceWarning,
+} from "./dependency-report-source";
 import type { PublishOutcome } from "./deployment-verifier";
 import {
   DependencyUnreadableError,
   type MicrosoftMode,
   appInputsOfPackage,
+  checkInstalled,
   dependencyFingerprint,
   packageFolderReader,
   publishedPackageReader,
@@ -130,6 +146,7 @@ import {
 } from "./events";
 import type { HangRefusedFile, PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
+import { UnfilteredExtensionsQueryError } from "./harness";
 import { homeDir } from "./home";
 import {
   type BeginPublishRefusal,
@@ -140,7 +157,16 @@ import {
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { discoveredRelPaths, isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
-import { type AlSource, ManifestDeclarationError, coverageRefusedObjects } from "./line-map";
+import {
+  type AlSource,
+  ManifestDeclarationError,
+  activeObjectKeys,
+  alRunnerAdmitsWrappedFile,
+  bcWrappedShapeRefusal,
+  coverageRefusedObjects,
+  duplicateObjectRefusals,
+  fileHoldsWrappedObject,
+} from "./line-map";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -196,7 +222,8 @@ import {
   wasStranded,
   withoutRefusedTests,
 } from "./resume";
-import type { ResumeIndex } from "./resume";
+import type { CarriedVerdict, ResumeIndex } from "./resume";
+import { CONTROL_DRAIN_MS } from "./run-mutant-transport";
 import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
 import {
   buildCoverageIndex,
@@ -214,13 +241,15 @@ import {
   isRunMutantLineCountMessage,
   testAppRefusal,
 } from "./stale-test-app";
-import { sameHiddenFiles } from "./store";
+import { runLendsAlRunnerNames, sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
-import type { CarryHidden, MutantVerdict, RunRow, RunnerKind } from "./store";
+import type { CarryHidden, MutantVerdict, RunRow, RunnerKind, TestAppIdentity } from "./store";
 import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
   PublishAppUnreadableError,
+  TestAppDriftedError,
+  TestAppRepublishedError,
   type TestArmEvidence,
   assertTestMembership,
   chooseTestSuite,
@@ -426,6 +455,13 @@ export interface RefusedFile extends Omit<FileRefusalFields, "site"> {
 
 export interface MutationSetResult {
   readonly files: readonly InstrumentedFile[];
+  /**
+   * R-300b (C1): object keys declared, in an arm this build compiles, by more than one of the
+   * project's files (every parsed file, `--only` or not) -> the refusal sentence
+   * (`duplicateObjectRefusals`, the function the al-runner index uses). `runSession` refuses them
+   * in selection on the al-runner path. Usually empty: alc rejects such a project.
+   */
+  readonly duplicateObjects: ReadonlyMap<string, string>;
   /** Files with >=1 spec that no selector var could be injected into — see doc comment above. */
   readonly skipped: readonly NotInstrumentedFile[];
   /** Every `.al` source file scanned (excluding emitted `Mutation*` artifacts) — the denominator
@@ -478,8 +514,8 @@ export interface MutationSetResult {
    * keeps.
    */
   readonly declarativeSites: readonly DeclarativeSiteFile[];
-  /** R447: per file, the sites R196's hang check refused (`MutationOperator.refusesHangCapable`),
-   *  after the `--operator` and `--lines` filters and outside inactive `#if` arms. */
+  /** R447: per file, the sites a hang check refused (R196's `MutationOperator.refusesHangCapable`,
+   *  or R501's dispatch-level `openItemHangRefuses`), after the `--operator` and `--lines` filters and outside inactive `#if` arms. */
   readonly hangRefused: readonly HangRefusedFile[];
   /**
    * R307: the exact identity entries of every file the trial refused (empty for a header-rule
@@ -503,6 +539,10 @@ export interface MutationSetResult {
    * `--only`/`--exclude`, `preproc-undecided`, no selector var fits).
    */
   readonly carryHidden: CarryHidden;
+  /** R565: every dependency report lookup and every package that could not be used, sorted. */
+  readonly dependencyReportSources: readonly DependencyReportSourceRecord[];
+  /** R565: `dependencySourceDigest` over `dependencyReportSources`. */
+  readonly dependencySourceSha256: string;
 }
 
 export interface MutationSetOptions {
@@ -591,6 +631,13 @@ export interface MutationSetOptions {
    * `"win32"` to simulate a Windows readdir on any host.
    */
   readonly platform?: NodeJS.Platform;
+  /**
+   * R565: the folders whose `.app` packages are searched, in order, for a report the project calls
+   * through `Report X` but does not declare (`dependency-report-source.ts`). al-runner: the pinned
+   * platform-apps folder, then `packagesDir`; bcdev and envtool: `packageCachePath`. Absent or
+   * empty: nothing is found, and each such report is named in a warning.
+   */
+  readonly dependencyPackageDirs?: readonly string[];
 }
 
 /**
@@ -887,11 +934,10 @@ export async function generateMutationSet(
       if (snapshot !== undefined && bytes === undefined) {
         throw new Error(`generateMutationSet: ${raw} is not in the source snapshot`);
       }
-      // Buffer's decode, as `readFile(..., "utf8")` does: a BOM is kept, not stripped.
+      // Buffer's decode, as `readFile(..., "utf8")` does: a BOM is kept, not stripped. The same
+      // `decodeSource` `lethal explain --project` renders with (R274).
       const source =
-        bytes !== undefined
-          ? bytes.toString("utf8")
-          : await readFile(join(projectDir, raw), "utf8");
+        bytes !== undefined ? decodeSource(bytes) : await readFile(join(projectDir, raw), "utf8");
       return { path: rel, source, root: wrapRoot(parseAL(source)) };
     }),
   );
@@ -907,10 +953,16 @@ export async function generateMutationSet(
   const armsByRoot = new Map<ALSyntaxNode, ArmEvaluation>(
     parsed.map(({ source, root }) => [root, evaluateArms(root, source, buildSymbols)]),
   );
-  const ctx = buildSemanticContext(
-    parsed.map(({ path, root }) => ({ path, root })),
-    armsByRoot,
-  );
+  // R565: a report outside the project is read from the dependency packages, lazily, by the hang
+  // refusal (`crossWriters`); the reader keeps what it looked up for the report and the digest.
+  const depReader = dependencyReportReader(options.dependencyPackageDirs ?? []);
+  const ctx: SemanticContext = {
+    ...buildSemanticContext(
+      parsed.map(({ path, root }) => ({ path, root })),
+      armsByRoot,
+    ),
+    dependencyReport: depReader.lookup,
+  };
   const preprocExcluded: PreprocExcludedFile[] = [];
   const symbolsDetail = `symbols: ${buildSymbols.length > 0 ? buildSymbols.join(", ") : "none"}`;
 
@@ -972,13 +1024,24 @@ export async function generateMutationSet(
     const specs: MutationSpec[] = [];
     let declarativeInThisFile = 0;
     const hangRefusedHere = new Map<string, number>();
+    const carrierFile = canCarryMutationSelectorVar(root);
     visit(root, (node) => {
       for (const op of allOperators) {
-        if (!op.targets(node, ctx)) {
-          // R447: a site R196's hang check refused, counted only where this run would have
-          // mutated it: not compiled out, and admitted by `--operator` and `--lines`.
+        const targeted = op.targets(node, ctx);
+        // R501: ONE dispatch-level hang refusal for every operator in `allOperators`, no exemption:
+        // a site in open report-data-item code, or one that deletes or alters a bounded item's only
+        // bound. Only a MUTABLE site: a declarative one (a report column's source) keeps its normal
+        // path below, dropped and tallied as non-executable, so it is never counted here.
+        // R500: not in a file whose kind cannot carry the selector var (an XMLport): its specs go to
+        // the `skipped` row below, and a refusal here would drop them from both rows.
+        const r501 =
+          carrierFile && targeted && isMutableSite(node) && openItemHangRefuses(node, ctx, op.name);
+        if (!targeted || r501) {
+          // R447: a site a hang check refused (R196's loop-condition write, or R501 above), counted
+          // only where this run would have mutated it: not compiled out, and admitted by
+          // `--operator` and `--lines`.
           if (
-            op.refusesHangCapable?.(node, ctx) === true &&
+            (r501 || op.refusesHangCapable?.(node, ctx) === true) &&
             !startsInInactiveArm(inactive, node.startIndex) &&
             (admittedOperators === undefined || admittedOperators.has(op.name)) &&
             (lineRanges === undefined ||
@@ -1205,14 +1268,15 @@ export async function generateMutationSet(
         uninstrumentableOnly.length > 0
           ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in ${where.join(" or in ")}, so nothing would deploy.`
           : "";
-      // R447: an operator whose sites R196 refused DID find sites; say where, as R307 does.
+      // R447: an operator whose sites a hang check refused (R196 or R501) DID find sites; say
+      // where, as R307 does.
       const hangNuance = barren
         .flatMap((n) => {
           const perFile = hangRefusedByOperator.get(n);
           if (perFile === undefined) return [];
           const where = [...perFile].map(([f, c]) => `${f} (${c})`).join(", ");
           return [
-            ` "${n}" had site(s) refused as hang-capable (R196: each writes a variable an enclosing loop's condition reads): ${where}.`,
+            ` "${n}" had site(s) refused as hang-capable (each writes a variable an enclosing loop's condition reads, R196, or is code of an unbounded report data item or a bounded item's only bound, R487/R501): ${where}.`,
           ];
         })
         .join("");
@@ -1308,8 +1372,21 @@ export async function generateMutationSet(
       `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
     );
   }
+  // R565: read once every lookup this generation made is done.
+  const dependencyReportSources = depReader.records();
+  for (const r of dependencyReportSources)
+    if (r.outcome !== "ok")
+      warn("dependency-report-source-unavailable", dependencySourceWarning(r));
   return {
+    dependencyReportSources,
+    dependencySourceSha256: dependencySourceDigest(dependencyReportSources),
     files,
+    duplicateObjects: duplicateObjectRefusals(
+      parsed.map(({ path, root }) => {
+        const arms = armsByRoot.get(root);
+        return { path, keys: arms === undefined ? [] : activeObjectKeys(root, arms) };
+      }),
+    ),
     skipped,
     totalFiles: entries.length,
     excludedByOnly,
@@ -1491,6 +1568,12 @@ export interface SessionConfig {
    * database instead, with no deploy and no baseline (R192). See `resume.ts`.
    */
   readonly resume?: "last" | number;
+  /**
+   * R565: dependency package folders the config names (bcdev and envtool: `packageCachePath`),
+   * searched after al-runner's provisioned platform apps and the backend's own
+   * (`ExecutionBackend.dependencyPackageDirs`). See `MutationSetOptions.dependencyPackageDirs`.
+   */
+  readonly dependencyPackageDirs?: readonly string[];
   /**
    * R53: re-run mutants a prior run stranded the tier on, instead of skipping them.
    *
@@ -1868,6 +1951,9 @@ async function prepareArtifactDir(args: {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
     args.subset === undefined ? args.files : narrowFilesToSubset(args.files, args.subset);
+  // R219: ONE flat-name map over the whole project, for both writers: built over the batch's own
+  // files, a duplicate whose twin is not instrumented here would get another name than its copy.
+  const flatNames = await batchFlatNames(args.projectDir, args.source);
   await writeInstrumentedProject({
     targetDir: args.targetDir,
     files,
@@ -1876,6 +1962,7 @@ async function prepareArtifactDir(args: {
     targetAppId: targetAppIdOf(args.projectManifest),
     operatorTiers,
     identityOrdinals: args.identityOrdinals,
+    flatNames,
   });
   return await prepareBatchProject(
     args.projectDir,
@@ -1884,6 +1971,7 @@ async function prepareArtifactDir(args: {
     args.appVersion,
     args.source,
     args.excludeOutputs,
+    flatNames,
   );
 }
 
@@ -2436,6 +2524,8 @@ interface FencedRunOutcome {
    */
   readonly retryAfter?: LostAckOutcome;
   readonly original?: { readonly attemptId: string; readonly opSeq: number };
+  /** R-204b: set when a retry was withheld because our stop may have ended the run. */
+  readonly cause?: "stop-outcome-unconfirmed";
 }
 
 /**
@@ -2486,6 +2576,16 @@ async function runFenced(
   if (firstOutcome === "unresolved") {
     return { verdict: first, lostAck: "unresolved", retried: false };
   }
+  // R-204b (R202): a tombstone our own stop may have written proves nothing about the run, and a
+  // hang need not recur, so a passing retry here could turn a real timeout into a survivor.
+  if (!stopIsRetrySafe(first.stopState)) {
+    return {
+      verdict: first,
+      lostAck: firstOutcome,
+      retried: false,
+      cause: "stop-outcome-unconfirmed",
+    };
+  }
   // R194 (second half): the two retry-safe outcomes say DIFFERENT things and the warning must
   // not borrow one's words for the other. `completed`: the fence ran to phase 3 and only the
   // result was lost. `not-started`: as of the reconciling read, phase 1 had not claimed our
@@ -2525,11 +2625,17 @@ async function runFenced(
   // never claimed, that is evidence about the transport, not about the request, and the counter
   // the retry consumed now sits one ahead of the server's: quarantine rather than continue on a
   // counter that would refuse the next mutant as a lease loss (review finding F3).
+  const lostAck = retryOutcome === "not-started" ? "unresolved" : retryOutcome;
   return {
     verdict: retry,
-    lostAck: retryOutcome === "not-started" ? "unresolved" : retryOutcome,
+    lostAck,
     retried: true,
     ...provenance,
+    // R-204b: the retry's own unrefused stop makes its ending unconfirmed too, never `result-lost`;
+    // an unresolved retry keeps its quarantine.
+    ...(lostAck !== "unresolved" && !stopIsRetrySafe(retry.stopState)
+      ? { cause: "stop-outcome-unconfirmed" as const }
+      : {}),
   };
 }
 
@@ -2578,8 +2684,18 @@ async function runFencedMany(
     return r;
   };
   const first = await once();
+  // R-204b: renames a call-level ending whose answer we could not use after a stop that may have
+  // been accepted. The malformed and run-error endings never retry, so for them only the name moves.
+  const unconfirmed = (r: RunManyResult): RunManyResult =>
+    r.kind === "call" ? { ...r, cause: "stop-outcome-unconfirmed" } : r;
+  const renameMalformed = (r: RunManyResult): RunManyResult =>
+    r.kind === "call" &&
+    (r.cause === "group-answer-malformed" || r.cause === "group-run-error") &&
+    !stopIsRetrySafe(r.verdict.stopState)
+      ? unconfirmed(r)
+      : r;
   if (first.kind !== "call" || !isLostAck(first.verdict)) {
-    return { result: first, lostAck: "none", retried: false };
+    return { result: renameMalformed(first), lostAck: "none", retried: false };
   }
   emit({
     type: "warning",
@@ -2589,6 +2705,10 @@ async function runFencedMany(
   const firstOutcome = await reconcileFencedLostAck(leaseSession, first.verdict, groupBudgetMs);
   if (firstOutcome === "unresolved")
     return { result: first, lostAck: "unresolved", retried: false };
+  // R-204b (R202): as in `runFenced`, no retry unless every stop in the call was refused.
+  if (!stopIsRetrySafe(first.verdict.stopState)) {
+    return { result: unconfirmed(first), lostAck: firstOutcome, retried: false };
+  }
   emit({
     type: "warning",
     code: firstOutcome === "completed" ? "lost-ack-retry" : "lost-ack-not-started",
@@ -2616,12 +2736,17 @@ async function runFencedMany(
     ...(original !== undefined ? { original } : {}),
   };
   if (retry.kind !== "call" || !isLostAck(retry.verdict)) {
-    return { result: retry, lostAck: "none", retried: true, ...provenance };
+    return { result: renameMalformed(retry), lostAck: "none", retried: true, ...provenance };
   }
   const retryOutcome = await reconcileFencedLostAck(leaseSession, retry.verdict, groupBudgetMs);
+  const lostAck = retryOutcome === "not-started" ? "unresolved" : retryOutcome;
   return {
-    result: retry,
-    lostAck: retryOutcome === "not-started" ? "unresolved" : retryOutcome,
+    // R-204b: as for the first attempt; an unresolved retry keeps its quarantine.
+    result:
+      lostAck !== "unresolved" && !stopIsRetrySafe(retry.verdict.stopState)
+        ? unconfirmed(retry)
+        : retry,
+    lostAck,
     retried: true,
     ...provenance,
   };
@@ -2641,10 +2766,15 @@ interface CoveringStep {
   readonly retried: boolean;
   readonly retryAfter?: LostAckOutcome;
   readonly original?: { readonly attemptId: string; readonly opSeq: number };
+  /** R516 (M2): the budget the run was SENT (`timeoutMs` on the single path, the method's
+   *  `budgetMs` on the grouped path), never recomputed: a timeout confirm is judged against it. */
   readonly testBudgetMs: number;
+  /** R516 (I3 c): where `testBudgetMs` came from; it picks the cause of an unconfirmed timeout. */
+  readonly testBudgetSource: BudgetSource;
   readonly groupBudgetMs: number;
   readonly opKind: "single" | "many";
-  readonly cause?: RunManyCause;
+  /** R534: plus al-runner's answered-row causes (`TestVerdict.runnerRow`), single path only. */
+  readonly cause?: RunManyCause | "runner-test-error" | "runner-refused";
   readonly abortSession?: string;
   /**
    * R206 §2.4: the 1-based position of `ref` within the CALL that ran it (1 on the sequential
@@ -2658,11 +2788,80 @@ interface CoveringStep {
   readonly callSettings: { readonly requestCeilingMs: number; readonly stopGraceMs: number };
 }
 
+/**
+ * R516 (I3 c): which figure set a covering test's budget, `max(2 x duration, floor)`. `durationMs`
+ * is the duration the budget was derived from (the larger of the baseline's and, R515, a passing
+ * timeout confirm's this shard), also on `floor`, where it is what the floor outranked.
+ */
+type BudgetSource =
+  | { readonly kind: "floor"; readonly durationMs: number }
+  | { readonly kind: "baseline"; readonly durationMs: number }
+  | { readonly kind: "confirm"; readonly confirmOf: string; readonly durationMs: number };
+
+/** R516: a covering test's budget and its source, as `runMutantsOnBackend`'s `budgetOf` gives it. */
+interface TestBudget {
+  readonly ms: number;
+  readonly source: BudgetSource;
+}
+
 /** R198: the group-run settings the covering loop dispatches under, or `undefined` for sequential. */
 interface GroupRunSettings {
   readonly maxMethodsPerCall: number;
   readonly requestCeilingMs: number;
   readonly stopGraceMs: number;
+}
+
+/**
+ * R198: one single-method covering run as a `CoveringStep`, at `budget`. R577: a module function so
+ * the kill reproduction runs the killer exactly as the covering loop did, at the budget the
+ * killing run was SENT (never a recomputed one).
+ */
+async function singleStep(
+  ctx: {
+    readonly backend: ExecutionBackend;
+    readonly safety: SessionSafety;
+    readonly leaseSession: LeaseSession | undefined;
+    readonly emit: RunEmitter;
+    readonly resyncOpSeq: (() => Promise<void>) | undefined;
+  },
+  ref: TestMethodRef,
+  budget: TestBudget,
+): Promise<CoveringStep> {
+  const { ms, source } = budget;
+  const out = await runFenced(
+    ctx.backend,
+    ctx.safety,
+    ref,
+    { coverage: "none", timeoutMs: ms },
+    ctx.leaseSession,
+    ctx.emit,
+    ctx.resyncOpSeq,
+  );
+  return {
+    ref,
+    verdict: out.verdict,
+    lostAck: out.lostAck,
+    retried: out.retried,
+    ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
+    ...(out.original !== undefined ? { original: out.original } : {}),
+    // R-204b: the single path's two causes, carried exactly as the grouped call's are. R534:
+    // al-runner's answered row, keyed on `runnerRow` ONLY (never on `completed-accepted`, which
+    // R488/R491's refusals also carry and which must still abort).
+    ...(out.cause !== undefined
+      ? { cause: out.cause }
+      : out.verdict.stopRefusal !== undefined
+        ? { cause: out.verdict.stopRefusal }
+        : out.verdict.runnerRow !== undefined
+          ? { cause: out.verdict.runnerRow }
+          : {}),
+    testBudgetMs: ms,
+    testBudgetSource: source,
+    groupBudgetMs: ms,
+    opKind: "single",
+    groupPosition: 1,
+    chunkPrefix: [{ ref, budgetMs: ms }],
+    callSettings: { requestCeilingMs: ms, stopGraceMs: 0 },
+  };
 }
 
 /**
@@ -2682,46 +2881,22 @@ async function* coveringRuns(args: {
   readonly backend: ExecutionBackend;
   readonly safety: SessionSafety;
   readonly ordered: readonly TestMethodRef[];
-  readonly budgetOf: (ref: TestMethodRef) => number;
+  readonly budgetOf: (ref: TestMethodRef) => TestBudget;
   readonly leaseSession: LeaseSession | undefined;
   readonly emit: RunEmitter;
   readonly resyncOpSeq: (() => Promise<void>) | undefined;
   readonly group: GroupRunSettings | undefined;
   readonly mutantId: string;
 }): AsyncGenerator<CoveringStep, void, undefined> {
-  const single = async (ref: TestMethodRef): Promise<CoveringStep> => {
-    const budget = args.budgetOf(ref);
-    const out = await runFenced(
-      args.backend,
-      args.safety,
-      ref,
-      { coverage: "none", timeoutMs: budget },
-      args.leaseSession,
-      args.emit,
-      args.resyncOpSeq,
-    );
-    return {
-      ref,
-      verdict: out.verdict,
-      lostAck: out.lostAck,
-      retried: out.retried,
-      ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
-      ...(out.original !== undefined ? { original: out.original } : {}),
-      testBudgetMs: budget,
-      groupBudgetMs: budget,
-      opKind: "single",
-      groupPosition: 1,
-      chunkPrefix: [{ ref, budgetMs: budget }],
-      callSettings: { requestCeilingMs: budget, stopGraceMs: 0 },
-    };
-  };
+  const single = (ref: TestMethodRef): Promise<CoveringStep> =>
+    singleStep(args, ref, args.budgetOf(ref));
   const group = args.group;
   if (group === undefined || args.backend.runMany === undefined) {
     for (const ref of args.ordered) yield await single(ref);
     return;
   }
   const fits = (ref: TestMethodRef) =>
-    args.budgetOf(ref) + group.stopGraceMs <= group.requestCeilingMs;
+    args.budgetOf(ref).ms + group.stopGraceMs <= group.requestCeilingMs;
   let cursor = 0;
   while (cursor < args.ordered.length) {
     const head = args.ordered[cursor];
@@ -2732,11 +2907,26 @@ async function* coveringRuns(args: {
       continue;
     }
     const methods: { ref: TestMethodRef; budgetMs: number }[] = [];
+    // R516 (M2): each method's budget SOURCE beside the `budgetMs` it is sent, index for index.
+    const sources: BudgetSource[] = [];
     for (let i = cursor; i < args.ordered.length && methods.length < group.maxMethodsPerCall; i++) {
       const ref = args.ordered[i];
       if (ref === undefined || !fits(ref)) break;
-      methods.push({ ref, budgetMs: args.budgetOf(ref) });
+      const b = args.budgetOf(ref);
+      methods.push({ ref, budgetMs: b.ms });
+      sources.push(b.source);
     }
+    // R516 (M2): the budget method `position` (1-based) was SENT, read from the call itself.
+    const sentAt = (position: number) => {
+      const m = methods[position - 1];
+      const source = sources[position - 1];
+      if (m === undefined || source === undefined) {
+        throw new Error(
+          `coveringRuns: mutant ${args.mutantId}'s call has ${methods.length} method(s), so it has no position ${position} — caller-contract violation`,
+        );
+      }
+      return { testBudgetMs: m.budgetMs, testBudgetSource: source };
+    };
     // R206 §3: two equal (codeunitId, method) pairs in one call is a caller-contract violation,
     // refused HERE, before dispatch, where the message can name the mutant. The server's own
     // collision check (`suite-unresolved`) is the second line, not the first.
@@ -2782,7 +2972,7 @@ async function* coveringRuns(args: {
         ...provenance,
         ref: verdict.ref,
         verdict,
-        testBudgetMs: args.budgetOf(verdict.ref),
+        ...sentAt(position),
         groupBudgetMs,
         opKind: "many",
         ...(cause !== undefined ? { cause } : {}),
@@ -2791,14 +2981,18 @@ async function* coveringRuns(args: {
         chunkPrefix: methods.slice(0, position),
         callSettings,
       };
-      return;
+      // R577 (I4): the consumer pulls again after a timeout only when its kill did not reproduce;
+      // the walk then goes on after it. Every other call-level ending ends the walk, as before.
+      if (verdict.outcome !== "timeout" || cause !== undefined) return;
+      cursor += position;
+      continue;
     }
     for (const [i, verdict] of out.result.verdicts.entries()) {
       yield {
         ...provenance,
         ref: verdict.ref,
         verdict,
-        testBudgetMs: args.budgetOf(verdict.ref),
+        ...sentAt(i + 1),
         groupBudgetMs,
         opKind: "many",
         groupPosition: i + 1,
@@ -2806,11 +3000,12 @@ async function* coveringRuns(args: {
         callSettings,
       };
     }
-    // A `failure` ends the walk. `complete` means every method of THIS call ran (the transport
-    // refuses a `complete` with fewer entries than the call asked for) and `cap` a prefix of it;
-    // either way the cursor advances by what ran and the next call, if any, takes the rest. The
-    // loop's attempted-set guard is what catches an answer whose `ranCount` outran its entries.
-    if (out.result.endedBy === "failure") return;
+    // `complete` means every method of THIS call ran (the transport refuses a `complete` with
+    // fewer entries than the call asked for) and `cap` a prefix of it; either way the cursor
+    // advances by what ran and the next call, if any, takes the rest. The loop's attempted-set
+    // guard is what catches an answer whose `ranCount` outran its entries. A `failure` advances
+    // the same way: the consumer breaks at a failure, so the walk ends there, except (R577, I4)
+    // after a kill that did not reproduce, when the walk goes on after the failed method.
     cursor += out.result.ranCount;
   }
 }
@@ -2848,6 +3043,26 @@ function noteLeaseLostOrThrow(leaseSession: LeaseSession | undefined, detail: st
   leaseSession.noteLeaseLost(detail);
 }
 
+interface LeaseSessionDeps {
+  readonly client: LeaseApi;
+  readonly lease: Lease;
+  readonly safety: SessionSafety;
+  readonly ttlSeconds: number;
+  readonly timers: LeaseTimers;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly quarantineStore: QuarantineStore | undefined;
+  readonly resourceKey: string | undefined;
+  readonly nowIso: () => string;
+  readonly runId: number;
+  readonly emit: RunEmitter;
+  /**
+   * R508: called once, on the FIRST loss, after the latch is set. Writes the lost batch's
+   * correction to the store at once, so a process killed before its `finally` (there is no
+   * SIGINT/SIGTERM handler) does not leave that batch carryable. Must not throw.
+   */
+  readonly onLost: (batchIndex: number) => void;
+}
+
 /**
  * The lease a session holds, plus everything the session does WITH it: the renew heartbeat, the
  * publish fence, op-seq reconciliation, lease-loss bookkeeping, and the op-gated release.
@@ -2871,22 +3086,59 @@ class LeaseSession {
   #lastPublishOpSeq: number | undefined;
   /** Updated by `runSession` at the top of every batch — the scope of a lease-lost invalidation. */
   currentBatchIndex = 0;
+  /** R507: the first R-496 refusal any lease call met, for teardown to surface. */
+  #refusal: UnfilteredExtensionsQueryError | undefined;
+  /** R507: set once `takeRefusal()` has run; a later refusal is warned, never stored. */
+  #refusalTaken = false;
+  private readonly d: LeaseSessionDeps;
 
-  constructor(
-    private readonly d: {
-      readonly client: LeaseApi;
-      readonly lease: Lease;
-      readonly safety: SessionSafety;
-      readonly ttlSeconds: number;
-      readonly timers: LeaseTimers;
-      readonly sleep: (ms: number) => Promise<void>;
-      readonly quarantineStore: QuarantineStore | undefined;
-      readonly resourceKey: string | undefined;
-      readonly nowIso: () => string;
-      readonly runId: number;
-      readonly emit: RunEmitter;
-    },
-  ) {}
+  constructor(d: LeaseSessionDeps) {
+    // R507: ONE wrapper instead of edits to every `catch` below. Each lease call's error is
+    // noted and rethrown, so every existing catch still does its fail-closed thing, and a
+    // refusal those catches swallow (renew, reconcile, finish) still ends the session as itself.
+    const inner = d.client;
+    const note = (err: unknown): never => {
+      this.noteRefusal(err);
+      throw err;
+    };
+    const client: LeaseApi = {
+      acquire: (...a) => inner.acquire(...a).catch(note),
+      renew: (...a) => inner.renew(...a).catch(note),
+      release: (...a) => inner.release(...a).catch(note),
+      beginPublish: (...a) => inner.beginPublish(...a).catch(note),
+      endPublish: (...a) => inner.endPublish(...a).catch(note),
+      getOperationStatus: (...a) => inner.getOperationStatus(...a).catch(note),
+      recoverOp: (...a) => inner.recoverOp(...a).catch(note),
+    };
+    this.d = { ...d, client };
+  }
+
+  /**
+   * R507: a refused unfiltered extensions query on the lease path. The first is kept for teardown
+   * and latches the session (not lease loss: no `lostBatchIndex`), so no new work starts; a later
+   * one, or any after `takeRefusal()`, is warned, never dropped.
+   */
+  private noteRefusal(err: unknown): void {
+    if (!(err instanceof UnfilteredExtensionsQueryError)) return;
+    if (this.#refusalTaken || this.#refusal !== undefined) {
+      console.warn(
+        `[lethal] another refused unfiltered extensions query on the lease path: ${err.message}`,
+      );
+      return;
+    }
+    this.#refusal = err;
+    this.d.safety.latchUnsafe(
+      `refused unfiltered extensions query on the lease path: ${err.message}`,
+    );
+  }
+
+  /** R507: hands the recorded refusal to teardown, once. Later refusals are warned. */
+  takeRefusal(): UnfilteredExtensionsQueryError | undefined {
+    const r = this.#refusal;
+    this.#refusal = undefined;
+    this.#refusalTaken = true;
+    return r;
+  }
 
   /** The batch that was in flight when the lease was lost — `undefined` while the lease is held. */
   get lostBatchIndex(): number | undefined {
@@ -2925,6 +3177,8 @@ class LeaseSession {
       try {
         outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
       } catch (first) {
+        // R504: after `stop()` (finish may have released) a renew answer is evidence of nothing.
+        if (this.#stopped) return;
         try {
           outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
         } catch (second) {
@@ -2936,7 +3190,7 @@ class LeaseSession {
           return;
         }
       }
-      if (!outcome.renewed) {
+      if (!outcome.renewed && !this.#stopped) {
         this.noteLeaseLost("RenewLease answered renewed:false — the lease is no longer ours");
       }
     } finally {
@@ -2946,13 +3200,17 @@ class LeaseSession {
 
   /**
    * design §6: latch `SessionSafety` (reason `lease-lost`), stop renewing, and remember WHICH
-   * batch was in flight so `runSession` can invalidate exactly that batch's verdicts at session
-   * end. Idempotent — the FIRST loss wins, like the latch itself.
+   * batch was in flight. R508: on the first loss, `onLost` then invalidates that batch's stored
+   * verdicts at once, and the session's `finally` does it again for any verdict recorded after
+   * this note. Idempotent — the FIRST loss wins, like the latch itself.
    */
   noteLeaseLost(detail: string): void {
-    if (this.#lostBatchIndex === undefined) this.#lostBatchIndex = this.currentBatchIndex;
+    const first = this.#lostBatchIndex === undefined;
+    if (first) this.#lostBatchIndex = this.currentBatchIndex;
     this.stop(); // no renew after a loss, and no dangling timer
+    // Latch BEFORE `onLost`: no new work may start while its store write runs.
     this.d.safety.latchUnsafe(`lease-lost: ${detail}`);
+    if (first) this.d.onLost(this.currentBatchIndex);
   }
 
   /** The server accepts only `lastCompletedOpSeq + 1` (design §5), and this client's publish ops
@@ -3009,7 +3267,7 @@ class LeaseSession {
       );
       throw new LeaseUnavailableError(
         `BeginPublish refused for opSeq ${opSeq} — the lease or the operation marker is no longer ours (design §4)`,
-        refusal,
+        { beginPublishRefusal: refusal },
       );
     }
     let result: T;
@@ -3613,6 +3871,8 @@ const TEST_APP_WHY =
  * Unknown on either side (a run from before R247, or a package this session could not read) never
  * matches, NULL against NULL included. It covers every carried verdict, whole batches (R192) and
  * single rows alike, because it refuses the run before any resume index is built from it.
+ * R495: both sides must be PROVEN: `testAppHash` is this session's proven identity (`undefined`
+ * when unproven), and the row must carry `testAppProven`.
  */
 function assertSameTestApp(
   row: RunRow | null,
@@ -3620,14 +3880,34 @@ function assertSameTestApp(
   testAppHash: string | undefined,
 ): void {
   if (row === null) throw new Error(`${flag}: the run it found is no longer in this database`);
-  if (row.testAppHash !== null && testAppHash !== undefined && row.testAppHash === testAppHash) {
+  if (
+    row.testAppProven &&
+    row.testAppHash !== null &&
+    testAppHash !== undefined &&
+    row.testAppHash === testAppHash
+  ) {
     return;
   }
   throw new Error(
-    `${flag}: run ${row.id} was measured against test app ${describeTestApp(row.testAppHash)}${
-      row.testAppHash === null ? " (it recorded no test-app identity; the run predates R247)" : ""
-    }, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so none of its verdicts is carried (R247). Drop the resume flag to run from scratch.`,
+    `${flag}: run ${row.id} was measured against test app ${describeTestApp(row.testAppHash)}${recordedTestAppNote(
+      row.testAppHash,
+      row.testAppProven,
+    )}, and this session's test app is ${describeTestApp(testAppHash)}${
+      testAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
+    }. ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495). Drop the resume flag to run from scratch.`,
   );
+}
+
+/** R495: why an identity lends nothing, said the same way on every path. */
+const TEST_APP_UNPROVEN =
+  "not proven installed: the identity was read from a package or source not proven to be the test app that ran, or recorded before R495";
+
+/** R495: what a recorded run's test-app identity is worth, for a refusal or warning. */
+function recordedTestAppNote(hash: string | null, proven: boolean): string {
+  if (hash === null) {
+    return " (it recorded none: its test app was not proven installed, or it ran before R247)";
+  }
+  return proven ? "" : ` (${TEST_APP_UNPROVEN})`;
 }
 
 /** R214: a symbol list for a message. `null` is a row recorded before the column existed. */
@@ -3663,15 +3943,25 @@ function resolveResume(
   buildSymbols: readonly string[],
   /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
   refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
+  /** R492: an env-tool hook will publish the test app under the lease, so the pre-lease read can
+   *  hold the OUTGOING one: the test app is compared after the hook (`runSession`), not here. */
+  testAppAfterHook = false,
 ):
   | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
   | undefined {
   if (cfg.resume === undefined) return undefined;
+  const sameTestApp = (row: RunRow | null, flag: string): void => {
+    if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash);
+    else if (row === null)
+      throw new Error(`${flag}: the run it found is no longer in this database`);
+  };
 
   let priorRunId: number;
   // R391: the resumed run's generation hash and `twin_tuples`, never its `source_sha256`.
   let recorded: RecordedCarrySide;
   let priorHidden: CarryHidden | null;
+  // R557 (I1): the resumed run's row, for `runLendsAlRunnerNames`.
+  let priorRow: RunRow | null;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -3724,9 +4014,10 @@ function resolveResume(
     }
     priorRunId = found;
     const foundRow = cfg.store.getRun(found);
+    priorRow = foundRow;
     // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL) must
     // still never be read as a match.
-    assertSameTestApp(foundRow, "--resume", testAppHash);
+    sameTestApp(foundRow, "--resume");
     assertSameBuildSymbols(foundRow, `--resume: run ${found}`, buildSymbols);
     priorHidden = foundRow?.carryHidden ?? null;
     if (priorHidden === null) {
@@ -3762,7 +4053,7 @@ function resolveResume(
         `--resume-run ${cfg.resume} was measured under ${describeCoverageMode(row.coverageMode)}, but this session measures under coverage mode ${coverageMode}. ${COVERAGE_MODE_WHY} (R354). Drop --resume-run to run from scratch.`,
       );
     }
-    assertSameTestApp(row, `--resume-run ${cfg.resume}`, testAppHash);
+    sameTestApp(row, `--resume-run ${cfg.resume}`);
     // R214: before the fingerprint (which carries the symbols too and would refuse this run
     // anyway, as "scoped differently"). NULL is unknown and matches no build.
     assertSameBuildSymbols(row, `--resume-run ${cfg.resume}`, buildSymbols);
@@ -3783,6 +4074,7 @@ function resolveResume(
     }
     recorded = recordedCarrySideOf(row);
     priorRunId = cfg.resume;
+    priorRow = row;
   }
 
   // R360 (review r1 #3): no pruned-bundle check here. Nothing on the resume path reads the prior
@@ -3791,8 +4083,37 @@ function resolveResume(
   // (`findBaselineSnapshot`) keys on the CURRENT batch dir's hash and the test app. A batch with
   // work left is rebuilt and republished. `lethal verify` keeps its refusal.
 
+  // R557 C1: a pre-fix al-runner run sent a renamed test under its AL name, al-runner ran nothing,
+  // and its only-kills read survived. Such a run's verdicts are not carried: the resume goes on
+  // with an EMPTY carry, so every mutant is executed (a warning, by ruling; still a resume, so the
+  // report says which run it came from, R89).
+  // (I1): first the run-level mark (`runLendsAlRunnerNames`): a run without it may have CARRIED
+  // such verdicts (a resume of a resume, `known-survivor` rows) and hold no baseline row showing
+  // it. Then, second, the run's own renamed baseline errors.
+  const carryRefused =
+    priorRow === null || !runLendsAlRunnerNames(priorRow)
+      ? `run ${priorRunId} ${AL_RUNNER_UNMARKED_WHY}`
+      : alRunnerRefusal(
+          priorRunId,
+          backendName === "al-runner"
+            ? alRunnerRenamed(cfg.store.baselineErrorMethods(priorRunId))
+            : [],
+        );
+  if (carryRefused !== undefined) {
+    emit({
+      type: "warning",
+      code: "resume-al-runner-test-names",
+      message: `[lethal] --resume: ${carryRefused}; its verdicts are not carried: every mutant is executed, including any it recorded as stranding the tier (R53), since nothing of it is carried (R557).`,
+    });
+  }
   const { index, dropped: refusedDropped } = withoutRefusedTests(
-    buildResumeIndex(cfg.store.mutantVerdicts(priorRunId), cfg.stopHungSessions === true),
+    buildResumeIndex(
+      // Two remove-only filters (R557 + R577, agreed 2026-10-20): R557's run-level trust empties the
+      // rows of an untrusted run, then R577's row-level rule refuses an unmarked kill among the rest.
+      carryRefused !== undefined ? [] : cfg.store.mutantVerdicts(priorRunId),
+      cfg.stopHungSessions === true,
+      cfg.backend.killsMustReproduce === true,
+    ),
     refusedTests,
   );
   if (refusedDropped > 0) {
@@ -3808,6 +4129,11 @@ function resolveResume(
     message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192).${
       index.nonCarryableRows > 0
         ? ` ${index.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`
+        : ""
+    }${
+      // R577 (M2): a kill scored before the reproduction rule is re-run, and said so in its own words.
+      index.unreproducedKills > 0
+        ? ` ${index.unreproducedKills} prior kill(s) recorded before the kill-reproduction rule (no killReproduced) will be re-executed, because this backend requires a kill to reproduce (R577).`
         : ""
     }${
       index.ambiguousKeys > 0
@@ -3833,8 +4159,26 @@ function resolveResume(
     carryableCount: index.carryable.size,
     strandedKeyCount: index.strandedKeys.size,
     retryStranded: cfg.retryStranded ?? false,
+    ...(carryRefused !== undefined ? { carryRefused: `${carryRefused} (R557)` } : {}),
   });
   return { runId: priorRunId, index, carryHidden: priorHidden, recorded };
+}
+
+/** R557 (I1): why an al-runner run without the R557 test-name mark lends nothing. */
+const AL_RUNNER_UNMARKED_WHY =
+  "ran on al-runner before R557 (its run row carries no R557 test-name mark), so a test whose al-runner name differs from its AL name may never have run in it, or in a run it carried verdicts from";
+
+/** R557 C1: why a run whose own baseline holds renamed `error` tests lends nothing, or
+ *  `undefined` when `tests` is empty. */
+function alRunnerRefusal(runId: number, tests: readonly string[]): string | undefined {
+  return tests.length === 0
+    ? undefined
+    : `run ${runId} ran on al-runner before R557 and recorded ${tests.length} test(s) as errors that al-runner never ran (${namesSample(tests)})`;
+}
+
+/** R557 C1: up to five test names for a warning, `, ...` when there are more. */
+function namesSample(tests: readonly string[]): string {
+  return `${tests.slice(0, 5).join(", ")}${tests.length > 5 ? ", ..." : ""}`;
 }
 
 /** R391: a run row's side of `carryRecord`. A missing row, like a NULL column, carries nothing. */
@@ -3843,6 +4187,7 @@ function recordedCarrySideOf(row: RunRow | null): RecordedCarrySide {
   return {
     hash: row?.generationSourceSha256 ?? null,
     twins: twins === null ? null : new Set(twins),
+    dependencyHash: row?.dependencySourceSha256 ?? null,
   };
 }
 
@@ -3884,6 +4229,26 @@ function pinPlatformAppsDir(backend: ExecutionBackend, dir: string, who: string)
 }
 
 /**
+ * Sol run 001 (I): `base` plus the objects the backend's deployed coverage index refused by name
+ * (al-runner and, since R497, bcdev; a backend without the method adds nothing). The base
+ * sentence wins a tie.
+ */
+async function withBackendRefusals(
+  backend: ExecutionBackend,
+  base: ReadonlyMap<string, string>,
+): Promise<ReadonlyMap<string, string>> {
+  const r = backend as { coverageRefusals?: () => Promise<ReadonlyMap<string, string>> };
+  if (typeof r.coverageRefusals !== "function") return base;
+  return new Map([...(await r.coverageRefusals()), ...base]);
+}
+
+/** R-300b: hands the session's effective build symbols to a backend that takes them. */
+function handBuildSymbols(backend: ExecutionBackend, symbols: readonly string[]): void {
+  const taker = backend as { useBuildSymbols?: (s: readonly string[]) => void };
+  if (typeof taker.useBuildSymbols === "function") taker.useBuildSymbols(symbols);
+}
+
+/**
  * C02-04: the session-level values `scoreBatch` needs. Built once per session by `runSession`,
  * after the lease is open, and shared by every batch.
  */
@@ -3901,7 +4266,7 @@ interface BatchScope {
   readonly emit: RunEmitter;
   readonly outcomes: SessionOutcome[];
   readonly killLedger: KillLedger;
-  readonly sessionReuse: { warned: boolean };
+  readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
   readonly groupRuns: GroupRunSettings | undefined;
   readonly minMutantBudgetMs: number;
   /** `cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT`; also the covering loop's fallback. */
@@ -3913,6 +4278,56 @@ interface BatchScope {
   readonly testPageRefused?: ReadonlyMap<string, string>;
 }
 type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
+
+/**
+ * Design §G: one batch's attestation ledger, shared by reference across every worker/shard that
+ * exercises the batch's one deployed artifact. `clean`: some covered run attested; never reset.
+ * R512: `suspect`: a run answered `observedAny: false` before any clean attestation, and THIS
+ * run's insert marked the snapshot in use (`markSuspect`); the mark is cleared when `clean` turns
+ * true. A store that refuses the mark throws out of `feedAttestation`, in the mutant loop, so the
+ * session fails as for a failed `record()`: it also refuses the verdict the mark would have guarded.
+ */
+export interface AttestationLedger {
+  clean: boolean;
+  /** A mark was attempted (at most once per batch). */
+  markTried: boolean;
+  /** THIS run's insert created the mark, so only then may it clear it. */
+  suspect: boolean;
+  /** True only when the insert created the row (`markSnapshotSuspect`). */
+  readonly markSuspect: () => boolean;
+  readonly clearSuspect: () => void;
+}
+
+/** A ledger whose mark is a no-op: a batch with no snapshot to mark (C02-04's no-snapshot path,
+ *  the named-mutant probes). */
+function unmarkedLedger(): AttestationLedger {
+  return {
+    clean: false,
+    markTried: false,
+    suspect: false,
+    markSuspect: () => false,
+    clearSuspect: () => {},
+  };
+}
+
+/**
+ * Feed one answer's attestation into the batch's ledger. Called at every site an answer is read
+ * (the covering run, the kill-confirmation rerun, and both warm-replay sites), each BEFORE that
+ * mutant's `record()`, so the mark is in the store before any verdict that answer produces.
+ * No attestation is no evidence (a 408, in-flight, a transport error): nothing happens.
+ */
+export function feedAttestation(ledger: AttestationLedger, a: TestVerdict["attestation"]): void {
+  if (a === undefined) return;
+  if (a.observedAny && a.identityMismatch !== true) {
+    if (ledger.clean) return;
+    ledger.clean = true;
+    if (ledger.suspect) ledger.clearSuspect();
+  } else if (!ledger.clean && !ledger.markTried) {
+    ledger.markTried = true;
+    ledger.suspect = ledger.markSuspect(); // false when another run's mark is already there
+  }
+}
+
 /** What `select` hands the covering loop: the mutants to run and everything that orders them. */
 interface CoveringPlan {
   readonly mutants: readonly MutantManifestEntry[];
@@ -3933,11 +4348,27 @@ interface ScoreBatchInput {
     readonly allowReuse: boolean;
     /** R389: the session's closed-world answer, bound into the snapshot key like the run's. */
     readonly closedWorld: ClosedWorld;
+    /** R492 (sol run 001), R495: the session's PROVEN test app (`undefined`: unproven). Reuse
+     *  needs the batch's own read to equal it: a later unpinned read can serve a
+     *  published-but-not-installed package, whose snapshot another run did prove. A different
+     *  read stops the session (`assertNoTestAppDrift`). R496: with its dependency fingerprint,
+     *  which a reused snapshot's run must have recorded too. */
+    readonly provenTestApp?: TestAppIdentity;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
   readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
-  /** Replaces the sequential `runMutantsOnBackend` call. runSession's worker fan-out only. */
-  readonly executeCovering?: (plan: CoveringPlan, attestation: { clean: boolean }) => Promise<void>;
+  /** Replaces the sequential `runMutantsOnBackend` call. runSession's worker fan-out only.
+   *  R514: `baselineReused` is the batch's reused snapshot, forwarded to `runMutantsOnBackend`. */
+  readonly executeCovering?: (
+    plan: CoveringPlan,
+    attestation: AttestationLedger,
+    baselineReused: ReusedBaseline | undefined,
+  ) => Promise<void>;
+}
+/** R514: the run and batch whose stored baseline (R192) a batch reused. */
+interface ReusedBaseline {
+  readonly runId: number;
+  readonly batchIndex: number;
 }
 /** "unsafe": latched during the baseline (the caller stops the session).
  *  "nothing-to-run": `select` returned undefined (the caller moves to the next batch).
@@ -4041,6 +4472,7 @@ async function openLeaseScope(a: {
   lease: LeaseSessionConfig | undefined;
   backend: ExecutionBackend;
   safety: SessionSafety;
+  store: ResultsStore;
   runId: number;
   quarantineStore: QuarantineStore | undefined;
   resourceKey: string | undefined;
@@ -4081,6 +4513,23 @@ async function openLeaseScope(a: {
       nowIso: a.nowIso,
       runId: a.runId,
       emit: a.emit,
+      // R508 first chance: synchronous (bun:sqlite), so done before `noteLeaseLost` returns.
+      // Never throws: the heartbeat and the dispatch paths call `noteLeaseLost` and must keep
+      // failing closed. The session's `finally` (`invalidateLostBatch`) writes again.
+      // R513: `markBatchLost` FIRST: each write is safe alone, and it is the one that makes every
+      // resume reader refuse a verdict recorded after this point that nothing corrects.
+      onLost: (batchIndex) => {
+        try {
+          const note = lostBatchNote(a.safety);
+          a.store.markBatchLost(a.runId, batchIndex, note);
+          a.store.invalidateBatch(a.runId, batchIndex, note);
+          a.store.dropBaselineSnapshot(a.runId, batchIndex);
+        } catch (err) {
+          console.warn(
+            `[lethal] could not correct run ${a.runId} batch ${batchIndex} at the lease loss (${messageOf(err)}); the session's teardown tries again`,
+          );
+        }
+      },
     });
     leaseSession = session;
     resyncSessionOpSeq = () => session.resyncOpSeq(a.backend);
@@ -4099,7 +4548,7 @@ async function closeLeaseScope(a: {
   safety: SessionSafety;
   leaseSession: LeaseSession | undefined;
   emit: RunEmitter;
-}): Promise<void> {
+}): Promise<Error | undefined> {
   // Best-effort cleanup: deliberately swallow errors here (unlike the
   // retrying activation calls in scoreBatch and the covering loop) since
   // this only runs to leave every backend deactivated on exit, and a
@@ -4127,19 +4576,109 @@ async function closeLeaseScope(a: {
   // handed to the next session. Last in the teardown so the backend's own deactivating
   // ClearActive (above) still runs under the lease it was taken with.
   if (a.leaseSession !== undefined) await a.leaseSession.finish();
+  // R499: one bounded wait for control requests still in flight (a stop or readback a non-scored
+  // last call left behind), so a refusal landing on one is taken below rather than lost. Never
+  // throws, so it never skips the release above; after the release, the server's lease fence decides.
+  for (const backend of [a.backend, ...a.workerBackends]) {
+    await (
+      backend as { drainControlRequests?: (ms: number) => Promise<void> }
+    ).drainControlRequests?.(CONTROL_DRAIN_MS);
+  }
   a.emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
+  // R-496: a redirect to an unfiltered extensions query that arrived after the last call returned
+  // has no next call to throw it. R507: so has one a lease call met (taken after `finish()`, so a
+  // refusal on its own calls is included). Handed back AFTER the cleanup above, for the caller to
+  // throw: the FIRST, with every other one warned, never dropped.
+  const refusals: Error[] = [];
+  const leaseRefusal = a.leaseSession?.takeRefusal();
+  if (leaseRefusal !== undefined) refusals.push(leaseRefusal);
+  for (const backend of [a.backend, ...a.workerBackends]) {
+    const late = (backend as { takeLateRefusal?: () => Error | undefined }).takeLateRefusal?.();
+    if (late !== undefined) refusals.push(late);
+  }
+  const [first, ...rest] = refusals;
+  for (const other of rest) {
+    console.warn(`[lethal] another refused unfiltered extensions query: ${other.message}`);
+  }
+  return first;
 }
 
-/** C02-04: design section 6's invalidation of the batch a lost lease was measured under. */
-function emitLeaseLostInvalidation(
+/**
+ * R-496: throw the refusal `closeLeaseScope` handed back, unless the session is already failing:
+ * then the earlier error stays and the refusal is logged (a warning line), never dropped silently.
+ * R507: when the session was latched, the latch reason is logged first, so a reason that is NOT
+ * the refusal (a quarantine, a lease loss) is never hidden behind it.
+ */
+function surfaceLateRefusal(
+  late: Error | undefined,
+  alreadyFailing: boolean,
+  safety: SessionSafety,
+): void {
+  if (late === undefined) return;
+  if (!alreadyFailing) {
+    if (safety.isUnsafe) {
+      console.warn(`[lethal] the session was latched: ${safety.reason ?? "unknown"}`);
+    }
+    throw late;
+  }
+  console.warn(
+    `[lethal] a refused unfiltered extensions query (on the lease path, or after the session's last call) while the session was already failing: ${late.message}`,
+  );
+}
+
+/** The note a lease-lost batch's verdicts carry, in the report and in the store. */
+function lostBatchNote(safety: SessionSafety): string {
+  return `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
+}
+
+/**
+ * R508: the lease was lost, and writing the lost batch's correction to the store failed, so its
+ * stored verdicts may still be carried by `--resume`. Conservative: `onLost` may already have
+ * written, but this write cannot prove it.
+ */
+export class LostBatchNotStoredError extends Error {
+  constructor(
+    readonly runId: number,
+    readonly batchIndex: number,
+    cause: unknown,
+  ) {
+    super(
+      `run ${runId} batch ${batchIndex}: the lease was lost, and the stored verdicts were NOT corrected (${messageOf(cause)}); do not --resume run ${runId}`,
+      { cause },
+    );
+    this.name = "LostBatchNotStoredError";
+  }
+}
+
+/**
+ * C02-04 + R508: design section 6's invalidation of the batch a lost lease was measured under —
+ * the event for the report, then the durable store write (the second chance after `onLost`, for a
+ * verdict recorded after the loss note). The event goes first so a failing write cannot hide it.
+ * A failed write throws `LostBatchNotStoredError`; the errors it would replace (`late`, the
+ * teardown's late refusal, and `earlier`, the error the session was already failing with) are
+ * warned first so neither is lost.
+ */
+function invalidateLostBatch(
+  store: ResultsStore,
+  runId: number,
   leaseSession: LeaseSession | undefined,
   safety: SessionSafety,
   emit: RunEmitter,
+  late: Error | undefined,
+  earlier: { readonly error: unknown } | undefined,
 ): void {
-  const lostBatchIndex = leaseSession?.lostBatchIndex;
-  if (lostBatchIndex !== undefined) {
-    const lostBatchNote = `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
-    emit({ type: "batch-invalidated", batchIndex: lostBatchIndex, reason: lostBatchNote });
+  const lost = leaseSession?.lostBatchIndex;
+  if (lost === undefined) return;
+  const note = lostBatchNote(safety);
+  emit({ type: "batch-invalidated", batchIndex: lost, reason: note });
+  try {
+    store.markBatchLost(runId, lost, note); // R513: a second chance if `onLost`'s insert failed
+    store.invalidateBatch(runId, lost, note);
+    store.dropBaselineSnapshot(runId, lost);
+  } catch (err) {
+    if (earlier !== undefined) console.warn(`[lethal] ${messageOf(earlier.error)}`);
+    if (late !== undefined) console.warn(`[lethal] ${late.message}`);
+    throw new LostBatchNotStoredError(runId, lost, err);
   }
 }
 
@@ -4297,6 +4836,53 @@ async function dispatchUnmutated(
  * section G attestation gate, in exactly the order `runSession` ran them inline. Which mutants
  * run against which tests is the caller's `select`; this function does not choose.
  */
+/** R192/R462: the per-batch test-app read, by `testAppHashFor`'s rule over the backend's package
+ *  read. The request identity is read ONCE, so a re-read at a refusal asks for the same app even if
+ *  the local app.json changed meanwhile. */
+async function batchTestAppReader(
+  backend: ExecutionBackend,
+  testDir: string,
+  /** R389: the session's closed-world answer, bound into the hash as the run's identity is. */
+  closedWorld: ClosedWorld,
+): Promise<() => Promise<string | undefined>> {
+  const packageReader = backend.fetchPublishedAppPackage;
+  const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
+  return async () => {
+    const h = await testAppHashFor(
+      packageReader === undefined
+        ? undefined
+        : async () =>
+            manifest === undefined
+              ? undefined
+              : packageReader.call(backend, { publisher: manifest.publisher, name: manifest.name }),
+      testDir,
+    );
+    // R389: a snapshot taken under another guard answer is never reused.
+    return h === undefined ? undefined : guardedTestAppHash(h, closedWorld);
+  };
+}
+
+/**
+ * R495: a session that PROVED its test app (`proven`) and reads a different one (`now`) at a batch
+ * clears its run's identity and flag, so no later session borrows from it, then throws before the
+ * batch records anything. A failed read (`undefined`) is treated the same (sol, final review): it
+ * cannot show the proven app still runs, and carrying, skipping or recording under the proof would
+ * rest on that. A session with nothing proven has nothing to lend or borrow. The read runs at the
+ * top of each batch (and again before its baseline), so a republish during a batch's mutant loop is
+ * caught at the next one, and an install-only change is not caught.
+ */
+function assertNoTestAppDrift(
+  store: ResultsStore,
+  runId: number,
+  proven: string | undefined,
+  now: string | undefined,
+  batchIdx: number,
+): void {
+  if (proven === undefined || now === proven) return;
+  store.setRunTestAppHash(runId, null, false, null);
+  throw new TestAppDriftedError(proven, now, batchIdx);
+}
+
 async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<ScoreBatchResult> {
   const {
     backend,
@@ -4341,35 +4927,47 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
   let hashTestApp: (() => Promise<string | undefined>) | undefined;
   if (input.snapshot !== undefined) {
-    const { batchDir, testDir, allowReuse, closedWorld } = input.snapshot;
+    const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
-    const packageReader = backend.fetchPublishedAppPackage;
-    // R462: the request identity is read ONCE, so the re-read at a refusal asks for the same app
-    // even if the local app.json changed meanwhile.
-    const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
-    hashTestApp = async () => {
-      const h = await testAppHashFor(
-        packageReader === undefined
-          ? undefined
-          : async () => {
-              return manifest === undefined
-                ? undefined
-                : packageReader.call(backend, {
-                    publisher: manifest.publisher,
-                    name: manifest.name,
-                  });
-            },
-        testDir,
-      );
-      // R389: a snapshot taken under another guard answer is never reused.
-      return h === undefined ? undefined : guardedTestAppHash(h, closedWorld);
-    };
+    hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
     const testAppHash = await hashTestApp();
+    // R495: before `select` carries anything or a snapshot is reused.
+    assertNoTestAppDrift(store, runId, provenTestApp?.hash, testAppHash, batchIdx);
+    // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
+    // here that differs from it (or a session with nothing proven) reuses nothing.
+    // R496: and the snapshot's run must have recorded the same dependency fingerprint.
+    const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
     const reusable =
-      allowReuse && testAppHash !== undefined
-        ? store.findBaselineSnapshot(batchHash, testAppHash, caps.coverage)
+      allowReuse && testAppHash !== undefined && runsWhatWasRead
+        ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
+    // R557 C1: checked on the snapshot itself, since `findBaselineSnapshot` can lend one from ANY
+    // run. A pre-fix al-runner snapshot holds a renamed test as an `error` al-runner never ran; it
+    // is not reused, and this batch re-runs its baseline under the name al-runner has.
+    // (I1): first the snapshot run's R557 mark (`runLendsAlRunnerNames`), then its own errors.
+    const snapshotRun = reused !== undefined ? store.getRun(reused.runId) : null;
+    if (reused !== undefined && snapshotRun !== null && !runLendsAlRunnerNames(snapshotRun)) {
+      emit({
+        type: "warning",
+        code: "resume-al-runner-test-names",
+        message: `[lethal] --resume: run ${reused.runId}'s batch ${reused.batchIndex} baseline snapshot is not reused: run ${reused.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
+      });
+      reused = undefined;
+    }
+    if (reused !== undefined && snapshotRun?.backend === "al-runner") {
+      const tainted = alRunnerRenamed(
+        reused.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
+      );
+      if (tainted.length > 0) {
+        emit({
+          type: "warning",
+          code: "resume-al-runner-test-names",
+          message: `[lethal] --resume: run ${reused.runId}'s batch ${reused.batchIndex} baseline snapshot ran on al-runner before R557 and recorded ${tainted.length} test(s) as errors that al-runner never ran (${namesSample(tainted)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
+        });
+        reused = undefined;
+      }
+    }
     // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
     // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
     // tests, so a saved row for any other test is DROPPED: it must not come back green and be
@@ -4388,7 +4986,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       emit({
         type: "warning",
         code: "resume-baseline-reused",
-        message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here.`,
+        message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
       });
       for (const saved of reused.baseline) {
         // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
@@ -4411,10 +5009,14 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       }
     }
   }
+  // R272: the tests whose baseline ran IN THIS SESSION. Only their durations reach the report: a
+  // reused snapshot's (R192) may predate R272, and so be al-runner `--server`'s shared suite time.
+  const ranHere = new Set<TestMethodRef>();
   for (const ref of reused !== undefined ? [] : tests) {
     const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
     if (stop) break;
     baseline.push({ ref, verdict: v });
+    ranHere.add(ref);
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
   // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined
@@ -4447,6 +5049,19 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           ? `${testAppHash}${PENDING_SUFFIX}`
           : testAppHash,
       baseline: baseline as BaselineObservation[],
+    });
+  }
+  // R557 (I3): one warning per batch naming every test al-runner had no row for that sits in an
+  // `#if` arm discovery could not decide; it is not run, so a mutant only it would kill may read
+  // survived.
+  const undecidedMissing = baseline
+    .filter((b) => b.verdict.failureMessage?.startsWith(AL_RUNNER_UNDECIDED_ARM_MISSING) === true)
+    .map((b) => qualifiedTestName(b.ref));
+  if (undecidedMissing.length > 0) {
+    emit({
+      type: "warning",
+      code: "al-runner-undecided-test-missing",
+      message: `[lethal] batch ${batchIdx}: al-runner has no row for these tests, which sit in an \`#if\` arm LethAL could not decide (R403); they are not run, so a mutant only they would kill may read survived. Pass the build's symbols to decide the arm (R557): ${undecidedMissing.join(", ")}`,
     });
   }
   // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
@@ -4503,6 +5118,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       if (isTestPageNotRunMessage(b.verdict.failureMessage)) {
         classification.push("tests-testpage-refused");
       }
+      const measured = b.verdict.measuredDurationMs;
       return {
         name: qualifiedTestName(b.ref),
         outcome: b.verdict.outcome,
@@ -4510,6 +5126,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         ...(b.verdict.failureMessage !== undefined
           ? { failureMessage: b.verdict.failureMessage }
           : {}),
+        // `measuredDurationMs` is set on a `pass` only (TestVerdict's doc), so no outcome check.
+        ...(ranHere.has(b.ref) && measured !== undefined ? { durationMs: measured } : {}),
       };
     }),
   });
@@ -4540,6 +5158,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   if (missingFromServer.length > 0) {
     // R462: a failed re-read proves nothing, so it is `undefined`, never a guess.
     const after = await hashTestApp?.().catch(() => undefined);
+    // R495 (sol, final review): a re-read that is not the proven test app (changed, or unreadable)
+    // withdraws the run's proof, so neither this run's snapshots, the one just recorded included,
+    // nor its verdicts lend anything later.
+    const proven = input.snapshot?.provenTestApp?.hash;
+    if (proven !== undefined && after !== proven) store.setRunTestAppHash(runId, null, false, null);
     throw testAppRefusal(missingFromServer, snapshotKey?.testAppHash, after);
   }
 
@@ -4564,11 +5187,30 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // `attestation.observedAny === true && identityMismatch !== true`. Checked against
   // `contributed` right after the mutant work below finishes, before the next batch (or the
   // final `buildReport`) ever sees this batch's verdicts.
-  const attestation = { clean: false };
+  // R512: the snapshot IN USE (the reused one, else this run's own) is marked suspect at the
+  // batch's first unattested answer, before any clean one, and that mark is cleared at the first
+  // clean one (`feedAttestation`). Written at the answer, not at the gate below, so it also holds
+  // when the session throws or is killed before the gate. Without a snapshot, nothing to mark.
+  const suspectKey =
+    reused !== undefined
+      ? { runId: reused.runId, batchIndex: reused.batchIndex }
+      : { runId, batchIndex: batchIdx };
+  const attestation: AttestationLedger =
+    input.snapshot !== undefined
+      ? {
+          clean: false,
+          markTried: false,
+          suspect: false,
+          markSuspect: () => store.markSnapshotSuspect(suspectKey, runId),
+          clearSuspect: () => store.clearSnapshotSuspect(suspectKey, runId),
+        }
+      : unmarkedLedger();
   emit({ type: "phase-entered", phase: "mutants" });
   const mutantsStartedMs = Date.now();
+  const baselineReused: ReusedBaseline | undefined =
+    reused !== undefined ? { runId: reused.runId, batchIndex: reused.batchIndex } : undefined;
   if (input.executeCovering !== undefined) {
-    await input.executeCovering(plan, attestation);
+    await input.executeCovering(plan, attestation, baselineReused);
   } else {
     // Sequential IS the parallel path with a pool of one: this is the
     // exact same runMutantsOnBackend call the caller's `executeCovering`
@@ -4597,6 +5239,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       memberCountsByTest: memberCounts,
       groupRuns,
       sessionReuse,
+      baselineReused,
     });
   }
   emit({ type: "phase-left", phase: "mutants", elapsedMs: Date.now() - mutantsStartedMs });
@@ -4861,6 +5504,41 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     }
   }
 
+  // R551: does this al-runner build accept `--test-exact`? One call, once per session, on the
+  // session backend, before the baseline, so the baseline and every mutant run under one selector.
+  // Structural, like `provisionOnce`. Anything but an acceptance keeps R488's path, which is
+  // correct on every build measured, so "not accepted" never refuses the session.
+  let exactTestSelector = false;
+  const selectorProber = cfg.backend as {
+    probeExactTestSelector?: () => Promise<TestSelectorProbe>;
+  };
+  const selectorProbed = selectorProber.probeExactTestSelector !== undefined;
+  if (selectorProber.probeExactTestSelector !== undefined) {
+    const p = await selectorProber.probeExactTestSelector();
+    if (p.kind !== "not-applicable") {
+      exactTestSelector = p.kind === "exact";
+      emit({
+        type: "warning",
+        code: "al-runner-test-selector",
+        message:
+          p.kind === "exact"
+            ? `al-runner test selector: exact (--test-exact accepted by a one-call probe in ${p.elapsedMs} ms; R551)`
+            : `al-runner test selector: substring with R488 excludes (--test-exact not accepted: ${p.reason}; probe ${p.elapsedMs} ms; R551)`,
+      });
+      // R558: the same choice as a structured event, which the report folds into
+      // `ExecutionContext.testSelector`. The warning above stays for the console line.
+      emit(
+        p.kind === "exact"
+          ? { type: "al-runner-test-selector", selector: "exact" }
+          : {
+              type: "al-runner-test-selector",
+              selector: "substring-with-excludes",
+              reason: p.reason,
+            },
+      );
+    }
+  }
+
   // R392: MEASURE al-runner's predefined symbols, every al-runner session, after provisioning and
   // before anything computes the build's symbols. Awaited, with nothing else in flight. A probe that
   // cannot give a complete answer throws AlRunnerPredefinedProbeError and the run is refused.
@@ -4924,9 +5602,26 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // (a compiled-out test there still meets R31's refusal at baseline), and the evidence record says
   // so. Phase C reports it: `tests-discovered` below carries `testBuildSymbols`, `excludedTests`
   // and the `tests-compiled-out` / `test-symbols-unverified` caveats.
-  const { evidence: testArmEvidence, deferredCheck: deferredTestAppCheck } =
-    await resolveTestArmEvidence(cfg, buildBackend.kind, publishedRead, discovery);
+  // R373/R486: what the env-tool hook will publish, read once here, before the lease. `undefined`
+  // when no hook runs under a lease (and on al-runner, which publishes nothing).
+  const envPublishes = buildBackend.kind === "al-runner" ? undefined : await envToolPublishes(cfg);
+  const { evidence: testArmEvidence, deferredCheck: deferredTestAppCheck } = resolveTestArmEvidence(
+    buildBackend.kind,
+    publishedRead,
+    discovery,
+    envPublishes?.testApp,
+  );
   const { tests, armPolicyApplied } = chooseTestSuite(discovery, testArmEvidence);
+  // R488: the UNFILTERED list, every arm read: a look-alike al-runner would also select must be
+  // excluded whether or not this session runs it. Given again to every worker below.
+  cfg.backend.useDiscoveredTests?.(discovery.unfiltered);
+  // R557 (I3): the suite this session runs, and the tests kept in an `#if` arm discovery could not
+  // decide: al-runner stops on a session-suite test it has no row for, except one of those. Given
+  // again to every worker below.
+  const undecidedKeptTests = discovery.excluded
+    .filter((x) => x.reason === "preproc-undecided-kept")
+    .map((x) => x.test);
+  cfg.backend.useSessionTests?.(tests, undecidedKeptTests);
   // Discovery returns the whole list in one parse — 1,000+ per-item events at one instant would
   // be false granularity, not liveness (see events.ts's doc comment on `tests-discovered`).
   // R403 phase C. With no compiled evidence the unfiltered suite runs, so a `compiled-out` record
@@ -4994,6 +5689,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     testAppHash,
     testDigests,
     testDigestParts,
+    testDigestDependencies,
     closedWorld: pendingClosedWorld,
   } = await testAppIdentity(
     cfg,
@@ -5004,7 +5700,35 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // R403 phase B: R139's source-to-source comparison filters both sides alike.
     armPolicyApplied ? testBuildSymbols : undefined,
     sourceSnapshot,
+    envPublishes !== undefined,
   );
+  // R389: the session's closed-world answer, bound into every test-app hash it reads or records.
+  const sessionClosedWorld = pendingClosedWorld?.guard.closedWorld ?? OPEN_WORLD;
+  // R389: a closed-world run's identity is recorded PENDING (unmatchable) until its
+  // post-execution recheck confirms it; a run killed before that never supplies a verdict.
+  const recordedTestAppHash = (h: string): string =>
+    pendingClosedWorld !== undefined ? `${h}${PENDING_SUFFIX}` : h;
+  // R495: the identity resume, history and the R192 snapshot may use, `undefined` unless proven.
+  // A hook session proves it after the hook, under the lease (below); this read may be outgoing.
+  const provenTestAppHash =
+    envPublishes === undefined &&
+    testAppHash !== undefined &&
+    (await provenWithoutHook(cfg, buildBackend.kind, publishedRead))
+      ? testAppHash
+      : undefined;
+  // R496: al-runner has no lease and no server, so its dependency fingerprint (its app.json and
+  // package folders) is complete here and is recorded with the run row. Every other session takes
+  // it under the lease (below).
+  let alRunnerTestApp: TestAppIdentity | undefined;
+  if (provenTestAppHash !== undefined && buildBackend.kind === "al-runner") {
+    const got = await takeTestAppDependencies(cfg, "not-published", sourceSnapshot);
+    if ("deps" in got) alRunnerTestApp = { hash: provenTestAppHash, deps: got.deps };
+    else
+      warnTestAppDependenciesUnproven(
+        emit,
+        `its dependencies could not be fingerprinted: ${got.why}`,
+      );
+  }
   const sourceSymbols = cfg.preprocessorSymbols ?? [];
   const sourceHashAtGeneration = hashSourceSnapshot(sourceSnapshot, sourceSymbols);
   // R214: the EFFECTIVE symbols (config plus app.json), read from the same snapshot generation
@@ -5019,6 +5743,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     sourceSnapshot,
     buildBackend,
   );
+  // R-300b: the al-runner coverage index evaluates `#if` arms under this same set. Structural,
+  // like `usePlatformAppsDir`: a backend without it builds no such index.
+  handBuildSymbols(cfg.backend, buildSymbols);
   const symbolsWarning = marksSymbolsWarning(
     marksUnderOtherSymbols(cfg.equivalenceMarks ?? [], buildSymbols),
     buildSymbols,
@@ -5077,26 +5804,34 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     backendName,
     configFingerprint,
     caps.coverage,
-    testAppHash,
+    provenTestAppHash,
     emit,
     buildSymbols,
     testPageRefusedNames,
+    envPublishes !== undefined,
   );
 
   const runId = cfg.store.createRun({
     identityScheme: IDENTITY_SCHEME,
     buildSymbols,
+    // R557 (I1): this session sends al-runner tests under `alRunnerMethodName`; the mark is what
+    // lets its verdicts be lent (`runLendsAlRunnerNames`).
+    ...(backendName === "al-runner" ? { alRunnerNames: true } : {}),
     coverageMode: caps.coverage,
     // R391: rule 1's "same source" fact, recorded with the row so no mutant row exists without it.
     generationSourceSha256: sourceHashAtGeneration,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
-    // R389: a closed-world run's identity is recorded PENDING (unmatchable) until its
-    // post-execution recheck confirms it; a run killed before that never supplies a verdict.
-    ...(testAppHash !== undefined
+    // R492: an env-tool session records its test app only once the read-back after the hook is
+    // proven installed (below), never the pre-lease read, which can hold the OUTGOING one.
+    // R495: any other session records it only when proven, and the flag with it.
+    // R496: and with its dependency fingerprint. Only al-runner has one here; a bcdev session
+    // records all three under the lease, after its fingerprint is taken there.
+    ...(alRunnerTestApp !== undefined
       ? {
-          testAppHash:
-            pendingClosedWorld !== undefined ? `${testAppHash}${PENDING_SUFFIX}` : testAppHash,
+          testAppHash: recordedTestAppHash(alRunnerTestApp.hash),
+          testAppProven: true,
+          testAppDeps: alRunnerTestApp.deps,
         }
       : {}),
     ...(testDigests !== undefined ? { testDigests } : {}),
@@ -5139,6 +5874,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const generateStartedMs = Date.now();
   const {
     files: allFiles,
+    duplicateObjects,
     skipped: notInstrumentedFiles,
     totalFiles: totalAlFiles,
     excludedByOnly,
@@ -5152,6 +5888,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     preprocExcluded,
     buildSymbols: generatedSymbols,
     carryHidden,
+    dependencyReportSources,
+    dependencySourceSha256,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
@@ -5161,9 +5899,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     preprocessorSymbols: sourceSymbols,
     backend: buildBackend,
     emit,
+    // R565: al-runner's provisioned platform apps first, then the backend's own package folders
+    // (al-runner's `packagesDir`), then the config's (bcdev and envtool: `packageCachePath`).
+    dependencyPackageDirs: [
+      ...(provisionedPlatformAppsDir !== undefined ? [provisionedPlatformAppsDir] : []),
+      ...(cfg.backend.dependencyPackageDirs?.() ?? []),
+      ...(cfg.dependencyPackageDirs ?? []),
+    ],
   });
   // R442: before any mutant row, so a run that dies earlier holds no verdict and stays NULL.
   cfg.store.setCarryHidden(runId, carryHidden);
+  // R565: likewise, so a run that dies before it carries nothing by rule 1.
+  cfg.store.setDependencySourceSha256(runId, dependencySourceSha256);
   // R374: numbered once over the whole run, here and not inside `generateMutationSet`'s file loop,
   // which then held one entry per mutant until its end (R400). Still inside the generate phase.
   // `identityOrdinalsOf`'s numbering, from entries kept long enough to read the twins below.
@@ -5181,6 +5928,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const carryCurrent: CurrentCarrySide = {
     hash: sourceHashAtGeneration,
     twins: new Set(twinTuples),
+    dependencyHash: dependencySourceSha256,
     refused: new Set(),
   };
   // R214: fail loudly if the set recorded on the run (above) and the set generation enumerated
@@ -5217,7 +5965,47 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   }
   // R298: objects declared inside, or after, a #if object wrapper, by the line map's own rule.
   // Passed to BOTH `coverageFilter` calls so no coverage mode and no fallback scores their mutants.
-  const coverageRefused = coverageRefusedObjects(allFiles);
+  // R-300b: per coverage path. On al-runner an admitted wrapped file is scored, and a key two
+  // files declare is refused by the sentence the index prints (C1).
+  // R497: on bcdev the BC shape rule under this build's arms admits the measured wrapped shapes,
+  // and a key two compiled files declare is refused there too.
+  const bcArms = new Map(
+    backendName === "bcdev"
+      ? allFiles.map((f) => [f.root, evaluateArms(f.root, f.source, buildSymbols)] as const)
+      : [],
+  );
+  const coverageRefused: ReadonlyMap<string, string> = new Map([
+    ...coverageRefusedObjects(
+      allFiles,
+      backendName,
+      backendName === "bcdev"
+        ? (f) => bcArms.get(f.root) ?? evaluateArms(f.root, f.source, buildSymbols)
+        : undefined,
+    ),
+    ...duplicateObjects,
+  ]);
+  // Sol run 002: on al-runner the index can refuse an ADMITTED wrapped file's objects after deploy
+  // (its instrumented text re-parses undecided), which the source read here cannot see. So no
+  // verdict is carried for such a file's mutants before that (known-survivor, full-batch resume);
+  // the ordinary resume carry runs after the post-deploy split and is safe. R497: the same holds
+  // on bcdev, whose line map applies the shape rule to the instrumented text.
+  const admittedOnBc = (f: (typeof allFiles)[number]): boolean => {
+    const arms = bcArms.get(f.root);
+    return (
+      fileHoldsWrappedObject(f.root) &&
+      arms !== undefined &&
+      bcWrappedShapeRefusal(f.root, arms) === undefined
+    );
+  };
+  const carryBarredFiles = new Set(
+    allFiles
+      .filter((f) =>
+        backendName === "al-runner" ? alRunnerAdmitsWrappedFile(f.root) : admittedOnBc(f),
+      )
+      .map((f) => f.path.replaceAll("\\", "/")),
+  );
+  const carryBarred = (m: MutantManifestEntry): boolean =>
+    carryBarredFiles.has(m.file.replaceAll("\\", "/"));
   // R92: raw site count (every spec that made it into an instrumentable file) vs the DEPLOYED
   // count once per-file dedup (`dedupeSpecs`) collapses same-site operator collisions into one
   // winner — the same collapse `writeInstrumentedProject` runs at compile time, per file (identity
@@ -5269,10 +6057,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       : {}),
     // R447: present only when non-empty, like `refusedFiles`.
     ...(hangRefused.length > 0 ? { hangRefusedFiles: hangRefused } : {}),
+    // R274: the source the report's positions refer to, for `lethal explain --project`. The
+    // GENERATION hash, not `runs.generation_source_sha256`, which is withheld when the source
+    // changed mid-run: the positions still refer to the bytes generation parsed.
+    sourceSha256: sourceHashAtGeneration,
     // R443: the run's numbering facts, for equivalence marks and `lethal explain`.
     numberingDigest,
     twinSites: twinTuples,
     carryHidden: { tuples: [...carryHidden.tuples], files: [...carryHidden.files] },
+    // R565: what was read from the dependency packages, and the digest the carry rule compares.
+    dependencyReportSources,
+    dependencySourceSha256,
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
   // satisfy a presence check while being useless to the person it is for. Built-in operators now
@@ -5309,6 +6104,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
 
   // R47: the configured floor for a mutant run's time budget — see `SessionConfig.mutantTimeoutMs`.
   const minMutantBudgetMs = cfg.mutantTimeoutMs ?? MIN_MUTANT_BUDGET_MS;
+  const baselineTimeoutMs = cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT;
+  // R517: before the first run; every worker gets the same pair below. al-runner --server starts
+  // its daemon with the larger of the two as its one in-run stop.
+  cfg.backend.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
   // R198: group runs, on a backend that has the call. `undefined` is the sequential loop.
   const groupRuns = resolveGroupRuns({
     groupRuns: cfg.groupRuns,
@@ -5370,8 +6169,16 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let historyCoverageModeWarned = false;
   // R247: likewise for its test-app warning.
   let historyTestAppWarned = false;
+  // R486: the test app the history filter compares. On an env-tool session it becomes the one
+  // read back after the hook published the test apps (below), never the pre-lease read.
+  // R495: always the PROVEN identity, `undefined` (matches nothing) when unproven.
+  // R496: the hash AND the dependency fingerprint, set only under the lease, after the step that
+  // takes the fingerprint there (below), so history and the R192 snapshot compare that value.
+  let historyTestApp: TestAppIdentity | undefined;
   // R442: likewise for its untrusted-run and hidden-files warnings.
   let historyCarryWarned = false;
+  // R557 C1: likewise for its pre-fix al-runner test-names warning.
+  let historyAlRunnerNamesWarned = false;
 
   // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
@@ -5399,6 +6206,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     lease: cfg.lease,
     backend: cfg.backend,
     safety,
+    store: cfg.store,
     runId,
     quarantineStore,
     resourceKey,
@@ -5410,6 +6218,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // `buildReport` at the very end — the whole point is that it survives into `--out` JSON and gets
   // repeated after the score, not that it flashes past once in stderr.
   let permissionCanary: PermissionCanaryResult | undefined;
+  let failing = false; // R-496: an error is already unwinding through the teardown
+  let failure: { readonly error: unknown } | undefined; // R508: that error, warned if lost
 
   try {
     if (cfg.lease !== undefined) {
@@ -5443,12 +6253,179 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         });
       }
     }
+    // R373/R486: the hook above published the test app this session runs, so the pre-lease read
+    // may describe the OUTGOING one. Read it back under the lease, with R139's own read; nothing
+    // can republish before the tests run. `envPublishes` is defined only when the hook ran.
+    let readBack: PublishedTestSources | undefined;
+    let readBackProof: { readonly proven: true } | { readonly why: string } | undefined;
+    // R496: the read-back's dependency fingerprint, taken after the hook it awaited.
+    let readBackDeps: { readonly deps: string } | { readonly why: string } | undefined;
+    if (envPublishes !== undefined) {
+      const afterRead = await fetchPublishedTestApp(cfg);
+      const after = await reportPublishedTestApp(
+        cfg,
+        afterRead,
+        tests,
+        emit,
+        armPolicyApplied ? testBuildSymbols : undefined,
+      );
+      readBack = after.sources;
+      // R492: the SERVED package is this run's test app only with proof it is the installed one
+      // (`proveReadBack`); a served hash alone once recorded P2 for a run that measured P1.
+      readBackProof = await proveReadBack(cfg, envPublishes, after.sources);
+      const proven = "proven" in readBackProof ? after.packageHash : undefined;
+      // R496: proof covers the whole closure: this fingerprint checks every extension in it
+      // installed, including the ones the hook did not publish. From the served package's
+      // manifest (F8), under the lease and after the hook (the race is impossible by order).
+      if (proven !== undefined) {
+        readBackDeps =
+          afterRead.kind === "bytes"
+            ? await takeTestAppDependencies(cfg, afterRead.bytes, sourceSnapshot)
+            : { why: "the test app read back after the hook has no package bytes" };
+      }
+      const identity =
+        proven !== undefined && readBackDeps !== undefined && "deps" in readBackDeps
+          ? { hash: proven, deps: readBackDeps.deps }
+          : undefined;
+      // R486/R492: the row records the test app that ran, or NULL ("unknown"), never the outgoing
+      // one and never an unproven one. R496: with its dependency fingerprint, or nothing.
+      cfg.store.setRunTestAppHash(
+        runId,
+        identity?.hash ?? null,
+        identity !== undefined,
+        identity?.deps ?? null,
+      );
+      // The history filter runs per batch, after this. `undefined` matches no finished run, so
+      // nothing is skipped (fail closed).
+      historyTestApp = identity;
+      // R492, fail closed: the resume was resolved before the lease WITHOUT its test app
+      // (`testAppAfterHook`). Its verdicts stand only if this read-back is proven and equals the
+      // test app the resumed run PROVED it measured (R495: its recorded hash and its proven flag).
+      // An older row without the flag is refused. First after the hook, before and independent of
+      // every digest check.
+      if (resolvedResume !== undefined) {
+        const prior = cfg.store.getRun(resolvedResume.runId);
+        const recorded = prior?.testAppHash ?? null;
+        const reason =
+          after.packageHash === undefined
+            ? "the test app could not be read back after the env-tool hook published publishApps"
+            : "why" in readBackProof
+              ? `the test app read back now (${after.packageHash}) is not proven to be what runs: ${readBackProof.why}`
+              : recorded === null || prior?.testAppProven !== true
+                ? `that run's test app was ${TEST_APP_UNPROVEN} (no recorded identity, or no proof: its proof failed, or it could not read installed versions)`
+                : recorded !== proven
+                  ? `the test app proven to run now is a different one (${proven})`
+                  : undefined;
+        if (reason !== undefined) {
+          throw new TestAppRepublishedError(
+            cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
+            recorded,
+            reason,
+          );
+        }
+      }
+    }
     // R403 phase B (plan §3(b)): on an env-tool session the test app that RUNS is the
     // `publishApps` file the hook above just published, not the pre-lease R139 download, which can
     // hold the outgoing package. Its compiled membership is checked here, under the lease and
     // before the first baseline, so a valid replacement passes whatever the server held before.
     if (deferredTestAppCheck !== undefined) {
       await checkPublishedTestAppFile(deferredTestAppCheck, discovery);
+    }
+    // R373: the env-tool run's digests, from the read-back, recorded only with proof it is what
+    // runs; otherwise exactly one `test-digests-unavailable` warning, and the row stays NULL.
+    if (envPublishes !== undefined && readBack !== undefined && readBackProof !== undefined) {
+      // A proof implies a readable read-back, so `unavailable` only narrows the type. R498: a lost
+      // dependency fingerprint is named BEFORE a proven source-less read-back's "no AL source".
+      const got =
+        "why" in readBackProof
+          ? readBackProof
+          : readBackDeps !== undefined && "why" in readBackDeps
+            ? {
+                why: `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${readBackDeps.why}`,
+              }
+            : readBack.kind === "unavailable" || readBack.kind === "source-less"
+              ? { why: readBack.why }
+              : await digestsOf(
+                  cfg,
+                  readBack,
+                  tests,
+                  testModel,
+                  sourceSnapshot,
+                  readBackDeps?.deps,
+                );
+      if ("why" in got) warnNoTestDigests(emit, got.why);
+      else cfg.store.setRunTestDigests(runId, got.digests, got.parts);
+    }
+
+    // R496 (plan step 3): every session's test-app identity is its hash AND its dependency
+    // fingerprint, and a session WITHOUT a hook takes that fingerprint HERE, under the lease, never
+    // from the pre-lease walk: another lease holder may have published a dependency while this
+    // session waited. Before the batch loop, so before any carry, history skip or snapshot reuse.
+    if (envPublishes === undefined) {
+      if (buildBackend.kind === "al-runner") {
+        // No lease and no server: taken before the run row and recorded with it.
+        historyTestApp = alRunnerTestApp;
+      } else if (provenTestAppHash !== undefined) {
+        const got =
+          publishedRead.kind === "bytes"
+            ? await takeTestAppDependencies(cfg, publishedRead.bytes, sourceSnapshot)
+            : { why: "the served test-app package was not read" };
+        // F9: the pre-lease digests' `D` part must equal the value taken here. Compared, and the
+        // run invalidated, BEFORE any usable identity is published or a resume authorised.
+        // The FULL fingerprint, never the parts' 16-hex diagnostic prefix (R-496 review).
+        const pre = testDigestDependencies;
+        const why =
+          "why" in got
+            ? `its dependencies could not be fingerprinted under the lease: ${got.why}`
+            : pre !== undefined && pre !== got.deps
+              ? `a dependency changed while this session waited for the lease (its digests were taken over dependencies ${pre}, and under the lease they are ${got.deps})`
+              : undefined;
+        if (why === undefined && "deps" in got) {
+          cfg.store.setRunTestAppHash(
+            runId,
+            recordedTestAppHash(provenTestAppHash),
+            true,
+            got.deps,
+          );
+          historyTestApp = { hash: provenTestAppHash, deps: got.deps };
+        } else {
+          // In one step: no identity, no digests, one warning; `historyTestApp` stays undefined.
+          cfg.store.setRunTestAppHash(runId, null, false, null);
+          if (testDigests !== undefined) {
+            cfg.store.clearRunTestDigests(runId);
+            warnNoTestDigests(
+              emit,
+              `${why}, so neither its digests nor its test-app identity describe what runs (R496)`,
+            );
+          } else {
+            warnTestAppDependenciesUnproven(emit, String(why));
+          }
+        }
+      }
+    }
+    // R496 (F1): a requested resume carries only from a run that proved the SAME identity: hash and
+    // dependency fingerprint, for every session kind. An unproven session refuses (any kind, as
+    // R495's post-hook rule does), and so does a run that recorded no fingerprint.
+    if (resolvedResume !== undefined) {
+      const prior = cfg.store.getRun(resolvedResume.runId);
+      const reason =
+        historyTestApp === undefined
+          ? "this session's test app is not proven: a dependency changed while it waited for the lease, or could not be read"
+          : prior?.testAppProven !== true || prior.testAppHash !== historyTestApp.hash
+            ? `that run's test app was ${TEST_APP_UNPROVEN}, or another one`
+            : prior.testAppDeps === null
+              ? "it recorded no dependency fingerprint (it ran before R496, or its fingerprint could not be taken)"
+              : prior.testAppDeps !== historyTestApp.deps
+                ? `the test app's dependencies changed (${prior.testAppDeps}, now ${historyTestApp.deps})`
+                : undefined;
+      if (reason !== undefined) {
+        throw new TestAppRepublishedError(
+          cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
+          prior?.testAppHash ?? null,
+          reason,
+        );
+      }
     }
 
     // R26: run it EXACTLY ONCE, here — after the lease is acquired above (the canary drives the
@@ -5492,6 +6469,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             `runSession: the session backend sends al-runner's pinned platform-app directory (${platformAppsDir}) but worker backend ${i} declined it, so the baseline and the mutants would run under different argv (R147, R242).`,
           );
         }
+        handBuildSymbols(worker, buildSymbols);
+        // R551: every worker gets the session's selector, true or false, every time. Workers never
+        // probe. A worker that cannot take it would run other argv than the baseline: refuse.
+        if (selectorProbed) {
+          const sel = worker as { useExactTestSelector?: (on: boolean) => void };
+          if (typeof sel.useExactTestSelector !== "function") {
+            throw new Error(
+              `runSession: the session backend probed al-runner's --test-exact (${exactTestSelector ? "accepted" : "not accepted"}) but worker backend ${i} has no useExactTestSelector, so the baseline and the mutants could run under different test selectors (R551).`,
+            );
+          }
+          sel.useExactTestSelector(exactTestSelector);
+        }
+        // R488: each worker starts with an empty sibling cache, so it needs the list too.
+        worker.useDiscoveredTests?.(discovery.unfiltered);
+        // R557 (I3): and the session suite, so a worker stops (or carves out) exactly as the
+        // session backend does.
+        worker.useSessionTests?.(tests, undecidedKeptTests);
+        worker.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
         workerBackends.push(worker);
       }
     }
@@ -5517,7 +6512,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       sessionReuse,
       groupRuns,
       minMutantBudgetMs,
-      baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
+      baselineTimeoutMs,
       testPageRefused,
     };
     // R-422: the backslash-path warning fires once per session; every batch re-reads the same
@@ -5525,10 +6520,19 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     let appJsonPathsWarned = false;
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
-      // verdicts at session end — earlier batches stand, every RunMutant in them having been
+      // verdicts (at the loss and again at session end, R508) — earlier batches stand, every RunMutant in them having been
       // individually fence-validated. The heartbeat runs on a timer and can observe the loss at
       // any moment, so it needs the current batch index, not the one the mutant loop last saw.
       if (leaseSession !== undefined) leaseSession.currentBatchIndex = batchIdx;
+      // R495: a proven session checks its test app FIRST, before anything this batch records: a
+      // whole-batch carry, history's known survivors, a compile failure's error rows or a baseline.
+      // (`scoreBatch` reads again before its baseline.)
+      if (historyTestApp !== undefined) {
+        const now = await (
+          await batchTestAppReader(cfg.backend, cfg.testDir, sessionClosedWorld)
+        )();
+        assertNoTestAppDrift(cfg.store, runId, historyTestApp.hash, now, batchIdx);
+      }
       // 1. write the instrumented project for this artifact — currently
       // always every file `generateMutationSet` found (single artifact).
       // `batchIdx` MUST come from `.entries()`, not a hoisted constant:
@@ -5626,8 +6630,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // needed for a verdict that already exists. A batch with one mutant to execute, one
       // colliding key, or one carried row from before the coverage columns existed takes the
       // ordinary path unchanged.
+      // Sol run 002: a batch holding a `carryBarred` mutant deploys, so the index can refuse it.
       if (
         resumeState !== undefined &&
+        !manifest.mutants.some(carryBarred) &&
         batchCarriesEntirely(resumeState.index, manifest.mutants, cfg.retryStranded ?? false)
       ) {
         replayCarriedBatch(cfg, runId, manifest.mutants, batchIdx, resumeState, outcomes, emit);
@@ -5707,7 +6713,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const prior = cfg.store.priorSurvivorKeys(
         cfg.projectDir,
         caps.coverage,
-        testAppHash,
+        historyTestApp,
         buildSymbols,
         carryHidden.files,
         {
@@ -5744,7 +6750,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             emit({
               type: "warning",
               code: "history-test-app-changed",
-              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}${recordedTestAppNote(
+                old.testAppHash,
+                old.proven,
+              )}, with dependencies ${old.deps ?? "not recorded"}, and this session's test app is ${describeTestApp(historyTestApp?.hash)}${
+                historyTestApp === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
+              }, with dependencies ${historyTestApp?.deps ?? "unknown"}. ${TEST_APP_WHY}; so does a changed dependency. No survivor from it is skipped: every mutant is executed (R247, R495, R496).`,
             });
           },
           carryUntrusted: (old) => {
@@ -5765,13 +6776,37 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, hid ${describeHiddenFiles(old.before)} whole from identity numbering, and this run hides ${describeHiddenFiles(old.now)} (--only/--exclude scope, a preprocessor directive that could not be evaluated, or a file no selector var fits). A file hidden in one run and not the other moves its twins' ordinals, so a recorded key can name another mutant: no survivor from it is skipped, every mutant is executed (R442).`,
             });
           },
+          alRunnerUnmarked: (old) => {
+            if (historyAlRunnerNamesWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyAlRunnerNamesWarned = true;
+            emit({
+              type: "warning",
+              code: "history-al-runner-test-names",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ${AL_RUNNER_UNMARKED_WHY}; its survivors may be false, so none is skipped: every mutant is executed (R557).`,
+            });
+          },
+          alRunnerTestNames: {
+            renamed: alRunnerRenamed,
+            refused: (old) => {
+              if (historyAlRunnerNamesWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+              historyAlRunnerNamesWarned = true;
+              emit({
+                type: "warning",
+                code: "history-al-runner-test-names",
+                message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ran on al-runner before R557 and recorded ${old.tests.length} test(s) as errors that al-runner never ran (${namesSample(old.tests)}); its survivors may be false, so none is skipped: every mutant is executed (R557).`,
+              });
+            },
+          },
         },
       );
-      const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
+      // Sol run 002: never a mutant whose refusal is known only after deploy (`carryBarred`).
+      const knownSurvivors = filterHistory([...manifest.mutants], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
         ...(carryDisabled !== undefined ? { carryDisabled } : {}),
         current: carryCurrent,
-      });
+      }).knownSurvivors.filter((m) => !carryBarred(m));
+      const skipped = new Set(knownSurvivors);
+      const execute = manifest.mutants.filter((m) => !skipped.has(m));
       for (const m of knownSurvivors)
         record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
 
@@ -6006,6 +7041,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       }> = [];
       let refusedThisBatch = new Map<string, string>();
       let testPageThisBatch = new Map<string, string>();
+      // Sol run 001 (I): plus what THIS batch's deployed index refused by name, read after deploy
+      // and before any mutant is scored. Selection read the original source, which can decide
+      // where the instrumented text does not.
+      const batchRefused = await withBackendRefusals(cfg.backend, coverageRefused);
       const select = (baseline: readonly BaselineRow[]): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -6127,7 +7166,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // get the same answer. Spelling it as a comparison against one mode's NAME meant every
             // new source-parsing mode silently opted into the widening it must not have.
             isHubCoverageMode(caps.coverage),
-            coverageRefused,
+            batchRefused,
           );
           perMutantTests = split.covered;
           refusedIds = split.refused;
@@ -6168,13 +7207,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             ? new Map<string, readonly TestMethodRef[]>()
             : coverageFilter(
                 // R298: a refused mutant was decided by the green split; it is left out here so
-                // its refusal is not warned a second time. `coverageRefused` stays as the guard.
+                // its refusal is not warned a second time. `batchRefused` stays as the guard.
                 uncovered.filter((m) => !refusedIds.has(m.mutantId)),
                 unsupportedIndex,
                 unsupportedBaseline.map((b) => b.ref),
                 undefined,
                 true,
-                coverageRefused,
+                batchRefused,
               ).covered;
         // R69 (closed): a mutant covered ONLY by a test this session cannot run is NAMED rather
         // than silently scored `no-coverage`. Recording is deferred until after the fenced mutant
@@ -6302,6 +7341,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               carried.killingTestFailure,
               undefined, // unplaceable
               carried.killPosition,
+              undefined, // reach
+              undefined, // killingTestRef
+              carriedReproduction(carried),
             );
           }
         }
@@ -6317,7 +7359,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // worker, which needs this batch's directory and files.
       const executeCovering = async (
         plan: CoveringPlan,
-        attestation: { clean: boolean },
+        attestation: AttestationLedger,
+        baselineReused: ReusedBaseline | undefined,
       ): Promise<void> => {
         const {
           mutants: toExecute,
@@ -6433,6 +7476,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               memberCountsByTest: memberCounts,
               groupRuns,
               sessionReuse,
+              baselineReused,
             });
           }),
         );
@@ -6455,7 +7499,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           allowReuse:
             resumeState !== undefined &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
-          closedWorld: pendingClosedWorld?.guard.closedWorld ?? OPEN_WORLD,
+          closedWorld: sessionClosedWorld,
+          ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
         },
         select,
         ...(workers > 1 ? { executeCovering } : {}),
@@ -6503,26 +7548,39 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // a session failure: the latch already recorded WHY, this batch's verdicts are invalidated
     // below, and the report carries `quarantined`. Rejecting here instead would throw all of that
     // away. Every other error still propagates untouched.
-    if (!(err instanceof SessionUnsafeError)) throw err;
+    if (!(err instanceof SessionUnsafeError)) {
+      failing = true;
+      failure = { error: err };
+      throw err;
+    }
   } finally {
-    await closeLeaseScope({
-      backend: cfg.backend,
-      workerBackends,
-      safety,
-      leaseSession,
-      emit,
-    });
+    let late: Error | undefined;
+    try {
+      late = await closeLeaseScope({
+        backend: cfg.backend,
+        workerBackends,
+        safety,
+        leaseSession,
+        emit,
+      });
+    } finally {
+      // Layer 5C-B1 (design §6, verbatim): "at session end — after the batch loop breaks, before
+      // buildReport — invalidate the CURRENT batch's verdicts". The artifact those verdicts came
+      // from was deployed under a lease this session can no longer prove it held, so nothing
+      // measured against it is trustworthy. EARLIER batches stand: every RunMutant in them was
+      // individually phase-1/phase-3 fence-validated, so invalidating them would be
+      // over-invalidation.
+      //
+      // Deliberately NOT delegated to design §G's attestation gate — that gate skips a batch that
+      // already earned a clean attestation, which a batch can do moments before the lease is lost.
+      //
+      // R508: in the store too, and in a `finally` so it runs even when the session is failing or
+      // the teardown throws. After `closeLeaseScope` so the teardown and the lease release always
+      // run, even if this write throws.
+      invalidateLostBatch(cfg.store, runId, leaseSession, safety, emit, late, failure);
+    }
+    surfaceLateRefusal(late, failing, safety);
   }
-
-  // Layer 5C-B1 (design §6, verbatim): "at session end — after the batch loop breaks, before
-  // buildReport — invalidate the CURRENT batch's verdicts". The artifact those verdicts came from
-  // was deployed under a lease this session can no longer prove it held, so nothing measured
-  // against it is trustworthy. EARLIER batches stand: every RunMutant in them was individually
-  // phase-1/phase-3 fence-validated, so invalidating them would be over-invalidation.
-  //
-  // Deliberately NOT delegated to design §G's attestation gate — that gate skips a batch that
-  // already earned a clean attestation, which a batch can do moments before the lease is lost.
-  emitLeaseLostInvalidation(leaseSession, safety, emit);
 
   // R391: one warning for every recorded verdict a key matched but `carryRecord` refused.
   if (carryCurrent.refused.size > 0) {
@@ -6540,18 +7598,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     const again = await pendingClosedWorld.recheck();
     if (sameClosedWorld(pendingClosedWorld.guard, again)) {
       // One transaction: the closed-world digests, and reuse enabled for the run and its snapshots.
-      if (testAppHash !== undefined) {
+      // R495/R496: the row holds the pending identity only when it was recorded proven
+      // (`historyTestApp`); a run whose digests were withdrawn under the lease (F9) gets none back.
+      if (historyTestApp !== undefined) {
         cfg.store.confirmClosedWorld(
           runId,
           PENDING_SUFFIX,
           pendingClosedWorld.digests,
           pendingClosedWorld.parts,
         );
-      } else {
+      } else if (cfg.store.testDigests(runId) !== null) {
         cfg.store.setTestDigests(runId, pendingClosedWorld.digests, pendingClosedWorld.parts);
       }
     } else {
-      if (testAppHash !== undefined) cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX);
+      if (historyTestApp !== undefined) cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX);
       emit({
         type: "warning",
         code: "closed-world-changed",
@@ -6565,8 +7625,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // treats its "survived"/"known-survivor" mutant rows as a future session's skip-list
   // (skipKnownSurvivors). The fold's own in-memory `batch-invalidated` handling (report-fold.ts)
   // corrects only the folded report, not the store — the `mutants` rows this session already wrote
-  // to `store` keep whatever verdict they had at `record()` time (no store-row-update API exists;
-  // `store.invalidateBatch`, called just above, is the SEPARATE durable correction for that).
+  // to `store` keep whatever verdict they had at `record()` time. `store.invalidateBatch` is the
+  // SEPARATE durable correction for that: the attestation gate calls it in `scoreBatch`, and a
+  // lease loss calls it in `onLost` and again in `invalidateLostBatch` (R508).
   // Leaving `finished_at` NULL for a quarantined
   // run excludes it from `priorSurvivorKeys` entirely, so those uncorrected on-disk rows (which
   // may include a false "survived" from an unproven binary) can never seed a future skip-list.
@@ -6641,6 +7702,19 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         "it will fail. If that app is one this session mutated or called, its procedure bodies were absent and " +
         "every verdict touching it describes a program that cannot run. Runner said: " +
         observedMissingImpl.announcement,
+    });
+  }
+  // R583: a dependency (not the target, not the test app) lost objects in al-runner's compile. The
+  // run is scored anyway; tests touching a dropped object fail, and the rest cover less. Structural,
+  // as above. One-shot reads it from each invocation's stderr. `--server` CANNOT see it: the measured
+  // drop prints only on the daemon's stderr, which is never read per request, so on `--server` the
+  // absence of this warning is not evidence that no dependency lost objects.
+  const depSource = cfg.backend as { observedDependencyDrops?: () => readonly string[] };
+  for (const drop of depSource.observedDependencyDrops?.() ?? []) {
+    emit({
+      type: "warning",
+      code: "al-runner-dependency-emit-excluded",
+      message: `al-runner dropped objects from a DEPENDENCY of this run (neither the target nor the test app), so it was scored anyway: a test that touches a dropped object fails, and one that touches only the survivors covers less than it claims (R583). Seen on the one-shot transport; --server cannot see such drops (they print only on the daemon's stderr), so no warning there is not evidence of no drop. Runner said: ${drop.slice(0, 1500)}`,
     });
   }
   const totalMs = Date.now() - sessionStartedMs;
@@ -6792,10 +7866,20 @@ export interface NamedMutantsConfig {
    * sent to no kept mutant. Refused when a key is not in `rerunOnUnmutated`, is in any kept
    * mutant's narrowed list, or had an invalid baseline (`invalidBaselineReason`). Answered in
    * `NamedMutantsResult.notRerun`.
+   *
+   * R536: `buildSymbols` is the source run's recorded set (the one the installed artifact and its
+   * line map were built under), and `backendRefused` is the backend's own refused set after the
+   * attach (`coverageRefusals()`, empty for a backend without one), so the filter refuses what the
+   * run's selection refused.
    */
   readonly narrow?: (
     baseline: ReadonlyArray<{ readonly ref: TestMethodRef; readonly verdict: TestVerdict }>,
-    ctx: { readonly coverage: CoverageMode; readonly alSources: readonly AlSource[] },
+    ctx: {
+      readonly coverage: CoverageMode;
+      readonly alSources: readonly AlSource[];
+      readonly buildSymbols: readonly string[];
+      readonly backendRefused: ReadonlyMap<string, string>;
+    },
   ) => {
     readonly methods: ReadonlyMap<string, readonly TestMethodRef[]>;
     readonly unreached: ReadonlySet<string>;
@@ -6923,6 +8007,14 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       `${who}: run ${runId} is finished; its rows are history that priorSurvivorKeys reads, so create a new run row for this call`,
     );
   }
+  // R536: the installed artifact was built under the SOURCE run's symbols, so its line map must read
+  // the #if arms under the same set. A run that recorded none is refused, never read as [] (R214).
+  const buildSymbols = store.getRun(installed.fromRunId)?.buildSymbols ?? null;
+  if (buildSymbols === null) {
+    throw new NamedMutantError(
+      `${who}: source run ${installed.fromRunId} recorded no build symbols (before R214), so the installed artifact's #if arms cannot be read as it was built; run lethal run again`,
+    );
+  }
   const { artifact, manifest } = await loadInstalledArtifact(store, installed);
   // R-384: `narrow` may replace this, inside `select`, before any mutant runs.
   let named = resolveNamedMutants(manifest, cfg.requests);
@@ -6949,6 +8041,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       `${who}: this backend cannot attach to an installed artifact`,
     );
   }
+  handBuildSymbols(backend, buildSymbols);
   const safety = new SessionSafety();
   const caps = backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
@@ -6991,6 +8084,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     lease: cfg.lease,
     backend,
     safety,
+    store,
     runId,
     quarantineStore,
     resourceKey,
@@ -7000,6 +8094,8 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   const outcomes: SessionOutcome[] = [];
   const strict = cfg.requireEveryMethodGreen === true;
   const baselineTests = baselineTestsOf(named);
+  let failing = false; // R-496: an error is already unwinding through the teardown
+  let failure: { readonly error: unknown } | undefined; // R508: that error, warned if lost
   const rerunRefs = cfg.rerunOnUnmutated ?? [];
   const baselineRan = new Map<string, TestVerdict>();
   const rerunRan = new Map<string, UnmutatedRun>();
@@ -7026,6 +8122,8 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     }
     // Mandatory: binds the transport to this artifact after anything `inLease` published.
     await attach(artifact);
+    // R536: what the attached line map refuses, as the run's selection read it.
+    const backendRefused = await withBackendRefusals(backend, new Map());
     const scope: BatchScope = {
       backend,
       caps,
@@ -7057,7 +8155,12 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
         for (const b of baseline) baselineRan.set(testKeyOf(b.ref), b.verdict);
         const narrow = cfg.narrow;
         if (narrow !== undefined) {
-          const n = narrow(baseline, { coverage: caps.coverage, alSources: artifact.alSources });
+          const n = narrow(baseline, {
+            coverage: caps.coverage,
+            alSources: artifact.alSources,
+            buildSymbols,
+            backendRefused,
+          });
           const applied = applyNarrow(named, n, who, { rerunRefs, baselineRan });
           named = applied.named;
           unreached = applied.unreached;
@@ -7104,11 +8207,21 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       }
     }
   } catch (err) {
-    if (!(err instanceof SessionUnsafeError)) throw err;
+    if (!(err instanceof SessionUnsafeError)) {
+      failing = true;
+      failure = { error: err };
+      throw err;
+    }
   } finally {
-    await closeLeaseScope({ backend, workerBackends: [], safety, leaseSession, emit });
+    let late: Error | undefined;
+    try {
+      late = await closeLeaseScope({ backend, workerBackends: [], safety, leaseSession, emit });
+    } finally {
+      // R508: the lost batch's event and store correction, as in `runSession`'s `finally`.
+      invalidateLostBatch(store, runId, leaseSession, safety, emit, late, failure);
+    }
+    surfaceLateRefusal(late, failing, safety);
   }
-  emitLeaseLostInvalidation(leaseSession, safety, emit);
   applyBatchInvalidations(outcomes, invalidations);
 
   const notRunOf = (mutant: MutantManifestEntry): SessionOutcome => {
@@ -7304,7 +8417,7 @@ async function runProbes(
     };
     const plan = selectNamed(baseline, named, probeScope, batchIndex, strict);
     if (plan !== undefined) {
-      const attestation = { clean: false };
+      const attestation = unmarkedLedger(); // R512: a probe records no snapshot to mark
       await runMutantsOnBackend({
         backend: scope.backend,
         safety: scope.safety,
@@ -7328,6 +8441,8 @@ async function runProbes(
         memberCountsByTest: plan.memberCountsByTest,
         groupRuns: scope.groupRuns,
         sessionReuse: scope.sessionReuse,
+        // R514: a probe's baseline is this run's own (`runNamedMutants` never reuses a snapshot).
+        baselineReused: undefined,
       });
       if (scope.caps.authoritative && !attestation.clean) {
         for (const [i, o] of outcomes.entries()) {
@@ -7641,32 +8756,38 @@ async function fetchPublishedTestApp(cfg: SessionConfig): Promise<PublishedTestA
  * lease). A file that cannot be read or is not an app package throws `PublishAppUnreadableError`
  * here, before the lease: skipping it would fall back to the pre-lease package, possibly the
  * outgoing build (plan §3(b)), and the publish would fail on it anyway (R232). Several matching
- * files: the LAST is published last, so it is the one that runs.
+ * files: the LAST is published last, so it is the one that runs. R373/R486: `undefined` when the
+ * hook will not run; otherwise also every file's app identity, for the installed check after it.
  */
-async function envToolTestAppFile(
-  cfg: SessionConfig,
-): Promise<{ readonly path: string; readonly bytes: Uint8Array } | undefined> {
+async function envToolPublishes(cfg: SessionConfig): Promise<EnvToolPublishes | undefined> {
+  if (cfg.afterLeaseAcquired === undefined || cfg.lease === undefined) return undefined;
   const paths = cfg.afterLeaseAcquiredPublishes ?? [];
-  if (cfg.afterLeaseAcquired === undefined || cfg.lease === undefined || paths.length === 0) {
-    return undefined;
-  }
-  const want = await readTestAppManifest(cfg.testDir);
-  if (want === undefined) return undefined;
-  let match: { readonly path: string; readonly bytes: Uint8Array } | undefined;
+  const want = paths.length === 0 ? undefined : await readTestAppManifest(cfg.testDir);
+  let testApp: { readonly path: string; readonly bytes: Uint8Array } | undefined;
+  const apps: Array<{ id: string; name: string; publisher: string }> = [];
   for (const path of paths) {
     let bytes: Buffer;
-    let identity: { readonly name: string; readonly publisher: string };
+    let identity: ReturnType<typeof readAppIdentity>;
     try {
       bytes = await readFile(path);
       identity = readAppIdentity(bytes);
     } catch (err) {
       throw new PublishAppUnreadableError(path, messageOf(err));
     }
-    if (identity.name === want.name && identity.publisher === want.publisher) {
-      match = { path, bytes };
+    apps.push({
+      id: identity.id.toLowerCase(),
+      name: identity.name,
+      publisher: identity.publisher,
+    });
+    if (
+      want !== undefined &&
+      identity.name === want.name &&
+      identity.publisher === want.publisher
+    ) {
+      testApp = { path, bytes };
     }
   }
-  return match;
+  return { apps, ...(testApp !== undefined ? { testApp } : {}) };
 }
 
 /**
@@ -7675,14 +8796,14 @@ async function envToolTestAppFile(
  * the baseline, and throws `TestAppDiffersError` on any difference. With an env-tool test app
  * file, the check is DEFERRED (`deferredCheck`, its path) to after the hook publishes it.
  */
-async function resolveTestArmEvidence(
-  cfg: SessionConfig,
+function resolveTestArmEvidence(
   backendKind: BuildBackend["kind"],
   read: PublishedTestAppRead,
   discovery: ArmAwareDiscovery,
-): Promise<{ evidence: TestArmEvidence; deferredCheck?: string }> {
+  /** The env-tool `publishApps` file that is the test app, when one is (`envToolPublishes`). */
+  file: { readonly path: string; readonly bytes: Uint8Array } | undefined,
+): { evidence: TestArmEvidence; deferredCheck?: string } {
   if (backendKind === "al-runner") return { evidence: { kind: "derived" } };
-  const file = await envToolTestAppFile(cfg);
   if (file !== undefined) {
     const m = compiledMembershipOf(file.bytes);
     if (m.kind === "none") {
@@ -7746,11 +8867,21 @@ async function reportPublishedTestApp(
   /** R403 phase B: the derived test set when the session runs the arm-FILTERED suite, so the
    *  published source is filtered alike; absent when it runs the unfiltered one. */
   armSymbols: readonly string[] | undefined,
-): Promise<{ testAppHash: string | undefined; sources: PublishedTestSources }> {
+  /** R373: false on an env-tool session's pre-lease read, which may be the OUTGOING package; its
+   *  `published-test-app-mismatch` and `published-test-app-unreadable` warnings are then said
+   *  only by the read after its hook. */
+  judge = true,
+): Promise<{
+  testAppHash: string | undefined;
+  sources: PublishedTestSources;
+  /** R486: the package's hash only when one was read AND parsed, never the source fallback. */
+  packageHash?: string;
+}> {
   // R247: this session's test-app identity, from the ONE package read (`testAppHashFor`'s rule:
   // the package's hash when it was read, `undefined` when the read failed, else the test source
   // tree's hash).
   const sourceHash = () => testAppHashFor(undefined, cfg.testDir);
+  const warn: RunEmitter = judge ? emit : () => {};
   if (read.kind === "no-fetch") {
     return { testAppHash: await sourceHash(), sources: { kind: "not-published" } };
   }
@@ -7762,7 +8893,7 @@ async function reportPublishedTestApp(
   }
   const { name } = read;
   if (read.kind === "failed") {
-    emit({
+    warn({
       type: "warning",
       code: "published-test-app-unreadable",
       message: `[lethal] could not read the published test app "${name}" from the server, so this run did not verify that the container holds the suite this project's source declares. A stale test app is still caught at baseline, one round trip later.`,
@@ -7779,7 +8910,7 @@ async function reportPublishedTestApp(
       armSymbols !== undefined ? { buildSymbols: armSymbols } : {},
     );
   } catch (err) {
-    emit({
+    warn({
       type: "warning",
       code: "published-test-app-unreadable",
       message: `[lethal] the server returned a package for the test app "${name}" that could not be read (${err instanceof Error ? err.message : String(err)}), so this run did not verify the published suite.`,
@@ -7791,16 +8922,18 @@ async function reportPublishedTestApp(
     comparePublishedTestApp({ version, tests: tests.map(qualifiedTestName) }, published),
   );
   if (message !== undefined) {
-    emit({ type: "warning", code: "published-test-app-mismatch", message });
+    warn({ type: "warning", code: "published-test-app-mismatch", message });
   }
   const files = publishedAlSources(Buffer.from(bytes));
   return {
     testAppHash,
+    packageHash: testAppHash,
     sources:
       files.length > 0
         ? { kind: "published", files, pkg: bytes }
         : {
-            kind: "unavailable",
+            kind: "source-less",
+            pkg: bytes,
             why: `the published test app "${name}" carries no AL source, so the body the server runs cannot be digested. Build the test app so its .app includes its source`,
           },
   };
@@ -7816,12 +8949,15 @@ type PublishedTestSources =
       readonly files: ReadonlyArray<{ path: string; text: string }>;
       readonly pkg: Uint8Array;
     }
+  /** R498: a readable package with no `.al` entries. Nothing to digest (`why`), but its bytes can
+   *  still prove an env-tool read-back (`proveReadBack`). */
+  | { readonly kind: "source-less"; readonly pkg: Uint8Array; readonly why: string }
   | { readonly kind: "unavailable"; readonly why: string };
 
 const NO_PUBLISHED_READ =
   "the published test app could not be requested from the server (no dev server, no dev-endpoint credentials, or no readable test app.json), and the source on disk is not known to be the body it runs";
 const UNREADABLE =
-  "the published test app could not be read, see the published-test-app-unreadable warning";
+  "the published test app could not be read (on an env-tool session this is the read before its own publish; the published-test-app-unreadable warning appears only if the read after the publish fails too)";
 
 /** R389: a closed-world answer not yet confirmed after execution, and the digests it would give. */
 interface PendingClosedWorld {
@@ -7847,104 +8983,373 @@ async function testAppIdentity(
   armSymbols: readonly string[] | undefined,
   /** R205: the target's source snapshot, so `targetOf` reads the pinned `app.json`. */
   source: ReadonlyMap<string, Buffer>,
+  /** R373: the env-tool hook will run under the lease; the digests are taken after it. */
+  deferred: boolean,
 ): Promise<{
   testAppHash: string | undefined;
   testDigests?: Record<string, string>;
   testDigestParts?: TestDigestParts;
   closedWorld?: PendingClosedWorld;
+  /** R496 F9: the full dependency fingerprint the digests were taken over. */
+  testDigestDependencies?: string;
 }> {
-  const { testAppHash, sources } = await reportPublishedTestApp(cfg, read, tests, emit, armSymbols);
+  const { testAppHash, sources } = await reportPublishedTestApp(
+    cfg,
+    read,
+    tests,
+    emit,
+    armSymbols,
+    !deferred,
+  );
   const none = (why: string) => {
-    emit({
-      type: "warning",
-      code: "test-digests-unavailable",
-      message: `[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: ${why}`,
-    });
+    warnNoTestDigests(emit, why);
     return { testAppHash };
   };
   // An env-tool session publishes `envTool.publishApps`, PREBUILT .app files, only after the lease
   // is taken, which is after the read above (`afterLeaseAcquiredFor` in cli.ts calls
   // `publishTestApps` in env-tool-session.ts, which publishes each file as it is). Neither that
-  // read nor the disk is known to be the body the server runs.
+  // read nor the disk is known to be the body the server runs. R373: when the hook will run, the
+  // digests are taken after it (`deferredTestDigests`), which warns if it records none.
   if (cfg.afterLeaseAcquired !== undefined) {
+    if (deferred) return { testAppHash };
     return none(
       "this run publishes its test apps itself (envTool.publishApps, prebuilt .app files) after the published test app is read, so neither that read nor the source on disk is known to be the body the server runs",
     );
   }
-  if (sources.kind === "unavailable") return none(sources.why);
+  if (sources.kind === "unavailable" || sources.kind === "source-less") return none(sources.why);
+  const got = await digestsOf(cfg, sources, tests, diskModel, source);
+  if ("why" in got) return none(got.why);
+  // R389: the closed-world guard, asked for the package actually DIGESTED (the published one on
+  // bcdev; sol's review). The run records OPEN-world digests; the closed-world ones replace them
+  // only after the same question, asked again after execution, gets the same answer (`recheck`).
+  // An env-tool session returned above, so it stays open-world (the safe direction).
+  const digested = sources.kind === "published" ? digestedAppOfPackage(sources.pkg) : undefined;
+  const ask = () => closedWorldGuard(cfg.backend, cfg.testDir, digested);
+  const guard = await ask();
+  if (guard.warn) {
+    emit({
+      type: "warning",
+      code: "closed-world-unmeasured",
+      message: `[lethal] public and internal test-app procedures are digested open-world (the safe direction): ${guard.why}`,
+    });
+  }
+  const c = isClosedWorld(guard.closedWorld)
+    ? await digestsOf(cfg, sources, tests, diskModel, source, got.dependencies, guard.closedWorld)
+    : undefined;
+  if (c !== undefined && "why" in c) return none(c.why);
+  return {
+    testAppHash:
+      testAppHash === undefined ? undefined : guardedTestAppHash(testAppHash, guard.closedWorld),
+    testDigests: got.digests,
+    testDigestParts: got.parts,
+    testDigestDependencies: got.dependencies,
+    ...(c !== undefined
+      ? { closedWorld: { guard, digests: c.digests, parts: c.parts, recheck: ask } }
+      : {}),
+  };
+}
+
+/** R-278: the one `test-digests-unavailable` warning, said the same way on every path. */
+function warnNoTestDigests(emit: RunEmitter, why: string): void {
+  emit({
+    type: "warning",
+    code: "test-digests-unavailable",
+    message: `[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: ${why}`,
+  });
+}
+
+/**
+ * R-371's dependency fingerprint of the test app that RUNS, shared by the digests and (R496) the
+ * test-app identity. On a backend that publishes, `pkg` is the SERVED test-app package: its
+ * manifest's dependencies (R496 F8: the manifest, never its `.al` entries, so a package without
+ * source fingerprints too) and the server's resident dependency packages, each proven installed
+ * (F5). On al-runner (`"not-published"`), the test project's app.json and the package folders it
+ * is handed. Throws `DependencyUnreadableError` when it cannot be taken.
+ */
+async function testAppDependencies(
+  cfg: SessionConfig,
+  pkg: Uint8Array | "not-published",
+  source: ReadonlyMap<string, Buffer>,
+): Promise<string> {
+  const fetchPackage = cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend);
+  const published = pkg !== "not-published";
+  const inputs = published ? appInputsOfPackage(pkg) : await readAppJsonInputs(cfg.testDir);
+  const read =
+    published && fetchPackage !== undefined
+      ? publishedPackageReader(fetchPackage)
+      : packageFolderReader(cfg.backend.dependencyPackageDirs?.() ?? []);
+  // R-385: the published path reads Microsoft apps, System and the control app's dependencies by
+  // the bytes the server holds (the backend's microsoftMode, required there: never a fallback to
+  // declared versions); al-runner keeps declared versions under a tag (D6).
+  let microsoft: MicrosoftMode = { kind: "declared" };
+  if (published) {
+    if (cfg.backend.microsoftMode === undefined) {
+      throw new DependencyUnreadableError(
+        "this backend publishes the test app but cannot read the Microsoft dependencies, System or the control app's dependencies from the server (it has no microsoftMode)",
+      );
+    }
+    microsoft = cfg.backend.microsoftMode();
+  }
+  return dependencyFingerprint(inputs, read, microsoft, await targetOf(cfg.projectDir, source));
+}
+
+/** R496: `testAppDependencies`, or why it could not be taken. */
+async function takeTestAppDependencies(
+  cfg: SessionConfig,
+  pkg: Uint8Array | "not-published",
+  source: ReadonlyMap<string, Buffer>,
+): Promise<{ readonly deps: string } | { readonly why: string }> {
   try {
-    // R-371: the dependency fingerprint and build inputs of the app that RUNS. On a backend that
-    // publishes, the published package's manifest and the server's resident dependency packages;
-    // on al-runner, the test project's app.json and the package folders it is handed.
-    const fetchPackage = cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend);
+    return { deps: await testAppDependencies(cfg, pkg, source) };
+  } catch (err) {
+    if (!(err instanceof DependencyUnreadableError)) throw err;
+    return { why: err.message };
+  }
+}
+
+/** R496: one warning when a test app proven installed loses its identity because its dependency
+ *  fingerprint could not be taken (and no `test-digests-unavailable` warning says so already). */
+function warnTestAppDependenciesUnproven(emit: RunEmitter, why: string): void {
+  emit({
+    type: "warning",
+    code: "test-app-dependencies-unproven",
+    message: `[lethal] this session's test app is not proven: ${why}. It lends nothing to a later --resume, --skip-known-survivors or baseline reuse, and borrows nothing (R496).`,
+  });
+}
+
+/**
+ * R-372's digest body, split out by R373 so the env-tool step after the hook runs the same code on
+ * its read-back. The digests, or why there are none.
+ */
+async function digestsOf(
+  cfg: SessionConfig,
+  sources: Exclude<
+    PublishedTestSources,
+    { readonly kind: "unavailable" } | { readonly kind: "source-less" }
+  >,
+  tests: readonly TestMethodRef[],
+  diskModel: TestAppModel,
+  source: ReadonlyMap<string, Buffer>,
+  /** R496: the fingerprint already taken under the lease for this read-back, so it is not walked
+   *  twice. Absent: walked here. */
+  takenDependencies?: string,
+  /** R389: the closed-world answer the digests are taken under. Absent: open-world. */
+  closedWorld?: ClosedWorld,
+): Promise<
+  | {
+      readonly digests: Record<string, string>;
+      readonly parts: TestDigestParts;
+      /** The FULL fingerprint the digests were taken over (the parts keep only 16 hex), for F9. */
+      readonly dependencies: string;
+    }
+  | { readonly why: string }
+> {
+  // `not-published` digests the disk, `published` the package; nothing else has a body to digest.
+  if (sources.kind !== "published" && sources.kind !== "not-published") {
+    const unknown: never = sources;
+    throw new Error(
+      `digestsOf was handed test sources of kind ${String((unknown as { kind: unknown }).kind)}`,
+    );
+  }
+  try {
     const published = sources.kind === "published";
     const inputs = published
       ? appInputsOfPackage(sources.pkg)
       : await readAppJsonInputs(cfg.testDir);
-    const read =
-      published && fetchPackage !== undefined
-        ? publishedPackageReader(fetchPackage)
-        : packageFolderReader(cfg.backend.dependencyPackageDirs?.() ?? []);
-    // R-385: the published path reads Microsoft apps, System and the control app's dependencies by
-    // the bytes the server holds (the backend's microsoftMode, required there: never a fallback to
-    // declared versions); al-runner keeps declared versions under a tag (D6).
-    let microsoft: MicrosoftMode = { kind: "declared" };
-    if (published) {
-      if (cfg.backend.microsoftMode === undefined) {
-        throw new DependencyUnreadableError(
-          "this backend publishes the test app but cannot read the Microsoft dependencies, System or the control app's dependencies from the server (it has no microsoftMode)",
-        );
-      }
-      microsoft = cfg.backend.microsoftMode();
-    }
-    const dependencies = await dependencyFingerprint(
-      inputs,
-      read,
-      microsoft,
-      await targetOf(cfg.projectDir, source),
+    const dependencies =
+      takenDependencies ??
+      (await testAppDependencies(cfg, published ? sources.pkg : "not-published", source));
+    const { digests, parts } = testDigestsOfModel(
+      published ? buildTestAppModel(sources.files) : diskModel,
+      tests,
+      {
+        dependencies,
+        buildInputs: inputs.buildInputs,
+        ...(closedWorld !== undefined ? { closedWorld } : {}),
+      },
     );
-    // R389: the closed-world guard, asked for the package actually DIGESTED (the published one on
-    // bcdev; sol's review). The run records OPEN-world digests; the closed-world ones replace them
-    // only after the same question, asked again after execution, gets the same answer (`recheck`).
-    const digested = published ? digestedAppOfPackage(sources.pkg) : undefined;
-    const ask = () => closedWorldGuard(cfg.backend, cfg.testDir, digested);
-    const guard = await ask();
-    if (guard.warn) {
-      emit({
-        type: "warning",
-        code: "closed-world-unmeasured",
-        message: `[lethal] public and internal test-app procedures are digested open-world (the safe direction): ${guard.why}`,
-      });
-    }
-    const model = published ? buildTestAppModel(sources.files) : diskModel;
-    const digestInputs = { dependencies, buildInputs: inputs.buildInputs };
-    const { digests, parts } = testDigestsOfModel(model, tests, digestInputs);
-    const closed = guard.closedWorld.public || guard.closedWorld.internal;
-    const c = closed
-      ? testDigestsOfModel(model, tests, { ...digestInputs, closedWorld: guard.closedWorld })
-      : undefined;
-    return {
-      testAppHash:
-        testAppHash === undefined ? undefined : guardedTestAppHash(testAppHash, guard.closedWorld),
-      testDigests: digests,
-      testDigestParts: parts,
-      ...(c !== undefined
-        ? { closedWorld: { guard, digests: c.digests, parts: c.parts, recheck: ask } }
-        : {}),
-    };
+    return { digests, parts, dependencies };
   } catch (err) {
     if (err instanceof DependencyUnreadableError) {
-      return none(
-        `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${err.message}`,
-      );
+      return {
+        why: `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${err.message}`,
+      };
     }
     if (!(err instanceof TestDigestError)) throw err;
-    return none(
-      sources.kind === "published"
-        ? `the published test app does not declare or parse every discovered test (republish it): ${err.message}`
-        : err.message,
-    );
+    return {
+      why:
+        sources.kind === "published"
+          ? `the published test app does not declare or parse every discovered test (republish it): ${err.message}`
+          : err.message,
+    };
   }
+}
+
+/** R373/R486: what an env-tool session publishes in its hook, read once before the lease. */
+interface EnvToolPublishes {
+  /** The `publishApps` file that is the test app, when one is (R403). */
+  readonly testApp?: { readonly path: string; readonly bytes: Uint8Array };
+  /** Every `publishApps` file's app identity, in publish order. */
+  readonly apps: ReadonlyArray<{
+    readonly id: string;
+    readonly name: string;
+    readonly publisher: string;
+  }>;
+}
+
+/**
+ * R495: whether a session WITHOUT a hook measures the test app it identified (`read`). al-runner
+ * compiles the test source it hashed, so its `no-fetch` identity is proven by construction (decided
+ * by the BACKEND, never by a `source:` prefix: bcdev runs the published app, not the disk). bcdev's
+ * served package is proven only when its OWN manifest's id and version (never the local app.json's)
+ * have exactly one installed row (`checkInstalled`, as `proveReadBack` does). Anything else: false.
+ */
+async function provenWithoutHook(
+  cfg: SessionConfig,
+  backendKind: string,
+  read: PublishedTestAppRead,
+): Promise<boolean> {
+  if (backendKind === "al-runner") return read.kind === "no-fetch";
+  if (read.kind !== "bytes") return false;
+  let got: ReturnType<typeof readAppIdentity>;
+  try {
+    got = readAppIdentity(Buffer.from(read.bytes));
+  } catch {
+    return false; // not an app package with a readable manifest
+  }
+  try {
+    const mode = cfg.backend.microsoftMode?.();
+    if (mode?.kind !== "bytes") return false;
+    await checkInstalled(
+      mode,
+      { id: got.id.toLowerCase(), name: got.name, publisher: got.publisher, version: got.version },
+      got.version,
+    );
+    return true;
+  } catch (err) {
+    // bcdev's `microsoftMode` throws `DependencyUnreadableError` with no harness verifier, and
+    // `checkInstalled` throws it when the proof fails: an unproven identity, never a session abort.
+    if (!(err instanceof DependencyUnreadableError)) throw err;
+    return false;
+  }
+}
+
+/**
+ * R373, R492: proof that an env-tool session's test app read back after its hook published
+ * `publishApps` (`sources`) is what runs: exactly one INSTALLED row at the served version for the
+ * test app and for every app the hook published (R-385 D2: `dev/packages` serves a version that
+ * may be published but not installed), and, when a `publishApps` file is the test app, the
+ * read-back's identity, version and `.al` source set equal that file's (R498: a read-back with no
+ * `.al` must equal the file byte for byte instead). Anything else is `why`.
+ * The run's test-app identity, its history hash and its digests are recorded only with this proof.
+ * It assumes BC holds one package per app id and version, so the bytes served at the installed
+ * version are the installed bytes.
+ */
+async function proveReadBack(
+  cfg: SessionConfig,
+  publishes: EnvToolPublishes,
+  sources: PublishedTestSources,
+): Promise<{ readonly proven: true } | { readonly why: string }> {
+  const AFTER = "after the hook published envTool.publishApps";
+  if (sources.kind === "not-published") {
+    return { why: `this backend cannot read the published test app back ${AFTER}` };
+  }
+  if (sources.kind === "unavailable") return { why: `${AFTER}: ${sources.why}` };
+  // R498: `source-less` takes the same identity and installed checks as `published`; only the
+  // final comparison with the publishApps file differs (bytes, as it has no `.al` set).
+  // bcdev's `microsoftMode` throws `DependencyUnreadableError` with no harness verifier: that is a
+  // run without digests, never a session abort.
+  let mode: MicrosoftMode | undefined;
+  try {
+    mode = cfg.backend.microsoftMode?.();
+  } catch (err) {
+    if (!(err instanceof DependencyUnreadableError)) throw err;
+    return { why: `the installed app versions cannot be read ${AFTER}: ${err.message}` };
+  }
+  const fetchPackage = cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend);
+  if (mode?.kind !== "bytes" || fetchPackage === undefined) {
+    return {
+      why: `this backend cannot read installed app versions, so the test app read back ${AFTER} is not proven to be the installed one`,
+    };
+  }
+  let got: ReturnType<typeof readAppIdentity>;
+  try {
+    got = readAppIdentity(Buffer.from(sources.pkg));
+  } catch (err) {
+    return { why: `the test app read back ${AFTER} has no readable identity: ${messageOf(err)}` };
+  }
+  try {
+    await checkInstalled(
+      mode,
+      { id: got.id.toLowerCase(), name: got.name, publisher: got.publisher, version: got.version },
+      got.version,
+    );
+    for (const app of publishes.apps) {
+      const bytes = await fetchPackage({ publisher: app.publisher, name: app.name });
+      if (bytes === null || bytes === undefined) {
+        throw new DependencyUnreadableError(
+          `the package of "${app.name}" (${app.id}) could not be read back`,
+        );
+      }
+      let served: ReturnType<typeof readAppIdentity>;
+      try {
+        served = readAppIdentity(Buffer.from(bytes));
+      } catch (err) {
+        throw new DependencyUnreadableError(
+          `the package read back for "${app.name}" (${app.id}) is not an app package: ${messageOf(err)}`,
+        );
+      }
+      if (served.id.toLowerCase() !== app.id) {
+        throw new DependencyUnreadableError(
+          `the package read back for "${app.name}" (${app.id}) is app ${served.id}, not the one published`,
+        );
+      }
+      await checkInstalled(mode, { ...app, version: served.version }, served.version);
+    }
+  } catch (err) {
+    if (!(err instanceof DependencyUnreadableError)) throw err;
+    return { why: `an app read back ${AFTER} is not proven installed: ${err.message}` };
+  }
+  const file = publishes.testApp;
+  if (file !== undefined) {
+    let local: Buffer;
+    let want: ReturnType<typeof readAppIdentity>;
+    try {
+      local = await readFile(file.path);
+      want = readAppIdentity(local);
+    } catch (err) {
+      return {
+        why: `the publishApps test app ${file.path} could not be read ${AFTER}: ${messageOf(err)}`,
+      };
+    }
+    const describe = (a: typeof got) =>
+      `"${a.name}" by "${a.publisher}" (${a.id.toLowerCase()}) version ${a.version}`;
+    if (describe(got) !== describe(want)) {
+      return {
+        why: `the test app read back ${AFTER} is ${describe(got)}, but the publishApps file ${file.path} is ${describe(want)}, so that file is not known to be what runs`,
+      };
+    }
+    if (sources.kind === "source-less") {
+      // R498: nothing to compare by source, so the served package must BE the file: measured, the
+      // dev endpoint serves back exactly the bytes published, with or without `.al`.
+      const served = hashPackage(sources.pkg);
+      const published = hashPackage(local);
+      if (served !== published) {
+        return {
+          why: `the test app read back ${AFTER} carries no AL source and its bytes differ from the publishApps file ${file.path} (sha256 ${served}, file ${published}), so that file is not known to be what runs (a publish that skipped an already-installed version, say)`,
+        };
+      }
+      return { proven: true };
+    }
+    const sourceSet = (files: ReadonlyArray<{ path: string; text: string }>) =>
+      JSON.stringify(files.map((f) => [f.path, f.text]).sort());
+    if (sourceSet(sources.files) !== sourceSet(publishedAlSources(local))) {
+      return {
+        why: `the test app read back ${AFTER} carries other .al sources than the publishApps file ${file.path}, so that file is not known to be what runs (a publish that skipped an already-installed version, say)`,
+      };
+    }
+  }
+  return { proven: true };
 }
 
 /**
@@ -7964,6 +9369,72 @@ async function closeIfSupported(backend: ExecutionBackend): Promise<void> {
   }
 }
 
+/** R517: the figures a position-1 timeout confirm was judged on. */
+interface JudgedConfirm {
+  /** The figure judged: the confirm's own duration (`measuredDurationMs ?? durationMs`) for a
+   *  timeout in the test body, else (R534) its wall clock. */
+  readonly confirmMs: number;
+  /** The confirm's wall clock (`durationMs`). */
+  readonly wallMs: number;
+  /** `min(budget, reported stop, inRunStopMs)`. */
+  readonly stopMs: number;
+}
+
+/** R517: the judged figure, plus the wall clock where it differs. */
+function durationsText(j: JudgedConfirm): string {
+  return j.confirmMs === j.wallMs
+    ? `${j.confirmMs} ms`
+    : `${j.confirmMs} ms by its own figure (${j.wallMs} ms wall clock)`;
+}
+
+/** R517: what the confirm was weighed against: the budget, or the reported stop below it. */
+function stopText(stopMs: number, budgetMs: number, setFrom: string): string {
+  return stopMs < budgetMs
+    ? `${stopMs} ms in-run stop al-runner reported (below the ${budgetMs} ms budget ${setFrom})`
+    : `${budgetMs} ms budget ${setFrom}`;
+}
+
+/**
+ * R516 (I3 b): the note of a position-1 timeout whose unmutated confirm passed in more than half the
+ * budget the run was sent (R517: or the lower stop al-runner reported it enforced). It prints both
+ * durations and their ratio; the 1.25 threshold picks the wording only, never a verdict.
+ */
+function timeoutUnconfirmedNote(
+  method: string,
+  judged: JudgedConfirm,
+  budgetMs: number,
+  source: BudgetSource,
+): string {
+  const d = source.durationMs;
+  // The ratio compares like with like: the confirm's wall clock against the budget's source.
+  const confirmMs = judged.wallMs;
+  const from =
+    source.kind === "confirm"
+      ? `the confirm of mutant ${source.confirmOf}, ${d} ms (R515)`
+      : source.kind === "baseline"
+        ? `this run's baseline, ${d} ms`
+        : `the --mutant-timeout-ms floor (the test's measured duration is ${d} ms)`;
+  const ratio = d > 0 ? confirmMs / d : Number.POSITIVE_INFINITY;
+  const why =
+    source.kind === "floor"
+      ? "the budget is the --mutant-timeout-ms floor and the test takes more than half of it"
+      : source.kind === "confirm"
+        ? "the budget is twice that confirm's duration"
+        : "the budget is twice its measured duration, or on al-runner one-shot the compile counts against it";
+  // R517: failed by the in-run stop alone (twice the test's own run fits the budget, not the stop).
+  const stopBound = judged.stopMs < budgetMs && 2 * judged.confirmMs <= budgetMs;
+  const band = stopBound
+    ? `the test's own run (${judged.confirmMs} ms) is more than half the ${judged.stopMs} ms in-run stop, which is below its budget; the stop is the larger of --mutant-timeout-ms and the baseline timeout, so raising --mutant-timeout-ms above twice this test's own run raises the stop and re-scores it`
+    : ratio <= 1.25
+      ? `the test ran about as fast as when its budget was set, so this is R516's boundary band (${why}); raise --mutant-timeout-ms above twice this test's duration to re-score it`
+      : "the test is slower now than when its budget was set, or this worker's tier is slower than the baseline's; raise --mutant-timeout-ms to re-score it";
+  const half =
+    judged.stopMs < budgetMs
+      ? `the ${judged.stopMs} ms in-run stop al-runner reported (below its ${budgetMs} ms budget, which was set from ${from})`
+      : `its ${budgetMs} ms budget, which was set from ${from}`;
+  return `timeout-unconfirmed ${method}: timed out at position 1 under the mutant; unmutated it completed in ${durationsText(judged)} on this backend, more than half ${half}; ratio ${confirmMs}/${d} = ${Number.isFinite(ratio) ? ratio.toFixed(2) : "inf"}. The timeout is not attributed to the mutant (R53's 2x margin, R516). ${band[0]?.toUpperCase() ?? ""}${band.slice(1)}.`;
+}
+
 /**
  * R206 §2.2: the warm confirmation. A kill (a `fail` or a `timeout`) at group position k > 1 was
  * measured in a session that had already run methods 1..k-1 of the same call, so it is confirmed
@@ -7971,7 +9442,11 @@ async function closeIfSupported(backend: ExecutionBackend): Promise<void> {
  * `RunMutantMany` call (`confirmation: true`, `activate(null)` first). Confirmed iff the replay
  * answers `complete` AND ran all k AND every entry passed (stated positively: a `cap` with one
  * passing entry satisfies "every method that ran passed" and is NOT a confirmation), and for a
- * timeout additionally iff entry k completed inside its own cold-measured budget.
+ * timeout additionally iff entry k completed in at most HALF its own budget (R53's 2x margin).
+ * R514: on a reused baseline (R192) that budget is another day's, so a complete all-pass replay
+ * beyond half of it is `reused-budget-stale`. R516: a fresh batch uses the same half-budget rule;
+ * beyond it the replay is `warm-timeout-unconfirmed`, whose note tells "outside the budget" from
+ * "within it but over half of it".
  *
  * Every other ending is an error, never a kill: j < k failing → `warm-prefix-unstable`; j = k
  * failing → `unstable` (today's cause, the warm wording); k completing outside its budget or
@@ -7999,10 +9474,13 @@ async function confirmWarm(p: {
     readonly backend: ExecutionBackend;
     readonly safety: SessionSafety;
     readonly emit: RunEmitter;
-    readonly attestation: { clean: boolean };
+    readonly attestation: AttestationLedger;
     readonly quarantineStore?: QuarantineStore | undefined;
     readonly resourceKey?: string | undefined;
     readonly nowIso: () => string;
+    /** R514: see `runMutantsOnBackend`'s field; it decides the over-half timeout grain's CAUSE
+     *  (`reused-budget-stale` on a reused batch), not the margin, which is 2x on every batch (R516). */
+    readonly baselineReused: ReusedBaseline | undefined;
   };
   readonly m: MutantManifestEntry;
   readonly step: CoveringStep;
@@ -8081,12 +9559,7 @@ async function confirmWarm(p: {
       opKind: "many",
       ...(verdict.sessionId !== undefined ? { sessionId: verdict.sessionId } : {}),
     });
-    if (
-      verdict.attestation?.observedAny === true &&
-      verdict.attestation.identityMismatch !== true
-    ) {
-      args.attestation.clean = true;
-    }
+    feedAttestation(args.attestation, verdict.attestation);
     if (cause === "stopped-after-completion") {
       // G3(a): R204's narrowing fired on the REPLAY's own 408; the covering call's wording would
       // describe the mutated run. What it means here is that k's duration could not be established.
@@ -8100,6 +9573,8 @@ async function confirmWarm(p: {
       ref: verdict.ref,
       verdict,
       testBudgetMs: budgetOfIndex(j),
+      // Not read by `classifyNonVerdictStep`, the only consumer of this step.
+      testBudgetSource: step.testBudgetSource,
       groupBudgetMs,
       opKind: "many",
       ...(cause !== undefined ? { cause } : {}),
@@ -8156,9 +9631,7 @@ async function confirmWarm(p: {
       opKind: "many",
       ...(rv.sessionId !== undefined ? { sessionId: rv.sessionId } : {}),
     });
-    if (rv.attestation?.observedAny === true && rv.attestation.identityMismatch !== true) {
-      args.attestation.clean = true;
-    }
+    feedAttestation(args.attestation, rv.attestation);
   }
   const reusedIn = verdicts.find(sessionWasReused);
   if (reusedIn !== undefined) {
@@ -8204,14 +9677,252 @@ async function confirmWarm(p: {
   if (grain === "timeout") {
     const kth = verdicts[k - 1];
     const budget = budgetOfIndex(k);
+    const reusedFrom = args.baselineReused;
+    if (
+      kth !== undefined &&
+      reusedFrom !== undefined &&
+      step.testBudgetSource.kind !== "confirm" &&
+      2 * kth.durationMs > budget
+    ) {
+      // R514: on a reused baseline the budget is another day's; R53's 2x margin, as the cold
+      // confirm uses. Not when R515 re-budgeted the test from today's confirm (R516 M1).
+      return error(
+        "reused-budget-stale",
+        `reused-budget-stale ${what}: method ${k} (${killer.method}) completed unmutated in ${kth.durationMs} ms at position ${k} of the replay, more than half the ${budget} ms budget set from run ${reusedFrom.runId}'s reused baseline (R192), so the timeout is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`,
+      );
+    }
     if (kth === undefined || kth.durationMs > budget) {
       return error(
         "warm-timeout-unconfirmed",
         `warm-timeout-unconfirmed ${what}: method ${k} (${killer.method}) completed unmutated in ${kth?.durationMs ?? "?"} ms, outside the ${budget} ms budget measured for it cold; the warm session, not the mutant, makes it slow (R206)`,
       );
     }
+    if (2 * kth.durationMs > budget) {
+      // R516: a fresh batch uses the same 2x margin (R53's): a replay inside the budget but over
+      // half of it does not separate the mutant from drift, so it is not a kill either.
+      return error(
+        "warm-timeout-unconfirmed",
+        `warm-timeout-unconfirmed ${what}: method ${k} (${killer.method}) completed unmutated in ${kth.durationMs} ms at position ${k} of the replay, within its ${budget} ms budget but more than half of it (R53's 2x margin, R516); the timeout is not attributed to the mutant`,
+      );
+    }
   }
   return { kind: "confirmed", killPosition: k };
+}
+
+/** R577: a kill decision that is not a kill: `WarmDecision`'s error shape, its cause optional as a
+ *  covering step's is (a lease loss and a transport error carry none). */
+interface KillErrorDecision {
+  readonly kind: "error";
+  readonly cause: MutantErrorCause | undefined;
+  readonly failureNote: string;
+  readonly transportError: boolean;
+}
+
+type ReproDecision =
+  | {
+      readonly kind: "reproduced";
+      /** `record()`'s `reproduction` argument: the reproduction's own text, when it had one. */
+      readonly reproduction: { readonly reproducedFailure?: string };
+    }
+  | KillErrorDecision;
+
+/**
+ * R577: "a kill must reproduce". Called after a kill's unmutated confirmation passed (cold at
+ * position 1, `confirmWarm` at k > 1), on a backend with `killsMustReproduce`. It re-activates the
+ * mutant (MANDATORY: al-runner `--server` caches its suite per activation and `activate` clears
+ * it, so without it the run would read the confirm's null suite), then re-runs the kill in its
+ * own context at the budget the killing run was SENT: at k = 1 one single run (`op_kind` single);
+ * at k > 1 the call's prefix 1..k through one `runMany` with no `confirmation` flag.
+ *
+ * Reproduced: the killer itself answers `fail` again (any text) for a fail kill, or `timeout` again
+ * for a timeout kill; at k > 1 only as method k of a replay that ran all k. Everything else that
+ * is an outcome is `kill-not-reproduced`, and the note says how the reproduction ended. A
+ * non-verdict ending (lost, deadline, stranded, a lease answer, a transport error) keeps its own
+ * cause through `classifyNonVerdictStep`, side effects included; a reused session is
+ * `session-reused`; a cap is `warm-confirmation-incomplete`. Never `survived`. The rows are
+ * MUTATED rows (`mutantCode` set) and their durations are not added to `spent`.
+ */
+async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<ReproDecision> {
+  const { args, m, step, leaseSession, resyncOpSeq, testResultBuffer } = p;
+  const k = step.groupPosition;
+  const killer = step.ref;
+  const timedOut = step.verdict.outcome === "timeout";
+  const firstLine = step.verdict.failureMessage?.split("\n")[0];
+  const what = `reproducing ${killer.method} under the mutant (first run ${
+    timedOut
+      ? `timed out at its ${step.testBudgetMs} ms budget`
+      : `failed: ${firstLine ?? "no text"}`
+  })`;
+  const error = (
+    cause: MutantErrorCause | undefined,
+    failureNote: string,
+    transportError = false,
+  ) => ({ kind: "error", cause, failureNote, transportError }) as const;
+  const replay = k > 1 ? ` by replaying the same ${k} method(s) of its call` : "";
+  const notReproduced = (how: string) =>
+    error(
+      "kill-not-reproduced",
+      `kill-not-reproduced ${killer.method}: ${
+        timedOut
+          ? `timed out under the mutant at its ${step.testBudgetMs} ms budget`
+          : `failed under the mutant${firstLine !== undefined ? ` (${firstLine})` : ""}`
+      }, passed with no mutant active, then ${how}; the ${
+        timedOut ? "timeout" : "failure"
+      } did not repeat, so it is not attributed to the mutant (R577). Re-run with --resume to measure it again.`,
+    );
+  // `how` for the killer's own answer in the reproduction, when it was not the reproducing one.
+  const answered = (outcome: TestVerdict["outcome"]) =>
+    outcome === "pass"
+      ? `passed when LethAL re-ran it under the mutant${replay}`
+      : outcome === "fail"
+        ? `failed instead of timing out when LethAL re-ran it under the mutant at the same budget${replay}`
+        : outcome === "timeout"
+          ? `timed out instead of failing when LethAL re-ran it under the mutant${replay}`
+          : `answered ${outcome} when LethAL re-ran it under the mutant${replay}`;
+  const reproduced = (v: TestVerdict): ReproDecision => ({
+    kind: "reproduced",
+    reproduction: v.failureMessage !== undefined ? { reproducedFailure: v.failureMessage } : {},
+  });
+  const fromNonVerdict = (nv: NonVerdictDecision): ReproDecision => {
+    const note = nv.failureNote ?? "the reproduction ended without a readable answer";
+    // I5: say the row came from the reproduction. Never in front of a strand's note, whose prefix
+    // `--resume` reads (`isStrandedNote`).
+    return error(
+      nv.cause,
+      nv.cause === "stranded" || note.includes(what) ? note : `${what}: ${note}`,
+      nv.transportError,
+    );
+  };
+  const push = (v: TestVerdict, opKind: "single" | "many", ref = v.ref) => {
+    testResultBuffer.push({
+      mutantCode: m.mutantId,
+      ref,
+      outcome: v.outcome,
+      durationMs: v.durationMs,
+      failureMessage: v.failureMessage,
+      opKind,
+      ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+    });
+    feedAttestation(args.attestation, v.attestation);
+  };
+  const classifyCtx = {
+    m,
+    leaseSession,
+    safety: args.safety,
+    quarantineStore: args.quarantineStore,
+    resourceKey: args.resourceKey,
+    nowIso: args.nowIso,
+    what,
+  };
+  const reusedNote = (v: TestVerdict) =>
+    `session-reused ${what}: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the reproduction started, so it did not run in the kill's context; the kill is unconfirmed (R577)`;
+
+  await activateOnce(args.backend, args.safety, m.mutantId);
+
+  if (k === 1) {
+    const r = await singleStep(
+      { backend: args.backend, safety: args.safety, leaseSession, emit: args.emit, resyncOpSeq },
+      killer,
+      { ms: step.testBudgetMs, source: step.testBudgetSource },
+    );
+    push(r.verdict, "single", killer);
+    const nonVerdict = await classifyNonVerdictStep(r, classifyCtx);
+    if (nonVerdict !== null) return fromNonVerdict(nonVerdict);
+    if (sessionWasReused(r.verdict)) return error("session-reused", reusedNote(r.verdict));
+    const want = timedOut ? "timeout" : "fail";
+    return r.verdict.outcome === want
+      ? reproduced(r.verdict)
+      : notReproduced(answered(r.verdict.outcome));
+  }
+
+  const out = await runFencedMany(
+    args.backend,
+    args.safety,
+    {
+      methods: step.chunkPrefix,
+      requestCeilingMs: step.callSettings.requestCeilingMs,
+      stopGraceMs: step.callSettings.stopGraceMs,
+    },
+    leaseSession,
+    args.emit,
+    resyncOpSeq,
+    m.mutantId,
+  );
+  const provenance = {
+    lostAck: out.lostAck,
+    retried: out.retried,
+    ...(out.retryAfter !== undefined ? { retryAfter: out.retryAfter } : {}),
+    ...(out.original !== undefined ? { original: out.original } : {}),
+  };
+  const prefix = step.chunkPrefix;
+  if (out.result.kind === "call") {
+    const { verdict, cause, abortSession, methodIndex } = out.result;
+    const j = Math.min(Math.max(methodIndex, 1), k);
+    push(verdict, "many");
+    const nonVerdict = await classifyNonVerdictStep(
+      {
+        ...provenance,
+        ref: verdict.ref,
+        verdict,
+        testBudgetMs: prefix[j - 1]?.budgetMs ?? 0,
+        testBudgetSource: step.testBudgetSource,
+        groupBudgetMs: step.callSettings.requestCeilingMs + step.callSettings.stopGraceMs,
+        opKind: "many",
+        ...(cause !== undefined ? { cause } : {}),
+        ...(abortSession !== undefined ? { abortSession } : {}),
+        groupPosition: j,
+        chunkPrefix: prefix.slice(0, j),
+        callSettings: step.callSettings,
+      },
+      classifyCtx,
+    );
+    if (nonVerdict !== null) return fromNonVerdict(nonVerdict);
+    if (verdict.outcome === "timeout") {
+      if (j < k) {
+        return notReproduced(
+          `${j}. ${verdict.ref.method} timed out first when LethAL replayed the same ${k} method(s) of its call under the mutant`,
+        );
+      }
+      return timedOut ? reproduced(verdict) : notReproduced(answered("timeout"));
+    }
+    return error(
+      "warm-confirmation-incomplete",
+      `warm-confirmation-incomplete ${what}: the replay answered at call level with outcome ${verdict.outcome}${verdict.failureMessage !== undefined ? ` (${verdict.failureMessage})` : ""}, which reproduces nothing (R577)`,
+    );
+  }
+  const { endedBy, ranCount, verdicts } = out.result;
+  for (const rv of verdicts) push(rv, "many");
+  const reusedIn = verdicts.find(sessionWasReused);
+  if (reusedIn !== undefined) return error("session-reused", reusedNote(reusedIn));
+  if (endedBy === "failure") {
+    const failed = verdicts[ranCount - 1];
+    if (ranCount < k) {
+      return notReproduced(
+        `${ranCount}. ${failed?.ref.method ?? "?"} failed first when LethAL replayed the same ${k} method(s) of its call under the mutant`,
+      );
+    }
+    if (failed !== undefined && ranCount === k && failed.outcome === "fail") {
+      return timedOut ? notReproduced(answered("fail")) : reproduced(failed);
+    }
+  }
+  if (endedBy === "cap") {
+    return error(
+      "warm-confirmation-incomplete",
+      `warm-confirmation-incomplete ${what}: the replay stopped at the server's cap after ${ranCount} of ${k} method(s), before reaching ${killer.method}; the kill is unconfirmed (R577)`,
+    );
+  }
+  if (
+    endedBy === "complete" &&
+    ranCount === k &&
+    verdicts.length === k &&
+    verdicts.every((rv) => rv.outcome === "pass")
+  ) {
+    return notReproduced(answered("pass"));
+  }
+  return error(
+    "warm-confirmation-incomplete",
+    `warm-confirmation-incomplete ${what}: the replay answered ${endedBy} with ${ranCount} of ${k} method(s), which reproduces nothing (R577)`,
+  );
 }
 
 /**
@@ -8293,9 +10004,9 @@ async function classifyNonVerdictStep(
       });
       return { failureNote: note, ...(cause !== undefined ? { cause } : {}), transportError };
     }
-    // Genuine loss: latch `lease-lost`, stop scheduling. The current batch's verdicts are
-    // invalidated at session end (design §6) — NOT here, because earlier mutants of this same
-    // batch were already recorded and only `runSession` can rewrite them. No durable tier
+    // Genuine loss: latch `lease-lost`, stop scheduling. The current batch's stored verdicts are
+    // invalidated by `noteLeaseLost`'s `onLost`, and again in the session's `finally` (design §6,
+    // R508) — not by this function, which sees one mutant only. No durable tier
     // quarantine: a clean lease loss means the container itself is fine.
     const detail = `${ref.method} (mutant ${ctx.m.mutantId}): ${v.failureMessage ?? "RunMutant lease-invalid"}`;
     noteLeaseLostOrThrow(ctx.leaseSession, detail);
@@ -8349,6 +10060,14 @@ async function classifyNonVerdictStep(
     // Layer 5C-B2 (design §5): reaching here means `runFenced` could not turn this run into a
     // readable answer — it already reconciled, and (when the op was proven complete) already
     // spent its one fresh attempt on it. All that is left is which diagnosis to record.
+    if (step.cause === "stop-outcome-unconfirmed") {
+      // R-204b (R202): the op reconciled clean, but LethAL had sent a stop for this run and it was
+      // not refused, so the retry was withheld: whether the stop or the test ended the run is not
+      // established. No verdict, no quarantine; `--resume` re-runs it.
+      note = `stop outcome unconfirmed ${what}: LethAL sent a stop for this run (${v.stopState ?? "unknown"}) and its answer could not be read${v.failureMessage !== undefined ? ` (${v.failureMessage})` : ""}; the operation reconciled ${lostAck}, but a run our stop may have ended is never retried, because a hang need not recur — no verdict (R202). Re-run with --resume`;
+      cause = step.cause;
+      return { failureNote: note, cause, transportError };
+    }
     if (lostAck === "completed") {
       // Phase 3 ran: the op is tombstoned and the container is clean. This mutant's RESULT is
       // genuinely lost (so `error`, never a verdict), but there is nothing to recycle, nothing
@@ -8466,9 +10185,10 @@ async function runMutantsOnBackend(args: {
    * Layer 5C-A Task 8, Task 10 (design §G): this batch's artifact-scoped clean-attestation
    * ledger — shared (by reference) across every worker/shard `runSession` fans this batch's
    * mutants out to, since they all exercise the SAME deployed artifact. Mutated in place: set
-   * `clean = true` the first time any covered run attests cleanly, never reset.
+   * `clean = true` the first time any covered run attests cleanly, never reset. R512: fed only
+   * through `feedAttestation`, which also marks the snapshot in use suspect.
    */
-  readonly attestation: { clean: boolean };
+  readonly attestation: AttestationLedger;
   /**
    * Layer 5C-B1: the session's lease, when it holds one. Present only for an authoritative
    * session configured with `SessionConfig.lease` — the branch that classifies a `lease-lost`
@@ -8483,12 +10203,47 @@ async function runMutantsOnBackend(args: {
   readonly memberCountsByTest: ReadonlyMap<string, number>;
   /** R198: group-run settings, or `undefined` for the sequential loop. */
   readonly groupRuns?: GroupRunSettings | undefined;
-  /** R206 §2.1: session-scoped, shared across batches and shards: the once-only warning flag. */
-  readonly sessionReuse: { warned: boolean };
+  /** R206 §2.1: session-scoped, shared across batches and shards: the once-only warning flag.
+   *  R517 (M-a): `stopWarned`, the same for a reported stop that is not the configured one.
+   *  R534 (D1b): `wordingWarned`, the same for a proven al-runner timeout in unknown wording. */
+  readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
+  /** R514: this batch's baseline came from a stored snapshot (R192), so its durations, and every
+   *  budget derived from them, are from another day. Since R516 every position-1 `timeout` is
+   *  confirmed unmutated with R53's 2x margin on every batch; this field only names the cause of
+   *  an unconfirmed one: `reused-budget-stale` when the budget came from the snapshot, otherwise
+   *  `timeout-unconfirmed`. `undefined` for a baseline measured in this run. */
+  readonly baselineReused: ReusedBaseline | undefined;
 }): Promise<void> {
   const leaseSession = args.leaseSession;
   const resyncOpSeq =
     leaseSession !== undefined ? () => leaseSession.resyncOpSeq(args.backend) : undefined;
+  // R515: per covering test, the largest duration a PASSING timeout confirm measured in this call,
+  // and the mutant whose confirm measured it. Local to the call: each call is one shard on one
+  // worker's backend, so a measurement stays with the tier it was taken on and a slow tier never
+  // raises a fast tier's budgets. It only ever raises a budget (`budgetOf` takes the max with the
+  // baseline's duration); every kill is still judged against the budget its run was SENT.
+  const measuredToday = new Map<string, { readonly ms: number; readonly byMutant: string }>();
+  const budgetOf = (ref: TestMethodRef): TestBudget => {
+    const key = testKeyOf(ref);
+    const baseline = args.baselineDuration.get(key) ?? args.fallbackTimeoutMs;
+    const today = measuredToday.get(key);
+    const durationMs = today !== undefined && today.ms > baseline ? today.ms : baseline;
+    const source: BudgetSource =
+      args.minMutantBudgetMs > 2 * durationMs
+        ? { kind: "floor", durationMs }
+        : today !== undefined && today.ms > baseline
+          ? { kind: "confirm", confirmOf: today.byMutant, durationMs }
+          : { kind: "baseline", durationMs };
+    return { ms: Math.max(2 * durationMs, args.minMutantBudgetMs), source };
+  };
+  const noteMeasured = (ref: TestMethodRef, ms: number, byMutant: string) => {
+    // R516 I1: only where the in-run stop IS the budget. On al-runner `--server` a larger budget
+    // moves no stop, so re-budgeting would only let a later confirm pass the 2x rule.
+    if (args.backend.inRunStopIsBudget !== true) return;
+    const key = testKeyOf(ref);
+    const prev = measuredToday.get(key);
+    if (prev === undefined || ms > prev.ms) measuredToday.set(key, { ms, byMutant });
+  };
   for (const m of args.mutants) {
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
@@ -8537,6 +10292,12 @@ async function runMutantsOnBackend(args: {
      */
     let failureNote: string | undefined;
     let cause: MutantErrorCause | undefined;
+    // R577: set at a kill site when the kill reproduced (`record()`'s `reproduction`).
+    let reproduction: { readonly reproducedFailure?: string } | undefined;
+    // R577 (I4): the FIRST kill that did not reproduce. The covering loop goes on with the mutant
+    // active; a later test that kills and reproduces makes it `killed`, a later error keeps that
+    // error, and a loop that ends with no other verdict records this one.
+    let notReproduced: KillErrorDecision | undefined;
     // Fix round 2, residual 1 (events.ts doc comment): the exact instant the kill-confirmation
     // loop below decides `cause: "unstable"` because a HUB-green test failed on the FENCE is also
     // the exact instant it knows WHICH test disagreed — captured here so the eventual `record()`
@@ -8574,11 +10335,6 @@ async function runMutantsOnBackend(args: {
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
     const ordered = orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
-    const budgetOf = (ref: TestMethodRef) =>
-      Math.max(
-        2 * (args.baselineDuration.get(testKeyOf(ref)) ?? args.fallbackTimeoutMs),
-        args.minMutantBudgetMs,
-      );
     // R198: every method a call REPORTED as run with a mapped pass/fail result. A survivor stands
     // only if this equals the covering set (checked after the loop): a chunking bug that skipped a
     // test must not manufacture a survivor. On the sequential path it is trivially complete.
@@ -8623,9 +10379,7 @@ async function runMutantsOnBackend(args: {
       spent += v.durationMs;
       // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:
       // "none" transport path (the only path that ever attests) — feed the artifact's ledger.
-      if (v.attestation?.observedAny === true && v.attestation.identityMismatch !== true) {
-        args.attestation.clean = true;
-      }
+      feedAttestation(args.attestation, v.attestation);
       // Per-mutant, not just per-artifact: OR-ed across this mutant's covering runs so a survivor
       // can say whether any guarded code ran at all. `undefined` stays `undefined` on a backend
       // that cannot attest — see `MutantOutcome.guardObserved`.
@@ -8640,6 +10394,34 @@ async function runMutantsOnBackend(args: {
         reachAnswered = true;
         if (v.reachedActive) reachedBy.push(qualifiedTestName(ref));
       }
+      // R534 (D1b): al-runner proved it stopped this row at its timeout, in wording LethAL does not
+      // know. Scored `runner-test-error` below; said once per session, so a moved wording is loud.
+      if (v.timeoutWordingUnknown === true && args.sessionReuse.wordingWarned !== true) {
+        args.sessionReuse.wordingWarned = true;
+        args.emit({
+          type: "warning",
+          code: "alrunner-timeout-wording-unrecognised",
+          message: `[lethal] alrunner-timeout-wording-unrecognised: al-runner stopped ${ref.method} (mutant ${m.mutantId}) at its timeout but the row's message is neither known timeout wording (${v.failureMessage ?? "no message"}); such hangs are scored runner-test-error, not timeout-killed, until RUNNER_TIMEOUT_MESSAGE / RUNNER_ONRUN_TIMEOUT_MESSAGE learn it (R534)`,
+        });
+      }
+      // R577: the reproduction, after a kill's confirmation passed; `undefined` with the rule off,
+      // which leaves every kill site exactly as it was.
+      const reproduce = (): Promise<ReproDecision | undefined> =>
+        args.backend.killsMustReproduce === true
+          ? reproduceKill({ args, m, step, leaseSession, resyncOpSeq, testResultBuffer })
+          : Promise.resolve(undefined);
+      // R577: a kill that did not reproduce. `true`: the covering loop goes on (I4).
+      const notKilled = (r: KillErrorDecision): boolean => {
+        if (r.cause === "kill-not-reproduced") {
+          notReproduced ??= r;
+          return true;
+        }
+        verdict = "error";
+        cause = r.cause;
+        failureNote = r.failureNote;
+        if (r.transportError) transportErrorRef = ref;
+        return false;
+      };
       // R206: every non-verdict ending (a lease answer, a lost ack, a group cause, our own
       // deadline, a transport error) is classified by `classifyNonVerdictStep`, the same branches
       // the warm confirmation's replay is classified by. `null` means a real outcome, decided below.
@@ -8673,6 +10455,22 @@ async function runMutantsOnBackend(args: {
           message: `[lethal] session-reuse-observed: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the call for ${ref.method} (mutant ${m.mutantId}) started — this environment hands LethAL sessions other calls have used; a failure or timeout measured in such a session is recorded as \`session-reused\`, never as a kill (R206)`,
         });
       }
+      // R517 (M-a): al-runner enforced a stop other than the --test-timeout it was started with
+      // (a build that ignores the flag). The confirm already judges against the reported one.
+      const configuredStop = args.backend.inRunStopMs;
+      if (
+        v.reportedStopMs !== undefined &&
+        configuredStop !== undefined &&
+        v.reportedStopMs !== configuredStop &&
+        args.sessionReuse.stopWarned !== true
+      ) {
+        args.sessionReuse.stopWarned = true;
+        args.emit({
+          type: "warning",
+          code: "alrunner-stop-mismatch",
+          message: `[lethal] alrunner-stop-mismatch: al-runner reported a ${v.reportedStopMs / 1000}s stop although it was started with --test-timeout ${configuredStop / 1000} (${ref.method}, mutant ${m.mutantId}); a timeout is judged against the stop it reported (R517)`,
+        });
+      }
       if (reused && v.outcome !== "pass") {
         verdict = "error";
         cause = "session-reused";
@@ -8690,6 +10488,12 @@ async function runMutantsOnBackend(args: {
             testResultBuffer,
           });
           if (warm.kind === "confirmed") {
+            const repro = await reproduce();
+            if (repro?.kind === "error") {
+              if (notKilled(repro)) continue;
+              break;
+            }
+            reproduction = repro?.reproduction;
             verdict = "timeout-killed";
             killingTest = ref.method;
             killingTestRef = ref;
@@ -8706,13 +10510,8 @@ async function runMutantsOnBackend(args: {
           }
           break;
         }
-        verdict = "timeout-killed";
-        killingTest = ref.method;
-        killingTestRef = ref;
-        killingTestFailure = v.failureMessage;
-        killPosition = 1;
-        recordKill(args.killLedger, m, ref);
-        break;
+        // R516: every position-1 timeout, fresh batch or reused (R514), falls through to the
+        // unmutated confirm below, on this worker's own backend, instead of being scored here.
       }
       if (v.outcome === "fail" && step.groupPosition > 1) {
         // R206 §2.2: a kill at group position k > 1 was measured WARM. Confirm it by replaying
@@ -8726,6 +10525,12 @@ async function runMutantsOnBackend(args: {
           testResultBuffer,
         });
         if (warm.kind === "confirmed") {
+          const repro = await reproduce();
+          if (repro?.kind === "error") {
+            if (notKilled(repro)) continue;
+            break;
+          }
+          reproduction = repro?.reproduction;
           verdict = "killed";
           killingTest = ref.method;
           killingTestRef = ref;
@@ -8743,7 +10548,17 @@ async function runMutantsOnBackend(args: {
         }
         break;
       }
-      if (v.outcome === "fail") {
+      // The cold kill confirmation: a `fail` at position 1, and (R514, R516) every position-1
+      // `timeout`, the only timeout that reaches here.
+      if (v.outcome === "fail" || v.outcome === "timeout") {
+        const timedOut = v.outcome === "timeout";
+        // R514: an unmutated run has no stop hook (bcdev wires R53's only for a pending mutant), so
+        // an overrun is an abort and a quarantine. A timeout's confirm runs at the baseline's
+        // deadline when that is longer, and judges the duration against the budget the timed-out
+        // run was SENT (`budget`, R516 M2) with R53's 2x margin. With the default floor (above the
+        // baseline deadline) it runs at the budget, and a test slower than that today is abandoned
+        // at that deadline: `in-flight-unknown`, a strand, the tier quarantined; never a kill.
+        const confirmMs = timedOut ? Math.max(budget, args.fallbackTimeoutMs) : budget;
         await activateOnce(args.backend, args.safety, null);
         // Layer 5C-B2: `runFenced` here too — the confirm rerun earns the same single fresh
         // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
@@ -8758,7 +10573,7 @@ async function runMutantsOnBackend(args: {
           args.backend,
           args.safety,
           ref,
-          { coverage: "none", timeoutMs: budget },
+          { coverage: "none", timeoutMs: confirmMs },
           leaseSession,
           args.emit,
           resyncOpSeq,
@@ -8768,7 +10583,7 @@ async function runMutantsOnBackend(args: {
           confirmRetryAfter === "not-started" &&
           confirmOriginal !== undefined &&
           leaseSession !== undefined
-            ? await leaseSession.classifyRetryRefusal(confirmOriginal, budget)
+            ? await leaseSession.classifyRetryRefusal(confirmOriginal, confirmMs)
             : "genuine";
         testResultBuffer.push({
           mutantCode: null,
@@ -8781,12 +10596,7 @@ async function runMutantsOnBackend(args: {
         // Layer 5C-A Task 8, Task 10 (design §G): the kill-confirmation rerun is a
         // null-activation run that ALSO goes through the coverage:"none" transport path (see
         // the covering-run feed above) — it attests too, so it must feed the same ledger.
-        if (
-          confirm.attestation?.observedAny === true &&
-          confirm.attestation.identityMismatch !== true
-        ) {
-          args.attestation.clean = true;
-        }
+        feedAttestation(args.attestation, confirm.attestation);
         const confirmLease = classifyLeaseVerdict(confirm);
         if (confirmLease !== "none") {
           // Same design §5/§6 split as the covering run above, applied to the confirmation rerun:
@@ -8868,7 +10678,68 @@ async function runMutantsOnBackend(args: {
           cause = "session-reused";
           failureNote = `session-reused confirming ${ref.method}: the server reported ${confirm.testRunsBefore} test method(s) had already run in session ${confirm.sessionId ?? "?"} before the confirmation started, so the killer was not re-run cold; the kill is unconfirmed (R206)`;
         } else if (confirm.outcome === "pass") {
-          verdict = "killed";
+          // R515: a passing timeout confirm measured the test on this worker's backend today;
+          // later mutants of this call are budgeted from it. Recorded BEFORE the judgement below,
+          // which must therefore read the budget the timed-out run was SENT (`budget`), never a
+          // recomputed one (R516 M2): recomputed now, it would already include this measurement.
+          if (timedOut) noteMeasured(ref, confirm.durationMs, m.mutantId);
+          // R517: the stop the run really enforced. al-runner reports it on its timeout row;
+          // `--server` (which declares `inRunStopMs`) must, or the timeout stays unconfirmed.
+          // bcdev reports none and declares none: the stop is the budget, as before.
+          const reported = v.reportedStopMs;
+          const stopUnreported = args.backend.inRunStopMs !== undefined && reported === undefined;
+          const stopMs = Math.min(
+            budget,
+            reported ?? Number.POSITIVE_INFINITY,
+            args.backend.inRunStopMs ?? Number.POSITIVE_INFINITY,
+          );
+          // The test's own duration, on the stop's clock (al-runner's per-test figure, not the
+          // suite's or the process's wall clock); bcdev's is its wall clock. R534 (I1): only when
+          // the stop fired in the test BODY. An OnRun-trigger timeout, or one that does not say
+          // where it fired, is judged on the wall clock, which includes the OnRun (no pass row
+          // reports its time): fail-closed, it can only over-state the unmutated run.
+          const confirmMs =
+            v.timeoutIn === "body"
+              ? (confirm.measuredDurationMs ?? confirm.durationMs)
+              : confirm.durationMs;
+          if (timedOut && (stopUnreported || 2 * confirmMs > stopMs)) {
+            // R514, R516: the test passes unmutated but takes more than half the stop it ran
+            // under, so a budget measured now would be larger: the timeout is not the mutant's. The
+            // cause follows where that budget came from (I3 c).
+            verdict = "error";
+            const source = step.testBudgetSource;
+            const judged = { confirmMs, wallMs: confirm.durationMs, stopMs };
+            // R517: the in-run stop failed it, not the budget: a re-measured baseline would not
+            // help, so never `reused-budget-stale`.
+            const stopBound = stopMs < budget && 2 * confirmMs <= budget;
+            if (stopUnreported) {
+              cause = "timeout-unconfirmed";
+              failureNote = `timeout-unconfirmed ${ref.method}: timed out at position 1 under the mutant, but al-runner did not say which stop it enforced (its row has no "Test exceeded <N>s timeout."), so the timeout cannot be weighed against the ${confirmMs} ms the test took unmutated and is not attributed to the mutant (R517)`;
+            } else if (
+              args.baselineReused !== undefined &&
+              source.kind !== "confirm" &&
+              !stopBound
+            ) {
+              cause = "reused-budget-stale";
+              failureNote = `reused-budget-stale ${ref.method}: completed unmutated in ${durationsText(judged)}, more than half the ${stopText(stopMs, budget, `set from run ${args.baselineReused.runId}'s reused baseline (R192)`)}, so the timeout at position 1 is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`;
+            } else {
+              cause = "timeout-unconfirmed";
+              failureNote = timeoutUnconfirmedNote(ref.method, judged, budget, source);
+            }
+            if (v.timeoutIn === "onrun") {
+              failureNote = `${failureNote ?? ""} The stop fired in the test codeunit's OnRun trigger, and al-runner does not report the OnRun's own time, so the confirm's wall clock was judged; it includes the OnRun and, on one-shot, the compile (R534).`;
+            }
+            break;
+          }
+          // R577: the kill must reproduce under the mutant, at the budget `v` was sent, before it
+          // is a kill and before R197's ledger learns from it.
+          const repro = await reproduce();
+          if (repro?.kind === "error") {
+            if (notKilled(repro)) continue;
+            break;
+          }
+          reproduction = repro?.reproduction;
+          verdict = timedOut ? "timeout-killed" : "killed";
           killingTest = ref.method;
           killingTestRef = ref;
           killPosition = 1;
@@ -8918,6 +10789,14 @@ async function runMutantsOnBackend(args: {
         }
         break;
       }
+    }
+    // R577 (I4): the loop ended with no other verdict after a kill that did not reproduce, so the
+    // mutant is that error, never `survived`. Before R198's check below, which guards survivors
+    // only: a group timeout's earlier methods are never in `attempted`, and this is no survivor.
+    if (verdict === "survived" && notReproduced !== undefined) {
+      verdict = "error";
+      cause = notReproduced.cause;
+      failureNote = notReproduced.failureNote;
     }
     // R198: a survivor is a mutant EVERY covering test ran against. On the group path a chunking
     // bug could skip tests and still answer all-pass; on the sequential path the set is complete
@@ -8969,6 +10848,7 @@ async function runMutantsOnBackend(args: {
       killPosition,
       reach,
       killingTestRef,
+      reproduction,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -9137,6 +11017,43 @@ function isToolResourcePath(rel: string): boolean {
 }
 
 /**
+ * A project file the batch copies as a RESOURCE: not `.al`, not an already-built `.app`, not an
+ * `app.json`, not under a tool directory (`isToolResourcePath`). The run's own output files are
+ * the caller's to exclude, by exact path. R505: the source-drift watch reads the same set, so the
+ * guard and the batch agree on which files are build inputs.
+ */
+export function isProjectResource(rel: string): boolean {
+  const lower = rel.toLowerCase();
+  if (lower.endsWith(".al") || lower.endsWith(".app")) return false;
+  if (basename(lower) === "app.json") return false;
+  return !isToolResourcePath(rel);
+}
+
+/**
+ * R219: THE flat-name map of a batch, over the project's `.al` files as the batch copies them.
+ * Every writer of one batch takes this one instance: `writeInstrumentedProject`'s `flatNames` and
+ * `prepareBatchProject`'s last argument. Two maps over different file lists would name a duplicate
+ * two ways, and alc would see one file twice (sol run 001, `compile-only.ts`).
+ */
+export async function batchFlatNames(
+  projectDir: string,
+  source?: ReadonlyMap<string, Buffer>,
+): Promise<FlatNames> {
+  return flatNamesFor(await batchAlFiles(projectDir, source));
+}
+
+/** The target's `.al` files a batch directory holds: the generation snapshot's when given (C02-06),
+ *  else `targetAlFiles`. R219: also the list every flat name is decided over. */
+async function batchAlFiles(
+  projectDir: string,
+  source: ReadonlyMap<string, Buffer> | undefined,
+): Promise<readonly string[]> {
+  return source !== undefined
+    ? [...source.keys()].filter((rel) => rel.toLowerCase().endsWith(".al"))
+    : await targetAlFiles(projectDir);
+}
+
+/**
  * Spec §5: the instrumented app must keep the target app's id, carry the
  * per-artifact version reserved via `reserveAppVersion` (app-version.ts —
  * clock-derived, monotonic across runs with no stored counter; the old
@@ -9165,6 +11082,8 @@ export async function prepareBatchProject(
   appVersion: string,
   source?: ReadonlyMap<string, Buffer>,
   excludeOutputs: readonly string[] = [],
+  /** R219: the map `writeInstrumentedProject` named its files by; built here when absent. */
+  flatNamesIn?: FlatNames,
 ): Promise<readonly AppJsonPathChange[]> {
   const pathChanges = await writeStampedAppJson(batchDir, projectManifest, appVersion);
   // R363: the run's own output files (the results database and its sidecars, `--out`,
@@ -9179,35 +11098,31 @@ export async function prepareBatchProject(
   // landed in a different batch, or that have no mutable sites at all) so
   // the batch dir holds the FULL project alc needs to compile.
   //
-  // The flattening to `basename` is dictated by `writeInstrumentedProject`, which writes its
-  // emissions that way. It makes two same-named files in different folders collide, and the
-  // `pathExists` skip below — there to leave an instrumented emission alone — would silently
-  // swallow the second one, dropping an AL object from the published app with no diagnostic.
-  // So collisions are detected here on the SOURCE paths, independently of what is already on
-  // disk, and refused loudly. (Continia Document Output has 551 distinct basenames across 551
-  // files, so the flattening survives there — by luck, not by design.)
+  // The flattening is dictated by `writeInstrumentedProject`, which writes its emissions that way,
+  // and the `pathExists` skip below is there to leave such an emission alone. R219: two same-named
+  // files in different folders get distinct flat names (`flatNamesFor`, the one map both writers
+  // use), so neither replaces the other; before, this refused the project (Continia Document
+  // Capture: two `ScannerUI.al`). The map still refuses a name it cannot make unique.
   // C02-06: the `.al` set and bytes come from `source`, the snapshot generation hashed and parsed,
   // so every batch compiles exactly the recorded bytes whatever happens on disk meanwhile. Without
   // one, `targetAlFiles`, which `hashTargetSource` enumerates too.
-  const alFiles =
-    source !== undefined
-      ? [...source.keys()].filter((rel) => rel.toLowerCase().endsWith(".al"))
-      : await targetAlFiles(projectDir);
-  const alBySeenBasename = new Map<string, string>();
+  const alFiles = await batchAlFiles(projectDir, source);
+  const flatNames = flatNamesIn ?? flatNamesFor(alFiles);
   for (const rel of alFiles) {
-    const base = basename(rel);
-    const previous = alBySeenBasename.get(base.toLowerCase());
-    if (previous !== undefined) {
-      throw new Error(
-        `cannot build the batch project: two source files share the basename "${base}" (${previous} and ${rel}). Instrumented files are written flat, so one would silently replace the other and its AL objects would be missing from the published app. Rename one of them.`,
-      );
-    }
-    alBySeenBasename.set(base.toLowerCase(), rel);
-    const dest = join(batchDir, base);
+    const dest = join(batchDir, flatNames.flatOf(rel));
     if (await pathExists(dest)) continue;
     if (source !== undefined) await writeFile(dest, snapshotBytes(source, rel));
     else await copyFile(join(projectDir, rel), dest);
   }
+  // R219 (sol run 001): `FLAT_NAMES_FILENAME` at the batch root is LethAL's, so a project resource
+  // that would land there, copied as it is or rebased, is refused rather than overwriting it or
+  // being overwritten. The record itself is written last, below.
+  const reserved = FLAT_NAMES_FILENAME.toLowerCase();
+  const refuseReserved = (rel: string): never => {
+    throw new Error(
+      `cannot build the batch project: the project resource "${rel}" would be written to the batch directory as "${FLAT_NAMES_FILENAME}", a name LethAL reserves for its record of renamed .al files (R219). Rename the resource.`,
+    );
+  };
 
   // Every directory that holds at least one `.al` file. A resource named relative to an AL file is
   // named relative to ITS directory, and the `.al` files above were just flattened onto the batch
@@ -9238,10 +11153,9 @@ export async function prepareBatchProject(
     if (!entry.isFile()) continue;
     const rel = relative(projectDir, join(entry.parentPath, entry.name));
     const lower = rel.toLowerCase();
-    if (lower.endsWith(".al") || lower.endsWith(".app")) continue;
-    if (basename(lower) === "app.json") continue;
-    if (isToolResourcePath(rel)) continue;
+    if (!isProjectResource(rel)) continue;
     if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
+    if (lower.replaceAll("\\", "/") === reserved) refuseReserved(rel);
     const dest = join(batchDir, rel);
     await mkdir(dirname(dest), { recursive: true });
     await copyFile(join(projectDir, rel), dest);
@@ -9253,6 +11167,7 @@ export async function prepareBatchProject(
     const tail = relative(owner, rel);
     if (join(batchDir, tail) === dest) continue;
     const key = tail.toLowerCase();
+    if (key.replaceAll("\\", "/") === reserved) refuseReserved(rel);
     const group = rebased.get(key) ?? { tail, owners: [] };
     group.owners.push(rel);
     rebased.set(key, group);
@@ -9277,11 +11192,13 @@ export async function prepareBatchProject(
     await mkdir(dirname(rebasedDest), { recursive: true });
     await copyFile(join(projectDir, only), rebasedDest);
   }
+  const sidecar = flatNamesSidecar(flatNames.renamed);
+  if (sidecar !== undefined) await writeFile(join(batchDir, FLAT_NAMES_FILENAME), sidecar);
   return pathChanges;
 }
 
 /** R363: one comparable form of a path. Windows paths compare case-insensitively. */
-function outputPathKey(p: string): string {
+export function outputPathKey(p: string): string {
   const r = resolve(p);
   return process.platform === "win32" ? r.toLowerCase() : r;
 }
@@ -9628,6 +11545,9 @@ function replayCarriedBatch(
       prior.killingTestFailure,
       prior.unplaceable,
       prior.killPosition,
+      undefined, // reach
+      undefined, // killingTestRef
+      carriedReproduction(prior),
     );
   }
   emit({
@@ -9644,6 +11564,14 @@ function replayCarriedBatch(
     unplaceableCount: unplaceable.length,
     unplaceableMutants: unplaceable.sort(),
   });
+}
+
+/** R577: `record()`'s `reproduction` argument for a carried verdict: its prior row's, unchanged. */
+function carriedReproduction(
+  c: CarriedVerdict,
+): { readonly reproducedFailure?: string } | undefined {
+  if (c.killReproduced !== true) return undefined;
+  return c.reproducedFailure !== undefined ? { reproducedFailure: c.reproducedFailure } : {};
 }
 
 export function record(
@@ -9724,8 +11652,21 @@ export function record(
   // `--resume`'s replays, which carry no ref. `SessionOutcome`-only: NOT written to the store and
   // NOT put on `mutant-scored`/`mutant-carried`, so no event or report field moves.
   killingTestRef?: TestMethodRef,
+  // R577: present iff the kill REPRODUCED under the mutant (`MutantOutcome.killReproduced`), with
+  // the reproduction's own text when it had one. Passed by the covering loop's kill sites when the
+  // backend has the rule on, and by the two resume replays, which carry a prior row's unchanged.
+  reproduction?: { readonly reproducedFailure?: string },
 ): number {
   const key = identityKeyOf(m);
+  const reproduced =
+    reproduction !== undefined
+      ? {
+          killReproduced: true as const,
+          ...(reproduction.reproducedFailure !== undefined
+            ? { reproducedFailure: reproduction.reproducedFailure }
+            : {}),
+        }
+      : {};
   const mutantRowId = store.recordMutant(runId, {
     mutantCode: m.mutantId,
     astHash: key.astHash,
@@ -9743,6 +11684,7 @@ export function record(
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(killPosition !== undefined ? { killPosition } : {}),
+    ...reproduced,
     ...(runner !== undefined ? { runner } : {}),
     // R192: always written, `[]` included — an explicit empty list is "no test ran this", while
     // NULL (a pre-R192 row) is "unknown", and `batchCarriesEntirely` refuses to skip on unknown.
@@ -9773,6 +11715,7 @@ export function record(
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(killPosition !== undefined ? { killPosition } : {}),
+    ...reproduced,
     ...(cause !== undefined ? { cause } : {}),
     ...(runner !== undefined ? { runner } : {}),
   });
@@ -9793,6 +11736,7 @@ export function record(
       ...(failureNote !== undefined ? { failureNote } : {}),
       ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
       ...(killPosition !== undefined ? { killPosition } : {}),
+      ...reproduced,
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
       ...(runner !== undefined ? { runner } : {}),
@@ -9815,6 +11759,7 @@ export function record(
       ...(failureNote !== undefined ? { failureNote } : {}),
       ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
       ...(killPosition !== undefined ? { killPosition } : {}),
+      ...reproduced,
       ...(cause !== undefined ? { cause } : {}),
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),

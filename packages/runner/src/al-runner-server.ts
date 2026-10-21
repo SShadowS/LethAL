@@ -63,6 +63,8 @@
  *   (measured on 2.11.0, R319); the symbols are start-time flags, see the constructor.
  */
 
+import { type AlRunnerCompileEntry, compileEntriesOf } from "./al-runner-transport";
+
 /** The subset of a spawned process this client uses, so tests can supply one without a binary. */
 export interface ServerProcessHandle {
   write(line: string): void;
@@ -87,7 +89,11 @@ export interface ServerProcessHandle {
   wait?(): Promise<unknown>;
 }
 
-export type ServerSpawnFn = (argv: readonly string[]) => ServerProcessHandle;
+/** `cwd` is used by R407's frame probe only; the session's daemon inherits LethAL's cwd. */
+export type ServerSpawnFn = (
+  argv: readonly string[],
+  opts?: { readonly cwd?: string },
+) => ServerProcessHandle;
 
 /** One test as the server streams it. */
 export interface ServerTestLine {
@@ -117,10 +123,17 @@ export interface ServerPerTestCoverage {
 }
 
 export interface ServerRunResult {
+  /** Each row's `name` is `Codeunit<id>.<CLR method>`: BC's C# name for the AL method
+   *  (`alRunnerMethodName`, R557), the same name `qualifiedTestName` builds. */
   readonly tests: readonly ServerTestLine[];
   readonly perTestCoverage: readonly ServerPerTestCoverage[];
+  /** The summary's own exit code, -1 when it carried none. R557 (I1): a missing row stops the
+   *  session only when this is 0 or 1 and every row is a pass or fail run row. */
   readonly exitCode: number;
   readonly total: number;
+  /** R583: the summary's `compilationErrors`. On 069cbf32 a bundle that lost objects to AL0666
+   *  still streams `pass` rows beside these, with `exitCode` 3. */
+  readonly compilationErrors: readonly AlRunnerCompileEntry[];
 }
 
 export interface ServerRunRequest {
@@ -240,14 +253,24 @@ export class AlRunnerServer {
    * once for a clean Cecil load; the child inherits the same stdio, so the readiness line still
    * arrives on the same pipe — just later". Measured at 2.4 s on a warm machine, but a first run
    * that provisions artifacts is minutes.
+   *
+   * R517: `testTimeoutSeconds` is sent as `--test-timeout N`, the daemon's one in-run stop for its
+   * life (a `runTests` request cannot carry one; the flag beats an inherited
+   * `AL_RUNNER_TEST_TIMEOUT_SEC`, measured on 43f76177). Absent: al-runner's own 60 s default.
+   * `AlRunnerBackend` never starts one without it.
    */
-  async start(readinessDeadlineMs: number, packagePaths: readonly string[] = []): Promise<void> {
+  async start(
+    readinessDeadlineMs: number,
+    packagePaths: readonly string[] = [],
+    testTimeoutSeconds?: number,
+  ): Promise<void> {
     if (this.proc !== undefined) return;
     const argv = [
       this.alRunnerPath,
       "--server",
       ...packagePaths.flatMap((p) => ["--package-cache", p]),
       ...this.preprocessorSymbols.flatMap((sym) => ["--define", sym]),
+      ...(testTimeoutSeconds !== undefined ? ["--test-timeout", String(testTimeoutSeconds)] : []),
     ];
     const proc = this.spawn(argv);
     this.proc = proc;
@@ -381,6 +404,7 @@ export class AlRunnerServer {
         perTestCoverage: rawPtc as readonly ServerPerTestCoverage[],
         exitCode: typeof msg.exitCode === "number" ? msg.exitCode : -1,
         total: typeof msg.total === "number" ? msg.total : tests.length,
+        compilationErrors: compileEntriesOf(msg.compilationErrors),
       };
     }
   }

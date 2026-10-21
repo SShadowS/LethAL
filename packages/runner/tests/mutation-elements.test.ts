@@ -296,7 +296,7 @@ describe("R184: refusals are carried as Ignored rather than dropped silently", (
     const entry = files["src/X.Codeunit.al"]?.mutants[0];
     expect(entry?.mutatorName).toBe("hang-refused");
     expect(entry?.description).toBe(
-      "2 mutation site(s) in this codeunit write a variable an enclosing loop's condition reads, so LethAL made no mutant there (hang-refused, R196). They are unmeasured, not tested.",
+      "2 mutation site(s) in this codeunit could hang the run if mutated: each writes a variable an enclosing loop's condition reads (R196), or is code of an unbounded report data item or a bounded item's only bound (R487/R501). LethAL made no mutant there (hang-refused). They are unmeasured, not tested.",
     );
   });
 

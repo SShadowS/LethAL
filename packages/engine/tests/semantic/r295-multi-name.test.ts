@@ -117,8 +117,8 @@ describe("R295: every name of a multi-name declaration is declared", () => {
   });
 
   describe("triggerLocalNames: a later name blocks the fallback to a global", () => {
-    // Trigger locals are deliberately UNTYPED for type resolution (R330), so the prescribed answer
-    // is null. Missing B fell through to the global's Text.
+    // R340: a plain trigger local is typed by its own declaration (B: Integer, from `A, B: Integer`),
+    // a `#if` one stays unknown (R330). Missing B fell through to the global's Text.
     const src = (header: string) => `codeunit 50100 "R"
 {
     trigger OnRun()
@@ -132,7 +132,7 @@ ${header}
 }
 `;
     it("in a plain var section", () => {
-      expect(typeAt(src("    var\n        A, B: Integer;"), "B")).toBeNull();
+      expect(typeAt(src("    var\n        A, B: Integer;"), "B")).toBe("Integer");
     });
     it("in a #if var section", () => {
       const header = "#if not CLEAN27\n    var\n        A, B: Integer;\n#endif";

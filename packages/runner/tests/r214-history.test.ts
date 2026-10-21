@@ -1,5 +1,5 @@
 import { afterAll, test as bunTest, describe, expect } from "bun:test";
-import { cp, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -16,6 +16,8 @@ import { runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
 import { ResultsStore } from "../src/store";
+import { servesTestApp } from "./helpers/proven-test-app";
+import { removeScratchDir } from "./helpers/scratch";
 
 // R214 Task 8: history, resume and marks apply only between runs built under the IDENTICAL
 // effective symbol set (C1), and the scheme N-1 to N transition on the same-text key (I4).
@@ -58,6 +60,10 @@ const selectorIds = { selectorId: 79647, controlId: 79648, tableId: 79649 };
 /** Every test passes, so every covered mutant survives; the baseline covers `Rate`. */
 class SurvivingBackend implements ExecutionBackend {
   private active: string | null = null;
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
     return CAPS;
   }
@@ -96,10 +102,10 @@ afterAll(async () => {
   // path was never recorded. The sweep is safe: scripts/test-preload.ts points tmpdir() at a
   // folder private to this bun process, so it cannot touch another session's files.
   await Promise.allSettled(inflight);
-  for (const r of roots) await rm(r, { recursive: true, force: true });
+  for (const r of roots) removeScratchDir(r);
   const tmp = tmpdir();
   for (const e of await readdir(tmp))
-    if (e.startsWith("lethal-r214-hist-")) await rm(join(tmp, e), { recursive: true, force: true });
+    if (e.startsWith("lethal-r214-hist-")) removeScratchDir(join(tmp, e));
   // 30 s: must outlast the 15 s per-test guard. Bun gives a hook only 5 s by default, and the wait
   // above can last as long as a starved test body still has to run; if the hook timed out, the rm
   // and the sweep would never run and the folders would leak.
@@ -470,6 +476,70 @@ describe("R214: a current-scheme row with no recorded symbols (NULL) never match
         `--resume-run ${runId} was built with preprocessor symbols \\(not recorded\\).*\\(none\\).*R214`,
       ),
     );
+  });
+
+  // R256: a run built WITH symbols before C02-06 has a symbol-blind digest, so a no-symbol run
+  // computes the same one and `--resume last` FINDS it. The provenance check must still refuse it.
+  async function legacySymbolRun() {
+    const dirs = await makeSymbolsProject();
+    const store = new ResultsStore(":memory:");
+    const run = (symbols: string[]) =>
+      runSession({
+        backend: new SurvivingBackend(),
+        store,
+        ...dirs,
+        selectorIds,
+        preprocessorSymbols: symbols,
+      });
+    await run([]); // finished: only its fingerprint is read
+    await run(["LETHALA"]);
+    const rows = store.db.query("SELECT id, config_fingerprint FROM runs ORDER BY id").all() as {
+      id: number;
+      config_fingerprint: string;
+    }[];
+    const [plain, withSymbols] = rows;
+    if (plain === undefined || withSymbols === undefined) throw new Error("two runs expected");
+    expect(withSymbols.config_fingerprint).not.toBe(plain.config_fingerprint);
+    return { dirs, store, plain, withSymbols };
+  }
+
+  test("R256: --resume last finds a legacy symbol run by its symbol-blind digest and refuses it by name", async () => {
+    const { dirs, store, plain, withSymbols } = await legacySymbolRun();
+    store.db.run(
+      "UPDATE runs SET config_fingerprint = ?, build_symbols = NULL, finished_at = NULL WHERE id = ?",
+      [plain.config_fingerprint, withSymbols.id],
+    );
+    await expect(
+      runSession({
+        backend: new SurvivingBackend(),
+        store,
+        ...dirs,
+        selectorIds,
+        preprocessorSymbols: [],
+        resume: "last",
+      }),
+    ).rejects.toThrow(
+      new RegExp(
+        `--resume: run ${withSymbols.id} was built with preprocessor symbols \\(not recorded\\).*\\(none\\).*R214`,
+      ),
+    );
+  });
+
+  test("R256 control: the same row with [] recorded resumes (the digest match is real)", async () => {
+    const { dirs, store, plain, withSymbols } = await legacySymbolRun();
+    store.db.run(
+      "UPDATE runs SET config_fingerprint = ?, build_symbols = '[]', finished_at = NULL WHERE id = ?",
+      [plain.config_fingerprint, withSymbols.id],
+    );
+    const report = await runSession({
+      backend: new SurvivingBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      preprocessorSymbols: [],
+      resume: "last",
+    });
+    expect(report.resumedFrom?.runId).toBe(withSymbols.id);
   });
 
   test("--resume-run control: the same row with [] recorded resumes", async () => {

@@ -15,6 +15,7 @@ import { refusalLine } from "../src/cli";
 import { firstCallOnly, runSession } from "../src/orchestrator";
 import { StaleTestAppError, TestAppChangedError } from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
+import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -86,6 +87,7 @@ async function makeProject(opts: { secondFile?: boolean } = {}) {
   }
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), TEST_AL);
+  await Bun.write(join(testDir, "app.json"), testAppJson());
   return { root, projectDir, testDir, instrumentedDir };
 }
 
@@ -109,6 +111,10 @@ class R461Backend implements ExecutionBackend {
   plainSeen: Array<{ files: string[]; al: string }> = [];
   private activations: Array<string | null> = [];
   private readonly compiler: ArtifactCompiler;
+  // R495: a served test app, installed, so the run's identity is proven (as a real bcdev's is).
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
 
   constructor(
     outputDir: string,

@@ -22,7 +22,11 @@ import { hashPackage } from "../src/baseline-snapshot";
 import { BcDevMcpBackend, PublishFailedError } from "../src/bcdev-backend";
 import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
-import { CONTROL_APP_ID, HarnessVerificationError } from "../src/harness";
+import {
+  CONTROL_APP_ID,
+  HarnessVerificationError,
+  UnfilteredExtensionsQueryError,
+} from "../src/harness";
 import type { HarnessVerifier } from "../src/harness";
 import type { Lease } from "../src/lease";
 import { type LineMap, type RenamedMemberNames, coverageRefusedObjects } from "../src/line-map";
@@ -30,7 +34,7 @@ import { requiresUnsafeLatch } from "../src/operation-outcome";
 import type { LeaseFence } from "../src/orchestrator";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
-import { RunMutantTransport } from "../src/run-mutant-transport";
+import { type ControlState, RunMutantTransport } from "../src/run-mutant-transport";
 import { buildCoverageIndex, coverageFilter } from "../src/selection";
 import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
 import { scratchDirs } from "./helpers/scratch";
@@ -366,7 +370,12 @@ async function makeBackendWithDeploy(
   runHandler: (args: unknown) => unknown,
   symbolReference: unknown,
   instrumentedDir?: string,
-  runMutantTransportFactory?: (targetAppId: string, artifactId: string) => RunMutantTransport,
+  runMutantTransportFactory?: (
+    targetAppId: string,
+    artifactId: string,
+    controlState: ControlState,
+  ) => RunMutantTransport,
+  buildSymbols?: readonly string[],
 ): Promise<{
   backend: BcDevMcpBackend;
   artifact: CompiledArtifact;
@@ -397,6 +406,7 @@ async function makeBackendWithDeploy(
     makeDeployment(outputDir, symbolReference),
     runMutantTransportFactory,
   );
+  if (buildSymbols !== undefined) backend.useBuildSymbols(buildSymbols);
   const artifact = await backend.deploy(deployDir);
   return {
     backend,
@@ -478,9 +488,9 @@ describe("BcDevMcpBackend.attach", () => {
       },
       () => clientTransport,
       deployment,
-      (appId, artifactId) => {
+      (appId, artifactId, controlState) => {
         factoryCalls.push([appId, artifactId]);
-        return {} as RunMutantTransport;
+        return { controlState } as unknown as RunMutantTransport;
       },
     );
     const bound = {
@@ -559,6 +569,41 @@ codeunit 70000 "Some Codeunit"
       }
     });
   }
+
+  // R497: the installed path hands the build's symbols to the line map too. With them the same
+  // one-arm file (compiled under no symbols) is admitted; without them it is refused as above.
+  test("R497: attach (fenced) with the build's symbols admits the wrapped object, nothing refused", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const s = await attachSetup({
+      coverageMode: "fenced",
+      alSources: [
+        {
+          path: "src/Some.Codeunit.al",
+          text: `namespace X;
+#if not CLEAN27
+codeunit 70000 "Some Codeunit"
+{
+    procedure Post()
+    begin
+    end;
+}
+#endif
+`,
+        },
+      ],
+    });
+    try {
+      s.backend.useBuildSymbols([]);
+      warn.mockClear();
+      await s.backend.attach(s.bound);
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((x) => x.includes("coverage refused"))).toEqual([]);
+      expect(await s.backend.coverageRefusals()).toEqual(new Map());
+    } finally {
+      warn.mockRestore();
+      await s.cleanup();
+    }
+  });
 
   // R318 review I1: the in-memory path names a renamed member from the VERIFIED manifest's
   // coverage names, as `buildLineMap` does from the manifest on disk. The source re-parses with an
@@ -678,6 +723,10 @@ codeunit 70000 "Some Codeunit"
 });
 
 describe("BcDevMcpBackend.run", () => {
+  test("R577: the kill-reproduction rule stays OFF on bcdev until R582", () => {
+    expect("killsMustReproduce" in makeBackend(() => ({}))).toBe(false);
+  });
+
   test("maps a passing result and resolves procedure coverage from the compiled app", async () => {
     const { backend, cleanup } = await makeBackendWithDeploy(
       () => ({
@@ -2051,7 +2100,7 @@ function capturingRunMutantFactory(
     };
     return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
   }) as typeof fetch;
-  return (targetAppId: string, artifactId: string) =>
+  return (targetAppId: string, artifactId: string, controlState: ControlState) =>
     new RunMutantTransport(
       {
         baseUrl: "http://bc:7048/BC",
@@ -2063,6 +2112,7 @@ function capturingRunMutantFactory(
       targetAppId,
       artifactId,
       captureFetch,
+      { controlState },
     );
 }
 
@@ -2195,7 +2245,7 @@ function leaseInvalidRunMutantFactory(reason?: string) {
     };
     return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
   }) as typeof fetch;
-  return (targetAppId: string, artifactId: string) =>
+  return (targetAppId: string, artifactId: string, controlState: ControlState) =>
     new RunMutantTransport(
       {
         baseUrl: "http://bc:7048/BC",
@@ -2207,6 +2257,7 @@ function leaseInvalidRunMutantFactory(reason?: string) {
       targetAppId,
       artifactId,
       fetchFn,
+      { controlState },
     );
 }
 
@@ -2406,12 +2457,13 @@ describe('coverageMode "fenced" (R58)', () => {
       };
       return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -2524,12 +2576,13 @@ describe('coverageMode "fenced" (R58)', () => {
         };
         return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
       }) as typeof fetch;
-      return (targetAppId: string, artifactId: string) =>
+      return (targetAppId: string, artifactId: string, controlState: ControlState) =>
         new HookSpyTransport(
           { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
           targetAppId,
           artifactId,
           okFetch,
+          { controlState },
         );
     }
 
@@ -2785,12 +2838,13 @@ describe("fenced coverage — the server-side object-id filter", () => {
       };
       return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -2942,12 +2996,13 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
       };
       return new Response(JSON.stringify({ value: JSON.stringify(payload) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -3118,12 +3173,13 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
       };
       return new Response(JSON.stringify({ value: JSON.stringify(payload) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -3132,6 +3188,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
     extraFiles: Record<string, string> = {},
     tables: readonly { Id: number; Name: string }[] = [],
     codeunits: readonly { Id: number; Name: string }[] = [],
+    symbols?: readonly string[],
   ): Promise<{
     backend: BcDevMcpBackend;
     cleanup: () => Promise<void>;
@@ -3166,6 +3223,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
       }),
       factory(coverage),
     );
+    if (symbols !== undefined) backend.useBuildSymbols(symbols);
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
     await backend.activate(null);
@@ -3179,6 +3237,42 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
   }
 
   const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
+
+  // R497: the SAME two-arm file (`#if CLEAN27` / `#else`, the E1 shape) with the build's symbols
+  // handed over: `#else` is compiled, so its rows name `AElse`, at H1a's base (1), and nothing is
+  // refused. Revert direction: without the handover (the test above) the rows yield nothing.
+  test("R497: with the build's symbols the measured two-arm shape is scored, compiled arm only", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const row = (lineNo: number) => ({ objectType: 5, objectId: 50103, lineNo, hits: 1 });
+    // The `#else` arm's `AElse` spans file lines 15-21 of TWO_ARM; base 1, so line 19 is `L := 1`.
+    const { backend, cleanup } = await deployed([row(19)], {}, [], [], []);
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50103, procedure: "AElse" },
+      ]);
+      expect(await backend.coverageRefusals()).toEqual(new Map());
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  // R497 A2: whatever the line map refuses reaches selection through `coverageRefusals()`.
+  test("R497 A2: coverageRefusals() is the line map's whole refused set", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed([]);
+    try {
+      expect([...(await backend.coverageRefusals()).entries()]).toEqual([
+        ["codeunit:50103", REFUSED.replace("[lethal] ", "")],
+      ]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
 
   test("rows for the wrapped object yield NO entry of any grain; the plain object's are named", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
@@ -3245,6 +3339,7 @@ table 50110 "Wrapped T"
         Object.entries({ ...files, "B2.Codeunit.al": TWO_ARM, "Other.Codeunit.al": PLAIN }).map(
           ([path, text]) => ({ path, root: wrapRoot(parseAL(text)) }),
         ),
+        "bcdev",
       );
       const other = { codeunitId: 50140, codeunitName: "Tests", method: "U" };
       const index = buildCoverageIndex([
@@ -3528,7 +3623,7 @@ table 50110 "Wrapped T"
   };
   const hubRef = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
 
-  async function hub(covered: unknown[]) {
+  async function hub(covered: unknown[], buildSymbols?: readonly string[]) {
     const dir = scratch("lethal-r298-hub-");
     await Bun.write(join(dir, "W.Table.al"), WRAPPED);
     await Bun.write(join(dir, "Other.Codeunit.al"), PLAIN);
@@ -3539,6 +3634,8 @@ table 50110 "Wrapped T"
       }),
       symbols,
       dir,
+      undefined,
+      buildSymbols,
     );
     return {
       ...made,
@@ -3569,6 +3666,32 @@ table 50110 "Wrapped T"
     }
   });
 
+  // R497 (HUB-A, measured): with the build's symbols the one-arm wrapped table (W1's shape) is
+  // attributed by method id like any object. Revert direction: the two tests around this one.
+  test("R497: with the build's symbols the one-arm wrapped table is attributed, nothing refused", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await hub(
+      [
+        { objectType: 1, objectId: 50110, methodId: 777 },
+        { objectType: 5, objectId: 50107, methodId: 888 },
+      ],
+      [],
+    );
+    try {
+      const v = await backend.run(hubRef, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Table", objectId: 50110, procedure: "Touch" },
+        { objectType: "Codeunit", objectId: 50107, procedure: "R" },
+      ]);
+      expect(await backend.coverageRefusals()).toEqual(new Map());
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
   test("with ZERO rows for the wrapped table, it is still named once at deploy", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     const { backend, cleanup } = await hub([{ objectType: 5, objectId: 50107, methodId: 888 }]);
@@ -3576,6 +3699,177 @@ table 50110 "Wrapped T"
       await backend.run(hubRef, { coverage: "procedure", timeoutMs: 5000 });
       const said = warn.mock.calls.map((c) => String(c[0]));
       expect(said.filter((s) => s.includes("coverage refused"))).toEqual([REFUSED]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+});
+
+/**
+ * R499: real transports, one per deploy, driven directly. "orphan": RunMutant's body is cut short,
+ * so the call reads the answer back, and that readback never answers until the test refuses it:
+ * the call ends `in-flight-unknown` (not scored) and leaves the readback in flight. "pass": a valid
+ * pass, echoed from the request.
+ */
+function scriptedTransportFetch(run: "orphan" | "pass"): {
+  fetchFn: typeof fetch;
+  refuse: (message: string) => void;
+} {
+  let refuseReadback: ((message: string) => void) | undefined;
+  const fetchFn = (async (url: unknown, init?: RequestInit) => {
+    if (String(url).includes("_GetOpAnswer")) {
+      return new Promise<Response>((_resolve, reject) => {
+        refuseReadback = (m) => reject(new UnfilteredExtensionsQueryError(m));
+      });
+    }
+    const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const inner = {
+      status: "ran",
+      testRunsBefore: 0,
+      sessionId: 2037,
+      targetAppId: b.targetAppId,
+      artifactId: b.artifactId,
+      attemptId: b.attemptId,
+      mutantId: b.mutantId,
+      codeunitId: b.testCodeunitId,
+      method: b.testMethod,
+      codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+      observedActive: true,
+    };
+    const body = JSON.stringify({ value: JSON.stringify(inner) });
+    if (run === "pass") return new Response(body, { status: 200 });
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(body.slice(0, -1)));
+        c.error(new Error("The socket connection was closed unexpectedly."));
+      },
+    });
+    return new Response(stream, { status: 200 });
+  }) as typeof fetch;
+  return {
+    fetchFn,
+    refuse: (m) => {
+      if (refuseReadback === undefined) throw new Error("no readback in flight to refuse");
+      refuseReadback(m);
+    },
+  };
+}
+
+describe("R499: every transport a backend binds shares its one control state", () => {
+  const TX_CFG = { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" };
+  const TX_REQ = {
+    ref: { codeunitId: 79100, codeunitName: "Ours Tests", method: "Alpha" },
+    mutantId: "M0001",
+    attemptId: "a1",
+    timeoutMs: 30,
+    lease: { epoch: 2, token: "tok-xyz", serverGeneration: "gen-abc", opSeq: 1 },
+  } as const;
+
+  /** One deploy per script; transport i uses script i. `drainMs` far above the test timeout. */
+  async function deployedTwice(scripts: readonly { fetchFn: typeof fetch }[]) {
+    const made: RunMutantTransport[] = [];
+    const factory = (appId: string, artifactId: string, controlState: ControlState) => {
+      const script = scripts[made.length];
+      if (script === undefined) throw new Error("more deploys than scripts");
+      const t = new RunMutantTransport(TX_CFG, appId, artifactId, script.fetchFn, {
+        controlState,
+        drainMs: 60_000,
+      });
+      made.push(t);
+      return t;
+    };
+    const { backend, deployDir, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [], coverage: [] }),
+      { Codeunits: [] },
+      undefined,
+      factory,
+    );
+    return { backend, deployDir, cleanup, made };
+  }
+
+  const at = (made: readonly RunMutantTransport[], i: number): RunMutantTransport => {
+    const t = made[i];
+    if (t === undefined) throw new Error(`no transport ${i}`);
+    return t;
+  };
+
+  test("B1: an orphan of transport A refused during B's scored exit after a re-deploy rejects B's call", async () => {
+    const a = scriptedTransportFetch("orphan");
+    const b = scriptedTransportFetch("pass");
+    const { deployDir, backend, cleanup, made } = await deployedTwice([a, b]);
+    try {
+      const first = await at(made, 0).run(TX_REQ);
+      expect(first.operation).toBe("in-flight-unknown");
+      await backend.deploy(deployDir); // binds B
+      expect(made).toHaveLength(2);
+      const call = at(made, 1)
+        .run(TX_REQ)
+        .then(
+          (v) => v,
+          (e: unknown) => e,
+        );
+      setTimeout(() => a.refuse("late on A"), 50);
+      const got = await call;
+      expect(got).toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect((got as Error).message).toContain("late on A");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("B2: a factory that ignores controlState makes deploy throw and binds nothing", async () => {
+    const a = scriptedTransportFetch("pass");
+    const b = scriptedTransportFetch("pass");
+    let calls = 0;
+    const factory = (appId: string, artifactId: string, controlState: ControlState) => {
+      calls += 1;
+      return calls === 1
+        ? new RunMutantTransport(TX_CFG, appId, artifactId, a.fetchFn, { controlState })
+        : new RunMutantTransport(TX_CFG, appId, artifactId, b.fetchFn); // its own private state
+    };
+    const { backend, deployDir, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [], coverage: [] }),
+      { Codeunits: [] },
+      undefined,
+      factory,
+    );
+    try {
+      const err = await backend.deploy(deployDir).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain("ignored the controlState argument");
+      backend.setLease(FAKE_LEASE);
+      await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(
+        /transport not configured/,
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // R-496's retired-transport case, now against real transports that share the backend's state.
+  test("B3: a refusal landing on a RETIRED transport after the re-deploy is surfaced at teardown; a second one is warned", async () => {
+    const a = scriptedTransportFetch("orphan");
+    const b = scriptedTransportFetch("orphan");
+    const { deployDir, backend, cleanup, made } = await deployedTwice([a, b]);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect((await at(made, 0).run(TX_REQ)).operation).toBe("in-flight-unknown");
+      await backend.deploy(deployDir); // binds transport B; A is replaced
+      expect((await at(made, 1).run(TX_REQ)).operation).toBe("in-flight-unknown");
+      // Only NOW does A record a refusal: after the redeploy, before teardown. Then B.
+      a.refuse("late on A");
+      b.refuse("late on B");
+      await backend.drainControlRequests(1000);
+      const late = backend.takeLateRefusal();
+      expect(late).toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect(late?.message).toContain("late on A");
+      // The second refusal was logged, not dropped.
+      expect(warn.mock.calls.flat().join("\n")).toContain("late on B");
+      expect(backend.takeLateRefusal()).toBeUndefined();
     } finally {
       warn.mockRestore();
       await cleanup();

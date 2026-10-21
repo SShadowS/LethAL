@@ -378,7 +378,12 @@ export function canCarryMutationSelectorVar(root: ALSyntaxNode): boolean {
  * comment used to defer on was measured — the tables gate covers both (a `tableextension`'s five
  * mutants are all killed; a `pageextension`'s are `no-coverage`). Enums stay out for a simpler
  * reason: they hold no code, so they can hold no var. `xmlport` and `query` are the kinds that
- * still hold code and still cannot carry it.
+ * still hold code and still cannot carry it. Adding `xmlport` here wakes R500's dormant XMLport
+ * hang refusal (`openItemHangRefuses` is asked only in a carrier file); `r500-dispatch.test.ts`
+ * pins that dormancy and goes red, as a reminder to measure it, when the kind is added. It also
+ * admits `#if`-wrapped xmlports on BC (R497's shape rule is kind-blind) with no gate measuring them:
+ * R545's census found 4 wrapped BaseApp xmlports (about 350 sites each, skipped today), so add a
+ * pre-committed wrapped xmlport arm to `sandbox-wrapped` first, as R536 and R545 did for their kinds.
  *
  * `reportextension` was added by R254 once its coverage was measured: BC reports it as object
  * type 22 under the extension's own id, al-runner as its own Cobertura class

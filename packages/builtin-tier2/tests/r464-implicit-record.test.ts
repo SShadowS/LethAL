@@ -305,8 +305,10 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
     }
 }`;
 
-  // Test 8 (sol r1).
-  it("8a. a local `Rec: Record U` in a table trigger: no spec (master: Rec.Amount := 1)", () => {
+  // Test 8 (sol r1). R477: a spelling R-464 cannot prove is never emitted; where nothing at the
+  // call declares the field, the BARE form is emitted instead (alc-measured to bind the call's
+  // field), so the tests below that said "no spec" now assert that bare text, never a prefix.
+  it("8a. a local `Rec: Record U` in a table trigger: no `Rec.` spec (master: Rec.Amount := 1); R477 bare form", () => {
     const t = `table 50110 T
 {
     fields
@@ -333,13 +335,15 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
         Validate(Amount, 11);
     end;
 }`;
-    expect(emitted(validateToAssign, { "U.al": U, "O.al": t })).toEqual([]);
+    expect(emitted(validateToAssign, { "U.al": U, "O.al": t })).toEqual([
+      "Validate(Amount, 1) => Amount := 1 [-]",
+    ]);
     expect(emitted(validateToAssign, { "U.al": U, "O.al": control })).toEqual([
       "Validate(Amount, 11) => Rec.Amount := 11 [-]",
     ]);
   });
 
-  it("8b. nested with whose inner table has a field named like the subject: no spec", () => {
+  it("8b. nested with whose inner table has a field named like the subject: no `R.` spec; R477 bare form", () => {
     const inner = `table 50112 Inner
 {
     fields
@@ -370,12 +374,15 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
 }`;
     expect(
       emitted(validateToAssign, { "U.al": U, "I.al": inner, "X.al": outer, "O.al": cu }),
-    ).toEqual(["Validate(Amount, 2) => Q.Amount := 2 [-]"]);
+    ).toEqual([
+      "Validate(Amount, 1) => Amount := 1 [-]",
+      "Validate(Amount, 2) => Q.Amount := 2 [-]",
+    ]);
   });
 
-  it("8c. `with Rec do` (a subject that is no declaration) is refused, not compared", () => {
+  it("8c. `with Rec do` (a subject that is no declaration): no prefix compared; R477 bare form", () => {
     // The prefix rule compares the subject's DECLARATION at the with and at the call; `Rec` has
-    // none, so the bare call is refused rather than assumed (conservative, measured: no site lost).
+    // none, so no prefix is assumed. R477: nothing declares `Amount`, so the bare form stands.
     const page = `page 50115 WithRec
 {
     SourceTable = U;
@@ -386,11 +393,13 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
         end;
     end;
 }`;
-    expect(emitted(validateToAssign, { "U.al": U, "O.al": page })).toEqual([]);
+    expect(emitted(validateToAssign, { "U.al": U, "O.al": page })).toEqual([
+      "Validate(Amount, 1) => Amount := 1 [-]",
+    ]);
   });
 
   // Test 9 (sol r2).
-  it("9a. an `#if`-only local `Rec: Record U`: no spec (master and r2: Rec.Amount := 1)", () => {
+  it("9a. an `#if`-only local `Rec: Record U`: no `Rec.` spec (master and r2: Rec.Amount := 1); R477 bare form", () => {
     const t = `table 50120 T2
 {
     fields
@@ -413,11 +422,12 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
     end;
 }`;
     expect(emitted(validateToAssign, { "U.al": U, "O.al": t })).toEqual([
+      "Validate(Amount, 1) => Amount := 1 [-]",
       "Validate(Amount, 3) => Rec.Amount := 3 [-]",
     ]);
   });
 
-  it("9b. `with` over a record whose table is not in the project: not claimed at all", () => {
+  it("9b. `with` over a record whose table is not in the project: no `Name.` spec; R477 bare form, claimed with its spec", () => {
     const cu = `codeunit 50122 DepWith
 {
     procedure P(Name: Record Customer)
@@ -427,17 +437,20 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
         end;
     end;
 }`;
-    expect(emitted(validateToAssign, { "O.al": cu })).toEqual([]);
-    // Refused in targets() too, so it is not a claimed site with no spec.
+    expect(emitted(validateToAssign, { "O.al": cu })).toEqual([
+      `Validate("No.", 'X') => "No." := 'X' [-]`,
+    ]);
+    // targets() and generate() agree: the claimed site is exactly the one with the spec. R-464's
+    // red-check 21 (targets() claims an unproven prefix) moved to R477's refused F-shadow test.
     const root = parseClean(cu);
     const ctx = buildSemanticContext([{ path: "O.al", root }]);
     const claimed = findAll(root, ALNodeKind.procedure_call).filter((n) =>
       validateToAssign.targets(n, ctx),
     );
-    expect(claimed).toEqual([]);
+    expect(claimed.map((n) => n.text)).toEqual([`Validate("No.", 'X')`]);
   });
 
-  it("9c. an `#if`-only field named like the with subject: no spec", () => {
+  it("9c. an `#if`-only field named like the with subject: no `R2.` spec; R477 bare form", () => {
     const inner = `table 50123 Inner2
 {
     fields
@@ -458,11 +471,13 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
         end;
     end;
 }`;
-    expect(emitted(validateToAssign, { "I.al": inner, "O.al": cu })).toEqual([]);
+    expect(emitted(validateToAssign, { "I.al": inner, "O.al": cu })).toEqual([
+      "Validate(Amount, 4) => Amount := 4 [-]",
+    ]);
   });
 
   // Test 10 (sol r3, Opus r4/r5).
-  it("10a. a field hidden after a string holding `//`: no spec (the engine's lexer)", () => {
+  it("10a. a field hidden after a string holding `//`: no `R.` spec (the engine's lexer); R477 bare form", () => {
     const t3 = `table 50140 T3
 {
     fields
@@ -494,11 +509,12 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
     end;
 }`;
     expect(emitted(validateToAssign, { "T3.al": t3, "T4.al": t4, "O.al": cu })).toEqual([
+      "Validate(Amount, 1) => Amount := 1 [-]",
       "Validate(Amount, 2) => Q.Amount := 2 [-]",
     ]);
   });
 
-  it("10b. an object-level `#if` declaration list naming Rec: no spec", () => {
+  it("10b. an object-level `#if` declaration list naming Rec: no `Rec.` spec; R477 bare form", () => {
     const t6 = `table 50154 T6
 {
     fields
@@ -529,13 +545,15 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
     var
         Dummy: Record U;
 }`;
-    expect(emitted(validateToAssign, { "U.al": U, "O.al": t6 })).toEqual([]);
+    expect(emitted(validateToAssign, { "U.al": U, "O.al": t6 })).toEqual([
+      "Validate(Amount, 4) => Amount := 4 [-]",
+    ]);
     expect(emitted(validateToAssign, { "U.al": U, "O.al": t7 })).toEqual([
       "Validate(Amount, 5) => Rec.Amount := 5 [-]",
     ]);
   });
 
-  it("10c. a declaration list broken by `#if` lines still names Rec: no spec", () => {
+  it("10c. a declaration list broken by `#if` lines still names Rec: no `Rec.` spec; R477 bare form", () => {
     const t8 = `table 50156 T8
 {
     fields
@@ -559,13 +577,15 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
     // The call itself parses (the ERROR is confined to the `#if` arm); the control proves the
     // operator still reaches a Validate in the same object shape without the list.
     const control = t8.replace("Rec,\n", "Keep,\n");
-    expect(emitted(validateToAssign, { "U.al": U, "O.al": t8 }, false)).toEqual([]);
+    expect(emitted(validateToAssign, { "U.al": U, "O.al": t8 }, false)).toEqual([
+      "Validate(Amount, 6) => Amount := 6 [-]",
+    ]);
     expect(emitted(validateToAssign, { "U.al": U, "O.al": control }, false)).toEqual([
       "Validate(Amount, 6) => Rec.Amount := 6 [-]",
     ]);
   });
 
-  it("10e. a declaration list whose later name is non-ASCII still names Rec: no spec", () => {
+  it("10e. a declaration list whose later name is non-ASCII still names Rec: no `Rec.` spec; R477 bare form", () => {
     // Final review minor 1: an ASCII-only identifier class stopped the list at `Beløb`.
     const t9 = `table 50157 T9
 {
@@ -584,13 +604,15 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
 #endif
 }`;
     const control = t9.replace("Rec, Beløb", "Beløb");
-    expect(emitted(validateToAssign, { "U.al": U, "O.al": t9 }, false)).toEqual([]);
+    expect(emitted(validateToAssign, { "U.al": U, "O.al": t9 }, false)).toEqual([
+      "Validate(Amount, 7) => Amount := 7 [-]",
+    ]);
     expect(emitted(validateToAssign, { "U.al": U, "O.al": control }, false)).toEqual([
       "Validate(Amount, 7) => Rec.Amount := 7 [-]",
     ]);
   });
 
-  it("10d. a table procedure named like the with subject: no spec", () => {
+  it("10d. a table procedure named like the with subject: no `R.` spec; R477 bare form", () => {
     const w5 = `table 50152 W5
 {
     fields
@@ -619,6 +641,7 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
     end;
 }`;
     expect(emitted(validateToAssign, { "U.al": U, "W.al": w5, "O.al": cu })).toEqual([
+      "Validate(Amount, 2) => Amount := 2 [-]",
       "Validate(Amount, 3) => Q.Amount := 3 [-]",
     ]);
   });

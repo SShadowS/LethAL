@@ -99,27 +99,46 @@ killing test and its mutant is reported survived. `--only` and `--exclude` give 
 caveat, `--operator` gives `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
 and `--tests-only` gives `tests-narrowed`.
 
-**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is OFF by
-default and CONDITIONAL when on. `lethal run` reads al-runner's own coverage output (R220) only with
-`"alRunner": { "coverage": "al-runner" }`, and one file declaring more than one object or holding a
-`#if`-wrapped object turns it off for the whole run, with a warning naming the file. (Multi-object:
-upstream #3713 is fixed, but al-runner v2.12.0-main.c39ad5de reports later objects' lines in the
-wrong frame, R383. `#if`: R298, pending R300.) Without coverage an unreached mutant comes back survived rather than no-coverage. That is one measured route to a false survivor. No measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). Do not quote a score from it. (Its `asserterror` DID
+**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is
+CONDITIONAL. `lethal run` reads al-runner's own coverage output (R220) by default since R394;
+`"alRunner": { "coverage": "none" }` turns it off. One file holding a `#if`-wrapped object turns it off for
+the whole run, with a warning naming the file. One file declaring more than one object keeps it only
+when a once-per-session frame probe admits the installed al-runner build, and turns it off
+otherwise; either way one warning line names the probe's answer and the build. (Multi-object:
+al-runner v2.12.0-main.c39ad5de reports later objects' lines in the wrong frame, R383; 43f76177 and
+c5bbaf89 (measured) do not, and the probe tells the builds apart at run time, R407. `#if`: R298, pending R300.) Without coverage an unreached mutant comes back survived rather than no-coverage. That is one measured route to a false survivor. No measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). Do not quote a score from it. (Its `asserterror` DID
 fail to fail a test in 2026-07; that was fixed upstream in v2 and the startup canary re-measures
 it every session.)
 
+**Do not edit the project during an al-runner run with coverage on (R505).** al-runner
+v2.12.0-main.c39ad5de labels coverage with the files of the project it finds beside the test app,
+as they are on disk at that moment, while LethAL compiled the run's snapshot. If an object moves
+to another file, or a file is renamed, its coverage would be credited to the wrong object or
+dropped. So `lethal run` checks the project's `.al` files, `app.json` and resources before and
+after every al-runner call that produces coverage. On any change it stops with
+`ProjectChangedDuringRunError`, naming the first files that changed. Undo the change, or wait for
+the run to end, then continue with `lethal run --resume` (it carries the verdicts recorded so far;
+a run stopped before its first verdict has none, so run it again). A log written into the project
+(`*.log`, `nohup.out`) and an office lock file (`~$...`) never count, but any other file written
+there during the run does: keep outputs outside the project. **Limit:** an edit that is undone
+between two checks, so it starts and ends inside one al-runner call, is not seen. A `git checkout`
+of another branch and back during a run is exactly that, so do not do it. Upstream fixed the
+labelling after this build (#5249). The container's al-runner (`43f76177`) is past it, and is measured to label
+the compiled batch, so there the check can only refuse. The host still pins `c39ad5de`.
+
 **al-runner settings (R387).** The `alRunner` section accepts `alRunnerPath`, `packagesDir`,
 `serverMode`, `selectorMode` and `coverage`, and refuses any other key by name. With none of the last
-three set, `lethal run` uses `--server` (one daemon per worker) and the resource selector (one compile
-per batch). `"serverMode": false` gives one process per test with the `"static"` selector (a recompile
+three set, `lethal run` uses `--server` (one daemon per worker), the resource selector (one compile
+per batch) and al-runner's coverage (R394). `"serverMode": false` gives one process per test with the `"static"` selector (a recompile
 per mutant), which is much slower. The run prints one `[lethal] al-runner settings:` line naming any
-slow or unmeasured setting; until coverage is on by default it always names `coverage`. `lethal
+slow or unmeasured setting; it names `coverage` only when the config sets `"none"` (an unreached
+mutant then reads survived, not no-coverage) or when the coverage guard turned it off. `lethal
 doctor` checks the binary's version only, not the transport. Under `--server` a hung test becomes an
 error after one suite deadline of at least 10 minutes, not a per-test timeout.
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one
-round trip instead of forty. This needs LethAL Control 1.0.0.20 or newer on the server; an older
+round trip instead of forty. This needs LethAL Control 1.0.0.22 or newer on the server; an older
 one is refused before any test runs. The report's `groupedCalls` says how many such calls were
 made. Three flags touch it and you should not need them: `--max-methods-per-call <n>` caps one
 call, `--request-ceiling-ms <n>` bounds one call (keep it under the hosting gateway's idle
@@ -140,7 +159,7 @@ has the complete set.
 
 | flag | read by |
 |---|---|
-| `--project` | `run`, `init`, `clear-ceiling`, `force-reset-lease`, `doctor`, `export`, `campaign` |
+| `--project` | `run`, `init`, `clear-ceiling`, `force-reset-lease`, `doctor`, `explain`, `export`, `campaign` |
 | `--tests` | `run`, `doctor`, `verify` |
 | `--config` | `run`, `clear-ceiling`, `force-reset-lease`, `doctor`, `verify` |
 | `--db` | `run`, `clear-ceiling`, `verify` |
@@ -148,6 +167,7 @@ has the complete set.
 | `--progress-out` | `run` |
 | `--json` | `doctor`, `campaign` |
 | `--top` | `explain` |
+| `--suggest` | `explain` |
 | `--report` | `campaign` |
 | `--only` | `run` |
 | `--exclude` | `run` |
@@ -163,7 +183,9 @@ has the complete set.
 optional there and changes the listing. With `--backend al-runner` a dry run runs al-runner ONCE
 to measure the preprocessor symbols it predefines (R392), needs `alRunner.alRunnerPath` in the
 config and refuses without it, and lists the `#if` arms for the MEASURED set (absent lists alc's
-build). The other
+build). A dry run on al-runner also has no provisioned platform-apps folder, so a Microsoft report
+the project calls through `Report X` is read only from `alRunner.packagesDir`, and the hang-refused
+set can differ from a real run's; it warns (R565). The other
 exception is `--out <file>`, which writes the dry-run listing as JSON:
 `{files, sites, deployed, perFile[{file, sites, deployed}], batches[{index, sites[{file, line,
 operator, deployed}]}], notInstrumented[{file, kinds, sites}]}`. `sites` counts raw mutation sites;
@@ -177,7 +199,11 @@ only on `compare`.
 
 `lethal campaign compare --json` prints one object on stdout and its lines on stderr:
 `{campaignCompareSchemaVersion, stage, baselinePath, mutantCount, identical, differences[],
-coverage}`. Read `coverage` before `identical` (R355). `coverage.verified: true` carries the one
+coverage, identity}`. Read `coverage` and `identity` before `identical` (R355, R556).
+`identity.verified: true` means both sides record the same identity scheme and every paired mutant's
+mutated text was checked by hash, so `identical` covers the text too; `identity.verified: false`
+carries a `statement` (a stage frozen before R556 has no hashes, a scheme changed, or rows could not
+be checked) and then `identical` means matching VERDICTS only. `coverage.verified: true` carries the one
 `coverageMode` both sides share. `coverage.verified: false` means the stage was frozen before R355
 (its baseline records no mode) or the report predates R252, and it always carries
 `stageCoverageMode`, `reportCoverageMode` (`null` where unrecorded) and a `statement`: a matching
@@ -255,7 +281,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v12.schema.json](../schemas/explain-v12.schema.json)
+- `lethal explain`: [../schemas/explain-v17.schema.json](../schemas/explain-v17.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -301,7 +327,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 12`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 17`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -341,12 +367,69 @@ lists the block's survivors only; the four counts cover every recorded mutant of
 mutants the run recorded, not ones it never generated, and it is absent on a run narrowed with
 `--operator`, `--lines` or `--changed-since`, which can drop mutants inside a block, and on a
 quarantined run, which stops scheduling mutants mid-run. It is also absent for every gap in a file
-the source report lists as hang-refused among its excluded sites (R447): there a loop's own step was
+the source report lists as hang-refused among its excluded sites (R447): there a loop's own step, or
+a site in an open report data item's code or at a bounded item's only bound (R487, R501), was
 refused and never generated, so "every recorded mutant survived" would overstate what was measured.
 Each gap has
 exactly one of `artifactId` (the artifact to verify it against) and `artifactIdAbsent` (why there
 is none, with the same values as on a survivor row; a gap is `carried` when any of its members is).
 `--top` never shortens `gaps`: every gap is listed, even one none of whose survivors is shown.
+
+`--project <dir>` adds each gap's source (R274):
+
+```
+lethal explain report.json --project <dir>
+```
+
+Each `gaps` row can also carry `coveringTests` and `reachMeasuredMembers` (R272), on a report that
+records testMethods. `coveringTests` lists every test covering one of the gap's survivors, each
+with `name`, and where known `file`, `line` (the 1-based line of the method's name),
+`reachedMembers` (how many of the gap's survivors that test reached) and `baselineDurationMs` (its
+smallest baseline duration from this run's completed baseline batches, so a batch whose baseline
+aborted adds nothing: al-runner's own per-test figure, or on bcdev the
+per-test call's wall clock, which is mostly call overhead, and a session's first call also pays
+the client's startup). `reachMeasuredMembers` is how many survivors had a
+measured reach, the denominator of `reachedMembers`. A test discovered at two places (two #if
+arms) has `lineAmbiguous` instead of a line. The order is a stated heuristic, not a measurement:
+most survivors reached first, then by name. Duration is shown, never used to order (R489). Without
+testMethods (an older report) the field is absent, which never means "no covering tests". On a run
+whose coverage is object-level or not measured, a gap's list can be the whole suite.
+
+Each `gaps` row can also carry `source`. Given `--project`, it holds `startLine` (the gap's `blockStartLine`),
+`lines` (the block's lines, split on LF, with one trailing CR dropped per line) and `marks`, one per
+member in `members` order, each `{ mutantCode, startLine, startColumn, endLine, endColumn }`. Lines and
+columns start at 1; a column counts UTF-16 code units (a tab is one), and the end is exclusive, so a
+site can span lines. Explain first hashes `<dir>` the way the run hashed its source (every .al
+file the target build compiles plus app.json, raw bytes, with the config's preprocessor symbols)
+and compares that with the report's sourceSha256. Any difference refuses by name (a
+ProjectSourceRefusedError, reason source-mismatch) with nothing on stdout: a CRLF/LF checkout
+difference, an app.json version bump, a changed preprocessor symbol or an edit to a test project
+nested inside the target all count. A report from before R274 has no sourceSha256 and refuses with
+reason no-source-hash. The output then holds TARGET SOURCE: do not publish it for a third party's
+code.
+
+`--suggest` adds a suggested fix kind per gap (R273), in its own section:
+
+```
+lethal explain report.json --suggest
+```
+
+The top level can also carry `suggestions`. It is a SUGGESTION, not a measurement, and it sits
+outside the measured projection: everything else in the output is the same with or without the
+flag. Each kind is derived only from a survivor's measured `reach` and coverage `attribution`.
+The kinds:
+
+| reach | attribution | kind |
+|---|---|---|
+| reached-unnoticed | any | check-the-result: the statement ran under a covering test and every covering test still passed |
+| covered-but-unreached | exact | cover-the-branch: a test enters the procedure, but the statement did not run in this mutant's runs (or it is unreachable) |
+| unreached-and-uncovered | object, all-green | cover-the-statement: it did not run in this mutant's runs, and entry to its procedure was not measured |
+| not-decided | any | undecided: the report cannot tell |
+
+A survivor a reader already marked is `reader-marked`. A gap takes its members' kind when they
+agree, else `mixed`; it lists every member of the matching `gaps` entry, in the same order. The
+section covers the recorded survivors only (on a narrowed run, not the whole block), and no-coverage
+blocks are outside it. On a report without gap ids, `--suggest` refuses with nothing on stdout.
 
 `noCoverageBlocks` lists the no-coverage mutants by block. It is a location list, not a verify
 input: an entry has no gap id and no counts.
@@ -558,7 +641,7 @@ The set of reasons is checked; the advice is guidance.
 | `carried` | The verdict was carried, so nothing of it is installed. Run a fresh `lethal run`. |
 | `source-predates-verify` | Run `lethal run` again: the run predates verify, stopped early, or its source changed while it ran. A gap id against an artifact whose manifest was written before gap ids existed refuses this way too; name its mutants as `<batchIndex>/<mutantCode>` ids instead, or run again. |
 | `source-changed` | The target changed since it was instrumented. Run again. |
-| `test-project-nested` | The `--tests` folder lies inside the target project, contains it, or cannot be resolved (R-260). The target build compiles every `.al` under its folder, so nested tests are part of the installed target app. Move the test project out of the target folder so it sits beside it, update the `--tests` you pass to both `lethal run` and `lethal verify` to that folder (no config field names the test folder), run `lethal run` again, then verify with its artifact id. |
+| `test-project-nested` | The `--tests` folder lies inside the target project, contains it, or cannot be resolved (R-260). The target build compiles every `.al` under its folder, so nested tests are part of the installed target app. Move the test project out of the target folder so it sits beside it, update the `--tests` you pass to both `lethal run` and `lethal verify` to that folder (no config field names the test folder), run `lethal run` again, then verify with its artifact id. Since R445 `lethal run` refuses the same layout by name (`test-project-nested`) before it builds anything; `lethal run --dry-run` takes no `--tests` and lists a nested project's test files as mutants. |
 | `covering-test-unmatched` | A covering test was renamed, renumbered or removed. Restore it, or run again. |
 | `no-tests-to-run` | Write a test first. |
 | `unsupported-config` | Verify runs on `bcdev` only, with no `envTool`. |
@@ -575,7 +658,7 @@ The set of reasons is checked; the advice is guidance.
 | `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. It can also mean the test app was never published. |
 | `coverage-mode-changed` | The source run was measured under another coverage mode, or before runs recorded one (R354), so its covering tests and verdicts do not apply. Run `lethal run` again under this configuration, then verify with its artifact id. |
 | `too-many-new-tests` | The new or edited tests need more extra test runs than the budget, `--max-new-tests` (default 50) x (survivors + 2). With the reach filter off this is the old rule, more new tests than `--max-new-tests`. With it on, verify refuses before the lease when the one unmutated run per new test alone exceeds the budget, and otherwise after those unmutated runs, before any mutant, when the runs left after the filter still do (a second unmutated run per new test sent to a survivor, plus one run per survivor a new test joins); the detail then says the unmutated runs had already run. The detail names the count, the runs with and without the filter, the exact value to pass, what made the tests new (a subscriber, an object, the whole-source fallback, a procedure, a dependency) and up to five changed procedures. Pass `--max-new-tests <n>` to pay for them, or run `lethal run` again so this source is the recorded one. |
-| `dependency-unreadable` | A dependency's package on the server could not be read, or did not check out (R385): a Microsoft package in the closure, `System`, or the `LethAL Control` package (which must be the version the running control app reports) was not served or was another app, or a Microsoft app has no installed version, two, or one that differs from the package served (an upgrade in progress). The detail names the app. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
+| `dependency-unreadable` | A dependency's package on the server could not be read, or did not check out (R385): a Microsoft package in the closure, `System`, or the `LethAL Control` package (which must be the version the running control app reports) was not served or was another app, or an app in the closure (any publisher since R496) has no installed version, two, or one that differs from the package served (an upgrade in progress). The detail names the app and its served and installed versions. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
 
 ### Marking an equivalent survivor (checked)
 
@@ -583,7 +666,7 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
 {
-  "identityScheme": 25,
+  "identityScheme": 40,
   "marks": [
     {
       "key": "...",
@@ -631,7 +714,12 @@ before R443, because such a report records no numbering facts.
 A marks file without `identityScheme` was written before the field existed and reads as scheme 1,
 and a mark made under a scheme other than the one the run keys under is reported stale and never
 applied, because a key can name a different mutant after an engine change renumbers its twins
-(R325). `markKey` (and a mark's `key`) is this key, built from the survivor's row in `report.json`:
+(R325). The current scheme is 40: since R565 the hang-refused set depends on the source of the
+dependency reports the project calls, read from its dependency packages. So history and `--resume`
+carry a verdict by its key (rule 1) only when both the source hash and the report's
+`dependencySourceSha256` equal the recorded run's. A mutant that is a singleton in its file can
+still carry under rule 2, by its file and its member's hash, whatever the digests say; that is by
+design (R391, R474). `markKey` (and a mark's `key`) is this key, built from the survivor's row in `report.json`:
 
 ```text
 key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>
@@ -661,8 +749,11 @@ codeunit in the test app (every test is then new), or a dependency, by the bytes
 server holds (R385: Microsoft ones too, so a rebuild or an upgrade at an unchanged declared version is
 seen). Every test also covers `System`, `Application` when the test app declares one, and Test
 Runner, which the `LethAL Control` app runs every test through, so a platform or Base App update
-makes every test new. A Microsoft app must have exactly one installed version, the one the server
-serves, or verify refuses `dependency-unreadable` naming it. This adds about 4.3 s per run and per
+makes every test new. Every app in the walk, Microsoft's and partner ones alike (R496: before, only
+Microsoft's were checked), must have exactly one installed version, the one the server serves, or
+verify refuses `dependency-unreadable` naming it. That includes a partner dependency that is
+published but not installed (a staged upgrade): this refusal is intended, since a digest over it
+would describe a package no test runs against. This adds about 4.3 s per run and per
 verify (14 packages, 68.9 MB, on BC 28.4). A test with a call the walk cannot follow (an interface,
 a `RecordRef` insert, a run by id) is new after ANY test-app edit. So one shared-helper edit can make
 many tests new.
@@ -709,7 +800,9 @@ The filter sees only code a new test runs itself, in its own session. A test tha
 because an EARLIER test in the same call left state behind (SingleInstance globals, committed
 data), or because of code run in another session (StartSession, a scheduled task, the job queue),
 is not sent to that survivor. A fresh `lethal run` has the same blind spot. Pass
-`--no-reach-filter` to send every new test to every survivor, as before R-384.
+`--no-reach-filter` to send every new test to every survivor, as before R-384. On apps that use
+background sessions, the job queue or SingleInstance state (most real apps), prefer
+`--no-reach-filter` when a missed kill would matter (R426).
 
 The cap counts extra test runs: two unmutated runs per new test, plus one per survivor a new test
 joins, against `--max-new-tests` (default 50) x (survivors + 2). With the reach filter on, a new
@@ -720,10 +813,79 @@ scheme v1 or v2) is refused once as `source-predates-verify`, and the detail nam
 (`scheme v2, this build v3`). An edited test
 gets the same unmutated runs as an added one. On bcdev the run records each test's source from the
 PUBLISHED test app, the body the server ran (R372), so a test you edited without republishing reads
-as new to verify. Where the run could not read that source (no dev endpoint, an env-tool session
-that publishes its own test apps, a package without source) it records none and warns
-`test-digests-unavailable`, and verify refuses that run as `source-predates-verify`. On al-runner the
-source on disk is what runs, and that is what the run records.
+as new to verify. An env-tool session publishes its own test apps after it takes the lease, so it
+reads the test app back after that publish and records the digests from that read (R373). It
+records them only when the read-back is installed (exactly one installed version, the one served),
+every app it published is installed at the version the server serves, and, when a `publishApps`
+file is the test app, the read-back has that file's name, publisher, version and `.al` sources.
+Where the run could not read that source or prove it (no dev endpoint, a failed or unproven
+read-back, a package without source) it records none and warns `test-digests-unavailable` once,
+naming why, and verify refuses that run as `source-predates-verify`. On al-runner the source on
+disk is what runs, and that is what the run records.
+
+An env-tool session's `--resume` finds the run to resume before the lease, against the test app the
+server held then. If the test app read back after the publish differs from it or cannot be read,
+the session refuses with `TestAppRepublishedError` (code `test-app-republished`) before the first
+baseline (R486). `--skip-known-survivors` compares the read-back instead: after a new test app, or
+an unreadable read-back, it skips nothing and warns `history-test-app-changed`. The run records the
+read-back's identity, or none when it could not be read.
+
+**A run lends its test-app identity to a later session only when it PROVED it (R495).** `--resume`,
+`--resume-run`, `--skip-known-survivors` and the reuse of a saved baseline all require the earlier
+run to have proven that the test app it recorded is the one it ran. The proof, by backend:
+- bcdev with an env-tool hook: the read-back after the hook, as above;
+- bcdev without a hook: the served package's own id and version (from the package, never from the
+  local `app.json`) has exactly one installed row on the server. A served package that is published
+  but not installed, a backend that cannot read installed versions, or no package read at all (no
+  dev-endpoint credentials: the source on disk is not what BC runs) proves nothing;
+- al-runner: it compiles the test source it hashed, so its identity is proven by construction.
+
+An unproven run records no identity. It still runs and reports normally, and it lends nothing: a
+later `--resume` of it is refused by name ("not proven installed"), and `--skip-known-survivors`
+skips none of its survivors and warns `history-test-app-changed`. A session that proved its test app
+and then reads a different one at a later batch, or cannot read it at all, stops there with
+`TestAppDriftedError` (code `test-app-drifted`), before that batch records anything (no carried
+verdict, no known survivor, no error row, no baseline), and its run keeps no identity. The same
+happens to the run's proof when a stale-test-app refusal's re-read finds another test app. The read
+runs at the top of each batch and again before its baseline, so a republish during a batch is
+caught at the next one; a change to what is installed that leaves the served package unchanged is
+not caught.
+
+**One-time cost on upgrade.** Runs recorded before R495 carry no proof, so the first run after the
+upgrade carries nothing on `--resume`, skips nothing on `--skip-known-survivors` and re-runs every
+baseline. The runs it records are proven, so the next session lends normally again.
+
+**The identity includes the test app's dependencies (R496).** A run's identity is its test-app hash
+AND its dependency fingerprint: every app the test app depends on, transitive ones too, hashed by
+the package the server holds, each with exactly one installed row at that version. A session lends
+to another only when both are equal, so a library the tests depend on that was rebuilt between two
+runs (same id and version, other bytes) carries nothing across. Where the fingerprint is taken:
+- bcdev without a hook: under the lease, from the served test-app package's manifest (a package
+  without `.al` source is fingerprinted too). If a dependency changed while the session waited for
+  the lease, so that its pre-lease digests no longer match, the run keeps neither its identity nor
+  its digests and warns `test-digests-unavailable` once; a fresh run then runs unproven, and a
+  requested resume refuses with `TestAppRepublishedError`;
+- bcdev with a hook: from the read-back after the hook;
+- al-runner: from the test project's `app.json` and the `.app` files in its package folders.
+
+A fingerprint that cannot be taken (a dependency not served, or not installed at the served
+version) leaves the run unproven, with a `test-app-dependencies-unproven` or
+`test-digests-unavailable` warning naming the app. A resume refused for this reason says "the test
+app's dependencies changed (A, now B)" or "it recorded no dependency fingerprint". Not covered: an
+installed app outside the dependency closure, a dependency changed during the batches, and the
+control app's own bytes (only its version and its dependencies count).
+
+**A hook session whose test app has no `.al` source (R498)** is proven when the package read back
+after the hook is byte for byte the `publishApps` test-app file (same SHA-256), on top of the usual
+installed checks. If no `publishApps` file is the test app, the installed checks alone prove it. It
+records its identity and dependency fingerprint, but no test digests (one `test-digests-unavailable`
+warning: "carries no AL source"). Byte equality was measured on the dev-endpoint (`altool`) publish
+route only. The hook publishes through the env tool's own publish command; if that command
+repackages the file, the bytes differ and the run stays unproven (safe, but no resume, skip or reuse).
+
+**Second one-time cost on upgrade.** Runs recorded before R496, R495's included, carry no
+fingerprint, so the first run after this upgrade carries nothing on `--resume`, skips nothing on
+`--skip-known-survivors` and re-runs every baseline.
 
 ### After verify (guidance)
 

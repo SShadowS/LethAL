@@ -26,6 +26,7 @@ import {
   TOOL_CONDITIONS,
 } from "../src/explain";
 import { assertExplainableReport, explain } from "../src/explain";
+import { SUGGESTION_KINDS, SUGGESTION_TEXTS, suggest } from "../src/explain-suggest";
 import {
   CAVEAT_INTERPRETATIONS,
   ERROR_CAUSE_INTERPRETATIONS,
@@ -49,6 +50,7 @@ import {
 import { REACH_FILTER_OFF_REASONS, REACH_FILTER_STATES } from "../src/verify-reach";
 import { bundleFor } from "./helpers/bundle";
 import { makeGitRepo } from "./helpers/git-repo";
+import { removeScratchDir } from "./helpers/scratch";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
 
 /**
@@ -239,6 +241,9 @@ describe("published JSON Schemas (R152)", () => {
   const doctorSchema = loadSchema("doctor-v1.schema.json");
 
   test("the explain schema describes exactly the leaves ExplainOutput declares", () => {
+    // R273: the optional root `suggestions` (`--suggest`) is NOT part of `ExplainOutput`; the CLI
+    // composes it. Its leaves are checked against their own type in the next test, and every
+    // OTHER schema leaf must still equal `ExplainOutput`'s, exactly as before.
     const fromType = typeLeafPaths({
       files: [join(SRC, "explain.ts"), join(SRC, "interpretation.ts")],
       root: "ExplainOutput",
@@ -255,7 +260,25 @@ describe("published JSON Schemas (R152)", () => {
         'ReportValidity["reliability"]',
       ],
     });
-    expect([...schemaLeafPaths(explainSchema)].sort()).toEqual([...fromType].sort());
+    const outsideSuggestions = schemaLeafPaths(explainSchema).filter(
+      (p) => !p.startsWith("$.suggestions."),
+    );
+    expect(outsideSuggestions.sort()).toEqual([...fromType].sort());
+  });
+
+  test("the explain schema's `suggestions` describes exactly the leaves ExplainSuggestions declares", () => {
+    const fromType = typeLeafPaths({
+      files: [join(SRC, "explain-suggest.ts")],
+      root: "ExplainSuggestions",
+      expectedLeafTypeNames: [
+        "SuggestionKind",
+        "GapSuggestionKind",
+        "SurvivorReach",
+        "ExplainAttribution",
+      ],
+    }).map((p) => p.replace(/^\$/, "$.suggestions"));
+    const inSchema = schemaLeafPaths(explainSchema).filter((p) => p.startsWith("$.suggestions."));
+    expect(inSchema.sort()).toEqual([...fromType].sort());
   });
 
   test("the doctor schema describes exactly the leaves DoctorJsonOutput declares", () => {
@@ -292,6 +315,27 @@ describe("published JSON Schemas (R152)", () => {
     expect(enumAt(explainSchema, "$.survivors[].artifactIdAbsent")).toEqual([
       ...ARTIFACT_ID_ABSENCES,
     ]);
+    // R273: the suggestions section's kind domain and the facts it copies.
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].kind")).toEqual([...SUGGESTION_KINDS]);
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].members[].kind")).toEqual(
+      SUGGESTION_KINDS.filter((k) => k !== "mixed"),
+    );
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].members[].reach")).toEqual(
+      Object.keys(REACH_INTERPRETATIONS),
+    );
+    expect(enumAt(explainSchema, "$.suggestions.gaps[].members[].attribution")).toEqual(
+      Object.keys(EXPLAIN_ATTRIBUTION_INTERPRETATIONS),
+    );
+    expect(Object.keys(SUGGESTION_TEXTS)).toEqual(
+      Object.keys(
+        ((
+          (explainSchema.properties as Record<string, Schema>).suggestions?.properties as Record<
+            string,
+            Schema
+          >
+        ).kinds?.properties as Record<string, Schema>) ?? {},
+      ),
+    );
     expect(enumAt(doctorSchema, "$.notChecked")).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
     expect(enumAt(doctorSchema, "$.caveat.kind")).toEqual([...DOCTOR_CAVEAT_KINDS]);
   });
@@ -359,6 +403,26 @@ describe("published JSON Schemas (R152)", () => {
     expect(
       conformsTo(explainSchema, explain(assertExplainableReport(raw), { topSurvivors: 3 })),
     ).toEqual([]);
+    // R273: the same projection with `--suggest`'s section, as the CLI composes it. The report
+    // predates `guardReached`, so one survivor is given a measured reach to reach `kinds` too.
+    const reached = raw.mutants.find((m) => m.verdict === "survived");
+    if (reached === undefined) throw new Error("no survivor");
+    reached.reachGrain = "statement";
+    reached.guardReached = true;
+    reached.reachedBy = reached.coveringTests;
+    const report = assertExplainableReport(raw);
+    const suggestions = suggest(report, explain(report));
+    expect(suggestions.gaps.length).toBe(gaps.length);
+    expect(Object.keys(suggestions.kinds).length).toBeGreaterThan(0);
+    expect(conformsTo(explainSchema, { ...projection, suggestions })).toEqual([]);
+    // And the validator really reads the section: a foreign member field is rejected.
+    const [first] = suggestions.gaps;
+    if (first === undefined) throw new Error("no suggestion gaps");
+    const tampered = {
+      ...suggestions,
+      gaps: [{ ...first, members: first.members.map((m) => ({ ...m, extra: 1 })) }],
+    };
+    expect(conformsTo(explainSchema, { ...projection, suggestions: tampered })).not.toEqual([]);
   });
 
   test("R351: coverageArmNames is additive under explain v7: output without it validates, and with it", () => {
@@ -925,7 +989,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
 
 /**
  * The two BIG surfaces are GENERATED (`scripts/generate-schemas.ts`) rather than hand-written:
- * `SessionReport` has 130 leaves and the stream is a union of 22 event shapes, and at that size a
+ * `SessionReport` has 130 leaves and the stream is a union of 23 event shapes, and at that size a
  * hand-written file is a second copy of the type rather than a guarantee. So the tests differ too —
  * freshness against the generator replaces the leaf-path pin, and both are checked against real
  * committed data.
@@ -1029,6 +1093,58 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(conformsTo(reportSchema, { ...without, coverageMode: "None" })).not.toEqual([]);
   });
 
+  test("R558: executionContexts[].testSelector is additive under v3: without it, with either value, and nothing else", () => {
+    // Optional and nested, so R157's rule keeps v3: the committed reports were deliberately NOT
+    // regenerated (they are bcdev reports, where the field can never appear).
+    const raw = readFileSync(
+      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+      "utf8",
+    );
+    expect(raw).not.toContain("testSelector");
+    const without = JSON.parse(raw) as {
+      validity: { executionContexts: Record<string, unknown>[] };
+    };
+    expect(without.validity.executionContexts.length).toBeGreaterThan(0);
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    const withSelector = (selector: string, reason?: string) => {
+      const doc = JSON.parse(raw) as typeof without;
+      for (const c of doc.validity.executionContexts) {
+        c.testSelector = selector;
+        if (reason !== undefined) c.testSelectorReason = reason;
+      }
+      return doc;
+    };
+    expect(conformsTo(reportSchema, withSelector("exact"))).toEqual([]);
+    expect(conformsTo(reportSchema, withSelector("substring-with-excludes", "exit 2"))).toEqual([]);
+    expect(conformsTo(reportSchema, withSelector("substring"))).not.toEqual([]);
+  });
+
+  test("R577: killReproduced and reproducedFailure are additive under v3: without them, with them, and killReproduced only as true", () => {
+    // Optional, so R157's rule keeps v3 and the committed reports (bcdev, where the rule is off)
+    // are not regenerated.
+    const raw = readFileSync(
+      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+      "utf8",
+    );
+    expect(raw).not.toContain("killReproduced");
+    expect(raw).not.toContain("reproducedFailure");
+    const without = JSON.parse(raw) as { mutants: Record<string, unknown>[] };
+    const kills = without.mutants.filter((m) => m.verdict === "killed");
+    expect(kills.length).toBeGreaterThan(0);
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    const withMarker = (value: unknown) => {
+      const doc = JSON.parse(raw) as typeof without;
+      for (const m of doc.mutants) {
+        if (m.verdict !== "killed") continue;
+        m.killReproduced = value;
+        m.reproducedFailure = "Assert.AreEqual failed.";
+      }
+      return doc;
+    };
+    expect(conformsTo(reportSchema, withMarker(true))).toEqual([]);
+    expect(conformsTo(reportSchema, withMarker(false))).not.toEqual([]);
+  });
+
   test("R381: buildSymbols is additive under v3: optional, a report without it validates, and with it, [] included", () => {
     const without = JSON.parse(
       readFileSync(
@@ -1109,6 +1225,17 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "coverage",
         "differences",
         "identical",
+        "mutantCount",
+        "stage",
+      ],
+      // R556: v2 added the REQUIRED `identity` and widened `identical` to the mutated text.
+      "campaign-compare-v2.schema.json": [
+        "baselinePath",
+        "campaignCompareSchemaVersion",
+        "coverage",
+        "differences",
+        "identical",
+        "identity",
         "mutantCount",
         "stage",
       ],
@@ -1207,6 +1334,66 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "toolConditions",
       ],
       "explain-v12.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v13.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v14.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v15.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v16.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v17.schema.json": [
         "caveats",
         "contract",
         "derivedFromReportSchemaVersion",
@@ -1444,12 +1631,43 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "group-coverage-incomplete",
         "op-stopped",
         "stopped-after-completion",
+        "stop-outcome-unconfirmed",
         "session-reused",
         "warm-prefix-unstable",
         "warm-timeout-unconfirmed",
         "warm-confirmation-incomplete",
+        "reused-budget-stale",
+        "timeout-unconfirmed",
+        "runner-test-error",
+        "runner-refused",
+        "kill-not-reproduced",
       ],
       "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
+      // R273: new domains on the new optional `suggestions` (an optional additive field, so no
+      // bump, orchestrator ruling 2026-10-06). From here on a value added to them bumps (R233).
+      "#/properties/suggestions/properties/gaps/items/properties/kind": [
+        "check-the-result",
+        "cover-the-branch",
+        "cover-the-statement",
+        "undecided",
+        "reader-marked",
+        "mixed",
+      ],
+      "#/properties/suggestions/properties/gaps/items/properties/members/items/properties/kind": [
+        "check-the-result",
+        "cover-the-branch",
+        "cover-the-statement",
+        "undecided",
+        "reader-marked",
+      ],
+      "#/properties/suggestions/properties/gaps/items/properties/members/items/properties/reach": [
+        "reached-unnoticed",
+        "covered-but-unreached",
+        "unreached-and-uncovered",
+        "not-decided",
+      ],
+      "#/properties/suggestions/properties/gaps/items/properties/members/items/properties/attribution":
+        ["exact", "object", "all-green", "not-measured"],
     });
     // C02-09: the one new enum path reuses the survivor's domain exactly, which is why it did not
     // bump the version.
@@ -1479,6 +1697,16 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v10.schema.json")).toEqual(required("explain-v9.schema.json"));
     // R307's v11 added a caveat value, not a required field.
     expect(required("explain-v11.schema.json")).toEqual(required("explain-v10.schema.json"));
+    // R-204b's v13 added a cause value, not a required field.
+    expect(required("explain-v13.schema.json")).toEqual(required("explain-v12.schema.json"));
+    // R514's v14 added a cause value, not a required field.
+    expect(required("explain-v14.schema.json")).toEqual(required("explain-v13.schema.json"));
+    // R516's v15 added a cause value, not a required field.
+    expect(required("explain-v15.schema.json")).toEqual(required("explain-v14.schema.json"));
+    // R534's v16 added two cause values, not a required field.
+    expect(required("explain-v16.schema.json")).toEqual(required("explain-v15.schema.json"));
+    // R577's v17 added a cause value, not a required field.
+    expect(required("explain-v17.schema.json")).toEqual(required("explain-v16.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",
@@ -1600,8 +1828,8 @@ describe("published JSON Schema - campaign compare (R357)", () => {
   }, 60_000);
 
   afterAll(() => {
-    rmSync(repo, { recursive: true, force: true });
-    rmSync(out, { recursive: true, force: true });
+    removeScratchDir(repo);
+    removeScratchDir(out);
   });
 
   test("a matching stage validates, and an UNVERIFIED old stage validates with its statement", async () => {
@@ -1616,6 +1844,15 @@ describe("published JSON Schema - campaign compare (R357)", () => {
     // The validator must be able to say no: an unverified result WITHOUT its statement.
     const { statement: _dropped, ...bare } = legacy.coverage as Record<string, unknown>;
     expect(conformsTo(compareSchema, { ...legacy, coverage: bare }).length).toBeGreaterThan(0);
+
+    // R556: the identity block, both variants; an unverified one without its statement fails.
+    expect(legacy.identity.verified).toBe(false);
+    const { statement: _noStatement, ...bareIdentity } = legacy.identity as Record<string, unknown>;
+    expect(conformsTo(compareSchema, { ...legacy, identity: bareIdentity }).length).toBeGreaterThan(
+      0,
+    );
+    const ok = { ...verified, identity: { verified: true, identityScheme: 37 } };
+    expect(conformsTo(compareSchema, ok)).toEqual([]);
   }, 60_000);
 
   test("a coverage-mode mismatch is a refusal: it throws, so there is no document to validate", async () => {
@@ -1627,4 +1864,15 @@ describe("published JSON Schema - campaign compare (R357)", () => {
     expect(props.campaignCompareSchemaVersion?.const).toBe(CAMPAIGN_COMPARE_SCHEMA_VERSION);
     expect(compareSchema.$id).toContain(`campaign-compare-v${CAMPAIGN_COMPARE_SCHEMA_VERSION}`);
   });
+
+  // R556: v2 added the REQUIRED `identity` and widened `identical`. v1 stays as it was published.
+  test("the build emits v2, and campaign-compare-v1.schema.json is kept as published", async () => {
+    expect(CAMPAIGN_COMPARE_SCHEMA_VERSION).toBe(2);
+    const v1 = loadSchema("campaign-compare-v1.schema.json");
+    expect((v1.properties as Record<string, Schema>).campaignCompareSchemaVersion?.const).toBe(1);
+    expect([...schemaLeafPaths(v1)].some((p) => p.startsWith("$.identity"))).toBe(false);
+    // A v2 document is not a v1 document.
+    const v2doc = await compareCampaignStage(args("verified"));
+    expect(conformsTo(v1, v2doc)).not.toEqual([]);
+  }, 60_000);
 });

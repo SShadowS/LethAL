@@ -1452,6 +1452,26 @@ codeunit 79310 "Data Tests"
     end;
 
     [Test]
+    procedure BandCountsFromLow()
+    var
+        Rep: Report "Data Band Report";
+        Actual: Integer;
+    begin
+        // R-463: BAND rows Entry No. 1..4, plus a decoy Entry No. 5 under 'OTHER'. The decoy lies in
+        // [3, 99], so dropping the 'BAND' filter counts 3, not 2. AddRelated deletes an existing row
+        // with that Entry No. first (the primary key), so the decoy cannot collide.
+        ClearRelated('BAND');
+        AddRelated(1, 'BAND', 0);
+        AddRelated(2, 'BAND', 0);
+        AddRelated(3, 'BAND', 0);
+        AddRelated(4, 'BAND', 0);
+        AddRelated(5, 'OTHER', 0);
+        Actual := Rep.CountBand(3);
+        if Actual <> 2 then
+            Error('CountBand(3) should be 2, got %1', Actual);
+    end;
+
+    [Test]
     procedure BandReportSumsBands()
     var
         Rep: Report "Data Band Report";
