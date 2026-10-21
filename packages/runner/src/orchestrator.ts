@@ -5746,9 +5746,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // reaches generation below.
   const backendName = buildBackend.kind;
   // R586 (plan r2 §10): the run row's `runner_build` and `runMayLend` step 1's session side.
+  const v3Build = await runnerBuildOf(cfg.backend, caps.kind);
   const lendingSession: LendingSession = {
     backend: backendName,
-    runnerBuild: await runnerBuildOf(cfg.backend, caps.kind),
+    runnerBuild: v3Build !== undefined ? `${v3Build.version} ${v3Build.binarySha256}` : undefined,
   };
   const buildSymbols = await effectiveBuildSymbols(
     cfg.projectDir,
@@ -7768,6 +7769,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     preprocessorSymbols: cfg.preprocessorSymbols ?? [],
     // R214: the effective set, which equivalence marks are matched against.
     buildSymbols,
+    // R586: the v3 build, onto the measured execution contexts.
+    ...(v3Build !== undefined ? { runnerBuild: v3Build } : {}),
   };
   const report = buildReport(statics, collectedEvents);
   // R89: a run ASKED to resume must SAY it resumed. This is the invariant the code already claims —
@@ -10866,7 +10869,7 @@ async function runMutantsOnBackend(args: {
 async function runnerBuildOf(
   backend: ExecutionBackend,
   kind: BackendCapabilities["kind"],
-): Promise<string | undefined> {
+): Promise<{ readonly version: string; readonly binarySha256: string } | undefined> {
   if (kind !== "al-runner-v3") return undefined;
   const b = backend as {
     runnerBuild?: () => Promise<{ readonly version: string; readonly binarySha256: string }>;
@@ -10878,7 +10881,7 @@ async function runnerBuildOf(
   if (version === "" || !/^[0-9a-f]{64}$/.test(binarySha256)) {
     throw new Error(`runSession: al-runner-v3 named no usable build ("${version}", "${binarySha256}"); refusing (R586)`);
   }
-  return `${version} ${binarySha256}`;
+  return { version, binarySha256 };
 }
 
 async function pathExists(p: string): Promise<boolean> {

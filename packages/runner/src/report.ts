@@ -1044,6 +1044,14 @@ export interface ExecutionContext {
   /** R558: the probe's reason, verbatim, when `testSelector` is `"substring-with-excludes"`. Absent
    *  with `"exact"`, which has no reason to give. */
   readonly testSelectorReason?: string;
+  /**
+   * R586: the al-runner-v3 build THIS session's directly measured verdicts ran on, its `--version`
+   * line (`alrunner 3.0.0-alpha.2 (91253f2d6)`). Absent on every other backend and on carried
+   * entries, whose build belongs to the run they came from.
+   */
+  readonly runnerBuild?: string;
+  /** R586: the sha256 of that v3 binary, on the same terms as `runnerBuild`. */
+  readonly binarySha256?: string;
 }
 
 /** R272: one discovered test method — see `SessionReport.testMethods`. */
@@ -2365,6 +2373,8 @@ function buildExecutionContexts(
   alRunnerTestSelector:
     | { readonly selector: "exact" | "substring-with-excludes"; readonly reason?: string }
     | undefined,
+  // R586 — see `ExecutionContext.runnerBuild`. On a v3 backend only, directly measured entries.
+  runnerBuild?: { readonly version: string; readonly binarySha256: string },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
   for (const o of outcomes) {
@@ -2382,6 +2392,9 @@ function buildExecutionContexts(
   // was produced by a DIFFERENT run against whatever that run selected, and stamping this run's
   // observation onto it would be a provenance claim about a session this one never made.
   const bcFields = {
+    ...(runnerBuild !== undefined && caps.kind === "al-runner-v3"
+      ? { runnerBuild: runnerBuild.version, binarySha256: runnerBuild.binarySha256 }
+      : {}),
     // R586: the three are v2 observations (its `[bc]` line, R147 pin, R551 probe).
     ...(alRunnerBcBuild !== undefined && isAlRunnerV2(caps.kind)
       ? { bcBuild: alRunnerBcBuild.build, bcBuildAnnouncement: alRunnerBcBuild.announcement }
@@ -3051,6 +3064,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.alRunnerBcBuild,
     input.alRunnerPlatformAppsDir,
     input.alRunnerTestSelector,
+    statics.runnerBuild,
   );
 
   return {

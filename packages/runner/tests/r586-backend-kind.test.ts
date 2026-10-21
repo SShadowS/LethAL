@@ -282,6 +282,12 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
       const store = new ResultsStore(":memory:");
       const report = await v3Session(root, store, withProbe(new V3KindStub([]), []));
       expect(report.backend).toBe("al-runner-v3");
+      // Step 4: the v3 build on the directly measured execution context.
+      expect(report.validity.executionContexts[0]).toMatchObject({
+        clientType: "al-runner v3 CLI",
+        runnerBuild: "alrunner 3.0.0-alpha.2 (91253f2d6)",
+        binarySha256: "b".repeat(64),
+      });
       expect(store.getRun(1)?.backend).toBe("al-runner-v3");
       // R557's stamp is the v2 mark: a v3 run must not carry it.
       expect(store.getRun(1)?.alRunnerNames).toBe(false);
