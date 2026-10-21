@@ -13,6 +13,27 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **On al-runner, a kill must reproduce** (R577). Measured: a Microsoft test that builds its input
+  from a random amount fails about 1 run in 100 on its own, and LethAL scored that chance failure as
+  a kill on every al-runner transport, because the only check was a re-run with no mutant, which a
+  1% test passes 99 times in 100. Now, after that re-run passes, LethAL runs the killing test once
+  more UNDER THE MUTANT, in the kill's own context and at the budget the killing run was sent. A
+  second failure (any text) makes it `killed`; for a timeout kill, a second timeout at the same
+  budget makes it `timeout-killed`. Anything else is `error` with the new cause
+  `kill-not-reproduced`, never `survived`, and the covering loop goes on, so a later test that kills
+  and reproduces still gives `killed`. A reproduction that is lost, cut by the deadline, stranded or
+  run in a reused session keeps that cause. A reproduced kill carries `killReproduced: true` and,
+  when the run had text, `reproducedFailure` (both optional, so the report stays schema v3, R157).
+  **Cost, per kill:** one more activation and one more run of the killing test under the mutant.
+  On one-shot that is one more spawn, with its compile. On `--server` it is one more WHOLE-SUITE run
+  (the daemon runs the suite once per activation), plus a recompile with the static selector (the
+  resource selector only rewrites its file). A timeout kill also waits out one more whole budget.
+  Nothing for survivors. **`lethal explain` is schema v17** (`explain-v17.schema.json`;
+  v16 is kept), because `kill-not-reproduced` is a new value of `notMeasured[].cause` (R233).
+  **`--resume` on al-runner re-runs a kill recorded before this rule** (no `killReproduced`) instead
+  of carrying it, and its warning counts such kills in their own words, apart from prior `error`
+  verdicts. bcdev is unchanged; its switch is R582.
+
 - **The report records which al-runner test selector produced its verdicts** (R558). R551 picks the
   selector once per session by a probe: `--test-exact` when the build accepts it, otherwise R488's
   substring with excludes. Until now only a warning line said which. The choice is now recorded on
@@ -759,6 +780,30 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   extension (R506).
 
 ### Fixed
+
+- **al-runner runs a test whose AL name it renames** (R557, upstream al-runner #5572). al-runner names
+  a test row by the C# identifier BC's compiler gives the AL method, so `"Stone Quoted"` is
+  `Stone_Quoted`, `"Dot.Name"` is `Dota46Name`, `"2Lead"` is `_2Lead`, and even an unquoted
+  `Default` is `_Default`. LethAL sent the AL name, al-runner selected nothing, and the test read as
+  a baseline `error`: every mutant only it would kill read `survived` (coverage `none`) or
+  `no-coverage` (coverage `al-runner`), a false survive. DC has 248 such tests of 1,902. LethAL now
+  sends and looks up BC's name (`alRunnerMethodName`: a space or `"` to `_`, a leading non-start
+  character prefixed `_`, any other non-identifier character as `a<code>`, a reserved C# keyword
+  prefixed `_`, format characters deleted), measured on 58 names on two builds. A session-suite test
+  al-runner still has no row for now STOPS the session by name (`AlRunnerTestNameError`): on one-shot
+  when al-runner selects nothing, on `--server` when its answer is otherwise clean (exit 0 or 1,
+  every row a pass or fail run row) or when the test's own codeunit ran another test. A test in an
+  `#if` arm LethAL could not decide (R403) keeps its `error`, with one
+  `al-runner-undecided-test-missing` warning per batch. A new store column, `runs.al_runner_names`,
+  marks every run an R557+ al-runner session creates; NULL (every older row) is untrusted. No al-runner
+  run without the mark is trusted, nor a marked one whose baseline holds a renamed test as an
+  `error`: `--skip-known-survivors` skips none of its survivors (`history-al-runner-test-names`),
+  `--resume` carries none of its verdicts (stranded R53 keys included, so those mutants run again;
+  the RESUMED banner names the reason, `resumedFrom.carryRefused`), and none of its baseline
+  snapshots is reused (`resume-al-runner-test-names`). bcdev runs are unaffected. The R123 contract probe gains a seventh fact,
+  `test-name-mangling`, which checks the rule against real rows once per session. Every test name in
+  `fixtures/` and `examples/` maps to itself, so no existing gate's argv moves; the new
+  `fixtures/sandbox-names` pair runs in `itest:alrunner` and in the new `itest:bcdev-names`.
 
 - **A same-object callee's early exits are hang-refused** (R574). When R531 follows a loop's call into a
   procedure of the same object, or a table procedure on the record, it now builds that hop with R571's rule:
