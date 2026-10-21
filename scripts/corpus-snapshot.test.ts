@@ -328,6 +328,20 @@ describe("review r1: the cached path and the DONE gate", () => {
     );
     expect(() => pickMaster({ ...base, corpusHead: head, depDirs: ["/deps"] })).toThrow("DEP_DIRS");
   });
+  test("review r2: DEP_DIRS in another ORDER still match", () => {
+    const r = repo();
+    const cache = fresh("cache");
+    const a = r.git(["rev-parse", "HEAD"]);
+    snap(r.dir, r.git, cache, a);
+    const { key } = dumperKeyOf(r.dir);
+    const manifest = join(entryDir(cache, a, "fixtures", key), "manifest.json");
+    const m = JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>;
+    writeFileSync(manifest, JSON.stringify({ ...m, depDirs: ["/b", "/a"] }));
+    const head = corpusHeadOf("fixtures", a, r.git);
+    const base = { cacheRoot: cache, set: "fixtures", sha: a, key, git: r.git, corpusHead: head };
+    expect(pickMaster({ ...base, depDirs: ["/a", "/b"] }).kind).toBe("cached");
+    expect(() => pickMaster({ ...base, depDirs: ["/a"] })).toThrow("DEP_DIRS");
+  });
   test("a half-written entry (no DONE) is never used: not as cached, not as a reuse candidate", () => {
     const r = repo();
     const cache = fresh("cache");
@@ -471,11 +485,20 @@ describe("B5 the heavy-job guard", () => {
       "grep -rn x /work/src/BC.History",
       "git -C /work/src/DC log",
       "less /work/src/DO/a.al",
-      "/bin/bash -c cd /work/src/DC && ls",
     ]) {
       expect(isHeavy(a), a).toBe(false);
     }
     expect(isHeavy("bun census.ts /work/src/DC/app")).toBe(true);
+  });
+  test("review r2: a shell-wrapped census whose child names no corpus is ONE job, not zero", () => {
+    // `bash -c 'cd /work/src/BC.History && bun census.ts .'`: only the shell names the corpus.
+    const census = [
+      "600 1 600 bash -c cd /work/src/BC.History && bun census.ts .",
+      "601 600 600 bun census.ts .",
+    ];
+    const v = heavyVerdict(parsePs(ps([...base, ...census])), SELF, [], 1);
+    expect(v.foreign.map((p) => p.pid)).toEqual([600]);
+    expect(v.refuse).toBe(true);
   });
   test("an itest:alrunner run (root + al-runner child, one pgid) is ONE job; its workers add none", () => {
     const run = [

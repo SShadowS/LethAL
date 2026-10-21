@@ -70,10 +70,16 @@ export const SET_NAMES = ["fixtures", ...Object.keys(EXTERNAL_SETS)];
 /** A process whose argv names one of these is a corpus job. */
 export const CORPUS_ROOT_RE = /\/work\/src\/(BC\.History|do-lethal|DC|DO)(\/|\s|$)/;
 
-/** A shell, reader, log watcher or search that merely NAMES a job or a corpus is not the job (its
- *  child is, when there is one). Shared with verify-equivalence.ts. */
-export const WATCHER =
-  /^(\S*\/)?(bash|sh|tail|grep|ugrep|rg|ps|less|more|cat|head|git|find|ls|du|vi|vim|nano)(\s|$)/;
+/** A reader, log watcher or search that merely NAMES a corpus is not a corpus job. Shells are NOT in
+ *  this list: `bash -c 'cd /work/src/BC.History && bun census.ts .'` is a corpus job whose bun child
+ *  names no corpus (review r2), so a shell naming a corpus counts. That is over-cautious for a shell
+ *  wrapping a plain grep, which errs on the safe side. */
+export const READER =
+  /^(\S*\/)?(tail|grep|ugrep|rg|ps|less|more|cat|head|git|find|ls|du|vi|vim|nano)(\s|$)/;
+
+/** READER plus shells: for verify-equivalence.ts, which waits on a job by NAME, a shell that only
+ *  mentions a job (another agent's `bash -c ... grep al-runner`) is not the job; its child is. */
+export const WATCHER = new RegExp(`^(\\S*\\/)?(bash|sh)(\\s|$)|${READER.source}`);
 
 const INTERPRETERS = new Set(["bun", "node", "dotnet", "bash", "sh"]);
 
@@ -93,7 +99,7 @@ function scriptOf(argv: readonly string[]): string | undefined {
  * gate against a remote server (itest:hang, itest:bcdev, ...) is not heavy.
  */
 export function isHeavy(args: string): boolean {
-  if (WATCHER.test(args)) return false;
+  if (READER.test(args)) return false;
   if (CORPUS_ROOT_RE.test(args)) return true;
   const argv = args.trim().split(/\s+/);
   if (argv.includes("--worker")) return false;
@@ -204,6 +210,11 @@ function readManifest(dir: string): Manifest {
   return JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
 }
 
+/** DEP_DIRS compared as a SET: order alone never refuses reuse. */
+function sameDirs(a: readonly string[], b: readonly string[]): boolean {
+  return JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+}
+
 export type Pick =
   | { kind: "cached"; dir: string; message: string }
   | { kind: "reuse"; dir: string; from: string; message: string }
@@ -231,7 +242,7 @@ export function pickMaster(o: {
     const why =
       m.corpusHead !== o.corpusHead
         ? `its corpus head ${m.corpusHead} is not today's ${o.corpusHead}`
-        : JSON.stringify(m.depDirs) !== JSON.stringify(o.depDirs)
+        : !sameDirs(m.depDirs, o.depDirs)
           ? `its DEP_DIRS ${JSON.stringify(m.depDirs)} are not today's ${JSON.stringify(o.depDirs)}`
           : undefined;
     if (why !== undefined) {
@@ -263,7 +274,7 @@ export function pickMaster(o: {
         ? `generation code changed since ${c.sha.slice(0, 8)}: ${gen[0]}${gen.length > 1 ? ` (+${gen.length - 1} more)` : ""}`
         : m.corpusHead !== o.corpusHead
           ? `corpus head changed since ${c.sha.slice(0, 8)}: ${m.corpusHead} -> ${o.corpusHead}`
-          : JSON.stringify(m.depDirs) !== JSON.stringify(o.depDirs)
+          : !sameDirs(m.depDirs, o.depDirs)
             ? `DEP_DIRS differ from ${c.sha.slice(0, 8)}'s`
             : undefined;
     if (why === undefined) {
