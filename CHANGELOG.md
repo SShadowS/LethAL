@@ -776,7 +776,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     On the baseline it stops the session (`AlRunnerTargetCompileError`).
   - **What the net leaves alone.** A test-app entry keeps today's behaviour. A dependency's drop,
     such as Tests-TestLibraries, is scored anyway and reported as the warning
-    `al-runner-dependency-emit-excluded`.
+    `al-runner-dependency-emit-excluded`. It is a dependency only when a foreign module is named.
+    `--server` cannot see such drops, because they print only on the daemon's stderr. So no
+    warning there is not evidence of no drop.
   - **What the net closes.** `--server` used to ignore `compilationErrors`. That let the default
     transport score false survives from a bundle al-runner had refused.
   - **Runtime 17.0 everywhere.** Every fixture, example and probe app, and LethAL Control
