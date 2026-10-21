@@ -450,6 +450,13 @@ export interface ExecutionBackend {
   microsoftMode?(): MicrosoftMode;
 
   /**
+   * R389, OPTIONAL: how many published apps on the server declare `appId` as a dependency (the
+   * control app's `DependentCount`). Present on bcdev only; absent means the closed-world guard
+   * is never asked and falls back (`closed-world.ts`).
+   */
+  dependentCount?(appId: string): Promise<number>;
+
+  /**
    * R488, OPTIONAL: every test the session discovered, every arm read, given before the baseline
    * and to every worker. A backend whose test selector is a substring match (al-runner one-shot)
    * excludes the look-alikes up front with it.
