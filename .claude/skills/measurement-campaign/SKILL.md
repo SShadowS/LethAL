@@ -162,6 +162,12 @@ Compare on semantic identity (`astHash` / `codeunitName` / `operatorName` / `ope
 first run and `campaign compare` REFUSES a missing one — that difference is the whole reason they
 are separate verbs.
 
+Coverage mode (R355): `freeze` refuses a report without `coverageMode` and records the mode in the
+stage baseline, and `campaign compare` refuses by name when both sides record a mode and they
+differ. A stage frozen before R252 records no mode: it still compares, but never as a bare
+"identical"; the result says "coverage mode UNVERIFIED" (console and JSON) until the stage is
+re-frozen.
+
 Stage 3 red-checks because **R86 is open: `failure_note` is NULL for every killed mutant, so no kill
 records why it died** — a false kill and a real one are indistinguishable in the record. Commit its
 reading rule before the consumer starts: **confusion is a hard finding, success is weak evidence.**

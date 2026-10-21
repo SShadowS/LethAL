@@ -80,6 +80,7 @@ import {
   testSelectorLineFailures,
   watchResourceSelector,
 } from "./cli-default-leg";
+import { ALRUNNER_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   LAYOUT_MAX_GUARDS,
@@ -227,8 +228,8 @@ const EXPECTED = {
   // Pre-committed in docs/superpowers/specs/2026-08-26-r159-remove-assignment-build-precommitment.md.
   // R159's `shift-integer` moves this from 18 to 19: `LogAudit`'s `Amount <> 0` is an
   // equality-family comparison, so the operator claims the literal.
-  totalMutantSites: 19,
-  killed: 3,
+  totalMutantSites: ALRUNNER_FIGURES.totalMutantSites,
+  killed: ALRUNNER_FIGURES.killed,
   // R159's `shift-integer` moves this from 15 to 16: `Sandbox Logic.LogAudit`'s `Amount <> 0`
   // becomes `<> 1`. It survives because the guarded block is `Amount := Amount`, a self-assignment,
   // so changing WHICH inputs enter a block that does nothing is unobservable. Measured in the spike,
@@ -242,8 +243,8 @@ const EXPECTED = {
   // So the load-bearing fact is not the numbers moving, it is that this gate and `itest:bcdev` now
   // agree at 3 / 12 / 4 PER MUTANT, on the one axis they used to disagree about. Pre-committed in
   // docs/superpowers/specs/2026-09-09-r220-alrunner-coverage-precommitment.md before the run.
-  survived: 12,
-  noCoverage: 4,
+  survived: ALRUNNER_FIGURES.survived,
+  noCoverage: ALRUNNER_FIGURES.noCoverage,
 };
 
 /**
@@ -253,7 +254,7 @@ const EXPECTED = {
  * elsewhere, which is the failure mode that matters here: a wrong attribution that happens to
  * balance. Naming them is what makes that impossible.
  */
-const EXPECTED_NO_COVERAGE_FILE = "SandboxPricing.Codeunit.al";
+const EXPECTED_NO_COVERAGE_FILE = ALRUNNER_FIGURES.noCoverageFile;
 
 /** What two legs must agree on, per mutant. */
 const shape = (r: SessionReport) =>

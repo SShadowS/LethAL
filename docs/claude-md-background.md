@@ -36,12 +36,35 @@ not about one gate (gate history is under `docs/gates/`). Moved here by R-592.
 
 - The probe-both-locations rule for `alc.exe` and `altool.exe` is R167.
 
+## Writing a screen
+
+Two design rules came out of `itest:tables`' history (see `docs/gates/tables.md`). They guide
+anyone who writes a new screen, a check that tags kills as suspect.
+
+- Keep the tag when in doubt (R143). A receiver the project cannot resolve keeps
+  `run-trigger-skipped-insert`. For a screen, the unsafe direction is tagging too little.
+- Pin what the screen separates, not a count (R132). The same number of flagged kills means
+  opposite things on a suite that raises through an assertion library and on one that raises
+  through bare `Error(...)`. Pinning `discrimination` (`vacuous`, `partial`) is what stops the same
+  number from reading as a finding.
+
 ## Campaign reports
 
 - Two Continia Document Output reports were committed with 2,550 `originalText`/`mutatedText`
   fields before anyone noticed (redacted 2026-08-09). The ruling that filenames, paths, procedure
   names and test names may be published but source code may not dates from that day.
-- `freeze` started recording `coverageMode` with R355.
+- `freeze` started recording `coverageMode` with R355. It refuses a report without
+  `coverageMode` and records the mode in the stage baseline. `campaign compare` refuses by name
+  when both sides record a mode and the modes differ. A stage frozen before R252 records no mode:
+  it still compares, but never as a plain "identical"; the result says "coverage mode UNVERIFIED"
+  (console and JSON) until the stage is re-frozen. The `measurement-campaign` skill carries the
+  same rules.
+
+## al-runner builds
+
+The Windows host pins a source build of upstream main instead of the released global tool, because
+v2.12.0 crashed concurrent sessions (R345). The global tool stays installed as the fallback. The
+paths and history are in `docs/gates/alrunner.md`.
 
 ## Editing files
 

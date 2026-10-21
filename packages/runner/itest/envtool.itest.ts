@@ -124,6 +124,7 @@ import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
+import { ENVTOOL_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertReachEvidence } from "./reach-evidence";
 
@@ -181,14 +182,14 @@ const EXPECTED = {
   // which survives as an equivalent mutant. Same fixture as `itest:bcdev`, so the same move.
   // R159's `shift-integer` moves this from 18 to 19: `LogAudit`'s `Amount <> 0` is an
   // equality-family comparison, so the operator claims the literal.
-  totalMutantSites: 19,
-  killed: 3,
+  totalMutantSites: ENVTOOL_FIGURES.totalMutantSites,
+  killed: ENVTOOL_FIGURES.killed,
   // R159's `shift-integer` moves this from 11 to 12: `Sandbox Logic.LogAudit`'s `Amount <> 0`
   // becomes `<> 1`. It survives because the guarded block is `Amount := Amount`, a self-assignment,
   // so changing WHICH inputs enter a block that does nothing is unobservable. Measured in the spike,
   // docs/superpowers/specs/2026-08-26-r159-shift-integer-spike.md.
-  survived: 12,
-  noCoverage: 4,
+  survived: ENVTOOL_FIGURES.survived,
+  noCoverage: ENVTOOL_FIGURES.noCoverage,
 };
 
 async function readJson<T>(path: string, what: string): Promise<T> {
