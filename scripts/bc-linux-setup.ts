@@ -47,7 +47,7 @@ const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");
 const BC_DEV_MCP = "/home/dev/src/bc-dev-mcp";
 const LANE = "code";
-const HOST = "http://192.168.2.157";
+export const HOST = "http://192.168.2.157";
 const HEARTBEAT_MS = 60_000;
 
 export const SERVERS = {
@@ -368,7 +368,7 @@ export async function withLease<T>(
   return result.value;
 }
 
-async function kraken(args: readonly string[]): Promise<string> {
+export async function kraken(args: readonly string[]): Promise<string> {
   const p = Bun.spawn(["kraken", "coord", ...args], { stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([
     new Response(p.stdout).text(),
@@ -402,7 +402,7 @@ export const krakenLease: LeaseDeps = {
 // ---------------------------------------------------------------------------------------------
 // (d) publishing over the dev endpoint
 
-interface Conn {
+export interface Conn {
   readonly server: ServerName;
   /** `Basic ...`, built in memory from the secret file. */
   readonly authorization: string;
@@ -413,7 +413,11 @@ function devBase(c: Conn): string {
 }
 
 /** The package the server holds for publisher/name, or `null` when it holds none. */
-async function residentPackage(c: Conn, publisher: string, name: string): Promise<Buffer | null> {
+export async function residentPackage(
+  c: Conn,
+  publisher: string,
+  name: string,
+): Promise<Buffer | null> {
   const url = devPackagesUrl(
     { server: HOST, serverInstance: "BC", tenant: "default", port: SERVERS[c.server].dev },
     { publisher, name },
@@ -432,7 +436,7 @@ async function residentVersion(c: Conn, publisher: string, name: string): Promis
   return pkg === null ? null : readAppIdentity(pkg).version;
 }
 
-async function publishBytes(c: Conn, fileName: string, bytes: Uint8Array): Promise<void> {
+export async function publishBytes(c: Conn, fileName: string, bytes: Uint8Array): Promise<void> {
   const params = new URLSearchParams({
     tenant: "default",
     SchemaUpdateMode: "forcesync",
@@ -479,19 +483,24 @@ async function ensureApp(
   return { outcome: "published", version: after };
 }
 
-interface AppManifest {
+export interface AppManifest {
+  readonly id?: string;
   readonly name: string;
   readonly publisher: string;
   readonly version: string;
-  readonly dependencies?: readonly { readonly name: string; readonly publisher: string }[];
+  readonly dependencies?: readonly {
+    readonly id?: string;
+    readonly name: string;
+    readonly publisher: string;
+  }[];
 }
 
-function manifest(dir: string): AppManifest {
+export function manifest(dir: string): AppManifest {
   return JSON.parse(readFileSync(join(dir, "app.json"), "utf8")) as AppManifest;
 }
 
 /** Downloads System plus every Microsoft dependency of `dir` from the server into `cache`. */
-async function downloadSymbols(c: Conn, dir: string, cache: string): Promise<void> {
+export async function downloadSymbols(c: Conn, dir: string, cache: string): Promise<void> {
   const deps = (manifest(dir).dependencies ?? []).filter((d) => d.publisher === "Microsoft");
   for (const name of ["System", ...deps.map((d) => d.name)]) {
     const pkg = await residentPackage(c, "Microsoft", name);
@@ -504,7 +513,7 @@ async function downloadSymbols(c: Conn, dir: string, cache: string): Promise<voi
   }
 }
 
-async function alcCompile(
+export async function alcCompile(
   alc: string,
   project: string,
   cache: string,
@@ -616,7 +625,7 @@ function bcDevMcpCommand(): string[] {
   return ["node", join(BC_DEV_MCP, entry)];
 }
 
-function errText(err: unknown): string {
+export function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
