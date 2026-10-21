@@ -14,6 +14,7 @@ import {
   generationChanged,
   gitIn,
   heavyVerdict,
+  isHeavy,
   parseKeyLine,
   parsePs,
   pickMaster,
@@ -356,6 +357,42 @@ describe("B5 the heavy-job guard", () => {
   test("/work/src/DOX is not the DO corpus", () => {
     const v = heavyVerdict(parsePs(ps([...base, job(200, 200, "/work/src/DOX/a")])), SELF, [], 0);
     expect(v.foreign).toEqual([]);
+  });
+  test("local runners are heavy by executable or script, never by an argument naming them", () => {
+    expect(isHeavy("/work/tools/al-runner/current/al-runner --output-json --test X /tmp/a")).toBe(
+      true,
+    );
+    expect(isHeavy("al-runner --server")).toBe(true);
+    expect(
+      isHeavy("/opt/dotnet/dotnet exec /home/x/ncl-shadow/abc/al-runner.dll --output-json"),
+    ).toBe(true);
+    expect(isHeavy("bun run itest:alrunner -- --reports /coord/x")).toBe(true);
+    expect(isHeavy("bun packages/runner/itest/al-runner.itest.ts --reports /coord/x")).toBe(true);
+    // Not heavy: a unit test FILE named after al-runner, a log watcher, a remote BC gate, a worker.
+    expect(isHeavy("bun test packages/runner/tests/al-runner-v3-backend.test.ts")).toBe(false);
+    expect(isHeavy("tail -F /coord/handoff/x/al-runner.log")).toBe(false);
+    expect(isHeavy("bun packages/runner/itest/hang.itest.ts")).toBe(false);
+    expect(isHeavy("bun packages/runner/itest/al-runner.itest.ts --worker 2")).toBe(false);
+  });
+  test("an itest:alrunner run (root + al-runner child, one pgid) is ONE job; its workers add none", () => {
+    const run = [
+      "700 1 700 bun run itest:alrunner",
+      "701 700 700 bun packages/runner/itest/al-runner.itest.ts",
+      "702 701 700 /work/tools/al-runner/current/al-runner --output-json --test X",
+      "703 701 703 bun packages/runner/itest/al-runner.itest.ts --worker 1",
+    ];
+    const one = heavyVerdict(parsePs(ps([...base, ...run])), SELF, [], 0);
+    expect(one.foreign.map((p) => p.pgid)).toEqual([700]);
+    expect(one.refuse).toBe(false);
+    // With one corpus job beside it, that is two others: refuse.
+    expect(heavyVerdict(parsePs(ps([...base, ...run, job(800, 800)])), SELF, [], 0).refuse).toBe(
+      true,
+    );
+    // A unit test run named after al-runner beside a corpus job is not a second job.
+    const unit = "900 1 900 bun test packages/runner/tests/al-runner-v3-backend.test.ts";
+    expect(heavyVerdict(parsePs(ps([...base, unit, job(800, 800)])), SELF, [], 0).refuse).toBe(
+      false,
+    );
   });
 
   // Real flock on temp lock files (util-linux; the tool runs in the Linux container only, so these

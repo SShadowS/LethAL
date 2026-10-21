@@ -27,7 +27,8 @@
  * dump: the tool re-execs itself under `flock -n -E 75 <locks>/heavy.<n>` (slot 1, then 2;
  * `LETHAL_HEAVY_LOCK_DIR`, default /coord/locks). The kernel holds the lock for as long as any
  * process holds the fd, project children included, so SIGKILL needs no cleanup. Inside the slot, a
- * `ps` scan counts the distinct process groups of OTHER corpus jobs that take no slot. Known limit:
+ * `ps` scan counts the distinct process groups of OTHER heavy jobs that take no slot: corpus jobs and
+ * local runners (al-runner, itest:alrunner; `isHeavy`). Known limit:
  * two jobs started from ONE non-interactive shell (`a & b`) share a pgid and count as one, and a job
  * on a corpus COPY is invisible to the scan; both should take a slot themselves:
  * `flock -n /coord/locks/heavy.<n> <cmd>`.
@@ -68,6 +69,38 @@ export const EXTERNAL_SETS: Readonly<Record<string, string>> = {
 export const SET_NAMES = ["fixtures", ...Object.keys(EXTERNAL_SETS)];
 /** A process whose argv names one of these is a corpus job. */
 export const CORPUS_ROOT_RE = /\/work\/src\/(BC\.History|do-lethal|DC|DO)(\/|\s|$)/;
+
+const INTERPRETERS = new Set(["bun", "node", "dotnet", "bash", "sh"]);
+
+/** The script an interpreter runs (`bun [run] <x>`, `dotnet exec <x>`), else undefined. */
+function scriptOf(argv: readonly string[]): string | undefined {
+  const exe = (argv[0] ?? "").slice((argv[0] ?? "").lastIndexOf("/") + 1);
+  if (!INTERPRETERS.has(exe)) return undefined;
+  return argv.slice(1).find((a) => !a.startsWith("-") && a !== "run" && a !== "exec");
+}
+
+/**
+ * A heavy job by the runbook's rule (two container-wide): a corpus job (its argv names a corpus
+ * root), or a LOCAL runner: an `al-runner` executable (v2, or the v3 Rust binary), al-runner's
+ * `.dll` under dotnet, or the itest:alrunner root process. Matched on the EXECUTABLE or SCRIPT,
+ * never on an argument that merely contains the name (a unit test file `al-runner-v3-x.test.ts`
+ * is not a runner). A parallel itest counts once: its `--worker` processes are not counted. A BC
+ * gate against a remote server (itest:hang, itest:bcdev, ...) is not heavy.
+ */
+export function isHeavy(args: string): boolean {
+  if (CORPUS_ROOT_RE.test(args)) return true;
+  const argv = args.trim().split(/\s+/);
+  if (argv.includes("--worker")) return false;
+  const exe = (argv[0] ?? "").slice((argv[0] ?? "").lastIndexOf("/") + 1);
+  if (exe === "al-runner" || exe === "al-runner.exe") return true;
+  const script = scriptOf(argv);
+  if (script === undefined) return false;
+  return (
+    script === "itest:alrunner" ||
+    /(^|\/)al-runner\.itest\.ts$/.test(script) ||
+    /(^|\/)al-runner\.dll$/.test(script)
+  );
+}
 
 /** B1: a path whose change can move a production key. */
 export function isGenerationPath(path: string): boolean {
@@ -514,13 +547,13 @@ export function heavyVerdict(
   for (const s of slotPids) for (const d of descendants(procs, s)) skip.add(d);
   const byPgid = new Map<number, Proc>();
   for (const p of procs) {
-    if (skip.has(p.pid) || !CORPUS_ROOT_RE.test(p.args)) continue;
+    if (skip.has(p.pid) || !isHeavy(p.args)) continue;
     if (!byPgid.has(p.pgid)) byPgid.set(p.pgid, p);
   }
   const foreign = [...byPgid.values()];
   const refuse = foreign.length + otherSlotsHeld >= 2;
   const message = [
-    `heavy-job guard: ${otherSlotsHeld} other slot(s) held, ${foreign.length} other corpus job(s) by process group${refuse ? " -> REFUSED (at most two heavy jobs container-wide)" : ""}`,
+    `heavy-job guard: ${otherSlotsHeld} other slot(s) held, ${foreign.length} other heavy job(s) (corpus or local runner) by process group${refuse ? " -> REFUSED (at most two heavy jobs container-wide)" : ""}`,
     ...foreign.map((p) => `  pgid ${p.pgid} pid ${p.pid}: ${p.args.slice(0, 100)}`),
   ].join("\n");
   return { refuse, foreign, message };
