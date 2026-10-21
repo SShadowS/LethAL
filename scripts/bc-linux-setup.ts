@@ -69,6 +69,20 @@ export const GATE_FIXTURES = [
   { configDir: "sandbox-harden", target: "sandbox-harden", tests: "sandbox-harden-tests" },
 ] as const;
 
+export type GateConfigDir = (typeof GATE_FIXTURES)[number]["configDir"];
+
+/**
+ * R596: the config's top-level `selectorIds`, per fixture. `itest:agreement` refuses unless
+ * sandbox-harden's config names the ids its full runs use (`SELECTOR_IDS` in
+ * verify-agreement.itest.ts, R261), because `lethal verify` reads them from the config. The other
+ * fixtures keep LethAL's defaults.
+ */
+export const FIXTURE_SELECTOR_IDS: Partial<
+  Record<GateConfigDir, { selectorId: number; controlId: number; tableId: number }>
+> = {
+  "sandbox-harden": { selectorId: 79547, controlId: 79548, tableId: 79549 },
+};
+
 export interface PublishStep {
   /** The fixture published first. */
   readonly target: string;
@@ -221,10 +235,19 @@ export function buildLaunch(server: ServerName): object {
  * API reads (companies, extensions) use, and `BC_DEV_API_PORT` points bc-dev-mcp's Automation
  * API calls at the same port instead of its 7048 default. Measured on bc1 2026-10-21: the API
  * under the OData root answers 404 "Resource not found for the segment 'BC'".
+ *
+ * `configDir` adds that fixture's `selectorIds` (`FIXTURE_SELECTOR_IDS`, R596).
  */
-export function buildConfig(server: ServerName, login: BcLogin, paths: ConfigPaths): object {
+export function buildConfig(
+  server: ServerName,
+  login: BcLogin,
+  paths: ConfigPaths,
+  configDir: GateConfigDir,
+): object {
   const p = SERVERS[server];
+  const selectorIds = FIXTURE_SELECTOR_IDS[configDir];
   return {
+    ...(selectorIds !== undefined ? { selectorIds } : {}),
     bcdev: {
       mcpCommand: paths.mcpCommand,
       server: `${HOST}:${p.dev}`,
@@ -644,8 +667,8 @@ async function setupServer(
     );
     return true;
   }
-  for (const { path, launch } of configs) {
-    writeConfig(path, buildConfig(server, login, paths));
+  for (const { fixture, path, launch } of configs) {
+    writeConfig(path, buildConfig(server, login, paths, fixture.configDir));
     mkdirSync(dirname(launch), { recursive: true });
     writeConfig(launch, buildLaunch(server));
     summary.push(`  wrote     ${path}`);
