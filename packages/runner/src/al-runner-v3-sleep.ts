@@ -255,5 +255,5 @@ export function sleepPassRefusal(
   const hit = hitSites(own[0]?.coverage ?? [], index)[0];
   return hit === undefined
     ? undefined
-    : `${SLEEP_NOTE_TAG} covered Sleep at ${at(hit)}: Sleep does nothing on al-runner v3 (#5605), so a pass here proves nothing about a wait; not scored`;
+    : `${SLEEP_NOTE_TAG} covered Sleep at ${at(hit)}: Sleep returns at once on al-runner v3's virtual clock (#5605), so a pass here proves nothing about a wait; not scored`;
 }

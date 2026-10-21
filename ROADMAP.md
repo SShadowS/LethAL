@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**83 of 598 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**88 of 603 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -629,7 +629,7 @@ that ordering is the priority.
 - **R580** · A #if-wrapped CODE-FREE object (enum, interface, permission set, control add-in, dotnet, enumextension) turns al-runner coverage off for its whole project, though it has no coverage identity: 42 files in 12 BC.History projects · [R580.md](docs/roadmap/R580.md) · open, filed 2026-10-11
 - **R581** · An al-runner --server baseline that fails before running any test reports "returned: <no tests>" and hides al-runner's own reason ("BC version selection failed ... minimum 28.6") · [R581.md](docs/roadmap/R581.md) · open, filed 2026-10-11
 - **R583** · al-runner 069cbf32 fails itest:alrunner's --server + resource-selector leg: NavNclResourceNotFoundException for 'active-mutant.txt' · [R583.md](docs/roadmap/R583.md) · done (3d826909)
-- **R586** · Migrate the al-runner backend from BusinessCentral.AL.Runner to al-runtime-rs (owner request): measure its contract first · [R586.md](docs/roadmap/R586.md) · open
+- **R586** · The al-runner-v3 backend: the Rust al-runner v3 (formerly al-runtime-rs), its contract measured first (owner request) · [R586.md](docs/roadmap/R586.md) · open
 - **R584** · Backwards compatibility for user apps below runtime 17 (after LethAL's release) · [R584.md](docs/roadmap/R584.md) · open, filed 2026-10-18
 - **R594** · Owner step: install the Continia stack on a Linux BC server, so the CDO slice can be measured live again now that Cronus28 is parked · [R594.md](docs/roadmap/R594.md) · done (c9fc4573)
 - **R589** · Three extra BC 28.4 servers (BC on Linux) on server1 for parallel LethAL gates: bc1, bc2, bc3 · [R589.md](docs/roadmap/R589.md) · done (f17a41d9)
@@ -643,6 +643,11 @@ that ordering is the priority.
 - **R602** · al-runner-v3 inherits v2's multi-object and #if-wrapped coverage refusal without a measurement on v3 · [R602.md](docs/roadmap/R602.md) · open
 - **R599** · scripts/bc-linux-setup.ts compares app versions, not contents, so a fixture rebuilt without a version bump keeps a stale build resident · [R599.md](docs/roadmap/R599.md) · open
 - **R603** · CI's Windows check job runs the unit suite serially; a parallel run there is unmeasured · [R603.md](docs/roadmap/R603.md) · open, filed 2026-10-21
+- **R607** · al-runner-v3: snapshot reuse and --resume drop the [v3-refused-test-nearby] note · [R607.md](docs/roadmap/R607.md) · open
+- **R608** · al-runner-v3: the compile proof does not bind non-.al files, <testDir>/.alpackages or subfolders of <deps> · [R608.md](docs/roadmap/R608.md) · open
+- **R609** · al-runner-v3: a no-coverage caused by a refused covering test carries no note · [R609.md](docs/roadmap/R609.md) · open
+- **R610** · al-runner-v3: unmeasured whether --coverage-json lists files reached only by a dynamic call · [R610.md](docs/roadmap/R610.md) · open
+- **R611** · R586's T15 backend-identity scanner is blind to case labels, split compares, .includes and src subfolders · [R611.md](docs/roadmap/R611.md) · open
 
 ---
 

@@ -5,10 +5,10 @@ import {
   CDO_COMMIT,
   CDO_FINGERPRINT,
   CDO_SLICE_SHA256,
-  V3_GATE_LEGS,
   V3LegEnvironment,
   V3LegFailure,
   V3LegHeld,
+  V3_GATE_LEGS,
   cdoCheckoutRefusal,
   classifyLegC,
   classifyLegT,
@@ -41,7 +41,10 @@ describe("the D legs' CDO checkout guard (lane ruling 2026-10-21)", () => {
     expect(cdoCheckoutRefusal({ ...ok, alpackages: changed })).toMatch(/Test\/\.alpackages/);
     expect(cdoCheckoutRefusal({ ...ok, alpackages: rest })).toMatch(/Test\/\.alpackages/);
     expect(
-      cdoCheckoutRefusal({ ...ok, alpackages: [...ok.alpackages, { name: "X.app", sha256: "2".repeat(64) }] }),
+      cdoCheckoutRefusal({
+        ...ok,
+        alpackages: [...ok.alpackages, { name: "X.app", sha256: "2".repeat(64) }],
+      }),
     ).toMatch(/Test\/\.alpackages/);
     expect(cdoCheckoutRefusal({ ...ok, alpackages: [] })).toMatch(/Test\/\.alpackages/);
   });
@@ -150,23 +153,49 @@ describe("RC-2 (I-2): leg C, a fixed defect is held, never a blacklisting", () =
     kind: DEFECTS.includes(fact) ? ("defect" as const) : ("contract" as const),
     verdict,
   });
-  const asMeasured = [f("version", "matches"), f("dup", "defect-present"), f("sleep", "defect-present")];
+  const asMeasured = [
+    f("version", "matches"),
+    f("dup", "defect-present"),
+    f("sleep", "defect-present"),
+  ];
   test("everything as pre-committed is a pass", () => {
     expect(classifyLegC(asMeasured, DEFECTS, 3).outcome).toBe("pass");
   });
   test("one defect fact moving defect-present -> gone is held", () => {
-    const r = classifyLegC([asMeasured[0], f("dup", "gone"), asMeasured[2]].flatMap((x) => (x === undefined ? [] : [x])), DEFECTS, 3);
+    const r = classifyLegC(
+      [asMeasured[0], f("dup", "gone"), asMeasured[2]].flatMap((x) => (x === undefined ? [] : [x])),
+      DEFECTS,
+      3,
+    );
     expect(r.outcome).toBe("held");
     expect(r.lines.join("\n")).toMatch(/held: dup: defect-present -> gone/);
   });
   test("a contract fact diverged is gate-fail, even beside a gone defect", () => {
-    expect(classifyLegC([f("version", "diverged"), f("dup", "gone"), f("sleep", "defect-present")], DEFECTS, 3).outcome).toBe("gate-fail");
+    expect(
+      classifyLegC(
+        [f("version", "diverged"), f("dup", "gone"), f("sleep", "defect-present")],
+        DEFECTS,
+        3,
+      ).outcome,
+    ).toBe("gate-fail");
   });
   test("a defect fact diverged is gate-fail", () => {
-    expect(classifyLegC([f("version", "matches"), f("dup", "diverged"), f("sleep", "defect-present")], DEFECTS, 3).outcome).toBe("gate-fail");
+    expect(
+      classifyLegC(
+        [f("version", "matches"), f("dup", "diverged"), f("sleep", "defect-present")],
+        DEFECTS,
+        3,
+      ).outcome,
+    ).toBe("gate-fail");
   });
   test("an unmeasurable fact is infra-fail; another fact count is gate-fail", () => {
-    expect(classifyLegC([f("version", "unmeasurable"), f("dup", "defect-present"), f("sleep", "defect-present")], DEFECTS, 3).outcome).toBe("infra-fail");
+    expect(
+      classifyLegC(
+        [f("version", "unmeasurable"), f("dup", "defect-present"), f("sleep", "defect-present")],
+        DEFECTS,
+        3,
+      ).outcome,
+    ).toBe("infra-fail");
     expect(classifyLegC(asMeasured.slice(0, 2), DEFECTS, 3).outcome).toBe("gate-fail");
   });
 });
@@ -191,8 +220,16 @@ describe("RC-4 (M5): leg T's known set is pinned by key and transition", () => {
     expect(knownDifferencesRefusal(bc, own, pinned)).toBeUndefined();
   });
   test("the same COUNT with another key is refused", () => {
-    const bc2 = [row("K1", "killed", "DoubleInsert"), row("K2", "killed", "T2"), row("K3", "killed", "T3")];
-    const own2 = [row("K1", "killed", "DoubleInsert"), row("K2", "killed", "T2"), row("K3", "survived")];
+    const bc2 = [
+      row("K1", "killed", "DoubleInsert"),
+      row("K2", "killed", "T2"),
+      row("K3", "killed", "T3"),
+    ];
+    const own2 = [
+      row("K1", "killed", "DoubleInsert"),
+      row("K2", "killed", "T2"),
+      row("K3", "survived"),
+    ];
     expect(knownDifferencesRefusal(bc2, own2, pinned)).toMatch(/K3/);
   });
   test("the same key with another transition is refused", () => {

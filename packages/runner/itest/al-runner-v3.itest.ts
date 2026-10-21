@@ -979,7 +979,11 @@ async function main(): Promise<void> {
           if (record) {
             // I-3 and M5 before anything is written: this run's rows differ from BC's on exactly
             // the pinned 52, by key and transition (41 Commit, 7 duplicate key, 4 TestPage).
-            const why = knownDifferencesRefusal(bc, normalizeForComparison(r), TABLES_KNOWN_DIFFERENCES);
+            const why = knownDifferencesRefusal(
+              bc,
+              normalizeForComparison(r),
+              TABLES_KNOWN_DIFFERENCES,
+            );
             console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 52"}`);
             must(why === undefined, `T: ${why}`);
             await compare();

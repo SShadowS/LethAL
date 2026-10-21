@@ -83,8 +83,7 @@ function fake(o: {
         env.LETHAL_V3_GATE_RECEIPT ?? "",
         JSON.stringify({
           nonce: o.badNonce === true ? "stale" : env.LETHAL_V3_GATE_NONCE,
-          binarySha256:
-            o.receiptSha ?? (o.badSha === true ? sha("other") : sha("alpha3")),
+          binarySha256: o.receiptSha ?? (o.badSha === true ? sha("other") : sha("alpha3")),
           lethalCommit: o.receiptCommit ?? commit,
           outcome: o.outcome,
           legs: o.legs ?? legsFor(o.outcome),

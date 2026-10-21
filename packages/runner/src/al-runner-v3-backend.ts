@@ -31,6 +31,7 @@ import {
   alRunnerCoverageFromServer,
   buildAlRunnerCoverageIndex,
 } from "./al-runner-coverage";
+import { assertBcVersionMatchesPackages } from "./al-runner-v3-config";
 import {
   type V3ContractResult,
   runV3ContractProbe,
@@ -38,7 +39,6 @@ import {
   v3ContractSummary,
   v3DefectWarnings,
 } from "./al-runner-v3-contract";
-import { assertBcVersionMatchesPackages } from "./al-runner-v3-config";
 import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
 import {
   AlRunnerV3CoverageJoinError,

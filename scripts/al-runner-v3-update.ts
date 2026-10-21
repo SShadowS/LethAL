@@ -39,13 +39,14 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  V3_GATE_LEGS,
   type V3LegOutcome,
+  V3_GATE_LEGS,
   gateOutcome,
 } from "../packages/runner/itest/al-runner-v3-gate";
 import { type GatedBuild, parseGated, sha256OfFile } from "../packages/runner/src/al-runner-v3-pin";
 
-export const ROOT = "/work/tools/al-runner-v3";export const REPO = "aldevtools/BusinessCentral.AL.Runner";
+export const ROOT = "/work/tools/al-runner-v3";
+export const REPO = "aldevtools/BusinessCentral.AL.Runner";
 export const GATE_WORKTREE = "/work/lethal-wt/al-runner-v3-gate";
 export const LOG = "/coord/handoff/R-586/v3-updates.log";
 
@@ -165,7 +166,10 @@ export function gatePreparation(s: {
   readonly alpackagesPresent: boolean;
   readonly symbolTar: string | undefined;
 }): { readonly steps: readonly string[][] } | { readonly refused: string } {
-  const steps: string[][] = [["bun", "install"], ["bun", "scripts/build-native-parser.ts"]];
+  const steps: string[][] = [
+    ["bun", "install"],
+    ["bun", "scripts/build-native-parser.ts"],
+  ];
   if (!s.alpackagesPresent) {
     if (s.symbolTar === undefined)
       return {

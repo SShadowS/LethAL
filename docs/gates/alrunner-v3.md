@@ -23,11 +23,14 @@ The legs:
     which has the `Test/.alpackages` the legs compile against. `/work/src/do-lethal` has none.
   - The pre-commitment binds the corpus by content, not by path. Each D leg refuses to start
     (`al-runner-v3-cdo-checkout-refused`) unless the checkout is at 5f2a71d, clean, and has corpus fingerprint
-    `aa47c61c1fcbb7e3` (`scripts/corpus-fingerprint.ts`).
+    `aa47c61c1fcbb7e3` (`scripts/corpus-fingerprint.ts`). The fingerprint excludes `.dependencies`, so the
+    slice's mutated file there and every `Test/.alpackages` app are also pinned by sha256 (`CDO_SLICE_SHA256`,
+    `CDO_ALPACKAGES` in `al-runner-v3-gate.ts`).
   - The oracle reports are redacted, so the per-mutant comparison checks the source text on only 24 of the 63
     mutants. Verdicts and killing tests are compared on all 63.
 - T: `fixtures/sandbox-data`, frozen in `al-runner-v3.tables.baseline.json`, with the 52 known differences
-  from `itest:tables` asserted by key.
+  from `itest:tables` asserted by key AND transition (`TABLES_KNOWN_DIFFERENCES` in
+  `al-runner-v3-tables-known.ts`), in the record run and in every confirm run.
 
 ## The pin and the update gate
 
@@ -36,9 +39,23 @@ The legs:
   `.gated` does not name (`AlRunnerV3UngatedBuildError`), unless `LETHAL_ALRUNNER_V3_CANDIDATE=1`.
 - The pin is never moved by hand. `bun scripts/al-runner-v3-update.ts` gates newer `v3.0.0-alpha.N` releases, and
   `--edge` gates the daily `edge` release by download.
-- In both, the checksum is checked before anything is extracted, and the gate runs at `.gated`'s commit. Only a
-  `pass` moves `current`. A `held` result (every difference a move toward BC) is kept for re-pre-commitment and
-  never blacklisted.
+- In both, the checksum is checked before anything is extracted, and the gate runs at `.gated`'s commit, in a
+  worktree it prepares first (`bun install`, the native parser, the fixture `.alpackages`) or refuses by name
+  (`al-runner-v3-gate-worktree-unprepared`). Only a `pass` moves `current`.
+- A leg's outcome comes from its error's TYPE, never its text:
+  - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`;
+  - `held`: every difference is a move toward BC (a defect fact `defect-present` -> `gone`, X (b) once v3 refuses
+    the broken target, a leg-T known row reaching its BC row). Kept under `held/` for re-pre-commitment, never
+    blacklisted;
+  - `infra-fail`: the environment (the CDO checkout guard, `al-runner-v3-itest-setup-does-not-compile`, an unset
+    variable, an unmeasurable fact). Retried next run.
+- A `gate-fail` goes to `failed/<tag>@<lethalCommit>`: final for that build at that LethAL commit only, so a
+  LethAL fix and a re-pre-commitment can gate the same build again.
+- The receipt must name the requested LethAL commit, and its legs must give its outcome over the exact leg set.
+- `timeout-is-cpu` is GATE-ONLY: its burns are fixed iteration counts calibrated on one machine, so only leg C
+  measures it, and a session trusts the gated build's record instead of re-burning (M1).
+- `.gated` names a commit on `lethal/r586`. The orchestrator merges with `--no-ff`, so that commit stays reachable
+  from master.
 
 ## Frozen figures
 

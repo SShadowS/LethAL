@@ -734,8 +734,10 @@ a LethAL feature or a mode.
     alc first, and refuses to run bytes alc did not see.
   - A statement-form duplicate-key `Insert` does not raise (#5603), so kills through that error
     read `survived` (7 on the tables fixture).
-  - `Sleep` does nothing (#5605). A covering pass that reaches a `Sleep` in the project reads
-    `error`; one in a dependency is not caught.
+  - `Sleep` returns at once and moves v3's virtual AL clock forward by the requested time (#5605):
+    a test that reads the clock after a Sleep behaves as on BC, but a wait costs no time and is
+    never stopped. A covering pass that reaches a `Sleep` in the project reads `error`; one in a
+    dependency is not caught.
 
   Selecting one test runs its whole codeunit (#5611), so LethAL makes one call per test codeunit
   and notes a kill made after another covering test of that codeunit. Tests v3 does not run
