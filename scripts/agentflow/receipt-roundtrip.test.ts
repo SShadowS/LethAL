@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ALRUNNER_LEG_IDS, fullRunSublegs } from "../../packages/runner/itest/alrunner-legs.ts";
 import { readChallenge, writeReceipt } from "../../packages/runner/itest/gate-receipt.ts";
 import { ReceiptError, validateReceipt } from "./receipt.ts";
 
@@ -16,7 +17,7 @@ import { ReceiptError, validateReceipt } from "./receipt.ts";
  * longer looks at.
  */
 describe("what a gate writes is what the executor accepts", () => {
-  test("a four-subleg pass round-trips", async () => {
+  test("itest:alrunner's 23-leg pass round-trips (R-587)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-rt-"));
     try {
       const c = readChallenge({
@@ -30,7 +31,7 @@ describe("what a gate writes is what the executor accepts", () => {
 
       await writeReceipt(c, "alrunner", {
         status: "passed",
-        sublegs: ["one-shot", "server", "resource", "platform-pin"],
+        sublegs: fullRunSublegs(ALRUNNER_LEG_IDS),
         artifacts: { reported: false },
       });
 
@@ -41,12 +42,12 @@ describe("what a gate writes is what the executor accepts", () => {
           nonce: c.nonce,
           candidateSha: c.candidateSha,
           containerGeneration: 5,
-          expectedSublegs: 4,
+          expectedSublegs: ALRUNNER_LEG_IDS,
         },
         raw,
       );
       expect(ok.status).toBe("passed");
-      expect(ok.sublegs).toHaveLength(4);
+      expect(ok.sublegs).toEqual([...ALRUNNER_LEG_IDS]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

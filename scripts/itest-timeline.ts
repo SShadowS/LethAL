@@ -15,13 +15,14 @@
  * cost" number. Both are recorded. A short-lived child that starts and ends between two samples is
  * missed: the figures are a lower bound on the true peak.
  *
- * `legs` cuts the log at the al-runner gate's leg-end markers (ALRUNNER_LEGS). The gate runs its
- * legs one after another, so a leg starts where the previous one ended.
+ * `legs` cuts the log at each leg's own `leg <id>: start` and `leg <id>: done in <s>s` lines
+ * (R-587 M5), so it reads a sequential run and a `--parallel` run alike. In a parallel run a leg's
+ * memory is the subtree of its group's `--worker` process, not the whole tree.
  */
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-interface Proc {
+export interface Proc {
   readonly pid: number;
   readonly ppid: number;
   readonly rssKb: number;
@@ -112,10 +113,7 @@ async function run(outDir: string, everyS: number, argv: string[]): Promise<numb
         time: new Date().toISOString(),
         treeRssKb: sum("rssKb"),
         treePssKb: sum("pssKb"),
-        // By executable, not by any mention: the bun command line names `al-runner.itest.ts`.
-        alRunnerProcs: procs.filter((p) =>
-          /(^|\/)(al-runner|dotnet)$/.test(p.cmd.split(" ")[0] ?? ""),
-        ).length,
+        alRunnerProcs: procs.filter(isAlRunner).length,
         ...(anon !== undefined ? { cgroupAnonKb: Math.round(Number(anon) / 1024) } : {}),
         procs,
       })}\n`,
@@ -129,52 +127,64 @@ async function run(outDir: string, everyS: number, argv: string[]): Promise<numb
   return child.exitCode ?? 1;
 }
 
-/** One leg of the al-runner gate: the marker that its END prints, and the how-many-th match. */
-interface LegMarker {
-  readonly leg: string;
-  readonly pattern: RegExp;
-  readonly nth: number;
-}
-
-/** Leg-end markers of `al-runner.itest.ts`, in run order (the table each leg prints when it ends). */
-export const ALRUNNER_LEGS: readonly LegMarker[] = [
-  { leg: "sandbox A one-shot", pattern: /^ {2}verdicts: killed=/, nth: 1 },
-  { leg: "sandbox B one-shot (determinism)", pattern: /^ {2}verdicts: killed=/, nth: 2 },
-  { leg: "sandbox C --server", pattern: /^ {2}verdicts: killed=/, nth: 3 },
-  { leg: "sandbox D resource", pattern: /^ {2}verdicts: killed=/, nth: 4 },
-  { leg: "layout one-shot", pattern: /^ {2}R353 layout one-shot:/, nth: 1 },
-  { leg: "layout --server", pattern: /^ {2}R353 layout --server:/, nth: 1 },
-  { leg: "multiobject one-shot", pattern: /^ {2}R407 multi-object one-shot:/, nth: 1 },
-  { leg: "multiobject --server", pattern: /^ {2}R407 multi-object --server:/, nth: 1 },
-  { leg: "multiobject resource", pattern: /^ {2}R407 multi-object --server \+ resource:/, nth: 1 },
-  { leg: "wrapped one-shot", pattern: /^ {2}R-300b wrapped one-shot:/, nth: 1 },
-  { leg: "wrapped --server", pattern: /^ {2}R-300b wrapped --server:/, nth: 1 },
-  { leg: "wrapped resource", pattern: /^ {2}R-300b wrapped resource:/, nth: 1 },
-  { leg: "names A1 one-shot al-runner", pattern: /^ {2}R557 names A1-/, nth: 1 },
-  { leg: "names A2 one-shot none", pattern: /^ {2}R557 names A2-/, nth: 1 },
-  { leg: "names A3 server al-runner", pattern: /^ {2}R557 names A3-/, nth: 1 },
-  { leg: "names A4 server none", pattern: /^ {2}R557 names A4-/, nth: 1 },
-  { leg: "symbols LETHALA one-shot", pattern: /^ {4}one-shot \[LETHALA\] /, nth: 1 },
-  { leg: "symbols LETHALA --server", pattern: /^ {4}--server \[LETHALA\] /, nth: 1 },
-  { leg: "symbols LETHALA resource", pattern: /^ {4}resource \[LETHALA\] /, nth: 1 },
-  { leg: "symbols LETHALB one-shot", pattern: /^ {4}one-shot \[LETHALB\] /, nth: 1 },
-  { leg: "symbols LETHALB --server", pattern: /^ {4}--server \[LETHALB\] /, nth: 1 },
-  { leg: "symbols LETHALB resource", pattern: /^ {4}resource \[LETHALB\] /, nth: 1 },
-  { leg: "cli-default (buildBackend)", pattern: /^ {2}cli-default leg: killed=/, nth: 1 },
-];
-
-interface LogLine {
+export interface LogLine {
   readonly elapsed: number;
   readonly text: string;
 }
 
-/** The elapsed time each leg ENDED at, or undefined where its marker never printed. */
-export function legEnds(
-  lines: readonly LogLine[],
-  legs: readonly LegMarker[],
-): (number | undefined)[] {
-  return legs.map((m) => lines.filter((l) => m.pattern.test(l.text))[m.nth - 1]?.elapsed);
+/** One leg's window, from its own `leg <id>: start` and `leg <id>: done in <s>s` lines (M5). */
+export interface LegWindow {
+  readonly leg: string;
+  /** The `[<group>] ` prefix a `--parallel` supervisor puts on its workers' lines. */
+  readonly group?: string;
+  readonly start: number;
+  /** Absent when the leg never printed its done line (it failed, or the run was cut). */
+  end?: number;
 }
+
+const MARKER = /^(?:\[([\w-]+)\] )?leg ([\w-]+): (start|done in )/;
+
+/** Every leg window in the log, in start order. Works for a sequential and a parallel run. */
+export function legWindows(lines: readonly LogLine[]): LegWindow[] {
+  const out: LegWindow[] = [];
+  for (const l of lines) {
+    const m = MARKER.exec(l.text);
+    if (m === null) continue;
+    const [, group, leg = "", what] = m;
+    if (what === "start") {
+      out.push({ leg, ...(group !== undefined ? { group } : {}), start: l.elapsed });
+    } else {
+      const open = out.findLast((w) => w.leg === leg && w.end === undefined);
+      if (open !== undefined) open.end = l.elapsed;
+    }
+  }
+  return out;
+}
+
+/**
+ * The processes a leg owns in one sample: the subtree of its group's `--worker` process in a
+ * parallel run, or every process in a sequential one (no group).
+ */
+export function legProcs(procs: readonly Proc[], group: string | undefined): Proc[] {
+  if (group === undefined) return [...procs];
+  const worker = procs.find((p) => new RegExp(`--worker --legs ${group}(\\s|$)`).test(p.cmd));
+  if (worker === undefined) return [];
+  const inTree = new Set([worker.pid]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const p of procs) {
+      if (!inTree.has(p.pid) && inTree.has(p.ppid)) {
+        inTree.add(p.pid);
+        grew = true;
+      }
+    }
+  }
+  return procs.filter((p) => inTree.has(p.pid));
+}
+
+/** By executable, not by any mention: the bun command line names `al-runner.itest.ts`. */
+const isAlRunner = (p: Proc) => /(^|\/)(al-runner|dotnet)$/.test(p.cmd.split(" ")[0] ?? "");
 
 function legs(outDir: string): void {
   const lines: LogLine[] = readFileSync(join(outDir, "log.txt"), "utf8")
@@ -193,28 +203,29 @@ function legs(outDir: string): void {
           elapsed: number;
           treeRssKb: number;
           treePssKb: number;
-          alRunnerProcs: number;
+          procs: Proc[];
         },
     );
-  const ends = legEnds(lines, ALRUNNER_LEGS);
   const mb = (kb: number) => Math.round(kb / 1024);
   const rows = [
-    "| # | leg | start s | end s | wall s | peak tree RSS MB | peak tree PSS MB | max al-runner procs |",
-    "|---|---|---|---|---|---|---|---|",
+    "| # | leg | group | start s | end s | wall s | peak RSS MB | peak PSS MB | max al-runner procs |",
+    "|---|---|---|---|---|---|---|---|---|",
   ];
-  let start = lines.find((l) => l.text.includes("al-runner build under test"))?.elapsed ?? 0;
-  ALRUNNER_LEGS.forEach((m, i) => {
-    const end = ends[i];
-    if (end === undefined) {
-      rows.push(`| ${i + 1} | ${m.leg} | ${start.toFixed(0)} | (no marker) | | | | |`);
+  legWindows(lines).forEach((w, i) => {
+    const g = w.group ?? "";
+    if (w.end === undefined) {
+      rows.push(`| ${i + 1} | ${w.leg} | ${g} | ${w.start.toFixed(0)} | (no done line) | | | | |`);
       return;
     }
-    const inLeg = samples.filter((s) => s.elapsed >= start && s.elapsed <= end);
-    const peak = (k: "treeRssKb" | "treePssKb") => mb(Math.max(0, ...inLeg.map((s) => s[k])));
+    const end = w.end;
+    const owned = samples
+      .filter((s) => s.elapsed >= w.start && s.elapsed <= end)
+      .map((s) => legProcs(s.procs, w.group));
+    const peak = (k: "rssKb" | "pssKb") =>
+      mb(Math.max(0, ...owned.map((ps) => ps.reduce((n, p) => n + p[k], 0))));
     rows.push(
-      `| ${i + 1} | ${m.leg} | ${start.toFixed(0)} | ${end.toFixed(0)} | ${(end - start).toFixed(0)} | ${peak("treeRssKb")} | ${peak("treePssKb")} | ${Math.max(0, ...inLeg.map((s) => s.alRunnerProcs))} |`,
+      `| ${i + 1} | ${w.leg} | ${g} | ${w.start.toFixed(0)} | ${end.toFixed(0)} | ${(end - w.start).toFixed(0)} | ${peak("rssKb")} | ${peak("pssKb")} | ${Math.max(0, ...owned.map((ps) => ps.filter(isAlRunner).length))} |`,
     );
-    start = end;
   });
   const last = lines.at(-1);
   rows.push(
