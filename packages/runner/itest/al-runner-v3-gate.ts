@@ -15,6 +15,31 @@ import type { NormalizedMutant } from "./mutant-equality";
 export type V3LegOutcome = "pass" | "held" | "gate-fail" | "infra-fail" | "skipped";
 export type V3GateOutcome = "pass" | "held" | "gate-fail" | "infra-fail";
 
+/**
+ * The D legs' corpus, bound by content, not path (lane ruling 2026-10-21; R187): Continia Document
+ * Output at 5f2a71d, a clean checkout, corpus fingerprint aa47c61c1fcbb7e3
+ * (`scripts/corpus-fingerprint.ts` over the checkout root), as R594's oracle was measured.
+ */
+export const CDO_COMMIT = "5f2a71d";
+export const CDO_FINGERPRINT = "aa47c61c1fcbb7e3";
+
+/** `undefined` when the checkout is the pre-committed one; otherwise the named refusal. */
+export function cdoCheckoutRefusal(c: {
+  readonly head: string;
+  readonly porcelain: string;
+  readonly fingerprint: string;
+}): string | undefined {
+  const tag = "al-runner-v3-cdo-checkout-refused";
+  const head = c.head.trim();
+  if (!head.startsWith(CDO_COMMIT)) return `${tag}: HEAD ${head}, pre-committed ${CDO_COMMIT}`;
+  if (c.porcelain.trim() !== "")
+    return `${tag}: not clean (${c.porcelain.trim().split("\n").length} changed path(s))`;
+  const fp = c.fingerprint.slice(0, 16);
+  if (fp !== CDO_FINGERPRINT)
+    return `${tag}: corpus fingerprint ${fp}, pre-committed ${CDO_FINGERPRINT}`;
+  return undefined;
+}
+
 /** The exact leg set a `pass` must hold (r3 F6 d). */
 export const V3_GATE_LEGS = ["C", "S1", "S3", "N1", "X", "D1", "D1c", "T"] as const;
 

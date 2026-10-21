@@ -13,7 +13,15 @@ The legs:
 - S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `itest:alrunner`'s table.
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
-- D1, D1c: the CDO slice at `/work/src/do-lethal` (5f2a71d), read-only, no source text committed.
+- D1, D1c: the Continia Document Output slice, compared per mutant with R594's BC oracle
+  (`docs/measurements/r594/bc3-A.report.json`, `bc3-B.report.json`). No source text is committed.
+  - `LETHAL_ITEST_V3_CDO` names the checkout. It is `/work/lethal-wt/cdo-r396`, the read-only measurement checkout,
+    which has the `Test/.alpackages` the legs compile against. `/work/src/do-lethal` has none.
+  - The pre-commitment binds the corpus by content, not by path. Each D leg refuses to start
+    (`al-runner-v3-cdo-checkout-refused`) unless the checkout is at 5f2a71d, clean, and has corpus fingerprint
+    `aa47c61c1fcbb7e3` (`scripts/corpus-fingerprint.ts`).
+  - The oracle reports are redacted, so the per-mutant comparison checks the source text on only 24 of the 63
+    mutants. Verdicts and killing tests are compared on all 63.
 - T: `fixtures/sandbox-data`, frozen in `al-runner-v3.tables.baseline.json`, with the 52 known differences
   from `itest:tables` asserted by key.
 
@@ -49,3 +57,7 @@ The legs:
 - 2026-10-21: leg C's first live run was BLOCKED. v3 alpha.2 runs a virtual AL clock, which made `sleep-is-noop`
   and the wall-clock `timeout-is-cpu` probe miss. The r6 delta restates both.
 - r5 replaced leg X (d)'s target, because r4's control could produce no Sleep refusal at all.
+- 2026-10-21: D1's first attempt under r6 was an infra-fail before any mutant ran. It pointed at
+  `/work/src/do-lethal`, which has no `Test/.alpackages`, so the contract probe's alc compile failed
+  (`/coord/handoff/R-586/gate/r6/D1.infra-fail-no-alpackages.log`). It re-ran on `/work/lethal-wt/cdo-r396`, the
+  same commit, and passed. The checkout guard above was then added, so that another checkout cannot slip in.

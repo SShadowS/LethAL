@@ -51,6 +51,7 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import {
   type V3LegOutcome,
+  cdoCheckoutRefusal,
   classifyLegT,
   gateOutcome,
   knownDifferenceKeys,
@@ -742,6 +743,21 @@ async function legXSleep(scratch: string): Promise<void> {
 
 async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   if (CDO === undefined) throw new LegFailure(`${leg}: LETHAL_ITEST_V3_CDO unset`);
+  const git = (...a: string[]) => execFileSync("git", ["-C", CDO, ...a], { encoding: "utf8" });
+  // `scripts/corpus-fingerprint.ts` (R187), run as a script: packages/ cannot import scripts/.
+  const fpOut = execFileSync("bun", [join(REPO, "scripts", "corpus-fingerprint.ts"), CDO], {
+    encoding: "utf8",
+  });
+  const fp = /^full sha256: ([0-9a-f]{64})$/m.exec(fpOut)?.[1];
+  if (fp === undefined) throw new Error(`${leg}: corpus-fingerprint printed no sha256: ${fpOut}`);
+  const head = git("rev-parse", "HEAD").trim();
+  console.log(`  ${leg}: CDO ${CDO} at ${head}, corpus fingerprint ${fp.slice(0, 16)}`);
+  const refused = cdoCheckoutRefusal({
+    head,
+    porcelain: git("status", "--porcelain"),
+    fingerprint: fp,
+  });
+  if (refused !== undefined) throw new LegFailure(`${leg}: ${refused}`);
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -828,6 +844,13 @@ async function main(): Promise<void> {
   if (LEGS.includes("T")) preflightGateBaseline(TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
   const sha = await sha256OfFile(BIN);
   const version = (execFileSync(BIN, ["--version"], { encoding: "utf8" }) as string).trim();
+  const lethalHead = execFileSync("git", ["-C", REPO, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+  const dirty = execFileSync("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=no"], {
+    encoding: "utf8",
+  }).trim();
+  console.log(`al-runner-v3 itest: LethAL ${lethalHead}${dirty === "" ? "" : " (DIRTY)"}`);
   console.log(
     `al-runner-v3 itest: ${version} sha256 ${sha} (${BIN})${CANDIDATE ? " CANDIDATE" : ""}; legs ${LEGS.join(",")}`,
   );
@@ -856,7 +879,9 @@ async function main(): Promise<void> {
             // pre-committed 52 (41 Commit, 7 duplicate key, 4 TestPage), or nothing is recorded.
             const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
             const known = knownDifferenceKeys(bc, normalizeForComparison(r)).size;
-            console.log(`  T: differs from BC's tables baseline on ${known} rows (pre-committed 52)`);
+            console.log(
+              `  T: differs from BC's tables baseline on ${known} rows (pre-committed 52)`,
+            );
             must(known === 52, `T: this run differs from BC's on ${known} rows, pre-committed 52`);
             await assertGateBaseline(r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
           } else {

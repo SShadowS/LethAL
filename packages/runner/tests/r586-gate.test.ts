@@ -1,12 +1,41 @@
 // R586 T19 (the itest half): leg T's `held` rule (r4 I-3) and the update-gate outcome (r3 F6).
 import { describe, expect, test } from "bun:test";
 import {
+  CDO_COMMIT,
+  CDO_FINGERPRINT,
   V3_GATE_LEGS,
+  cdoCheckoutRefusal,
   classifyLegT,
   gateOutcome,
   knownDifferenceKeys,
 } from "../itest/al-runner-v3-gate";
 import type { NormalizedMutant } from "../itest/mutant-equality";
+
+describe("the D legs' CDO checkout guard (lane ruling 2026-10-21)", () => {
+  const ok = {
+    head: `${CDO_COMMIT}0123456789abcdef0123456789abcdef`,
+    porcelain: "",
+    fingerprint: `${CDO_FINGERPRINT}acb96562a01478cced5cf3295919f0a60c1d6dd18a702004`,
+  };
+  test("the measurement checkout (5f2a71d, clean, aa47c61c1fcbb7e3) is accepted", () => {
+    expect(cdoCheckoutRefusal(ok)).toBeUndefined();
+  });
+  test("another commit is refused by name", () => {
+    expect(cdoCheckoutRefusal({ ...ok, head: "c895a7d0000" })).toMatch(
+      /al-runner-v3-cdo-checkout-refused: HEAD c895a7d0000, pre-committed 5f2a71d/,
+    );
+  });
+  test("a dirty checkout is refused by name", () => {
+    expect(cdoCheckoutRefusal({ ...ok, porcelain: " M Cloud/app.json\n" })).toMatch(
+      /al-runner-v3-cdo-checkout-refused: not clean/,
+    );
+  });
+  test("another corpus fingerprint is refused by name", () => {
+    expect(cdoCheckoutRefusal({ ...ok, fingerprint: "0000000000000000ffff" })).toMatch(
+      /al-runner-v3-cdo-checkout-refused: corpus fingerprint 0000000000000000, pre-committed aa47c61c1fcbb7e3/,
+    );
+  });
+});
 
 const row = (
   key: string,
