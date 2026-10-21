@@ -32,7 +32,7 @@ import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { formatFailure } from "../src/format-failure";
@@ -44,7 +44,13 @@ import { type SessionReport, mutantRef } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import {
+  assertLaunchMatchesConfig,
+  itestConfigName,
+  itestConfigPath,
+  itestLaunchPath,
+  printItestTarget,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
@@ -69,8 +75,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 // Committed per-mutant baseline, see baseline-guard.ts. Since R332 a missing file is refused at
 // startup; record it only with LETHAL_ITEST_RECORD_BASELINE=tables.baseline.json (a record run
 // exits 3, never a pass). Never hand-write this file; it must come from a live run.
@@ -760,6 +767,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
   const launchCfg = await readOptionalLaunchConfig();
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
+  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
 
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
@@ -782,6 +790,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -790,7 +799,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     defaultDeployerIo,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -803,6 +812,7 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       mcpCommand: bcdev.mcpCommand,
       project: PROJECT_DIR,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
       packageCachePath: bcdev.packageCachePath,

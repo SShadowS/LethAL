@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type AlRunnerContractResult,
+  CONTRACT_NAMES_METHODS,
   type ContractFactName,
   contractRefusals,
   runAlRunnerContractProbe,
@@ -47,7 +48,29 @@ interface FakeShape {
   readonly spawnThrows?: string;
   /** When set, the passing-test run dies without an envelope (R345). */
   readonly passCrash?: { readonly exitCode: number; readonly stderr: string };
+  /** R557: the rows the codeunit-50012 run returns. Default `NAMES_ROWS`. */
+  readonly namesRows?: readonly string[];
 }
+
+/**
+ * R557: the rows al-runner gives probe codeunit 50012's methods, written out by hand from the
+ * measured rule (each one is in `al-runner-transport.test.ts`'s measured table, or is the same step
+ * on another name), never computed with `alRunnerMethodName`, so a moved rule cannot agree with
+ * itself here.
+ */
+const NAMES_ROWS = [
+  "Codeunit50012.Space_Name",
+  "Codeunit50012.Dasha45Name",
+  "Codeunit50012.Parena40xa41",
+  "Codeunit50012.Dota46Name",
+  "Codeunit50012.Slasha47Name",
+  "Codeunit50012.Ampa38Name",
+  "Codeunit50012._7Lead",
+  "Codeunit50012._default",
+  "Codeunit50012.Ærø_Løb",
+  "Codeunit50012.SoftHyphen",
+  "Codeunit50012.PlainName",
+];
 
 /**
  * A fake al-runner reproducing today's MEASURED shapes by default, with one fact overridable at a
@@ -132,6 +155,22 @@ function fakeSpawn(shape: FakeShape = {}): { spawn: SpawnFn; argvs: string[][] }
           }
         : { exitCode: 1, stdout: "", stderr: "error AL0111: Semicolon expected.\n" };
     }
+    // R557: the codeunit-prefix run over probe codeunit 50012.
+    if (argv.includes("Codeunit50012.")) {
+      const rows = shape.namesRows ?? NAMES_ROWS;
+      return {
+        exitCode: 0,
+        stdout: alRunnerStdout({
+          tests: rows.map((name) => ({ name, status: "pass", durationMs: 1 })),
+          passed: rows.length,
+          failed: 0,
+          errors: 0,
+          total: rows.length,
+          exitCode: 0,
+        }),
+        stderr: "",
+      };
+    }
     if (shape.passCrash !== undefined) {
       return { exitCode: shape.passCrash.exitCode, stdout: "", stderr: shape.passCrash.stderr };
     }
@@ -160,7 +199,7 @@ function refusalNames(result: AlRunnerContractResult): ContractFactName[] {
 }
 
 describe("runAlRunnerContractProbe — today's measured contract MATCHES", () => {
-  test("all six facts match against a fake reproducing al-runner v2.0.1.0", async () => {
+  test("all seven facts match against a fake reproducing al-runner v2.0.1.0", async () => {
     const { spawn } = fakeSpawn();
     const result = await runAlRunnerContractProbe("al-runner", spawn);
     // Named individually rather than as a count: a probe that silently stopped emitting one fact
@@ -172,6 +211,7 @@ describe("runAlRunnerContractProbe — today's measured contract MATCHES", () =>
     expect(verdictOf(result, "timeout-classified")).toBe("matches");
     expect(verdictOf(result, "timeout-exit-readable")).toBe("matches");
     expect(verdictOf(result, "compile-failure-not-scorable")).toBe("matches");
+    expect(verdictOf(result, "test-name-mangling")).toBe("matches");
     expect(contractRefusals(result)).toEqual([]);
   });
 
@@ -285,11 +325,71 @@ describe("runAlRunnerContractProbe — unmeasurable refuses, it does not pass", 
     expect(result.facts.map((f) => f.fact).sort()).toEqual([
       "compile-failure-not-scorable",
       "qualified-test-name",
+      "test-name-mangling",
       "timeout-classified",
       "timeout-exit-readable",
       "unknown-flag-rejected",
       "version",
     ]);
+  });
+});
+
+/** R557: the `test-name-mangling` fact, from one codeunit-prefix run over probe codeunit 50012. */
+describe("runAlRunnerContractProbe — test-name-mangling (R557)", () => {
+  test("T6a: rows equal to the rule's names for 50012 match, from one `Codeunit50012.` run without --test-exact", async () => {
+    const { spawn, argvs } = fakeSpawn();
+    const result = await runAlRunnerContractProbe("al-runner", spawn);
+    expect(verdictOf(result, "test-name-mangling")).toBe("matches");
+    const names = argvs.filter((a) => a.includes("Codeunit50012."));
+    expect(names).toHaveLength(1);
+    expect(names[0]).not.toContain("--test-exact");
+  });
+
+  test("T6b: `Dash_Name` where `Dasha45Name` is expected diverges, refuses, and prints both lists", async () => {
+    const drifted = NAMES_ROWS.map((n) =>
+      n === "Codeunit50012.Dasha45Name" ? "Codeunit50012.Dash_Name" : n,
+    );
+    const result = await runAlRunnerContractProbe(
+      "al-runner",
+      fakeSpawn({ namesRows: drifted }).spawn,
+    );
+    expect(refusalNames(result)).toEqual(["test-name-mangling"]);
+    const [refusal] = contractRefusals(result);
+    expect(refusal).toContain("Codeunit50012.Dasha45Name");
+    expect(refusal).toContain("Codeunit50012.Dash_Name");
+    expect(refusal).toContain("alRunnerMethodName");
+  });
+
+  test("the probe list holds a Unicode Cf unit (the soft hyphen), so rule step e is probed live", () => {
+    expect(CONTRACT_NAMES_METHODS).toContain("Soft\u00adHyphen");
+    expect(CONTRACT_NAMES_METHODS.some((m) => /\p{Cf}/u.test(m))).toBe(true);
+  });
+
+  test("T6b: a missing row diverges (a subset is not a match)", async () => {
+    const result = await runAlRunnerContractProbe(
+      "al-runner",
+      fakeSpawn({ namesRows: NAMES_ROWS.filter((n) => n !== "Codeunit50012.SoftHyphen") }).spawn,
+    );
+    expect(refusalNames(result)).toEqual(["test-name-mangling"]);
+  });
+
+  test("T6c: an extra row diverges (a superset is not a match)", async () => {
+    const result = await runAlRunnerContractProbe(
+      "al-runner",
+      fakeSpawn({ namesRows: [...NAMES_ROWS, "Codeunit50012.Extra"] }).spawn,
+    );
+    expect(refusalNames(result)).toEqual(["test-name-mangling"]);
+    expect(contractRefusals(result)[0]).toContain("Codeunit50012.Extra");
+  });
+
+  test("a names run with no readable envelope is unmeasurable, and refuses", async () => {
+    const spawn: SpawnFn = async (argv, o) =>
+      argv.includes("Codeunit50012.")
+        ? { exitCode: 3, stdout: "", stderr: "AL-DIAGNOSTIC-FAIL\n" }
+        : fakeSpawn().spawn(argv, o);
+    const result = await runAlRunnerContractProbe("al-runner", spawn);
+    expect(verdictOf(result, "test-name-mangling")).toBe("unmeasurable");
+    expect(refusalNames(result)).toEqual(["test-name-mangling"]);
   });
 });
 

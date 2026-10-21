@@ -387,6 +387,12 @@
           "killPosition": {
             "type": "number"
           },
+          "killReproduced": {
+            "const": true
+          },
+          "reproducedFailure": {
+            "type": "string"
+          },
           "cause": {
             "type": "string",
             "enum": [
@@ -407,7 +413,8 @@
               "reused-budget-stale",
               "timeout-unconfirmed",
               "runner-test-error",
-              "runner-refused"
+              "runner-refused",
+              "kill-not-reproduced"
             ]
           },
           "platformKillMechanism": {
@@ -1018,6 +1025,9 @@
         },
         "skippedStranded": {
           "type": "number"
+        },
+        "carryRefused": {
+          "type": "string"
         }
       }
     },

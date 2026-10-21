@@ -29,6 +29,8 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Wrapped Pair` | 78905 | `sandbox-wrapped` | R-300b C1: one object in two files, `WrappedPairA` (`#if WRAPDEF and WRAPAPP`) and `WrappedPairB` (the opposite). |
 | `Wrapped Arms` | 78906 | `sandbox-wrapped` | R-300b refusal control: a two-arm wrapper. |
 | `Wrapped Tests` | 78950 | `sandbox-wrapped-tests` | One test per procedure, `Grow*`/`Twice*` per file and twin, `PairPick`, `ArmsPick`. Asserts via `Error()`. |
+| `Names Calc` | 78800 | `sandbox-names` | R557 target: twelve identical `exit(x + 1)` procedures, each reached and killed by exactly one test. See "sandbox-names (R557)" below. |
+| `Names Tests` | 78850 | `sandbox-names-tests` | One test per procedure, under AL names al-runner renames (`"Space Step"`, `"Dash-Step"`, `"Paren(Step)"`, `"Dot.Step"`, `"Slash/Step"`, `"Amp&Step"`, `"7Digit Step"`, unquoted `Default`, `"Blåbær Step"`, `"Twin Pair"`) and two unrenamed controls (`Twin_PairLong`, `PlainControl`). UTF-8. Asserts via `Error()`. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on
 `sandbox-app` only (id `df1aa9ff-6539-4c86-a9d0-ad702b61ac9a`) and declares the same
@@ -43,7 +45,7 @@ The injected Mutation Selector/Control/Active object ids (`79197`–`79199`, see
 the project already declares. Every fixture here follows it against its own ranges (`sandbox-app`
 79197-79199, `sandbox-data` 79397-79399, `sandbox-hang` 79447-79449, `sandbox-harden` 79547-79549,
 `gift-card` 90197-90199, `sandbox-symbols` 79647-79649, `sandbox-layout` 79747-79749,
-`sandbox-multiobject` 79847-79849, `sandbox-wrapped` 78947-78949), and two fixtures must never share the three
+`sandbox-multiobject` 79847-79849, `sandbox-wrapped` 78947-78949, `sandbox-names` 78847-78849), and two fixtures must never share the three
 ids, which is R169.
 They didn't always: the original ids (`50000`–`50002`) compiled fine against al-runner but
 fail real `alc.exe` with `AL0297` ("object identifier is not valid ... allowed ranges") —
@@ -484,6 +486,43 @@ twelve mutants or their owners move, or if the guard stops refusing the fixture.
 `.alpackages` is gitignored. Create an empty `.alpackages` directory in `sandbox-multiobject`, and
 `alc` the target into `sandbox-multiobject-tests/.alpackages` from current source before compiling.
 al-runner compiles both from source and needs neither.
+
+## sandbox-names (R557)
+
+A target, `Names Calc` (78800), with twelve identical procedures, each `exit(x + 1)`, and a test
+codeunit, `Names Tests` (78850, UTF-8), with one test per procedure, each the ONLY test that reaches
+and kills its procedure (`if C.<P>(5) <> 6 then Error('<P>(5) must be 6')`). al-runner names a test
+row by BC's C# identifier for the AL method, and ten of the twelve AL names are renamed by it
+(`"Dash-Step"` is `Codeunit78850.Dasha45Step`, unquoted `Default` is `_Default`, `"Blåbær Step"` is
+`Blåbær_Step`); `Twin_PairLong` and `PlainControl` are controls. `"Twin Pair"` and `Twin_PairLong`
+are the R488 look-alike pair, a unit-only trap (T5 in the plan): no live verdict depends on it.
+
+36 mutants, M0001-M0036, one batch: per procedure `empty-block`, `return-value`, `swap-additive`.
+Both apps declare runtime 17.0 (owner ruling, R-583). Pre-committed per mutant in
+`docs/superpowers/specs/2026-10-09-r557-names-precommitment.md` (table A); the checks are
+`packages/runner/itest/names-fixture.ts`, and `packages/runner/tests/names-fixture.test.ts` fails
+offline if the table stops describing the fixture.
+
+**Frozen figures** (their home, with the spec, until the owner approves the CLAUDE.md sentence):
+- `itest:alrunner`, four legs at one batch: A1 one-shot coverage `al-runner`, A2 one-shot `none`, A3
+  `--server` `al-runner`, A4 `--server` `none`. Each: killed **36** / survived **0** / no-coverage
+  **0**, every kill by its row's test with its row's text, a green baseline (12 of 12), no
+  `al-runner-undecided-test-missing` warning. A1 and A3 cover each mutant by its one test; A2 and A4
+  by all twelve. A2-A4 equal A1 per mutant. The one-shot legs carry the R123 `test-name-mangling`
+  fact, `matches`; the `--server` legs print no contract line. Baseline
+  `al-runner.names.baseline.json` (A1).
+- RED-CHECKED, pre-commitment section B: on the pre-R557 name builder the same legs read 6 / 30 / 0
+  (coverage `none`) and 6 / 0 / 30 (coverage `al-runner`), M0001-M0030 moving.
+- `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-names`: the same table on Cronus28, fenced, 36 / 0 / 0,
+  baseline `bcdev.names.baseline.json`. Kept out of `itest:bcdev`, so its 3 / 12 / 4 cannot move.
+- Both baselines are registered and wait for their one R332 record run (`PENDING_FIRST_RECORD`).
+
+A2 costs about 115 one-shot invocations (10-11 min), so the names legs add about 16-18 min to
+`itest:alrunner`.
+
+`.alpackages` is gitignored. Create an empty `.alpackages` directory in `sandbox-names`, and `alc`
+the target into `sandbox-names-tests/.alpackages` from current source before compiling. For bcdev,
+publish the target, then the tests app (`altool publishapp`), as for every bcdev fixture.
 
 ## Tier-2 Phase 0 — the `sandbox-data` table fixture
 
@@ -1629,6 +1668,49 @@ For real credentials, create a gitignored `lethal.config.local.json` next to `ap
 the same shape and point `--config` at it. `packages/runner/itest/bcdev.itest.ts` reads this
 file (plus `launch.local.json` for `environmentType`/`environmentName`) directly — it is not
 routed through the CLI.
+
+### The BC on Linux servers: `lethal.config.bc1.json`, `bc2`, `bc3` (R589)
+
+Three BC 28.4 servers run on server1 (192.168.2.157), on BC on Linux, so the BC gates can run in
+parallel instead of queueing for Cronus28. They are W1: the company is `CRONUS International Ltd.`
+(not Cronus28's DK `CRONUS Danmark A/S`), the tenant `default`, the instance `BC`, with Basic
+authentication.
+
+| server | OData | dev endpoint | API |
+|---|---|---|---|
+| `bc1` | 7048 | 7049 | 7052 |
+| `bc2` | 7148 | 7149 | 7152 |
+| `bc3` | 7248 | 7249 | 7252 |
+
+`bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` prepares them. It writes one gitignored
+`lethal.config.<server>.json` and `.vscode/launch.<server>.json` in each gate's fixture directory
+(`sandbox-app`, `sandbox-data`, `sandbox-hang`, `sandbox-harden`). It then publishes LethAL Control
+and every app a BC gate needs (`PUBLISH_PLAN`: `sandbox-probes` before `sandbox-app`, each fixture
+pair, `sandbox-harden-answers`, `sandbox-wrapped` built with `/define:WRAPDEF`, the names pair) over
+the dev endpoint, targets before their dependents, skipping an app the server already has. It ends
+with `lethal doctor` on each config. A gate picks a server with
+`LETHAL_ITEST_CONFIG=lethal.config.bc1.json`, and prints the target it will measure as its first
+line (config, host and dev port, OData root, API root).
+
+`LETHAL_ITEST_CONFIG=lethal.config.<x>.json` requires `.vscode/launch.<x>.json` naming the same
+server: the itest refuses when the file is missing, or when its host (or its dev port, where both
+state one) differs from the config's. With the variable unset, `lethal.config.local.json` and
+`launch.local.json` work as before.
+
+- **The databases are in memory.** A restart of a server's container, or of server1, resets it to
+  a fresh CRONUS with none of LethAL's apps. Re-run the setup script; it is safe to run again.
+- The login is in the gitignored fixture config and in `/coord/secrets/bc-linux.env` (written by
+  the owner). It is never in this repository, which is public.
+- `server` in these configs carries the dev port (`http://192.168.2.157:7149` for `bc2`) and
+  `baseUrl` the OData root, because the three servers share one host: without the port they would
+  be one server to LethAL's quarantine and publish queue.
+- The itests take both ports from the config (R591, folded into R589): OData from `baseUrl`
+  (`configuredOdataBaseUrl`), the dev port from `port`, which reaches bc-dev-mcp and altool's
+  `--port`. LethAL's own API reads (companies, extensions) go to `apiBaseUrl`, because BC on Linux
+  serves the API on its own port. A config with none of these (Cronus28) keeps 7048 for OData and
+  API, and 7049 for dev.
+- **Cronus284 is CentralGauge's, not LethAL's.** LethAL used it from 2026-09-26 to 2026-10-20, and
+  measurements from that time say so; it is not a target any more.
 
 ## Running the fixture manually
 

@@ -1,11 +1,38 @@
-# R557 pre-commitment r3: `sandbox-names` + `sandbox-names-tests`
+# R557 pre-commitment r4: `sandbox-names` + `sandbox-names-tests`
 
-Written 2026-10-09 (r2), re-validated 2026-10-18 against master `0254e6d2` (r3), before any LethAL session on this
+Written 2026-10-09 (r2), re-validated 2026-10-18 against master `0254e6d2` (r3), amended 2026-10-20 (r4) after r3's
+live run was BLOCKED on one row (below), before any LethAL session on this
 fixture and before any fix code exists. The lane commits it as
 `docs/superpowers/specs/2026-10-09-r557-names-precommitment.md` (specs-only, `[skip ci]`, to master) BEFORE its first
 live run. The lane may change this table only before that commit, and only to match the OFFLINE mutant listing
 (section 0). After the commit, a difference in any live run is a finding and a stop. Never edit a row to match a run.
 Upstream: al-runner #5572.
+
+## Changes from r3 (approved by the orchestrator 2026-10-20; the standing record-amend-commit-rerun precedent)
+
+**r3 was BLOCKED.** The run: `itest:alrunner` in record mode for `al-runner.names.baseline.json` on build `ca355bbd`
+(clean tree), with the pinned `v2.12.0-main.f06ee78c` copy. Every existing leg passed. All four names legs scored
+36 / 0 / 0 with `baselineGreen: true`, and every row (verdict, killing test, covering set, kill text) equalled table
+A. The run failed only on this, verbatim:
+
+```
+Error: R557: 2 names-leg check(s) failed:
+  - R557 names A3-server-al-runner: rows differ from the pre-committed table (docs/superpowers/specs/2026-10-09-r557-names-precommitment.md):
+  - a --server leg printed a contract line: ["[lethal] al-runner wire contract: exit 0: \"al-runner v2.12.0-main.f06ee78c\" | version=matches unknown-flag-rejected=matches qualified-test-name=matches test-name-mangling=matches timeout-classified=matches timeout-exit-readable=matches compile-failure-not-scorable=matches | banner=false | measured-under=--package-cache ...
+  - R557 names A4-server-none: rows differ from the pre-committed table (docs/superpowers/specs/2026-10-09-r557-names-precommitment.md):
+  - a --server leg printed a contract line: [... the same line ...]
+```
+
+**Why the r3 row was wrong.** r3's A3/A4 rows said "**No contract line** in its output". That came from the plan
+review's M1 ("R123 runs only inside `runSession`, and only when pinned, so only one-shot legs"), and M1 was wrong.
+`runSession`'s R149 re-probe runs whenever provisioning yields a platform-app directory, and that includes `--server`
+sessions. This is filed as [[R344]] ("On a `--server` session, `runSession` still re-probes the al-runner contract
+under the platform-app pin, an argv no mutant uses"). The existing wrapped `--server` and resource legs emit the same
+line; no gate ever asserted its absence. No product behaviour moved, and R557 does not touch that code.
+
+**The ONLY change in r4.** Legs A3 and A4: the session emits exactly one `al-runner-contract-pinned` line, and it
+carries `test-name-mangling=matches`, as on A1/A2. M1's "no contract line on the `--server` legs" is withdrawn. No
+other row, count or leg changes.
 
 ## Changes from r2
 
@@ -41,7 +68,8 @@ Evidence: `/coord/handoff/R-557/revalidate.md`. No row of table A or B moved, an
 - **M4.** Added `DanishStep` with test `"Blåbær Step"` as procedure 9 (M0025-M0027). Every later mutant moved by 3.
   The totals are now 36 / 0 / 0 after the fix, and on master 6 / 30 / 0 (coverage none) and 6 / 0 / 30 (coverage
   al-runner).
-- **M1.** The contract fact is asserted on the one-shot legs, and no contract line on the `--server` legs.
+- **M1.** The contract fact is asserted on the one-shot legs, and no contract line on the `--server` legs. (The
+  second half is WITHDRAWN in r4: see "Changes from r3".)
 - **M2.** The Twin trap is declared UNIT-ONLY. No live leg shows it. See section A's note.
 - **M3.** Leg A2's expected cost is stated.
 - **Section C.** Lists the I1 and I3 carve-outs and C1's history and resume refusals as directions proven by unit
@@ -88,8 +116,8 @@ Evidence: `/coord/handoff/R-557/revalidate.md`. No row of table A or B moved, an
 |---|---|---|---|---|
 | A1 | al-runner `v2.12.0-main.f06ee78c` (sha `f06ee78c3f81b3da51eaee6e662c974946735e42`, BC 28.5.54151.55132), the scratch copy `/tmp/claude-1000/-work-lethal-wt-lane-bugs/42bbe1d1-6c93-426d-bdfa-21fd7ce46008/scratchpad/r557f/f06ee78c/al-runner` via `LETHAL_ALRUNNER_PATH`. The gate's first line must print this build | one-shot, R551 **exact** path (measured accepted on this build) | `al-runner`, set explicitly | table A. Each mutant's `coveringTests` is exactly `["Names Tests.<its killer>"]`. `baselineGreen: true`, 12/12 baseline tests pass, no `baseline-red` caveat, no `al-runner-undecided-test-missing` warning. R123 `test-name-mangling` fact present and `matches`. One `al-runner-test-selector` line (exact), and `testSelector: "exact"` with no reason on every measured context (R558). Frozen as `al-runner.names.baseline.json` (R556 format, scheme 40) |
 | A2 | same | one-shot, exact | `none`, set explicitly | table A, with verdict, killing test and kill text equal to A1 per mutant. `coveringTests` holds all 12 tests. The `test-name-mangling` fact is present and `matches`. Same selector line and `testSelector` as A1. **Cost: about 115 one-shot invocations, about 10-11 min** (12 baseline + 78 to find each procedure's killer in name order + 24 killer-first) |
-| A3 | same | `--server` | `al-runner`, set explicitly | equal to A1 per mutant, including `coveringTests` (the leg that showed the false `no-coverage`). **No contract line** in its output. No selector line and no `testSelector` |
-| A4 | same | `--server` | `none`, set explicitly | equal to A2 per mutant. **No contract line**. No selector line and no `testSelector` |
+| A3 | same | `--server` | `al-runner`, set explicitly | equal to A1 per mutant, including `coveringTests` (the leg that showed the false `no-coverage`). **Exactly one `al-runner-contract-pinned` line, carrying `test-name-mangling=matches`** (r4; the R149 re-probe, [[R344]]). No selector line and no `testSelector` |
+| A4 | same | `--server` | `none`, set explicitly | equal to A2 per mutant. **Exactly one `al-runner-contract-pinned` line, carrying `test-name-mangling=matches`** (r4, [[R344]]). No selector line and no `testSelector` |
 | B1 | Cronus28 (bcdev), `itest:bcdev-names` | fenced | fenced | table A: verdict and killing test equal to A1 per mutant, and kill text contains the row's text. Frozen as `bcdev.names.baseline.json`. The first live evidence for non-ASCII (`Blåbær Step`) and special-character test names in `Test Method Line` |
 
 Every al-runner leg: no R557 refusal fires, and the session exits 0.

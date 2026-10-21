@@ -259,6 +259,9 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
         // through unchanged. The shim used to drop it, which made every fixture built here invisible
         // to anything reading a kill's own words — R121's screen, for one.
         ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
+        // R577: carried unchanged by the same call site, like the kill text above.
+        ...(o.killReproduced === true ? { killReproduced: true as const } : {}),
+        ...(o.reproducedFailure !== undefined ? { reproducedFailure: o.reproducedFailure } : {}),
         coveringTests: o.coveringTests ?? [],
         ...(o.coverageAttribution !== undefined
           ? { coverageAttribution: o.coverageAttribution }
@@ -282,6 +285,9 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
         ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
         // R86 — see the `mutant-carried` push above.
         ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
+        // R577 — see the `mutant-carried` push above.
+        ...(o.killReproduced === true ? { killReproduced: true as const } : {}),
+        ...(o.reproducedFailure !== undefined ? { reproducedFailure: o.reproducedFailure } : {}),
         ...(o.cause !== undefined ? { cause: o.cause } : {}),
         coveringTests: o.coveringTests ?? [],
         ...(o.coverageAttribution !== undefined

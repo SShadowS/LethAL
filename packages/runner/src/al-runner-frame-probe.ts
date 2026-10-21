@@ -415,7 +415,10 @@ async function viaOneShot(
   if (res.kind === "deadline") {
     return { build, failure: ["deadline", `the probe did not finish within ${deadlineMs} ms`] };
   }
-  if (res.kind === "error") return { build, failure: ["run-failed", tail(res.detail)] };
+  // R557: a probe that selected nothing ran nothing, as a failed run did not.
+  if (res.kind === "error" || res.kind === "none-selected") {
+    return { build, failure: ["run-failed", tail(res.detail)] };
+  }
   const notPassed = testNotPassed(res.tests);
   if (notPassed !== undefined) return { build, failure: ["test-not-passed", notPassed] };
   let xml: string;

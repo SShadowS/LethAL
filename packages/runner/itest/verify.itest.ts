@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { hashPackage } from "../src/baseline-snapshot";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { odataBaseUrl, validateBcDevConfig, verifyFromCli } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig, verifyFromCli } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { explain } from "../src/explain";
@@ -49,7 +49,13 @@ import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT, runVerify } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
 import { preflightReadOnlyBaseline, readGateBaseline } from "./baseline-guard";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import {
+  assertLaunchMatchesConfig,
+  itestConfigName,
+  itestConfigPath,
+  itestLaunchPath,
+  printItestTarget,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { assertReachFields } from "./verify-reach-fields";
@@ -67,8 +73,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 const BASELINE_PATH = join(HERE, "bcdev.baseline.json");
 const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 
@@ -200,6 +207,7 @@ async function main(): Promise<void> {
   if (!launchCfg) throw new Error(`${LAUNCH_LOCAL_PATH} has no configurations[0] entry`);
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
+  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
   const testAppJson = await readJson<{ publisher: string }>(
     join(TEST_DIR, "app.json"),
     "sandbox-tests app.json",
@@ -222,6 +230,7 @@ async function main(): Promise<void> {
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -230,7 +239,7 @@ async function main(): Promise<void> {
     defaultDeployerIo,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -242,6 +251,7 @@ async function main(): Promise<void> {
       mcpCommand: bcdev.mcpCommand,
       project: PROJECT_DIR,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
       packageCachePath: bcdev.packageCachePath,

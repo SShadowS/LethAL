@@ -10,6 +10,8 @@ export function fakeAlRunnerServer(
     silent?: boolean;
     onRunTests?: () => void;
     perTestCoverage?: readonly unknown[];
+    /** R557: the summary's `exitCode`, 0 unless set. */
+    exitCode?: number;
     /** Extra summary fields, merged last (R583: `exitCode`, `compilationErrors`). */
     summary?: Record<string, unknown>;
   } = {},
@@ -36,7 +38,7 @@ export function fakeAlRunnerServer(
           emit(
             JSON.stringify({
               type: "summary",
-              exitCode: 0,
+              exitCode: opts.exitCode ?? 0,
               total: tests.length,
               ...(opts.perTestCoverage !== undefined
                 ? { perTestCoverage: opts.perTestCoverage }
