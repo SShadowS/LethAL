@@ -1,0 +1,293 @@
+/**
+ * R586 §12 (plan `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`, r2 §12 with r3's
+ * F6 and r4's I-3): the al-runner v3 update gate. Separate from `al-runner-update.sh` (the frozen
+ * .NET al-runner). Daily, or by hand:
+ *
+ *   bun scripts/al-runner-v3-update.ts [--regate <lethal commit>] [--dry-run]
+ *
+ * 1. Candidates: `v3.0.0-alpha.N` releases of aldevtools/BusinessCentral.AL.Runner with N above the
+ *    gated build's. Never `edge`.
+ * 2. The linux-x64 tarball and SHA256SUMS go into a NEW empty folder; a checksum mismatch is
+ *    `infra-fail` and the tarball is NEVER extracted. Extraction goes into another new folder.
+ * 3. The gate runs in a detached worktree at `.gated`'s `lethalCommit` (never a moving master), with
+ *    `LETHAL_ALRUNNER_V3_CANDIDATE=1`, the CDO corpus and leg T. Its receipt is deleted before the
+ *    run and accepted only with this run's nonce AND the candidate's binary sha256.
+ * 4. Outcomes: `pass` -> installed, `.gated` written, `current` moved (unless a v3 process is
+ *    running: "deferred: in use"); `gate-fail` -> `failed/` for good; `held` (every difference a
+ *    move toward BC) -> `held/`, never blacklisted, a line for the orchestrator to re-pre-commit;
+ *    `infra-fail` -> nothing kept, retried next run, a line after 3 in a row.
+ * `--regate <commit>`: gate the CURRENT build at a new LethAL commit; on pass `.gated` takes it.
+ * The script never commits.
+ */
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { type GatedBuild, parseGated, sha256OfFile } from "../packages/runner/src/al-runner-v3-pin";
+
+export const ROOT = "/work/tools/al-runner-v3";
+export const REPO = "aldevtools/BusinessCentral.AL.Runner";
+export const GATE_WORKTREE = "/work/lethal-wt/al-runner-v3-gate";
+export const LOG = "/coord/handoff/R-586/v3-updates.log";
+
+export type Outcome = "pass" | "held" | "gate-fail" | "infra-fail";
+
+/** Everything with a side effect, injected so the test drives every branch (T19). */
+export interface UpdateDeps {
+  readonly root: string;
+  /** Release tags, newest first (`gh release list`). */
+  listReleases(): Promise<readonly string[]>;
+  /** Downloads the linux-x64 tarball and SHA256SUMS of `tag` into the empty `dir`. */
+  download(tag: string, dir: string): Promise<{ readonly tarball: string; readonly sums: string }>;
+  /** Extracts `tarball` into the empty `dir`; returns the binary's path. */
+  extract(tarball: string, dir: string): Promise<string>;
+  versionOf(binary: string): Promise<string>;
+  /** Checks out `commit` detached in the gate worktree and runs the gate with `env`. */
+  runGate(commit: string, env: Readonly<Record<string, string>>): Promise<void>;
+  /** A running process whose executable resolves under `root`. */
+  inUse(): Promise<boolean>;
+  log(line: string): Promise<void>;
+  now(): string;
+}
+
+/** `v3.0.0-alpha.N` -> N; anything else (edge, other lines) -> undefined. */
+export function alphaOf(tag: string): number | undefined {
+  const m = /^v3\.0\.0-alpha\.(\d+)$/.exec(tag);
+  return m === null ? undefined : Number(m[1]);
+}
+
+/** Candidates above the gated alpha, oldest first; never `edge`. */
+export function candidates(tags: readonly string[], gatedAlpha: number): string[] {
+  return tags
+    .map((t) => ({ t, n: alphaOf(t) }))
+    .filter((x): x is { t: string; n: number } => x.n !== undefined && x.n > gatedAlpha)
+    .sort((a, b) => a.n - b.n)
+    .map((x) => x.t);
+}
+
+/** The sha256 SHA256SUMS states for `file` (by basename), or undefined. */
+export function expectedSha(sums: string, file: string): string | undefined {
+  const name = file.split("/").pop() ?? file;
+  for (const line of sums.split("\n")) {
+    const m = /^([0-9a-f]{64})\s+\*?(.+)$/.exec(line.trim());
+    if (m !== null && m[2] === name) return m[1];
+  }
+  return undefined;
+}
+
+/** Reads the receipt: valid only with this nonce and this binary's sha256; else infra-fail. */
+export async function readReceipt(path: string, nonce: string, sha: string): Promise<{ outcome: Outcome; why: string }> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    return { outcome: "infra-fail", why: "no receipt" };
+  }
+  const r = raw as { nonce?: unknown; binarySha256?: unknown; outcome?: unknown; legs?: unknown };
+  if (r.nonce !== nonce) return { outcome: "infra-fail", why: "a receipt of another run (nonce)" };
+  if (r.binarySha256 !== sha) return { outcome: "infra-fail", why: "a receipt for another binary (sha256)" };
+  if (r.outcome === "pass" || r.outcome === "held" || r.outcome === "gate-fail" || r.outcome === "infra-fail") {
+    return { outcome: r.outcome, why: `receipt legs ${JSON.stringify(r.legs)}` };
+  }
+  return { outcome: "infra-fail", why: `a receipt with outcome ${JSON.stringify(r.outcome)}` };
+}
+
+async function readCurrentGated(root: string): Promise<GatedBuild & { readonly dir: string }> {
+  const dir = await readlink(join(root, "current"));
+  return { ...parseGated(await readFile(join(dir, ".gated"), "utf8"), join(dir, ".gated")), dir };
+}
+
+async function infraCount(root: string, name: string, bump: boolean): Promise<number> {
+  const f = join(root, "infra", `${name}.count`);
+  await mkdir(join(root, "infra"), { recursive: true });
+  const n = existsSync(f) ? Number(await readFile(f, "utf8")) : 0;
+  const next = bump ? n + 1 : 0;
+  await writeFile(f, String(next));
+  return next;
+}
+
+/** One candidate (or the current build, on `--regate`) through the gate. */
+export async function gateOne(
+  deps: UpdateDeps,
+  tag: string,
+  gated: GatedBuild,
+  opts: { readonly regateAt?: string } = {},
+): Promise<Outcome> {
+  const { root } = deps;
+  const work = await mkdtemp(join(root, ".work-"));
+  try {
+    let binary: string;
+    let tarballSha: string | undefined;
+    const name = tag;
+    if (opts.regateAt !== undefined) {
+      binary = join(await readlink(join(root, "current")), "al-runner");
+    } else {
+      if (existsSync(join(root, "failed", name))) return "gate-fail";
+      const dl = join(work, "dl");
+      await mkdir(dl);
+      let got: { tarball: string; sums: string };
+      try {
+        got = await deps.download(tag, dl);
+      } catch (err) {
+        await deps.log(`${deps.now()} ${tag}: infra-fail: download: ${String(err)}`);
+        return infra(deps, name);
+      }
+      const want = expectedSha(await readFile(got.sums, "utf8"), got.tarball);
+      tarballSha = await sha256OfFile(got.tarball);
+      if (want === undefined || want !== tarballSha) {
+        // Logged loudly, never extracted.
+        await deps.log(`${deps.now()} ${tag}: infra-fail: CHECKSUM MISMATCH (SHA256SUMS ${want ?? "none"}, tarball ${tarballSha}); not extracted`);
+        return infra(deps, name);
+      }
+      const x = join(work, "x");
+      await mkdir(x);
+      binary = await deps.extract(got.tarball, x);
+    }
+    const sha = await sha256OfFile(binary);
+    const version = await deps.versionOf(binary);
+    const nonce = randomUUID();
+    const receipt = join(work, "receipt.json");
+    await rm(receipt, { force: true });
+    const commit = opts.regateAt ?? gated.lethalCommit;
+    try {
+      await deps.runGate(commit, {
+        LETHAL_ITEST_ALRUNNER_V3: "1",
+        LETHAL_ALRUNNER_V3_PATH: binary,
+        ...(opts.regateAt === undefined ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1" } : {}),
+        LETHAL_ITEST_V3_TABLES: "1",
+        LETHAL_V3_GATE_NONCE: nonce,
+        LETHAL_V3_GATE_RECEIPT: receipt,
+      });
+    } catch {
+      // A failing gate still writes its receipt; the receipt decides.
+    }
+    const { outcome, why } = await readReceipt(receipt, nonce, sha);
+    await deps.log(`${deps.now()} ${tag} (${version}, ${sha}) at ${commit}: ${outcome}: ${why}`);
+    if (outcome === "infra-fail") return infra(deps, name);
+    await infraCount(root, name, false);
+    if (outcome === "gate-fail") {
+      if (opts.regateAt === undefined) {
+        await mkdir(join(root, "failed", name), { recursive: true });
+        await cp(binary, join(root, "failed", name, "al-runner"));
+      }
+      return "gate-fail";
+    }
+    if (outcome === "held") {
+      if (opts.regateAt === undefined) {
+        await mkdir(join(root, "held", name), { recursive: true });
+        await cp(binary, join(root, "held", name, "al-runner"));
+      }
+      await deps.log(`${deps.now()} ${tag}: HELD for the orchestrator: every difference is a move toward BC; re-pre-commit, then re-gate`);
+      return "held";
+    }
+    // pass
+    const dirName = opts.regateAt !== undefined ? undefined : `${tag.replace(/^v/, "")}-${/\(([0-9a-f]+)\)/.exec(version)?.[1] ?? "unknown"}`;
+    const dest = dirName === undefined ? await readlink(join(root, "current")) : join(root, dirName);
+    if (dirName !== undefined) {
+      await mkdir(dest, { recursive: true });
+      await cp(binary, join(dest, "al-runner"));
+      await chmod(join(dest, "al-runner"), 0o755);
+    }
+    const next: GatedBuild = {
+      version,
+      binarySha256: sha,
+      lethalCommit: commit,
+      ...(tarballSha !== undefined ? { tarballSha256: tarballSha } : gated.tarballSha256 !== undefined ? { tarballSha256: gated.tarballSha256 } : {}),
+      gatedAt: deps.now(),
+    };
+    await writeFile(join(dest, ".gated"), `${JSON.stringify(next, null, 2)}\n`);
+    if (dirName !== undefined) {
+      if (await deps.inUse()) {
+        await deps.log(`${deps.now()} ${tag}: passed; deferred: in use (current not moved)`);
+        return "pass";
+      }
+      const tmp = join(root, `current.${randomUUID()}`);
+      await symlink(dest, tmp);
+      await rename(tmp, join(root, "current"));
+      await deps.log(`${deps.now()} ${tag}: current -> ${dest} (a line for R586)`);
+    }
+    return "pass";
+  } finally {
+    await rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function infra(deps: UpdateDeps, name: string): Promise<Outcome> {
+  const n = await infraCount(deps.root, name, true);
+  if (n >= 3) await deps.log(`${deps.now()} ${name}: ${n} infra-fails in a row: a line for the orchestrator`);
+  return "infra-fail";
+}
+
+/** The daily run: every candidate above the gated alpha, oldest first, until one passes. */
+export async function updateOnce(deps: UpdateDeps, opts: { readonly regateAt?: string } = {}): Promise<Outcome[]> {
+  const current = await readCurrentGated(deps.root);
+  if (opts.regateAt !== undefined) return [await gateOne(deps, "regate", current, opts)];
+  const gatedAlpha = /3\.0\.0-alpha\.(\d+)/.exec(current.version)?.[1];
+  if (gatedAlpha === undefined) throw new Error(`the gated build "${current.version}" is not a v3 alpha`);
+  const out: Outcome[] = [];
+  for (const tag of candidates(await deps.listReleases(), Number(gatedAlpha))) {
+    const o = await gateOne(deps, tag, current);
+    out.push(o);
+    if (o === "pass") break;
+  }
+  return out;
+}
+
+/** Real side effects. */
+export function realDeps(root = ROOT): UpdateDeps {
+  const run = async (argv: string[], env: Record<string, string> = {}, cwd?: string) => {
+    const p = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env }, ...(cwd !== undefined ? { cwd } : {}) });
+    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    const code = await p.exited;
+    if (code !== 0) throw new Error(`${argv.join(" ")}: exit ${code}: ${err.slice(-400)}`);
+    return out;
+  };
+  return {
+    root,
+    listReleases: async () =>
+      (await run(["gh", "release", "list", "--repo", REPO, "--limit", "50", "--json", "tagName", "--jq", ".[].tagName"]))
+        .split("\n")
+        .filter((t) => t !== ""),
+    download: async (tag, dir) => {
+      await run(["gh", "release", "download", tag, "--repo", REPO, "--dir", dir, "--pattern", "*x86_64-unknown-linux*.tar.xz", "--pattern", "SHA256SUMS"]);
+      const files = await readdir(dir);
+      const tarball = files.find((f) => f.endsWith(".tar.xz"));
+      if (tarball === undefined || !files.includes("SHA256SUMS")) throw new Error(`release ${tag} has no linux-x64 tarball or SHA256SUMS`);
+      return { tarball: join(dir, tarball), sums: join(dir, "SHA256SUMS") };
+    },
+    extract: async (tarball, dir) => {
+      await run(["tar", "-xJf", tarball, "-C", dir]);
+      for (const n of ["al-runner", "alrunner"]) if (existsSync(join(dir, n))) return join(dir, n);
+      throw new Error(`no al-runner binary in ${tarball}`);
+    },
+    versionOf: async (b) => (await run([b, "--version"])).trim(),
+    runGate: async (commit, env) => {
+      if (!existsSync(GATE_WORKTREE)) await run(["git", "-C", process.cwd(), "worktree", "add", "--detach", GATE_WORKTREE, commit]);
+      await run(["git", "-C", GATE_WORKTREE, "checkout", "--detach", commit]);
+      await run(["bun", "run", "itest:alrunner-v3"], { ...env, ...(process.env.LETHAL_ITEST_V3_CDO !== undefined ? { LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO } : {}) }, GATE_WORKTREE);
+    },
+    inUse: async () => {
+      for (const pid of await readdir("/proc")) {
+        if (!/^\d+$/.test(pid)) continue;
+        const exe = await readlink(`/proc/${pid}/exe`).catch(() => "");
+        if (exe.startsWith(`${root}/`)) return true;
+      }
+      return false;
+    },
+    log: async (line) => {
+      console.log(line);
+      await writeFile(LOG, `${line}\n`, { flag: "a" }).catch(() => {});
+    },
+    now: () => new Date().toISOString(),
+  };
+}
+
+if (import.meta.main) {
+  const i = process.argv.indexOf("--regate");
+  const regateAt = i >= 0 ? process.argv[i + 1] : undefined;
+  if (i >= 0 && (regateAt === undefined || !/^[0-9a-f]{7,40}$/.test(regateAt))) {
+    throw new Error("--regate needs a LethAL commit sha");
+  }
+  const out = await updateOnce(realDeps(), regateAt !== undefined ? { regateAt } : {});
+  console.log(`al-runner-v3-update: ${out.join(", ") || "no candidate"}`);
+}
