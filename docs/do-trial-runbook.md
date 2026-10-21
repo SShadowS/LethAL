@@ -56,7 +56,7 @@ because `altool` hardcodes port 7049 and the portal is path-routed HTTPS on 443)
     "mcpCommand": ["bun", "run", "<bc-dev-mcp>/src/mcp/index.ts"],
     "company": "CRONUS Danmark A/S",
     "tenant": "default",
-    "packageCachePath": "<a cache holding Continia + Microsoft symbols + lethal-control.app>",
+    "packageCachePath": "<a cache holding Continia + Microsoft symbols>",  // R552: lethal-control.app need not be here; LethAL stages its own copy and never writes this cache
     "controlSymbolPath": "<repo>/extensions/lethal-control/lethal-control.app",
     "alcPath": "<~/.continia/alc/17/.../alc.exe"        // R43 — see below
   },

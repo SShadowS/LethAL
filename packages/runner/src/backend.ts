@@ -253,6 +253,13 @@ export interface BackendCapabilities {
   readonly deploy: "publish" | "none";
   readonly isolation: "session" | "full-reset";
   readonly authoritative: boolean;
+  /**
+   * R553: the backend's own identity, set by `BcDevMcpBackend` and `AlRunnerBackend` themselves and
+   * never inferred from `authoritative` (an al-runner backend made authoritative one day is still
+   * al-runner). The assertion screen keys on it. Optional only because the unit suite's in-memory
+   * fakes predate it; absent is never treated as al-runner by the screen.
+   */
+  readonly kind?: "bcdev" | "al-runner";
 }
 
 export interface BackendStatus {

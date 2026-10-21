@@ -15,18 +15,27 @@
  * `--config` (default `<project>/lethal.config.json`, as `lethal run`) supplies the
  * `preprocessorSymbols` a real run builds with, for both enumeration and alc (R379).
  *
- * `--control-symbol` is staged into `--package-cache` here, exactly as
- * `BcDevMcpBackend.stageForCompile` does for a real run — so gate 0 imposes no setup step that a
- * real `lethal run` does not.
+ * `--control-symbol` goes, with every package of `--package-cache`, into a LethAL-owned copy that
+ * alc gets as its ONE package-cache path, exactly as `BcDevMcpBackend` does for a real run — so
+ * gate 0 imposes no setup step that a real `lethal run` does not. R552: `--package-cache` is only
+ * read; a `lethal-control.app` an older LethAL left there gets one warning, is left out of the
+ * copy and is never touched.
  *
  * Exit 0 = validation passed AND alc produced an artifact. Any other exit is a gate-0 failure.
  */
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ArtifactCompiler, defaultArtifactIo } from "../../packages/runner/src/artifact";
+import {
+  ArtifactCompiler,
+  type ArtifactIo,
+  buildPackageCacheCopy,
+  defaultArtifactIo,
+  removePackageCacheCopy,
+} from "../../packages/runner/src/artifact";
+import { controlLeftoverWarning } from "../../packages/runner/src/bcdev-backend";
 import { validateSelectorIdsForProject } from "../../packages/runner/src/cli";
 // Parsing lives in packages/runner/src, not here — see that file's doc comment for why
 // (packages/runner/tests needs to import it, and packages/runner/tsconfig.json's composite
@@ -91,7 +100,10 @@ export async function stageCompileOnlyBatch(input: {
   );
 }
 
-export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
+export async function compileOnly(
+  args: CompileOnlyArgs,
+  io: ArtifactIo = defaultArtifactIo,
+): Promise<void> {
   // 1. The check --dry-run never reaches. Throws naming the offending id and range.
   await validateSelectorIdsForProject(args.projectDir, args.selectorIds);
   console.log(`[compile-only] selector ids validated against ${args.projectDir}/app.json`);
@@ -114,6 +126,7 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
   const artifactId = randomBytes(16).toString("hex");
   const target = await mkdtemp(join(tmpdir(), "lethal-compile-only-"));
   const outputDir = await mkdtemp(join(tmpdir(), "lethal-compile-only-out-"));
+  let cacheCopy: string | undefined;
 
   try {
     await stageCompileOnlyBatch({
@@ -134,21 +147,26 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
     // throwaway sibling copy, for exactly this reason; `target` here is already our own private
     // temp dir, so the injection lands directly on it.
     //
-    // The DEPENDENCY needs the SYMBOL: alc resolves the declared dependency out of the package
-    // cache, so both halves have to be present. `stageForCompile` does both (`cp(controlSymbolPath,
-    // join(packageCachePath, "lethal-control.app"))`, bcdev-backend.ts), so this driver does too —
-    // an earlier version injected the dependency and left the staging to the caller, described as
-    // "the same requirement any real `lethal run` has". It is not: no other path imposes it, and
-    // on a hard gate the operator would have met it as an unexplained alc symbol-resolution
-    // failure.
+    // The DEPENDENCY needs the SYMBOL: alc resolves the declared dependency out of a package
+    // cache, so both halves have to be present. `stageForCompile` does both, so this driver does
+    // too — an earlier version injected the dependency and left the staging to the caller,
+    // described as "the same requirement any real `lethal run` has". It is not: no other path
+    // imposes it, and on a hard gate the operator would have met it as an unexplained alc
+    // symbol-resolution failure.
+    //
+    // R552: like `BcDevMcpBackend`, alc gets ONE cache path, a LethAL-owned copy of
+    // `--package-cache` plus the symbol (`buildPackageCacheCopy`), removed in the `finally` below.
+    // `--package-cache` is only read.
     if (!existsSync(args.controlSymbolPath)) {
       throw new Error(
         `compile-only: --control-symbol ${args.controlSymbolPath} does not exist. Build the LethAL Control extension first (the /control-app skill); a missing symbol would surface as an alc symbol-resolution error with no hint about its cause.`,
       );
     }
     await mkdir(args.packageCachePath, { recursive: true });
-    await cp(args.controlSymbolPath, join(args.packageCachePath, "lethal-control.app"));
-    console.log(`[compile-only] staged lethal-control.app into ${args.packageCachePath}`);
+    const leftover = controlLeftoverWarning(args.packageCachePath);
+    if (leftover !== undefined) console.warn(leftover);
+    cacheCopy = await buildPackageCacheCopy(args.packageCachePath, args.controlSymbolPath);
+    console.log(`[compile-only] package cache copy with lethal-control.app at ${cacheCopy}`);
 
     const targetAppJsonPath = join(target, "app.json");
     const stagedManifest = JSON.parse(await readFile(targetAppJsonPath, "utf8")) as Record<
@@ -170,7 +188,7 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
         // R379: alc builds under the config's symbols too, as a real run's compile does.
         ...(configSymbols.length > 0 ? { preprocessorSymbols: configSymbols } : {}),
       },
-      defaultArtifactIo,
+      io,
     );
     const artifact = await compiler.compile({
       projectDir: target,
@@ -179,6 +197,7 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
       appVersion: String(compiledManifest.version),
       mutantManifest,
       appManifest: compiledManifest,
+      packageCacheCopyPath: cacheCopy,
     });
     console.log(
       `[compile-only] OK — instrumented project compiled, artifact ${artifactId} (${JSON.stringify(
@@ -188,6 +207,7 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
   } finally {
     await rm(target, { recursive: true, force: true });
     await rm(outputDir, { recursive: true, force: true });
+    if (cacheCopy !== undefined) await removePackageCacheCopy(cacheCopy);
   }
 }
 
