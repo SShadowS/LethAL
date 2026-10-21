@@ -44,7 +44,7 @@ history.
 
 The legs and their figures:
 
-- Leg A, sandbox-app one-shot: 3 / 12 / 4 over 19. All four no-coverage mutants are in
+- Leg A, sandbox-app one-shot (`al-runner.baseline.json`): 3 / 12 / 4 over 19. All four no-coverage mutants are in
   `SandboxPricing.Codeunit.al`. This equals `itest:bcdev` mutant by mutant. The leg makes no
   grouped call and cannot measure a warm kill, so `groupedCalls` and `warmKills` are both 0, and
   every kill is at `killPosition` 1. Those two zeros are literals in the gate's assertions, so the
@@ -52,12 +52,15 @@ The legs and their figures:
 - The `--server` leg (R220) uses al-runner's warm daemon. The resource leg (R222) uses
   `selectorMode: "resource"`. Every leg's verdicts must equal the one-shot leg's, mutant by
   mutant.
-- The symbol sets (R321): 5 / 4 / 0 over 9 for each of `[LETHALA]` and `[LETHALB]`.
-- The layout leg (R353): 7 / 3 / 0 over 10, at `maxGuardsPerBatch` 7.
-- The multi-object leg (R383, R407): 6 / 1 / 5 over 12.
-- The wrapped leg (R-300b, R343): 58 / 37 / 3 over 98.
-- The CLI-default leg (R387, R394): 3 / 12 / 4 over 19, equal to leg A.
-- The names legs (R557): 36 / 0 / 0 over 36.
+- The symbol set `[LETHALA]` (R321, `al-runner.symbols-lethala.baseline.json`): 5 / 4 / 0 over 9.
+- The symbol set `[LETHALB]` (R321, `al-runner.symbols-lethalb.baseline.json`): 5 / 4 / 0 over 9.
+- The layout leg (R353, `al-runner.layout.baseline.json`): 7 / 3 / 0 over 10, at
+  `maxGuardsPerBatch` 7.
+- The multi-object leg (R383, R407, `al-runner.multiobject.baseline.json`): 6 / 1 / 5 over 12.
+- The wrapped leg (R-300b, R343, `al-runner.wrapped.baseline.json`): 58 / 37 / 3 over 98.
+- The CLI-default leg (R387, R394, `al-runner.cli-default.baseline.json`): 3 / 12 / 4 over 19,
+  equal to leg A.
+- The names legs (R557, `al-runner.names.baseline.json`): 36 / 0 / 0 over 36.
 - Kill reproduction (R577): every kill on every leg is reproduced, with 2 killer rows per kill.
   The CLI-default leg makes 23 activations and 22 `runTests` requests.
 
@@ -111,8 +114,8 @@ The legs and their figures:
   runs under the symbol `WRAPDEF` through the one-shot, `--server` and resource legs. Each admitted
   wrapped file must equal its twin mutant by mutant, in both directions. `WrappedArms` is refused
   by name. Any R383 "position wins" warning, or R-300b "line is dropped" warning, fails the leg.
-  The header comments of `Twice` in the wrapped files set line spans the prediction rests on, as
-  `LayoutBeta`'s does. It was first recorded on 2026-10-06 on al-runner v2.12.0-main.c39ad5de,
+  The load-bearing comment inside `Twice` in the wrapped files sets line spans the prediction rests
+  on, as `LayoutBeta`'s header comment does. It was first recorded on 2026-10-06 on al-runner v2.12.0-main.c39ad5de,
   per `docs/superpowers/specs/2026-10-06-r300b-wrapped-leg-precommitment.md`; that run measured
   that `--define` adds to the symbols in `app.json`. R343 froze it at 36 mutants
   (`docs/superpowers/specs/2026-10-08-r343-wrapped-leg-precommitment.md`); the fixture has grown
@@ -130,8 +133,8 @@ The legs and their figures:
   `al-runner` and `none`. They are checked mutant by mutant against
   `docs/superpowers/specs/2026-10-09-r557-names-precommitment.md`. Red-checked: with the name
   builder from before R557, it reads 6 killed and 30 survived under coverage `none`, and 6 killed
-  and 30 no-coverage under coverage `al-runner`. It was recorded on 2026-10-20 on
-  v2.12.0-main.f06ee78c. The bcdev twin is [bcdev-names.md](bcdev-names.md).
+  and 30 no-coverage under coverage `al-runner`. It was recorded on al-runner
+  v2.12.0-main.f06ee78c per pre-commitment r4 (2026-10-20), committed in b7aa3f1e. The bcdev twin is [bcdev-names.md](bcdev-names.md).
 - **Kill reproduction (R577).** `REPRODUCTION_EXPECTED` in `kill-reproduction.ts` holds the
   figures. They were measured at 102821df. The names legs' 2 killer rows per kill is a prediction
   (addendum a40097fc), not a measurement.

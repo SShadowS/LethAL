@@ -516,7 +516,7 @@ hold the pinned counts; the leg detail is here, with the spec):
   (coverage `none`) and 6 / 0 / 30 (coverage `al-runner`), M0001-M0030 moving.
 - `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-names`: the same table on Cronus28, fenced, 36 / 0 / 0,
   baseline `bcdev.names.baseline.json`. Kept out of `itest:bcdev`, so its 3 / 12 / 4 cannot move.
-- Both baselines were recorded on 2026-10-20 per pre-commitment r4 (R332), on al-runner
+- Both baselines were recorded per pre-commitment r4 (2026-10-20), committed in b7aa3f1e (R332), on al-runner
   v2.12.0-main.f06ee78c and on Cronus28; the two files are byte-identical, and
   `PENDING_FIRST_RECORD` is empty.
 

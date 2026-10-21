@@ -52,12 +52,14 @@ What the figures mean:
   fails, by name, and that the report names the refusal. It must not be relaxed to "the baseline is
   not green", and must not go back to "the baseline is green".
 - `platformArtifactKills` is 4: kills screened as platform artifacts (R72, R138, R143).
-- The assertion screen's `discrimination` is `partial` (R132). The screen separates kills here,
+- R121's assertion screen reports `discrimination` `partial` (R132). The screen separates kills here,
   because one arm raises errors through `Library Assert`. `itest:bcdev` pins the `vacuous` case.
-- `declarativeSites` is 1 site in 1 file (R144). A declarative site, such as a page property,
-  produces no mutant. The gate checks that the report says so.
-- `notInstrumented` is 5 sites in `query 79332 "Data Scope Query"`. A query is not a kind LethAL
-  instruments, so its sites are skipped and do not change the counts above.
+- `declarativeSites` (R144): one declarative site in one file, `src/DataMainList.Page.al`. A
+  declarative site, such as a page property, produces no mutant. The gate checks that the report
+  says so.
+- `notInstrumented`: the sites of `query 79332 "Data Scope Query"` (the count is in the block). A
+  query is not a kind LethAL instruments, so its sites are skipped and do not change the counts
+  above.
 
 ## History
 

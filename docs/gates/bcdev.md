@@ -53,7 +53,7 @@ What the figures mean:
   operator; this was measured.
 - R193 and R197 (2026-09-02) re-recorded the baseline. R193 added identity ordinals for twins.
   R197 made covering tests run killer-first.
-- The al-runner gate is compared with this gate's table mutant by mutant; see
+- Since R220 the al-runner gate is compared with this gate's table mutant by mutant; see
   [alrunner.md](alrunner.md).
 - R589 (2026-10-21): the BC on Linux servers `bc1` to `bc3` may carry this gate once its figures
   reproduce there mutant by mutant. See CLAUDE.md §"Environment".

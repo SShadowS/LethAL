@@ -44,9 +44,15 @@ fields are:
 - An exported pre-committed table exists for that baseline, and its verdict counts differ.
 - A `constants` figure differs from the exported constant.
 - A registered gate baseline (`GATE_BASELINES`, `SYMBOL_BASELINES`) is on no page, or on two.
-- The "## Frozen figures" prose states a `killed / survived / no-coverage` triple, or an
-  "over N" total, that the block does not hold. History sections are not checked, because they
-  quote old figures on purpose.
+- The "## Frozen figures" prose states a count the block does not hold: a
+  `killed / survived / no-coverage` triple, an "over N" total, a count in words ("16 killed",
+  "5 timeout-killed"), or a named figure ("`groupedCalls` is 399"). On a page with several
+  baselines, each bullet that states counts must name its baseline file, and is checked against
+  that file alone. History sections are not checked, because they quote old figures on purpose.
+- A count in `gate-expected.ts` (killed, survived, no-coverage and their total) differs from the
+  gate's baseline file.
+- A figure in `gate-expected.ts` is named on no page.
+- One of the six itests it serves does not read its figures from it, or restates one as a literal.
 - CLAUDE.md names a `docs/...md` path that does not exist.
 
 So a re-recorded baseline, or a changed itest figure, cannot leave its page stale. The commit that

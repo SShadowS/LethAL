@@ -29,8 +29,8 @@ All 36 mutants are killed (3 operators on each of 12 procedures). Each must matc
 
 ## History
 
-R557 (from the owner-approved CLAUDE.md proposal in `/coord/handoff/R-557/`): recorded on
-2026-10-20 per pre-commitment r4, on Cronus28 (record run exit 3, confirm run PASS). The bcdev and
+R557 (from the owner-approved CLAUDE.md proposal in `/coord/handoff/R-557/`): recorded per
+pre-commitment r4 (2026-10-20), committed in b7aa3f1e, on Cronus28 (record run exit 3, confirm run PASS). The bcdev and
 al-runner names baselines are byte-identical. The al-runner side was red-checked: with the name
 builder from before R557, it reads 6 killed and 30 survived under coverage `none`, and 6 killed
 and 30 no-coverage under coverage `al-runner`.
