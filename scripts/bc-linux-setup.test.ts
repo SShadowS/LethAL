@@ -90,6 +90,7 @@ describe("config writer", () => {
         tenant: "default",
         port: 7149,
         baseUrl: "http://192.168.2.157:7148/BC",
+        apiBaseUrl: "http://192.168.2.157:7152/BC",
         company: "CRONUS International Ltd.",
         username: "BCRUNNER",
         password: SECRET,

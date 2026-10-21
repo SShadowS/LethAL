@@ -34,8 +34,9 @@ import type { TestMethodRef } from "../src/backend";
 import { hashPackage } from "../src/baseline-snapshot";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import {
+  devPortOf,
   loadEquivalenceMarks,
-  odataBaseUrl,
+  odataUrlsOf,
   resolveSelectorIds,
   validateBcDevConfig,
   validateSelectorIdsConfig,
@@ -240,7 +241,7 @@ async function main(): Promise<void> {
   const outputDir = join(scratch, "publish");
   await mkdir(outputDir, { recursive: true });
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -255,6 +256,7 @@ async function main(): Promise<void> {
         mcpCommand: bcdev.mcpCommand,
         project: PROJECT_DIR,
         server: bcdev.server,
+        ...devPortOf(bcdev),
         serverInstance: bcdev.serverInstance,
         company: bcdev.company,
         packageCachePath: bcdev.packageCachePath,
@@ -272,6 +274,7 @@ async function main(): Promise<void> {
           {
             altoolPath: toolPaths.altoolPath,
             server: bcdev.server,
+            ...devPortOf(bcdev),
             serverInstance: bcdev.serverInstance,
             username: bcdev.username,
             password: bcdev.password,

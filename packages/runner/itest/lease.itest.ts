@@ -145,7 +145,7 @@ import { fileURLToPath } from "node:url";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import type { LethalConfigFile } from "../src/cli";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import { formatFailure } from "../src/format-failure";
 import { HarnessVerifier } from "../src/harness";
 import type { Lease, LeaseTuple } from "../src/lease";
@@ -1455,7 +1455,7 @@ async function main(): Promise<void> {
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const cfg: ActivationConfig = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,

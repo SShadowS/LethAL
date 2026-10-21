@@ -79,7 +79,7 @@ export function containerFromServer(server: string | undefined): string {
   const host = /^[a-z][a-z0-9+.-]*:\/\/([^/:?#]+)/i.exec(server ?? "")?.[1];
   if (host === undefined || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(host)) {
     throw new Error(
-      `cannot derive the container name from bcdev.server ${JSON.stringify(server)}: expected a URL such as http://Cronus284`,
+      `cannot derive the container name from bcdev.server ${JSON.stringify(server)}: expected a URL such as http://Cronus28`,
     );
   }
   return host;

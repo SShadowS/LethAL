@@ -58,7 +58,7 @@ import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import type { CompiledArtifact } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import type { LethalConfigFile } from "../src/cli";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { discoverTests } from "../src/discovery";
 import { formatFailure } from "../src/format-failure";
@@ -694,6 +694,7 @@ async function main(): Promise<void> {
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -702,7 +703,7 @@ async function main(): Promise<void> {
     deployerIoTracker.io,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,

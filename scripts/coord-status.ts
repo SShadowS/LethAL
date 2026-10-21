@@ -5,15 +5,16 @@
  *
  * Prints: pause state, open question count, the stale list, the Doing list with each doing task's
  * latest run checkpoint (phase + first 200 chars of note, read from
- * `<root>/tasks/<id>/runs/<latest>/checkpoint.json`), and who holds the Cronus28 and Cronus284
- * leases. Everything except the checkpoints comes from the coord CLI via `scripts/coord.sh`.
+ * `<root>/tasks/<id>/runs/<latest>/checkpoint.json`), and who holds the leases on LethAL's
+ * containers. Everything except the checkpoints comes from the coord CLI via `scripts/coord.sh`.
  *
  * The root is `LETHAL_COORD_ROOT`; else `CG_COORD_ROOT` when `KRAKEN_PROJECT` is set (inside a
  * kraken container it is the project's own /coord, and a LETHAL_COORD_ROOT that differs from it is
  * refused); else `H:\lethal-coord`. On the host an
  * inherited `CG_COORD_ROOT` is ignored on purpose: the machine-wide one can point at CentralGauge's
  * root (see scripts/coord.sh). The leased containers are read from
- * `<root>/machine/allocation.json` inside kraken, and are Cronus28 and Cronus284 on the host.
+ * `<root>/machine/allocation.json` inside kraken, and are Cronus28 on the host (Cronus284 is CentralGauge's
+ * since 2026-10-21, R589).
  * A coord call that fails, or prints something that is not the expected shape, exits non-zero.
  */
 
@@ -22,7 +23,7 @@ import { join } from "node:path";
 
 const COORD_SH = join(import.meta.dir, "coord.sh");
 export const DEFAULT_ROOT = "H:\\lethal-coord";
-export const LEASED_CONTAINERS = ["Cronus28", "Cronus284"] as const;
+export const LEASED_CONTAINERS = ["Cronus28"] as const;
 const NOTE_CHARS = 200;
 
 type Env = Readonly<Record<string, string | undefined>>;

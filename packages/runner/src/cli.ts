@@ -2178,8 +2178,15 @@ export interface BcDevConfigSection {
    * OData root, used VERBATIM when present. `odataBaseUrl` injects port 7048, which is right for a
    * container and wrong for an environment tool's `https://host/{envId}`. Set only by
    * `env-tool-session`; a hand-written bcdev section leaves it absent and keeps the derivation.
+   * R589: also how a hand-written section names an OData port other than 7048 (BC on Linux).
    */
   readonly baseUrl?: string;
+  /**
+   * R589: the API root (`<proto>//<host>:<apiPort>/<instance>`), used VERBATIM for the API calls
+   * (`api/v2.0/companies`, the automation `extensions` list). Absent, they go to the OData root,
+   * as they always did. BC on Linux serves its API on a separate port.
+   */
+  readonly apiBaseUrl?: string;
   /**
    * bc-dev-mcp connection port. Set only by `env-tool-session` (derived from `baseUrl` — see
    * `deriveMcpPort` there); a hand-written bcdev section leaves it absent, matching a container's
@@ -2732,6 +2739,36 @@ export function odataBaseUrl(server: string, serverInstance: string): string {
 }
 
 /**
+ * R589: the OData root a bcdev section names. `baseUrl` verbatim when the config gives one (the
+ * only way to reach a server whose OData is not on 7048, such as `bc2`'s 7148), else
+ * `odataBaseUrl`'s 7048 derivation, so a config without it (Cronus28) is unchanged. The ONE
+ * derivation `odataCfgFor` and every bcdev itest use.
+ */
+export function configuredOdataBaseUrl(
+  c: Pick<BcDevConfigSection, "baseUrl" | "server" | "serverInstance">,
+): string {
+  return c.baseUrl ?? odataBaseUrl(c.server, c.serverInstance);
+}
+
+/**
+ * R589: the OData root, plus the API root when the section names one. What every OData/API client
+ * built from a bcdev section (`odataCfgFor`, the bcdev itests) spreads in.
+ */
+export function odataUrlsOf(
+  c: Pick<BcDevConfigSection, "baseUrl" | "apiBaseUrl" | "server" | "serverInstance">,
+): { readonly baseUrl: string; readonly apiBaseUrl?: string } {
+  return {
+    baseUrl: configuredOdataBaseUrl(c),
+    ...(c.apiBaseUrl !== undefined ? { apiBaseUrl: c.apiBaseUrl } : {}),
+  };
+}
+
+/** R589: `{ port }` when the bcdev section names its dev port, else nothing (the 7049 default). */
+export function devPortOf(c: Pick<BcDevConfigSection, "port">): { readonly port?: number } {
+  return c.port !== undefined ? { port: c.port } : {};
+}
+
+/**
  * R51: the OData base URL a RECOVERY command (`force-reset-lease`) should call, given the tier the
  * operator named and whatever the config declares.
  *
@@ -2791,7 +2828,7 @@ export function recoveryBaseUrl(
  */
 export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
   return {
-    baseUrl: c.baseUrl ?? odataBaseUrl(c.server, c.serverInstance),
+    ...odataUrlsOf(c),
     company: c.company,
     username: c.username,
     password: c.password,
@@ -2929,6 +2966,7 @@ export function deployerFor(
           username: c.username,
           password: c.password,
           ...(c.tenant !== undefined ? { tenant: c.tenant } : {}),
+          ...devPortOf(c),
         },
         defaultDeployerIo,
       );
@@ -5791,6 +5829,7 @@ export async function forceResetLeaseFromCli(
     // 443, which port-7048 injection can never reach), and refuses one that names a different tier
     // than --instance. See `recoveryBaseUrl`.
     baseUrl: recoveryBaseUrl(parsed.server, parsed.serverInstance, c.baseUrl),
+    ...(c.apiBaseUrl !== undefined ? { apiBaseUrl: c.apiBaseUrl } : {}),
     company: c.company,
     username: c.username,
     password: c.password,

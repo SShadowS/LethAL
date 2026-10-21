@@ -155,8 +155,10 @@ export function configFileName(server: ServerName): string {
  * `server` carries the DEV port, not the bare host. All three servers share one host, and LethAL
  * keys its quarantine (`quarantineResourceKey`) and its publish queue (`canonicalContainerKey`)
  * on `server`, so a bare host would make bc1, bc2 and bc3 one resource. `baseUrl` is the OData
- * root, used verbatim (`odataBaseUrl` would force 7048), and `BC_DEV_API_PORT` points
- * bc-dev-mcp's Automation API calls at this server's API port instead of its 7048 default.
+ * root, used verbatim (`odataBaseUrl` would force 7048), `apiBaseUrl` the API root LethAL's own
+ * API reads (companies, extensions) use, and `BC_DEV_API_PORT` points bc-dev-mcp's Automation
+ * API calls at the same port instead of its 7048 default. Measured on bc1 2026-10-21: the API
+ * under the OData root answers 404 "Resource not found for the segment 'BC'".
  */
 export function buildConfig(server: ServerName, login: BcLogin, paths: ConfigPaths): object {
   const p = SERVERS[server];
@@ -168,6 +170,7 @@ export function buildConfig(server: ServerName, login: BcLogin, paths: ConfigPat
       tenant: "default",
       port: p.dev,
       baseUrl: `${HOST}:${p.odata}/BC`,
+      apiBaseUrl: `${HOST}:${p.api}/BC`,
       company: "CRONUS International Ltd.",
       username: login.user,
       password: login.password,

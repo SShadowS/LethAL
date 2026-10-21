@@ -2,6 +2,13 @@ export type FetchFn = typeof fetch;
 
 export interface ActivationConfig {
   readonly baseUrl: string;
+  /**
+   * R589: the root the API calls (`api/v2.0/companies`, the automation `extensions` list) go to.
+   * Absent, they go to `baseUrl`, which is right where one port serves OData and API (Cronus28).
+   * BC on Linux serves the API on its own port: measured 2026-10-21 on bc1, `api/v2.0/companies`
+   * under the OData root answers 404 "Resource not found for the segment 'BC'".
+   */
+  readonly apiBaseUrl?: string;
   readonly company: string;
   readonly username: string;
   readonly password: string;

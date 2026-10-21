@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { hashPackage } from "../src/baseline-snapshot";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { odataBaseUrl, validateBcDevConfig, verifyFromCli } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig, verifyFromCli } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { explain } from "../src/explain";
@@ -222,6 +222,7 @@ async function main(): Promise<void> {
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -230,7 +231,7 @@ async function main(): Promise<void> {
     defaultDeployerIo,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -242,6 +243,7 @@ async function main(): Promise<void> {
       mcpCommand: bcdev.mcpCommand,
       project: PROJECT_DIR,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       company: bcdev.company,
       packageCachePath: bcdev.packageCachePath,
