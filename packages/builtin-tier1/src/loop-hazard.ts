@@ -3470,6 +3470,11 @@ interface R572Frame {
     /** the loop's call node */
     readonly node: ALSyntaxNode;
   } | null;
+  /** flags being expanded (`r572FlagKeys`): a flag fed from itself (`Done := not Done`, or a
+   *  ring `A := B; B := A`) is never forced, and must not recurse for ever (re-price, BaseApp) */
+  readonly flags?: ReadonlySet<string>;
+  /** how many flags deep the expansion is (the backstop's count, independent of `flags`) */
+  readonly flagDepth?: number;
 }
 
 const r572Unparen = (n: ALSyntaxNode): ALSyntaxNode => {
@@ -3871,6 +3876,10 @@ function r572HelperKeeps(
  * `var`-out pass, `Clear` or `Evaluate`; a local cannot be written by a subscriber). Then the flag
  * forces the exit when its assigned value does.
  */
+/** Backstops (each REFUSES on its cut-off, never admits; counted as `backstopCutOffs`). */
+const R572_FLAG_DEPTH = 8;
+const R572_SLICE_PROCS = 64;
+
 function r572FlagKeys(
   id: ALSyntaxNode,
   exitWhenTrue: boolean,
@@ -3879,6 +3888,14 @@ function r572FlagKeys(
 ): string[] {
   if (!r572InvariantStep.on || frame.helper !== null) return [];
   const k = normalizeAlName(id.text);
+  // the CAUSE of the BaseApp overflow (re-price): a flag fed from itself is a cycle; the visited set
+  // ends it (never forced, so refused)
+  if (frame.flags?.has(k) === true) return [];
+  // BACKSTOP on top of it: a flag chain deeper than R572_FLAG_DEPTH is not followed (refused)
+  if ((frame.flagDepth ?? 0) >= R572_FLAG_DEPTH) {
+    if (r572GapSink !== null) r572GapSink.backstopCutOffs++;
+    return [];
+  }
   const body = frame.loop.childForFieldName("body");
   if (body === null || !r531Declares(frame.scope, k, false)) return [];
   const writes: ALSyntaxNode[] = [];
@@ -3906,7 +3923,9 @@ function r572FlagKeys(
   if (w.childForFieldName("operator")?.text.trim() !== ":=" || l === null || !isIdentifierLike(l))
     return [];
   if (v === null || !r572Unconditional(w, frame.loop)) return [];
-  return r572Forcing(v, exitWhenTrue, frame, ctx);
+  const flags = new Set([...(frame.flags ?? []), k]);
+  const flagDepth = (frame.flagDepth ?? 0) + 1;
+  return r572Forcing(v, exitWhenTrue, { ...frame, flags, flagDepth }, ctx);
 }
 
 /** Record and variable methods that leave the receiver as it was (anything else writes it). */
@@ -4098,6 +4117,8 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
  * - `m2ReachCutOff`: a stateful chain whose writer reach stopped at the hop cap with calls unread;
  * - `m3CopyShared`: a `Copy(X, true)` in a refused chain's object (an alias of shared state);
  * - `m3RecRefByValue`: a forced RecordRef cursor handed BY VALUE to a callee.
+ * Not an R604 gap: `backstopCutOffs` counts each time a depth BACKSTOP cut a walk off and refused
+ * (`R572_FLAG_DEPTH`, `R572_SLICE_PROCS`), so the backstops' cost shows in the re-price.
  */
 export interface R572Gaps {
   h2SplitQueue: number;
@@ -4105,6 +4126,7 @@ export interface R572Gaps {
   m2ReachCutOff: number;
   m3CopyShared: number;
   m3RecRefByValue: number;
+  backstopCutOffs: number;
 }
 let r572GapSink: R572Gaps | null = null;
 
@@ -4147,6 +4169,7 @@ export function r572Census(ctx: SemanticContext): {
     m2ReachCutOff: 0,
     m3CopyShared: 0,
     m3RecRefByValue: 0,
+    backstopCutOffs: 0,
   };
   r572GapSink = gaps;
   try {
@@ -4759,6 +4782,12 @@ function r572ValueNames(
   if (body === null) return null;
   const path = new Set<string>();
   if (seen.has(r572Id(p))) return path;
+  // BACKSTOP (the `seen` set already ends cycles): a slice through more than R572_SLICE_PROCS
+  // same-object procedures is undecidable, so every global counts (refuses more)
+  if (seen.size >= R572_SLICE_PROCS) {
+    if (r572GapSink !== null) r572GapSink.backstopCutOffs++;
+    return null;
+  }
   seen.add(r572Id(p));
   const obj = objectOf(p);
   const rv = p.childForFieldName("return_value");

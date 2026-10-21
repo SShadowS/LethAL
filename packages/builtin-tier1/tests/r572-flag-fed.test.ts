@@ -916,6 +916,59 @@ ${body}
                 Clear(EndLoop);`);
     expect(project(files)(C, "FEED")).toBe(true);
   });
+  it("28e. a flag fed from itself (`EndLoop := not EndLoop`): refused, and no endless recursion", () => {
+    const files = flagLoop("                EndLoop := not EndLoop;");
+    expect(project(files)(C, "FEED")).toBe(true);
+    // ended by the visited set (the cause), not by the depth backstop
+    expect(gapsOf(files).backstopCutOffs).toBe(0);
+  });
+  it("28f. a flag that also keeps itself (`EndLoop := (R.Next() = 0) or EndLoop`): skipped", () => {
+    const files = flagLoop("                EndLoop := (R.Next() = 0) or EndLoop;");
+    expect(project(files)(C, "FEED")).toBe(false);
+  });
+  it("28g. a ring of two flags (`EndLoop := Other; Other := EndLoop`): refused, no recursion", () => {
+    const files = dLoop(
+      `            repeat
+                More := F.More();
+                EndLoop := Other;
+                Other := EndLoop;
+            until EndLoop or not More;`,
+      `        EndLoop: Boolean;
+        Other: Boolean;`,
+    );
+    expect(project(files)(C, "FEED")).toBe(true);
+    expect(gapsOf(files).backstopCutOffs).toBe(0);
+  });
+  it("28h. a flag chain 10,000 deep: the depth backstop refuses it, without overflow", () => {
+    const N = 10_000;
+    const vars = Array.from({ length: N }, (_, i) => `        A${i}: Boolean;`).join("\n");
+    const chain = Array.from({ length: N }, (_, i) =>
+      i === N - 1
+        ? `                A${i} := R.Next() = 0;`
+        : `                A${i} := A${i + 1};`,
+    ).join("\n");
+    const files = dLoop(
+      `            repeat
+                More := F.More();
+${chain}
+            until A0 or not More;`,
+      vars,
+    );
+    expect(project(files)(C, "FEED")).toBe(true);
+    expect(gapsOf(files).backstopCutOffs).toBeGreaterThan(0);
+  });
+  it("28i. control: a two-deep flag chain to the step stays forced (skipped)", () => {
+    const files = dLoop(
+      `            repeat
+                More := F.More();
+                A0 := A1;
+                A1 := R.Next() = 0;
+            until A0 or not More;`,
+      `        A0: Boolean;
+        A1: Boolean;`,
+    );
+    expect(project(files)(C, "FEED")).toBe(false);
+  });
   it("28d. the flag written twice in the body: refused", () => {
     const files = flagLoop(`                EndLoop := R.Next() = 0;
                 EndLoop := false;`);
@@ -1089,6 +1142,64 @@ describe("R572 narrowing (b): writers of the value path", () => {
     expect(at(C, "T18ADV")).toBe(true);
   });
 
+  /** GetNext reads `Total` through a chain of `n` same-object getters; Touch writes `Other`, which
+   *  is NOT on the value path. */
+  const getterChain = (n: number): Files => {
+    const getters = Array.from({ length: n }, (_, i) =>
+      i === n - 1
+        ? `    local procedure G${i}(): Integer\n    begin\n        exit(Total);\n    end;`
+        : `    local procedure G${i}(): Integer\n    var\n        V: Integer;\n    begin\n        V := G${i + 1}();\n        exit(V);\n    end;`,
+    ).join("\n\n");
+    return {
+      [C]: `codeunit 57202 "R572 Deep"
+{
+    var
+        Total: Integer;
+        Other: Integer;
+
+    procedure GetNext(): Integer
+    var
+        V: Integer;
+    begin
+        V := G0();
+        exit(V);
+    end;
+
+    procedure Add()
+    begin
+        Total -= 1;
+    end;
+
+    procedure Touch()
+    var
+        Tag: Text;
+    begin
+        Tag := 'T18C';
+        Other := 0;
+    end;
+
+${getters}
+}`,
+      [L]: loop(
+        `        It: Codeunit "R572 Deep";
+        V: Integer;`,
+        `        V := It.GetNext();
+        while V > 0 do begin
+            It.Add();
+            It.Touch();
+            V := It.GetNext();
+        end;`,
+      ),
+    };
+  };
+  it("18c. a value-path slice through 10,000 getters: the backstop counts every global (refuses)", () => {
+    const files = getterChain(10_000);
+    expect(project(files)(C, "T18C")).toBe(true);
+    expect(gapsOf(files).backstopCutOffs).toBeGreaterThan(0);
+  }, 120_000); // 10,000 procedures take a few seconds to resolve
+  it("18d. control: the same through 3 getters: `Other`'s writer is not refused", () => {
+    expect(project(getterChain(3))(C, "T18C")).toBe(false);
+  });
   it("18b. the result read through a SECOND same-object procedure: its global's writer is refused", () => {
     const at = project({
       [C]: `codeunit 57202 "R572 Two"
@@ -1595,6 +1706,7 @@ describe("R604 census: one counter per gap master already has (not refusals)", (
     m2ReachCutOff: 0,
     m3CopyShared: 0,
     m3RecRefByValue: 0,
+    backstopCutOffs: 0,
   };
   const RESET = `codeunit 57202 "R572 Reset"
 {
