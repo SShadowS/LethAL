@@ -76,6 +76,13 @@
             },
             "authoritative": {
               "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "bcdev",
+                "al-runner"
+              ]
             }
           }
         },
