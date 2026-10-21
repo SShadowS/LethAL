@@ -46,7 +46,10 @@ next free id right before writing).
 - **Push work early, but WIP pushes carry `[skip ci]`** in the head commit's message. Unplanned
   restarts happen, so push; but CI runs on every branch and every red run emails the owner. Push
   WITHOUT `[skip ci]` only when you want a real CI result (before submitting, or to reproduce a
-  Windows-only failure); the submitted head must have a CI run.
+  Windows-only failure); the submitted head must have a CI run. A clean MERGE commit as the
+  submit head may start no CI run at all when the same push also carries `[skip ci]` commits
+  (R-577, 1ab9cbdc): after pushing, check `gh run list --commit <sha>`; if there is no run, push an
+  empty "CI run for the submit" commit on top.
 - **Measure a corpus once per master commit, and reuse it (owner, 2026-10-08).** A full
   BC.History dump of master costs hours, and plan rounds repeated it. Keep master's dump in
   `/coord/cache/dumps/<master sha>/<set>/` (sets: `bch`, `cdo`, `dc`, `do`, `fixtures`), with a
