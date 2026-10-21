@@ -852,6 +852,12 @@ async function main(): Promise<void> {
           const r = await legT(scratch);
           const record = recordRequested(TABLES_BASELINE_PATH);
           if (record) {
+            // I-3 before anything is written: this run's rows differ from BC's on exactly the
+            // pre-committed 52 (41 Commit, 7 duplicate key, 4 TestPage), or nothing is recorded.
+            const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
+            const known = knownDifferenceKeys(bc, normalizeForComparison(r)).size;
+            console.log(`  T: differs from BC's tables baseline on ${known} rows (pre-committed 52)`);
+            must(known === 52, `T: this run differs from BC's on ${known} rows, pre-committed 52`);
             await assertGateBaseline(r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
           } else {
             const own = (await readGateBaseline(TABLES_BASELINE_PATH)).entries;
