@@ -1,5 +1,18 @@
 # R-588 plan r3 — fixes N1 to N5 of adversary-r2 (roadmap R593)
 
+## Amendment (orchestrator, 2026-10-21, during the build): verify.ts exit codes
+| exit | verify.ts |
+|---|---|
+| 0 | FULL run, every test passed (the only 0) |
+| 4 | PARTIAL run (`--changed`, package names), every test passed; the receipt reads `VERIFY PARTIAL: PASS, exit 4` |
+| 1 | any failure, full or partial |
+| 2 | refused arguments (unknown flag or package, partial or snapshot opt-out under CI) |
+
+Reason: push and merge chains run `verify && git push`, so a partial pass that exits 0 would let a push
+through. R-587's partial gates exit 4 too. Pinned in verify.test.ts (`exit codes: ...`), red-checked in
+three directions: partial pass returning 0, full pass returning 4, partial failure returning 4.
+`corpus-snapshot.ts` keeps its own table (0 / 1 / 2) below.
+
 Base: plan.r2.md, which rests on plan.r1.md. Everything r2 says holds unless a section below replaces it.
 No full-suite runs were made for r3.
 
