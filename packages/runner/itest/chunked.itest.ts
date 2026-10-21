@@ -80,6 +80,7 @@ import {
   itestLaunchPath,
   printItestTarget,
 } from "./config-path";
+import { CHUNKED_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertReachEvidence, assertReachIdenticalAcrossLegs } from "./reach-evidence";
 
@@ -103,20 +104,11 @@ const ONLY = ["src/DataMain.Table.al"];
 const CHUNK = 2;
 
 /** MEASURED on the unbounded leg, 2026-09-04, before the chunked leg existed. */
-const CONTROL = {
-  killed: 17,
-  survived: 7,
-  noCoverage: 2,
-  warmKills: 9,
-  groupedCalls: 33,
-  /** killPosition histogram over the 17 kills. */
-  positions: { 1: 8, 2: 3, 3: 3, 4: 2, 5: 1 } as Record<number, number>,
-};
+const CONTROL = CHUNKED_FIGURES.control;
 
 /** DERIVED from the control before the chunked leg ran. See the pre-commitment spec. */
 const CHUNKED = {
-  warmKills: 5,
-  groupedCalls: 57,
+  ...CHUNKED_FIGURES.chunked,
   /** Every kill whose chunk position is 2, with the replay its chunk demands, in order. */
   warm: [
     {

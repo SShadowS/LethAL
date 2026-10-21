@@ -85,7 +85,7 @@ bun run compile:fixtures      # if any .al under fixtures/ or examples/ changed
 
 `/live-gate`. Unit tests are structurally blind to AL that cannot compile and to real BC behaviour,
 and a release is exactly the wrong place to find that out. Frozen per-gate figures are in
-`CLAUDE.md`; a differing verdict blocks the release rather than updating an expectation.
+`docs/gates/` (one page per gate); a differing verdict blocks the release rather than updating an expectation.
 
 ### 6. Commit, push, watch CI
 
