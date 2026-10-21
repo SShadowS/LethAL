@@ -367,6 +367,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
   capabilities(): BackendCapabilities {
     return {
+      kind: "bcdev",
       coverage: this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE,
       deploy: "publish",
       isolation: "session",

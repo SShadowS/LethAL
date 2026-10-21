@@ -254,6 +254,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "coverage": "procedure",
           "deploy": "publish",
           "isolation": "session",
+          "kind": "bcdev",
         },
         "seq": 1,
         "type": "run-configured",

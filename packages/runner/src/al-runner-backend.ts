@@ -1184,6 +1184,7 @@ export class AlRunnerBackend implements ExecutionBackend {
    */
   capabilities(): BackendCapabilities {
     return {
+      kind: "al-runner",
       // R220: `"al-runner"` sits on the `fenced` side of `CoverageMode`'s routing axis -- ONE
       // runner produces the green set and every verdict -- so it carries no runner-disagreement
       // note and R175's unnamed-member widening stays off, both via `isHubCoverageMode`.

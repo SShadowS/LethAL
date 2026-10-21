@@ -148,7 +148,7 @@ describe("R447: generation", () => {
 });
 
 const CAPS = {
-  authoritative: true,
+  kind: "bcdev", authoritative: true,
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",

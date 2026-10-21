@@ -108,7 +108,7 @@ function fakeBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBacken
     coverage: "none",
     deploy: "publish",
     isolation: "session",
-    authoritative: true,
+    kind: "bcdev", authoritative: true,
   };
   return {
     capabilities: () => caps,

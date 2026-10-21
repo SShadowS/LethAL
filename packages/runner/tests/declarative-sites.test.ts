@@ -153,7 +153,7 @@ describe("generateMutationSet — declarative sites are counted, not just warned
 });
 
 const STATICS: FoldStatics = {
-  caps: { authoritative: true, coverage: "procedure", deploy: "publish", isolation: "session" },
+  caps: { kind: "bcdev", authoritative: true, coverage: "procedure", deploy: "publish", isolation: "session" },
   buildSymbols: [],
 };
 
@@ -215,7 +215,7 @@ describe("foldEvents — the declarative count reaches the report", () => {
 describe("buildReport — the count, the caveat and the console line", () => {
   function build(declarativeSites: readonly { file: string; kinds: string; sites: number }[]) {
     return legacyBuildReport({
-      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      caps: { coverage: "procedure", deploy: "publish", isolation: "session", kind: "bcdev", authoritative: true },
       baselineGreen: true,
       batches: 1,
       outcomes: [],

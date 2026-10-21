@@ -107,7 +107,7 @@ class SiteBackend implements ExecutionBackend {
   fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
   microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
-    return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
+    return { coverage: "procedure", deploy: "publish", isolation: "session", kind: "bcdev", authoritative: true };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };

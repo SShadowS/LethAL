@@ -60,7 +60,7 @@ class SurviveBackend implements ExecutionBackend {
   readonly deploys: string[] = [];
   private active: string | null = null;
   capabilities(): BackendCapabilities {
-    return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
+    return { coverage: "procedure", deploy: "publish", isolation: "session", kind: "bcdev", authoritative: true };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };

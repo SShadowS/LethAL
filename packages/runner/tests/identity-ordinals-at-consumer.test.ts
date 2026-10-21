@@ -93,7 +93,7 @@ const selectorIds = { selectorId: 50290, controlId: 50291, tableId: 50292 };
 /** Every test passes and covers nothing, so every mutant is reported, unexecuted. */
 class NoCoverageBackend implements ExecutionBackend {
   capabilities(): BackendCapabilities {
-    return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
+    return { coverage: "procedure", deploy: "publish", isolation: "session", kind: "bcdev", authoritative: true };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };

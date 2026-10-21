@@ -100,7 +100,7 @@ const CAPS: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
-  authoritative: true,
+  kind: "bcdev", authoritative: true,
 };
 
 const selectorIds = { selectorId: 50000, controlId: 50001, tableId: 50002 };
@@ -4097,7 +4097,10 @@ class ClockBackend extends CountingBackend {
   /** R392: read only when non-authoritative (the al-runner shape `workers > 1` needs). */
   readonly measurePredefinedSymbols = measuredV2_12;
   override capabilities(): BackendCapabilities {
-    return { ...super.capabilities(), authoritative: this.authoritative };
+    return { ...super.capabilities(),
+      kind: this.authoritative ? "bcdev" : "al-runner",
+      authoritative: this.authoritative,
+    };
   }
   override async activate(id: string | null): Promise<void> {
     this.active = id;
@@ -5432,7 +5435,7 @@ describe("R557 x R577: --resume on al-runner, each remove-only rule alone", () =
       (this as { fetchPublishedAppPackage?: unknown }).fetchPublishedAppPackage = undefined;
     }
     override capabilities(): BackendCapabilities {
-      return { ...super.capabilities(), authoritative: false };
+      return { ...super.capabilities(), kind: "al-runner", authoritative: false };
     }
   }
   /** Run 1 kills its first mutant (marked when `marked`), then strands; run 2 resumes it. */

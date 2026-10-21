@@ -51,7 +51,7 @@ const CAPS: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
-  authoritative: true,
+  kind: "bcdev", authoritative: true,
 };
 
 // Inside the fixture's own id range (79600..79649).

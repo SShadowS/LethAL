@@ -67,7 +67,7 @@ function mutant(mutantId: string): MutantManifestEntry {
  */
 function buildScenarioReport(): SessionReport {
   const statics: FoldStatics = {
-    caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+    caps: { coverage: "procedure", deploy: "publish", isolation: "session", kind: "bcdev", authoritative: true },
     buildSymbols: [],
     only: {
       patterns: [

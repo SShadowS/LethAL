@@ -248,7 +248,29 @@ export function stopIsRetrySafe(s: StopState | undefined): boolean {
  */
 export type CoverageMode = "none" | "procedure" | "line" | "fenced" | "al-runner";
 
+/**
+ * R586 (C1): WHICH backend this is. Before R586 `!authoritative` meant "al-runner" everywhere
+ * (`runSession`'s build backend, the run row's `backend`, resume, R557's stamp, the report), so a
+ * second non-authoritative backend would have read as the frozen .NET al-runner. Every branch about
+ * the backend's identity keys on this, through the predicates below; `authoritative` keeps only
+ * its own meaning (a verdict to act on). `"al-runner-v3"` is the Rust al-runner (`3.0.0-alpha.N`,
+ * plan `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`).
+ */
+export type BackendKind = "bcdev" | "al-runner" | "al-runner-v3";
+
+/** R586: the backend publishes to a BC server (leases, attestation, quarantine, TestPage scan). */
+export function isBcdevBackend(caps: Pick<BackendCapabilities, "kind">): boolean {
+  return caps.kind === "bcdev";
+}
+
+/** R586: the frozen .NET al-runner (v2): its predefined-symbol probe, R557 names, R147 pin. */
+export function isAlRunnerV2Backend(caps: Pick<BackendCapabilities, "kind">): boolean {
+  return caps.kind === "al-runner";
+}
+
 export interface BackendCapabilities {
+  /** R586 (C1): see `BackendKind`. Required, so no backend can be mistaken for another. */
+  readonly kind: BackendKind;
   readonly coverage: CoverageMode;
   readonly deploy: "publish" | "none";
   readonly isolation: "session" | "full-reset";

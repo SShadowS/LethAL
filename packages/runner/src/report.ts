@@ -12,6 +12,7 @@ import {
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
 import type { BackendCapabilities, CoverageMode, TestMethodRef } from "./backend";
+import { isAlRunnerV2Backend, isBcdevBackend } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import {
   EQUIVALENCE_MARKS_FILENAME,
@@ -2310,7 +2311,16 @@ function measuredExecutionContext(
   // R57 measured the fenced `RunMutant` path directly (`GuiAllowed=No`, `ClientType=ODataV4`).
   // al-runner is a headless CLI, which is not the same evidence, and saying "measured" of both
   // would be the kind of static claim R7/R8 exist to stop.
-  return caps.authoritative
+  if (caps.kind === "al-runner-v3") {
+    return {
+      guiAllowed: false,
+      clientType: "al-runner v3 CLI",
+      basis:
+        "al-runner v3 (Rust) executes headlessly by construction, one process per test codeunit; " +
+        "not separately measured by LethAL the way the fenced path was under R57 (R586)",
+    };
+  }
+  return isBcdevBackend(caps)
     ? {
         guiAllowed: false,
         clientType: "ODataV4",
@@ -2372,16 +2382,17 @@ function buildExecutionContexts(
   // was produced by a DIFFERENT run against whatever that run selected, and stamping this run's
   // observation onto it would be a provenance claim about a session this one never made.
   const bcFields = {
-    ...(alRunnerBcBuild !== undefined && !caps.authoritative
+    // R586: the three are v2 observations (its `[bc]` line, R147 pin, R551 probe).
+    ...(alRunnerBcBuild !== undefined && isAlRunnerV2Backend(caps)
       ? { bcBuild: alRunnerBcBuild.build, bcBuildAnnouncement: alRunnerBcBuild.announcement }
       : {}),
     // R147, same two gates and for the same reason: a carried verdict's platform apps belong to the
     // run it came from, and bcdev has no such concept at all.
-    ...(alRunnerPlatformAppsDir !== undefined && !caps.authoritative
+    ...(alRunnerPlatformAppsDir !== undefined && isAlRunnerV2Backend(caps)
       ? { platformAppsDir: alRunnerPlatformAppsDir }
       : {}),
     // R558, same two gates: a carried verdict's selector belongs to the run it came from.
-    ...(alRunnerTestSelector !== undefined && !caps.authoritative
+    ...(alRunnerTestSelector !== undefined && isAlRunnerV2Backend(caps)
       ? {
           testSelector: alRunnerTestSelector.selector,
           ...(alRunnerTestSelector.reason !== undefined
@@ -3105,7 +3116,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     survivorsByProcedure,
     testFiles,
     ...(input.testMethods !== undefined ? { testMethods: input.testMethods } : {}),
-    backend: input.caps.authoritative ? "bcdev" : "al-runner",
+    // R586 (C1): the backend's own kind, never derived from `authoritative`.
+    backend: input.caps.kind,
     authoritative: input.caps.authoritative,
     coverageMode: input.caps.coverage,
     baselineGreen: input.baselineGreen,

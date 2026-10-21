@@ -21,7 +21,7 @@ const CAPS = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
-  authoritative: true,
+  kind: "bcdev", authoritative: true,
 } as const;
 
 function entry(over: Partial<MutantManifestEntry> = {}): MutantManifestEntry {
