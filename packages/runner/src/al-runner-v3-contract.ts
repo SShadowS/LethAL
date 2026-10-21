@@ -340,7 +340,11 @@ interface Call {
   readonly coverage: unknown;
 }
 
-async function writeProject(root: string, logic: string, testsDir = "tests"): Promise<{ app: string; tests: string }> {
+async function writeProject(
+  root: string,
+  logic: string,
+  testsDir = "tests",
+): Promise<{ app: string; tests: string }> {
   const app = join(root, "app");
   const tests = join(root, testsDir);
   await mkdir(join(app, "src"), { recursive: true });
@@ -389,7 +393,13 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     let seq = 0;
     const call = async (
       args: readonly string[],
-      o: { coverage?: boolean; app?: string; tests?: string; wrap?: readonly string[]; codeunit?: number } = {},
+      o: {
+        coverage?: boolean;
+        app?: string;
+        tests?: string;
+        wrap?: readonly string[];
+        codeunit?: number;
+      } = {},
     ): Promise<Call> => {
       seq += 1;
       const cov = join(root, `cov-${seq}.json`);
@@ -411,9 +421,10 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         o.tests ?? tests,
       ];
       const t0 = Date.now();
-      const res = await spawn(argv, env.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: env.cacheDir } } : {}).catch(
-        (e: unknown) => ({ exitCode: -1, stdout: "", stderr: String(e) }),
-      );
+      const res = await spawn(
+        argv,
+        env.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: env.cacheDir } } : {},
+      ).catch((e: unknown) => ({ exitCode: -1, stdout: "", stderr: String(e) }));
       const wallMs = Date.now() - t0;
       const decoded = o.codeunit !== undefined ? decodeV3Rows(res.stdout, o.codeunit) : undefined;
       let coverage: unknown;
@@ -433,14 +444,30 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     };
 
     // version
-    const v = await spawn([env.alRunnerPath, "--version"]).catch(() => ({ exitCode: -1, stdout: "", stderr: "" }));
+    const v = await spawn([env.alRunnerPath, "--version"]).catch(() => ({
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+    }));
     const version = v.stdout.trim();
     facts.push(
-      fact("version", "contract", version === env.expectedVersion ? "matches" : "diverged", env.expectedVersion, version),
+      fact(
+        "version",
+        "contract",
+        version === env.expectedVersion ? "matches" : "diverged",
+        env.expectedVersion,
+        version,
+      ),
     );
 
     // unknown-flag-rejected
-    const bad = await spawn([env.alRunnerPath, "test", "--lethal-wire-contract-probe", app, tests]).catch(() => ({
+    const bad = await spawn([
+      env.alRunnerPath,
+      "test",
+      "--lethal-wire-contract-probe",
+      app,
+      tests,
+    ]).catch(() => ({
       exitCode: -1,
       stdout: "",
       stderr: "",
@@ -456,7 +483,10 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     );
 
     // The main codeunit, with coverage and --verbose (bc-build-pinned reads its stderr).
-    const main = await call(["--verbose", "--codeunit", "50650"], { coverage: true, codeunit: 50650 });
+    const main = await call(["--verbose", "--codeunit", "50650"], {
+      coverage: true,
+      codeunit: 50650,
+    });
     const shapeOk =
       main.rows !== undefined &&
       main.rows.length === 7 &&
@@ -467,7 +497,9 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         "contract",
         shapeOk ? "matches" : main.rows === undefined ? "unmeasurable" : "diverged",
         "7 rows of codeunit 50650 with name, codeunit, method, status, durationMs (and notRun, message)",
-        main.rows === undefined ? `exit ${main.exitCode}, no decodable document` : `${main.rows.length} rows`,
+        main.rows === undefined
+          ? `exit ${main.exitCode}, no decodable document`
+          : `${main.rows.length} rows`,
       ),
     );
     facts.push(
@@ -502,8 +534,16 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       ),
     );
     // per-test-coverage: CoversOnlyA reaches Probe First lines 5 and 7, never line 6.
-    const ptc = (main.coverage as { perTestCoverage?: { test: string; coverage: { file: string; statements: { line: number; hits: number }[] }[] }[] } | undefined)
-      ?.perTestCoverage;
+    const ptc = (
+      main.coverage as
+        | {
+            perTestCoverage?: {
+              test: string;
+              coverage: { file: string; statements: { line: number; hits: number }[] }[];
+            }[];
+          }
+        | undefined
+    )?.perTestCoverage;
     const onlyA = ptc
       ?.find((e) => e.test === "Codeunit50650.CoversOnlyA")
       ?.coverage.filter((f) => f.file.endsWith("First.Codeunit.al"))
@@ -513,7 +553,11 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       fact(
         "per-test-coverage",
         "contract",
-        onlyA === undefined ? "unmeasurable" : JSON.stringify(onlyA) === "[5,7]" ? "matches" : "diverged",
+        onlyA === undefined
+          ? "unmeasurable"
+          : JSON.stringify(onlyA) === "[5,7]"
+            ? "matches"
+            : "diverged",
         "CoversOnlyA hits Probe First lines 5 and 7 only",
         JSON.stringify(onlyA ?? null),
       ),
@@ -524,7 +568,11 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       fact(
         "codeunit-runs-whole",
         "defect",
-        persistB === undefined ? "unmeasurable" : persistB === "rows=0 counter=1" ? "defect-present" : "gone",
+        persistB === undefined
+          ? "unmeasurable"
+          : persistB === "rows=0 counter=1"
+            ? "defect-present"
+            : "gone",
         'PersistB "rows=0 counter=1" (database rolled back, the codeunit variable kept)',
         persistB ?? "no row",
       ),
@@ -536,7 +584,9 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       fact(
         "codeunit-row-equals-exact-row",
         "contract",
-        e !== undefined && e.status === rowOf(main, "PersistB")?.status && e.message === persistB ? "matches" : "diverged",
+        e !== undefined && e.status === rowOf(main, "PersistB")?.status && e.message === persistB
+          ? "matches"
+          : "diverged",
         "the PersistB row from --test-exact equals the --codeunit row",
         JSON.stringify(e ?? null),
       ),
@@ -564,13 +614,17 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       ),
     );
     // timeout-classified
-    const hang = await call(["--test-timeout-secs", "3", "--codeunit", "50651"], { codeunit: 50651 });
+    const hang = await call(["--test-timeout-secs", "3", "--codeunit", "50651"], {
+      codeunit: 50651,
+    });
     const h = rowOf(hang, "CpuHang");
     facts.push(
       fact(
         "timeout-classified",
         "contract",
-        hang.exitCode === 7 && h?.notRun === true && h.message === "Test exceeded 3s timeout." ? "matches" : "diverged",
+        hang.exitCode === 7 && h?.notRun === true && h.message === "Test exceeded 3s timeout."
+          ? "matches"
+          : "diverged",
         'CpuHang at N=3: exit 7, notRun, "Test exceeded 3s timeout."',
         `exit ${hang.exitCode} ${JSON.stringify(h ?? null)} wall ${hang.wallMs} ms`,
       ),
@@ -583,9 +637,13 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     //           -> it burns about half (1.5 s of CPU) in its 3 s: a pass.
     // A wall-time stop would stop both; a CPU-time stop separates them in both directions.
     if (env.tasksetPath === undefined) {
-      facts.push(fact("timeout-is-cpu", "contract", "unmeasurable", "taskset available", "no taskset"));
+      facts.push(
+        fact("timeout-is-cpu", "contract", "unmeasurable", "taskset available", "no taskset"),
+      );
     } else {
-      const alone = await call(["--test-timeout-secs", "2", "--codeunit", "50656"], { codeunit: 50656 });
+      const alone = await call(["--test-timeout-secs", "2", "--codeunit", "50656"], {
+        codeunit: 50656,
+      });
       const burner =
         env.startBurner?.() ??
         Bun.spawn([env.tasksetPath, "-c", "0", "sh", "-c", "while :; do :; done"], {
@@ -604,7 +662,10 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       const a = rowOf(alone, "WallSpin3s");
       const s = rowOf(shared, "WallSpin3s");
       const ok =
-        a?.notRun === true && a.message === "Test exceeded 2s timeout." && s?.status === "pass" && !s.notRun;
+        a?.notRun === true &&
+        a.message === "Test exceeded 2s timeout." &&
+        s?.status === "pass" &&
+        !s.notRun;
       facts.push(
         fact(
           "timeout-is-cpu",
@@ -622,7 +683,9 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       fact(
         "refusal-row-shape",
         "contract",
-        ref.exitCode === 7 && http?.notRun === true && (http.message ?? "").startsWith("NotRun: out-of-scope: ")
+        ref.exitCode === 7 &&
+          http?.notRun === true &&
+          (http.message ?? "").startsWith("NotRun: out-of-scope: ")
           ? "matches"
           : "diverged",
         'HttpGet: exit 7, notRun, "NotRun: out-of-scope: ..."',
@@ -658,13 +721,22 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       fact(
         "duplicate-key-insert-raises",
         "defect",
-        k === undefined ? "unmeasurable" : k.status === "pass" ? "defect-present" : k.status === "fail" ? "gone" : "unmeasurable",
+        k === undefined
+          ? "unmeasurable"
+          : k.status === "pass"
+            ? "defect-present"
+            : k.status === "fail"
+              ? "gone"
+              : "unmeasurable",
         "DuplicateNamedKey passes (BC raises a duplicate key)",
         JSON.stringify(k ?? null),
       ),
     );
     // sleep-is-noop (#5605) and sleep-line-covered, on codeunit 50660 (no CPU-bound sibling).
-    const sleepN = await call(["--test-timeout-secs", "3", "--codeunit", "50660"], { coverage: true, codeunit: 50660 });
+    const sleepN = await call(["--test-timeout-secs", "3", "--codeunit", "50660"], {
+      coverage: true,
+      codeunit: 50660,
+    });
     const sleepFree = await call(["--codeunit", "50660"], { codeunit: 50660 });
     const noop = (cl: Call): boolean | undefined => {
       if (cl.rows === undefined) return undefined;
@@ -681,7 +753,11 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       fact(
         "sleep-is-noop",
         "defect",
-        n1 === undefined || n2 === undefined ? "unmeasurable" : n1 && n2 ? "defect-present" : "gone",
+        n1 === undefined || n2 === undefined
+          ? "unmeasurable"
+          : n1 && n2
+            ? "defect-present"
+            : "gone",
         "codeunit 50660 with N=3 and with no flag: under 1 s of wall, Sleep tests pass in 0 ms, LongSleepThenAssert fails 'after sleep <n>', n < 1000",
         `N=3: ${sleepN.wallMs} ms ${JSON.stringify(sleepN.rows ?? null).slice(0, 250)}; no flag: ${sleepFree.wallMs} ms`,
       ),
@@ -689,15 +765,23 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     const sc = sleepN.coverage as
       | {
           coverage?: { file: string; statements: { line: number; hits: number }[] }[];
-          perTestCoverage?: { test: string; coverage: { file: string; statements: { line: number; hits: number }[] }[] }[];
+          perTestCoverage?: {
+            test: string;
+            coverage: { file: string; statements: { line: number; hits: number }[] }[];
+          }[];
         }
       | undefined;
     const hits = (test: string, fileEnd: string, line: number): boolean =>
       sc?.perTestCoverage
         ?.find((t) => t.test === test)
-        ?.coverage.some((f) => f.file.endsWith(fileEnd) && f.statements.some((s) => s.line === line && s.hits > 0)) === true;
+        ?.coverage.some(
+          (f) =>
+            f.file.endsWith(fileEnd) && f.statements.some((s) => s.line === line && s.hits > 0),
+        ) === true;
     const listed = (fileEnd: string, line: number): boolean =>
-      sc?.coverage?.some((f) => f.file.endsWith(fileEnd) && f.statements.some((s) => s.line === line)) === true;
+      sc?.coverage?.some(
+        (f) => f.file.endsWith(fileEnd) && f.statements.some((s) => s.line === line),
+      ) === true;
     const covered =
       hits("Codeunit50660.LongSleepA", "SleepProbe.Codeunit.al", 17) &&
       hits("Codeunit50660.SleeperDoubles", "Sleeper.Codeunit.al", 5) &&
@@ -709,7 +793,11 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         "contract",
         sc === undefined ? "unmeasurable" : covered ? "matches" : "diverged",
         "LongSleepA hits SleepProbe line 17, SleeperDoubles hits Sleeper line 5, both listed top-level",
-        sc === undefined ? "no coverage document" : covered ? "as expected" : "a hit or a listing is missing",
+        sc === undefined
+          ? "no coverage document"
+          : covered
+            ? "as expected"
+            : "a hit or a listing is missing",
       ),
     );
     // predefined-symbols
@@ -731,14 +819,18 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         ),
       );
     } catch (err) {
-      facts.push(fact("predefined-symbols", "contract", "unmeasurable", "a complete mask", String(err)));
+      facts.push(
+        fact("predefined-symbols", "contract", "unmeasurable", "a complete mask", String(err)),
+      );
     }
     // The alc facts: the compile proof catches what v3 runs anyway.
     if (env.alcPath === undefined) {
       for (const f of ["compile-failure-not-scorable", "positional-target-wins"]) {
         facts.push(fact(f, "contract", "unmeasurable", "alc available", "no alc"));
       }
-      facts.push(fact("upstream-compile-errors", "defect", "unmeasurable", "alc available", "no alc"));
+      facts.push(
+        fact("upstream-compile-errors", "defect", "unmeasurable", "alc available", "no alc"),
+      );
     } else {
       const outDir = join(root, "alc-out");
       await mkdir(outDir, { recursive: true });
@@ -749,7 +841,11 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       const broken = await writeProject(join(root, "broken"), logicAl("exit(A + B);", true));
       let alcRejected: string;
       try {
-        await compiler.compileProject({ projectDir: broken.app, packageCachePath: env.packagesDir, name: "broken" });
+        await compiler.compileProject({
+          projectDir: broken.app,
+          packageCachePath: env.packagesDir,
+          name: "broken",
+        });
         alcRejected = "accepted";
       } catch (err) {
         alcRejected = err instanceof AlcCompileError ? "AlcCompileError" : `other: ${String(err)}`;
@@ -763,7 +859,11 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
           alcRejected,
         ),
       );
-      const ranBroken = await call(["--codeunit", "50650"], { app: broken.app, tests: broken.tests, codeunit: 50650 });
+      const ranBroken = await call(["--codeunit", "50650"], {
+        app: broken.app,
+        tests: broken.tests,
+        codeunit: 50650,
+      });
       facts.push(
         fact(
           "upstream-compile-errors",
@@ -780,11 +880,21 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       // positional-target-wins: a HIGHER-version target .app with source (Add + 100) in the test
       // app's .alpackages does not replace the positional target folder.
       const variant = await writeProject(join(root, "variant"), logicAl("exit(A + B + 100);"));
-      const vManifest = JSON.parse(await readFile(join(variant.app, "app.json"), "utf8")) as Record<string, unknown>;
-      await writeFile(join(variant.app, "app.json"), JSON.stringify({ ...vManifest, version: "9.0.0.0" }));
+      const vManifest = JSON.parse(await readFile(join(variant.app, "app.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      await writeFile(
+        join(variant.app, "app.json"),
+        JSON.stringify({ ...vManifest, version: "9.0.0.0" }),
+      );
       let positional: string;
       try {
-        const out = await compiler.compileProject({ projectDir: variant.app, packageCachePath: env.packagesDir, name: "variant" });
+        const out = await compiler.compileProject({
+          projectDir: variant.app,
+          packageCachePath: env.packagesDir,
+          name: "variant",
+        });
         const t2 = join(root, "tests-pinned");
         await cp(tests, t2, { recursive: true });
         await mkdir(join(t2, ".alpackages"), { recursive: true });
@@ -798,7 +908,11 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         fact(
           "positional-target-wins",
           "contract",
-          positional.startsWith("unmeasurable") ? "unmeasurable" : positional === "pass" ? "matches" : "diverged",
+          positional.startsWith("unmeasurable")
+            ? "unmeasurable"
+            : positional === "pass"
+              ? "matches"
+              : "diverged",
           "Passes passes: the positional target, not the higher-version .app in .alpackages",
           positional,
         ),
@@ -824,7 +938,10 @@ export function v3ContractRefusals(r: V3ContractResult): string[] {
 export function v3DefectsGone(r: V3ContractResult): string[] {
   return r.facts
     .filter((f) => f.kind === "defect" && f.verdict === "gone")
-    .map((f) => `[lethal] al-runner-v3-defect-gone: ${f.fact}: re-measure before relying on it (measured ${f.measured})`);
+    .map(
+      (f) =>
+        `[lethal] al-runner-v3-defect-gone: ${f.fact}: re-measure before relying on it (measured ${f.measured})`,
+    );
 }
 
 /** One line per session: the contract its verdicts were produced under. */

@@ -365,7 +365,8 @@ describe("generateMutationSet — --operator refuses to select nothing", () => {
  */
 describe("buildReport — an operator-scoped run says so", () => {
   const CAPS = {
-    kind: "bcdev", authoritative: true,
+    kind: "bcdev",
+    authoritative: true,
     coverage: "procedure",
     deploy: "publish",
     isolation: "session",
@@ -454,7 +455,8 @@ describe("runSession — --operator reaches both the mutant set AND the report",
     coverage: "procedure",
     deploy: "publish",
     isolation: "session",
-    kind: "al-runner", authoritative: false,
+    kind: "al-runner",
+    authoritative: false,
   };
 
   const RUN_APP_JSON = JSON.stringify({

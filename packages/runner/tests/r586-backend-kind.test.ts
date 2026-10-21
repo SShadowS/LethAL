@@ -296,7 +296,9 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
       // R557's stamp is the v2 mark: a v3 run must not carry it.
       expect(store.getRun(1)?.alRunnerNames).toBe(false);
       // R586: the build `runMayLend` lends under.
-      expect(store.getRun(1)?.runnerBuild).toBe(`alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)}`);
+      expect(store.getRun(1)?.runnerBuild).toBe(
+        `alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)}`,
+      );
     });
   });
 

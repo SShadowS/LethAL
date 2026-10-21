@@ -100,7 +100,8 @@ const CAPS: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
-  kind: "bcdev", authoritative: true,
+  kind: "bcdev",
+  authoritative: true,
 };
 
 const selectorIds = { selectorId: 50000, controlId: 50001, tableId: 50002 };
@@ -4097,7 +4098,8 @@ class ClockBackend extends CountingBackend {
   /** R392: read only when non-authoritative (the al-runner shape `workers > 1` needs). */
   readonly measurePredefinedSymbols = measuredV2_12;
   override capabilities(): BackendCapabilities {
-    return { ...super.capabilities(),
+    return {
+      ...super.capabilities(),
       kind: this.authoritative ? "bcdev" : "al-runner",
       authoritative: this.authoritative,
     };

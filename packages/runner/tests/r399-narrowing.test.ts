@@ -16,7 +16,8 @@ import { removeScratchDir } from "./helpers/scratch";
  */
 
 const CAPS = {
-  kind: "bcdev", authoritative: true,
+  kind: "bcdev",
+  authoritative: true,
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",

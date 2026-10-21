@@ -34,7 +34,9 @@ const REFUSED = ["serverMode", "selectorMode", "alRunnerPath"];
 /** T16 / T17: the section, validated; every refusal names its key. Extends nothing: plain Errors. */
 export function validateAlRunnerV3Config(raw: unknown): AlRunnerV3ConfigSection {
   if (raw === undefined || raw === null || typeof raw !== "object") {
-    throw new Error('lethal.config.json is missing the "alRunnerV3" section (required for --backend al-runner-v3)');
+    throw new Error(
+      'lethal.config.json is missing the "alRunnerV3" section (required for --backend al-runner-v3)',
+    );
   }
   const r = raw as Record<string, unknown>;
   for (const k of REFUSED) {
@@ -48,7 +50,9 @@ export function validateAlRunnerV3Config(raw: unknown): AlRunnerV3ConfigSection 
   }
   const unknown = Object.keys(r).filter((k) => !KEYS.includes(k));
   if (unknown.length > 0) {
-    throw new Error(`lethal.config.json "alRunnerV3" has unknown key(s): ${unknown.join(", ")}. Allowed: ${KEYS.join(", ")}.`);
+    throw new Error(
+      `lethal.config.json "alRunnerV3" has unknown key(s): ${unknown.join(", ")}. Allowed: ${KEYS.join(", ")}.`,
+    );
   }
   if (typeof r.bcVersion !== "string" || !/^\d+\.\d+\.\d+\.\d+$/.test(r.bcVersion)) {
     throw new Error(
@@ -56,10 +60,14 @@ export function validateAlRunnerV3Config(raw: unknown): AlRunnerV3ConfigSection 
     );
   }
   if (typeof r.packagesDir !== "string" || r.packagesDir === "") {
-    throw new Error('"alRunnerV3.packagesDir" is required: the folder v3 and alc both read packages from (R586).');
+    throw new Error(
+      '"alRunnerV3.packagesDir" is required: the folder v3 and alc both read packages from (R586).',
+    );
   }
   if (r.coverage !== undefined && r.coverage !== "al-runner" && r.coverage !== "none") {
-    throw new Error(`"alRunnerV3.coverage" must be "al-runner" or "none", got ${JSON.stringify(r.coverage)}`);
+    throw new Error(
+      `"alRunnerV3.coverage" must be "al-runner" or "none", got ${JSON.stringify(r.coverage)}`,
+    );
   }
   for (const k of ["path", "alcPath", "cacheDir"]) {
     if (r[k] !== undefined && (typeof r[k] !== "string" || r[k] === "")) {
@@ -81,7 +89,10 @@ export function validateAlRunnerV3Config(raw: unknown): AlRunnerV3ConfigSection 
  * `bcVersion` (`al-runner-v3-bc-version-mismatch`): v3 would otherwise run one BC build's apps
  * while the proof and the report name another.
  */
-export async function assertBcVersionMatchesPackages(packagesDir: string, bcVersion: string): Promise<void> {
+export async function assertBcVersionMatchesPackages(
+  packagesDir: string,
+  bcVersion: string,
+): Promise<void> {
   for (const name of (await readdir(packagesDir)).sort()) {
     if (!name.toLowerCase().endsWith(".app")) continue;
     let id: ReturnType<typeof readAppIdentity>;
@@ -90,7 +101,11 @@ export async function assertBcVersionMatchesPackages(packagesDir: string, bcVers
     } catch {
       continue; // not a manifest package (a Ready-to-Run wrapper or the platform): not this check
     }
-    if (id.publisher === "Microsoft" && id.name === "System Application" && id.version !== bcVersion) {
+    if (
+      id.publisher === "Microsoft" &&
+      id.name === "System Application" &&
+      id.version !== bcVersion
+    ) {
       throw new Error(
         `al-runner-v3-bc-version-mismatch: ${join(packagesDir, name)} is System Application ${id.version}, but "alRunnerV3.bcVersion" is ${bcVersion} (R586).`,
       );
@@ -101,7 +116,9 @@ export async function assertBcVersionMatchesPackages(packagesDir: string, bcVers
 /** T16: the platform refusal, before anything is built. */
 export function refuseV3Platform(platform: NodeJS.Platform = process.platform): void {
   if (platform === "win32") {
-    throw new Error("al-runner-v3-windows-unsupported: --backend al-runner-v3 is not measured on Windows (R586 v1).");
+    throw new Error(
+      "al-runner-v3-windows-unsupported: --backend al-runner-v3 is not measured on Windows (R586 v1).",
+    );
   }
 }
 

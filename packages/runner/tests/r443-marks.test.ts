@@ -104,7 +104,13 @@ ${stmts.map((s) => `        ${s}`).join("\n")}
 class AllSurvive implements ExecutionBackend {
   private active: string | null = null;
   capabilities(): BackendCapabilities {
-    return { coverage: "procedure", deploy: "publish", isolation: "session", kind: "bcdev", authoritative: true };
+    return {
+      coverage: "procedure",
+      deploy: "publish",
+      isolation: "session",
+      kind: "bcdev",
+      authoritative: true,
+    };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };

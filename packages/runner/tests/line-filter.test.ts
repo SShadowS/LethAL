@@ -245,7 +245,8 @@ const SRC = { ref: "main", mergeBase: "b".repeat(40), untrackedFiles: ["src/New.
 
 describe("the report and the fingerprint", () => {
   const CAPS = {
-    kind: "bcdev", authoritative: true,
+    kind: "bcdev",
+    authoritative: true,
     coverage: "procedure",
     deploy: "publish",
     isolation: "session",
@@ -322,7 +323,8 @@ describe("runSession: the line filter reaches both the mutant set AND the report
     coverage: "procedure",
     deploy: "publish",
     isolation: "session",
-    kind: "al-runner", authoritative: false,
+    kind: "al-runner",
+    authoritative: false,
   };
 
   class StubBackend implements ExecutionBackend {

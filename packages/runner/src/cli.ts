@@ -57,6 +57,7 @@ import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import { AlRunnerV3Backend } from "./al-runner-v3-backend";
+import { checkGated } from "./al-runner-v3-pin";
 import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
   assertBcVersionMatchesPackages,
@@ -3267,7 +3268,9 @@ async function buildAlRunnerV3Backend(
       coverage,
       sourceProjectDir: parsed.projectDir,
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
-      ...(deps.preprocessorSymbols.length > 0 ? { preprocessorSymbols: deps.preprocessorSymbols } : {}),
+      ...(deps.preprocessorSymbols.length > 0
+        ? { preprocessorSymbols: deps.preprocessorSymbols }
+        : {}),
     },
     deps.spawn,
   );
@@ -5129,6 +5132,41 @@ export async function buildDoctorDeps(
   // can genuinely refuse. Everything else doctor knows how to ask is a live-BC concern and is left
   // out rather than answered vacuously — see `DOCTOR_AL_RUNNER_ONLY_CAVEAT` for the full list and
   // for the measurement that keeps alc out of it.
+  // R586: an AL-RUNNER-V3-ONLY project: one check, the binary's version, its `.gated` pin and
+  // `bcVersion` against the package folder. The session's contract probe is not run here.
+  if (
+    configFile.envTool === undefined &&
+    configFile.bcdev === undefined &&
+    configFile.alRunner === undefined &&
+    configFile.alRunnerV3 !== undefined
+  ) {
+    const c = validateAlRunnerV3Config(configFile.alRunnerV3);
+    const spawn = opts.alRunnerSpawn ?? defaultSpawn;
+    return {
+      cfg: {},
+      deps: {
+        alRunnerV3: async () => {
+          const v = await spawn([c.path, "--version"]).catch((e: unknown) => ({
+            exitCode: -1,
+            stdout: "",
+            stderr: String(e),
+          }));
+          const version = (v.stdout || v.stderr).trim();
+          if (v.exitCode !== 0) return { ok: false, details: `${c.path} not runnable: ${version}` };
+          try {
+            const gated = await checkGated(c.path, version);
+            await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
+            return {
+              ok: true,
+              details: `${version}; gated at LethAL ${gated.lethalCommit}; bcVersion ${c.bcVersion}`,
+            };
+          } catch (err) {
+            return { ok: false, details: err instanceof Error ? err.message : String(err) };
+          }
+        },
+      },
+    };
+  }
   if (
     configFile.envTool === undefined &&
     configFile.bcdev === undefined &&

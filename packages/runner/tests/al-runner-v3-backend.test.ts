@@ -95,7 +95,10 @@ async function layout(targetAl = TARGET_AL, testAl = TEST_AL): Promise<Layout> {
   const testDir = join(root, "tests");
   const deps = join(root, "deps");
   for (const d of [batch, testDir, deps]) await mkdir(d, { recursive: true });
-  await writeFile(join(batch, "app.json"), JSON.stringify({ id: TARGET_ID, name: "T", version: "1.0.0.0" }));
+  await writeFile(
+    join(batch, "app.json"),
+    JSON.stringify({ id: TARGET_ID, name: "T", version: "1.0.0.0" }),
+  );
   await writeFile(
     join(batch, "mutant-manifest.json"),
     JSON.stringify({
@@ -107,11 +110,20 @@ async function layout(targetAl = TARGET_AL, testAl = TEST_AL): Promise<Layout> {
     }),
   );
   // The batch arrives with the CONTROL selector; deploy replaces it with the static one.
-  await writeFile(join(batch, "MutationSelector.Codeunit.al"), "codeunit 79199 x { /* dynamic */ }");
+  await writeFile(
+    join(batch, "MutationSelector.Codeunit.al"),
+    "codeunit 79199 x { /* dynamic */ }",
+  );
   await writeFile(join(batch, "Logic.Codeunit.al"), targetAl);
-  await writeFile(join(testDir, "app.json"), JSON.stringify({ id: "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7", name: "Tests" }));
+  await writeFile(
+    join(testDir, "app.json"),
+    JSON.stringify({ id: "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7", name: "Tests" }),
+  );
   await writeFile(join(testDir, "Tests.Codeunit.al"), testAl);
-  await writeFile(join(deps, "Microsoft_System.app"), fakeApp("8874ed3a-0643-4247-9ced-7a7002f7135d"));
+  await writeFile(
+    join(deps, "Microsoft_System.app"),
+    fakeApp("8874ed3a-0643-4247-9ced-7a7002f7135d"),
+  );
   await writeFile(join(deps, "Stale_Target.app"), fakeApp(TARGET_ID));
   return { root, batch, testDir, deps, scratch: join(root, "scratch") };
 }
@@ -160,7 +172,8 @@ function fakeV3(
 ) {
   const calls: string[][] = [];
   const spawn: SpawnFn = async (argv) => {
-    if (argv[1] === "--version") return { exitCode: 0, stdout: "alrunner 3.0.0-alpha.2 (91253f2d6)\n", stderr: "" };
+    if (argv[1] === "--version")
+      return { exitCode: 0, stdout: "alrunner 3.0.0-alpha.2 (91253f2d6)\n", stderr: "" };
     calls.push([...argv]);
     const active = argv.at(-2) ?? "";
     const testDir = argv.at(-1) ?? "";
@@ -180,21 +193,43 @@ function fakeV3(
       ...(r.message !== undefined ? { message: r.message } : {}),
       ...(r.notRun === true ? { notRun: true } : {}),
     }));
-    return { exitCode: opts.exit ?? 0, stdout: opts.stdout ?? JSON.stringify({ tests, exitCode: 0 }), stderr: "" };
+    return {
+      exitCode: opts.exit ?? 0,
+      stdout: opts.stdout ?? JSON.stringify({ tests, exitCode: 0 }),
+      stderr: "",
+    };
   };
   return { spawn, calls };
 }
 
 /** Per-test coverage where every test hits one statement of its own test file. */
 const plainCoverage = (_id: string, _active: string, testDir: string) => ({
-  coverage: [{ file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }, { line: 12, hits: 1 }] }],
+  coverage: [
+    {
+      file: join(testDir, "Tests.Codeunit.al"),
+      statements: [
+        { line: 7, hits: 1 },
+        { line: 12, hits: 1 },
+      ],
+    },
+  ],
   perTestCoverage: ["A", "B"].map((m, i) => ({
     test: `Codeunit${CU}.${m}`,
-    coverage: [{ file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: i === 0 ? 7 : 12, hits: 1 }] }],
+    coverage: [
+      {
+        file: join(testDir, "Tests.Codeunit.al"),
+        statements: [{ line: i === 0 ? 7 : 12, hits: 1 }],
+      },
+    ],
   })),
 });
 
-function backendOf(l: Layout, spawn: SpawnFn, alcIo: ArtifactIo, extra: Partial<AlRunnerV3Config> = {}) {
+function backendOf(
+  l: Layout,
+  spawn: SpawnFn,
+  alcIo: ArtifactIo,
+  extra: Partial<AlRunnerV3Config> = {},
+) {
   return new AlRunnerV3Backend(
     {
       alRunnerPath: "/fake/alrunner",
@@ -231,7 +266,14 @@ describe("§3 the compile proof", () => {
     expect(v3.calls).toHaveLength(0);
     // The batch v3 reads has the STATIC baseline selector, no control files.
     const sel = await readFile(join(l.scratch, "active", "MutationSelector.Codeunit.al"), "utf8");
-    expect(sel).toBe(emitStaticSelector({ objectId: SELECTOR_ID, activeId: "", artifactId: ARTIFACT, targetAppId: "" }));
+    expect(sel).toBe(
+      emitStaticSelector({
+        objectId: SELECTOR_ID,
+        activeId: "",
+        artifactId: ARTIFACT,
+        targetAppId: "",
+      }),
+    );
   });
 
   test("leg X (a): a batch alc rejects throws AlcCompileError and v3 is spawned 0 times", async () => {
@@ -271,8 +313,18 @@ describe("§3 the compile proof", () => {
 
 describe("T3, T4, T23", () => {
   test("T3: two static selectors differ only in the id literal", () => {
-    const a = emitStaticSelector({ objectId: 7, activeId: "M0001", artifactId: ARTIFACT, targetAppId: "" });
-    const b = emitStaticSelector({ objectId: 7, activeId: "M0042", artifactId: ARTIFACT, targetAppId: "" });
+    const a = emitStaticSelector({
+      objectId: 7,
+      activeId: "M0001",
+      artifactId: ARTIFACT,
+      targetAppId: "",
+    });
+    const b = emitStaticSelector({
+      objectId: 7,
+      activeId: "M0042",
+      artifactId: ARTIFACT,
+      targetAppId: "",
+    });
     expect(a.replace("M0001", "X")).toBe(b.replace("M0042", "X"));
     expect(a).not.toBe(b);
   });
@@ -285,7 +337,9 @@ describe("T3, T4, T23", () => {
         throw new Error("ENOENT alc");
       },
     };
-    const err = await backendOf(l, fakeV3(allPass).spawn, io).deploy(l.batch).catch((e: unknown) => e);
+    const err = await backendOf(l, fakeV3(allPass).spawn, io)
+      .deploy(l.batch)
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ArtifactPrepareError);
     expect(err).not.toBeInstanceOf(AlcCompileError);
   });
@@ -320,14 +374,25 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
   });
 
   const cases: [string, (l: Layout) => Promise<void>][] = [
-    ["c1: a byte appended to a target .al in active/", (l) => appendFile(join(active(l), "Logic.Codeunit.al"), " ")],
-    ["c2: a byte appended to a test .al", (l) => appendFile(join(l.testDir, "Tests.Codeunit.al"), " ")],
+    [
+      "c1: a byte appended to a target .al in active/",
+      (l) => appendFile(join(active(l), "Logic.Codeunit.al"), " "),
+    ],
+    [
+      "c2: a byte appended to a test .al",
+      (l) => appendFile(join(l.testDir, "Tests.Codeunit.al"), " "),
+    ],
     [
       "c3: the selector rewritten to an id not in the manifest",
       (l) =>
         writeFile(
           join(active(l), "MutationSelector.Codeunit.al"),
-          emitStaticSelector({ objectId: SELECTOR_ID, activeId: "M9999", artifactId: ARTIFACT, targetAppId: "" }),
+          emitStaticSelector({
+            objectId: SELECTOR_ID,
+            activeId: "M9999",
+            artifactId: ARTIFACT,
+            targetAppId: "",
+          }),
         ),
     ],
     [
@@ -335,12 +400,20 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
       (l) =>
         writeFile(
           join(active(l), "MutationSelector.Codeunit.al"),
-          emitStaticSelector({ objectId: SELECTOR_ID, activeId: "M0001", artifactId: ARTIFACT, targetAppId: "" }),
+          emitStaticSelector({
+            objectId: SELECTOR_ID,
+            activeId: "M0001",
+            artifactId: ARTIFACT,
+            targetAppId: "",
+          }),
         ),
     ],
     ["c5: a byte changed in active/app.json", (l) => appendFile(join(active(l), "app.json"), " ")],
     ["c5: one file added to <deps>", (l) => writeFile(join(l.deps, "Extra.app"), "x")],
-    ["c5: a <deps> file's bytes changed (size moves)", (l) => appendFile(join(l.deps, "Microsoft_System.app"), "x")],
+    [
+      "c5: a <deps> file's bytes changed (size moves)",
+      (l) => appendFile(join(l.deps, "Microsoft_System.app"), "x"),
+    ],
     ["the test app's app.json changed", (l) => appendFile(join(l.testDir, "app.json"), " ")],
   ];
   for (const [name, tamper] of cases) {
@@ -373,10 +446,25 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
     });
     expect(argv.filter((a) => a === "--codeunit")).toHaveLength(1);
     expect(argv).toContain("--coverage-json");
-    for (const forbidden of ["--test", "--test-exact", "--filter", "--exclude-test", "--allow-not-run", "--explain"]) {
+    for (const forbidden of [
+      "--test",
+      "--test-exact",
+      "--filter",
+      "--exclude-test",
+      "--allow-not-run",
+      "--explain",
+    ]) {
       expect(argv).not.toContain(forbidden);
     }
-    expect(argv.slice(0, 7)).toEqual(["/b", "test", "--output-json", "--isolation", "test", "--test-timeout-secs", "3"]);
+    expect(argv.slice(0, 7)).toEqual([
+      "/b",
+      "test",
+      "--output-json",
+      "--isolation",
+      "test",
+      "--test-timeout-secs",
+      "3",
+    ]);
     expect(argv).toContain("--no-download");
     expect(argv.slice(-2)).toEqual(["/a", "/t"]);
   });
@@ -438,17 +526,30 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
 
   test("T28: a timeout row must report the stop the call was sent", async () => {
     const timeoutRow = (n: number) => () => [
-      { method: "A", status: "error" as const, notRun: true, message: `Test exceeded ${n}s timeout.` },
+      {
+        method: "A",
+        status: "error" as const,
+        notRun: true,
+        message: `Test exceeded ${n}s timeout.`,
+      },
       { method: "B", status: "pass" as const },
     ];
     const l = await layout();
-    const good = backendOf(l, fakeV3(timeoutRow(2), { coverage: plainCoverage }).spawn, fakeAlc().io);
+    const good = backendOf(
+      l,
+      fakeV3(timeoutRow(2), { coverage: plainCoverage }).spawn,
+      fakeAlc().io,
+    );
     await good.deploy(l.batch);
     await good.activate("M0001");
     const v = await good.run(ref("A"), { coverage: "none", timeoutMs: 2000 });
     expect(v.outcome).toBe("timeout");
     expect(v.reportedStopMs).toBe(2000);
-    const bad = backendOf(l, fakeV3(timeoutRow(20), { coverage: plainCoverage }).spawn, fakeAlc().io);
+    const bad = backendOf(
+      l,
+      fakeV3(timeoutRow(20), { coverage: plainCoverage }).spawn,
+      fakeAlc().io,
+    );
     await bad.deploy(l.batch);
     await bad.activate("M0001");
     const w = await bad.run(ref("A"), { coverage: "none", timeoutMs: 2000 });
@@ -465,7 +566,10 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
         { codeunit: CU, method: "A", name: `Codeunit${CU}.A`, status: "pass" },
         { codeunit: CU, method: "B", name: `Codeunit${CU}.B`, status: "maybe" },
       ];
-      await writeFile(argv[argv.indexOf("--coverage-json") + 1] ?? "", JSON.stringify(plainCoverage("", "", l.testDir)));
+      await writeFile(
+        argv[argv.indexOf("--coverage-json") + 1] ?? "",
+        JSON.stringify(plainCoverage("", "", l.testDir)),
+      );
       return { exitCode: 0, stdout: JSON.stringify({ tests }), stderr: "" };
     };
     const b = backendOf(l, spawn, fakeAlc().io);
@@ -530,13 +634,17 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
       coverage: [],
       perTestCoverage: ["Twin_PairLong", "Twin Pair", "A"].map((m) => ({
         test: `Codeunit${CU}.${m}`,
-        coverage: [{ file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] }],
+        coverage: [
+          { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
+        ],
       })),
     });
     const b = backendOf(l, fakeV3(rows, { coverage: cov }).spawn, fakeAlc().io);
     await b.deploy(l.batch);
     await b.activate("M0001");
-    expect((await b.run(ref("Twin Pair"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe("pass");
+    expect((await b.run(ref("Twin Pair"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe(
+      "pass",
+    );
     expect((await b.run(ref("a"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe("pass");
   });
 
@@ -546,8 +654,21 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
       coverage: (_id, active, testDir) => ({
         coverage: [],
         perTestCoverage: [
-          { test: `Codeunit${CU}.A`, coverage: [{ file: join(active, "Logic.Codeunit.al"), statements: [{ line: 5, hits: 1, scope: "Twice" }] }] },
-          { test: `Codeunit${CU}.B`, coverage: [{ file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 12, hits: 1 }] }] },
+          {
+            test: `Codeunit${CU}.A`,
+            coverage: [
+              {
+                file: join(active, "Logic.Codeunit.al"),
+                statements: [{ line: 5, hits: 1, scope: "Twice" }],
+              },
+            ],
+          },
+          {
+            test: `Codeunit${CU}.B`,
+            coverage: [
+              { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 12, hits: 1 }] },
+            ],
+          },
         ],
       }),
     });
@@ -570,9 +691,9 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
 
   test("selectorMode resource is refused by name before any call", async () => {
     const l = await layout();
-    expect(() => backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, { selectorMode: "resource" })).toThrow(
-      AlRunnerV3ResourceSelectorRefusedError,
-    );
+    expect(() =>
+      backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, { selectorMode: "resource" }),
+    ).toThrow(AlRunnerV3ResourceSelectorRefusedError);
   });
 });
 
@@ -593,22 +714,45 @@ describe("§5 the row decoder", () => {
     }
   });
   test("notRun + the timeout sentence is a timeout at that stop; notRun + anything else is a refusal (the field wins over the prefix)", () => {
-    const t = v3RowVerdict(r, row({ status: "error", notRun: true, message: "Test exceeded 3s timeout." }), 3, 10, undefined);
+    const t = v3RowVerdict(
+      r,
+      row({ status: "error", notRun: true, message: "Test exceeded 3s timeout." }),
+      3,
+      10,
+      undefined,
+    );
     expect([t.outcome, t.reportedStopMs]).toEqual(["timeout", 3000]);
-    const ref1 = v3RowVerdict(r, row({ status: "error", notRun: true, message: "anything at all" }), 3, 10, undefined);
+    const ref1 = v3RowVerdict(
+      r,
+      row({ status: "error", notRun: true, message: "anything at all" }),
+      3,
+      10,
+      undefined,
+    );
     expect([ref1.outcome, ref1.runnerRow]).toEqual(["error", "runner-refused"]);
   });
   test("without notRun: fail is a kill, pass a pass, error an unclassified non-verdict", () => {
-    expect(v3RowVerdict(r, row({ status: "fail", message: "boom" }), 3, 10, undefined).outcome).toBe("fail");
+    expect(
+      v3RowVerdict(r, row({ status: "fail", message: "boom" }), 3, 10, undefined).outcome,
+    ).toBe("fail");
     expect(v3RowVerdict(r, row({}), 3, 10, undefined).outcome).toBe("pass");
     const e = v3RowVerdict(r, row({ status: "error", message: "?" }), 3, 10, undefined);
     expect([e.outcome, e.runnerRow]).toEqual(["error", "runner-test-error"]);
   });
   test("decodeV3Rows refuses another codeunit's row and a name that is not Codeunit<id>.<method>", () => {
     const doc = (t: object) => JSON.stringify({ tests: [t] });
-    expect(decodeV3Rows(doc({ codeunit: 1, method: "A", name: "Codeunit1.A", status: "pass" }), 2)).toHaveProperty("why");
-    expect(decodeV3Rows(doc({ codeunit: 2, method: "A", name: "Codeunit2.B", status: "pass" }), 2)).toHaveProperty("why");
-    expect(decodeV3Rows(doc({ codeunit: 2, method: "Space Step", name: "Codeunit2.Space Step", status: "pass" }), 2)).toHaveProperty("rows");
+    expect(
+      decodeV3Rows(doc({ codeunit: 1, method: "A", name: "Codeunit1.A", status: "pass" }), 2),
+    ).toHaveProperty("why");
+    expect(
+      decodeV3Rows(doc({ codeunit: 2, method: "A", name: "Codeunit2.B", status: "pass" }), 2),
+    ).toHaveProperty("why");
+    expect(
+      decodeV3Rows(
+        doc({ codeunit: 2, method: "Space Step", name: "Codeunit2.Space Step", status: "pass" }),
+        2,
+      ),
+    ).toHaveProperty("rows");
   });
 });
 
@@ -631,7 +775,9 @@ describe("T24 (I1) and I3: the notes", () => {
     // Direction 2: A ran first but does NOT cover this mutant: no note.
     await b.activate("M0002");
     b.useCoveringBudgets("M0002", [{ ref: ref("B"), budgetMs: 1000 }]);
-    expect((await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).backendNote).toBeUndefined();
+    expect(
+      (await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).backendNote,
+    ).toBeUndefined();
   });
 
   test("a first-row kill gets no note", async () => {
@@ -647,19 +793,28 @@ describe("T24 (I1) and I3: the notes", () => {
       { ref: ref("A"), budgetMs: 1000 },
       { ref: ref("B"), budgetMs: 1000 },
     ]);
-    expect((await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).backendNote).toBeUndefined();
+    expect(
+      (await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).backendNote,
+    ).toBeUndefined();
   });
 
   test("I3: a survivor whose covering codeunit had a baseline refusal is noted; one whose codeunit had none is not", async () => {
     const l = await layout();
     const rows = () => [
       { method: "A", status: "pass" as const },
-      { method: "B", status: "error" as const, notRun: true, message: "NotRun: out-of-scope: Commit" },
+      {
+        method: "B",
+        status: "error" as const,
+        notRun: true,
+        message: "NotRun: out-of-scope: Commit",
+      },
     ];
     const b = backendOf(l, fakeV3(rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
     await b.deploy(l.batch);
     await b.activate(null);
-    expect((await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).runnerRow).toBe("runner-refused");
+    expect((await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).runnerRow).toBe(
+      "runner-refused",
+    );
     expect(b.survivorNote([ref("A")])?.startsWith(V3_REFUSED_NEARBY_TAG)).toBe(true);
     expect(b.survivorNote([ref("Q", 1)])).toBeUndefined();
   });
@@ -685,11 +840,19 @@ describe("§6 the Sleep rule through the backend (T12, T31, T32)", () => {
         test: `Codeunit${CU}.${m}`,
         coverage: [
           { file: join(testDir, "Tests.Codeunit.al"), statements: [{ line: 7, hits: 1 }] },
-          ...(opts.hit === true && m === "A" ? [{ file: target, statements: [{ line: 5, hits: 1 }] }] : []),
+          ...(opts.hit === true && m === "A"
+            ? [{ file: target, statements: [{ line: 5, hits: 1 }] }]
+            : []),
         ],
       });
       return {
-        coverage: [{ file: target, statements: opts.listLine === false ? [{ line: 6, hits: 0 }] : [line, { line: 6, hits: 0 }] }],
+        coverage: [
+          {
+            file: target,
+            statements:
+              opts.listLine === false ? [{ line: 6, hits: 0 }] : [line, { line: 6, hits: 0 }],
+          },
+        ],
         perTestCoverage: opts.perTest === false ? [own("B")] : [own("A"), own("B")],
       };
     };
@@ -792,7 +955,15 @@ codeunit 79000 "Logic"
     const cov = (_id: string, active: string, testDir: string) => {
       const target = join(active, "Logic.Codeunit.al");
       return {
-        coverage: [{ file: target, statements: [{ line: 13, hits: 1 }, { line: 14, hits: 1 }] }],
+        coverage: [
+          {
+            file: target,
+            statements: [
+              { line: 13, hits: 1 },
+              { line: 14, hits: 1 },
+            ],
+          },
+        ],
         perTestCoverage: ["A", "B"].map((m) => ({
           test: `Codeunit${CU}.${m}`,
           coverage: [

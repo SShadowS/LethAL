@@ -15,13 +15,15 @@ const CAPS_AL_RUNNER = {
   coverage: "none",
   deploy: "none",
   isolation: "full-reset",
-  kind: "al-runner", authoritative: false,
+  kind: "al-runner",
+  authoritative: false,
 } as const;
 const CAPS_BCDEV = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
-  kind: "bcdev", authoritative: true,
+  kind: "bcdev",
+  authoritative: true,
 } as const;
 
 function entry(id: string): MutantManifestEntry {

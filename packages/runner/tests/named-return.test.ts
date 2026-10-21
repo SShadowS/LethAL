@@ -477,7 +477,8 @@ const CAPS: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
-  kind: "bcdev", authoritative: true,
+  kind: "bcdev",
+  authoritative: true,
 };
 
 const selectorIds = { selectorId: 50147, controlId: 50148, tableId: 50149 };

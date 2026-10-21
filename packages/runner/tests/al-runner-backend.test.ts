@@ -1259,7 +1259,8 @@ describe("AlRunnerBackend capabilities", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
-      kind: "al-runner", authoritative: false,
+      kind: "al-runner",
+      authoritative: false,
     });
   });
 });

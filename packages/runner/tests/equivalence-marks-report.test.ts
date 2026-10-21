@@ -151,7 +151,13 @@ function survivedReport(
   ];
   return buildReport(
     {
-      caps: { kind: "bcdev", authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
+      caps: {
+        kind: "bcdev",
+        authoritative: true,
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+      },
       buildSymbols: [],
       ...(marks !== undefined ? { equivalenceMarks: marks } : {}),
     },

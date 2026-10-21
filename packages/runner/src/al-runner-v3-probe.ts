@@ -79,7 +79,9 @@ export function readV3Mask(message: string): readonly string[] {
   const masks = [...message.matchAll(/R586MASK:([\s\S]*?):END/g)];
   const body = masks[0]?.[1];
   if (masks.length !== 1 || message.split("R586MASK:").length !== 2 || body === undefined) {
-    throw new AlRunnerV3ProbeError(`expected exactly one R586MASK:...:END, got: ${message.slice(0, 300)}`);
+    throw new AlRunnerV3ProbeError(
+      `expected exactly one R586MASK:...:END, got: ${message.slice(0, 300)}`,
+    );
   }
   const known = new Set([...V3_PREDEFINED_CANDIDATES, "ALWAYS"]);
   const seen = new Map<string, boolean>();
@@ -94,7 +96,8 @@ export function readV3Mask(message: string): readonly string[] {
   }
   if (seen.get("ALWAYS") !== true) throw new AlRunnerV3ProbeError("the +ALWAYS control is missing");
   const missing = V3_PREDEFINED_CANDIDATES.filter((c) => !seen.has(c));
-  if (missing.length > 0) throw new AlRunnerV3ProbeError(`candidates missing: ${missing.join(", ")}`);
+  if (missing.length > 0)
+    throw new AlRunnerV3ProbeError(`candidates missing: ${missing.join(", ")}`);
   return V3_PREDEFINED_CANDIDATES.filter((c) => seen.get(c) === true).sort();
 }
 
@@ -125,7 +128,9 @@ export async function probeV3PredefinedSymbols(a: {
         name: "LethAL R586 Mask Probe",
         idFrom: TEST_ID,
         idTo: TEST_ID,
-        dependencies: [{ id: targetId, name: "LethAL R586 Mask", publisher: "LethAL", version: "1.0.0.0" }],
+        dependencies: [
+          { id: targetId, name: "LethAL R586 Mask", publisher: "LethAL", version: "1.0.0.0" },
+        ],
       }),
     );
     await writeFile(join(tests, "MaskProbe.Codeunit.al"), TEST_AL);
@@ -149,13 +154,17 @@ export async function probeV3PredefinedSymbols(a: {
       a.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: a.cacheDir } } : {},
     );
     if (res.exitCode !== 1) {
-      throw new AlRunnerV3ProbeError(`v3 exited ${res.exitCode}, expected 1 (the probe test fails). stderr: ${res.stderr.slice(-400)}`);
+      throw new AlRunnerV3ProbeError(
+        `v3 exited ${res.exitCode}, expected 1 (the probe test fails). stderr: ${res.stderr.slice(-400)}`,
+      );
     }
     const decoded = decodeV3Rows(res.stdout, TEST_ID);
     if ("why" in decoded) throw new AlRunnerV3ProbeError(decoded.why);
     const [row, ...rest] = decoded.rows;
     if (row === undefined || rest.length > 0 || row.status !== "fail" || row.notRun) {
-      throw new AlRunnerV3ProbeError(`expected one failing row, got ${JSON.stringify(decoded.rows).slice(0, 300)}`);
+      throw new AlRunnerV3ProbeError(
+        `expected one failing row, got ${JSON.stringify(decoded.rows).slice(0, 300)}`,
+      );
     }
     return { symbols: readV3Mask(row.message ?? "") };
   } finally {

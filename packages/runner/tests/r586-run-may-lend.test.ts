@@ -17,20 +17,42 @@ const ctx = { baselineErrorMethods: () => [] };
 
 describe("T14: runMayLend", () => {
   test("v3 never lends to v2 or bcdev, and v2 / bcdev never lend to v3", () => {
-    expect(runMayLend(run("al-runner-v3", B1), { backend: "al-runner", runnerBuild: undefined }, ctx)?.step).toBe("backend-build");
-    expect(runMayLend(run("al-runner-v3", B1), { backend: "bcdev", runnerBuild: undefined }, ctx)?.step).toBe("backend-build");
-    expect(runMayLend(run("al-runner", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step).toBe("backend-build");
-    expect(runMayLend(run("bcdev", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step).toBe("backend-build");
+    expect(
+      runMayLend(run("al-runner-v3", B1), { backend: "al-runner", runnerBuild: undefined }, ctx)
+        ?.step,
+    ).toBe("backend-build");
+    expect(
+      runMayLend(run("al-runner-v3", B1), { backend: "bcdev", runnerBuild: undefined }, ctx)?.step,
+    ).toBe("backend-build");
+    expect(
+      runMayLend(run("al-runner", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step,
+    ).toBe("backend-build");
+    expect(
+      runMayLend(run("bcdev", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step,
+    ).toBe("backend-build");
   });
   test("v3 lends to the same build only; another build or an unrecorded one refuses", () => {
-    expect(runMayLend(run("al-runner-v3", B1), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)).toBeUndefined();
-    expect(runMayLend(run("al-runner-v3", B2), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step).toBe("backend-build");
-    expect(runMayLend(run("al-runner-v3", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step).toBe("backend-build");
+    expect(
+      runMayLend(run("al-runner-v3", B1), { backend: "al-runner-v3", runnerBuild: B1 }, ctx),
+    ).toBeUndefined();
+    expect(
+      runMayLend(run("al-runner-v3", B2), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step,
+    ).toBe("backend-build");
+    expect(
+      runMayLend(run("al-runner-v3", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)
+        ?.step,
+    ).toBe("backend-build");
   });
   test("v2 <-> bcdev are unchanged by step 1 (R592 is filed separately)", () => {
-    expect(backendBuildRefusal(run("bcdev", null), { backend: "al-runner", runnerBuild: undefined })).toBeUndefined();
-    expect(backendBuildRefusal(run("al-runner", null), { backend: "bcdev", runnerBuild: undefined })).toBeUndefined();
-    expect(runMayLend(run("al-runner", null), { backend: "al-runner", runnerBuild: undefined }, ctx)).toBeUndefined();
+    expect(
+      backendBuildRefusal(run("bcdev", null), { backend: "al-runner", runnerBuild: undefined }),
+    ).toBeUndefined();
+    expect(
+      backendBuildRefusal(run("al-runner", null), { backend: "bcdev", runnerBuild: undefined }),
+    ).toBeUndefined();
+    expect(
+      runMayLend(run("al-runner", null), { backend: "al-runner", runnerBuild: undefined }, ctx),
+    ).toBeUndefined();
   });
   test("no session named: a v3 run lends nothing, any other run is unchanged", () => {
     expect(backendBuildRefusal(run("al-runner-v3", B1), undefined)).toBeDefined();
@@ -38,11 +60,17 @@ describe("T14: runMayLend", () => {
   });
   test("order: step 1 names the reason before R557's mark, and the mark before the renamed tests", () => {
     const unmarkedV3 = run("al-runner-v3", B2, false);
-    expect(runMayLend(unmarkedV3, { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step).toBe("backend-build");
+    expect(runMayLend(unmarkedV3, { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step).toBe(
+      "backend-build",
+    );
     const unmarkedV2 = run("al-runner", null, false);
     const renamed = { baselineErrorMethods: () => ["X"], renamed: () => ["X"] };
-    expect(runMayLend(unmarkedV2, { backend: "al-runner", runnerBuild: undefined }, renamed)?.step).toBe("al-runner-unmarked");
-    expect(runMayLend(run("al-runner", null), { backend: "al-runner", runnerBuild: undefined }, renamed)).toEqual({
+    expect(
+      runMayLend(unmarkedV2, { backend: "al-runner", runnerBuild: undefined }, renamed)?.step,
+    ).toBe("al-runner-unmarked");
+    expect(
+      runMayLend(run("al-runner", null), { backend: "al-runner", runnerBuild: undefined }, renamed),
+    ).toEqual({
       step: "al-runner-renamed",
       tests: ["X"],
     });
@@ -100,7 +128,10 @@ describe("T14 at the store sites", () => {
   test("history: a v3 survivor is not lent to a v2 session (the #5603 false survivor case), and is lent to its own build", () => {
     const store = new ResultsStore(":memory:");
     finishedRun(store, "al-runner-v3", B1);
-    expect(ask(store, "al-runner", undefined)).toMatchObject({ keys: 0, refused: [expect.stringMatching(/al-runner-v3/)] });
+    expect(ask(store, "al-runner", undefined)).toMatchObject({
+      keys: 0,
+      refused: [expect.stringMatching(/al-runner-v3/)],
+    });
     expect(ask(store, "al-runner-v3", B2).keys).toBe(0);
     expect(ask(store, "al-runner-v3", B1)).toEqual({ keys: 1, refused: [] });
   });
@@ -133,7 +164,12 @@ describe("T14 at the store sites", () => {
       runnerBuild: B2,
     });
     store.recordMutant(id, mutantRow("killed"));
-    const q = { projectPath: "P", backend: "al-runner-v3", configFingerprint: "F", carryableVerdicts: [...CARRYABLE_VERDICTS] };
+    const q = {
+      projectPath: "P",
+      backend: "al-runner-v3",
+      configFingerprint: "F",
+      carryableVerdicts: [...CARRYABLE_VERDICTS],
+    };
     expect(store.findResumableRun({ ...q, runnerBuild: B1 })).toBeNull();
     expect(store.findResumableRun({ ...q, runnerBuild: B2 })).toBe(id);
     expect(() => store.findResumableRun(q)).toThrow(/must name its runner build/);
@@ -149,9 +185,13 @@ describe("campaign freeze is refused for v3 by name", () => {
     try {
       const path = join(dir, "r.json");
       await writeFile(path, JSON.stringify({ backend: "al-runner-v3", coverageMode: "al-runner" }));
-      await expect(freezeStageTo(path, "s", 0, dir)).rejects.toThrow(/al-runner-v3-campaign-freeze-refused/);
+      await expect(freezeStageTo(path, "s", 0, dir)).rejects.toThrow(
+        /al-runner-v3-campaign-freeze-refused/,
+      );
       await writeFile(path, JSON.stringify({ backend: "al-runner", coverageMode: "al-runner" }));
-      await expect(freezeStageTo(path, "s", 0, dir)).rejects.not.toThrow(/al-runner-v3-campaign-freeze-refused/);
+      await expect(freezeStageTo(path, "s", 0, dir)).rejects.not.toThrow(
+        /al-runner-v3-campaign-freeze-refused/,
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

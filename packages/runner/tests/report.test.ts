@@ -298,7 +298,13 @@ describe("Caveat union", () => {
 // ------------------------------------------------------------------------
 describe("buildReport: hangCapable travels the site property path (R196)", () => {
   const STATICS: FoldStatics = {
-    caps: { kind: "bcdev", authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
+    caps: {
+      kind: "bcdev",
+      authoritative: true,
+      coverage: "none",
+      deploy: "publish",
+      isolation: "session",
+    },
     buildSymbols: [],
   };
 
@@ -861,7 +867,13 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
 // R577: the kill-reproduction fields ride both fold sites, and the banner names the new cause.
 describe("R577: killReproduced, reproducedFailure and kill-not-reproduced on the report", () => {
   const STATICS: FoldStatics = {
-    caps: { kind: "al-runner", authoritative: false, coverage: "none", deploy: "publish", isolation: "session" },
+    caps: {
+      kind: "al-runner",
+      authoritative: false,
+      coverage: "none",
+      deploy: "publish",
+      isolation: "session",
+    },
     buildSymbols: [],
   };
   const mutant = (id: string): MutantManifestEntry => ({

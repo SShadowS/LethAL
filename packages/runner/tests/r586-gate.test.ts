@@ -1,9 +1,18 @@
 // R586 T19 (the itest half): leg T's `held` rule (r4 I-3) and the update-gate outcome (r3 F6).
 import { describe, expect, test } from "bun:test";
-import { V3_GATE_LEGS, classifyLegT, gateOutcome, knownDifferenceKeys } from "../itest/al-runner-v3-gate";
+import {
+  V3_GATE_LEGS,
+  classifyLegT,
+  gateOutcome,
+  knownDifferenceKeys,
+} from "../itest/al-runner-v3-gate";
 import type { NormalizedMutant } from "../itest/mutant-equality";
 
-const row = (key: string, verdict: string, killingTest: string | null = null): NormalizedMutant => ({
+const row = (
+  key: string,
+  verdict: string,
+  killingTest: string | null = null,
+): NormalizedMutant => ({
   key,
   verdict,
   killingTest,
@@ -23,12 +32,28 @@ describe("leg T: held only for a known row moving to its BC verdict", () => {
     expect(classifyLegT(own, own, bc).outcome).toBe("pass");
   });
   test("a #5603 fix turning the known survivor into BC's kill is held, never gate-fail", () => {
-    const now = [row("K1", "killed", "DoubleInsert"), row("K2", "killed", "T2"), row("K3", "survived")];
+    const now = [
+      row("K1", "killed", "DoubleInsert"),
+      row("K2", "killed", "T2"),
+      row("K3", "survived"),
+    ];
     expect(classifyLegT(own, now, bc).outcome).toBe("held");
   });
   test("a known row moving to a NON-BC verdict, or another killing test, is gate-fail", () => {
-    expect(classifyLegT(own, [row("K1", "no-coverage"), own[1] as NormalizedMutant, own[2] as NormalizedMutant], bc).outcome).toBe("gate-fail");
-    expect(classifyLegT(own, [row("K1", "killed", "Other"), own[1] as NormalizedMutant, own[2] as NormalizedMutant], bc).outcome).toBe("gate-fail");
+    expect(
+      classifyLegT(
+        own,
+        [row("K1", "no-coverage"), own[1] as NormalizedMutant, own[2] as NormalizedMutant],
+        bc,
+      ).outcome,
+    ).toBe("gate-fail");
+    expect(
+      classifyLegT(
+        own,
+        [row("K1", "killed", "Other"), own[1] as NormalizedMutant, own[2] as NormalizedMutant],
+        bc,
+      ).outcome,
+    ).toBe("gate-fail");
   });
   test("an UNLISTED row's difference is gate-fail, even beside a held one", () => {
     const now = [row("K1", "killed", "DoubleInsert"), row("K2", "survived"), row("K3", "survived")];

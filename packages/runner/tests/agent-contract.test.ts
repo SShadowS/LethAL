@@ -622,7 +622,8 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
       ] as RunEventInput[]
     ).map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
     const caps = {
-      kind: "bcdev", authoritative: true,
+      kind: "bcdev",
+      authoritative: true,
       coverage: "procedure",
       deploy: "publish",
       isolation: "session",

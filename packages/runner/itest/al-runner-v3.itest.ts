@@ -80,8 +80,18 @@ const CDO_BC = "28.4.53241.53758";
 const fixture = (n: string) => join(REPO, "fixtures", n);
 const PROBE = join(REPO, "scripts", "r586-probe");
 
-const configured = ["C", "S1", "S3", "N1", "X", ...(CDO !== undefined ? ["D1", "D1c"] : []), ...(TABLES ? ["T"] : [])];
-const LEGS = (process.env.LETHAL_ITEST_V3_LEGS ?? configured.join(",")).split(",").map((s) => s.trim());
+const configured = [
+  "C",
+  "S1",
+  "S3",
+  "N1",
+  "X",
+  ...(CDO !== undefined ? ["D1", "D1c"] : []),
+  ...(TABLES ? ["T"] : []),
+];
+const LEGS = (process.env.LETHAL_ITEST_V3_LEGS ?? configured.join(","))
+  .split(",")
+  .map((s) => s.trim());
 
 /** Oracle server BC builds, recorded beside v3's `--bc-version` (F8). */
 const ORACLE_BC_BUILD: Record<string, string> = {
@@ -108,7 +118,13 @@ async function microsoftDeps(scratch: string): Promise<string> {
   return dir;
 }
 
-function backendCfg(o: Partial<AlRunnerV3Config> & Pick<AlRunnerV3Config, "instrumentedDir" | "testDir" | "packagesDir" | "bcVersion" | "selectorObjectId">): AlRunnerV3Config {
+function backendCfg(
+  o: Partial<AlRunnerV3Config> &
+    Pick<
+      AlRunnerV3Config,
+      "instrumentedDir" | "testDir" | "packagesDir" | "bcVersion" | "selectorObjectId"
+    >,
+): AlRunnerV3Config {
   return {
     alRunnerPath: BIN,
     alcPath: ALC,
@@ -146,9 +162,14 @@ async function session(
 const counts = (r: SessionReport) =>
   `${r.counts.killed} / ${r.counts.survived} / ${r.counts.noCoverage} (errors ${r.counts.errors}, timeout-killed ${r.counts.timeoutKilled})`;
 const tagged = (r: SessionReport, tag: string) =>
-  r.mutants.filter((m) => (m.failureNote ?? "").startsWith(tag)).map((m) => `${m.batchIndex}/${m.mutantCode}`).sort();
+  r.mutants
+    .filter((m) => (m.failureNote ?? "").startsWith(tag))
+    .map((m) => `${m.batchIndex}/${m.mutantCode}`)
+    .sort();
 const refusedCause = (r: SessionReport) =>
-  r.mutants.filter((m) => m.cause === "runner-refused" || m.cause === "runner-test-error").map((m) => `${m.batchIndex}/${m.mutantCode}`);
+  r.mutants
+    .filter((m) => m.cause === "runner-refused" || m.cause === "runner-test-error")
+    .map((m) => `${m.batchIndex}/${m.mutantCode}`);
 
 /** Every kill reproduced (R577), and none `kill-not-reproduced`. */
 function assertReproduced(r: SessionReport, leg: string): void {
@@ -166,20 +187,39 @@ async function assertPerMutant(r: SessionReport, oraclePath: string, leg: string
   let cmp: ReturnType<typeof compareMutants>;
   if (Array.isArray(raw.mutants)) {
     const o = raw as unknown as SessionReport;
-    cmp = compareMutants(normalizeForComparison(o), now, { sameScheme: o.identityScheme === r.identityScheme });
+    cmp = compareMutants(normalizeForComparison(o), now, {
+      sameScheme: o.identityScheme === r.identityScheme,
+    });
   } else {
     const base = await readGateBaseline(oraclePath);
-    cmp = compareMutants(base.entries, now, { sameScheme: base.identityScheme === r.identityScheme });
+    cmp = compareMutants(base.entries, now, {
+      sameScheme: base.identityScheme === r.identityScheme,
+    });
   }
-  console.log(`  ${leg}: vs ${oraclePath}: ${cmp.differences.length} difference(s), text verified ${cmp.textVerified}, unverified ${cmp.textUnverified}`);
+  console.log(
+    `  ${leg}: vs ${oraclePath}: ${cmp.differences.length} difference(s), text verified ${cmp.textVerified}, unverified ${cmp.textUnverified}`,
+  );
   for (const d of cmp.differences) console.log(`    - ${d}`);
-  must(cmp.differences.length === 0, `${leg}: ${cmp.differences.length} per-mutant difference(s) from ${oraclePath}`);
+  must(
+    cmp.differences.length === 0,
+    `${leg}: ${cmp.differences.length} per-mutant difference(s) from ${oraclePath}`,
+  );
 }
 
-function assertCounts(r: SessionReport, leg: string, k: number, s: number, n: number, total: number): void {
+function assertCounts(
+  r: SessionReport,
+  leg: string,
+  k: number,
+  s: number,
+  n: number,
+  total: number,
+): void {
   console.log(`  ${leg}: ${counts(r)} over ${r.mutants.length}`);
   must(
-    r.counts.killed === k && r.counts.survived === s && r.counts.noCoverage === n && r.mutants.length === total,
+    r.counts.killed === k &&
+      r.counts.survived === s &&
+      r.counts.noCoverage === n &&
+      r.mutants.length === total,
     `${leg}: ${counts(r)} over ${r.mutants.length}, pre-committed ${k} / ${s} / ${n} over ${total}`,
   );
 }
@@ -187,7 +227,10 @@ function assertCounts(r: SessionReport, leg: string, k: number, s: number, n: nu
 function assertIndex(b: AlRunnerV3Backend, leg: string, target: number, test: number): void {
   const s = b.sleepIndexSize();
   console.log(`  ${leg}: Sleep index ${s?.target} + ${s?.test}`);
-  must(s?.target === target && s.test === test, `${leg}: Sleep index ${JSON.stringify(s)}, pre-committed ${target} + ${test}`);
+  must(
+    s?.target === target && s.test === test,
+    `${leg}: Sleep index ${JSON.stringify(s)}, pre-committed ${target} + ${test}`,
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -211,8 +254,11 @@ async function legC(scratch: string): Promise<void> {
     "quoted-name-unselectable",
     "commit-under-test-isolation",
   ];
-  for (const f of r.facts) console.log(`  C: ${f.fact} = ${f.verdict} | ${f.measured.slice(0, 200)}`);
-  const off = r.facts.filter((f) => f.verdict !== (DEFECTS.includes(f.fact) ? "defect-present" : "matches"));
+  for (const f of r.facts)
+    console.log(`  C: ${f.fact} = ${f.verdict} | ${f.measured.slice(0, 200)}`);
+  const off = r.facts.filter(
+    (f) => f.verdict !== (DEFECTS.includes(f.fact) ? "defect-present" : "matches"),
+  );
   must(off.length === 0, `C: ${off.map((f) => `${f.fact}=${f.verdict}`).join(", ")}`);
   must(r.facts.length === 23, `C: ${r.facts.length} facts, expected 23`);
 }
@@ -234,13 +280,25 @@ async function legS1(scratch: string): Promise<void> {
   });
   assertCounts(r, "S1", 3, 12, 4, 19);
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "S1");
-  must(r.baselineGreen && r.unsupportedTests.length === 0, "S1: baseline not green or a refused test");
-  must(tagged(r, V3_STATE_NOTE_TAG).length === 0, `S1: state notes ${tagged(r, V3_STATE_NOTE_TAG)}`);
+  must(
+    r.baselineGreen && r.unsupportedTests.length === 0,
+    "S1: baseline not green or a refused test",
+  );
+  must(
+    tagged(r, V3_STATE_NOTE_TAG).length === 0,
+    `S1: state notes ${tagged(r, V3_STATE_NOTE_TAG)}`,
+  );
   must(tagged(r, V3_REFUSED_NEARBY_TAG).length === 0, "S1: refused-nearby notes");
-  must(tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0, "S1: a §6 or runner refusal");
+  must(
+    tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0,
+    "S1: a §6 or runner refusal",
+  );
   assertIndex(b, "S1", 0, 0);
   assertReproduced(r, "S1");
-  must(r.validity.executionContexts.some((c) => c.runnerBuild !== undefined), "S1: no runnerBuild recorded");
+  must(
+    r.validity.executionContexts.some((c) => c.runnerBuild !== undefined),
+    "S1: no runnerBuild recorded",
+  );
 }
 
 async function legS3(scratch: string): Promise<void> {
@@ -257,10 +315,14 @@ async function legS3(scratch: string): Promise<void> {
       }),
     );
   } catch (err) {
-    refused = err instanceof AlRunnerV3ResourceSelectorRefusedError ? err.message : `other: ${String(err)}`;
+    refused =
+      err instanceof AlRunnerV3ResourceSelectorRefusedError ? err.message : `other: ${String(err)}`;
   }
   console.log(`  S3: ${refused}`);
-  must(refused.startsWith("al-runner-v3-resource-selector-refused"), `S3: not refused by name (${refused})`);
+  must(
+    refused.startsWith("al-runner-v3-resource-selector-refused"),
+    `S3: not refused by name (${refused})`,
+  );
 }
 
 async function legN1(scratch: string): Promise<void> {
@@ -281,9 +343,18 @@ async function legN1(scratch: string): Promise<void> {
   });
   assertCounts(r, "N1", 36, 0, 0, 36);
   await assertPerMutant(r, join(HERE, "bcdev.names.baseline.json"), "N1");
-  must(r.baselineGreen && r.unsupportedTests.length === 0, "N1: baseline not green or a refused test");
-  must(tagged(r, V3_STATE_NOTE_TAG).length === 0 && tagged(r, V3_REFUSED_NEARBY_TAG).length === 0, "N1: notes");
-  must(tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0, "N1: a §6 or runner refusal");
+  must(
+    r.baselineGreen && r.unsupportedTests.length === 0,
+    "N1: baseline not green or a refused test",
+  );
+  must(
+    tagged(r, V3_STATE_NOTE_TAG).length === 0 && tagged(r, V3_REFUSED_NEARBY_TAG).length === 0,
+    "N1: notes",
+  );
+  must(
+    tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0,
+    "N1: a §6 or runner refusal",
+  );
   assertIndex(b, "N1", 0, 0);
   assertReproduced(r, "N1");
 }
@@ -321,7 +392,13 @@ async function legX(scratch: string): Promise<void> {
   const deps = join(sb, ".alpackages");
   const mk = (dir: string, testDir = sb) =>
     new AlRunnerV3Backend(
-      backendCfg({ instrumentedDir: dir, testDir, packagesDir: deps, bcVersion: SANDBOX_BC, selectorObjectId: 79199 }),
+      backendCfg({
+        instrumentedDir: dir,
+        testDir,
+        packagesDir: deps,
+        bcVersion: SANDBOX_BC,
+        selectorObjectId: 79199,
+      }),
     );
   // (a) a broken batch: AlcCompileError naming AL0118, v3 spawned 0 times.
   const broken = join(scratch, "broken");
@@ -332,23 +409,52 @@ async function legX(scratch: string): Promise<void> {
   await writeFile(logic, text.replace("begin", "begin NoSuchVar := 1;"));
   const ba = mk(join(scratch, "xa"));
   const errA = await ba.deploy(broken).catch((e: unknown) => e);
-  console.log(`  X (a): ${errA instanceof AlcCompileError ? "AlcCompileError" : String(errA)}; v3 spawns ${ba.spawnCount}`);
-  must(errA instanceof AlcCompileError && /AL0118/.test(errA.message) && ba.spawnCount === 0, "X (a)");
+  console.log(
+    `  X (a): ${errA instanceof AlcCompileError ? "AlcCompileError" : String(errA)}; v3 spawns ${ba.spawnCount}`,
+  );
+  must(
+    errA instanceof AlcCompileError && /AL0118/.test(errA.message) && ba.spawnCount === 0,
+    "X (a)",
+  );
   // (b) v3 alone on that folder: exit 7, 1 pass, 1 not run.
   const bDir = join(scratch, "xb");
   await cp(broken, bDir, { recursive: true });
-  for (const f of [CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME]) await rm(join(bDir, f), { force: true });
-  const man = JSON.parse(await readFile(join(bDir, "mutant-manifest.json"), "utf8")) as { artifactId: string };
+  for (const f of [CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME])
+    await rm(join(bDir, f), { force: true });
+  const man = JSON.parse(await readFile(join(bDir, "mutant-manifest.json"), "utf8")) as {
+    artifactId: string;
+  };
   await writeFile(
     join(bDir, "MutationSelector.Codeunit.al"),
-    emitStaticSelector({ objectId: 79199, activeId: "", artifactId: man.artifactId, targetAppId: "" }),
+    emitStaticSelector({
+      objectId: 79199,
+      activeId: "",
+      artifactId: man.artifactId,
+      targetAppId: "",
+    }),
   );
   let b7 = "";
   try {
-    execFileSync(BIN, ["test", "--output-json", "--isolation", "test", "--package-cache", deps, "--bc-version", SANDBOX_BC, "--no-download", bDir, sb], {
-      encoding: "utf8",
-      env: { ...process.env, ALRUNNER_CACHE: CACHE },
-    });
+    execFileSync(
+      BIN,
+      [
+        "test",
+        "--output-json",
+        "--isolation",
+        "test",
+        "--package-cache",
+        deps,
+        "--bc-version",
+        SANDBOX_BC,
+        "--no-download",
+        bDir,
+        sb,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, ALRUNNER_CACHE: CACHE },
+      },
+    );
     b7 = "exit 0";
   } catch (e) {
     const x = e as { status?: number; stdout?: string };
@@ -360,13 +466,40 @@ async function legX(scratch: string): Promise<void> {
   // (c1-c5) after a good deploy and activate("M0002").
   const tamper: [string, (active: string, tests: string, d: string) => Promise<void>][] = [
     ["c1", (a) => appendFile(join(a, "SandboxLogic.Codeunit.al"), " ")],
-    ["c2", async (_a, t) => {
-      const f = (await readdir(t)).find((n) => n.endsWith(".al"));
-      if (f === undefined) throw new LegFailure("X: no test .al");
-      await appendFile(join(t, f), " ");
-    }],
-    ["c3", (a) => writeFile(join(a, "MutationSelector.Codeunit.al"), emitStaticSelector({ objectId: 79199, activeId: "M9999", artifactId: man.artifactId, targetAppId: "" }))],
-    ["c4", (a) => writeFile(join(a, "MutationSelector.Codeunit.al"), emitStaticSelector({ objectId: 79199, activeId: "M0001", artifactId: man.artifactId, targetAppId: "" }))],
+    [
+      "c2",
+      async (_a, t) => {
+        const f = (await readdir(t)).find((n) => n.endsWith(".al"));
+        if (f === undefined) throw new LegFailure("X: no test .al");
+        await appendFile(join(t, f), " ");
+      },
+    ],
+    [
+      "c3",
+      (a) =>
+        writeFile(
+          join(a, "MutationSelector.Codeunit.al"),
+          emitStaticSelector({
+            objectId: 79199,
+            activeId: "M9999",
+            artifactId: man.artifactId,
+            targetAppId: "",
+          }),
+        ),
+    ],
+    [
+      "c4",
+      (a) =>
+        writeFile(
+          join(a, "MutationSelector.Codeunit.al"),
+          emitStaticSelector({
+            objectId: 79199,
+            activeId: "M0001",
+            artifactId: man.artifactId,
+            targetAppId: "",
+          }),
+        ),
+    ],
     ["c5 app.json", (a) => appendFile(join(a, "app.json"), " ")],
     ["c5 deps", async (_a, _t, d) => writeFile(join(d, "Extra.app"), "x")],
   ];
@@ -377,16 +510,27 @@ async function legX(scratch: string): Promise<void> {
     await cp(sb, tests, { recursive: true });
     await cp(deps, d, { recursive: true });
     const b = new AlRunnerV3Backend(
-      backendCfg({ instrumentedDir: join(dir, "b"), testDir: tests, packagesDir: d, bcVersion: SANDBOX_BC, selectorObjectId: 79199 }),
+      backendCfg({
+        instrumentedDir: join(dir, "b"),
+        testDir: tests,
+        packagesDir: d,
+        bcVersion: SANDBOX_BC,
+        selectorObjectId: 79199,
+      }),
     );
     await b.deploy(batch);
     await b.activate("M0002");
     const before = b.spawnCount;
     await fn(join(dir, "b", "active"), join(tests, "src"), d);
     const err = await b
-      .run({ codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" }, { coverage: "none", timeoutMs: 30000 })
+      .run(
+        { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" },
+        { coverage: "none", timeoutMs: 30000 },
+      )
       .catch((e: unknown) => e);
-    console.log(`  X (${name}): ${err instanceof AlRunnerV3UnprovenBatchError ? "AlRunnerV3UnprovenBatchError" : String(err)}; spawns ${b.spawnCount - before}`);
+    console.log(
+      `  X (${name}): ${err instanceof AlRunnerV3UnprovenBatchError ? "AlRunnerV3UnprovenBatchError" : String(err)}; spawns ${b.spawnCount - before}`,
+    );
     must(err instanceof AlRunnerV3UnprovenBatchError && b.spawnCount === before, `X (${name})`);
   }
   await legXSleep(scratch);
@@ -398,8 +542,14 @@ async function legXSleep(scratch: string): Promise<void> {
   const tests = join(scratch, "probe-tests");
   await cp(join(PROBE, "probe-app"), app, { recursive: true });
   await cp(join(PROBE, "probe-tests"), tests, { recursive: true });
-  await cp(join(PROBE, "extras", "ProbeSleeper.Codeunit.al"), join(app, "src", "ProbeSleeper.Codeunit.al"));
-  await cp(join(PROBE, "extras", "ProbeSleep.Codeunit.al"), join(tests, "src", "ProbeSleep.Codeunit.al"));
+  await cp(
+    join(PROBE, "extras", "ProbeSleeper.Codeunit.al"),
+    join(app, "src", "ProbeSleeper.Codeunit.al"),
+  );
+  await cp(
+    join(PROBE, "extras", "ProbeSleep.Codeunit.al"),
+    join(tests, "src", "ProbeSleep.Codeunit.al"),
+  );
   // The multi-object file and its test leave the scratch copy: with coverage on, the v3 index
   // refuses a multi-object file (its frame is not measured on v3).
   await rm(join(app, "src", "ProbePair.Codeunit.al"));
@@ -408,7 +558,13 @@ async function legXSleep(scratch: string): Promise<void> {
   const run = async (tag: string, tamper?: (p: string) => Promise<void>) => {
     const dir = join(scratch, `xd-${tag}`);
     const b = new AlRunnerV3Backend(
-      backendCfg({ instrumentedDir: join(dir, "b"), testDir: tests, packagesDir: deps, bcVersion: SANDBOX_BC, selectorObjectId: 50649 }),
+      backendCfg({
+        instrumentedDir: join(dir, "b"),
+        testDir: tests,
+        packagesDir: deps,
+        bcVersion: SANDBOX_BC,
+        selectorObjectId: 50649,
+      }),
     );
     if (tamper !== undefined) b.coverageTamper = tamper;
     const r = await session(dir, b, {
@@ -419,7 +575,9 @@ async function legXSleep(scratch: string): Promise<void> {
       testsOnly: ["src/ProbeSleep.Codeunit.al"],
     });
     for (const m of r.mutants) {
-      console.log(`  X (${tag}): ${m.mutantCode} ${m.operatorName} ${m.verdict} ${m.killingTest ?? "-"} ${(m.failureNote ?? "").slice(0, 120)}`);
+      console.log(
+        `  X (${tag}): ${m.mutantCode} ${m.operatorName} ${m.verdict} ${m.killingTest ?? "-"} ${(m.failureNote ?? "").slice(0, 120)}`,
+      );
     }
     return { r, b };
   };
@@ -427,65 +585,105 @@ async function legXSleep(scratch: string): Promise<void> {
   const idx = b.sleepIndexSize();
   console.log(`  X (d): Sleep index ${idx?.target} + ${idx?.test}`);
   must((idx?.target ?? 0) >= 2 && idx?.test === 4, `X (d): Sleep index ${JSON.stringify(idx)}`);
-  must(r.unsupportedTests.some((t) => t.endsWith("LongSleepThenAssert")), "X (d): LongSleepThenAssert not refused at baseline");
+  must(
+    r.unsupportedTests.some((t) => t.endsWith("LongSleepThenAssert")),
+    "X (d): LongSleepThenAssert not refused at baseline",
+  );
   const keepsSleep = (m: MutantOutcome) => /\bSleep\s*\(/i.test(m.mutatedText ?? "");
-  const keepsDouble = (m: MutantOutcome) => (m.mutatedText ?? "").includes("X * 2") || !(m.originalText ?? "").includes("X * 2");
+  const keepsDouble = (m: MutantOutcome) =>
+    (m.mutatedText ?? "").includes("X * 2") || !(m.originalText ?? "").includes("X * 2");
   const expected = (m: MutantOutcome): string =>
-    !keepsDouble(m) ? "killed" : keepsSleep(m) || !(m.originalText ?? "").includes("Sleep") ? "error" : "survived";
-  const wrong = r.mutants.filter((m) => m.verdict !== expected(m)).map((m) => `${m.mutantCode} ${m.verdict}, rule says ${expected(m)}`);
+    !keepsDouble(m)
+      ? "killed"
+      : keepsSleep(m) || !(m.originalText ?? "").includes("Sleep")
+        ? "error"
+        : "survived";
+  const wrong = r.mutants
+    .filter((m) => m.verdict !== expected(m))
+    .map((m) => `${m.mutantCode} ${m.verdict}, rule says ${expected(m)}`);
   must(wrong.length === 0, `X (d): ${wrong.join("; ")}`);
   const errs = r.mutants.filter((m) => m.verdict === "error");
   must(errs.length >= 1, "X (d): no §6 error mutant");
   must(
-    errs.every((m) => m.cause === "runner-refused" && (m.failureNote ?? "").startsWith(`${SLEEP_NOTE_TAG} covered Sleep at`)),
+    errs.every(
+      (m) =>
+        m.cause === "runner-refused" &&
+        (m.failureNote ?? "").startsWith(`${SLEEP_NOTE_TAG} covered Sleep at`),
+    ),
     "X (d): an error without the covered-Sleep note",
   );
   // (e) the coverage document removed under every mutant: no pass survives.
   const e = await run("e", async (p) => {
     await rm(p, { force: true });
   });
-  must(e.r.mutants.every((m) => m.verdict !== "survived"), "X (e): a survivor with no coverage document");
   must(
-    e.r.mutants.filter((m) => m.verdict === "error").every((m) => (m.failureNote ?? "").includes("coverage unavailable")),
+    e.r.mutants.every((m) => m.verdict !== "survived"),
+    "X (e): a survivor with no coverage document",
+  );
+  must(
+    e.r.mutants
+      .filter((m) => m.verdict === "error")
+      .every((m) => (m.failureNote ?? "").includes("coverage unavailable")),
     "X (e): an error without the unavailable note",
   );
   // (f) a missing per-test entry; an absent indexed line; an unowned hit. The Sleep lines are read
   // from the instrumented file v3 reported (a text match, as close to the index as a hook needs).
   type Cov = { file: string; statements: { line: number; hits: number }[] };
   type Doc = { coverage: Cov[]; perTestCoverage: { test: string; coverage: Cov[] }[] };
-  const edit = (fn: (j: Doc, sleepLines: (f: Cov) => Promise<Set<number>>) => Promise<void>) => async (p: string) => {
-    const j = JSON.parse(await readFile(p, "utf8")) as Doc;
-    const sleepLines = async (f: Cov) =>
-      new Set(
-        (await readFile(f.file, "utf8"))
-          .split("\n")
-          .flatMap((l, i) => (/\bSleep\s*\(/i.test(l) ? [i + 1] : [])),
-      );
-    await fn(j, sleepLines);
-    await writeFile(p, JSON.stringify(j));
-  };
+  const edit =
+    (fn: (j: Doc, sleepLines: (f: Cov) => Promise<Set<number>>) => Promise<void>) =>
+    async (p: string) => {
+      const j = JSON.parse(await readFile(p, "utf8")) as Doc;
+      const sleepLines = async (f: Cov) =>
+        new Set(
+          (await readFile(f.file, "utf8"))
+            .split("\n")
+            .flatMap((l, i) => (/\bSleep\s*\(/i.test(l) ? [i + 1] : [])),
+        );
+      await fn(j, sleepLines);
+      await writeFile(p, JSON.stringify(j));
+    };
   const isSleeper = (f: Cov) => f.file.endsWith("ProbeSleeper.Codeunit.al");
-  const f1 = await run("f1", edit(async (j) => {
-    j.perTestCoverage = j.perTestCoverage.filter((t) => !t.test.endsWith(".SleeperDoubles"));
-  }));
-  must(f1.r.mutants.every((m) => m.verdict !== "survived"), "X (f1): a survivor with no per-test entry");
-  const f2 = await run("f2", edit(async (j, sleepLines) => {
-    for (const f of j.coverage.filter(isSleeper)) {
-      const lines = await sleepLines(f);
-      f.statements = f.statements.filter((s) => !lines.has(s.line));
-    }
-  }));
-  must(f2.r.mutants.every((m) => m.verdict !== "survived"), "X (f2): a survivor with an indexed line absent");
-  const f3 = await run("f3", edit(async (j, sleepLines) => {
-    for (const f of j.coverage.filter(isSleeper)) {
-      const lines = await sleepLines(f);
-      for (const s of f.statements) if (lines.has(s.line)) s.hits = Math.max(1, s.hits);
-      for (const t of j.perTestCoverage) {
-        for (const g of t.coverage.filter(isSleeper)) g.statements = g.statements.filter((s) => !lines.has(s.line));
+  const f1 = await run(
+    "f1",
+    edit(async (j) => {
+      j.perTestCoverage = j.perTestCoverage.filter((t) => !t.test.endsWith(".SleeperDoubles"));
+    }),
+  );
+  must(
+    f1.r.mutants.every((m) => m.verdict !== "survived"),
+    "X (f1): a survivor with no per-test entry",
+  );
+  const f2 = await run(
+    "f2",
+    edit(async (j, sleepLines) => {
+      for (const f of j.coverage.filter(isSleeper)) {
+        const lines = await sleepLines(f);
+        f.statements = f.statements.filter((s) => !lines.has(s.line));
       }
-    }
-  }));
-  must(f3.r.mutants.every((m) => m.verdict !== "survived"), "X (f3): a survivor with an unowned Sleep hit");
+    }),
+  );
+  must(
+    f2.r.mutants.every((m) => m.verdict !== "survived"),
+    "X (f2): a survivor with an indexed line absent",
+  );
+  const f3 = await run(
+    "f3",
+    edit(async (j, sleepLines) => {
+      for (const f of j.coverage.filter(isSleeper)) {
+        const lines = await sleepLines(f);
+        for (const s of f.statements) if (lines.has(s.line)) s.hits = Math.max(1, s.hits);
+        for (const t of j.perTestCoverage) {
+          for (const g of t.coverage.filter(isSleeper))
+            g.statements = g.statements.filter((s) => !lines.has(s.line));
+        }
+      }
+    }),
+  );
+  must(
+    f3.r.mutants.every((m) => m.verdict !== "survived"),
+    "X (f3): a survivor with an unowned Sleep hit",
+  );
 }
 
 async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
@@ -510,16 +708,34 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   });
   if (leg === "D1") assertCounts(r, leg, 51, 12, 0, 63);
   else assertCounts(r, leg, 51, 8, 4, 63);
-  await assertPerMutant(r, join(REPO, "docs", "measurements", "r594", leg === "D1" ? "bc3-A.report.json" : "bc3-B.report.json"), leg);
+  await assertPerMutant(
+    r,
+    join(
+      REPO,
+      "docs",
+      "measurements",
+      "r594",
+      leg === "D1" ? "bc3-A.report.json" : "bc3-B.report.json",
+    ),
+    leg,
+  );
   const STATE = [
     ...Array.from({ length: 30 }, (_, i) => `0/M${String(i + 1).padStart(4, "0")}`),
-    ...[35, 36, 37, 39, 42, 43, 44, 45, 46, 47, 49, 50, 51, 52, 53, 54, 56, 58, 59, 60, 61].map((n) => `0/M${String(n).padStart(4, "0")}`),
+    ...[35, 36, 37, 39, 42, 43, 44, 45, 46, 47, 49, 50, 51, 52, 53, 54, 56, 58, 59, 60, 61].map(
+      (n) => `0/M${String(n).padStart(4, "0")}`,
+    ),
   ].sort();
   const got = tagged(r, V3_STATE_NOTE_TAG);
   console.log(`  ${leg}: state notes ${got.length}`);
-  must(JSON.stringify(got) === JSON.stringify(STATE), `${leg}: state-note set differs: ${got.join(",")}`);
+  must(
+    JSON.stringify(got) === JSON.stringify(STATE),
+    `${leg}: state-note set differs: ${got.join(",")}`,
+  );
   must(tagged(r, V3_REFUSED_NEARBY_TAG).length === 0, `${leg}: refused-nearby notes`);
-  must(tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0, `${leg}: a §6 or runner refusal`);
+  must(
+    tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0,
+    `${leg}: a §6 or runner refusal`,
+  );
   must(r.baselineGreen && r.unsupportedTests.length === 0, `${leg}: baseline not green`);
   assertIndex(b, leg, 3, 0);
   assertReproduced(r, leg);
@@ -541,9 +757,14 @@ async function legT(scratch: string): Promise<SessionReport> {
     selectorIds: { selectorId: 79399, controlId: 79398, tableId: 79397 },
   });
   assertCounts(r, "T", 290, 57, 59, 406);
-  must(r.unsupportedTests.length === 3, `T: ${r.unsupportedTests.length} refused tests, pre-committed 3`);
+  must(
+    r.unsupportedTests.length === 3,
+    `T: ${r.unsupportedTests.length} refused tests, pre-committed 3`,
+  );
   assertIndex(b, "T", 0, 0);
-  console.log(`  T: notes state ${tagged(r, V3_STATE_NOTE_TAG).length}, refused-nearby ${tagged(r, V3_REFUSED_NEARBY_TAG).length}, §6 ${tagged(r, SLEEP_NOTE_TAG).length} (recorded, not predicted)`);
+  console.log(
+    `  T: notes state ${tagged(r, V3_STATE_NOTE_TAG).length}, refused-nearby ${tagged(r, V3_REFUSED_NEARBY_TAG).length}, §6 ${tagged(r, SLEEP_NOTE_TAG).length} (recorded, not predicted)`,
+  );
   return r;
 }
 
@@ -553,7 +774,9 @@ async function main(): Promise<void> {
   if (LEGS.includes("T")) preflightGateBaseline(TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
   const sha = await sha256OfFile(BIN);
   const version = (execFileSync(BIN, ["--version"], { encoding: "utf8" }) as string).trim();
-  console.log(`al-runner-v3 itest: ${version} sha256 ${sha} (${BIN})${CANDIDATE ? " CANDIDATE" : ""}; legs ${LEGS.join(",")}`);
+  console.log(
+    `al-runner-v3 itest: ${version} sha256 ${sha} (${BIN})${CANDIDATE ? " CANDIDATE" : ""}; legs ${LEGS.join(",")}`,
+  );
   const legs: Record<string, V3LegOutcome> = {};
   const lines: string[] = [];
   const root = await mkdtemp(join(tmpdir(), "lethal-itest-v3-"));
@@ -581,7 +804,10 @@ async function main(): Promise<void> {
             const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
             // I-3: the known differences are the pre-committed 52 (41 Commit, 7 duplicate key, 4 TestPage).
             const known = knownDifferenceKeys(bc, own).size;
-            must(known === 52, `T: v3's own baseline differs from BC's on ${known} rows, pre-committed 52`);
+            must(
+              known === 52,
+              `T: v3's own baseline differs from BC's on ${known} rows, pre-committed 52`,
+            );
             const t = classifyLegT(own, normalizeForComparison(r), bc);
             for (const l of t.lines) console.log(`  T: ${l}`);
             lines.push(...t.lines);
@@ -602,7 +828,10 @@ async function main(): Promise<void> {
           continue;
         }
         const msg = err instanceof Error ? err.message : String(err);
-        legs[leg] = err instanceof LegFailure || /difference|BLOCK|differs/.test(msg) ? "gate-fail" : "infra-fail";
+        legs[leg] =
+          err instanceof LegFailure || /difference|BLOCK|differs/.test(msg)
+            ? "gate-fail"
+            : "infra-fail";
         lines.push(`${leg}: ${msg.slice(0, 1000)}`);
         console.log(`leg ${leg}: ${legs[leg]?.toUpperCase()} ${formatFailure(err).slice(0, 2000)}`);
       }
@@ -619,7 +848,9 @@ async function main(): Promise<void> {
       nonce,
       binarySha256: sha,
       version,
-      lethalCommit: (execFileSync("git", ["-C", REPO, "rev-parse", "HEAD"], { encoding: "utf8" }) as string).trim(),
+      lethalCommit: (
+        execFileSync("git", ["-C", REPO, "rev-parse", "HEAD"], { encoding: "utf8" }) as string
+      ).trim(),
       outcome,
       legs,
       lines,
@@ -629,7 +860,8 @@ async function main(): Promise<void> {
   }
   if (recorded !== undefined) throw recorded;
   const bad = Object.entries(legs).filter(([, v]) => v !== "pass");
-  if (bad.length > 0) throw new Error(`al-runner-v3 itest: FAIL: ${bad.map(([l, v]) => `${l}=${v}`).join(", ")}`);
+  if (bad.length > 0)
+    throw new Error(`al-runner-v3 itest: FAIL: ${bad.map(([l, v]) => `${l}=${v}`).join(", ")}`);
   console.log("al-runner-v3 itest: PASS");
 }
 

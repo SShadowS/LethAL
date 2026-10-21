@@ -16,7 +16,8 @@ const CAPS = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
-  kind: "bcdev", authoritative: true,
+  kind: "bcdev",
+  authoritative: true,
 } as const;
 
 function mutant(id: string): MutantManifestEntry {

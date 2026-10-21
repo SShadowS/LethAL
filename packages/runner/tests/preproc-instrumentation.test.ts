@@ -4466,7 +4466,13 @@ function r351Report(
   ];
   return buildReport(
     {
-      caps: { kind: "bcdev", authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
+      caps: {
+        kind: "bcdev",
+        authoritative: true,
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+      },
       buildSymbols: [],
     },
     events.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent),

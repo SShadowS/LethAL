@@ -554,7 +554,8 @@ const CEILING_CAPS: BackendCapabilities = {
   coverage: "none",
   deploy: "publish",
   isolation: "session",
-  kind: "bcdev", authoritative: true,
+  kind: "bcdev",
+  authoritative: true,
 };
 
 const VERIFIER_CFG = {

@@ -82,7 +82,9 @@ export async function checkGated(
   try {
     text = await readFile(where, "utf8");
   } catch {
-    throw new AlRunnerV3UngatedBuildError(`${alRunnerPath} has no ${where}; only a gated build runs`);
+    throw new AlRunnerV3UngatedBuildError(
+      `${alRunnerPath} has no ${where}; only a gated build runs`,
+    );
   }
   const gated = parseGated(text, where);
   if (gated.binarySha256 !== sha) {

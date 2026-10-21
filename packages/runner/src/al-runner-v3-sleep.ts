@@ -12,7 +12,14 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { type ALSyntaxNode, initParser, normalizeAlName, parseAL, visit, wrapRoot } from "@lethal/engine";
+import {
+  type ALSyntaxNode,
+  initParser,
+  normalizeAlName,
+  parseAL,
+  visit,
+  wrapRoot,
+} from "@lethal/engine";
 import type { ServerCoverageFile } from "./al-runner-server";
 
 /** One indexed Sleep call: the absolute `/`-separated path v3 reports, and its 1-based line. */
@@ -179,9 +186,7 @@ export function sleepCallRefusal(doc: V3CoverageRead, index: SleepIndex): string
       }
     }
   }
-  const owned = new Set(
-    doc.perTestCoverage.flatMap((e) => hitSites(e.coverage, index)).map(at),
-  );
+  const owned = new Set(doc.perTestCoverage.flatMap((e) => hitSites(e.coverage, index)).map(at));
   const unowned = hitSites(doc.coverage, index).find((s) => !owned.has(at(s)));
   return unowned === undefined
     ? undefined

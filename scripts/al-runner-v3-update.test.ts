@@ -5,7 +5,13 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Outcome, type UpdateDeps, candidates, expectedSha, updateOnce } from "./al-runner-v3-update";
+import {
+  type Outcome,
+  type UpdateDeps,
+  candidates,
+  expectedSha,
+  updateOnce,
+} from "./al-runner-v3-update";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const GATED_COMMIT = "abcdef1234567";
@@ -22,7 +28,11 @@ async function setup(): Promise<string> {
   await writeFile(join(cur, "al-runner"), "alpha2");
   await writeFile(
     join(cur, ".gated"),
-    JSON.stringify({ version: "alrunner 3.0.0-alpha.2 (91253f2d6)", binarySha256: sha("alpha2"), lethalCommit: GATED_COMMIT }),
+    JSON.stringify({
+      version: "alrunner 3.0.0-alpha.2 (91253f2d6)",
+      binarySha256: sha("alpha2"),
+      lethalCommit: GATED_COMMIT,
+    }),
   );
   await symlink(cur, join(root, "current"));
   return root;
@@ -39,10 +49,14 @@ function fake(o: {
   const seen = { gates: [] as string[], extracts: 0, logs: [] as string[] };
   const deps: UpdateDeps = {
     root,
-    listReleases: async () => o.tags ?? ["edge", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v3.0.0-alpha.1"],
+    listReleases: async () =>
+      o.tags ?? ["edge", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v3.0.0-alpha.1"],
     download: async (_tag, dir) => {
       await writeFile(join(dir, "t.tar.xz"), "tarball");
-      await writeFile(join(dir, "SHA256SUMS"), `${o.badSums === true ? "0".repeat(64) : sha("tarball")}  t.tar.xz\n`);
+      await writeFile(
+        join(dir, "SHA256SUMS"),
+        `${o.badSums === true ? "0".repeat(64) : sha("tarball")}  t.tar.xz\n`,
+      );
       return { tarball: join(dir, "t.tar.xz"), sums: join(dir, "SHA256SUMS") };
     },
     extract: async (_t, dir) => {
@@ -77,10 +91,9 @@ const current = async () => readlink(join(root, "current"));
 
 describe("T19: the v3 update gate", () => {
   test("candidates: alphas above the gated one, oldest first, never edge", () => {
-    expect(candidates(["edge", "v3.0.0-alpha.4", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v2.12.0"], 2)).toEqual([
-      "v3.0.0-alpha.3",
-      "v3.0.0-alpha.4",
-    ]);
+    expect(
+      candidates(["edge", "v3.0.0-alpha.4", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v2.12.0"], 2),
+    ).toEqual(["v3.0.0-alpha.3", "v3.0.0-alpha.4"]);
     expect(expectedSha(`${"a".repeat(64)}  x.tar.xz\n`, "/d/x.tar.xz")).toBe("a".repeat(64));
   });
 
@@ -92,7 +105,11 @@ describe("T19: the v3 update gate", () => {
     const cur = await current();
     expect(cur).toBe(join(root, "3.0.0-alpha.3-c893e3633"));
     const g = JSON.parse(await readFile(join(cur, ".gated"), "utf8"));
-    expect(g).toMatchObject({ binarySha256: sha("alpha3"), lethalCommit: GATED_COMMIT, tarballSha256: sha("tarball") });
+    expect(g).toMatchObject({
+      binarySha256: sha("alpha3"),
+      lethalCommit: GATED_COMMIT,
+      tarballSha256: sha("tarball"),
+    });
   });
 
   test("pass while a v3 process runs: installed, current NOT moved (deferred: in use)", async () => {
@@ -105,7 +122,9 @@ describe("T19: the v3 update gate", () => {
 
   test("a stale receipt (another nonce) or another binary's is infra-fail; current stays", async () => {
     await setup();
-    expect(await updateOnce(fake({ outcome: "pass", badNonce: true }).deps)).toEqual(["infra-fail"]);
+    expect(await updateOnce(fake({ outcome: "pass", badNonce: true }).deps)).toEqual([
+      "infra-fail",
+    ]);
     expect(await updateOnce(fake({ outcome: "pass", badSha: true }).deps)).toEqual(["infra-fail"]);
     expect(await updateOnce(fake({}).deps)).toEqual(["infra-fail"]);
     expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
@@ -153,7 +172,15 @@ describe("T19: the v3 update gate", () => {
     deps.versionOf = async () => "alrunner 3.0.0-alpha.2 (91253f2d6)";
     const { runGate } = deps;
     deps.runGate = async (c, env) => {
-      await writeFile(env.LETHAL_V3_GATE_RECEIPT ?? "", JSON.stringify({ nonce: env.LETHAL_V3_GATE_NONCE, binarySha256: sha("alpha2"), outcome: "pass", legs: {} }));
+      await writeFile(
+        env.LETHAL_V3_GATE_RECEIPT ?? "",
+        JSON.stringify({
+          nonce: env.LETHAL_V3_GATE_NONCE,
+          binarySha256: sha("alpha2"),
+          outcome: "pass",
+          legs: {},
+        }),
+      );
       seen.gates.push(c);
       void runGate;
     };

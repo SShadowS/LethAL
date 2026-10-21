@@ -11,16 +11,31 @@ import {
   v3DefectsGone,
 } from "../src/al-runner-v3-contract";
 import { V3_PREDEFINED_CANDIDATES } from "../src/al-runner-v3-probe";
-import { AlRunnerV3UngatedBuildError, checkGated, parseGated, sha256OfFile } from "../src/al-runner-v3-pin";
+import {
+  AlRunnerV3UngatedBuildError,
+  checkGated,
+  parseGated,
+  sha256OfFile,
+} from "../src/al-runner-v3-pin";
 import type { ArtifactIo } from "../src/artifact";
 import type { SpawnFn } from "../src/publisher";
 
 const VERSION = "alrunner 3.0.0-alpha.2 (91253f2d6)";
 const BC = "28.0.46665.47126";
 
-type Over = Partial<Record<string, (argv: readonly string[]) => { exitCode: number; stdout: string; stderr?: string } | undefined>>;
+type Over = Partial<
+  Record<
+    string,
+    (argv: readonly string[]) => { exitCode: number; stdout: string; stderr?: string } | undefined
+  >
+>;
 
-const row = (cu: number, method: string, status: string, o: { message?: string; notRun?: boolean; durationMs?: number } = {}) => ({
+const row = (
+  cu: number,
+  method: string,
+  status: string,
+  o: { message?: string; notRun?: boolean; durationMs?: number } = {},
+) => ({
   codeunit: cu,
   method,
   name: `Codeunit${cu}.${method}`,
@@ -43,7 +58,9 @@ function fakeV3(over: Over = {}): SpawnFn {
         : has("--lethal-wire-contract-probe")
           ? "bad"
           : has("--test-exact")
-            ? val("--test-exact").includes("Space") ? "quoted" : "exact"
+            ? val("--test-exact").includes("Space")
+              ? "quoted"
+              : "exact"
             : `cu${val("--codeunit")}${has("--define") ? "-def" : ""}${argv[0] === "/usr/bin/taskset" ? "-shared" : ""}${a.some((x) => x.includes("/broken/")) ? "-broken" : ""}${a.some((x) => x.includes("tests-pinned")) ? "-pinned" : ""}${has("--test-timeout-secs") ? `-n${val("--test-timeout-secs")}` : ""}`;
     const o = over[key]?.(a);
     if (o !== undefined) return { stderr: "", ...o };
@@ -54,17 +71,55 @@ function fakeV3(over: Over = {}): SpawnFn {
       const body =
         cu === "50650"
           ? {
-              coverage: [{ file: first, statements: [{ line: 5, hits: 1 }, { line: 6, hits: 0 }, { line: 7, hits: 1 }] }],
-              perTestCoverage: [{ test: "Codeunit50650.CoversOnlyA", coverage: [{ file: first, statements: [{ line: 5, hits: 1 }, { line: 7, hits: 1 }] }] }],
+              coverage: [
+                {
+                  file: first,
+                  statements: [
+                    { line: 5, hits: 1 },
+                    { line: 6, hits: 0 },
+                    { line: 7, hits: 1 },
+                  ],
+                },
+              ],
+              perTestCoverage: [
+                {
+                  test: "Codeunit50650.CoversOnlyA",
+                  coverage: [
+                    {
+                      file: first,
+                      statements: [
+                        { line: 5, hits: 1 },
+                        { line: 7, hits: 1 },
+                      ],
+                    },
+                  ],
+                },
+              ],
             }
           : {
               coverage: [
-                { file: "/p/tests/src/SleepProbe.Codeunit.al", statements: [{ line: 17, hits: 1 }] },
+                {
+                  file: "/p/tests/src/SleepProbe.Codeunit.al",
+                  statements: [{ line: 17, hits: 1 }],
+                },
                 { file: "/p/app/src/Sleeper.Codeunit.al", statements: [{ line: 5, hits: 1 }] },
               ],
               perTestCoverage: [
-                { test: "Codeunit50660.LongSleepA", coverage: [{ file: "/p/tests/src/SleepProbe.Codeunit.al", statements: [{ line: 17, hits: 1 }] }] },
-                { test: "Codeunit50660.SleeperDoubles", coverage: [{ file: "/p/app/src/Sleeper.Codeunit.al", statements: [{ line: 5, hits: 1 }] }] },
+                {
+                  test: "Codeunit50660.LongSleepA",
+                  coverage: [
+                    {
+                      file: "/p/tests/src/SleepProbe.Codeunit.al",
+                      statements: [{ line: 17, hits: 1 }],
+                    },
+                  ],
+                },
+                {
+                  test: "Codeunit50660.SleeperDoubles",
+                  coverage: [
+                    { file: "/p/app/src/Sleeper.Codeunit.al", statements: [{ line: 5, hits: 1 }] },
+                  ],
+                },
               ],
             };
       await writeFile(cov, JSON.stringify(body));
@@ -88,22 +143,50 @@ function fakeV3(over: Over = {}): SpawnFn {
     const answers: Record<string, { exitCode: number; stdout: string; stderr?: string }> = {
       version: { exitCode: 0, stdout: `${VERSION}\n` },
       bad: { exitCode: 2, stdout: "" },
-      cu50650: { exitCode: 1, stdout: doc(mainRows("none")), stderr: `target: BC ${BC}, runtime 16.0\n` },
+      cu50650: {
+        exitCode: 1,
+        stdout: doc(mainRows("none")),
+        stderr: `target: BC ${BC}, runtime 16.0\n`,
+      },
       "cu50650-def": { exitCode: 1, stdout: doc(mainRows("A")) },
       exact: { exitCode: 1, stdout: doc(mainRows("none")) },
       cu0: { exitCode: 6, stdout: "" },
       quoted: { exitCode: 6, stdout: "" },
-      "cu50651-n3": { exitCode: 7, stdout: doc([row(50651, "CpuHang", "error", { notRun: true, message: "Test exceeded 3s timeout." })]) },
-      "cu50656-n2": { exitCode: 7, stdout: doc([row(50656, "WallSpin3s", "error", { notRun: true, message: "Test exceeded 2s timeout." })]) },
+      "cu50651-n3": {
+        exitCode: 7,
+        stdout: doc([
+          row(50651, "CpuHang", "error", { notRun: true, message: "Test exceeded 3s timeout." }),
+        ]),
+      },
+      "cu50656-n2": {
+        exitCode: 7,
+        stdout: doc([
+          row(50656, "WallSpin3s", "error", { notRun: true, message: "Test exceeded 2s timeout." }),
+        ]),
+      },
       "cu50656-shared-n2": { exitCode: 0, stdout: doc([row(50656, "WallSpin3s", "pass")]) },
       cu50653: {
         exitCode: 7,
         stdout: doc([
-          row(50653, "HttpGet", "error", { notRun: true, message: "NotRun: out-of-scope: an outbound HTTP request" }),
-          row(50653, "LaterFails", "error", { notRun: true, message: "NotRun: out-of-scope: an earlier test was refused" }),
+          row(50653, "HttpGet", "error", {
+            notRun: true,
+            message: "NotRun: out-of-scope: an outbound HTTP request",
+          }),
+          row(50653, "LaterFails", "error", {
+            notRun: true,
+            message: "NotRun: out-of-scope: an earlier test was refused",
+          }),
         ]),
       },
-      cu50657: { exitCode: 7, stdout: doc([row(50657, "CommitCall", "error", { notRun: true, message: "NotRun: out-of-scope: Commit" })]) },
+      cu50657: {
+        exitCode: 7,
+        stdout: doc([
+          row(50657, "CommitCall", "error", {
+            notRun: true,
+            message: "NotRun: out-of-scope: Commit",
+          }),
+        ]),
+      },
       cu50655: { exitCode: 0, stdout: doc([row(50655, "DuplicateNamedKey", "pass")]) },
       "cu50660-n3": { exitCode: 1, stdout: doc(sleepRows) },
       cu50660: { exitCode: 1, stdout: doc(sleepRows) },
@@ -190,14 +273,24 @@ describe("§8 the contract probe", () => {
 
   test("a contract fact that diverges refuses (timeout wording moved)", async () => {
     const r = await probe({
-      "cu50651-n3": () => ({ exitCode: 7, stdout: doc([row(50651, "CpuHang", "error", { notRun: true, message: "TIMEOUT after 3s" })]) }),
+      "cu50651-n3": () => ({
+        exitCode: 7,
+        stdout: doc([
+          row(50651, "CpuHang", "error", { notRun: true, message: "TIMEOUT after 3s" }),
+        ]),
+      }),
     });
     expect(v3ContractRefusals(r).join("\n")).toMatch(/timeout-classified/);
   });
 
   test("timeout-is-cpu diverges when the shared-core run is ALSO stopped (a wall-time stop)", async () => {
     const r = await probe({
-      "cu50656-shared-n2": () => ({ exitCode: 7, stdout: doc([row(50656, "WallSpin3s", "error", { notRun: true, message: "Test exceeded 2s timeout." })]) }),
+      "cu50656-shared-n2": () => ({
+        exitCode: 7,
+        stdout: doc([
+          row(50656, "WallSpin3s", "error", { notRun: true, message: "Test exceeded 2s timeout." }),
+        ]),
+      }),
     });
     expect(r.facts.find((f) => f.fact === "timeout-is-cpu")?.verdict).toBe("diverged");
   });
@@ -217,15 +310,27 @@ describe("§8 the contract probe", () => {
   });
 
   test("a defect that is gone never refuses; it prints al-runner-v3-defect-gone", async () => {
-    const r = await probe({ cu50655: () => ({ exitCode: 1, stdout: doc([row(50655, "DuplicateNamedKey", "fail", { message: "already exists" })]) }) });
+    const r = await probe({
+      cu50655: () => ({
+        exitCode: 1,
+        stdout: doc([row(50655, "DuplicateNamedKey", "fail", { message: "already exists" })]),
+      }),
+    });
     expect(r.facts.find((f) => f.fact === "duplicate-key-insert-raises")?.verdict).toBe("gone");
     expect(v3ContractRefusals(r)).toEqual([]);
-    expect(v3DefectsGone(r).join("\n")).toMatch(/al-runner-v3-defect-gone: duplicate-key-insert-raises/);
+    expect(v3DefectsGone(r).join("\n")).toMatch(
+      /al-runner-v3-defect-gone: duplicate-key-insert-raises/,
+    );
   });
 
   test("sleep-is-noop reads gone when a Sleep test is stopped as a timeout", async () => {
     const r = await probe({
-      "cu50660-n3": () => ({ exitCode: 7, stdout: doc([row(50660, "ShortSleep", "error", { notRun: true, message: "Test exceeded 3s timeout." })]) }),
+      "cu50660-n3": () => ({
+        exitCode: 7,
+        stdout: doc([
+          row(50660, "ShortSleep", "error", { notRun: true, message: "Test exceeded 3s timeout." }),
+        ]),
+      }),
     });
     expect(r.facts.find((f) => f.fact === "sleep-is-noop")?.verdict).toBe("gone");
   });
@@ -259,23 +364,44 @@ describe("T18: the .gated pin", () => {
 
   test("a matching .gated passes", async () => {
     const bin = await setup();
-    await writeFile(join(dir, ".gated"), JSON.stringify({ version: VERSION, binarySha256: await sha256OfFile(bin), lethalCommit: "abcdef1" }));
+    await writeFile(
+      join(dir, ".gated"),
+      JSON.stringify({
+        version: VERSION,
+        binarySha256: await sha256OfFile(bin),
+        lethalCommit: "abcdef1",
+      }),
+    );
     expect((await checkGated(bin, VERSION)).lethalCommit).toBe("abcdef1");
   });
 
   test("no .gated, another sha256 or another version is refused", async () => {
     const bin = await setup();
     await expect(checkGated(bin, VERSION)).rejects.toBeInstanceOf(AlRunnerV3UngatedBuildError);
-    await writeFile(join(dir, ".gated"), JSON.stringify({ version: VERSION, binarySha256: "0".repeat(64), lethalCommit: "abcdef1" }));
+    await writeFile(
+      join(dir, ".gated"),
+      JSON.stringify({ version: VERSION, binarySha256: "0".repeat(64), lethalCommit: "abcdef1" }),
+    );
     await expect(checkGated(bin, VERSION)).rejects.toThrow(/sha256/);
-    await writeFile(join(dir, ".gated"), JSON.stringify({ version: "alrunner 3.0.0-alpha.3 (c893e3633)", binarySha256: await sha256OfFile(bin), lethalCommit: "abcdef1" }));
+    await writeFile(
+      join(dir, ".gated"),
+      JSON.stringify({
+        version: "alrunner 3.0.0-alpha.3 (c893e3633)",
+        binarySha256: await sha256OfFile(bin),
+        lethalCommit: "abcdef1",
+      }),
+    );
     await expect(checkGated(bin, VERSION)).rejects.toThrow(/pins/);
   });
 
   test("a candidate run reads no .gated, and a corrupt .gated is refused, never defaulted", async () => {
     const bin = await setup();
-    expect((await checkGated(bin, VERSION, { candidate: true })).binarySha256).toBe(await sha256OfFile(bin));
+    expect((await checkGated(bin, VERSION, { candidate: true })).binarySha256).toBe(
+      await sha256OfFile(bin),
+    );
     expect(() => parseGated("{}", "x")).toThrow(AlRunnerV3UngatedBuildError);
-    expect(() => parseGated('{"version":"v","binarySha256":"zz","lethalCommit":"abcdef1"}', "x")).toThrow(/binarySha256/);
+    expect(() =>
+      parseGated('{"version":"v","binarySha256":"zz","lethalCommit":"abcdef1"}', "x"),
+    ).toThrow(/binarySha256/);
   });
 });

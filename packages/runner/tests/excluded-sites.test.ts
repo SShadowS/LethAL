@@ -131,7 +131,8 @@ describe("the derived views reproduce today's shapes exactly", () => {
  */
 describe("buildReport derives both legacy fields from excludedSites (not in parallel)", () => {
   const CAPS = {
-    kind: "bcdev", authoritative: true,
+    kind: "bcdev",
+    authoritative: true,
     coverage: "procedure",
     deploy: "publish",
     isolation: "session",
@@ -265,7 +266,8 @@ describe("one buildExcludedSites call carries both refusal kinds", () => {
     const report = buildReport(
       {
         caps: {
-          kind: "bcdev", authoritative: true,
+          kind: "bcdev",
+          authoritative: true,
           coverage: "procedure",
           deploy: "publish",
           isolation: "session",

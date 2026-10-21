@@ -39,7 +39,8 @@ describe("T30: the Sleep index finds bare Sleep( calls only", () => {
     for (const l of [8, 9, 10]) expect(lines).not.toContain(l);
   });
   test("a test-app helper that sleeps is a call like any other", () => {
-    const helper = "codeunit 50 H\n{\n    procedure Wait()\n    begin\n        Sleep(10);\n    end;\n}\n";
+    const helper =
+      "codeunit 50 H\n{\n    procedure Wait()\n    begin\n        Sleep(10);\n    end;\n}\n";
     expect(sleepCallLines(helper)).toEqual([5]);
   });
 });
@@ -50,12 +51,23 @@ const index: SleepIndex = {
   shown: new Map([[sleepFileKey(FILE), FILE]]),
   sizes: { target: 1, test: 0 },
 };
-const doc = (o: { top?: { line: number; hits: number }[]; own?: { line: number; hits: number }[]; entry?: boolean }) =>
+const doc = (o: {
+  top?: { line: number; hits: number }[];
+  own?: { line: number; hits: number }[];
+  entry?: boolean;
+}) =>
   decodeV3Coverage(
     JSON.stringify({
       coverage: [{ file: FILE, statements: o.top ?? [{ line: 5, hits: 0 }] }],
       perTestCoverage:
-        o.entry === false ? [] : [{ test: "Codeunit1.A", coverage: [{ file: FILE, statements: o.own ?? [{ line: 6, hits: 1 }] }] }],
+        o.entry === false
+          ? []
+          : [
+              {
+                test: "Codeunit1.A",
+                coverage: [{ file: FILE, statements: o.own ?? [{ line: 6, hits: 1 }] }],
+              },
+            ],
     }),
   );
 
@@ -66,25 +78,45 @@ describe("T32 and T12, pure", () => {
   });
   test("case 3: a per-test hit on the indexed line", () => {
     const d = doc({ top: [{ line: 5, hits: 1 }], own: [{ line: 5, hits: 1 }] });
-    expect(sleepPassRefusal(d, index, "Codeunit1.A")).toMatch(/^\[v3-sleep-noop\] covered Sleep at/);
+    expect(sleepPassRefusal(d, index, "Codeunit1.A")).toMatch(
+      /^\[v3-sleep-noop\] covered Sleep at/,
+    );
   });
   test("case 1: no document, an unparsable one, a missing per-test entry", () => {
-    expect(sleepPassRefusal(decodeV3Coverage(undefined), index, "Codeunit1.A")).toMatch(/coverage unavailable/);
-    expect(sleepPassRefusal(decodeV3Coverage("{"), index, "Codeunit1.A")).toMatch(/coverage unavailable/);
-    expect(sleepPassRefusal(doc({ entry: false }), index, "Codeunit1.A")).toMatch(/no per-test entry/);
+    expect(sleepPassRefusal(decodeV3Coverage(undefined), index, "Codeunit1.A")).toMatch(
+      /coverage unavailable/,
+    );
+    expect(sleepPassRefusal(decodeV3Coverage("{"), index, "Codeunit1.A")).toMatch(
+      /coverage unavailable/,
+    );
+    expect(sleepPassRefusal(doc({ entry: false }), index, "Codeunit1.A")).toMatch(
+      /no per-test entry/,
+    );
   });
   test("case 1 fires with an EMPTY index too (cases 2-4 cannot)", () => {
-    const empty: SleepIndex = { byFile: new Map(), shown: new Map(), sizes: { target: 0, test: 0 } };
-    expect(sleepPassRefusal(decodeV3Coverage(undefined), empty, "Codeunit1.A")).toMatch(/coverage unavailable/);
-    expect(sleepPassRefusal(doc({ entry: false }), empty, "Codeunit1.A")).toMatch(/no per-test entry/);
+    const empty: SleepIndex = {
+      byFile: new Map(),
+      shown: new Map(),
+      sizes: { target: 0, test: 0 },
+    };
+    expect(sleepPassRefusal(decodeV3Coverage(undefined), empty, "Codeunit1.A")).toMatch(
+      /coverage unavailable/,
+    );
+    expect(sleepPassRefusal(doc({ entry: false }), empty, "Codeunit1.A")).toMatch(
+      /no per-test entry/,
+    );
     expect(sleepPassRefusal(doc({}), empty, "Codeunit1.A")).toBeUndefined();
   });
   test("case 2: the indexed line missing from a file v3 listed; a file v3 did not list is not case 2", () => {
-    expect(sleepCallRefusal(doc({ top: [{ line: 6, hits: 0 }] }), index)).toMatch(/not in v3's coverage/);
+    expect(sleepCallRefusal(doc({ top: [{ line: 6, hits: 0 }] }), index)).toMatch(
+      /not in v3's coverage/,
+    );
     const unlisted = decodeV3Coverage(JSON.stringify({ coverage: [], perTestCoverage: [] }));
     expect(sleepCallRefusal(unlisted, index)).toBeUndefined();
   });
   test("case 4: a top-level hit no per-test entry holds", () => {
-    expect(sleepCallRefusal(doc({ top: [{ line: 5, hits: 1 }] }), index)).toMatch(/unattributed Sleep hit/);
+    expect(sleepCallRefusal(doc({ top: [{ line: 5, hits: 1 }] }), index)).toMatch(
+      /unattributed Sleep hit/,
+    );
   });
 });

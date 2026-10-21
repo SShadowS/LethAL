@@ -175,13 +175,19 @@ export function decodeV3Rows(
       (message !== undefined && typeof message !== "string") ||
       (notRun !== undefined && typeof notRun !== "boolean")
     ) {
-      return { why: `row ${i + 1} does not have v3's row shape: ${JSON.stringify(t).slice(0, 200)}` };
+      return {
+        why: `row ${i + 1} does not have v3's row shape: ${JSON.stringify(t).slice(0, 200)}`,
+      };
     }
     if (codeunit !== codeunitId) {
-      return { why: `row ${i + 1} (${name}) is codeunit ${codeunit}, not the ${codeunitId} asked for` };
+      return {
+        why: `row ${i + 1} (${name}) is codeunit ${codeunit}, not the ${codeunitId} asked for`,
+      };
     }
     if (name.toLowerCase() !== `codeunit${codeunit}.${method}`.toLowerCase()) {
-      return { why: `row ${i + 1}'s name "${name}" does not match codeunit ${codeunit} method "${method}"` };
+      return {
+        why: `row ${i + 1}'s name "${name}" does not match codeunit ${codeunit} method "${method}"`,
+      };
     }
     rows.push({
       codeunit,
@@ -380,7 +386,8 @@ async function readManifestIds(
   const ids = new Set<string>();
   for (const e of m.mutants) {
     const id = (e as { mutantId?: unknown } | null)?.mutantId;
-    if (typeof id !== "string") throw new Error(`al-runner-v3: ${path} has a mutant with no mutantId`);
+    if (typeof id !== "string")
+      throw new Error(`al-runner-v3: ${path} has a mutant with no mutantId`);
     ids.add(id);
   }
   return { artifactId: m.artifactId, ids };
@@ -404,7 +411,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private buildSymbols: readonly string[] | undefined;
   private callSeq = 0;
   /** F5: per mutant, the budgets the covering loop will send each ref (`useCoveringBudgets`). */
-  private plan: { readonly mutantId: string; readonly budgets: ReadonlyMap<string, number> } | undefined;
+  private plan:
+    | { readonly mutantId: string; readonly budgets: ReadonlyMap<string, number> }
+    | undefined;
   /** Every discovered test, per codeunit (the outer bound counts a codeunit's tests). */
   private testsPerCodeunit = new Map<number, number>();
   /** The session suite, per codeunit: the tests a call must have exactly one row for. */
@@ -577,7 +586,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await rm(join(toDir, f), { force: true });
     }
     const { artifactId } = await readManifestIds(toDir);
-    await writeFile(join(toDir, CONTROL_SELECTOR_FILENAME), this.selectorText(artifactId, null), "utf8");
+    await writeFile(
+      join(toDir, CONTROL_SELECTOR_FILENAME),
+      this.selectorText(artifactId, null),
+      "utf8",
+    );
     return artifactId;
   }
 
@@ -734,7 +747,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw new Error("al-runner-v3: activate() before a successful deploy()");
     }
     if (mutantId !== null && !proof.manifestIds.has(mutantId)) {
-      throw new Error(`al-runner-v3: activate(${mutantId}): not a mutant of the deployed batch's manifest`);
+      throw new Error(
+        `al-runner-v3: activate(${mutantId}): not a mutant of the deployed batch's manifest`,
+      );
     }
     // The plan is NOT dropped here: keyed by mutant id and read only while that mutant is active,
     // so the R577 reproduction (after the unmutated confirm) runs at the killing call's stop.
@@ -770,21 +785,27 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     if ((await hashAlTree(this.cfg.testDir)) !== proof.testDirHash) {
-      throw new AlRunnerV3UnprovenBatchError("an .al file in the test dir changed after the alc proof");
+      throw new AlRunnerV3UnprovenBatchError(
+        "an .al file in the test dir changed after the alc proof",
+      );
     }
     if ((await fileSha256(join(this.cfg.testDir, "app.json"))) !== proof.testAppJsonSha256) {
       throw new AlRunnerV3UnprovenBatchError("the test app's app.json changed after the alc proof");
     }
     const now = await listDeps(this.cfg.packagesDir, false);
     if (now.map((e) => e.name).join("\n") !== proof.deps.map((e) => e.name).join("\n")) {
-      throw new AlRunnerV3UnprovenBatchError(`the file list of ${this.cfg.packagesDir} changed after the alc proof`);
+      throw new AlRunnerV3UnprovenBatchError(
+        `the file list of ${this.cfg.packagesDir} changed after the alc proof`,
+      );
     }
     for (const [i, e] of now.entries()) {
       const was = proof.deps[i];
       if (was === undefined) continue;
       if (e.size === was.size && e.mtimeMs === was.mtimeMs) continue;
       if ((await fileSha256(join(this.cfg.packagesDir, e.name))) !== was.sha256) {
-        throw new AlRunnerV3UnprovenBatchError(`${this.cfg.packagesDir}/${e.name} changed after the alc proof`);
+        throw new AlRunnerV3UnprovenBatchError(
+          `${this.cfg.packagesDir}/${e.name} changed after the alc proof`,
+        );
       }
     }
   }
@@ -804,7 +825,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (row === undefined || mine.length !== 1) {
       // Cached only when every suite test of the codeunit had one row, so this is a ref outside
       // the suite: never a verdict.
-      return this.rowMissing(ref, `${mine.length} row(s) for ${ref.codeunitName}.${ref.method}`, call.wallMs);
+      return this.rowMissing(
+        ref,
+        `${mine.length} row(s) for ${ref.codeunitName}.${ref.method}`,
+        call.wallMs,
+      );
     }
     const coverage =
       row.status === "pass" && !row.notRun && this.lastActivated === null
@@ -824,7 +849,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // or wrapped file): every call requested --coverage-json (`v3CallArgv`).
     if (verdict.outcome === "pass") {
       const index = this.sleepIndex;
-      if (index === undefined) throw new Error("al-runner-v3: no Sleep index for the deployed batch");
+      if (index === undefined)
+        throw new Error("al-runner-v3: no Sleep index for the deployed batch");
       this.batchBlind ??= blindNote(call.coverage, index);
       const note = this.batchBlind ?? sleepPassRefusal(call.coverage, index, row.name);
       if (note !== undefined) {
@@ -863,14 +889,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** I3 (branch b): a survivor whose covering codeunit had a test v3 refused at baseline. */
   survivorNote(covering: readonly TestMethodRef[]): string | undefined {
     const near = [...new Set(covering.map((r) => r.codeunitId))].flatMap((id) =>
-      [...(this.baselineRefused.get(id) ?? [])].map((m) => `${covering.find((c) => c.codeunitId === id)?.codeunitName ?? id}.${m}`),
+      [...(this.baselineRefused.get(id) ?? [])].map(
+        (m) => `${covering.find((c) => c.codeunitId === id)?.codeunitName ?? id}.${m}`,
+      ),
     );
     return near.length === 0
       ? undefined
       : `${V3_REFUSED_NEARBY_TAG} ${near.join(", ")}: refused by v3 at baseline in a covering test's codeunit, so a kill it might make on BC is not measured here`;
   }
 
-  private coverageOf(rowName: string, doc: V3CoverageRead): CoverageMap | undefined | "unavailable" {
+  private coverageOf(
+    rowName: string,
+    doc: V3CoverageRead,
+  ): CoverageMap | undefined | "unavailable" {
     const index = this.coverageIndex;
     if (index === undefined) return undefined;
     if (doc.kind === "unavailable") return "unavailable";
@@ -903,7 +934,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let budget = timeoutMs;
     const plan = this.plan;
     if (plan !== undefined && plan.mutantId === this.lastActivated) {
-      for (const [k, ms] of plan.budgets) if (k.startsWith(`${id}\u0000`) && ms > budget) budget = ms;
+      for (const [k, ms] of plan.budgets)
+        if (k.startsWith(`${id}\u0000`) && ms > budget) budget = ms;
     }
     const stopSeconds = stopSecondsOf(budget);
     const covDir = join(this.cfg.instrumentedDir, "cov");
@@ -939,7 +971,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       });
     } catch (err) {
       clearTimeout(timer);
-      return { verdict: transportFailure(ref, `could not run v3: ${err instanceof Error ? err.message : String(err)}`, Date.now() - started) };
+      return {
+        verdict: transportFailure(
+          ref,
+          `could not run v3: ${err instanceof Error ? err.message : String(err)}`,
+          Date.now() - started,
+        ),
+      };
     }
     clearTimeout(timer);
     const wallMs = Date.now() - started;
@@ -955,7 +993,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     if (res.exitCode === 6) throw new AlRunnerV3SelectionError(id, res.stderr);
     if (![0, 1, 7, 8].includes(res.exitCode)) {
-      return { verdict: transportFailure(ref, `v3 exited ${res.exitCode}: ${res.stderr.slice(-400)}`, wallMs) };
+      return {
+        verdict: transportFailure(
+          ref,
+          `v3 exited ${res.exitCode}: ${res.stderr.slice(-400)}`,
+          wallMs,
+        ),
+      };
     }
     if (res.exitCode === 8 && !this.dotnetHelperWarned) {
       this.dotnetHelperWarned = true;
@@ -970,9 +1014,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // Every suite test of this codeunit (and the asking ref) has exactly one row, or nothing is cached.
     const needed = [...(this.suitePerCodeunit.get(id) ?? []), ref];
     for (const t of needed) {
-      const n = decoded.rows.filter((r) => r.method.toLowerCase() === t.method.toLowerCase()).length;
+      const n = decoded.rows.filter(
+        (r) => r.method.toLowerCase() === t.method.toLowerCase(),
+      ).length;
       if (n !== 1) {
-        return { verdict: this.rowMissing(ref, `codeunit ${id}'s call has ${n} row(s) for ${t.codeunitName}.${t.method}`, wallMs) };
+        return {
+          verdict: this.rowMissing(
+            ref,
+            `codeunit ${id}'s call has ${n} row(s) for ${t.codeunitName}.${t.method}`,
+            wallMs,
+          ),
+        };
       }
     }
     if (this.coverageTamper !== undefined && this.lastActivated !== null) {
@@ -1005,7 +1057,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   async close(): Promise<void> {
-    await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(() => {});
+    await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(
+      () => {},
+    );
   }
 }
 

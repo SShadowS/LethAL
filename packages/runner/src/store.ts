@@ -1037,7 +1037,9 @@ export class ResultsStore {
     // R586: a v3 session resumes only its own build; NULL (an unrecorded build) never matches.
     const v3 = q.backend === "al-runner-v3";
     if (v3 && q.runnerBuild === undefined) {
-      throw new Error("findResumableRun: an al-runner-v3 session must name its runner build (R586)");
+      throw new Error(
+        "findResumableRun: an al-runner-v3 session must name its runner build (R586)",
+      );
     }
     // R52: "most recent unfinished" is NOT sufficient — it must also HAVE something to carry.
     // Measured 2026-07-27: an attempted resume aborted at lease acquisition before scoring a single

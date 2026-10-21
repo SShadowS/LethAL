@@ -129,6 +129,9 @@ export interface DoctorDeps {
    * `lease` lesson two fields up but the same mistake.
    */
   readonly alRunner?: () => Promise<{ readonly ok: boolean; readonly details: string }>;
+  /** R586: the al-runner-v3 binary: its `--version`, its `.gated` pin and `bcVersion` against the
+   *  package folder. Read-only; the session's contract probe is not run here. */
+  readonly alRunnerV3?: () => Promise<{ readonly ok: boolean; readonly details: string }>;
   /**
    * R131: al-runner's artifact cache, READ. Supplied on every path `buildDoctorDeps` produces —
    * reading a local directory needs no environment to exist — but OPTIONAL on the type since R146,
@@ -489,6 +492,7 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     lease,
     toolPaths,
     alRunner,
+    alRunnerV3,
     alRunnerCache,
     companies,
     alcRuntime,
@@ -532,6 +536,14 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
   // cache line.
   if (alRunner !== undefined) {
     checkPromises.push(runCheck("al-runner", async () => checkAlRunner(await alRunner())));
+  }
+  if (alRunnerV3 !== undefined) {
+    checkPromises.push(
+      runCheck("al-runner-v3", async () => {
+        const s = await alRunnerV3();
+        return { name: "al-runner-v3", ok: s.ok, detail: s.details };
+      }),
+    );
   }
   if (toolPaths !== undefined) {
     checkPromises.push(

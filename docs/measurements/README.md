@@ -1000,6 +1000,45 @@ here as measured and neither was.**
   to work that out. The operator deliberately sets no `equivalenceHint`.
 - One container, one company, one BC 28 server.
 
+## al-runner v3 — the Rust al-runner, measured on 3.0.0-alpha.2 (R586)
+
+Measured 2026-10-21 on `alrunner 3.0.0-alpha.2 (91253f2d6)` (binary sha256 `b23f8315…5d45`), Linux,
+in this container. The raw measurements are under `/coord/handoff/R-586/` (`measure.md`,
+`plan-measure/`, `contract-alpha2/`). LethAL re-measures the contract every session
+(`packages/runner/src/al-runner-v3-contract.ts`, 23 facts) and gates the pin with
+`itest:alrunner-v3`. The plan is `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`;
+the figures are pre-committed in `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment.md`.
+
+- **Command line.** `al-runner test --output-json --isolation test --test-timeout-secs N --codeunit
+  <id> --package-cache <dir> --bc-version <build> --no-download [--define S] --coverage-json <f>
+  <app> <tests>`. An unknown flag exits 2 with no document. Exit codes: 0 all passed, 1 a test
+  failed, 7 a test not run, 8 not run for a missing .NET helper, 6 the selection matched nothing
+  (with NO document, #5613).
+- **Rows.** `tests[]` with `codeunit`, `codeunitName`, `method` (the AL name, quotes removed), `name`
+  (`Codeunit<id>.<method>`), `status` (`pass`, `fail`, `error`), `durationMs`, and `message` and
+  `notRun` when present. A test v3 does not run is `error`, `notRun: true`, with
+  `NotRun: out-of-scope: <reason>`. A test stopped by the time limit is `error`, `notRun: true`,
+  `Test exceeded <N>s timeout.`.
+- **Selection.** A selected test's whole codeunit runs (#5611); only the selected tests are
+  reported. A quoted test name cannot be selected by `--test` or `--test-exact` (exit 6, #5572),
+  and `--test X --test-exact X` selects the union (#5612). `--codeunit` reports every test under
+  its AL name.
+- **Time limit.** `--test-timeout-secs N` stops a test after N seconds of CPU time. Machine load
+  does not count; a test that waits without computing is stopped at 10 x N of wall time.
+- **`Sleep` does nothing** (#5605): `Sleep(600000)` returns at once, with or without a time limit.
+- **Code that does not compile runs** (#5602): a target with an AL0118 error ran, and its test passed.
+- **Duplicate key.** A statement-form duplicate-key `Insert()` does not raise (#5603).
+- **Isolation.** `Commit()` is refused under `--isolation test` (#5607), and `--isolation disabled`
+  refuses every test (#5609). One refusal turns the codeunit's later failures into not-run (#5610).
+- **Coverage.** `--coverage-json` has two parts:
+  - a top-level `coverage` that lists every statement of every compiled file, with zero-hit ones;
+  - `perTestCoverage`, which lists only the statements each test hit.
+
+  Paths are absolute with forward slashes. Statement lines are FILE-relative.
+- **Predefined symbols.** No arm is active over CLEAN, CLEANSCHEMA, CLEANSCHEMA1..40 or BC1..40.
+- **Target precedence.** The positional target folder wins over a higher-version `.app` of the same
+  app in the test app's `.alpackages`.
+
 ## al-runner v2 — the CLI and wire contract, measured against the released binary
 
 ### A test row's name is BC's C# name for the AL method (measured 2026-10-09, c5bbaf89 and 43f76177; R557)

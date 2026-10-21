@@ -21,7 +21,19 @@
  */
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  readlink,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { type GatedBuild, parseGated, sha256OfFile } from "../packages/runner/src/al-runner-v3-pin";
 
@@ -76,7 +88,11 @@ export function expectedSha(sums: string, file: string): string | undefined {
 }
 
 /** Reads the receipt: valid only with this nonce and this binary's sha256; else infra-fail. */
-export async function readReceipt(path: string, nonce: string, sha: string): Promise<{ outcome: Outcome; why: string }> {
+export async function readReceipt(
+  path: string,
+  nonce: string,
+  sha: string,
+): Promise<{ outcome: Outcome; why: string }> {
   let raw: unknown;
   try {
     raw = JSON.parse(await readFile(path, "utf8"));
@@ -85,8 +101,14 @@ export async function readReceipt(path: string, nonce: string, sha: string): Pro
   }
   const r = raw as { nonce?: unknown; binarySha256?: unknown; outcome?: unknown; legs?: unknown };
   if (r.nonce !== nonce) return { outcome: "infra-fail", why: "a receipt of another run (nonce)" };
-  if (r.binarySha256 !== sha) return { outcome: "infra-fail", why: "a receipt for another binary (sha256)" };
-  if (r.outcome === "pass" || r.outcome === "held" || r.outcome === "gate-fail" || r.outcome === "infra-fail") {
+  if (r.binarySha256 !== sha)
+    return { outcome: "infra-fail", why: "a receipt for another binary (sha256)" };
+  if (
+    r.outcome === "pass" ||
+    r.outcome === "held" ||
+    r.outcome === "gate-fail" ||
+    r.outcome === "infra-fail"
+  ) {
     return { outcome: r.outcome, why: `receipt legs ${JSON.stringify(r.legs)}` };
   }
   return { outcome: "infra-fail", why: `a receipt with outcome ${JSON.stringify(r.outcome)}` };
@@ -136,7 +158,9 @@ export async function gateOne(
       tarballSha = await sha256OfFile(got.tarball);
       if (want === undefined || want !== tarballSha) {
         // Logged loudly, never extracted.
-        await deps.log(`${deps.now()} ${tag}: infra-fail: CHECKSUM MISMATCH (SHA256SUMS ${want ?? "none"}, tarball ${tarballSha}); not extracted`);
+        await deps.log(
+          `${deps.now()} ${tag}: infra-fail: CHECKSUM MISMATCH (SHA256SUMS ${want ?? "none"}, tarball ${tarballSha}); not extracted`,
+        );
         return infra(deps, name);
       }
       const x = join(work, "x");
@@ -177,12 +201,18 @@ export async function gateOne(
         await mkdir(join(root, "held", name), { recursive: true });
         await cp(binary, join(root, "held", name, "al-runner"));
       }
-      await deps.log(`${deps.now()} ${tag}: HELD for the orchestrator: every difference is a move toward BC; re-pre-commit, then re-gate`);
+      await deps.log(
+        `${deps.now()} ${tag}: HELD for the orchestrator: every difference is a move toward BC; re-pre-commit, then re-gate`,
+      );
       return "held";
     }
     // pass
-    const dirName = opts.regateAt !== undefined ? undefined : `${tag.replace(/^v/, "")}-${/\(([0-9a-f]+)\)/.exec(version)?.[1] ?? "unknown"}`;
-    const dest = dirName === undefined ? await readlink(join(root, "current")) : join(root, dirName);
+    const dirName =
+      opts.regateAt !== undefined
+        ? undefined
+        : `${tag.replace(/^v/, "")}-${/\(([0-9a-f]+)\)/.exec(version)?.[1] ?? "unknown"}`;
+    const dest =
+      dirName === undefined ? await readlink(join(root, "current")) : join(root, dirName);
     if (dirName !== undefined) {
       await mkdir(dest, { recursive: true });
       await cp(binary, join(dest, "al-runner"));
@@ -192,7 +222,11 @@ export async function gateOne(
       version,
       binarySha256: sha,
       lethalCommit: commit,
-      ...(tarballSha !== undefined ? { tarballSha256: tarballSha } : gated.tarballSha256 !== undefined ? { tarballSha256: gated.tarballSha256 } : {}),
+      ...(tarballSha !== undefined
+        ? { tarballSha256: tarballSha }
+        : gated.tarballSha256 !== undefined
+          ? { tarballSha256: gated.tarballSha256 }
+          : {}),
       gatedAt: deps.now(),
     };
     await writeFile(join(dest, ".gated"), `${JSON.stringify(next, null, 2)}\n`);
@@ -214,16 +248,21 @@ export async function gateOne(
 
 async function infra(deps: UpdateDeps, name: string): Promise<Outcome> {
   const n = await infraCount(deps.root, name, true);
-  if (n >= 3) await deps.log(`${deps.now()} ${name}: ${n} infra-fails in a row: a line for the orchestrator`);
+  if (n >= 3)
+    await deps.log(`${deps.now()} ${name}: ${n} infra-fails in a row: a line for the orchestrator`);
   return "infra-fail";
 }
 
 /** The daily run: every candidate above the gated alpha, oldest first, until one passes. */
-export async function updateOnce(deps: UpdateDeps, opts: { readonly regateAt?: string } = {}): Promise<Outcome[]> {
+export async function updateOnce(
+  deps: UpdateDeps,
+  opts: { readonly regateAt?: string } = {},
+): Promise<Outcome[]> {
   const current = await readCurrentGated(deps.root);
   if (opts.regateAt !== undefined) return [await gateOne(deps, "regate", current, opts)];
   const gatedAlpha = /3\.0\.0-alpha\.(\d+)/.exec(current.version)?.[1];
-  if (gatedAlpha === undefined) throw new Error(`the gated build "${current.version}" is not a v3 alpha`);
+  if (gatedAlpha === undefined)
+    throw new Error(`the gated build "${current.version}" is not a v3 alpha`);
   const out: Outcome[] = [];
   for (const tag of candidates(await deps.listReleases(), Number(gatedAlpha))) {
     const o = await gateOne(deps, tag, current);
@@ -236,8 +275,16 @@ export async function updateOnce(deps: UpdateDeps, opts: { readonly regateAt?: s
 /** Real side effects. */
 export function realDeps(root = ROOT): UpdateDeps {
   const run = async (argv: string[], env: Record<string, string> = {}, cwd?: string) => {
-    const p = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env }, ...(cwd !== undefined ? { cwd } : {}) });
-    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    const p = Bun.spawn(argv, {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, ...env },
+      ...(cwd !== undefined ? { cwd } : {}),
+    });
+    const [out, err] = await Promise.all([
+      new Response(p.stdout).text(),
+      new Response(p.stderr).text(),
+    ]);
     const code = await p.exited;
     if (code !== 0) throw new Error(`${argv.join(" ")}: exit ${code}: ${err.slice(-400)}`);
     return out;
@@ -245,14 +292,42 @@ export function realDeps(root = ROOT): UpdateDeps {
   return {
     root,
     listReleases: async () =>
-      (await run(["gh", "release", "list", "--repo", REPO, "--limit", "50", "--json", "tagName", "--jq", ".[].tagName"]))
+      (
+        await run([
+          "gh",
+          "release",
+          "list",
+          "--repo",
+          REPO,
+          "--limit",
+          "50",
+          "--json",
+          "tagName",
+          "--jq",
+          ".[].tagName",
+        ])
+      )
         .split("\n")
         .filter((t) => t !== ""),
     download: async (tag, dir) => {
-      await run(["gh", "release", "download", tag, "--repo", REPO, "--dir", dir, "--pattern", "*x86_64-unknown-linux*.tar.xz", "--pattern", "SHA256SUMS"]);
+      await run([
+        "gh",
+        "release",
+        "download",
+        tag,
+        "--repo",
+        REPO,
+        "--dir",
+        dir,
+        "--pattern",
+        "*x86_64-unknown-linux*.tar.xz",
+        "--pattern",
+        "SHA256SUMS",
+      ]);
       const files = await readdir(dir);
       const tarball = files.find((f) => f.endsWith(".tar.xz"));
-      if (tarball === undefined || !files.includes("SHA256SUMS")) throw new Error(`release ${tag} has no linux-x64 tarball or SHA256SUMS`);
+      if (tarball === undefined || !files.includes("SHA256SUMS"))
+        throw new Error(`release ${tag} has no linux-x64 tarball or SHA256SUMS`);
       return { tarball: join(dir, tarball), sums: join(dir, "SHA256SUMS") };
     },
     extract: async (tarball, dir) => {
@@ -262,9 +337,28 @@ export function realDeps(root = ROOT): UpdateDeps {
     },
     versionOf: async (b) => (await run([b, "--version"])).trim(),
     runGate: async (commit, env) => {
-      if (!existsSync(GATE_WORKTREE)) await run(["git", "-C", process.cwd(), "worktree", "add", "--detach", GATE_WORKTREE, commit]);
+      if (!existsSync(GATE_WORKTREE))
+        await run([
+          "git",
+          "-C",
+          process.cwd(),
+          "worktree",
+          "add",
+          "--detach",
+          GATE_WORKTREE,
+          commit,
+        ]);
       await run(["git", "-C", GATE_WORKTREE, "checkout", "--detach", commit]);
-      await run(["bun", "run", "itest:alrunner-v3"], { ...env, ...(process.env.LETHAL_ITEST_V3_CDO !== undefined ? { LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO } : {}) }, GATE_WORKTREE);
+      await run(
+        ["bun", "run", "itest:alrunner-v3"],
+        {
+          ...env,
+          ...(process.env.LETHAL_ITEST_V3_CDO !== undefined
+            ? { LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO }
+            : {}),
+        },
+        GATE_WORKTREE,
+      );
     },
     inUse: async () => {
       for (const pid of await readdir("/proc")) {

@@ -3949,7 +3949,9 @@ function resolveResume(
   const assertLends = (row: RunRow, flag: string): void => {
     const why = backendBuildRefusal(row, lendingSession);
     if (why !== undefined) {
-      throw new Error(`${flag}: ${why}; none of its verdicts is carried. Drop the resume flag to run from scratch.`);
+      throw new Error(
+        `${flag}: ${why}; none of its verdicts is carried. Drop the resume flag to run from scratch.`,
+      );
     }
   };
   const sameTestApp = (row: RunRow | null, flag: string): void => {
@@ -10875,11 +10877,15 @@ async function runnerBuildOf(
     runnerBuild?: () => Promise<{ readonly version: string; readonly binarySha256: string }>;
   };
   if (typeof b.runnerBuild !== "function") {
-    throw new Error("runSession: this al-runner-v3 backend cannot name its build (runnerBuild); refusing (R586)");
+    throw new Error(
+      "runSession: this al-runner-v3 backend cannot name its build (runnerBuild); refusing (R586)",
+    );
   }
   const { version, binarySha256 } = await b.runnerBuild();
   if (version === "" || !/^[0-9a-f]{64}$/.test(binarySha256)) {
-    throw new Error(`runSession: al-runner-v3 named no usable build ("${version}", "${binarySha256}"); refusing (R586)`);
+    throw new Error(
+      `runSession: al-runner-v3 named no usable build ("${version}", "${binarySha256}"); refusing (R586)`,
+    );
   }
   return { version, binarySha256 };
 }

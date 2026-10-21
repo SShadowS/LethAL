@@ -70,10 +70,16 @@ export function classifyLegT(
     const ns = n.get(k) ?? [];
     if (os.length === 1 && ns.length === 1 && sameRow(os[0], ns[0])) continue;
     const toward =
-      known.has(k) && os.length === 1 && ns.length === 1 && (b.get(k)?.length ?? 0) === 1 && sameRow(ns[0], b.get(k)?.[0]);
+      known.has(k) &&
+      os.length === 1 &&
+      ns.length === 1 &&
+      (b.get(k)?.length ?? 0) === 1 &&
+      sameRow(ns[0], b.get(k)?.[0]);
     if (toward) {
       anyHeld = true;
-      lines.push(`held: ${k}: ${os[0]?.verdict} -> ${ns[0]?.verdict} (the BC verdict, a known difference)`);
+      lines.push(
+        `held: ${k}: ${os[0]?.verdict} -> ${ns[0]?.verdict} (the BC verdict, a known difference)`,
+      );
     } else {
       anyFail = true;
       lines.push(
