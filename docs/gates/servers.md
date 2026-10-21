@@ -79,36 +79,46 @@ This table is the record. It lists the pairs exactly as the autonomy runbook
 (`docs/superpowers/runbooks/autonomy/README.md`, "Proof is PER SERVER") does. Each pair below
 PASSED on 2026-10-21 under the runtime-17 fixtures, per mutant equal to its baseline or frozen table
 where the gate has mutants, with no baseline re-recorded. The control column is the LethAL Control
-version the server held during that proof (read by `lethal doctor`'s `control-version` check). It
-matters: 1.0.0.22 and 1.0.0.23 take different paths in some gates, so **a proof holds only for the
-control version it ran under**. Read that way, as of 2026-10-21:
+version the server held during that proof, read by `lethal doctor`'s `control-version` check before
+each server's queue. A proof holds only for the control version it ran under, because control
+builds take different paths in some gates.
 
-- **`bc3`** (holds 1.0.0.23, the pinned build): all 13 BC gates are proven under its current control.
-- **`bc1`** (now holds 1.0.0.23): only `itest:chunked`, `itest:hang`, `itest:harden` and
-  `itest:agreement` are proven under its current control. Its other 9 rows are R-583 proofs under
-  1.0.0.22 (`itest:verify`'s control was not recorded), and each needs a re-proof on the build app.json pins.
-- **`bc2`** (holds 1.0.0.22, below the pinned 1.0.0.23 in `extensions/lethal-control/app.json`): all
-  13 are proven, but only under 1.0.0.22. Upgrading bc2 to the pinned build (for example by
-  `bc-linux-setup.ts --server bc2`) voids all 13, and each then needs a re-proof.
+**As of 2026-10-21, every BC gate is proven on every bc server under the LethAL Control build master
+requires** (the build `extensions/lethal-control/app.json` and `CONTROL_SHA256` in
+`scripts/bc-linux-setup.ts` pin): 13 gates on each of bc1, bc2 and bc3, 39 pairs. bc2 was moved to
+that build first, measured 2026-10-21 by `bc-republish.ts control` as an upgrade with nothing removed,
+read back with the pinned sha256 (`/coord/handoff/R-604/control-bc2.log`), and its 13 gates were
+re-proven after it. bc1's 9 gates proven earlier under the older build were re-proven too. Re-prove
+a server's gates whenever its control build or fixture apps change.
 
 | server | gate | LethAL Control | proof (log) |
 |---|---|---|---|
-| `bc1` | `itest:bcdev`, `itest:bcdev-wrapped`, `itest:bcdev-names`, `itest:tables`, `itest:verify-scale`, `itest:stale-publish`, `itest:testapp`, `itest:lease` | 1.0.0.22 | R-583 phase 2, `/coord/handoff/R-583/gates/p2-<gate>-bc1.log` |
-| `bc1` | `itest:verify` | not recorded | R-595, `/coord/handoff/R-595/itest-verify-bc1-e2e-PASS.log` |
+| `bc1` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-bcdev.c23.log` |
+| `bc1` | `itest:bcdev-wrapped` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-bcdev-wrapped.c23.log` |
+| `bc1` | `itest:bcdev-names` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-bcdev-names.c23.log` |
+| `bc1` | `itest:tables` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-tables.c23.log` |
+| `bc1` | `itest:verify` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-verify.c23.log` |
+| `bc1` | `itest:verify-scale` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-verify-scale.c23.log` |
+| `bc1` | `itest:stale-publish` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-stale-publish.c23.log` |
+| `bc1` | `itest:testapp` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-testapp.c23.log` |
+| `bc1` | `itest:lease` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-lease.c23.log` |
 | `bc1` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-chunked.log` |
 | `bc1` | `itest:hang` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-hang.log` |
 | `bc1` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-harden.log` |
 | `bc1` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-agreement.log` |
-| `bc2` | `itest:chunked`, `itest:hang`, `itest:harden`, `itest:agreement` | 1.0.0.22 | R-583 phase 2, `/coord/handoff/R-583/gates/p2-<gate>-bc2.log`. For `itest:agreement`, R-583's earlier run of master's code there was NOT REPRODUCED (an ordering deviation, `p2-master-agreement-bc2.log`); the orchestrator accepted the R-583-code PASS in its place (`/coord/handoff/R-583/gates.md`) |
-| `bc2` | `itest:bcdev` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-bcdev.log` |
-| `bc2` | `itest:bcdev-wrapped` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-bcdev-wrapped.log` |
-| `bc2` | `itest:bcdev-names` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-bcdev-names.log` |
-| `bc2` | `itest:tables` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-tables.log` |
-| `bc2` | `itest:verify` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-verify.log` |
-| `bc2` | `itest:verify-scale` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-verify-scale.log` |
-| `bc2` | `itest:stale-publish` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-stale-publish.log` |
-| `bc2` | `itest:testapp` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-testapp.log` |
-| `bc2` | `itest:lease` | 1.0.0.22 | R-604, `/coord/handoff/R-604/bc2-lease.log` |
+| `bc2` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-bcdev.c23.log` |
+| `bc2` | `itest:bcdev-wrapped` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-bcdev-wrapped.c23.log` |
+| `bc2` | `itest:bcdev-names` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-bcdev-names.c23.log` |
+| `bc2` | `itest:tables` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-tables.c23.log` |
+| `bc2` | `itest:verify` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-verify.c23.log` |
+| `bc2` | `itest:verify-scale` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-verify-scale.c23.log` |
+| `bc2` | `itest:stale-publish` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-stale-publish.c23.log` |
+| `bc2` | `itest:testapp` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-testapp.c23.log` |
+| `bc2` | `itest:lease` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-lease.c23.log` |
+| `bc2` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-chunked.c23.log` |
+| `bc2` | `itest:hang` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-hang.c23.log` |
+| `bc2` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-harden.c23.log` |
+| `bc2` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-agreement.c23.log` |
 | `bc3` | `itest:hang` | 1.0.0.23 | R-604 (re-proven after the republish), `/coord/handoff/R-604/bc3-hang.log` |
 | `bc3` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev.log` |
 | `bc3` | `itest:bcdev-wrapped` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev-wrapped.log` |
@@ -144,6 +154,17 @@ Earlier proofs not in the table: `itest:verify-scale` also passed on `bc2` under
 R-583 merged, and `itest:bcdev` passed on all three servers in R589, before the runtime-17
 fixtures. bc3's earlier `itest:hang` proof (R-389, `/coord/handoff/R-389/bc-live/hang-bc3.log`) is
 replaced by R-604's, made after the republish.
+
+Superseded by the table, and kept as history, because they ran under the older control build,
+1.0.0.22 (measured 2026-10-21): R-583 phase 2's proofs on bc1 (bcdev, bcdev-wrapped, bcdev-names,
+tables, verify-scale, stale-publish, testapp, lease) and on bc2 (chunked, hang, harden, agreement),
+in `/coord/handoff/R-583/gates/p2-<gate>-<server>.log`; R-595's bc1 `itest:verify`
+(`/coord/handoff/R-595/itest-verify-bc1-e2e-PASS.log`, control not recorded); and R-604's first
+bc2 round (bcdev, bcdev-wrapped, bcdev-names, tables, verify, verify-scale, stale-publish,
+testapp, lease), in `/coord/handoff/R-604/bc2-<gate>.log`. Every one of them passed. For bc2
+`itest:agreement`, R-583's earlier run of master's code was NOT REPRODUCED (an ordering deviation,
+`p2-master-agreement-bc2.log`), and the orchestrator accepted the R-583-code PASS in its place
+(`/coord/handoff/R-583/gates.md`).
 
 ## Other servers
 
