@@ -58,6 +58,7 @@ import {
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
+import { LOG_THEN_GAP, OVER_BUDGET_GAP, PREDICTED_GAPS } from "./verify-gaps";
 import { assertReachFields } from "./verify-reach-fields";
 
 if (!process.env.LETHAL_ITEST_VERIFY) {
@@ -99,54 +100,14 @@ const CLAMP_KEY = "|Sandbox Logic|ClampPercent|lethal.negate-conditional|";
 const LOGAUDIT_KEY = "|Sandbox Logic|LogAudit|lethal.negate-conditional|";
 const KILL_KEY = "|Sandbox Logic|IsOverBudget|lethal.return-value|";
 
-/**
- * C02-09: explain's gaps and no-coverage block on the step-1 report, measured offline before the
- * run (see the gap pre-commitment). Full identity keys from bcdev.baseline.json.
- */
-const CLAMP_GAP = {
-  name: "ClampPercent body",
-  gapId: "G72826da4c976",
-  keys: [
-    "b03dba085d6a4498f41e5e223ecb64c66e6eee1d2d2ef7ab55f84fa7c63835d7|Sandbox Logic|ClampPercent|lethal.empty-block|1",
-    "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.negate-conditional|1",
-    "fc15ec3036dca5e21a2e79675b48f28e5815811f32dff4eb3426e0ff803575bb|Sandbox Logic|ClampPercent|lethal.conditional-boundary|1",
-    "58ade303c82ea175e1cabd4e46b8cd818e3a59a66b60578ef4d85077548d40e9|Sandbox Logic|ClampPercent|lethal.conditional-boundary|1",
-    "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Sandbox Logic|ClampPercent|lethal.return-value|1",
-  ],
-};
-const APPLY_GAP = {
-  name: "ApplyAudit body",
-  gapId: "G140fcb49d7d2",
-  keys: [
-    "2b34811c1b253fde93b24824f30d18d933316b7f64723b67d413a3b0d16956a6|Sandbox Logic|ApplyAudit|lethal.empty-block|1",
-    "9b4f290c51c1ef232af4a294bb9a0a4c404064f20bac6e893fab28b45cdf7785|Sandbox Logic|ApplyAudit|lethal.void-method-call|1",
-  ],
-};
-const LOG_BODY_GAP = {
-  name: "LogAudit body",
-  gapId: "G4e97ec8a420a",
-  keys: [
-    "63c4f230d49983a82f9a54edf57f787ba2196df2de23c5374a9921c523fc408f|Sandbox Logic|LogAudit|lethal.empty-block|1",
-    "5cba655a6ac203ce40d31b0b4974a7b2f308cfec342a35d8e1a4f8d8c09c5c03|Sandbox Logic|LogAudit|lethal.negate-conditional|1",
-    "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Sandbox Logic|LogAudit|lethal.shift-integer|1",
-  ],
-};
-const LOG_THEN_GAP = {
-  name: "LogAudit then-block",
-  gapId: "Gd09a2f841d4e",
-  keys: [
-    "77ee7e3d0adfcd76e1ae34e9067dcebc5c466f1172a857c730b0d43f7085d15c|Sandbox Logic|LogAudit|lethal.empty-block|1",
-    "d8f839f87361f4d85b7ccd435b318285a82e1e3610237d66488e17b8bdd61de3|Sandbox Logic|LogAudit|lethal.remove-assignment|1",
-  ],
-};
-const PREDICTED_GAPS = [CLAMP_GAP, APPLY_GAP, LOG_BODY_GAP, LOG_THEN_GAP];
+// C02-09: the step-1 gaps (`PREDICTED_GAPS`, `LOG_THEN_GAP`) live in `verify-gaps.ts` (R-595).
 const PREDICTED_NO_COVERAGE_KEYS = [
   "e7216a276891ae7f02f66d83d4fad98fdc3ca56552d617d1f70fa371f7cfc667|Sandbox Pricing|DiscountedPrice|lethal.empty-block|1",
   "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.conditional-boundary|1",
   "98656555452a91ccc91c88a8a0bc3f58192db5f5153792b959447d06cff62cf1|Sandbox Pricing|DiscountedPrice|lethal.return-value|1",
   "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.swap-additive|1",
 ];
-const OVER_BUDGET_GAP_ID = "G9890e48cccd0";
+const OVER_BUDGET_GAP_ID = OVER_BUDGET_GAP.gapId;
 /** A well-formed gap id that no block of sandbox-app has (step 5c asserts that first). */
 const UNKNOWN_GAP_ID = "G000000000000";
 

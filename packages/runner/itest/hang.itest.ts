@@ -63,6 +63,7 @@ import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
+import { HANG_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   type QuarantineDiagnostic,
@@ -103,7 +104,7 @@ const SELECTOR_IDS = { selectorId: 79447, controlId: 79448, tableId: 79449 };
  * terminating mutants' measured cost (66-141 ms, three orders of magnitude of headroom) and far
  * below anything that would make a slow-but-correct mutant look like a hang.
  */
-const BUDGET_MS = 20_000;
+const BUDGET_MS = HANG_FIGURES.budgetMs;
 /** `RunMutantRequest.stopGraceMs`'s default — how long the held request waits after the stop. */
 const STOP_GRACE_MS = 30_000;
 
@@ -221,7 +222,7 @@ const EXPECTED_ON: ReadonlyArray<{
 ];
 
 /** R206: the warm kills of the ON leg, all in the new arm: three warm fails and one warm timeout. */
-const EXPECTED_WARM_KILLS = 4;
+const EXPECTED_WARM_KILLS = HANG_FIGURES.warmKills;
 
 /**
  * R516: the cold confirms of the position-1 timeouts, pinned as NUMBERS, never read back from the
@@ -229,8 +230,8 @@ const EXPECTED_WARM_KILLS = 4;
  * ON: lines 37, 43, 44 and 73 (line 145 is at position 2 and is confirmed by its replay instead).
  * SINGLE: the same four plus line 145, every call holding one method.
  */
-const EXPECTED_COLD_CONFIRMS_ON = 4;
-const EXPECTED_COLD_CONFIRMS_SINGLE = 5;
+const EXPECTED_COLD_CONFIRMS_ON = HANG_FIGURES.coldConfirmsOn;
+const EXPECTED_COLD_CONFIRMS_SINGLE = HANG_FIGURES.coldConfirmsSingle;
 
 /**
  * R516: every position-1 timeout is confirmed by ONE unmutated `RunMutant` call before it is
