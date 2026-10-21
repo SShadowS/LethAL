@@ -127,48 +127,92 @@ async function main(): Promise<number> {
     ...Array.from({ length: k }, (_, i) => `serial-${i + 1}`),
     ...Array.from({ length: n }, (_, i) => `parallel-${i + 1}`),
   ];
-  for (const name of names) {
-    for (;;) {
-      const heavy = matchingProcesses(sh(["ps", "-eo", "pid,args"]), wait, new Set([process.pid]));
-      if (heavy.length === 0) break;
-      console.log(
-        `${new Date().toISOString()} ${name}: waiting, heavy job running:\n  ${heavy.map((l) => l.slice(0, 120)).join("\n  ")}`,
-      );
-      await Bun.sleep(30_000);
+  const contaminated: string[] = [];
+  const ownTree = (): Set<number> => {
+    const rows = sh(["ps", "-eo", "pid,ppid"])
+      .split("\n")
+      .slice(1)
+      .map((l) => l.trim().split(/\s+/).map(Number));
+    const mine = new Set([process.pid]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const [pid, ppid] of rows) {
+        if (pid !== undefined && ppid !== undefined && !mine.has(pid) && mine.has(ppid)) {
+          mine.add(pid);
+          grew = true;
+        }
+      }
     }
-    const load = sh(["uptime"]).trim();
-    const others = matchingProcesses(
-      sh(["ps", "-eo", "pid,args"]),
-      /\bbun\b|itest|al-runner/,
-      new Set([process.pid]),
-    ).filter((l) => !l.includes("pi-server.ts") && !l.includes("kraken"));
-    const xml = join(out, `${name}.xml`);
-    const args = name.startsWith("parallel") ? [`--parallel=${p}`] : [];
-    const t0 = Date.now();
-    const r = Bun.spawnSync(
-      ["bun", "test", ...args, "--reporter=junit", `--reporter-outfile=${xml}`],
-      { cwd: REPO_ROOT, env: { ...process.env, CI: "true" }, stdout: "pipe", stderr: "pipe" },
-    );
-    const seconds = (Date.now() - t0) / 1000;
-    const output = `${r.stdout.toString()}${r.stderr.toString()}`;
-    writeFileSync(join(out, `${name}.log`), output);
-    const s = parseTestSummary(output);
-    const cases = parseJunit(readFileSync(xml, "utf8"));
-    runs.push({
-      name,
-      seconds,
-      pass: s?.pass ?? -1,
-      fail: s?.fail ?? -1,
-      skip: s?.skip ?? -1,
-      files: s?.files,
-      cases,
-      load,
-      others,
-    });
-    console.log(
-      `${name}: ${s?.pass} pass / ${s?.skip} skip / ${s?.fail} fail, ${s?.files} files, ${cases.length} junit cases, ${seconds.toFixed(1)} s`,
-    );
-  }
+    return mine;
+  };
+  for (const name of names)
+    for (;;) {
+      for (;;) {
+        const heavy = matchingProcesses(
+          sh(["ps", "-eo", "pid,args"]),
+          wait,
+          new Set([process.pid]),
+        );
+        if (heavy.length === 0) break;
+        console.log(
+          `${new Date().toISOString()} ${name}: waiting, heavy job running:\n  ${heavy.map((l) => l.slice(0, 120)).join("\n  ")}`,
+        );
+        await Bun.sleep(30_000);
+      }
+      const load = sh(["uptime"]).trim();
+      const others = matchingProcesses(
+        sh(["ps", "-eo", "pid,args"]),
+        /\bbun\b|itest|al-runner/,
+        new Set([process.pid]),
+      ).filter((l) => !l.includes("pi-server.ts") && !l.includes("kraken"));
+      const xml = join(out, `${name}.xml`);
+      const args = name.startsWith("parallel") ? [`--parallel=${p}`] : [];
+      const t0 = Date.now();
+      const child = Bun.spawn(
+        ["bun", "test", ...args, "--reporter=junit", `--reporter-outfile=${xml}`],
+        { cwd: REPO_ROOT, env: { ...process.env, CI: "true" }, stdout: "pipe", stderr: "pipe" },
+      );
+      // A heavy job that starts DURING the run contaminates it: sample every 5 s, and redo the run.
+      const overlap = new Set<string>();
+      const sampler = setInterval(() => {
+        for (const l of matchingProcesses(sh(["ps", "-eo", "pid,args"]), wait, ownTree())) {
+          overlap.add(l.replace(/^\d+\s+/, "").slice(0, 120));
+        }
+      }, 5_000);
+      const [stdout, stderr] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      await child.exited;
+      clearInterval(sampler);
+      const seconds = (Date.now() - t0) / 1000;
+      const output = `${stdout}${stderr}`;
+      if (overlap.size > 0) {
+        const tag = `${name}.contaminated-${Date.now()}`;
+        writeFileSync(join(out, `${tag}.log`), output);
+        contaminated.push(`${tag}: a heavy job ran during it: ${[...overlap].join("; ")}`);
+        console.log(`${name}: CONTAMINATED (${[...overlap].join("; ")}), redoing`);
+        continue;
+      }
+      writeFileSync(join(out, `${name}.log`), output);
+      const s = parseTestSummary(output);
+      const cases = parseJunit(readFileSync(xml, "utf8"));
+      runs.push({
+        name,
+        seconds,
+        pass: s?.pass ?? -1,
+        fail: s?.fail ?? -1,
+        skip: s?.skip ?? -1,
+        files: s?.files,
+        cases,
+        load,
+        others,
+      });
+      console.log(
+        `${name}: ${s?.pass} pass / ${s?.skip} skip / ${s?.fail} fail, ${s?.files} files, ${cases.length} junit cases, ${seconds.toFixed(1)} s`,
+      );
+      break;
+    }
 
   const ref = runs[0];
   if (ref === undefined) throw new Error("no runs");
@@ -203,6 +247,9 @@ async function main(): Promise<number> {
     "",
     `Parallel runs differing from the reference or with a failure: ${flaky} of ${n}.`,
     `Result: ${allSame ? "IDENTICAL per test name in every run" : "DIFFERENT (see below)"}.`,
+    "",
+    `Runs discarded and redone because a heavy job ran during them (not counted above): ${contaminated.length}`,
+    ...contaminated.map((c) => `- ${c}`),
     "",
     ...details,
   );
