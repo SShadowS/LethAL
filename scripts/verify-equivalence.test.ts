@@ -74,9 +74,12 @@ describe("the heavy-job wait", () => {
     "     15 bun scripts/verify-equivalence.ts --serial 3",
     "     16 tail -F /coord/handoff/x/al-runner.log",
     "     17 /bin/bash -c ps -eo pid,args | grep al-runner",
+    "     18 bun packages/runner/itest/al-runner.itest.ts",
+    "     19 bun scripts/verify.ts",
+    "     20 bun test --parallel=8",
   ].join("\n");
-  test("matches local heavy jobs and itest:hang, not a remote BC gate or itself", () => {
+  test("matches itest:alrunner, al-runner.itest.ts, the runtime, itest:hang, corpus jobs and other verifies; not a remote BC gate or itself", () => {
     const got = matchingProcesses(PS, new RegExp(DEFAULT_WAIT), new Set([15]));
-    expect(got.map((l) => Number(l.split(" ")[0]))).toEqual([10, 11, 12, 13]);
+    expect(got.map((l) => Number(l.split(" ")[0]))).toEqual([10, 11, 12, 13, 18, 19, 20]);
   });
 });

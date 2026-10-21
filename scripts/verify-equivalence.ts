@@ -21,7 +21,7 @@ import { type JunitCase, cleanDist, parseJunit, parseTestSummary } from "./verif
 const REPO_ROOT = join(import.meta.dir, "..");
 
 export const DEFAULT_WAIT =
-  "al-runner|itest:alrunner|itest:hang|hang\\.itest\\.ts|/work/src/|corpus-snapshot\\.ts";
+  "itest:alrunner|al-runner\\.itest\\.ts|al-runner|itest:hang|hang\\.itest\\.ts|/work/src/|corpus-snapshot\\.ts|scripts/verify\\.ts|^bun test\\b";
 
 /** One key per test: file, describe path, name and status, tab-separated. */
 export function caseKey(c: JunitCase): string {
