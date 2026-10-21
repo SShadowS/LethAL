@@ -82,8 +82,15 @@ describe("spawnWorker against a fake worker (I4)", () => {
 
   test("SIGKILL fails, naming the group (exitCode null is never read as a pass)", async () => {
     const { r, c } = await one("sigkill");
-    expect(r.signal).toBe("SIGKILL");
-    expect(c.failures.join()).toMatch(/worker layout: killed by SIGKILL/);
+    if (process.platform === "win32") {
+      // Windows has no signals: the killed worker reports exitCode null and signal null, which
+      // combineWorkers names as "exited null". Still a failure, never a pass.
+      expect(r.exitCode).not.toBe(4);
+      expect(c.failures.join()).toMatch(/worker layout: (killed by|exited)/);
+    } else {
+      expect(r.signal).toBe("SIGKILL");
+      expect(c.failures.join()).toMatch(/worker layout: killed by SIGKILL/);
+    }
     expect(c.ran).toEqual([]);
   });
 
@@ -117,7 +124,10 @@ describe("superviseGroups (I5)", () => {
     expect(res.interrupted).toBe("SIGTERM");
     // names is longest-first, so it started; layout never did.
     const names = res.results.find((r) => r.group === "names");
-    expect(names?.exitCode).toBe(4);
+    // POSIX: the fake worker traps the forwarded SIGTERM and exits 4. Windows cannot trap it, so the
+    // worker just ends (exitCode null). Either way the run fails as interrupted, asserted below.
+    if (process.platform !== "win32") expect(names?.exitCode).toBe(4);
+    else expect(names?.exitCode).not.toBe(0);
     expect(res.results.find((r) => r.group === "layout")?.signal).toBe("not-started");
     const c = combineWorkers(res.results, {
       nonce: NONCE,

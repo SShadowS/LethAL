@@ -98,7 +98,8 @@ Every check that compares two legs stays inside one group, so a group always run
   - **Builds.** It is refused on a released al-runner at or below 2.12.0 (R345). A source build is allowed, so
     on the Windows host use one at or after c39ad5de.
   - **Stopping it.** One Ctrl-C passes the signal to the workers, and the run fails. A worker whose parent
-    dies stops within about 2 s.
+    dies notices it within about 2 s and stops starting new legs; it exits by a 60 s backstop at the
+    latest. Measured live: every process of a killed run was gone within 70 s.
   - **Measured on 2026-10-21** (`/coord/handoff/R-587/compare.md`): 20.6 min against 53.6 min sequential,
     peak memory 2.2 GB, identical per mutant on all 23 legs.
 - **Reports.** `-- --reports <empty or new folder>` writes:
@@ -107,7 +108,8 @@ Every check that compares two legs stays inside one group, so a group always run
   - each group's `<group>.done.json`;
   - in parallel mode, each group's `<group>.log`;
   - `result.json`, only after a full PASS.
-  Every file carries the run's nonce. A folder that is not empty is refused.
+  Every file except the `<group>.log` files carries the run's nonce. A folder that is not empty is
+  refused.
 - **Comparing two full runs.** `bun scripts/alrunner-legs-diff.ts <dir A> <dir B>` compares two passed runs leg
   by leg.
   - It refuses (exit 2) a folder without `result.json`, a missing file, a file from another run, or a
