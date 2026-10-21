@@ -19,6 +19,8 @@
  *    `infra-fail` -> nothing kept, retried next run, a line after 3 in a row.
  * `--regate <commit>`: gate the CURRENT build at a new LethAL commit; on pass `.gated` takes it.
  * The script never commits.
+ * To-do (not v1; serve is out of v1): capture `serve`'s full summary for one edit in the CDO
+ * 18-dependency workspace, the measurement #5614 lacks (R586's defect table, row 14).
  */
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -298,7 +300,9 @@ export type EdgeResult = "skipped" | "no-op" | Outcome;
 export async function edgeOnce(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult> {
   const heavy = await deps.heavyJobs();
   if (heavy >= 2) {
-    await deps.log(`${deps.now()} edge: skipped for the day: ${heavy} heavy jobs are running (limit: 1 other)`);
+    await deps.log(
+      `${deps.now()} edge: skipped for the day: ${heavy} heavy jobs are running (limit: 1 other)`,
+    );
     return "skipped";
   }
   const free = await deps.freeGb();
@@ -437,10 +441,13 @@ export function realEdgeDeps(root = ROOT): UpdateDeps & EdgeDeps {
       await writeFile(log, `${line}\n`, { flag: "a" }).catch(() => {});
     },
     edgeCommit: async () => {
-      const p = Bun.spawn(["gh", "release", "view", "edge", "--repo", REPO, "--json", "targetCommitish,name,body"], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      const p = Bun.spawn(
+        ["gh", "release", "view", "edge", "--repo", REPO, "--json", "targetCommitish,name,body"],
+        {
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
       const out = await new Response(p.stdout).text();
       if ((await p.exited) !== 0) throw new Error("gh release view edge failed");
       const j = JSON.parse(out) as { targetCommitish?: string; name?: string; body?: string };
@@ -454,15 +461,27 @@ export function realEdgeDeps(root = ROOT): UpdateDeps & EdgeDeps {
       let n = 0;
       for (const pid of await readdir("/proc")) {
         if (!/^\d+$/.test(pid)) continue;
-        const cmd = (await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")).replaceAll("\0", " ");
-        if (/^bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|^bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/.test(cmd)) n++;
+        const cmd = (await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")).replaceAll(
+          "\0",
+          " ",
+        );
+        if (
+          /^bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|^bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/.test(
+            cmd,
+          )
+        )
+          n++;
       }
       return n;
     },
     freeGb: async () => {
       const p = Bun.spawn(["free", "-g"], { stdout: "pipe" });
       const out = await new Response(p.stdout).text();
-      const mem = out.split("\n").find((l) => l.startsWith("Mem:"))?.trim().split(/\s+/);
+      const mem = out
+        .split("\n")
+        .find((l) => l.startsWith("Mem:"))
+        ?.trim()
+        .split(/\s+/);
       const avail = Number(mem?.[6]);
       if (!Number.isFinite(avail)) throw new Error(`cannot read free -g: ${out}`);
       return avail;

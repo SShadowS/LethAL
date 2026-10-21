@@ -48,19 +48,19 @@ import { type SessionConfig, runSession } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import {
-  BaselineRecordedError,
-  assertGateBaseline,
-  preflightGateBaseline,
-  readGateBaseline,
-  recordRequested,
-} from "./baseline-guard";
-import {
   type V3LegOutcome,
   classifyLegT,
   gateOutcome,
   knownDifferenceKeys,
   writeV3Receipt,
 } from "./al-runner-v3-gate";
+import {
+  BaselineRecordedError,
+  assertGateBaseline,
+  preflightGateBaseline,
+  readGateBaseline,
+  recordRequested,
+} from "./baseline-guard";
 import { compareMutants, normalizeForComparison } from "./mutant-equality";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER_V3) {
@@ -587,16 +587,23 @@ async function legXSleep(scratch: string): Promise<void> {
   // ProbeSleeper's Sleep lines, read from the very --coverage-json the backend then reads.
   const hitsByMutant = new Map<string, Map<number, number>>();
   const recordHits = async (p: string): Promise<void> => {
-    const sel = await readFile(join(dirname(p), "..", "active", "MutationSelector.Codeunit.al"), "utf8");
+    const sel = await readFile(
+      join(dirname(p), "..", "active", "MutationSelector.Codeunit.al"),
+      "utf8",
+    );
     const id = /MutantId = '([^']+)'/.exec(sel)?.[1] ?? "";
     const doc = JSON.parse(await readFile(p, "utf8")) as {
-      perTestCoverage: { test: string; coverage: { file: string; statements: { line: number; hits: number }[] }[] }[];
+      perTestCoverage: {
+        test: string;
+        coverage: { file: string; statements: { line: number; hits: number }[] }[];
+      }[];
     };
     const own = doc.perTestCoverage.find((t) => t.test.endsWith(".SleeperDoubles"));
     const m = new Map<number, number>();
     for (const f of own?.coverage ?? []) {
       if (!f.file.endsWith("ProbeSleeper.Codeunit.al")) continue;
-      for (const s of f.statements) if (SLEEP_LINES.includes(s.line)) m.set(s.line, (m.get(s.line) ?? 0) + s.hits);
+      for (const s of f.statements)
+        if (SLEEP_LINES.includes(s.line)) m.set(s.line, (m.get(s.line) ?? 0) + s.hits);
     }
     hitsByMutant.set(id, m);
   };
@@ -605,9 +612,11 @@ async function legXSleep(scratch: string): Promise<void> {
   const idx = b.sleepIndexSize();
   console.log(`  X (d): Sleep index ${idx?.target} + ${idx?.test}`);
   must(idx?.target === 4 && idx?.test === 5, `X (d): Sleep index ${JSON.stringify(idx)}, r5 4 + 5`);
+  // r6 (c): v3's virtual clock makes LongSleepThenAssert PASS, so the baseline is green and no
+  // ProbeSleep test is unsupported.
   must(
-    r.unsupportedTests.some((t) => t.endsWith("LongSleepThenAssert")),
-    "X (d): LongSleepThenAssert not refused at baseline",
+    !r.unsupportedTests.some((t) => t.includes("Sleep")),
+    `X (d): a Sleep test refused at baseline: ${r.unsupportedTests.join(", ")}`,
   );
   // The r5 table, by operator (codes as generated: M0001..M0005).
   const R5: Record<string, { code: string; verdict: string; line?: number }> = {
@@ -622,9 +631,15 @@ async function legXSleep(scratch: string): Promise<void> {
     const want = R5[m.operatorName];
     const hits = hitsByMutant.get(m.mutantCode);
     console.log(`  X (d): ${m.mutantCode} hits ${JSON.stringify([...(hits ?? new Map())])}`);
-    must(want !== undefined && want.code === m.mutantCode && want.verdict === m.verdict, `X (d): ${m.mutantCode} ${m.operatorName} ${m.verdict}`);
+    must(
+      want !== undefined && want.code === m.mutantCode && want.verdict === m.verdict,
+      `X (d): ${m.mutantCode} ${m.operatorName} ${m.verdict}`,
+    );
     if (want?.verdict === "error") {
-      must((hits?.get(want.line ?? -1) ?? 0) > 0, `X (d): ${m.mutantCode}: no raw hit on Sleep line ${want.line}`);
+      must(
+        (hits?.get(want.line ?? -1) ?? 0) > 0,
+        `X (d): ${m.mutantCode}: no raw hit on Sleep line ${want.line}`,
+      );
       must(
         m.cause === "runner-refused" &&
           (m.failureNote ?? "").startsWith(`${SLEEP_NOTE_TAG} covered Sleep at`) &&
@@ -632,13 +647,23 @@ async function legXSleep(scratch: string): Promise<void> {
         `X (d): ${m.mutantCode}: not the Sleep rule's refusal at :${want.line} (${m.cause} ${m.failureNote})`,
       );
     } else {
-      must(!(m.failureNote ?? "").includes(SLEEP_NOTE_TAG), `X (d): ${m.mutantCode} carries a Sleep note`);
+      must(
+        !(m.failureNote ?? "").includes(SLEEP_NOTE_TAG),
+        `X (d): ${m.mutantCode} carries a Sleep note`,
+      );
     }
-    if (m.verdict === "killed") must(m.killingTest === "SleeperDoubles" && m.killReproduced === true, `X (d): ${m.mutantCode} killer`);
+    if (m.verdict === "killed")
+      must(
+        m.killingTest === "SleeperDoubles" && m.killReproduced === true,
+        `X (d): ${m.mutantCode} killer`,
+      );
   }
   // The negative twin: no hit on any indexed Sleep line, a passing row, survived, no note.
   const twin = hitsByMutant.get("M0002");
-  must(twin !== undefined && [...twin.values()].every((h) => h === 0), `X (d): M0002 hit a Sleep line ${JSON.stringify([...(twin ?? new Map())])}`);
+  must(
+    twin !== undefined && [...twin.values()].every((h) => h === 0),
+    `X (d): M0002 hit a Sleep line ${JSON.stringify([...(twin ?? new Map())])}`,
+  );
   // (e) the coverage document removed under every mutant: no pass survives.
   const e = await run("e", async (p) => {
     await rm(p, { force: true });

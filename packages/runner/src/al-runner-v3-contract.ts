@@ -39,6 +39,48 @@ const TARGET_ID = "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d0586";
 const TESTS_ID = "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d1586";
 const TARGET_NAME = "LethAL R586 Contract App";
 
+/**
+ * `timeout-is-cpu` (pre-commitment r6): fixed iteration counts, calibrated once on alpha.2 in this
+ * container (2026-10-21): `Burn(110000000)` alone is 3.0 s of CPU (user 2.998 s, wall 3.02 s), and
+ * at N=2 a notRun row "Test exceeded 2s timeout." at 2.04 s wall. `Burn(55000000)` is 1.49 s of CPU
+ * alone; under `taskset -c 0` beside a busy loop it took 3.17 s wall for 1.52 s of CPU and PASSED at
+ * N=2 (durationMs 3105). A wall-time stop would stop the second; a CPU-time stop does not.
+ */
+/**
+ * `sleep-is-noop` (#5605, pre-commitment r6) on one call of codeunit 50660:
+ * - `defect-present`: the call is under 1 s, every Sleep row passes with durationMs under 100, AND
+ *   `LongSleepThenAssert` passes (Sleep returned at once and advanced the AL clock);
+ * - `gone`: a Sleep test took its real time (durationMs >= 1000) or was stopped as a timeout row
+ *   (notRun, "Test exceeded ..."): upstream's proposed fix (slept time counts toward the timeout);
+ * - `diverged`: anything else, e.g. fast but the clock not advanced. Never `matches`.
+ */
+export function classifySleep(cl: {
+  readonly rows: readonly V3Row[] | undefined;
+  readonly wallMs: number;
+}): V3DefectVerdict | "diverged" {
+  if (cl.rows === undefined) return "unmeasurable";
+  const rows = cl.rows;
+  const sleeps = ["ShortSleep", "LongSleepA", "LongSleepB", "LongSleepThenAssert"].map((m) =>
+    rows.find((r) => r.method === m),
+  );
+  const present = sleeps.filter((r): r is V3Row => r !== undefined);
+  if (
+    present.some(
+      (r) => (r.durationMs ?? 0) >= 1000 || (r.notRun && /^Test exceeded/.test(r.message ?? "")),
+    )
+  )
+    return "gone";
+  if (present.length !== sleeps.length) return "unmeasurable";
+  const instant =
+    cl.wallMs < 1000 && present.every((r) => r.durationMs !== undefined && r.durationMs < 100);
+  return instant && present.every((r) => r.status === "pass" && !r.notRun)
+    ? "defect-present"
+    : "diverged";
+}
+
+export const BURN_LONG = 110_000_000;
+export const BURN_SHORT = 55_000_000;
+
 /** Probe First: its lines are what `per-test-coverage` checks (5 `if`, 6 `exit(1)`, 7 `exit(0)`). */
 const FIRST_AL = `codeunit 50601 "Probe First"
 {
@@ -67,14 +109,15 @@ ${broken ? "        NoSuchVar := 1;\n" : ""}        while true do
         exit(I);
     end;
 
-    procedure WallSpin(Ms: Integer)
+    procedure Burn(N: Integer): Integer
     var
-        Started: DateTime;
         I: Integer;
+        S: Integer;
     begin
-        Started := CurrentDateTime();
-        while CurrentDateTime() - Started < Ms do
-            I += 1;
+        // A fixed amount of CPU work, no clock read: v3's AL clock is virtual (r6).
+        for I := 1 to N do
+            S := (S + I) mod 1000;
+        exit(S);
     end;
 
     procedure ArmName(): Text
@@ -202,16 +245,31 @@ codeunit 50651 "Probe Hang"
     end;
 }
 
-codeunit 50656 "Probe Wall"
+codeunit 50656 "Probe Burn Long"
 {
     Subtype = Test;
 
     [Test]
-    procedure WallSpin3s()
+    procedure CpuBurnLong()
     var
         Logic: Codeunit "Probe Logic";
     begin
-        Logic.WallSpin(3000);
+        if Logic.Burn(${BURN_LONG}) < 0 then
+            Error('negative');
+    end;
+}
+
+codeunit 50658 "Probe Burn Short"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure CpuBurnShort()
+    var
+        Logic: Codeunit "Probe Logic";
+    begin
+        if Logic.Burn(${BURN_SHORT}) < 0 then
+            Error('negative');
     end;
 }
 
@@ -629,13 +687,12 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         `exit ${hang.exitCode} ${JSON.stringify(h ?? null)} wall ${hang.wallMs} ms`,
       ),
     );
-    // timeout-is-cpu (lane ruling 2026-10-21, a deviation from plan §8's calibrated 1.7 s CPU loop
-    // at N=3): codeunit 50656's `WallSpin3s` spins on CurrentDateTime for 3 s of WALL time.
+    // timeout-is-cpu (pre-commitment r6; r4's wall-clock spin was invalid: v3's AL clock is virtual):
     //   alone:  `<v3> test --output-json --isolation test ... --test-timeout-secs 2 --codeunit 50656`
-    //           -> it burns about 3 s of CPU: a notRun row "Test exceeded 2s timeout.";
-    //   shared: the same argv under `taskset -c 0`, beside `taskset -c 0 sh -c 'while :; do :; done'`
-    //           -> it burns about half (1.5 s of CPU) in its 3 s: a pass.
-    // A wall-time stop would stop both; a CPU-time stop separates them in both directions.
+    //           `CpuBurnLong` (BURN_LONG, 3.0 s of CPU) -> a notRun row "Test exceeded 2s timeout.";
+    //   shared: `--codeunit 50658` under `taskset -c 0`, beside `taskset -c 0 sh -c 'while :; do :; done'`
+    //           `CpuBurnShort` (BURN_SHORT, 1.5 s of CPU) -> a pass whose row durationMs is over 2000.
+    // A wall-time stop would stop the second; only a CPU-time stop gives both.
     if (env.tasksetPath === undefined) {
       facts.push(
         fact("timeout-is-cpu", "contract", "unmeasurable", "taskset available", "no taskset"),
@@ -652,26 +709,27 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         });
       let shared: Call;
       try {
-        shared = await call(["--test-timeout-secs", "2", "--codeunit", "50656"], {
-          codeunit: 50656,
+        shared = await call(["--test-timeout-secs", "2", "--codeunit", "50658"], {
+          codeunit: 50658,
           wrap: [env.tasksetPath, "-c", "0"],
         });
       } finally {
         burner.kill();
       }
-      const a = rowOf(alone, "WallSpin3s");
-      const s = rowOf(shared, "WallSpin3s");
+      const a = rowOf(alone, "CpuBurnLong");
+      const s = rowOf(shared, "CpuBurnShort");
       const ok =
         a?.notRun === true &&
         a.message === "Test exceeded 2s timeout." &&
         s?.status === "pass" &&
-        !s.notRun;
+        !s.notRun &&
+        (s.durationMs ?? 0) > 2000;
       facts.push(
         fact(
           "timeout-is-cpu",
           "contract",
           a === undefined || s === undefined ? "unmeasurable" : ok ? "matches" : "diverged",
-          "a 3 s wall spin at N=2: a timeout row alone; a pass on one core shared with a busy loop",
+          "at N=2: CpuBurnLong (3 s of CPU) alone is a timeout row; CpuBurnShort (1.5 s of CPU) on one core shared with a busy loop passes with durationMs over 2000",
           `alone ${JSON.stringify(a ?? null)} (${alone.wallMs} ms); shared ${JSON.stringify(s ?? null)} (${shared.wallMs} ms)`,
         ),
       );
@@ -738,27 +796,22 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
       codeunit: 50660,
     });
     const sleepFree = await call(["--codeunit", "50660"], { codeunit: 50660 });
-    const noop = (cl: Call): boolean | undefined => {
-      if (cl.rows === undefined) return undefined;
-      const passes = ["ShortSleep", "LongSleepA", "LongSleepB", "SleeperDoubles"].every((m) => {
-        const r = rowOf(cl, m);
-        return r?.status === "pass" && !r.notRun && r.durationMs === 0;
-      });
-      const after = /^after sleep (\d+)/.exec(rowOf(cl, "LongSleepThenAssert")?.message ?? "");
-      return cl.wallMs < 1000 && passes && after !== null && Number(after[1]) < 1000;
-    };
-    const n1 = noop(sleepN);
-    const n2 = noop(sleepFree);
+    const n1 = classifySleep(sleepN);
+    const n2 = classifySleep(sleepFree);
     facts.push(
       fact(
         "sleep-is-noop",
         "defect",
-        n1 === undefined || n2 === undefined
-          ? "unmeasurable"
-          : n1 && n2
-            ? "defect-present"
-            : "gone",
-        "codeunit 50660 with N=3 and with no flag: under 1 s of wall, Sleep tests pass in 0 ms, LongSleepThenAssert fails 'after sleep <n>', n < 1000",
+        // Upstream's proposed #5605 fix stops a long Sleep only under a timeout flag, so the
+        // N=3 call alone reading `gone` is the fix; the flag-free call may stay instant.
+        n1 === "gone" || n2 === "gone"
+          ? "gone"
+          : n1 === n2
+            ? n1
+            : n1 === "unmeasurable" || n2 === "unmeasurable"
+              ? "unmeasurable"
+              : "diverged",
+        "codeunit 50660 with N=3 and with no flag: call under 1 s, Sleep rows durationMs under 100, and LongSleepThenAssert PASSES (the AL clock advanced >= 600000 ms): a virtual clock",
         `N=3: ${sleepN.wallMs} ms ${JSON.stringify(sleepN.rows ?? null).slice(0, 250)}; no flag: ${sleepFree.wallMs} ms`,
       ),
     );
@@ -926,12 +979,20 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
 
 /** Every contract fact that is not `matches`; each refuses the session. */
 export function v3ContractRefusals(r: V3ContractResult): string[] {
-  return r.facts
-    .filter((f) => f.kind === "contract" && f.verdict !== "matches")
-    .map(
-      (f) =>
-        `[lethal] al-runner-v3 contract ${f.verdict.toUpperCase()} — ${f.fact}\n    expected: ${f.expected}\n    measured: ${f.measured}\n    Re-measure (plan §8) before changing code; the pinned build is in .gated (R586).`,
-    );
+  return (
+    r.facts
+      // A defect fact that reads neither present nor gone (r6: `diverged`) is not the defect we
+      // pre-committed to, so it refuses like a contract fact.
+      .filter(
+        (f) =>
+          (f.kind === "contract" && f.verdict !== "matches") ||
+          (f.kind === "defect" && f.verdict === "diverged"),
+      )
+      .map(
+        (f) =>
+          `[lethal] al-runner-v3 contract ${f.verdict.toUpperCase()} — ${f.fact}\n    expected: ${f.expected}\n    measured: ${f.measured}\n    Re-measure (plan §8) before changing code; the pinned build is in .gated (R586).`,
+      )
+  );
 }
 
 /** The `al-runner-v3-defect-gone` lines; they change nothing until a human re-measures. */
@@ -942,6 +1003,23 @@ export function v3DefectsGone(r: V3ContractResult): string[] {
       (f) =>
         `[lethal] al-runner-v3-defect-gone: ${f.fact}: re-measure before relying on it (measured ${f.measured})`,
     );
+}
+
+/**
+ * Every defect-fact warning a session prints (r6): the `gone` lines, plus one
+ * `al-runner-v3-defect-unmeasurable` line per defect fact that could not be measured. Neither
+ * refuses: §6 fails closed independently of the facts.
+ */
+export function v3DefectWarnings(r: V3ContractResult): string[] {
+  return [
+    ...v3DefectsGone(r),
+    ...r.facts
+      .filter((f) => f.kind === "defect" && f.verdict === "unmeasurable")
+      .map(
+        (f) =>
+          `[lethal] al-runner-v3-defect-unmeasurable: ${f.fact}: not measured on this build; no capability depends on it (measured ${f.measured})`,
+      ),
+  ];
 }
 
 /** One line per session: the contract its verdicts were produced under. */

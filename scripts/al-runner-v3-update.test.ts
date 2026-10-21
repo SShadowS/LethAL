@@ -193,7 +193,10 @@ describe("T19: the v3 update gate", () => {
 });
 
 describe("the daily edge path (edgeOnce)", () => {
-  const edge = (o: Parameters<typeof fake>[0], e: { commit?: string; heavy?: number; free?: number } = {}) => {
+  const edge = (
+    o: Parameters<typeof fake>[0],
+    e: { commit?: string; heavy?: number; free?: number } = {},
+  ) => {
     const f = fake(o);
     return {
       ...f,

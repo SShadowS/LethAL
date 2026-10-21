@@ -4,19 +4,22 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { V3Row } from "../src/al-runner-v3-backend";
 import {
   type V3ContractResult,
+  classifySleep,
   runV3ContractProbe,
   v3ContractRefusals,
+  v3DefectWarnings,
   v3DefectsGone,
 } from "../src/al-runner-v3-contract";
-import { V3_PREDEFINED_CANDIDATES } from "../src/al-runner-v3-probe";
 import {
   AlRunnerV3UngatedBuildError,
   checkGated,
   parseGated,
   sha256OfFile,
 } from "../src/al-runner-v3-pin";
+import { V3_PREDEFINED_CANDIDATES } from "../src/al-runner-v3-probe";
 import type { ArtifactIo } from "../src/artifact";
 import type { SpawnFn } from "../src/publisher";
 
@@ -137,7 +140,7 @@ function fakeV3(over: Over = {}): SpawnFn {
       row(50660, "ShortSleep", "pass"),
       row(50660, "LongSleepA", "pass"),
       row(50660, "LongSleepB", "pass"),
-      row(50660, "LongSleepThenAssert", "fail", { message: "after sleep 3" }),
+      row(50660, "LongSleepThenAssert", "pass"),
       row(50660, "SleeperDoubles", "pass"),
     ];
     const answers: Record<string, { exitCode: number; stdout: string; stderr?: string }> = {
@@ -161,10 +164,16 @@ function fakeV3(over: Over = {}): SpawnFn {
       "cu50656-n2": {
         exitCode: 7,
         stdout: doc([
-          row(50656, "WallSpin3s", "error", { notRun: true, message: "Test exceeded 2s timeout." }),
+          row(50656, "CpuBurnLong", "error", {
+            notRun: true,
+            message: "Test exceeded 2s timeout.",
+          }),
         ]),
       },
-      "cu50656-shared-n2": { exitCode: 0, stdout: doc([row(50656, "WallSpin3s", "pass")]) },
+      "cu50658-shared-n2": {
+        exitCode: 0,
+        stdout: doc([row(50658, "CpuBurnShort", "pass", { durationMs: 3105 })]),
+      },
       cu50653: {
         exitCode: 7,
         stdout: doc([
@@ -285,11 +294,31 @@ describe("§8 the contract probe", () => {
 
   test("timeout-is-cpu diverges when the shared-core run is ALSO stopped (a wall-time stop)", async () => {
     const r = await probe({
-      "cu50656-shared-n2": () => ({
+      "cu50658-shared-n2": () => ({
         exitCode: 7,
         stdout: doc([
-          row(50656, "WallSpin3s", "error", { notRun: true, message: "Test exceeded 2s timeout." }),
+          row(50658, "CpuBurnShort", "error", {
+            notRun: true,
+            message: "Test exceeded 2s timeout.",
+          }),
         ]),
+      }),
+    });
+    expect(r.facts.find((f) => f.fact === "timeout-is-cpu")?.verdict).toBe("diverged");
+  });
+
+  test("timeout-is-cpu diverges when the alone run is NOT stopped (no CPU timeout at all)", async () => {
+    const r = await probe({
+      "cu50656-n2": () => ({ exitCode: 0, stdout: doc([row(50656, "CpuBurnLong", "pass")]) }),
+    });
+    expect(r.facts.find((f) => f.fact === "timeout-is-cpu")?.verdict).toBe("diverged");
+  });
+
+  test("timeout-is-cpu diverges when the shared pass did not actually take over N of wall", async () => {
+    const r = await probe({
+      "cu50658-shared-n2": () => ({
+        exitCode: 0,
+        stdout: doc([row(50658, "CpuBurnShort", "pass", { durationMs: 1500 })]),
       }),
     });
     expect(r.facts.find((f) => f.fact === "timeout-is-cpu")?.verdict).toBe("diverged");
@@ -328,11 +357,84 @@ describe("§8 the contract probe", () => {
       "cu50660-n3": () => ({
         exitCode: 7,
         stdout: doc([
-          row(50660, "ShortSleep", "error", { notRun: true, message: "Test exceeded 3s timeout." }),
+          row(50660, "ShortSleep", "pass"),
+          row(50660, "LongSleepA", "pass"),
+          row(50660, "LongSleepB", "pass"),
+          row(50660, "LongSleepThenAssert", "error", {
+            notRun: true,
+            message: "Test exceeded 3s timeout.",
+          }),
+          row(50660, "SleeperDoubles", "pass"),
         ]),
       }),
     });
     expect(r.facts.find((f) => f.fact === "sleep-is-noop")?.verdict).toBe("gone");
+  });
+
+  test("an unmeasurable defect fact does not refuse but is warned BY NAME (r6)", async () => {
+    const none = () => ({ exitCode: 6, stdout: "" });
+    const r = await probe({ "cu50660-n3": none, cu50660: none });
+    expect(r.facts.find((f) => f.fact === "sleep-is-noop")?.verdict).toBe("unmeasurable");
+    expect(v3ContractRefusals(r).join("\n")).not.toMatch(/sleep-is-noop/);
+    expect(v3DefectWarnings(r).join("\n")).toMatch(
+      /al-runner-v3-defect-unmeasurable: sleep-is-noop/,
+    );
+    // alpha.2 as measured warns nothing.
+    expect(v3DefectWarnings(await probe())).toEqual([]);
+  });
+
+  test("sleep-is-noop diverges (and refuses) when Sleep is fast but the clock did not advance", async () => {
+    const fastNoClock = () => ({
+      exitCode: 1,
+      stdout: doc([
+        row(50660, "ShortSleep", "pass"),
+        row(50660, "LongSleepA", "pass"),
+        row(50660, "LongSleepB", "pass"),
+        row(50660, "LongSleepThenAssert", "fail", { message: "after sleep 3" }),
+        row(50660, "SleeperDoubles", "pass"),
+      ]),
+    });
+    const r = await probe({ "cu50660-n3": fastNoClock, cu50660: fastNoClock });
+    expect(r.facts.find((f) => f.fact === "sleep-is-noop")?.verdict).toBe("diverged");
+    expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — sleep-is-noop/);
+  });
+});
+
+describe("r6 classifySleep", () => {
+  const rows = (ltaStatus: string, o: Parameters<typeof row>[3] = {}) =>
+    [
+      row(50660, "ShortSleep", "pass"),
+      row(50660, "LongSleepA", "pass"),
+      row(50660, "LongSleepB", "pass"),
+      row(50660, "LongSleepThenAssert", ltaStatus, o),
+      row(50660, "SleeperDoubles", "pass"),
+    ] as unknown as V3Row[];
+  test("instant and the clock advanced: defect-present", () => {
+    expect(classifySleep({ rows: rows("pass"), wallMs: 30 })).toBe("defect-present");
+  });
+  test("a Sleep test stopped as a timeout row (upstream's proposed #5605 fix): gone", () => {
+    expect(
+      classifySleep({
+        rows: rows("error", { notRun: true, message: "Test exceeded 3s timeout.", durationMs: 0 }),
+        wallMs: 40,
+      }),
+    ).toBe("gone");
+  });
+  test("a Sleep test taking its real time: gone", () => {
+    expect(classifySleep({ rows: rows("pass", { durationMs: 600000 }), wallMs: 600100 })).toBe(
+      "gone",
+    );
+  });
+  test("instant but the clock not advanced: diverged", () => {
+    expect(classifySleep({ rows: rows("fail", { message: "after sleep 3" }), wallMs: 30 })).toBe(
+      "diverged",
+    );
+  });
+  test("a slow call with instant rows: diverged, never defect-present", () => {
+    expect(classifySleep({ rows: rows("pass"), wallMs: 5000 })).toBe("diverged");
+  });
+  test("no document: unmeasurable", () => {
+    expect(classifySleep({ rows: undefined, wallMs: 30 })).toBe("unmeasurable");
   });
 
   test("no taskset leaves timeout-is-cpu unmeasurable, which refuses (a contract fact)", async () => {

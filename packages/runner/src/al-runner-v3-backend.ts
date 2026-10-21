@@ -24,13 +24,21 @@ import {
   CONTROL_UPGRADE_FILENAME,
   emitStaticSelector,
 } from "@lethal/schemata";
+import { verdictFromRunnerTest } from "./al-runner-backend";
 import {
   AlRunnerCoverageFrameError,
   type AlRunnerCoverageIndex,
   alRunnerCoverageFromServer,
   buildAlRunnerCoverageIndex,
 } from "./al-runner-coverage";
-import { verdictFromRunnerTest } from "./al-runner-backend";
+import {
+  type V3ContractResult,
+  runV3ContractProbe,
+  v3ContractRefusals,
+  v3ContractSummary,
+  v3DefectWarnings,
+} from "./al-runner-v3-contract";
+import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
 import {
   type SleepIndex,
   type V3CoverageRead,
@@ -49,14 +57,6 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import {
-  type V3ContractResult,
-  runV3ContractProbe,
-  v3ContractRefusals,
-  v3ContractSummary,
-  v3DefectsGone,
-} from "./al-runner-v3-contract";
-import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
 import { hashAlTree } from "./baseline-snapshot";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, defaultSpawn } from "./publisher";
@@ -497,7 +497,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...(Bun.which("taskset") !== null ? { tasksetPath: Bun.which("taskset") ?? "" } : {}),
       spawn: this.spawn,
     });
-    for (const line of v3DefectsGone(this.contract)) console.warn(line);
+    for (const line of v3DefectWarnings(this.contract)) console.warn(line);
     const refusals = v3ContractRefusals(this.contract);
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return { ok: true, details: `${reported}; ${v3ContractSummary(this.contract)}` };
