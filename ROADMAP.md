@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**79 of 591 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**80 of 593 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -630,12 +630,14 @@ that ordering is the priority.
 - **R589** · Three extra BC 28.4 servers (BC on Linux) on server1 for parallel LethAL gates: bc1, bc2, bc3 · [R589.md](docs/roadmap/R589.md) · done (f17a41d9)
 - **R591** · The bcdev itests and LethAL's altool publish ignore a non-default port, so bc2 and bc3 configs would reach bc1 · [R591.md](docs/roadmap/R591.md) · done (f17a41d9)
 - **R587** · itest:alrunner split into legs (--legs groups, --parallel=N ≤ 3, exact 23-id receipt, partial exits 4) · [R587.md](docs/roadmap/R587.md) · open
+- **R593** · Iteration is slow: no shared master-corpus snapshot tool, and verify.ts always runs the whole suite · [R593.md](docs/roadmap/R593.md) · done (3d591a53)
 - **R590** · al-runner: a kill through a DROPPED dependency object (NavNCLMissingMethodException) is scored killed, where BC would run it · [R590.md](docs/roadmap/R590.md) · open, filed 2026-10-21
 - **R595** · itest:verify fails on master: its pinned gap ids predate R276's gapIdOf change · [R595.md](docs/roadmap/R595.md) · done (d7683ff3)
 - **R596** · bc-linux-setup writes no selectorIds into the sandbox-harden config, so itest:agreement refuses on bc servers · [R596.md](docs/roadmap/R596.md) · done (c881d0ba)
 - **R597** · lethal verify's test-app-version-below-resident refusal tells the user to run Sync-NAVApp, a Windows/BcContainerHelper-only fix, on the Linux bc servers too · [R597.md](docs/roadmap/R597.md) · open, filed 2026-10-21
 - **R598** · scripts/bc-linux-setup.ts takes its bc server lease in lane `code`'s name, whoever runs it · [R598.md](docs/roadmap/R598.md) · open
 - **R599** · scripts/bc-linux-setup.ts compares app versions, not contents, so a fixture rebuilt without a version bump keeps a stale build resident · [R599.md](docs/roadmap/R599.md) · open
+- **R603** · CI's Windows check job runs the unit suite serially; a parallel run there is unmeasured · [R603.md](docs/roadmap/R603.md) · open, filed 2026-10-21
 
 ---
 
