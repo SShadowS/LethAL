@@ -58,10 +58,10 @@ export const REPRODUCTION_EXPECTED: Readonly<Record<string, ReproductionFigures>
   "symbols-LETHALB/resource": { killerRowsPerKill: 2 },
   "cli-default": { killerRowsPerKill: 2, activations: 23, serverSuiteRuns: 22 },
   // R557's names legs (A1/A2 one-shot, A3/A4 --server) arrived in the merge with master after the
-  // 102821df measurement, so they are NOT YET MEASURED: the gate prints them and refuses to pass
-  // until these two figures are filled from a run.
-  "names/one-shot": { killerRowsPerKill: null },
-  "names/server": { killerRowsPerKill: null },
+  // 102821df measurement. Their 2 is PREDICTED (pre-commitment addendum a40097fc), not measured: the
+  // store's method and `killing_test` both come from LethAL's own test reference.
+  "names/one-shot": { killerRowsPerKill: 2 },
+  "names/server": { killerRowsPerKill: 2 },
 };
 
 /** Every figure a run measured against a `null` in the table, for the end-of-gate failure. */
