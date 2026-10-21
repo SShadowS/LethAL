@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**75 of 584 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**77 of 588 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -625,9 +625,13 @@ that ordering is the priority.
 - **R579** · A #if block holding only #pragma lines counts as an object wrapper, so 21 Power BI Report embeddings files turn al-runner coverage off (wrapperHoldsObject vs isTopLevelObject) · [R579.md](docs/roadmap/R579.md) · open, filed 2026-10-11
 - **R580** · A #if-wrapped CODE-FREE object (enum, interface, permission set, control add-in, dotnet, enumextension) turns al-runner coverage off for its whole project, though it has no coverage identity: 42 files in 12 BC.History projects · [R580.md](docs/roadmap/R580.md) · open, filed 2026-10-11
 - **R581** · An al-runner --server baseline that fails before running any test reports "returned: <no tests>" and hides al-runner's own reason ("BC version selection failed ... minimum 28.6") · [R581.md](docs/roadmap/R581.md) · open, filed 2026-10-11
+- **R583** · al-runner 069cbf32 fails itest:alrunner's --server + resource-selector leg: NavNclResourceNotFoundException for 'active-mutant.txt' · [R583.md](docs/roadmap/R583.md) · done (3d826909)
+- **R584** · Backwards compatibility for user apps below runtime 17 (after LethAL's release) · [R584.md](docs/roadmap/R584.md) · open, filed 2026-10-18
 - **R589** · Three extra BC 28.4 servers (BC on Linux) on server1 for parallel LethAL gates: bc1, bc2, bc3 · [R589.md](docs/roadmap/R589.md) · done (f17a41d9)
 - **R591** · The bcdev itests and LethAL's altool publish ignore a non-default port, so bc2 and bc3 configs would reach bc1 · [R591.md](docs/roadmap/R591.md) · done (f17a41d9)
+- **R590** · al-runner: a kill through a DROPPED dependency object (NavNCLMissingMethodException) is scored killed, where BC would run it · [R590.md](docs/roadmap/R590.md) · open, filed 2026-10-21
 - **R595** · itest:verify fails on master: its pinned gap ids predate R276's gapIdOf change · [R595.md](docs/roadmap/R595.md) · open, filed 2026-10-21
+- **R596** · bc-linux-setup writes no selectorIds into the sandbox-harden config, so itest:agreement refuses on bc servers · [R596.md](docs/roadmap/R596.md) · done (c881d0ba)
 - **R597** · lethal verify's test-app-version-below-resident refusal tells the user to run Sync-NAVApp, a Windows/BcContainerHelper-only fix, on the Linux bc servers too · [R597.md](docs/roadmap/R597.md) · open, filed 2026-10-21
 
 ---
