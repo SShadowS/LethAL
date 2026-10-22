@@ -287,6 +287,9 @@ export interface RunRow {
   /** R565: the run's `dependencySourceSha256`, written after generation (`setDependencySourceSha256`).
    *  `null` when not recorded (before R565, or the run died before generation): no rule-1 carry. */
   readonly dependencySourceSha256: string | null;
+  /** R601: `runs.resource_key`, the server tier the run ran on (`quarantineResourceKey`). `null`
+   *  on a run with no tier identity (al-runner, or no server fields): never equal to anything. */
+  readonly resourceKey: string | null;
   /** R557 (I1): the run carries the R557 test-name mark (`runs.al_runner_names`). `false` on a row
    *  recorded before the column, and on every run that is not an R557+ al-runner session. */
   readonly alRunnerNames: boolean;
@@ -943,8 +946,15 @@ export class ResultsStore {
   /** R389: the guard's answer changed during the run. In ONE transaction, the run's test-app
    *  identity and every baseline snapshot it recorded get `suffix`, so no later session carries or
    *  reuses from it. A revoked owner whose snapshot somehow kept the old key is excluded by
-   *  `findBaselineSnapshot`'s R496 condition that the run's hash equals the snapshot's. */
-  revokeTestAppHash(runId: number, suffix: string): void {
+   *  `findBaselineSnapshot`'s R496 condition that the run's hash equals the snapshot's.
+   *  R601 (review I2): `chain` is a session that resumed a pending prior. In the same transaction,
+   *  every run of `chain.projectPath` still recorded as exactly `chain.pendingHash` is revoked too,
+   *  with its snapshots, so the run it resumed cannot lend again after the answer was seen to flip. */
+  revokeTestAppHash(
+    runId: number,
+    suffix: string,
+    chain?: { readonly projectPath: string; readonly pendingHash: string },
+  ): void {
     this.db.transaction(() => {
       const changed = this.db
         .query(
@@ -956,6 +966,17 @@ export class ResultsStore {
       this.db
         .query("UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ? WHERE run_id = ?")
         .run(suffix, runId);
+      if (chain === undefined) return;
+      this.db
+        .query(
+          "UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ?1 WHERE run_id IN (SELECT id FROM runs WHERE project_path = ?2 AND test_app_hash = ?3)",
+        )
+        .run(suffix, chain.projectPath, chain.pendingHash);
+      this.db
+        .query(
+          "UPDATE runs SET test_app_hash = test_app_hash || ?1 WHERE project_path = ?2 AND test_app_hash = ?3",
+        )
+        .run(suffix, chain.projectPath, chain.pendingHash);
     })();
   }
 
@@ -1213,9 +1234,10 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build, resource_key FROM runs WHERE id = ?",
       )
       .get(runId) as {
+      resource_key: string | null;
       dependency_source_sha256: string | null;
       al_runner_names: number | null;
       runner_build: string | null;
@@ -1255,6 +1277,7 @@ export class ResultsStore {
       dependencySourceSha256: row.dependency_source_sha256,
       alRunnerNames: row.al_runner_names === 1,
       runnerBuild: row.runner_build,
+      resourceKey: row.resource_key,
     };
   }
 

@@ -106,7 +106,9 @@ import {
   closedWorldGuard,
   digestedAppOfPackage,
   guardedTestAppHash,
+  isClosedIdentity,
   isClosedWorld,
+  resumableTestApp,
   sameClosedWorld,
 } from "./closed-world";
 import {
@@ -3878,24 +3880,49 @@ function assertSameTestApp(
   row: RunRow | null,
   flag: string,
   testAppHash: string | undefined,
+  pending: PendingResumeCheck,
 ): void {
   if (row === null) throw new Error(`${flag}: the run it found is no longer in this database`);
   if (
     row.testAppProven &&
-    row.testAppHash !== null &&
-    testAppHash !== undefined &&
-    row.testAppHash === testAppHash
+    resumableTestApp(row.testAppHash, testAppHash, row.resourceKey, pending.resourceKey)
   ) {
     return;
   }
+  // R601 (review I3): only a proven pending prior against a proven session gets the R601 words.
+  const note =
+    testAppHash !== undefined && row.testAppProven && row.testAppHash?.endsWith(PENDING_SUFFIX)
+      ? ` ${pendingRefusal(row, testAppHash, pending)}`
+      : "";
   throw new Error(
     `${flag}: run ${row.id} was measured against test app ${describeTestApp(row.testAppHash)}${recordedTestAppNote(
       row.testAppHash,
       row.testAppProven,
     )}, and this session's test app is ${describeTestApp(testAppHash)}${
       testAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-    }. ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495). Drop the resume flag to run from scratch.`,
+    }.${note} ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495${note === "" ? "" : ", R601"}). Drop the resume flag to run from scratch.`,
   );
+}
+
+/** R601: what the pending-prior rule compares besides the identity strings. */
+interface PendingResumeCheck {
+  /** This session's server tier (`quarantineResourceKey`), `undefined` when it has none. */
+  readonly resourceKey: string | undefined;
+  /** Why this session is open-world, when it is (`testAppIdentity`). */
+  readonly openWorldWhy: string | undefined;
+}
+
+/** R601: why a pending prior is not resumed by this session, in one or two sentences. */
+function pendingRefusal(row: RunRow, session: string, p: PendingResumeCheck): string {
+  const head = `Run ${row.id} ended before its post-execution closed-world check, so its closed-world answer was never confirmed`;
+  if (!isClosedIdentity(session)) {
+    return `${head}, and this session's closed-world guard does not answer closed now, because: ${p.openWorldWhy ?? "unknown"}. So that answer cannot be confirmed.`;
+  }
+  const server =
+    row.testAppHash === `${session}${PENDING_SUFFIX}`
+      ? ` It ran on server ${row.resourceKey ?? "unknown"}, and this session runs on server ${p.resourceKey ?? "unknown"}.`
+      : "";
+  return `${head}.${server} Such a run is resumed only by a session on the same server whose test app and closed-world answer, asked now, are the same, and this session's differ.`;
 }
 
 /** R495: why an identity lends nothing, said the same way on every path. */
@@ -3948,12 +3975,14 @@ function resolveResume(
   testAppAfterHook = false,
   /** R586: `runMayLend` step 1's session side; absent lends no v3 run (unit callers). */
   lendingSession?: LendingSession,
+  /** R601: the pending-prior rule's server key and open-world reason. */
+  pending: PendingResumeCheck = { resourceKey: undefined, openWorldWhy: undefined },
 ):
   | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
   | undefined {
   if (cfg.resume === undefined) return undefined;
   const sameTestApp = (row: RunRow, flag: string): void => {
-    if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash);
+    if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
   // a throw), then the branch's own checks (each throws), then R557's mark and renamed baseline
@@ -3998,6 +4027,8 @@ function resolveResume(
   let priorHidden: CarryHidden | null;
   // R557: why the resumed run's carry is refused (`lend`), or `undefined`.
   let carryRefused: string | undefined;
+  // R601: the resumed run's recorded test-app identity, for the `resume-reusing-run` clause.
+  let priorTestAppHash: string | null;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -4073,6 +4104,7 @@ function resolveResume(
     if (priorHidden === null)
       throw new Error(`--resume: run ${found} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(foundRow);
+    priorTestAppHash = foundRow.testAppHash;
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -4134,6 +4166,7 @@ function resolveResume(
     if (priorHidden === null)
       throw new Error(`--resume-run ${id} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(row);
+    priorTestAppHash = row.testAppHash;
     priorRunId = id;
   }
 
@@ -4175,6 +4208,10 @@ function resolveResume(
     type: "warning",
     code: "resume-reusing-run",
     message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192).${
+      testAppHash !== undefined && priorTestAppHash === `${testAppHash}${PENDING_SUFFIX}`
+        ? ` Run ${priorRunId} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`
+        : ""
+    }${
       index.nonCarryableRows > 0
         ? ` ${index.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`
         : ""
@@ -5773,6 +5810,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     testDigestParts,
     testDigestDependencies,
     closedWorld: pendingClosedWorld,
+    openWorldWhy,
   } = await testAppIdentity(
     cfg,
     publishedRead,
@@ -5898,6 +5936,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     testPageRefusedNames,
     envPublishes !== undefined,
     lendingSession,
+    { resourceKey, openWorldWhy },
   );
 
   const runId = cfg.store.createRun({
@@ -6513,7 +6552,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const reason =
         historyTestApp === undefined
           ? "this session's test app is not proven: a dependency changed while it waited for the lease, or could not be read"
-          : prior?.testAppProven !== true || prior.testAppHash !== historyTestApp.hash
+          : prior?.testAppProven !== true ||
+              !resumableTestApp(
+                prior.testAppHash,
+                historyTestApp.hash,
+                prior.resourceKey,
+                resourceKey,
+              )
             ? `that run's test app was ${TEST_APP_UNPROVEN}, or another one`
             : prior.testAppDeps === null
               ? "it recorded no dependency fingerprint (it ran before R496, or its fingerprint could not be taken)"
@@ -7724,7 +7769,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         cfg.store.setTestDigests(runId, pendingClosedWorld.digests, pendingClosedWorld.parts);
       }
     } else {
-      if (historyTestApp !== undefined) cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX);
+      if (historyTestApp !== undefined) {
+        // R601 (review I2): a session that resumed a pending prior revokes that chain with itself.
+        const pendingHash = `${historyTestApp.hash}${PENDING_SUFFIX}`;
+        const resumedPending =
+          resolvedResume !== undefined &&
+          cfg.store.getRun(resolvedResume.runId)?.testAppHash === pendingHash;
+        cfg.store.revokeTestAppHash(
+          runId,
+          REVOKED_SUFFIX,
+          resumedPending ? { projectPath: cfg.projectDir, pendingHash } : undefined,
+        );
+      }
       emit({
         type: "warning",
         code: "closed-world-changed",
@@ -9108,6 +9164,8 @@ async function testAppIdentity(
   closedWorld?: PendingClosedWorld;
   /** R496 F9: the full dependency fingerprint the digests were taken over. */
   testDigestDependencies?: string;
+  /** R601 (review I3): why this session is open-world, when it is (no `closedWorld`). */
+  openWorldWhy?: string;
 }> {
   const { testAppHash, sources } = await reportPublishedTestApp(
     cfg,
@@ -9119,7 +9177,7 @@ async function testAppIdentity(
   );
   const none = (why: string) => {
     warnNoTestDigests(emit, why);
-    return { testAppHash };
+    return { testAppHash, openWorldWhy: why };
   };
   // An env-tool session publishes `envTool.publishApps`, PREBUILT .app files, only after the lease
   // is taken, which is after the read above (`afterLeaseAcquiredFor` in cli.ts calls
@@ -9127,7 +9185,11 @@ async function testAppIdentity(
   // read nor the disk is known to be the body the server runs. R373: when the hook will run, the
   // digests are taken after it (`deferredTestDigests`), which warns if it records none.
   if (cfg.afterLeaseAcquired !== undefined) {
-    if (deferred) return { testAppHash };
+    if (deferred)
+      return {
+        testAppHash,
+        openWorldWhy: "an env-tool session's test app is digested open-world (R389)",
+      };
     return none(
       "this run publishes its test apps itself (envTool.publishApps, prebuilt .app files) after the published test app is read, so neither that read nor the source on disk is known to be the body the server runs",
     );
@@ -9161,7 +9223,7 @@ async function testAppIdentity(
     testDigestDependencies: got.dependencies,
     ...(c !== undefined
       ? { closedWorld: { guard, digests: c.digests, parts: c.parts, recheck: ask } }
-      : {}),
+      : { openWorldWhy: guard.why }),
   };
 }
 

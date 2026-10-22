@@ -157,5 +157,35 @@ export class ClosedWorldChangedError extends Error {
  *  owner, a run killed before confirmation included, never supplies a verdict or a baseline. */
 export const PENDING_SUFFIX = "|pending";
 
+/** The closed tag `guardedTestAppHash` ends a closed identity with. */
+const CLOSED_TAG = /\|closed-world:public(\+internal)?$/;
+
+/** Whether a session identity is closed-world (the guard answered closed at its start). */
+export const isClosedIdentity = (session: string): boolean => CLOSED_TAG.test(session);
+
+/**
+ * R601: a resume may carry from `recorded` when it is this session's identity, or this session's
+ * CLOSED identity still pending, recorded on the same server: the prior run ended before its
+ * post-execution re-ask, this session's guard gave the same closed answer at its start, and this
+ * session's own re-ask confirms or revokes everything it carries. An undefined or NULL server key
+ * never matches (review I1).
+ */
+export function resumableTestApp(
+  recorded: string | null,
+  session: string | undefined,
+  recordedServer: string | null,
+  sessionServer: string | undefined,
+): boolean {
+  if (recorded === null || session === undefined) return false;
+  if (recorded === session) return true;
+  return (
+    isClosedIdentity(session) &&
+    recorded === `${session}${PENDING_SUFFIX}` &&
+    recordedServer !== null &&
+    sessionServer !== undefined &&
+    recordedServer === sessionServer
+  );
+}
+
 /** The suffix a run's recorded identity gets when its post-execution check failed: matches nothing. */
 export const REVOKED_SUFFIX = "|closed-world:revoked";

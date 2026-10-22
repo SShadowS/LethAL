@@ -8,8 +8,9 @@
  * (`--skip-known-survivors`), `--resume`, `--resume-run` and baseline-snapshot reuse never lend
  * there. This gate fills a SCRATCH store with one real run of `fixtures/sandbox-app` (L0), then
  * lends from it on the positive half (L1 history, R1/R2/R3 resume) and seeds clones of it that one
- * field makes untrustworthy on the negative half (N0 control, N1 v3, N5 revoked; RN3, RN1, RN2,
- * RN4 refused before the lease). Seeds are written by `lend-seed.ts`, whose offline test pins that
+ * field makes untrustworthy on the negative half (N0 control, N1 v3, N5 revoked; RN3, RN1d, RN2,
+ * RN4 refused before the lease), then (R601, RP) resumes a crashed closed-world run's pending
+ * state on the same server. Seeds are written by `lend-seed.ts`, whose offline test pins that
  * each override changes only its own field.
  *
  * Every per-mutant comparison goes BY IDENTITY KEY through `compareMutants` against the committed
@@ -591,16 +592,21 @@ async function main(): Promise<void> {
       `--resume-run ${KV} ran on backend al-runner-v3, but this session uses bcdev — verdicts are not interchangeable across backends`,
     );
     sublegs.push("RN3");
-    // A crashed run's state: `--resume` must pick KP (KV is another backend) and refuse it.
-    const KP = seedRunFrom(store, A, { hashSuffix: PENDING_SUFFIX });
+    // R601 RN1d: a crashed run's state whose closed answer is NOT this session's (the tag
+    // swapped). `--resume` must pick KPd (KV is another backend), and the test-app check before
+    // the lease must refuse it in R601's words.
+    const swapped = H.endsWith(`${CLOSED_WORLD}+internal`)
+      ? H.slice(0, -"+internal".length)
+      : `${H}+internal`;
+    const KPd = seedRunFrom(store, A, { testAppHash: swapped, hashSuffix: PENDING_SUFFIX });
     await assertRefused(
-      "RN1",
+      "RN1d",
       store,
-      () => session(store, root, "RN1", { resume: "last" }),
-      `--resume: run ${KP} was measured against test app ${H}${PENDING_SUFFIX}`,
-      "none of its verdicts is carried (R247, R495)",
+      () => session(store, root, "RN1d", { resume: "last" }),
+      `--resume: run ${KPd} was measured against test app ${swapped}${PENDING_SUFFIX}, and this session's test app is ${H}. Run ${KPd} ended before its post-execution closed-world check, so its closed-world answer was never confirmed. Such a run is resumed only by a session on the same server whose test app and closed-world answer, asked now, are the same, and this session's differ.`,
+      "none of its verdicts is carried (R247, R495, R601)",
     );
-    sublegs.push("RN1");
+    sublegs.push("RN1d");
     const KR = seedRunFrom(store, A, { revoke: true });
     await assertRefused(
       "RN2",
@@ -618,6 +624,75 @@ async function main(): Promise<void> {
       `--resume-run ${A}: run ${A} already finished; nothing to resume.`,
     );
     sublegs.push("RN4");
+
+    // ---- RP (R601): a crashed closed-world run's state (K's partial shape, `H|pending`, on A's
+    // server), the newest unfinished run. `--resume` picks KP, this session's guard gives the same
+    // closed answer, it carries, executes the rest, and its own re-ask after execution confirms
+    // its run. KP itself stays pending.
+    const KP = seedRunFrom(store, A, {
+      keepKeys: new Set([...KEPT, ...keySet(LEND_FIGURES.keptAsError)]),
+      errorKeys: keySet(LEND_FIGURES.keptAsError),
+      permuteCodes: true,
+      sentinel: { key: sentinelKey, durationMs: LEND_FIGURES.sentinel.durationMs },
+      hashSuffix: PENDING_SUFFIX,
+    });
+    const rp = await session(store, root, "RP", { resume: "last" });
+    printTable("RP", rp.report);
+    assertCodes("RP", rp.events, ["resume-reusing-run", "resume-baseline-reused"]);
+    const rpReusing = message(rp.events, "resume-reusing-run");
+    assert.ok(
+      rpReusing.includes(
+        `reusing run ${KP} — ${LEND_FIGURES.resumeSnapshot.carryable} mutant verdict(s) may be carried`,
+      ) &&
+        rpReusing.includes(
+          ` ${LEND_FIGURES.resumeSnapshot.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`,
+        ) &&
+        rpReusing.includes(
+          ` Run ${KP} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`,
+        ),
+      `RP: resume-reusing-run must pick KP (${KP}), name 9 carryable and 1 error row, and say R601's clause; got ${rpReusing}`,
+    );
+    assert.ok(
+      message(rp.events, "resume-baseline-reused").includes(`same as run ${n5.runId}'s batch 0,`),
+      `RP: the reused snapshot must be N5's run's (${n5.runId}), the newest confirmed owner`,
+    );
+    assert.deepEqual(
+      carriedKeys(rp.report),
+      carriedInPartBatch(KEPT),
+      "RP: exactly KEPT minus its no-coverage rows carried, by key",
+    );
+    assertFrozen("RP", baseline, rp.report);
+    assert.equal(
+      rp.report.groupedCalls,
+      LEND_FIGURES.resumeSnapshot.groupedCalls,
+      "RP: groupedCalls",
+    );
+    assert.deepEqual(
+      rp.report.resumedFrom,
+      { runId: KP, carriedMutants: LEND_FIGURES.resumeSnapshot.carried, skippedStranded: 0 },
+      "RP: resumedFrom",
+    );
+    const rpSentinel = rp.report.mutants.find((m) => keyOf(m) === sentinelKey);
+    assert.ok(
+      rp.events.some(
+        (e) =>
+          e.type === "mutant-carried" &&
+          rpSentinel !== undefined &&
+          e.mutant.mutantId === rpSentinel.mutantCode &&
+          e.batchIndex === rpSentinel.batchIndex &&
+          e.fromRunId === KP &&
+          e.priorDurationMs === LEND_FIGURES.sentinel.durationMs,
+      ),
+      `RP: the sentinel row must be carried from KP by key, with priorDurationMs ${LEND_FIGURES.sentinel.durationMs}`,
+    );
+    // The resumed run's own live re-ask confirmed it: exactly H, never H|pending.
+    assertIdentity("RP", store, rp.runId, identity);
+    assert.equal(
+      store.getRun(KP)?.testAppHash,
+      `${H}${PENDING_SUFFIX}`,
+      "RP: KP itself is never rewritten",
+    );
+    sublegs.push("RP");
   } finally {
     store.close();
     await rm(root, { recursive: true, force: true });
