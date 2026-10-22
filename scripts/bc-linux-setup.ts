@@ -48,7 +48,6 @@
  * in-process `dev/apps` POST needs no child process at all. The per-server config files hold the
  * login, which is why they must be git-ignored.
  */
-import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -59,11 +58,43 @@ import { appInputsOfPackage } from "../packages/runner/src/digest-inputs.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
 import {
+  type AppItem,
+  type AppManifest,
+  type Conn,
+  type Decided,
+  HOST,
+  SERVERS,
+  type ServerName,
+  type ServerOps,
+  actAll,
+  contentDigest,
+  decideAll,
+  fixtureManifests,
+  headerPackageId,
+  manifest,
+  publishBytes,
+  realOps,
+  refusals,
+  sha256Of,
+} from "./bc-app-content.ts";
+import {
   SYMBOL_CACHE_ROOT,
   UNFILLED,
   fillSymbolCache,
   lookupSymbolCache,
 } from "./bc-symbol-cache.ts";
+
+// Moved down into bc-app-content.ts (R599); re-exported so no importer's line changes.
+export {
+  type AppManifest,
+  type Conn,
+  HOST,
+  SERVERS,
+  type ServerName,
+  manifest,
+  publishBytes,
+  sha256Of,
+};
 
 const REPO = join(import.meta.dir, "..");
 export const SECRET_PATH = "/coord/secrets/bc-linux.env";
@@ -76,15 +107,7 @@ const CONTROL_VERSION = "1.0.0.23";
 const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");
 const BC_DEV_MCP = "/home/dev/src/bc-dev-mcp";
-export const HOST = "http://192.168.2.157";
 const HEARTBEAT_MS = 60_000;
-
-export const SERVERS = {
-  bc1: { odata: 7048, dev: 7049, api: 7052 },
-  bc2: { odata: 7148, dev: 7149, api: 7152 },
-  bc3: { odata: 7248, dev: 7249, api: 7252 },
-} as const;
-export type ServerName = keyof typeof SERVERS;
 
 /**
  * The fixtures whose config directory a BC gate reads (`itestConfigPath(<dir>)` in
@@ -119,8 +142,14 @@ export interface PublishStep {
   readonly target: string;
   /** `/define:` symbols for the target's compile (fixtures/README.md says which). */
   readonly defines?: readonly string[];
-  /** Apps that depend on `target`, compiled against the target package the server holds. */
+  /** Apps that depend on `target`, compiled against the LOCAL target build (R599, F3). */
   readonly dependents: readonly string[];
+  /**
+   * R599 (I3): a gate deploys this target itself as an instrumented, minted build, so setup KEEPS
+   * a resident build above app.json when that build is instrumented. Unmarked (`sandbox-probes`):
+   * a resident build above app.json is refused.
+   */
+  readonly gateDeploys?: boolean;
 }
 
 /**
@@ -138,12 +167,21 @@ export interface PublishStep {
  */
 export const PUBLISH_PLAN: readonly PublishStep[] = [
   { target: "sandbox-probes", dependents: [] },
-  { target: "sandbox-app", dependents: ["sandbox-tests"] },
-  { target: "sandbox-data", dependents: ["sandbox-data-tests"] },
-  { target: "sandbox-hang", dependents: ["sandbox-hang-tests"] },
-  { target: "sandbox-harden", dependents: ["sandbox-harden-tests", "sandbox-harden-answers"] },
-  { target: "sandbox-wrapped", defines: ["WRAPDEF"], dependents: ["sandbox-wrapped-tests"] },
-  { target: "sandbox-names", dependents: ["sandbox-names-tests"] },
+  { target: "sandbox-app", dependents: ["sandbox-tests"], gateDeploys: true },
+  { target: "sandbox-data", dependents: ["sandbox-data-tests"], gateDeploys: true },
+  { target: "sandbox-hang", dependents: ["sandbox-hang-tests"], gateDeploys: true },
+  {
+    target: "sandbox-harden",
+    dependents: ["sandbox-harden-tests", "sandbox-harden-answers"],
+    gateDeploys: true,
+  },
+  {
+    target: "sandbox-wrapped",
+    defines: ["WRAPDEF"],
+    dependents: ["sandbox-wrapped-tests"],
+    gateDeploys: true,
+  },
+  { target: "sandbox-names", dependents: ["sandbox-names-tests"], gateDeploys: true },
 ];
 
 /**
@@ -485,16 +523,6 @@ export function krakenLeaseFor(
 // ---------------------------------------------------------------------------------------------
 // (d) publishing over the dev endpoint
 
-export interface Conn {
-  readonly server: ServerName;
-  /** `Basic ...`, built in memory from the secret file. */
-  readonly authorization: string;
-}
-
-function devBase(c: Conn): string {
-  return `${HOST}:${SERVERS[c.server].dev}/BC`;
-}
-
 /** The package the server holds for publisher/name, or `null` when it holds none. */
 export async function residentPackage(
   c: Conn,
@@ -519,32 +547,15 @@ async function residentVersion(c: Conn, publisher: string, name: string): Promis
   return pkg === null ? null : readAppIdentity(pkg).version;
 }
 
-export async function publishBytes(c: Conn, fileName: string, bytes: Uint8Array): Promise<void> {
-  const params = new URLSearchParams({
-    tenant: "default",
-    SchemaUpdateMode: "forcesync",
-    DependencyPublishingOption: "default",
-  });
-  const form = new FormData();
-  // Wire shape from bc-dev-mcp (measured on Cronus28 BC 28.4): one multipart part named after the file.
-  form.append(fileName, new Blob([bytes]), fileName);
-  const res = await bcFetch(`${devBase(c)}/dev/apps?${params}`, {
-    method: "POST",
-    headers: { authorization: c.authorization },
-    body: form,
-  });
-  if (!res.ok) {
-    const text = (await res.text()).slice(0, 2000);
-    throw new Error(`${c.server}: publishing ${fileName} failed (HTTP ${res.status}): ${text}`);
-  }
-}
-
 export type AppOutcome = "published" | "skipped";
 
 /**
  * Publishes `bytes` unless the server already holds the app at the same or a higher version (a
  * gate run leaves the target at a higher minted version, and a downgrade would be refused). After
  * a publish, the server must report exactly the local version.
+ *
+ * R599: the fixture path no longer uses this (it decides by content, `bc-app-content.ts`).
+ * `ensureContinia`'s act pass and `scripts/r594/cdo-publish.ts` still do.
  */
 export async function ensureApp(
   c: Conn,
@@ -564,22 +575,6 @@ export async function ensureApp(
     );
   }
   return { outcome: "published", version: after };
-}
-
-export interface AppManifest {
-  readonly id?: string;
-  readonly name: string;
-  readonly publisher: string;
-  readonly version: string;
-  readonly dependencies?: readonly {
-    readonly id?: string;
-    readonly name: string;
-    readonly publisher: string;
-  }[];
-}
-
-export function manifest(dir: string): AppManifest {
-  return JSON.parse(readFileSync(join(dir, "app.json"), "utf8")) as AppManifest;
 }
 
 /** Downloads System plus every Microsoft dependency of `dir` from the server into `cache`. */
@@ -620,64 +615,56 @@ export async function alcCompile(
   }
 }
 
-/** A skip says what it did NOT check: a same-version build with other contents is kept. */
-function skipNote(resident: string, local: string): string {
-  return `the server holds ${resident} (app.json ${local}): same or higher version, contents not compared`;
+/** The compile line: version, raw sha256 and the header's per-compile id (the future packageId). */
+export function compiledLine(bytes: Buffer, note = ""): string {
+  const id = readAppIdentity(bytes);
+  return `  compiled  ${id.name} ${id.version}${note} sha256 ${sha256Of(bytes)} digest ${contentDigest(bytes).slice(0, 12)} header packageId ${headerPackageId(bytes)}`;
 }
 
 /**
- * Target first, then each dependent compiled against the target package the SERVER now holds.
- * `symbols` is the shared, read-only build dir (`bc-symbol-cache.ts`): the target compiles against
- * it as it is, and nothing is written into it.
+ * Compiles one `PUBLISH_PLAN` step: the target against the shared, read-only symbol dir
+ * (`bc-symbol-cache.ts`, nothing is written into it), then each dependent against the LOCAL target
+ * build (F3: a test app's digest does not depend on which target build it was compiled against),
+ * in its own private cache. Nothing is published here.
  */
-async function ensureStep(
+async function compileStep(
   c: Conn,
   alc: string,
   step: PublishStep,
   symbols: string,
   log: string[],
-): Promise<void> {
+): Promise<AppItem[]> {
   const targetDir = join(REPO, "fixtures", step.target);
   const build = join(STATE_ROOT, c.server, "build", step.target);
   rmSync(build, { recursive: true, force: true });
   mkdirSync(build, { recursive: true });
-
   const t = manifest(targetDir);
-  const tBefore = await residentVersion(c, t.publisher, t.name);
-  if (tBefore !== null && compareAppVersions(tBefore, t.version) >= 0) {
-    log.push(`  skipped   ${t.name}: ${skipNote(tBefore, t.version)}`);
-  } else {
-    const out = join(build, "target.app");
-    await alcCompile(alc, targetDir, symbols, out, step.defines);
-    const r = await ensureApp(c, readFileSync(out), t.name);
-    log.push(`  ${r.outcome.padEnd(9)} ${t.name} ${r.version}`);
-  }
-
+  const out = join(build, "target.app");
+  await alcCompile(alc, targetDir, symbols, out, step.defines);
+  const target = readFileSync(out);
+  log.push(compiledLine(target));
+  const items: AppItem[] = [
+    { dir: step.target, local: target, role: "target", gateDeploys: step.gateDeploys === true },
+  ];
   for (const dependent of step.dependents) {
     const depDir = join(REPO, "fixtures", dependent);
-    const s = manifest(depDir);
-    const sBefore = await residentVersion(c, s.publisher, s.name);
-    if (sBefore !== null && compareAppVersions(sBefore, s.version) >= 0) {
-      log.push(`  skipped   ${s.name}: ${skipNote(sBefore, s.version)}`);
-      continue;
-    }
     const cache = join(build, `${dependent}-symbols`);
     mkdirSync(cache, { recursive: true });
     await downloadSymbols(c, depDir, cache);
-    const resident = await residentPackage(c, t.publisher, t.name);
-    if (resident === null) {
-      throw new Error(`${c.server}: ${t.name} is not on the server after its publish`);
-    }
-    writeFileSync(join(cache, `${t.publisher}_${t.name}.app`), resident);
-    const out = join(build, `${dependent}.app`);
-    await alcCompile(alc, depDir, cache, out);
-    const r = await ensureApp(c, readFileSync(out), s.name);
-    log.push(`  ${r.outcome.padEnd(9)} ${s.name} ${r.version}`);
+    writeFileSync(join(cache, `${t.publisher}_${t.name}.app`), target);
+    const dOut = join(build, `${dependent}.app`);
+    await alcCompile(alc, depDir, cache, dOut);
+    const bytes = readFileSync(dOut);
+    log.push(compiledLine(bytes));
+    items.push({
+      dir: dependent,
+      local: bytes,
+      role: "dependent",
+      gateDeploys: false,
+      targetDir: step.target,
+    });
   }
-}
-
-export function sha256Of(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
+  return items;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -727,10 +714,12 @@ export interface SetupArgs {
   readonly acceptBuild?: string;
   /** Only write the configs and launch files: no server call, no lease. */
   readonly writeConfigOnly?: boolean;
+  /** R599: decide every app and print it, under the lease; publish nothing, write no config. */
+  readonly predict?: boolean;
 }
 
 const USAGE =
-  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run] [--with-continia [--accept-build <version>]] [--held-lease <token>]\n" +
+  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all [--lane <lane>] [--dry-run | --predict] [--with-continia [--accept-build <version>]] [--held-lease <token>]\n" +
   "       bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all --write-config-only";
 
 export function parseArgs(argv: readonly string[]): SetupArgs {
@@ -741,9 +730,11 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
   let heldLease: string | undefined;
   let acceptBuild: string | undefined;
   let writeConfigOnly = false;
+  let predict = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") dryRun = true;
+    else if (a === "--predict") predict = true;
     else if (a === "--write-config-only") writeConfigOnly = true;
     else if (a === "--with-continia") withContinia = true;
     else if (a === "--server") server = argv[++i];
@@ -762,8 +753,12 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
   }
   if (acceptBuild !== undefined && !withContinia) throw new Error(USAGE);
   // The config-only mode reaches no server, so a flag about the server run is a mistake.
-  if (writeConfigOnly && (dryRun || withContinia || heldLease !== undefined || lane !== undefined))
+  if (
+    writeConfigOnly &&
+    (dryRun || predict || withContinia || heldLease !== undefined || lane !== undefined)
+  )
     throw new Error(`--write-config-only takes only --server\n${USAGE}`);
+  if (predict && dryRun) throw new Error(`--predict and --dry-run exclude each other\n${USAGE}`);
   if (
     writeConfigOnly &&
     (server === "bc1" || server === "bc2" || server === "bc3" || server === "all")
@@ -780,6 +775,7 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
     withContinia,
     ...(heldLease !== undefined ? { heldLease } : {}),
     ...(acceptBuild !== undefined ? { acceptBuild } : {}),
+    ...(predict ? { predict } : {}),
   };
   if (server === "bc1" || server === "bc2" || server === "bc3")
     return { servers: [server], ...rest };
@@ -910,28 +906,47 @@ export function continiaDependencyProblems(
  * file published, skipped when the server holds exactly that version, and refused when it holds a
  * different one (a third-party app is never replaced here).
  */
-async function ensureContinia(
-  c: Conn,
+/** What the Continia step does on the server (R599 F5: a fake counts it in tests). */
+export interface ContiniaOps {
+  /** The lenient read `residentVersion` always used (M6: any failure reads as absent). */
+  residentVersion(publisher: string, name: string): Promise<string | null>;
+  publish(fileName: string, bytes: Buffer): Promise<void>;
+}
+
+export function realContiniaOps(c: Conn): ContiniaOps {
+  return {
+    residentVersion: (publisher, name) => residentVersion(c, publisher, name),
+    publish: (fileName, bytes) => publishBytes(c, fileName, bytes),
+  };
+}
+
+/**
+ * The DECIDE half of the Continia step (R599 F5): every read and check, no publish. Returns the
+ * files to publish, or `ok: false` when anything stops it; its rules are unchanged (an equal
+ * version skips, a different one refuses).
+ */
+export async function decideContinia(
+  ops: ContiniaOps,
+  files: readonly { readonly bytes: Buffer }[],
   summary: string[],
   acceptBuild: string | undefined,
-): Promise<boolean> {
+): Promise<{ ok: boolean; toPublish: Buffer[] }> {
   const want = acceptBuild ?? PINNED_MICROSOFT_VERSION;
   const resident = new Map<string, string | null>();
   let ok = true;
   for (const name of PINNED_MICROSOFT) {
-    const v = await residentVersion(c, "Microsoft", name);
+    const v = await ops.residentVersion("Microsoft", name);
     resident.set(name, v);
     const same = v === want;
     summary.push(`  P1        Microsoft ${name}: ${v ?? "absent"}${same ? "" : " (DIFFERS)"}`);
     ok &&= same;
   }
-  resident.set("System", await residentVersion(c, "Microsoft", "System"));
+  resident.set("System", await ops.residentVersion("Microsoft", "System"));
   summary.push(`  P1        Microsoft System: ${resident.get("System") ?? "absent"}`);
   if (!ok) {
     summary.push(`  STOPPED   the Microsoft apps are not all ${want}: no Continia app published`);
-    return false;
+    return { ok: false, toPublish: [] };
   }
-  const files = CONTINIA_APPS.map((app) => ({ app, bytes: readContinia(app) }));
   const pinned = new Map(
     files.map((f) => [readAppIdentity(f.bytes).name, readAppIdentity(f.bytes).version]),
   );
@@ -939,26 +954,46 @@ async function ensureContinia(
   if (problems.length > 0) {
     for (const p of problems) summary.push(`  DEPENDS   ${p}`);
     summary.push("  STOPPED   a Continia app would be refused: none published");
-    return false;
+    return { ok: false, toPublish: [] };
   }
   summary.push("  P1        every Continia app's declared dependencies are satisfied");
+  const toPublish: Buffer[] = [];
   for (const { bytes } of files) {
-    const sha = sha256Of(bytes);
     const local = readAppIdentity(bytes);
-    const before = await residentVersion(c, local.publisher, local.name);
+    const before = await ops.residentVersion(local.publisher, local.name);
     if (before === local.version) {
       summary.push(`  skipped   ${local.name} ${before} (resident, equal)`);
       continue;
     }
     if (before !== null) {
-      throw new Error(
-        `${c.server}: ${local.name} is resident at ${before}, not the pinned ${local.version}; not replacing it`,
+      summary.push(
+        `  refuse    ${local.name} is resident at ${before}, not the pinned ${local.version}; not replacing it`,
       );
+      ok = false;
+      continue;
     }
-    const r = await ensureApp(c, bytes, local.name);
-    summary.push(`  ${r.outcome.padEnd(9)} ${local.name} ${r.version} (Dev scope, sha256 ${sha})`);
+    summary.push(`  publish   ${local.name} ${local.version} (Dev scope, sha256 ${sha256Of(bytes)})`);
+    toPublish.push(bytes);
   }
-  return true;
+  return { ok, toPublish };
+}
+
+/** The ACT half: publishes each file, then the server must report exactly its version. */
+export async function actContinia(
+  ops: ContiniaOps,
+  toPublish: readonly Buffer[],
+  summary: string[],
+): Promise<void> {
+  for (const bytes of toPublish) {
+    const local = readAppIdentity(bytes);
+    await ops.publish(`${local.publisher}_${local.name}_${local.version}.app`, bytes);
+    const after = await ops.residentVersion(local.publisher, local.name);
+    if (after !== local.version)
+      throw new Error(
+        `${local.name} was published as ${local.version} but the server reports ${after ?? "nothing"}`,
+      );
+    summary.push(`  published ${local.name} ${after} (Dev scope, sha256 ${sha256Of(bytes)})`);
+  }
 }
 
 /**
@@ -975,6 +1010,41 @@ export interface RunDeps {
   readonly cacheRoot: string;
   readonly mcpCommand: () => string[];
   readonly env: Record<string, string | undefined>;
+  /** Every config and launch write goes through here (a test counts them). */
+  readonly writeConfig: (path: string, config: object) => void;
+  /** One Microsoft package for the shared symbol cache. */
+  readonly downloadSymbol: (c: Conn, name: string) => Promise<Buffer | null>;
+  readonly serverOps: (c: Conn) => ServerOps;
+  readonly continiaOps: (c: Conn) => ContiniaOps;
+  readonly continiaFiles: () => { readonly bytes: Buffer }[];
+  /** The pinned LethAL Control build, sha256-checked. */
+  readonly controlBytes: () => Buffer;
+  /** Compiles one `PUBLISH_PLAN` step; publishes nothing. */
+  readonly compile: (c: Conn, step: PublishStep, symbols: string, log: string[]) => Promise<AppItem[]>;
+  readonly fixtures: () => ReadonlyMap<string, AppManifest>;
+  readonly doctor: (configPath: string, projectDir: string, testsDir: string) => Promise<boolean>;
+}
+
+function pinnedControl(): Buffer {
+  const control = readFileSync(CONTROL_APP);
+  const sha = sha256Of(control);
+  if (sha !== CONTROL_SHA256) {
+    throw new Error(
+      `${CONTROL_APP}: sha256 ${sha}, expected ${CONTROL_SHA256}; refusing to publish it`,
+    );
+  }
+  return control;
+}
+
+async function realCompile(
+  c: Conn,
+  step: PublishStep,
+  symbols: string,
+  log: string[],
+): Promise<AppItem[]> {
+  const tools = await defaultAlToolPaths();
+  if (tools === undefined) throw new Error("no alc found under the AL Language extension");
+  return compileStep(c, tools.alcPath, step, symbols, log);
 }
 
 export const REAL_DEPS: RunDeps = {
@@ -990,6 +1060,15 @@ export const REAL_DEPS: RunDeps = {
   cacheRoot: SYMBOL_CACHE_ROOT,
   mcpCommand: bcDevMcpCommand,
   env: process.env,
+  writeConfig: (path, config) => writeConfig(path, config, gitIgnores),
+  downloadSymbol: (c, name) => residentPackage(c, "Microsoft", name),
+  serverOps: realOps,
+  continiaOps: realContiniaOps,
+  continiaFiles: () => CONTINIA_APPS.map((app) => ({ bytes: readContinia(app) })),
+  controlBytes: pinnedControl,
+  compile: realCompile,
+  fixtures: fixtureManifests,
+  doctor,
 };
 
 function configTargets(repo: string, server: ServerName) {
@@ -1022,9 +1101,9 @@ function writeServerConfigs(
     packageCachePath,
   };
   for (const { fixture, path, launch } of configTargets(deps.repo, server)) {
-    writeConfig(path, buildConfig(server, login, paths, fixture.configDir), deps.isIgnored);
+    deps.writeConfig(path, buildConfig(server, login, paths, fixture.configDir));
     mkdirSync(dirname(launch), { recursive: true });
-    writeConfig(launch, buildLaunch(server), deps.isIgnored);
+    deps.writeConfig(launch, buildLaunch(server));
     summary.push(`  wrote     ${path}`);
     summary.push(`  wrote     ${launch}`);
   }
@@ -1086,51 +1165,62 @@ async function setupServer(
     return true;
   }
 
-  const control = readFileSync(CONTROL_APP);
-  const sha = sha256Of(control);
-  if (sha !== CONTROL_SHA256) {
-    throw new Error(
-      `${CONTROL_APP}: sha256 ${sha}, expected ${CONTROL_SHA256}; refusing to publish it`,
-    );
-  }
-  const tools = await defaultAlToolPaths();
-  if (tools === undefined) throw new Error("no alc found under the AL Language extension");
-
+  const control = deps.controlBytes();
   const conn = deps.connect(server, login);
+  const log = (s: string) => summary.push(s);
   return await withLease(server, deps.lease(lane, args.heldLease), async () => {
-    // The shared Microsoft symbol cache first, so the configs can name it.
+    // The shared Microsoft symbol cache first, so the configs can name it. `--predict` fills it
+    // too (ruling (b)): a read from the server into the write-once cache, not a change to either.
     const cache = await fillSymbolCache({
       root: deps.cacheRoot,
       server,
       names: symbolNames(),
-      download: (name) => residentPackage(conn, "Microsoft", name),
+      download: (name) => deps.downloadSymbol(conn, name),
     });
     summary.push(
       `  symbols   ${cache.dir} (${cache.outcome === "filled" ? "downloaded and sealed" : "already complete, verified"}; ${cache.downloads} download${cache.downloads === 1 ? "" : "s"})`,
     );
-    const symbols = cache.dir;
-    writeServerConfigs(deps, server, login, symbols, summary);
-    // (d)
-    const c = await ensureApp(conn, control, "LethAL Control");
-    summary.push(
-      c.outcome === "skipped"
-        ? `  skipped   LethAL Control: ${skipNote(c.version, CONTROL_VERSION)}`
-        : `  published LethAL Control ${c.version}`,
-    );
-    // (d2) before the fixtures, so a P1 stop leaves the fixtures as they were.
-    if (args.withContinia && !(await ensureContinia(conn, summary, args.acceptBuild))) return false;
-    let ok = true;
+    if (args.predict !== true) writeServerConfigs(deps, server, login, cache.dir, summary);
+
+    // DECIDE every app (M4): compile all, read what the server holds, print each decision.
+    const items: AppItem[] = [
+      { dir: "lethal-control", local: control, role: "control", gateDeploys: false },
+    ];
+    let compiled = true;
     for (const step of PUBLISH_PLAN) {
       try {
-        await ensureStep(conn, tools.alcPath, step, symbols, summary);
+        items.push(...(await deps.compile(conn, step, cache.dir, summary)));
       } catch (err) {
-        ok = false;
+        compiled = false;
         summary.push(`  FAILED    ${step.target}: ${errText(err)}`);
       }
     }
+    const cops = deps.continiaOps(conn);
+    const continia = args.withContinia
+      ? await decideContinia(cops, deps.continiaFiles(), summary, args.acceptBuild)
+      : { ok: true, toPublish: [] };
+    const ops = deps.serverOps(conn);
+    const decided: Decided[] = await decideAll(items, ops, "setup", deps.fixtures(), log);
+    const refused = refusals(decided);
+    if (!compiled || refused.length > 0 || !continia.ok) {
+      summary.push(
+        `  STOPPED   ${refused.length} app(s) refused${compiled ? "" : ", a compile failed"}${continia.ok ? "" : ", the Continia step stopped"}: NOTHING was published`,
+      );
+      return false;
+    }
+    if (args.predict === true) {
+      summary.push("  predicted: nothing published, no config or launch file written, no doctor");
+      return true;
+    }
+    // ACT: control, then Continia (before the fixtures, as before), then each step's apps.
+    const [controlDecided, ...fixtureDecided] = decided;
+    await actAll(controlDecided === undefined ? [] : [controlDecided], ops, log);
+    await actContinia(cops, continia.toPublish, summary);
+    await actAll(fixtureDecided, ops, log);
     // (e)
+    let ok = true;
     for (const { fixture, path } of configs) {
-      const pass = await doctor(
+      const pass = await deps.doctor(
         path,
         join(REPO, "fixtures", fixture.target),
         join(REPO, "fixtures", fixture.tests),
