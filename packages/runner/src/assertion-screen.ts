@@ -38,7 +38,8 @@
  *     slice: unstripped, al-runner flagged 51 of 51 (`vacuous`) where bcdev flagged 3 (`partial`).
  *     R553 reads past ONE leading `...Exception: ` on the al-runner backend only
  *     (`screenMessageOf`); after it the 51 al-runner messages are byte-equal to bcdev's and the same
- *     three are flagged.
+ *     three are flagged. al-runner v3 (Rust) does NOT prefix: R657 measured it writing BC's own
+ *     message (alpha.2 and edge 57f1e4f98, one-shot and serve), so v3 reads on bcdev's rule.
  *
  * THE ONE NON-LOCALISING SIGNAL ANYONE HAS FOUND. R101(f) measured al-runner emitting
  * `InvalidOperationException: out-of-scope: <api> - <category> - see docs/scope.md#<anchor>` when its
@@ -107,7 +108,8 @@ export const AL_RUNNER_EXCEPTION_PREFIX = /^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*Excep
  * The text R121's rule reads. bcdev: `killMessageOf`, unchanged, whatever the text starts with (a
  * bcdev text CAN carry a .NET type name). al-runner: minus `AL_RUNNER_EXCEPTION_PREFIX`. Keyed on
  * the backend's identity (`BackendCapabilities.kind`), never on `authoritative` and never on the
- * text. Reads only; the stored `killingTestFailure` is never rewritten.
+ * text. Reads only; the stored `killingTestFailure` is never rewritten. al-runner-v3 is passed as
+ * "bcdev" on purpose (R657): its message carries no `<Type>: ` prefix, so there is nothing to strip.
  */
 export function screenMessageOf(
   failure: string | undefined,
