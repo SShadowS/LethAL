@@ -12,11 +12,16 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeV3Rows } from "./al-runner-v3-backend";
-import type { AlRunnerPredefinedProbe } from "./preprocessor-symbols";
 import { type SpawnFn, defaultSpawn } from "./publisher";
 
+/** What the probe MEASURED v3 to predefine: sorted, only `V3_PREDEFINED_CANDIDATES` can appear.
+ *  (Was `preprocessor-symbols.ts`' `AlRunnerPredefinedProbe`, shared with the retired v2 probe.) */
+export interface V3PredefinedProbe {
+  readonly symbols: readonly string[];
+}
+
 /** A probe app's `app.json`. Moved here from `al-runner-canary.ts` by R654 S1: the v3 probes use
- *  it, and the .NET canary and probes import it from here until they are retired. */
+ *  it. */
 export function baseAppJson(overrides: {
   id: string;
   name: string;
@@ -145,7 +150,7 @@ export async function probeV3PredefinedSymbols(a: {
   readonly bcVersion: string;
   readonly cacheDir?: string;
   readonly spawn?: SpawnFn;
-}): Promise<AlRunnerPredefinedProbe> {
+}): Promise<V3PredefinedProbe> {
   const root = await mkdtemp(join(tmpdir(), "lethal-r586-predefined-"));
   try {
     const src = join(root, "src");

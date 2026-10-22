@@ -2,20 +2,15 @@ import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import { CARRIER_KINDS, IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry, ReachGrain } from "@lethal/schemata";
-import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import {
-  AL_RUNNER_EXCEPTION_PREFIX,
   ASSERTION_SCREEN_DIAGNOSIS,
   ASSERTION_SCREEN_DISCRIMINATION_NOTES,
-  ASSERTION_SCREEN_VACUOUS_AL_RUNNER_NOTE,
   type AssertionScreenDiscrimination,
   killMessageOf,
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
-  screenMessageOf,
 } from "./assertion-screen";
 import type { BackendCapabilities, CoverageMode, TestMethodRef } from "./backend";
-import { isAlRunnerV2, isBcdev } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import {
   EQUIVALENCE_MARKS_FILENAME,
@@ -1003,64 +998,6 @@ export interface ExecutionContext {
    *  reader needs to judge how much of the score this context actually accounts for. */
   readonly verdictCount: number;
   /**
-   * R129: the BC artifact build these verdicts were executed against, when the path ANNOUNCED one.
-   *
-   * Present only on the al-runner path, and only when a run's output carried the runner's own
-   * `[bc]` line. That is the one path which CHOOSES a BC runtime for itself: bcdev executes against
-   * whichever container the config names, which the report already identifies. Absent is "the path
-   * did not say", never a guess — and absent on a CARRIED verdict too, whose BC build belongs to the
-   * run it came from and is that run's report to state.
-   *
-   * Worth capturing even though the selection is currently deterministic given the binary: 2.1.1's
-   * own `--help` documents a DIFFERENT default rule ("the latest version present in the artifacts
-   * dir") from the one its runtime announces ("the exact build this binary was compiled against").
-   * If a release ever makes the help text true, selection becomes machine-state-dependent, and two
-   * differing runs that recorded nothing would be indistinguishable afterwards.
-   */
-  readonly bcBuild?: string;
-  /** The runner's own line the `bcBuild` above was read from, verbatim — so a reader who distrusts
-   *  the parse can check it, and a reworded announcement is visible rather than silent. */
-  readonly bcBuildAnnouncement?: string;
-  /**
-   * R147: the Microsoft platform-app directory these verdicts were executed against, when the
-   * session PINNED one at start rather than letting al-runner re-resolve it per invocation.
-   *
-   * Present on the same terms as `bcBuild`: the al-runner path only, directly-measured entries only,
-   * never a carried verdict. It answers a question `bcBuild` does not — al-runner resolves the
-   * ENGINE at the binary's build and the PLATFORM APPS at the project's version prefix, and these
-   * are two different builds (28.1.x versus 28.0.x, measured). `bcBuild` names the first.
-   *
-   * It is also what makes a resumed report honest. `sessionFingerprint` deliberately does NOT cover
-   * the pin — widening it would break every `--resume` the moment Microsoft publishes, which is
-   * worse than the problem — so a resumed report can hold verdicts produced against two different
-   * platform-app builds. Carried entries never receive this field, so the seam is visible instead of
-   * hidden.
-   *
-   * R242: absent on a `--server` session (the server and resource legs of `itest:alrunner`). The
-   * daemon starts with `packagesDir` alone and never receives the pin, so recording it there would
-   * name a directory the run never searched.
-   */
-  readonly platformAppsDir?: string;
-  /**
-   * R558: the al-runner test selector THIS session's one-shot runs used, chosen once by R551's
-   * probe: `"exact"` (`--test X --test-exact X`) or `"substring-with-excludes"` (R488's `--test X
-   * --exclude-test <sibling>...`). Every worker is forced onto the same one, or the session refuses,
-   * so one value describes every directly-measured verdict of the session.
-   *
-   * Present on the same terms as `platformAppsDir`: the al-runner path only, directly-measured
-   * entries only, never a carried verdict (whose selector belongs to the run it came from). Absent
-   * on `--server`, where the probe is not-applicable (a one-shot run with `selectorMode: "resource"`
-   * DOES probe, and records it), on bcdev, and on the zero-count entry of a run that scored nothing.
-   *
-   * On `--resume`, a batch whose baseline was reused (`resume-baseline-reused`, R192) took its
-   * baseline verdicts and coverage from the earlier run that warning names, which may have used the
-   * other selector. Like `platformAppsDir`, this field states this session's own runs only.
-   */
-  readonly testSelector?: "exact" | "substring-with-excludes";
-  /** R558: the probe's reason, verbatim, when `testSelector` is `"substring-with-excludes"`. Absent
-   *  with `"exact"`, which has no reason to give. */
-  readonly testSelectorReason?: string;
-  /**
    * R586: the al-runner-v3 build THIS session's directly measured verdicts ran on, its `--version`
    * line (`alrunner 3.0.0-alpha.2 (91253f2d6)`). Absent on every other backend and on carried
    * entries, whose build belongs to the run they came from.
@@ -1466,10 +1403,6 @@ export interface SessionReport {
      * `STRANDED_SKIP_INTERPRETATION` for what a non-zero value means to a reader.
      */
     readonly skippedStranded: number;
-    /** R557: why nothing of the run was carried, when that is a refusal rather than a run with no
-     *  reusable verdict (an al-runner run without the R557 test-name mark, or one whose baseline
-     *  holds renamed errors). Absent otherwise. */
-    readonly carryRefused?: string;
   };
   /**
    * Wall-clock cost of this run, split into the phases that scale differently — the whole point
@@ -1784,17 +1717,6 @@ export interface SessionReport {
     readonly reason: string;
   };
   /**
-   * R7/R8: set only on an al-runner session that actually ran the startup canary
-   * (`packages/runner/src/al-runner-canary.ts`, attached via `cli.ts`'s `withAlRunnerCanary`) —
-   * absent on every bcdev session and on the al-runner no-`alRunnerPath` fallback path, where
-   * nothing was measured. Persisting the measured verdict here (not just a `console.warn` at
-   * session start) is what makes it survive into a `--out` JSON report or reach a CI that
-   * discards stderr; `renderConsole` also repeats it at the END of the printed report for the
-   * same reason — a warning seen once, before the mutant table, is easy to have already
-   * scrolled past by the time a reader gets to the score.
-   */
-  readonly alRunnerCanary?: AlRunnerCanaryResult;
-  /**
    * R26: set on every session that ran the permission canary — an authoritative (bcdev) session,
    * where the fenced `RunMutant` path is the thing being characterised. Absent on al-runner and on
    * every in-memory-backend unit test, which have no fenced path and so nothing to measure.
@@ -1802,8 +1724,8 @@ export interface SessionReport {
    * Persisting it here (not just a `console.warn` after the lease is acquired) is what makes the
    * verdict survive into a `--out` JSON report or reach a CI that discards stderr — and it is what
    * lets two runs of the same project on two different servers be compared honestly, since
-   * `"mocked"` and `"not-mocked"` produce legitimately different scores for the same code. As with
-   * `alRunnerCanary`, `renderConsole` also repeats it AFTER the score: a warning printed before a
+   * `"mocked"` and `"not-mocked"` produce legitimately different scores for the same code.
+   * `renderConsole` also repeats it AFTER the score: a warning printed before a
    * single mutant ran has scrolled well off screen by the time a reader reaches the number it
    * qualifies.
    *
@@ -2345,21 +2267,14 @@ function measuredExecutionContext(
         "not separately measured by LethAL the way the fenced path was under R57 (R586)",
     };
   }
-  return isBcdev(caps.kind)
-    ? {
-        guiAllowed: false,
-        clientType: "ODataV4",
-        basis:
-          "measured on the fenced RunMutant path (R57): every mutant executes in a " +
-          "GuiAllowed=No, ClientType=ODataV4 session",
-      }
-    : {
-        guiAllowed: false,
-        clientType: "al-runner CLI",
-        basis:
-          "al-runner executes headlessly by construction (no client session to prompt from); " +
-          "not separately measured by LethAL the way the fenced path was under R57",
-      };
+  // R654: bcdev is the only other backend (the .NET al-runner's "al-runner CLI" arm is gone).
+  return {
+    guiAllowed: false,
+    clientType: "ODataV4",
+    basis:
+      "measured on the fenced RunMutant path (R57): every mutant executes in a " +
+      "GuiAllowed=No, ClientType=ODataV4 session",
+  };
 }
 
 /**
@@ -2381,15 +2296,6 @@ function buildExecutionContexts(
   outcomes: readonly SessionOutcome[],
   caps: BackendCapabilities,
   resumedFrom: { readonly runId: number } | undefined,
-  // R129 — see `ExecutionContext.bcBuild`. Attached only to non-carried entries on a
-  // non-authoritative (al-runner) backend, which is the only path that announces one.
-  alRunnerBcBuild: { readonly build: string; readonly announcement: string } | undefined,
-  // R147 — see `ExecutionContext.platformAppsDir`. Gated exactly as `alRunnerBcBuild` is.
-  alRunnerPlatformAppsDir: string | undefined,
-  // R558 — see `ExecutionContext.testSelector`. Gated exactly as the two above.
-  alRunnerTestSelector:
-    | { readonly selector: "exact" | "substring-with-excludes"; readonly reason?: string }
-    | undefined,
   // R586 — see `ExecutionContext.runnerBuild`. On a v3 backend only, directly measured entries.
   runnerBuild?: { readonly version: string; readonly binarySha256: string },
 ): ExecutionContext[] {
@@ -2405,30 +2311,12 @@ function buildExecutionContexts(
   if (groups.size === 0) {
     return [{ runner: "fenced", ...measuredExecutionContext("fenced", caps), verdictCount: 0 }];
   }
-  // R129: only a directly-measured entry on the announcing path gets the build. A carried verdict
-  // was produced by a DIFFERENT run against whatever that run selected, and stamping this run's
-  // observation onto it would be a provenance claim about a session this one never made.
+  // R129: only a directly-measured entry gets the build. A carried verdict was produced by a
+  // DIFFERENT run, and stamping this run's observation onto it would be a provenance claim about a
+  // session this one never made.
   const bcFields = {
     ...(runnerBuild !== undefined && caps.kind === "al-runner-v3"
       ? { runnerBuild: runnerBuild.version, binarySha256: runnerBuild.binarySha256 }
-      : {}),
-    // R586: the three are v2 observations (its `[bc]` line, R147 pin, R551 probe).
-    ...(alRunnerBcBuild !== undefined && isAlRunnerV2(caps.kind)
-      ? { bcBuild: alRunnerBcBuild.build, bcBuildAnnouncement: alRunnerBcBuild.announcement }
-      : {}),
-    // R147, same two gates and for the same reason: a carried verdict's platform apps belong to the
-    // run it came from, and bcdev has no such concept at all.
-    ...(alRunnerPlatformAppsDir !== undefined && isAlRunnerV2(caps.kind)
-      ? { platformAppsDir: alRunnerPlatformAppsDir }
-      : {}),
-    // R558, same two gates: a carried verdict's selector belongs to the run it came from.
-    ...(alRunnerTestSelector !== undefined && isAlRunnerV2(caps.kind)
-      ? {
-          testSelector: alRunnerTestSelector.selector,
-          ...(alRunnerTestSelector.reason !== undefined
-            ? { testSelectorReason: alRunnerTestSelector.reason }
-            : {}),
-        }
       : {}),
   };
   return [...groups.values()].map((g) => {
@@ -2963,26 +2851,14 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     (m) => m.verdict === "killed" || m.verdict === "timeout-killed",
   );
   const killsWithText = screenedKills.filter((m) => m.killingTestFailure !== undefined);
-  // R553: keyed on the backend's declared identity, never on `authoritative`: only a backend that
-  // says it is al-runner has its `{Type}Exception: ` prefix read past. al-runner-v3 takes bcdev's
-  // rule ON PURPOSE (R657): v3 (Rust) writes BC's own message with no `<Type>: ` prefix, measured on
-  // alpha.2 and edge 57f1e4f98, one-shot and serve. The al-runner rule would strip nothing on v3 and
-  // would put the backend-blame note on every `vacuous` v3 screen.
-  const screenBackend = input.caps.kind === "al-runner" ? "al-runner" : "bcdev";
+  // One rule for every backend (`killMessageOf`): al-runner-v3 writes BC's own message with no
+  // `<Type>: ` prefix (R657). R654 removed R553's al-runner arm with the .NET al-runner.
   const flaggedKills = killsWithText.filter(
-    (m) => !looksLikeAssertionFailure(screenMessageOf(m.killingTestFailure, screenBackend)),
+    (m) => !looksLikeAssertionFailure(killMessageOf(m.killingTestFailure)),
   );
   const runnerRefusals = flaggedKills.filter((m) =>
-    looksLikeRunnerRefusal(screenMessageOf(m.killingTestFailure, screenBackend)),
+    looksLikeRunnerRefusal(killMessageOf(m.killingTestFailure)),
   );
-  // R553 (I3): over `killed` only, so a timeout kill's own text cannot pick the backend note.
-  const unprefixed =
-    screenBackend === "al-runner" &&
-    killsWithText.some(
-      (m) =>
-        m.verdict === "killed" &&
-        !AL_RUNNER_EXCEPTION_PREFIX.test(killMessageOf(m.killingTestFailure)),
-    );
   if (flaggedKills.length > 0) caveats.push("kills-without-assertion");
   const discrimination: AssertionScreenDiscrimination =
     killsWithText.length === 0
@@ -3002,10 +2878,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           flagged: flaggedKills.length,
           flaggedMutants: refsOf(flaggedKills),
           discrimination,
-          discriminationNote:
-            discrimination === "vacuous" && unprefixed
-              ? ASSERTION_SCREEN_VACUOUS_AL_RUNNER_NOTE
-              : ASSERTION_SCREEN_DISCRIMINATION_NOTES[discrimination],
+          discriminationNote: ASSERTION_SCREEN_DISCRIMINATION_NOTES[discrimination],
           runnerRefusals: runnerRefusals.length,
           runnerRefusalMutants: refsOf(runnerRefusals),
           diagnosis: ASSERTION_SCREEN_DIAGNOSIS,
@@ -3098,9 +2971,6 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.outcomes,
     input.caps,
     input.resumedFrom !== undefined ? { runId: input.resumedFrom.runId } : undefined,
-    input.alRunnerBcBuild,
-    input.alRunnerPlatformAppsDir,
-    input.alRunnerTestSelector,
     statics.runnerBuild,
   );
 
@@ -3621,11 +3491,9 @@ export function renderConsole(r: SessionReport): string {
   if (r.resumedFrom !== undefined) {
     lines.push(
       `RESUMED: ${r.resumedFrom.carriedMutants} verdict(s) carried from run ${r.resumedFrom.runId} without re-executing. They were measured over the same source (identity-matched) and the same scope, but by a different published artifact in an earlier session.${
-        r.resumedFrom.carryRefused !== undefined
-          ? ` Nothing was carried: ${r.resumedFrom.carryRefused}. This run measured everything itself.`
-          : r.resumedFrom.carriedMutants === 0
-            ? " Nothing was actually carried — the prior run had no reusable verdict, so this run measured everything itself."
-            : ""
+        r.resumedFrom.carriedMutants === 0
+          ? " Nothing was actually carried — the prior run had no reusable verdict, so this run measured everything itself."
+          : ""
       }${
         // R53: stated separately from the carried count, because it is the opposite kind of fact —
         // these mutants have NO verdict from either run and must not be read as covered.
@@ -3659,17 +3527,6 @@ export function renderConsole(r: SessionReport): string {
     lines.push(
       `INTERACTIVE EXECUTION (client-services): ${interactive.verdictCount} verdict(s) here come from the GuiAllowed=Yes, ClientType=${interactive.clientType} path (R69 Phase 2) instead — ${interactive.basisText}. This is NOT the fenced branch above: under GuiAllowed=Yes an UNHANDLED Confirm RAISES rather than returning its default, so a mutant inside a Confirm branch can genuinely reach a different verdict here than it would fenced — a disagreement between the two paths on such a mutant is not necessarily a bug in either measurement.`,
     );
-  }
-  // R129: which BC RUNTIME produced these verdicts, printed once, beside the path that chose it.
-  // Nothing else in the report answers it on the al-runner path — the gate's first line names the
-  // al-runner BINARY, which is a different question.
-  {
-    const announced = r.validity.executionContexts.find((c) => c.bcBuild !== undefined);
-    if (announced?.bcBuild !== undefined) {
-      lines.push(
-        `BC RUNTIME: al-runner executed these tests against BC ${announced.bcBuild}, which it selected itself and announced: "${announced.bcBuildAnnouncement ?? ""}"`,
-      );
-    }
   }
   // The score's own limits, immediately after it. A reader quotes `score: 15.7%` long before
   // correlating four separate qualifier fields, so the qualification has to arrive with it.
@@ -3771,20 +3628,10 @@ export function renderConsole(r: SessionReport): string {
       `COVERAGE FALLBACK: ${r.untargetedTriggerCount} table trigger mutant(s) coverage could place nowhere — each was run against every green test rather than against an attributed set.`,
     );
   }
-  // R7/R8: repeat the al-runner canary's measured verdict at the END too — `announceAlRunnerCanary`
-  // (cli.ts) already prints it once via console.warn at the very start of the session, before a
-  // single mutant has run, which is exactly the "warning that scrolls past on a long run" pattern
-  // that let the original static claim go unnoticed for a session's whole duration. The end of a
-  // long run — right after the score — is where a reader actually is.
-  // R586: the canary is the v2 al-runner's (absent on v3 anyway).
-  if (r.backend === "al-runner" && r.alRunnerCanary !== undefined) {
-    lines.push("");
-    lines.push(...alRunnerCanaryWarnings(r.alRunnerCanary));
-  }
-  // R26: same reasoning, same lesson — the permission canary is announced once, right after the
-  // lease is acquired and before the first mutant runs, which on a real session is many minutes
-  // and a full mutant table before the score a reader is actually looking at. Repeat it here.
-  // Unlike the al-runner canary above this is NOT gated on `authoritative`: the permission mock is
+  // R26: the permission canary is announced once, right after the lease is acquired and before
+  // the first mutant runs, which on a real session is many minutes and a full mutant table before
+  // the score a reader is actually looking at. Repeat it here, after the score.
+  // This is NOT gated on `authoritative`: the permission mock is
   // a property of the FENCED (bcdev) path, so an authoritative report is exactly where it belongs
   // — presence of the field alone decides, and nothing else ever sets it.
   if (r.permissionCanary !== undefined) {

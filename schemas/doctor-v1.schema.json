@@ -53,7 +53,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["create-mode", "al-runner-only"],
+          "enum": ["create-mode"],
           "description": "The branchable half."
         },
         "note": {

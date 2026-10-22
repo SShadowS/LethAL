@@ -9,7 +9,6 @@ import { normalizeForComparison } from "../itest/mutant-equality";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import { CAMPAIGN_COMPARE_SCHEMA_VERSION, compareCampaignStage } from "../src/campaign-subcommands";
 import {
-  DOCTOR_AL_RUNNER_ONLY_CAVEAT,
   DOCTOR_CAVEAT_KINDS,
   DOCTOR_CREATE_MODE_CAVEAT,
   DOCTOR_NOT_CHECKED_TOKENS,
@@ -478,7 +477,9 @@ describe("published JSON Schemas (R152)", () => {
     };
     expect(conformsTo(doctorSchema, doctorJson(report))).toEqual([]);
     expect(conformsTo(doctorSchema, doctorJson(report, DOCTOR_CREATE_MODE_CAVEAT))).toEqual([]);
-    expect(conformsTo(doctorSchema, doctorJson(report, DOCTOR_AL_RUNNER_ONLY_CAVEAT))).toEqual([]);
+    // R654: doctor v1 narrowed in place; the retired al-runner-only caveat is no longer a kind.
+    const retired = { ...doctorJson(report), caveat: { kind: "al-runner-only", note: "x" } };
+    expect(conformsTo(doctorSchema, retired)).not.toEqual([]);
   });
 
   test("the validator FAILS a document it should fail — otherwise every test above is vacuous", () => {
@@ -1095,30 +1096,44 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(conformsTo(reportSchema, { ...without, coverageMode: "None" })).not.toEqual([]);
   });
 
-  test("R558: executionContexts[].testSelector is additive under v3: without it, with either value, and nothing else", () => {
-    // Optional and nested, so R157's rule keeps v3: the committed reports were deliberately NOT
-    // regenerated (they are bcdev reports, where the field can never appear).
+  // R654 (plan r1 I3): report v3 was narrowed in place, not bumped. Sound because every field it
+  // lost was optional and written only by the retired .NET al-runner, so no committed (bcdev)
+  // report carries one: the gift-card report still validates, and a report with one is refused.
+  test("R654: the narrowed v3 accepts the gift-card report and refuses each retired v2 field", () => {
     const raw = readFileSync(
       join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
       "utf8",
     );
-    expect(raw).not.toContain("testSelector");
-    const without = JSON.parse(raw) as {
+    for (const gone of ["alRunnerCanary", "testSelector", "platformAppsDir", "carryRefused"]) {
+      expect(raw, gone).not.toContain(gone);
+    }
+    const doc = JSON.parse(raw) as {
       validity: { executionContexts: Record<string, unknown>[] };
+      resumedFrom?: Record<string, unknown>;
     };
-    expect(without.validity.executionContexts.length).toBeGreaterThan(0);
-    expect(conformsTo(reportSchema, without)).toEqual([]);
-    const withSelector = (selector: string, reason?: string) => {
-      const doc = JSON.parse(raw) as typeof without;
-      for (const c of doc.validity.executionContexts) {
-        c.testSelector = selector;
-        if (reason !== undefined) c.testSelectorReason = reason;
-      }
-      return doc;
+    expect(conformsTo(reportSchema, doc)).toEqual([]);
+    expect(
+      conformsTo(reportSchema, {
+        ...doc,
+        alRunnerCanary: {
+          asserterror: "defect-not-reproduced",
+          tableGlobalVar: "defect-not-reproduced",
+          transactionRollback: "defect-not-reproduced",
+        },
+      }),
+    ).not.toEqual([]);
+    for (const field of ["testSelector", "testSelectorReason", "platformAppsDir", "bcBuild"]) {
+      const withField = JSON.parse(raw) as typeof doc;
+      for (const c of withField.validity.executionContexts) c[field] = "exact";
+      expect(conformsTo(reportSchema, withField), field).not.toEqual([]);
+    }
+    const resumed = {
+      ...doc,
+      resumedFrom: { runId: 1, carriedMutants: 0, skippedStranded: 0, carryRefused: "x" },
     };
-    expect(conformsTo(reportSchema, withSelector("exact"))).toEqual([]);
-    expect(conformsTo(reportSchema, withSelector("substring-with-excludes", "exit 2"))).toEqual([]);
-    expect(conformsTo(reportSchema, withSelector("substring"))).not.toEqual([]);
+    expect(conformsTo(reportSchema, resumed)).not.toEqual([]);
+    const { carryRefused: _, ...kept } = resumed.resumedFrom;
+    expect(conformsTo(reportSchema, { ...doc, resumedFrom: kept })).toEqual([]);
   });
 
   test("R577: killReproduced and reproducedFailure are additive under v3: without them, with them, and killReproduced only as true", () => {

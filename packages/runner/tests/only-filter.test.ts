@@ -218,7 +218,7 @@ describe("generateMutationSet — --only does not shrink the semantic context", 
 });
 
 describe("parseCliConfig — --only", () => {
-  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner"] as const;
+  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"] as const;
 
   test("a single --only lands as a one-element array", () => {
     const cfg = parseCliConfig([...RUN_ARGS, "--only", "Al/Codeunit/**"]);
@@ -255,7 +255,7 @@ describe("parseCliConfig — --only", () => {
 });
 
 describe("parseCliConfig — --tests-only (R45)", () => {
-  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner"] as const;
+  const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"] as const;
 
   test("parses and is repeatable", () => {
     const cfg = parseCliConfig([
@@ -395,7 +395,7 @@ describe("parseCliConfig — --exclude", () => {
       "--tests",
       "t",
       "--backend",
-      "al-runner",
+      "bcdev",
       "--exclude",
       "src/Upgrade/**",
       "--exclude",
@@ -414,7 +414,7 @@ describe("parseCliConfig — --exclude", () => {
         "--tests",
         "t",
         "--backend",
-        "al-runner",
+        "bcdev",
         "--exclude",
         "",
       ]),
@@ -422,7 +422,7 @@ describe("parseCliConfig — --exclude", () => {
   });
 
   test("absent when not given, so a plain run is unchanged", () => {
-    const cfg = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "al-runner"]);
+    const cfg = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "bcdev"]);
     // Absent rather than empty, so a plain run's config is byte-identical to what it was before
     // `--exclude` existed.
     expect("exclude" in cfg).toBe(false);

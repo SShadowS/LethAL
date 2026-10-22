@@ -75,7 +75,6 @@
     "measure-gui-guarded.ts",
     "measure-testpage-exclusive.ts",
     "probe-5cb1.ts",
-    "probe-alrunner-tables.ts",
     "probe-grammar-corpus.ts",
     "probe-grammar-crosscheck.ts",
     "corpus-fingerprint.ts",
@@ -97,7 +96,6 @@
     "r289-probe/sidecar.ts",
     "r289-probe/sidecar.test.ts",
     "r514-probe/probe.ts",
-    "r518-probe/run.ts",
     "roadmap-index.ts",
     "roadmap-index.test.ts",
     "roadmap-next-id.ts",
@@ -145,8 +143,6 @@
     "typecheck-coverage.test.ts",
     "al-runner-v3-update.test.ts",
     "al-runner-v3-update.ts",
-    "alrunner-legs-diff.test.ts",
-    "alrunner-legs-diff.ts",
     "automation-api-guard.test.ts",
     "build-native-parser.test.ts",
     "build-native-parser.ts",
@@ -209,7 +205,6 @@
     "test-preload.ts",
     "verify-equivalence.test.ts",
     "verify-equivalence.ts",
-    "probe-alrunner-canary.ts",
     "census-hang-capable.ts",
     "sample-declined-hang-capable.ts"
   ]

@@ -1,12 +1,15 @@
-# itest:alrunner
+# itest:alrunner (retired by R654)
 
-`LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` runs LethAL through al-runner.
-`LETHAL_ALRUNNER_PATH` names the al-runner binary. al-runner is a third-party test runner for AL
-that needs no BC server. The gate prints the al-runner build it ran against as its first line.
-CLAUDE.md holds the rules for moving to a new al-runner build. This page holds the figures and the
-history.
+**This gate no longer exists.** R654 retired the .NET al-runner (v2) backend and this gate with
+it: `itest:alrunner`, its legs and its eight `al-runner.*.baseline.json` files were deleted in
+R654 S3. `--backend al-runner`, a stored v2 run and a v2 report are refused by name
+(`al-runner-v2-retired`). The Rust al-runner's gate is [alrunner-v3.md](alrunner-v3.md); its L1,
+Y-A, Y-B and K legs took over the layout, symbol-set and CLI-default checks.
 
-## Frozen figures
+Everything below is the page as it stood at retirement, kept as history. Nothing on it is run or
+pinned any more.
+
+## Frozen figures (at retirement)
 
 ```json gate-figures
 {

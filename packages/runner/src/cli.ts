@@ -27,29 +27,7 @@ import {
 // workspace packages stay at 0.0.0 and are private.
 import rootPackageJson from "../../../package.json" with { type: "json" };
 import type { ActivationConfig, FetchFn } from "./activation";
-import {
-  AlRunnerBackend,
-  type AlRunnerConfig,
-  type AlRunnerProvisionResult,
-} from "./al-runner-backend";
-import { readAlRunnerCache } from "./al-runner-cache";
-import type { AlRunnerCacheReport } from "./al-runner-cache";
-import {
-  type AlRunnerCanaryResult,
-  alRunnerCanaryWarnings,
-  runAlRunnerCanary,
-} from "./al-runner-canary";
-import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { alRunnerCoverageSupport } from "./al-runner-coverage";
-import {
-  type AlRunnerFrameProbeRequest,
-  type AlRunnerFrameProbeResult,
-  probeAlRunnerCoverageFrame,
-} from "./al-runner-frame-probe";
-import {
-  predefinedSymbolsChangedWarning,
-  probeAlRunnerPredefinedSymbols,
-} from "./al-runner-predefined-probe";
 import type { ServerSpawnFn } from "./al-runner-server";
 import { AlRunnerV3Backend } from "./al-runner-v3-backend";
 import {
@@ -136,6 +114,7 @@ import { assertResourceSelectorRuntime, runtimeBelow14 } from "./resource-select
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
+import { AlRunnerV2RetiredError, RETIRED_V2_BACKEND, V2_RETIRED_BACKEND_FLAG } from "./v2-retired";
 import {
   TestProjectNestedError,
   VERIFY_EXIT,
@@ -351,13 +330,15 @@ export async function validateSelectorIdsForProject(
   validateSelectorIds(selectorIds, idRanges, existingCodeunitIds);
 }
 
-/** `--backend`'s one validation, for `run` and `run --dry-run` alike. */
+/** `--backend`'s one validation, for `run` and `run --dry-run` alike. R654: the retired .NET
+ *  al-runner is refused by name, never as "unknown". */
 function parseBackendKind(raw: string | undefined): BackendKind {
   if (raw === undefined || raw === "") {
-    throw new Error('missing required --backend <"bcdev" | "al-runner" | "al-runner-v3">');
+    throw new Error('missing required --backend <"bcdev" | "al-runner-v3">');
   }
-  if (raw !== "bcdev" && raw !== "al-runner" && raw !== "al-runner-v3") {
-    throw new Error(`unknown --backend "${raw}" (expected "bcdev", "al-runner" or "al-runner-v3")`);
+  if (raw === RETIRED_V2_BACKEND) throw new AlRunnerV2RetiredError(V2_RETIRED_BACKEND_FLAG);
+  if (raw !== "bcdev" && raw !== "al-runner-v3") {
+    throw new Error(`unknown --backend "${raw}" (expected "bcdev" or "al-runner-v3")`);
   }
   return raw;
 }
@@ -915,7 +896,7 @@ export function helpText(version: string): string {
   return `lethal ${version} — mutation testing for Business Central AL
 
 USAGE
-  lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner|al-runner-v3> [options]
+  lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner-v3> [options]
   lethal run               --project <dir> --dry-run
   lethal init              --project <dir> [--out <path>] [--force]
   lethal clear-quarantine  --server <url> --instance <name>
@@ -950,9 +931,10 @@ EXPORT — R178. Projects a finished report into a format a CI system can DISPLA
 RUN — required
   --project <dir>            AL project to mutate (the app under test)
   --tests <dir>              AL test project (omit only with --dry-run)
-  --backend <name>           bcdev (live BC, authoritative), al-runner (offline, NOT authoritative)
-                             or al-runner-v3 (the Rust al-runner, offline, NOT authoritative,
-                             pinned in /work/tools/al-runner-v3, config section "alRunnerV3")
+  --backend <name>           bcdev (live BC, authoritative) or al-runner-v3 (the Rust al-runner,
+                             offline, NOT authoritative, pinned in /work/tools/al-runner-v3, config
+                             section "alRunnerV3"). al-runner, the retired .NET al-runner, is
+                             refused by name (al-runner-v2-retired, R654)
 
 RUN — scope. These bound cost. --tests-only can change a verdict; the others cannot.
   --only <glob>              only these files contribute mutants (repeatable). Every file is still
@@ -993,10 +975,7 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              deployed}]}], notInstrumented[{file, kinds, sites}]}. Every other
                              execution flag (--tests, --workers ...) is refused with
                              --dry-run, because a dry run executes no tests. --backend is
-                             optional. With --backend al-runner a dry run runs al-runner ONCE to
-                             measure the preprocessor symbols it predefines (R392), needs
-                             alRunner.alRunnerPath in the config and refuses without it, and lists
-                             the #if arms for the MEASURED set (absent lists alc's build)
+                             optional; every backend lists the #if arms of alc's build
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
@@ -2235,314 +2214,14 @@ export interface BcDevConfigSection {
   readonly coverageMode?: "procedure" | "none" | "fenced";
 }
 
-export interface AlRunnerConfigSection {
-  readonly alRunnerPath: string;
-  /** Forwarded as v2's `--package-cache` (v1 spelled it `--packages`). */
-  readonly packagesDir?: string;
-  /**
-   * R220 — run through `al-runner --server`, the warm JSON-RPC daemon, instead of one process per
-   * test. Refused from R97 until 2026-09-09; both grounds were re-measured on 2.11.0 first, and
-   * the numbers are in `al-runner-server.ts`.
-   *
-   * ON by default since R387 (`effectiveAlRunnerTransport`); `false` selects the one-shot
-   * transport. `AlRunnerBackend` itself still defaults to off: the default lives in `buildBackend`
-   * only, so code that builds the backend directly (the gate's one-shot legs) is unchanged.
-   */
-  readonly serverMode?: boolean;
-  /**
-   * R387: R222's selector channel. Defaults to `"resource"` when the server is on and `"static"`
-   * when it is off. That pairing is a POLICY, not a technical need: resource also works one-shot,
-   * but no gate has run one-shot plus resource live, so an explicit choice of it is accepted and
-   * the advisory line names it as unmeasured.
-   */
-  readonly selectorMode?: "static" | "resource";
-  /**
-   * R387: R220's `--coverage`. ON (`"al-runner"`) by default since R394 (`effectiveAlRunnerTransport`);
-   * R387 shipped it off. Whether set or defaulted, `runFromCli` first asks `alRunnerCoverageSupport`
-   * and falls back to `"none"`, with one named warning, for a project holding a multi-object file
-   * the R407 frame probe refuses or an `#if`-wrapped object file R298 refuses. `"none"` turns it off.
-   */
-  readonly coverage?: "al-runner" | "none";
-}
-
-/** R387: every key the `alRunner` section accepts. Anything else is refused by name. */
-const AL_RUNNER_KEYS: readonly string[] = [
-  "alRunnerPath",
-  "packagesDir",
-  "serverMode",
-  "selectorMode",
-  "coverage",
-];
-
-/**
- * R387: the transport `buildBackend` gives an al-runner run. The one place the defaults live, so
- * the backend and the advisory line cannot disagree about them.
- */
-export function effectiveAlRunnerTransport(c: Partial<AlRunnerConfigSection>): {
-  readonly serverMode: boolean;
-  readonly selectorMode: "static" | "resource";
-  readonly coverage: "al-runner" | "none";
-} {
-  const serverMode = c.serverMode ?? true;
-  return {
-    serverMode,
-    selectorMode: c.selectorMode ?? (serverMode ? "resource" : "static"),
-    // R394: on by default (R387 shipped "none"). The coverage guard still runs on it.
-    coverage: c.coverage ?? "al-runner",
-  };
-}
-
-/**
- * R387: the ONE advisory line an al-runner run prints, naming each slow or unmeasured setting and
- * the key that changes it. `undefined` when there is nothing to say. Not a `Caveat`: it changes no
- * verdict, so it needs no report field.
- */
-export function alRunnerAdvisory(
-  c: Partial<AlRunnerConfigSection>,
-  /** The files the coverage guard named when it turned coverage off (set or on by default). The
-   *  line then says why it is off instead of advising a key. */
-  coverageTurnedOffFor: readonly string[] = [],
-  /** R583: the target `app.json`'s `runtime`. Below 14.0 the faster selector is not available. */
-  runtime?: unknown,
-): string | undefined {
-  const t = effectiveAlRunnerTransport(c);
-  const notes: string[] = [];
-  if (!t.serverMode) {
-    notes.push('serverMode is false (one process per test; "alRunner.serverMode": true is faster)');
-  }
-  if (t.selectorMode === "static" && runtimeBelow14(runtime)) {
-    notes.push(
-      `selectorMode is "static" (a recompile per mutant); the faster "resource" selector needs app.json runtime 14.0 or above and this app declares ${JSON.stringify(runtime)}: raise its runtime to 17.0 to use it`,
-    );
-  } else if (t.selectorMode === "static") {
-    notes.push(
-      'selectorMode is "static" (a recompile per mutant; "alRunner.selectorMode": "resource" is faster)',
-    );
-  }
-  if (!t.serverMode && t.selectorMode === "resource") {
-    notes.push(
-      'serverMode false with selectorMode "resource" is a combination no gate has measured live',
-    );
-  }
-  if (coverageTurnedOffFor.length > 0) {
-    notes.push(
-      `coverage is "none" (turned off for this run because al-runner's coverage lines cannot be placed in ${coverageTurnedOffFor.join(", ")}; the warning above says why)`,
-    );
-  } else if (t.coverage === "none") {
-    // R394: reached only when the config sets "none"; the default is "al-runner" and prints nothing.
-    notes.push(
-      'coverage is "none", set by "alRunner.coverage": "none" (an unreached mutant reads survived instead of no-coverage, and every mutant runs every green test; remove the key to turn coverage back on)',
-    );
-  }
-  if (notes.length === 0) return undefined;
-  return `[lethal] al-runner settings: ${notes.join("; ")}.`;
-}
-
-/**
- * R387: al-runner coverage (set by `alRunner.coverage: "al-runner"`, or on by default since R394),
- * checked against the project before anything is built. The index drops a file holding a `#if`-wrapped object of a shape it does not admit
- * (`alRunnerAdmitsWrappedFile`, R298, R-300b), which would turn real coverage into wrong coverage,
- * so such a run falls back to `"none"` with ONE warning naming the files. Called once per session,
- * so the warning is not repeated per worker.
- *
- * R407: a multi-object file is admitted only when THIS al-runner passes the coverage-frame probe
- * (`probeAlRunnerCoverageFrame`), run on the transport the session will use. On
- * v2.12.0-main.c39ad5de al-runner reported every object after a file's first at the wrong line
- * (R383); upstream #5249 fixed it, and the probe tells the two apart. Refused, the run falls back
- * to `"none"` exactly as before, and the warning names the probe's reason and the build.
- */
-export async function withAlRunnerCoverageGuard(
-  configFile: LethalConfigFile,
-  projectDir: string,
-  warn: (line: string) => void = console.warn,
-  opts: AlRunnerCoverageGuardOptions = {},
-): Promise<LethalConfigFile> {
-  return (await applyAlRunnerCoverageGuard(configFile, projectDir, warn, opts)).config;
-}
-
-/** R407: what the guard needs beyond the config, and its seams for tests. */
-export interface AlRunnerCoverageGuardOptions {
-  /** R205: the session's source snapshot, so the guard judges the files the build uses. */
-  readonly snapshot?: ReadonlyMap<string, Buffer>;
-  /** The session's test project: a one-shot probe provisions on it for the R147 pin. */
-  readonly testDir?: string;
-  readonly frameProbe?: (req: AlRunnerFrameProbeRequest) => Promise<AlRunnerFrameProbeResult>;
-  readonly provision?: (cfg: AlRunnerConfig) => Promise<AlRunnerProvisionResult>;
-}
-
-/**
- * The guard, also returning the files it named (empty when it did not fall back) and whether
- * multi-object files are admitted (R407). `admitMultiObjectFiles` is true only when coverage stays
- * `"al-runner"`, the project holds a multi-object file, and the frame probe admitted.
- */
-export async function applyAlRunnerCoverageGuard(
-  configFile: LethalConfigFile,
-  projectDir: string,
-  warn: (line: string) => void,
-  opts: AlRunnerCoverageGuardOptions = {},
-): Promise<{
-  readonly config: LethalConfigFile;
-  readonly named: readonly string[];
-  readonly admitMultiObjectFiles: boolean;
-}> {
-  const section = configFile.alRunner ?? {};
-  // R394: the EFFECTIVE coverage, so a config with no coverage key (on by default) is guarded too.
-  if (effectiveAlRunnerTransport(section).coverage !== "al-runner") {
-    return { config: configFile, named: [], admitMultiObjectFiles: false };
-  }
-  const support = await alRunnerCoverageSupport(projectDir, opts.snapshot);
-  let probe: AlRunnerFrameProbeResult | undefined;
-  if (support.multiObjectFiles.length > 0) {
-    probe = await runFrameProbe(configFile, projectDir, opts);
-    if (probe.outcome === "admitted") {
-      warn(
-        `[lethal] al-runner-coverage-frame-admitted: ${support.multiObjectFiles.join(", ")} (more than one object) keep al-runner coverage: the frame probe (${probe.transport}) found every object reported in the instrumented frame, labelled inside the bundle (Probe B at lines ${probe.lines.join(", ")}). al-runner build: ${probe.build ?? "<not printed>"} (R407).`,
-      );
-    }
-  }
-  const multi = probe?.outcome === "admitted" ? [] : support.multiObjectFiles;
-  if (multi.length === 0 && support.wrappedObjectFiles.length === 0) {
-    return { config: configFile, named: [], admitMultiObjectFiles: probe?.outcome === "admitted" };
-  }
-  const named = [
-    ...multi.map((f) => `${f} (more than one object)`),
-    ...support.wrappedObjectFiles.map((f) => `${f} (an #if-wrapped object)`),
-  ];
-  const why = [
-    ...(probe?.outcome === "refused"
-      ? [
-          `al-runner reports every object after a file's first at the wrong line on some builds (measured on v2.12.0-main.c39ad5de, R383), and the frame probe (${probe.transport}) REFUSED this one: ${probe.refusal}: ${probe.reason}. al-runner build: ${probe.build ?? "<not printed>"} (R407)`,
-        ]
-      : []),
-    ...(support.wrappedObjectFiles.length > 0
-      ? ["the #if object wrapper is of a shape not measured on al-runner (R300)"]
-      : []),
-  ];
-  warn(
-    `[lethal] al-runner-coverage-unsupported: al-runner coverage (${section.coverage === "al-runner" ? 'set by "alRunner.coverage": "al-runner"' : "on by default"}) is turned OFF for this run, which runs with coverage "none" instead. al-runner's coverage cannot be placed in ${named.join(", ")}: ${why.join("; ")}. Trusting it would credit those objects' mutants to the wrong tests, or report them no-coverage while tests do reach them.`,
-  );
-  return {
-    config: { ...configFile, alRunner: { ...section, coverage: "none" } },
-    named,
-    admitMultiObjectFiles: false,
-  };
-}
-
-/**
- * R407: the frame probe on the session's transport. A one-shot session's probe takes the R147 pin
- * from one `provisionOnce` on the session's test project, as the session's own runs will; the
- * daemon never takes one (R242).
- */
-async function runFrameProbe(
-  configFile: LethalConfigFile,
-  projectDir: string,
-  opts: AlRunnerCoverageGuardOptions,
-): Promise<AlRunnerFrameProbeResult> {
-  const section = configFile.alRunner ?? {};
-  const { alRunnerPath, packagesDir } = section;
-  if (alRunnerPath === undefined || alRunnerPath === "") {
-    throw new Error("the al-runner coverage guard needs alRunner.alRunnerPath to probe (R407)");
-  }
-  const preprocessorSymbols = validatePreprocessorSymbols(configFile.preprocessorSymbols);
-  const { serverMode } = effectiveAlRunnerTransport(section);
-  let platformAppsDir: string | undefined;
-  if (!serverMode) {
-    if (opts.testDir === undefined) {
-      throw new Error(
-        'the al-runner coverage guard needs the test project for a one-shot probe (R407); set "alRunner.coverage": "none" to run without coverage',
-      );
-    }
-    const cfg: AlRunnerConfig = {
-      alRunnerPath,
-      instrumentedDir: opts.testDir,
-      testDir: opts.testDir,
-      selectorObjectId: 0,
-      ...(packagesDir !== undefined ? { packagesDir } : {}),
-      ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
-    };
-    // ponytail: a throwaway backend, only for `provisionOnce`'s argv and pin checks.
-    const provisioned = await (opts.provision ?? ((c) => new AlRunnerBackend(c).provisionOnce()))(
-      cfg,
-    );
-    if ("platformAppsDir" in provisioned) platformAppsDir = provisioned.platformAppsDir;
-  }
-  return (opts.frameProbe ?? probeAlRunnerCoverageFrame)({
-    alRunnerPath,
-    projectDir,
-    serverMode,
-    ...(platformAppsDir !== undefined ? { platformAppsDir } : {}),
-    ...(packagesDir !== undefined ? { packagesDir } : {}),
-    ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
-  });
-}
-
-/**
- * R387: what `runFromCli` does once per al-runner session before any backend is built: validate
- * the section (the same call `buildBackend` makes), apply the coverage guard, and print the ONE
- * advisory line. Returns the config every backend of the session is built from. A config with no
- * `alRunner` section is returned untouched, so `buildBackend` still throws its own targeted error.
- * R205: `opts.snapshot` is the session's source snapshot, so the guard judges the files the build uses.
- * R407: also returns whether multi-object files are admitted, which `buildBackend` hands to every
- * backend it builds. It is never a config key.
- */
-export async function prepareAlRunnerSession(
-  configFile: LethalConfigFile,
-  projectDir: string,
-  warn: (line: string) => void = console.warn,
-  opts: AlRunnerCoverageGuardOptions = {},
-): Promise<{ readonly config: LethalConfigFile; readonly admitMultiObjectFiles: boolean }> {
-  if (configFile.alRunner === undefined)
-    return { config: configFile, admitMultiObjectFiles: false };
-  validateAlRunnerConfig(configFile.alRunner);
-  const { config, named, admitMultiObjectFiles } = await applyAlRunnerCoverageGuard(
-    configFile,
-    projectDir,
-    warn,
-    opts,
-  );
-  const advisory = alRunnerAdvisory(
-    config.alRunner ?? {},
-    named,
-    (await targetAppJson(projectDir, opts.snapshot))?.runtime,
-  );
-  if (advisory !== undefined) warn(advisory);
-  return { config, admitMultiObjectFiles };
-}
-
-/** The target's `app.json` from the session snapshot (R205), else from disk; `undefined` when absent. */
-async function targetAppJson(
-  projectDir: string,
-  snapshot: ReadonlyMap<string, Buffer> | undefined,
-): Promise<Record<string, unknown> | undefined> {
-  let raw = snapshot?.get("app.json")?.toString("utf8");
-  if (raw === undefined && snapshot === undefined) {
-    raw = await readFile(join(projectDir, "app.json"), "utf8").catch(() => undefined);
-  }
-  if (raw === undefined) return undefined;
-  return JSON.parse(raw.replace(/^﻿/, "")) as Record<string, unknown>;
-}
-
-/**
- * R583: refuses an al-runner run whose effective selector is `resource` on a target below runtime
- * 14.0, BEFORE anything is instrumented. `deploy()` checks again on the manifest al-runner compiles.
- * Called for `run` (campaign stages run through it) and `run --dry-run`. `verify` is bcdev only.
- */
-export async function refuseResourceSelectorRuntime(
-  config: LethalConfigFile,
-  projectDir: string,
-  snapshot: ReadonlyMap<string, Buffer>,
-): Promise<void> {
-  const appJson = await targetAppJson(projectDir, snapshot);
-  if (appJson === undefined) return; // buildBackend refuses a missing app.json by its own message
-  assertResourceSelectorRuntime(
-    appJson,
-    effectiveAlRunnerTransport(config.alRunner ?? {}).selectorMode,
-  );
-}
-
 export interface LethalConfigFile {
   readonly bcdev?: Partial<BcDevConfigSection>;
-  readonly alRunner?: Partial<AlRunnerConfigSection>;
+  /**
+   * The retired .NET al-runner's section (R654). Nothing reads it. HELD (R654 S3, orchestrator
+   * ruling): its refusal by name (`al-runner-v2-retired`, plan F2) waits until the owner strips it
+   * from the provisioned config templates, so until then it is tolerated and ignored.
+   */
+  readonly alRunner?: unknown;
   /** R586: the al-runner-v3 section, validated by `validateAlRunnerV3Config`. */
   readonly alRunnerV3?: unknown;
   // Task 7: an environment tool (Task 6) resolves/provisions the bcdev section instead of it
@@ -2683,58 +2362,6 @@ export function validateBcDevConfig(
   return raw as BcDevConfigSection;
 }
 
-export function validateAlRunnerConfig(
-  raw: Partial<AlRunnerConfigSection> | undefined,
-): AlRunnerConfigSection {
-  if (!raw) {
-    throw new Error(
-      'lethal.config.json is missing the "alRunner" section (required for --backend al-runner)',
-    );
-  }
-  if (!raw.alRunnerPath) {
-    throw new Error(
-      'lethal.config.json "alRunner" section is missing required field(s): alRunnerPath',
-    );
-  }
-  // al-runner v2 removed `--stubs` entirely — its own --help lists stubs under NOT YET
-  // IMPLEMENTED, and passing the flag is an unknown-option error (exit 2). A config that still
-  // names a stubs directory is asking for something the runner cannot do, so accepting the
-  // field and dropping it on the floor would leave the operator believing their target app's
-  // hand-written dependency stubs are in play while every compile runs without them. Refuse and
-  // say which version took it away.
-  if ((raw as { stubsDir?: unknown }).stubsDir !== undefined) {
-    throw new Error(
-      'lethal.config.json "alRunner" section sets "stubsDir", which al-runner v2 no longer ' +
-        "supports — v2 removed the --stubs flag (its --help lists stubs under NOT YET " +
-        "IMPLEMENTED) and rejects it as an unknown option. Remove the field; there is no " +
-        "replacement flag to point it at.",
-    );
-  }
-  // R387: a misspelled key used to be ignored in silence, so `"servermode": true` ran one-shot.
-  const unknown = Object.keys(raw).filter((k) => !AL_RUNNER_KEYS.includes(k));
-  if (unknown.length > 0) {
-    throw new Error(
-      `lethal.config.json "alRunner" section has unknown key(s): ${unknown.join(", ")}. Allowed: ${AL_RUNNER_KEYS.join(", ")}.`,
-    );
-  }
-  const bad: string[] = [];
-  if (raw.serverMode !== undefined && typeof raw.serverMode !== "boolean") {
-    bad.push(`serverMode must be true or false, got ${JSON.stringify(raw.serverMode)}`);
-  }
-  if (raw.selectorMode !== undefined && !["static", "resource"].includes(raw.selectorMode)) {
-    bad.push(
-      `selectorMode must be "static" or "resource", got ${JSON.stringify(raw.selectorMode)}`,
-    );
-  }
-  if (raw.coverage !== undefined && !["al-runner", "none"].includes(raw.coverage)) {
-    bad.push(`coverage must be "al-runner" or "none", got ${JSON.stringify(raw.coverage)}`);
-  }
-  if (bad.length > 0) {
-    throw new Error(`lethal.config.json "alRunner" section: ${bad.join("; ")}`);
-  }
-  return raw as AlRunnerConfigSection;
-}
-
 async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
   let text: string;
   try {
@@ -2762,7 +2389,7 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
  */
 export function configuredPackageCaches(c: LethalConfigFile): string[] {
   const v3 = c.alRunnerV3 as { packagesDir?: unknown } | undefined;
-  return [c.bcdev?.packageCachePath, c.alRunner?.packagesDir, v3?.packagesDir].filter(
+  return [c.bcdev?.packageCachePath, v3?.packagesDir].filter(
     (p): p is string => typeof p === "string" && p !== "",
   );
 }
@@ -2966,41 +2593,12 @@ export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
  * Builds one backend instance targeting `scratchDir` for all of its own scratch
  * output. Called once for the session's main backend (baseline/coverage), and —
  * when `--workers > 1` — once more per worker with a distinct `scratchDir`
- * (`cli.ts`'s `runFromCli`), so that:
- *   - each al-runner worker gets its own `instrumentedDir` — `AlRunnerBackend`
- *     copies each batch's compiled source into a private subdirectory of it on
- *     every `deploy()` call (see the comment there), so a distinct
- *     `instrumentedDir` per worker is what makes those copies land in
- *     genuinely separate directories instead of racing on the same one, and
- *   - each bcdev worker gets its own `ArtifactCompiler.outputDir`. Since Layer
- *     5A the compiled .app is content-addressed per artifact id (never a fixed
- *     filename), so collisions are already structurally impossible — a private
- *     outputDir per worker additionally keeps each worker's scratch/final
- *     artifacts physically separate and independently disposable.
+ * (`cli.ts`'s `runFromCli`), so that each bcdev worker gets its own
+ * `ArtifactCompiler.outputDir`. Since Layer 5A the compiled .app is content-addressed per artifact
+ * id (never a fixed filename), so collisions are already structurally impossible — a private
+ * outputDir per worker additionally keeps each worker's scratch/final artifacts physically
+ * separate and independently disposable. (al-runner-v3 refuses `--workers > 1`.)
  */
-/**
- * Static fallback for the al-runner non-authoritative warning, used ONLY when `runFromCli`
- * cannot yet run the real canary (`al-runner-canary.ts`) because `lethal.config.json` has no
- * `alRunnerPath` configured — `validateAlRunnerConfig` throws its own targeted error for that
- * moments later in `buildBackend`, so this is printed on the way to that throw, not instead of
- * it. Every session that DOES have a configured path gets `alRunnerCanaryWarnings`'s dynamic,
- * measured-on-this-binary text instead (R7/R8 — see that module's doc comment for why a canary
- * that re-proves the defect every session beats a warning frozen at 2026-07-25).
- *
- * Called ONCE per session from `runFromCli`, not from `buildBackend`: backends are constructed
- * once for the session plus once per worker, so warning at construction printed the same
- * paragraph five times under `--workers 4` and trained the reader to scroll past it.
- */
-function warnAlRunnerNotAuthoritative(): void {
-  // R255: this used to name the asserterror defect (R7), which v2 fixed; the canary reports it
-  // `defect-not-reproduced`. The reasons below are `AlRunnerBackend.capabilities`'s.
-  console.warn(
-    "[lethal] al-runner is NOT authoritative: its coverage depends on the project's file " +
-      "layout (a file whose later objects carry code turns it off for the whole run), and its " +
-      "`Codeunit.Run` rollback has not been re-measured against BC. Treat survivors from this backend as " +
-      "unconfirmed — re-run them under --backend bcdev before acting on them.",
-  );
-}
 
 /**
  * Builds one `EnvToolPublisher` for a resolved bcdev connection. The ONLY place that derives
@@ -3326,50 +2924,10 @@ export async function buildBackend(
   selectorIds: SelectorConfig = DEFAULT_SELECTOR_IDS,
   /** R205: the session's source snapshot, so the id check reads the source the build uses. */
   source?: ReadonlyMap<string, Buffer>,
-  /** R407: the coverage guard's frame-probe admission (`prepareAlRunnerSession`), never config. */
-  admitMultiObjectFiles = false,
 ): Promise<ExecutionBackend> {
   // R101(c): validated FIRST, for both backends, before anything is constructed — a typo'd symbol
   // list must fail immediately rather than after a compile that silently used the other branch.
   const preprocessorSymbols = validatePreprocessorSymbols(configFile.preprocessorSymbols);
-  if (parsed.backendKind === "al-runner") {
-    // R3/R4: validated here, first, before constructing anything — al-runner's own `alc` run is
-    // lazy (`AlRunnerBackend.activate()`, see `selector.ts`'s doc comment), so this is the
-    // earliest point that can catch a bad id for this backend too.
-    await validateSelectorIdsForProject(parsed.projectDir, selectorIds, source);
-    const c = validateAlRunnerConfig(configFile.alRunner);
-    // R387: the defaults are applied HERE and nowhere else. A default in the backend's constructor
-    // would silently turn the gate's one-shot legs, which build the backend directly, into server
-    // legs.
-    const t = effectiveAlRunnerTransport(c);
-    return new AlRunnerBackend(
-      {
-        alRunnerPath: c.alRunnerPath,
-        instrumentedDir: join(scratchDir, "al-runner-active"),
-        testDir: parsed.testDir,
-        sourceProjectDir: parsed.projectDir,
-        // R505: with coverage on, al-runner labels it from the LIVE project; read it only while
-        // the project still equals the session snapshot.
-        ...(t.coverage !== "none" && source !== undefined
-          ? {
-              projectWatch: watchProjectInputs(parsed.projectDir, source, runOutputPaths(parsed)),
-            }
-          : {}),
-        ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
-        selectorObjectId: selectorIds.selectorId,
-        serverMode: t.serverMode,
-        selectorMode: t.selectorMode,
-        coverage: t.coverage,
-        ...(admitMultiObjectFiles ? { admitMultiObjectFiles: true } : {}),
-        // R101(c): the same list the bcdev path's `alc` step gets below. Both compile paths must
-        // select the same branch, or their verdicts describe two different programs.
-        ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
-      },
-      deps.alRunnerSpawn,
-      deps.alRunnerServerSpawn,
-    );
-  }
-
   if (parsed.backendKind === "al-runner-v3") {
     return buildAlRunnerV3Backend(parsed, configFile, scratchDir, {
       alToolPaths: deps.alToolPaths ?? defaultAlToolPaths,
@@ -3743,36 +3301,17 @@ export async function printDryRun(
     readonly preprocessorSymbols?: readonly string[];
     /** R377: the backend whose build is listed; absent is alc's (`bcdev`). */
     readonly backendKind?: BackendKind;
-    /** R392: the config's al-runner binary, probed once when `backendKind` is `al-runner`. */
-    readonly alRunnerPath?: string;
     /** R565: the dependency package folders the config names (`MutationSetOptions`). */
     readonly dependencyPackageDirs?: readonly string[];
   },
-  spawn: SpawnFn = defaultSpawn,
 ): Promise<void> {
   // R41/R127: `--only` and `--operator` are honoured here too. A dry run whose whole purpose is
   // "how big is this going to be" would be worse than useless if it answered for a wider scope
   // than the one the real run will use.
   const operators = paths.operators;
   const exclude = paths.exclude;
-  // R392: an al-runner listing needs the symbols al-runner predefines, so it MEASURES them, which
-  // spawns al-runner once. A dry run that cannot measure refuses rather than assuming a list.
   let backend: BuildBackend | undefined;
-  if (paths.backendKind === "al-runner") {
-    if (paths.alRunnerPath === undefined) {
-      throw new Error(
-        `lethal run --dry-run --backend al-runner runs al-runner once to measure the preprocessor symbols it predefines (R392), and the config (${paths.configPath}) names no alRunner.alRunnerPath. Set it, or drop --backend al-runner to list alc's build.`,
-      );
-    }
-    const predefined = await probeAlRunnerPredefinedSymbols(paths.alRunnerPath, { spawn });
-    const changed = predefinedSymbolsChangedWarning(predefined);
-    if (changed !== undefined) console.warn(changed);
-    backend = { kind: "al-runner", predefined };
-    // R565: a real run provisions and searches al-runner's platform apps first; a dry run does not.
-    console.warn(
-      "[lethal] dry run on al-runner: no platform-apps folder is provisioned, so Microsoft reports the project calls are read only from alRunner.packagesDir, and the refused set can differ from a real run's (R565).",
-    );
-  } else if (paths.backendKind === "bcdev") {
+  if (paths.backendKind === "bcdev") {
     backend = { kind: "bcdev" };
   } else if (paths.backendKind === "al-runner-v3") {
     // R586: v3 compiles what alc proved, so the listing is alc's build (its contract refuses a
@@ -4034,87 +3573,6 @@ async function tierHasQuarantineRecord(
 }
 
 /**
- * R7/R8: prove — on the ACTUAL configured binary, every al-runner session — whether the two
- * measured al-runner defects (asserterror never fails; a table object's own global var doesn't
- * survive a trigger's write back out) are present on THIS machine's build, rather than
- * repeating a claim frozen at the moment someone last measured it by hand. Only possible once
- * `alRunnerPath` is known; if it isn't, `buildBackend` throws its own targeted "missing
- * alRunnerPath" error moments later, and the static fallback (`warnAlRunnerNotAuthoritative`)
- * covers that gap instead — in which case there is nothing measured to return either.
- *
- * Extracted out of `runFromCli` (rather than left inlined there) so this specific branch — which
- * config field gates the canary vs. the fallback, and that the canary's own warnings actually
- * reach `console.warn` — is directly testable without mocking `runFromCli`'s config-file I/O,
- * `resolveEnvToolSession`, `buildBackend`, and `runSession` all at once (see cli.test.ts's own
- * note on why it deliberately does not exercise `runFromCli` end to end).
- *
- * Returns the measured result (or `undefined` on the no-`alRunnerPath` fallback path) so
- * `runFromCli` can attach it to the `SessionReport` via `withAlRunnerCanary` below — printing it
- * once via `console.warn` here and nowhere else was the exact "warning that scrolls past, and a
- * `--out` JSON report or any CI that discards stderr never sees it at all" gap review flagged.
- */
-export async function announceAlRunnerCanary(
-  configFile: LethalConfigFile,
-  runCanary: typeof runAlRunnerCanary = runAlRunnerCanary,
-): Promise<AlRunnerCanaryResult | undefined> {
-  const alRunnerPath = configFile.alRunner?.alRunnerPath;
-  if (alRunnerPath === undefined) {
-    warnAlRunnerNotAuthoritative();
-    return undefined;
-  }
-  const canary = await runCanary(alRunnerPath);
-  for (const line of alRunnerCanaryWarnings(canary)) console.warn(line);
-  return canary;
-}
-
-/**
- * R123: measures al-runner's wire contract and REFUSES the session if a fact the decode depends on
- * has moved. Runs BEFORE `announceAlRunnerCanary` on purpose — if the contract has shifted, the
- * canary's own reading of this binary is not trustworthy either, so there is no point printing it.
- *
- * Throws rather than returning a flag. There is nothing to unwind at this point in `runFromCli`
- * (no environment provisioned, no artifact published, no mutant run) and no `SessionReport` to
- * attach a caveat to, because the session never starts. A run whose verdicts would be decoded by
- * assumptions that no longer hold is not a degraded run — it is a run whose output means nothing,
- * and this project would rather print why than hand someone a number.
- *
- * Skips exactly where `announceAlRunnerCanary` skips: with no configured `alRunnerPath` there is no
- * binary to measure and no al-runner session to protect.
- */
-export async function announceAlRunnerContract(
-  configFile: LethalConfigFile,
-  runProbe: typeof runAlRunnerContractProbe = runAlRunnerContractProbe,
-): Promise<void> {
-  const alRunnerPath = configFile.alRunner?.alRunnerPath;
-  if (alRunnerPath === undefined) return;
-  const result = await runProbe(alRunnerPath);
-  // Printed whether or not it refuses, so a session that DID run records the contract its verdicts
-  // were produced under — the same reasoning that made `itest:alrunner` stamp the version.
-  console.warn(contractSummary(result));
-  const refusals = contractRefusals(result);
-  if (refusals.length > 0) {
-    throw new Error(
-      `${refusals.join("\n")}\nRefusing to run: al-runner's wire contract has moved, so this session's verdicts would be decoded by assumptions that no longer hold. Use --backend bcdev, or re-measure and update the adapter.`,
-    );
-  }
-}
-
-/**
- * Attaches a measured al-runner canary result onto a `SessionReport` — a plain, obviously-correct
- * merge (never mutating `report`) extracted so it's directly unit-testable without needing a real
- * `runSession`/`ResultsStore`/backend to produce a `SessionReport` in the first place. `canary`
- * is `undefined` on every bcdev session (never computed) and on the al-runner no-`alRunnerPath`
- * fallback path (nothing was measured) — both leave `report` untouched rather than adding an
- * `alRunnerCanary` key with no real content.
- */
-export function withAlRunnerCanary(
-  report: SessionReport,
-  canary: AlRunnerCanaryResult | undefined,
-): SessionReport {
-  return canary !== undefined ? { ...report, alRunnerCanary: canary } : report;
-}
-
-/**
  * R358: removes a session's temp scratch directory. Best-effort, like the other cleanups at the
  * end of a session: a failure (on Windows, usually a file a child process still holds open) is
  * reported and never replaces the session's report or the error already unwinding.
@@ -4162,15 +3620,6 @@ export async function runFromCli(
     // `validateSelectorIdsForProject` below would try to read a nonexistent app.json and break
     // every one of them. See its call site's comment for WHY it moved here at all.
     validateSelectorIdsForProject?: typeof validateSelectorIdsForProject;
-    // R7/R8: injectable so a test can drive the al-runner canary's warning wiring below with a
-    // canned `AlRunnerCanaryResult`, without spawning a real al-runner process.
-    runAlRunnerCanary?: typeof runAlRunnerCanary;
-    /** R123: same injection point and same reason as `runAlRunnerCanary` above — a test drives a
-     *  canned contract result without spawning a real al-runner. */
-    runAlRunnerContractProbe?: typeof runAlRunnerContractProbe;
-    /** R407: the coverage guard's frame probe and its one-shot provisioning, for tests. */
-    alRunnerFrameProbe?: AlRunnerCoverageGuardOptions["frameProbe"];
-    alRunnerProvision?: AlRunnerCoverageGuardOptions["provision"];
     /** GH-25: the spawn `--changed-since` runs git through, so a test can neutralise the
      *  machine's inherited git config (a global `*.al -diff` would make an edit look binary). */
     gitSpawn?: SpawnFn;
@@ -4189,10 +3638,6 @@ export async function runFromCli(
   // lines, the al-runner coverage guard and the session's build all use this snapshot, so an edit
   // landing later is never built; the session's last-batch re-read warns about it.
   const source = await readTargetSource(parsed.projectDir);
-  // R583: before any al-runner probe, instrumentation or build.
-  if (parsed.backendKind === "al-runner") {
-    await refuseResourceSelectorRuntime(configFile, parsed.projectDir, source);
-  }
   // Issue #19: before anything is provisioned, so a bad ref fails in seconds.
   const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn, source);
   // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
@@ -4250,50 +3695,7 @@ export async function runFromCli(
   return report;
 
   async function runInScratch(): Promise<SessionReport> {
-    // R7/R8: captured here (outer scope) rather than discarded, so the `withEnvTeardown` closure
-    // below can attach it to the final `SessionReport` — see `withAlRunnerCanary`. Stays
-    // `undefined` for every bcdev session (this branch never runs) and for the al-runner
-    // no-`alRunnerPath` fallback path.
-    let alRunnerCanaryResult: AlRunnerCanaryResult | undefined;
-    // R387: the config every backend of this session is built from. Differs from `configFile` only
-    // when the al-runner coverage guard below turned a requested coverage off.
-    let sessionConfig = configFile;
-    // R407: the guard's frame-probe admission, handed to the main backend AND every worker.
-    let admitMultiObjectFiles = false;
-    if (parsed.backendKind === "al-runner") {
-      // R123: the contract first — if it has moved, nothing measured after it can be trusted,
-      // including the canary. Throws on a divergence; see `announceAlRunnerContract`.
-      await announceAlRunnerContract(
-        configFile,
-        deps.runAlRunnerContractProbe ?? runAlRunnerContractProbe,
-      );
-      alRunnerCanaryResult = await announceAlRunnerCanary(
-        configFile,
-        deps.runAlRunnerCanary ?? runAlRunnerCanary,
-      );
-      // R18: `--keep-env`/`--allow-expiring-env` are refused OUTRIGHT for al-runner (parseCliConfig,
-      // above) on the reasoning that a silent no-op is wrong — a whole configured `envTool` section
-      // being silently ignored deserves at least the same treatment. Not refused outright (unlike
-      // those flags) because a config file is often shared across `--backend` choices and an
-      // operator switching backends for a one-off al-runner run shouldn't be blocked by it; but
-      // silence is exactly the failure mode this project refuses to ship.
-      if (configFile.envTool !== undefined) {
-        console.warn(
-          "[lethal] envTool is configured but IGNORED: --backend al-runner has no environment to " +
-            "resolve or provision — the entire `envTool` section in this config is silently unused " +
-            "on this path. Remove it, or run with --backend bcdev to have it take effect.",
-        );
-      }
-      // R387: once per session, here rather than in `buildBackend`, which runs once per worker.
-      const prepared = await prepareAlRunnerSession(configFile, parsed.projectDir, console.warn, {
-        snapshot: source,
-        testDir: parsed.testDir,
-        ...(deps.alRunnerFrameProbe !== undefined ? { frameProbe: deps.alRunnerFrameProbe } : {}),
-        ...(deps.alRunnerProvision !== undefined ? { provision: deps.alRunnerProvision } : {}),
-      });
-      sessionConfig = prepared.config;
-      admitMultiObjectFiles = prepared.admitMultiObjectFiles;
-    }
+    const sessionConfig = configFile;
 
     // Task 7: resolves the bcdev section EXACTLY ONCE (see `resolveEnvToolSession`'s doc comment)
     // and substitutes it into `effectiveConfig`, which every downstream seam below reads instead of
@@ -4359,7 +3761,6 @@ export async function runFromCli(
             {},
             selectorIds,
             source,
-            admitMultiObjectFiles,
           );
           // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
           // without awaiting — see orchestrator.ts), but building a worker's backend
@@ -4370,9 +3771,8 @@ export async function runFromCli(
           // disposing them (see `closeIfSupported` in orchestrator.ts) — it just
           // doesn't own constructing them.
           //
-          // (bcdev + --workers > 1 is refused in `parseCliConfig`, so this loop only ever builds
-          // al-runner backends today — `effectiveConfig` equals `configFile` on that path regardless,
-          // since `resolveEnvToolSession` is a no-op for al-runner. `deploy` is still threaded through
+          // (bcdev + --workers > 1 is refused in `parseCliConfig`, and so is al-runner-v3, so since
+          // R654 this loop builds nothing today. `deploy` is still threaded through
           // (Important 3, Task 7 review): a bcdev worker built without it would silently publish via
           // `ContainerDeployer`/altool instead of through the configured env tool — unreachable today
           // only because of the `--workers > 1` bcdev refusal above, and that restriction is
@@ -4389,7 +3789,6 @@ export async function runFromCli(
                   {},
                   selectorIds,
                   source,
-                  admitMultiObjectFiles,
                 ),
               );
             }
@@ -4523,11 +3922,10 @@ export async function runFromCli(
             }
           }
           // Release whatever the backend is holding open: the spawned bc-dev MCP
-          // child, or (server mode) the one warm al-runner process. The
-          // `process.exit(0)` below would paper over a leak here, but only for this
+          // child. The `process.exit(0)` below would paper over a leak here, but only for this
           // entry point — anything else embedding the backend would hang or leak a
           // process instead.
-          if (backend instanceof BcDevMcpBackend || backend instanceof AlRunnerBackend) {
+          if (backend instanceof BcDevMcpBackend) {
             try {
               await backend.close();
             } catch (err) {
@@ -4565,10 +3963,7 @@ export async function runFromCli(
             "runFromCli: the try block completed without throwing but produced no report — this is a bug in runFromCli, not a session failure",
           );
         }
-        // R7/R8: persist the measured canary verdict onto the report itself (a `--out` JSON report,
-        // or any CI that discards stderr, previously had no record of it at all — only the
-        // console.warn lines printed once at the very start, before a single mutant ran).
-        return withAlRunnerCanary(report, alRunnerCanaryResult);
+        return report;
       },
       deps.quarantineDir ?? defaultQuarantineDir(),
       // R360 I-1: a deleted environment can never verify a bundle installed on it again.
@@ -4819,35 +4214,6 @@ export const DOCTOR_CREATE_MODE_CAVEAT =
   "nothing to check yet — none exists until a run provisions one. Only tool-paths is checked here.";
 
 /**
- * R146 — the caveat an AL-RUNNER-ONLY project gets, and the reason it is not optional.
- *
- * Before this row, such a config THREW: `lethal doctor` only accepted a bcdev-shaped one, so R131's
- * `al-runner-cache` check — a local directory read, needing no environment, written FOR al-runner
- * users — was unreachable by the users who only use al-runner.
- *
- * The fix is not "report the live-BC checks anyway". Environment status, the lease, the quarantine
- * record and the LethAL Control version have no meaning without a BC server, and rendering any of
- * them `[ok]` would repeat R110's withdrawn lease check exactly: a check that structurally cannot
- * fail, printed green, in the scenario the tooling exists for. They are ABSENT, and this names them
- * so the absence is a statement rather than a gap.
- *
- * `alc`/`altool` are absent for a MEASURED reason, and R146's own row got this wrong. The row lists
- * `alc` as "needed for the target compile on both backends". It is not: `buildBackend`'s al-runner
- * branch returns before `defaultAlToolPaths`/`resolveAlToolPaths` are reached, and `ArtifactCompiler`
- * is constructed only on the bcdev branch, because al-runner compiles the bundle with its own
- * compiler. Checking alc here would fail configs `lethal run --backend al-runner` accepts, which is
- * the stricter-than-`run` drift R21 and R34 each caught once already.
- */
-export const DOCTOR_AL_RUNNER_ONLY_CAVEAT =
-  'this config declares "alRunner" and neither "bcdev" nor "envTool", so it is an al-runner-only ' +
-  "project and only the two checks that mean something without a BC server were run. NOT CHECKED, " +
-  "and absent rather than passing: environment status, the lease, the quarantine record, the " +
-  "control-version of the deployed LethAL Control app — all four need a live BC server — and " +
-  "alc/altool, which `lethal run --backend al-runner` never resolves because al-runner compiles " +
-  "the bundle with its own compiler. A green report here says nothing about whether a bcdev run " +
-  "would work.";
-
-/**
  * The `packageCachePath` `validateBcDevConfig` requires (it is `BcDevConfigSection`'s shared
  * shape) when a read-only resolver has nothing else to offer for it — a config that leaves
  * `packageCachePath` to `downloadSymbols` (no static path declared — legal per
@@ -5031,45 +4397,6 @@ function doctorConfigFromEnvTool(
 }
 
 /**
- * R146 — the `al-runner` doctor probe, or `undefined` when the config never mentions al-runner.
- *
- * Builds the REAL `AlRunnerBackend` and calls its own `status()`, which is the same call
- * `runSession` makes before a session starts: it spawns `--version` and refuses a binary that is not
- * v2, because this adapter's v2-only argv pointed at v1 produces wrong verdicts rather than an
- * error. Doctor's honesty constraint 3 is that every check calls the refusal's own machinery, and a
- * second hand-rolled `--version` parse here is exactly the drift that constraint exists to stop.
- *
- * The fields `status()` does not touch (`instrumentedDir`, `testDir`, `selectorObjectId`) are given
- * inert values. Nothing this function does reads them, and nothing it does writes to disk or spawns
- * anything except `--version`, so it stays inside doctor's read-only boundary by construction.
- *
- * The constructor no longer refuses `serverMode: true` (R220 lifted R97/R126's refusal), and
- * `status()` only runs `--version`, so this check does NOT verify the transport a run would use:
- * not the `--server` daemon, not the selector mode, not coverage (R387). A config `run` would reject
- * still throws here, through `validateAlRunnerConfig`.
- */
-function alRunnerStatusFor(
-  configFile: LethalConfigFile,
-  spawn?: SpawnFn,
-): (() => Promise<BackendStatus>) | undefined {
-  const raw = configFile.alRunner;
-  if (raw === undefined) return undefined;
-  const c = validateAlRunnerConfig(raw);
-  return async () => {
-    const backend = new AlRunnerBackend(
-      {
-        alRunnerPath: c.alRunnerPath,
-        instrumentedDir: "",
-        testDir: "",
-        selectorObjectId: 0,
-      },
-      ...(spawn !== undefined ? ([spawn] as const) : ([] as const)),
-    );
-    return backend.status();
-  };
-}
-
-/**
  * R109 ruling, honesty constraint 1: builds `DoctorDeps`/`DoctorConfig` through the SAME
  * load-and-validate path `lethal run` uses — `validateBcDevConfig`/`validateEnvToolConfig`, the
  * identical calls `resolveEnvToolSession`/`buildBackend` make — never a second, hand-rolled parse.
@@ -5122,47 +4449,27 @@ export async function buildDoctorDeps(
     readonly alToolPaths?: typeof defaultAlToolPaths;
     readonly fetchFn?: FetchFn;
     readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
-    /** R131: al-runner's artifact root. Injected by tests so a unit test does not walk whatever
-     *  1 GB cache the machine running it happens to have — and so its result is the machine's,
-     *  not the suite's. Absent means al-runner's own default location. */
-    readonly alRunnerCacheDir?: string;
-    /** R264: al-runner's SECOND cache root (`~/.cache/al-runner`, R168). Injected by tests for the
-     *  same reason as `alRunnerCacheDir`: a unit test must never walk the machine's real cache.
-     *  Absent means al-runner's own default location. */
-    readonly alRunnerSecondaryCacheDir?: string;
-    /** R146: the spawn the al-runner `--version` probe uses. Injected by tests so the check can be
-     *  driven without a real al-runner install; absent means the real one. */
+    /** R586: the spawn the al-runner-v3 `--version` probe uses. Injected by tests so the check can
+     *  be driven without a real al-runner install; absent means the real one. */
     readonly alRunnerSpawn?: SpawnFn;
   } = {},
 ): Promise<{
   readonly cfg: DoctorConfig;
   readonly deps: DoctorDeps;
-  /**
-   * R146: at most ONE caveat, because the two shapes that produce one are mutually exclusive — a
-   * create-mode config HAS an `envTool` section, and an al-runner-only config has neither `envTool`
-   * nor `bcdev`. Renamed from `createModeCaveat` when the second kind arrived, so the field name
-   * does not claim to be about create mode while carrying something else.
-   */
+  /** R146: the create-mode caveat (R654 removed the al-runner-only one with the .NET al-runner). */
   readonly caveat?: string;
 }> {
   // R111: validation and resolution both live in `prepareBcdevReadOnly`, shared with
   // `force-reset-lease` — including constraint 4, the hard read-only boundary, which that helper
   // now carries in the config it hands the client rather than in a comment. A malformed envTool
   // section still throws HERE, eagerly, identically to `run` (constraint 1).
-  // R146 — an AL-RUNNER-ONLY project. Decided BEFORE `prepareBcdevReadOnly`, because that helper
-  // resolves a bcdev identity this config does not have and would throw on the way.
-  //
-  // The check list is short on purpose. `alRunnerCache` (R131) reads a local directory; `alRunner`
-  // spawns `--version` through `AlRunnerBackend.status()`, the same call `runSession` makes, and it
-  // can genuinely refuse. Everything else doctor knows how to ask is a live-BC concern and is left
-  // out rather than answered vacuously — see `DOCTOR_AL_RUNNER_ONLY_CAVEAT` for the full list and
-  // for the measurement that keeps alc out of it.
   // R586: an AL-RUNNER-V3-ONLY project: one check, the binary's version, its `.gated` pin and
-  // `bcVersion` against the package folder. The session's contract probe is not run here.
+  // `bcVersion` against the package folder. The session's contract probe is not run here. Decided
+  // BEFORE `prepareBcdevReadOnly`, because that helper resolves a bcdev identity this config does
+  // not have. (An `alRunner` section, the retired .NET al-runner's, is ignored: R654 F2 is held.)
   if (
     configFile.envTool === undefined &&
     configFile.bcdev === undefined &&
-    configFile.alRunner === undefined &&
     configFile.alRunnerV3 !== undefined
   ) {
     const c = validateAlRunnerV3Config(configFile.alRunnerV3);
@@ -5192,30 +4499,6 @@ export async function buildDoctorDeps(
       },
     };
   }
-  if (
-    configFile.envTool === undefined &&
-    configFile.bcdev === undefined &&
-    configFile.alRunner !== undefined
-  ) {
-    // Eagerly, exactly as `buildBackend` does, so a config `run` would reject throws HERE too
-    // (honesty constraint 1) rather than surfacing as a failing check: an unknown key or a bad
-    // `serverMode`/`selectorMode`/`coverage` value (R387). The transport itself is not checked.
-    validateAlRunnerConfig(configFile.alRunner);
-    const alRunnerProbe = alRunnerStatusFor(configFile, opts.alRunnerSpawn);
-    return {
-      cfg: {},
-      deps: {
-        // Non-undefined by construction: this branch is reached only when `configFile.alRunner` is
-        // defined, which is the only thing `alRunnerStatusFor` returns `undefined` for. Narrowed
-        // rather than asserted — `!` is banned here.
-        ...(alRunnerProbe !== undefined ? { alRunner: alRunnerProbe } : {}),
-        alRunnerCache: () =>
-          readAlRunnerCache(opts.alRunnerCacheDir, opts.alRunnerSecondaryCacheDir),
-      },
-      caveat: DOCTOR_AL_RUNNER_ONLY_CAVEAT,
-    };
-  }
-
   const readOnly = prepareBcdevReadOnly(configFile, {
     runId: "doctor",
     ...(opts.projectDir !== undefined ? { projectDir: opts.projectDir } : {}),
@@ -5226,19 +4509,15 @@ export async function buildDoctorDeps(
   // `server`/`serverInstance`/credentials from the file — validating the raw bcdev section here
   // would throw on exactly the configs `prepareBcdevReadOnly` exists to resolve.
   if (configFile.envTool === undefined && configFile.bcdev === undefined) {
-    // Reached only when the config declares NO backend at all — the al-runner-only branch above has
-    // already returned. That is a real mistake worth refusing (R146 point 3), and widening doctor to
-    // accept it would have thrown the refusal away along with the bug.
+    // Reached only when the config declares NO backend at all — the al-runner-v3-only branch above
+    // has already returned. That is a real mistake worth refusing (R146 point 3), and widening
+    // doctor to accept it would have thrown the refusal away along with the bug.
     //
     // Scoped to a section being FULLY ABSENT. A `bcdev` section that IS present but missing a
     // required field is a genuine typo, and `validateBcDevConfig`'s own field-listing message below
     // is the right one for that.
-    //
-    // The message this replaced said doctor "only checks a bcdev-configured project… if this is an
-    // al-runner project there is nothing here for doctor to check today". That stopped being true
-    // on 2026-08-14 when R131 added `al-runner-cache`, and R146 is the row that noticed.
     throw new Error(
-      'lethal doctor found no "bcdev", "envTool" or "alRunner" section in this config, so there is no backend for it to check anything about. Add the section for the backend this project runs on.',
+      'lethal doctor found no "bcdev", "envTool" or "alRunnerV3" section in this config, so there is no backend for it to check anything about. Add the section for the backend this project runs on.',
     );
   }
   if (configFile.envTool === undefined) {
@@ -5397,17 +4676,6 @@ export async function buildDoctorDeps(
           };
         };
 
-  // R131: reads a local directory and adds up sizes. No spawn, no write, no delete — so it is
-  // inside doctor's read-only boundary (constraint 4) by construction rather than by promise, and
-  // it runs in create mode too, where there is no environment but there is still a disk.
-  const alRunnerCache = async (): Promise<AlRunnerCacheReport> =>
-    readAlRunnerCache(opts.alRunnerCacheDir, opts.alRunnerSecondaryCacheDir);
-
-  // R146: the al-runner probe follows the CONFIG, not the `--backend` flag doctor does not have. A
-  // bcdev project that also declares an `alRunner` section gets it alongside the live-BC checks; a
-  // config that never mentions al-runner gets no dep and therefore no check.
-  const alRunner = alRunnerStatusFor(configFile, opts.alRunnerSpawn);
-
   return {
     cfg: {
       ...doctorConfigFromEnvTool(envCfg),
@@ -5424,8 +4692,6 @@ export async function buildDoctorDeps(
       ...(isCreateMode || testApp === undefined ? {} : { testApp }),
       toolPaths,
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
-      ...(alRunner !== undefined ? { alRunner } : {}),
-      alRunnerCache,
     },
     ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };
@@ -5537,8 +4803,9 @@ export const DOCTOR_SCHEMA_VERSION = 1;
 export const DOCTOR_NOT_CHECKED_TOKENS = ["publish-ceiling", "baseline-test-health"] as const;
 export type DoctorNotChecked = (typeof DOCTOR_NOT_CHECKED_TOKENS)[number];
 
-/** Which conditional caveat a report carries, if any. One token per caveat constant above. */
-export const DOCTOR_CAVEAT_KINDS = ["create-mode", "al-runner-only"] as const;
+/** Which conditional caveat a report carries, if any. One token per caveat constant above.
+ *  R654 (plan r1 I3): `"al-runner-only"` left with the .NET al-runner, narrowed in place. */
+export const DOCTOR_CAVEAT_KINDS = ["create-mode"] as const;
 export type DoctorCaveatKind = (typeof DOCTOR_CAVEAT_KINDS)[number];
 
 export interface DoctorJsonOutput {
@@ -5567,9 +4834,7 @@ export function doctorJson(report: DoctorReport, caveat?: string): DoctorJsonOut
       ? undefined
       : caveat === DOCTOR_CREATE_MODE_CAVEAT
         ? "create-mode"
-        : caveat === DOCTOR_AL_RUNNER_ONLY_CAVEAT
-          ? "al-runner-only"
-          : undefined;
+        : undefined;
   if (caveat !== undefined && kind === undefined) {
     throw new Error(
       `doctor --json: unrecognised caveat with no token in DOCTOR_CAVEAT_KINDS — ${JSON.stringify(caveat)}. Add its token rather than emitting it unlabelled.`,
@@ -5602,16 +4867,8 @@ export async function doctorFromCli(
     readonly alToolPaths?: typeof defaultAlToolPaths;
     readonly fetchFn?: FetchFn;
     readonly makeEnvToolClient?: (cfg: EnvToolConfigSection) => EnvToolClient;
-    /** R131: al-runner's artifact root. Injected by tests so a unit test does not walk whatever
-     *  1 GB cache the machine running it happens to have — and so its result is the machine's,
-     *  not the suite's. Absent means al-runner's own default location. */
-    readonly alRunnerCacheDir?: string;
-    /** R264: al-runner's SECOND cache root (`~/.cache/al-runner`, R168). Injected by tests for the
-     *  same reason as `alRunnerCacheDir`: a unit test must never walk the machine's real cache.
-     *  Absent means al-runner's own default location. */
-    readonly alRunnerSecondaryCacheDir?: string;
-    /** R146: the spawn the al-runner `--version` probe uses. Injected by tests; absent means the
-     *  real one. */
+    /** R586: the spawn the al-runner-v3 `--version` probe uses. Injected by tests; absent means
+     *  the real one. */
     readonly alRunnerSpawn?: SpawnFn;
     /** Issue #23: the spawn that reads alc's version banner. */
     readonly alcSpawn?: SpawnFn;
@@ -5630,13 +4887,6 @@ export async function doctorFromCli(
     ...(deps.alToolPaths !== undefined ? { alToolPaths: deps.alToolPaths } : {}),
     ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
     ...(deps.makeEnvToolClient !== undefined ? { makeEnvToolClient: deps.makeEnvToolClient } : {}),
-    // R146: this was DECLARED on both sides and dropped in the middle, so R131's injection seam did
-    // nothing when reached through the CLI and a unit test driving `lethal doctor` walked whatever
-    // multi-GB artifact cache the machine happened to hold.
-    ...(deps.alRunnerCacheDir !== undefined ? { alRunnerCacheDir: deps.alRunnerCacheDir } : {}),
-    ...(deps.alRunnerSecondaryCacheDir !== undefined
-      ? { alRunnerSecondaryCacheDir: deps.alRunnerSecondaryCacheDir }
-      : {}),
     ...(deps.alRunnerSpawn !== undefined ? { alRunnerSpawn: deps.alRunnerSpawn } : {}),
   });
   const report = await runDoctor(cfg, doctorDeps);
@@ -6163,10 +5413,6 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
   const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
   // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
   const dryRunSource = await readTargetSource(parsed.projectDir);
-  // R583: a dry run refuses what the real run would refuse.
-  if (parsed.backendKind === "al-runner") {
-    await refuseResourceSelectorRuntime(dryRunConfig ?? {}, parsed.projectDir, dryRunSource);
-  }
   const dryRunLines = await resolveLineRanges(parsed, defaultSpawn, dryRunSource);
   await printDryRun(parsed.projectDir, parsed.only, {
     dbPath: parsed.dbPath,
@@ -6180,16 +5426,11 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
       ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
       : {}),
     ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
-    ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
-      ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
-      : {}),
-    // R565: the folders a real run searches, less al-runner's provisioned platform apps.
-    dependencyPackageDirs:
-      parsed.backendKind === "al-runner"
-        ? dryRunConfig?.alRunner?.packagesDir !== undefined
-          ? [dryRunConfig.alRunner.packagesDir]
-          : []
-        : [resolve(packageCachePathDefault(dryRunConfig?.bcdev, parsed.projectDir))],
+    // R565: the folders a real run searches. (On al-runner-v3 this is still bcdev's package cache,
+    // not `alRunnerV3.packagesDir`: found by the R654 inventory, pre-existing.)
+    dependencyPackageDirs: [
+      resolve(packageCachePathDefault(dryRunConfig?.bcdev, parsed.projectDir)),
+    ],
   });
   return 0;
 }

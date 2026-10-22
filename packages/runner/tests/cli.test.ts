@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
-import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -34,7 +33,6 @@ import {
   verifyFromCli,
 } from "../src/cli";
 import {
-  announceAlRunnerCanary,
   clearQuarantine,
   forceResetLeaseFromCli,
   helpText,
@@ -49,11 +47,9 @@ import {
   resolveForceResetLeaseConfig,
   resolveSelectorIds,
   resourceIdentityFor,
-  validateAlRunnerConfig,
   validateBcDevConfig,
   validateSelectorIdsConfig,
   validateSelectorIdsForProject,
-  withAlRunnerCanary,
 } from "../src/cli";
 import { EnvToolClient } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
@@ -76,7 +72,6 @@ import {
   refusalOutput,
   type runVerify,
 } from "../src/verify";
-import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { tinyBundle } from "./helpers/bundle";
 import { stalledResponse } from "./helpers/lease-wire";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
@@ -210,7 +205,7 @@ describe("parseCliConfig — R89, a stray positional is refused, never ignored",
 
 describe("parseCliConfig", () => {
   test("missing --project throws a clear error", () => {
-    expect(() => parseCliConfig(["run", "--tests", "t", "--backend", "al-runner"])).toThrow(
+    expect(() => parseCliConfig(["run", "--tests", "t", "--backend", "bcdev"])).toThrow(
       "missing required --project",
     );
   });
@@ -229,7 +224,7 @@ describe("parseCliConfig", () => {
   });
 
   test("missing --tests (non-dry-run) throws a clear error", () => {
-    expect(() => parseCliConfig(["run", "--project", "proj", "--backend", "al-runner"])).toThrow(
+    expect(() => parseCliConfig(["run", "--project", "proj", "--backend", "bcdev"])).toThrow(
       "missing required --tests",
     );
   });
@@ -246,7 +241,8 @@ describe("parseCliConfig", () => {
     ).toThrow('unknown --backend "nope"');
   });
 
-  test("valid al-runner args fill in defaults for db/config/skip-known-survivors", () => {
+  // R654: was the retired .NET al-runner; bcdev is the vehicle now.
+  test("valid bcdev args fill in defaults for db/config/skip-known-survivors", () => {
     const parsed = parseCliConfig([
       "run",
       "--project",
@@ -254,13 +250,13 @@ describe("parseCliConfig", () => {
       "--tests",
       "t",
       "--backend",
-      "al-runner",
+      "bcdev",
     ]);
     expect(parsed).toEqual({
       mode: "run",
       projectDir: "proj",
       testDir: "t",
-      backendKind: "al-runner",
+      backendKind: "bcdev",
       dbPath: join("proj", "lethal.sqlite"),
       configPath: join("proj", "lethal.config.json"),
       skipKnownSurvivors: false,
@@ -627,14 +623,16 @@ describe("odataCfgFor (t7: the shared OData config both buildBackend and leaseSe
   });
 });
 
+// R654: the vehicle backend is bcdev (was the retired .NET al-runner, the one backend that took
+// --workers > 1; R671).
 describe("parseCliConfig — worker flags", () => {
   test("defaults to a single worker", () => {
-    const p = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "al-runner"]);
+    const p = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "bcdev"]);
     if (p.mode !== "run") throw new Error("expected a run config");
     expect(p.workers).toBe(1);
   });
 
-  test("accepts --workers and --compile-concurrency", () => {
+  test("accepts --workers 1 and --compile-concurrency", () => {
     const p = parseCliConfig([
       "run",
       "--project",
@@ -642,14 +640,14 @@ describe("parseCliConfig — worker flags", () => {
       "--tests",
       "t",
       "--backend",
-      "al-runner",
+      "bcdev",
       "--workers",
-      "4",
+      "1",
       "--compile-concurrency",
       "2",
     ]);
     if (p.mode !== "run") throw new Error("expected a run config");
-    expect(p.workers).toBe(4);
+    expect(p.workers).toBe(1);
     expect(p.compileConcurrency).toBe(2);
   });
 
@@ -662,7 +660,7 @@ describe("parseCliConfig — worker flags", () => {
         "--tests",
         "t",
         "--backend",
-        "al-runner",
+        "bcdev",
         "--workers",
         "0",
       ]),
@@ -712,7 +710,7 @@ describe("parseCliConfig — worker flags", () => {
 // (DEFAULT_SELECTOR_IDS) independently.
 describe("parseCliConfig — selector id flags", () => {
   test("no flags given: selectorIdOverrides is absent entirely", () => {
-    const p = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "al-runner"]);
+    const p = parseCliConfig(["run", "--project", "p", "--tests", "t", "--backend", "bcdev"]);
     if (p.mode !== "run") throw new Error("expected a run config");
     expect(p.selectorIdOverrides).toBeUndefined();
     expect("selectorIdOverrides" in p).toBe(false);
@@ -726,7 +724,7 @@ describe("parseCliConfig — selector id flags", () => {
       "--tests",
       "t",
       "--backend",
-      "al-runner",
+      "bcdev",
       "--selector-id",
       "50002",
       "--control-id",
@@ -750,7 +748,7 @@ describe("parseCliConfig — selector id flags", () => {
       "--tests",
       "t",
       "--backend",
-      "al-runner",
+      "bcdev",
       "--selector-id",
       "50002",
     ]);
@@ -767,7 +765,7 @@ describe("parseCliConfig — selector id flags", () => {
         "--tests",
         "t",
         "--backend",
-        "al-runner",
+        "bcdev",
         "--selector-id",
         "0",
       ]),
@@ -783,7 +781,7 @@ describe("parseCliConfig — selector id flags", () => {
         "--tests",
         "t",
         "--backend",
-        "al-runner",
+        "bcdev",
         "--control-id",
         "not-a-number",
       ]),
@@ -799,7 +797,7 @@ describe("parseCliConfig — selector id flags", () => {
         "--tests",
         "t",
         "--backend",
-        "al-runner",
+        "bcdev",
         "--table-id",
         "1.5",
       ]),
@@ -887,37 +885,6 @@ describe("validateSelectorIdsConfig", () => {
     expect(() =>
       validateSelectorIdsConfig({ selectorId: -1, controlId: 0, tableId: 79150 }),
     ).toThrow(/selectorId, controlId/);
-  });
-});
-
-describe("validateAlRunnerConfig", () => {
-  test("passes through a complete section", () => {
-    const section = { alRunnerPath: "al-runner" };
-    expect(validateAlRunnerConfig(section)).toEqual(section);
-  });
-
-  test("missing section entirely throws", () => {
-    expect(() => validateAlRunnerConfig(undefined)).toThrow('missing the "alRunner" section');
-  });
-
-  test("missing alRunnerPath throws", () => {
-    expect(() => validateAlRunnerConfig({})).toThrow("alRunnerPath");
-  });
-
-  // al-runner v2 removed --stubs entirely and rejects it as an unknown option. Accepting the
-  // field and dropping it would leave an operator believing their hand-written dependency stubs
-  // were in play while every compile ran without them — a config that lies quietly. The refusal
-  // must name the version, because "unknown field" alone tells nobody what to do about it.
-  test('a config still setting "stubsDir" is REFUSED, naming v2 and the removed flag', () => {
-    expect(() =>
-      validateAlRunnerConfig({ alRunnerPath: "al-runner", stubsDir: "C:/stubs" } as never),
-    ).toThrow(/stubsDir/);
-    expect(() =>
-      validateAlRunnerConfig({ alRunnerPath: "al-runner", stubsDir: "C:/stubs" } as never),
-    ).toThrow(/v2/);
-    expect(() =>
-      validateAlRunnerConfig({ alRunnerPath: "al-runner", stubsDir: "C:/stubs" } as never),
-    ).toThrow(/--stubs/);
   });
 });
 
@@ -1073,11 +1040,8 @@ describe("resourceIdentityFor (Task 13 folded fix — cli.ts sources quarantine 
     });
   });
 
-  test("al-runner session has no shared tier — returns no identity fields", () => {
-    const configFile = { alRunner: { alRunnerPath: "al-runner" } };
-    expect(
-      resourceIdentityFor({ ...bcdevRunConfig, backendKind: "al-runner" }, configFile),
-    ).toEqual({});
+  test("al-runner-v3 session has no shared tier — returns no identity fields", () => {
+    expect(resourceIdentityFor({ ...bcdevRunConfig, backendKind: "al-runner-v3" }, {})).toEqual({});
   });
 
   test("bcdev session with an incomplete bcdev config section throws (same validation as buildBackend)", () => {
@@ -1101,12 +1065,11 @@ describe("resourceIdentityFor (Task 13 folded fix — cli.ts sources quarantine 
         packageCachePath: "C:/.alpackages",
         controlSymbolPath: "C:/lethal-control.app",
       },
-      alRunner: { alRunnerPath: "al-runner" },
     };
     const wired = leaseSessionFor(bcdevRunConfig, configFile);
     expect(wired.lease?.client).toBeInstanceOf(LeaseClient);
     expect(typeof wired.lease?.serverGeneration).toBe("function");
-    expect(leaseSessionFor({ ...bcdevRunConfig, backendKind: "al-runner" }, configFile)).toEqual(
+    expect(leaseSessionFor({ ...bcdevRunConfig, backendKind: "al-runner-v3" }, configFile)).toEqual(
       {},
     );
   });
@@ -1126,12 +1089,11 @@ describe("resourceIdentityFor (Task 13 folded fix — cli.ts sources quarantine 
         packageCachePath: "C:/.alpackages",
         controlSymbolPath: "C:/lethal-control.app",
       },
-      alRunner: { alRunnerPath: "al-runner" },
     };
     const wired = permissionCanaryFor(bcdevRunConfig, configFile);
     expect(typeof wired.permissionCanary).toBe("function");
     expect(
-      permissionCanaryFor({ ...bcdevRunConfig, backendKind: "al-runner" }, configFile),
+      permissionCanaryFor({ ...bcdevRunConfig, backendKind: "al-runner-v3" }, configFile),
     ).toEqual({});
   });
 
@@ -1866,166 +1828,8 @@ describe("forceResetLeaseFromCli — the wiring (R51 follow-on)", () => {
   });
 });
 
-// ————————————————————————————————————————————————————————————————————————
-// R7/R8: `announceAlRunnerCanary` — the exact branch `runFromCli` takes for an al-runner
-// session, extracted so it's testable without mocking config-file I/O, resolveEnvToolSession,
-// buildBackend, and runSession all at once (see the `resourceIdentityFor` describe block above
-// for the same reasoning applied to an earlier fix). Reverting this branch to unconditionally
-// call the static `warnAlRunnerNotAuthoritative()` fallback (its pre-canary behaviour) would
-// fail every test below that asserts a canary-shaped line landed in `console.warn`.
-// ————————————————————————————————————————————————————————————————————————
-describe("announceAlRunnerCanary (R7/R8)", () => {
-  function fakeCanary(result: AlRunnerCanaryResult, calls: string[]) {
-    return async (alRunnerPath: string) => {
-      calls.push(alRunnerPath);
-      return result;
-    };
-  }
-
-  test("runs the canary, prints its warnings, and RETURNS the measured result when alRunnerPath is configured", async () => {
-    const calls: string[] = [];
-    const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = ((...args: unknown[]) => {
-      warnings.push(args.map(String).join(" "));
-    }) as typeof console.warn;
-    const canned: AlRunnerCanaryResult = {
-      asserterror: "defect-confirmed",
-      tableGlobalVar: "defect-not-reproduced",
-      transactionRollback: "defect-not-reproduced",
-    };
-    let result: AlRunnerCanaryResult | undefined;
-    try {
-      result = await announceAlRunnerCanary(
-        { alRunner: { alRunnerPath: "C:/al-runner.exe" } },
-        fakeCanary(canned, calls),
-      );
-    } finally {
-      console.warn = originalWarn;
-    }
-    expect(calls).toEqual(["C:/al-runner.exe"]);
-    expect(warnings.some((l) => l.includes("R7") && l.includes("CONFIRMED"))).toBe(true);
-    expect(warnings.some((l) => l.includes("R8") && l.includes("did NOT"))).toBe(true);
-    // R7/R8 report-persistence fix: the caller (runFromCli) needs this value back to attach it
-    // to the SessionReport via withAlRunnerCanary — printing it was never enough on its own.
-    expect(result).toEqual(canned);
-  });
-
-  test("falls back to the static warning WITHOUT running the canary, and returns undefined, when alRunnerPath is not yet configured", async () => {
-    const calls: string[] = [];
-    const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = ((...args: unknown[]) => {
-      warnings.push(args.map(String).join(" "));
-    }) as typeof console.warn;
-    let result: AlRunnerCanaryResult | undefined;
-    try {
-      result = await announceAlRunnerCanary(
-        {},
-        fakeCanary(
-          {
-            asserterror: "defect-confirmed",
-            tableGlobalVar: "defect-confirmed",
-            transactionRollback: "defect-not-reproduced",
-          },
-          calls,
-        ),
-      );
-    } finally {
-      console.warn = originalWarn;
-    }
-    // The canary must never run against an unconfigured/undefined path — buildBackend's own
-    // validateAlRunnerConfig throws the targeted "missing alRunnerPath" error moments later.
-    expect(calls).toEqual([]);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("al-runner is NOT authoritative");
-    // R255: the reason given is the CURRENT one. The asserterror defect (R7) is fixed in v2 and the
-    // canary reports it `defect-not-reproduced`, so the fallback must not name it.
-    expect(warnings[0]).not.toContain("asserterror");
-    expect(warnings[0]).toContain("coverage");
-    expect(result).toBeUndefined();
-  });
-});
-
-// ————————————————————————————————————————————————————————————————————————
-// R7/R8 report-persistence fix: `withAlRunnerCanary` — the plain merge `runFromCli` applies to
-// its final `SessionReport` before returning it, extracted so it's testable without a real
-// backend/runSession producing a `SessionReport`. Reverting `runFromCli` to drop this call (i.e.
-// return `report` as-is) would leave a `--out` JSON report or any CI that discards stderr with
-// no record of the canary's measured verdict — exactly the gap review flagged, since only the
-// console.warn lines from `announceAlRunnerCanary` would carry it.
-// ————————————————————————————————————————————————————————————————————————
-describe("withAlRunnerCanary (R7/R8 report persistence)", () => {
-  const baseReport = {
-    schemaVersion: 2,
-    validity: {
-      reliability: "full" as const,
-      caveats: [],
-      scoreDescribes: "test fixture",
-      baselineTests: { total: 0, failing: 0 },
-      scoredMutants: { scored: 0, recorded: 0 },
-      // R60/R69 Phase 2: one entry per execution path actually used; always non-empty.
-      executionContexts: [
-        {
-          runner: "fenced" as const,
-          guiAllowed: false,
-          clientType: "ODataV4",
-          basis: "test fixture",
-          verdictCount: 0,
-        },
-      ],
-    },
-    survivorsByProcedure: [],
-    testFiles: {},
-    backend: "al-runner",
-    authoritative: false,
-    baselineGreen: true,
-    batches: 1,
-    counts: {
-      killed: 0,
-      survived: 0,
-      noCoverage: 0,
-      timeoutKilled: 0,
-      knownSurvivors: 0,
-      unstable: 0,
-      errors: 0,
-      deadlineExceeded: 0,
-    },
-    mutationScore: null,
-    mutants: [],
-    unsupportedTests: [],
-    notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
-    declarativeSites: { siteCount: 0, fileCount: 0, files: [] },
-    timings: {
-      totalMs: 0,
-      generateMutationSetMs: 0,
-      deployMs: 0,
-      baselineMs: 0,
-      mutantsMs: 0,
-      perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
-    },
-    preprocessorSymbols: [],
-    unplaceableCount: 0,
-    unplaceableMutants: [],
-    untargetedTriggerCount: 0,
-  };
-
-  test("attaches the measured result under alRunnerCanary, leaving every other field untouched", () => {
-    const canary: AlRunnerCanaryResult = {
-      asserterror: "defect-confirmed",
-      tableGlobalVar: "defect-confirmed",
-      transactionRollback: "defect-not-reproduced",
-    };
-    const result = withAlRunnerCanary(baseReport, canary);
-    expect(result).toEqual({ ...baseReport, alRunnerCanary: canary });
-  });
-
-  test("undefined canary (bcdev session, or the no-alRunnerPath fallback) leaves the report exactly as given, with no alRunnerCanary key at all", () => {
-    const result = withAlRunnerCanary(baseReport, undefined);
-    expect(result).toEqual(baseReport);
-    expect("alRunnerCanary" in result).toBe(false);
-  });
-});
+// R654 removed the .NET al-runner's canary (R7/R8): `announceAlRunnerCanary` and
+// `withAlRunnerCanary` went with it.
 
 // ————————————————————————————————————————————————————————————————————————
 /**
@@ -2244,16 +2048,19 @@ describe("issue #22: the restore notice names the version to beat", () => {
 // report names them and the recorded target source hash covers them. Driven through the REAL
 // runFromCli and runSession; only the backend is a fake (no deploy, every test passes).
 describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
+  // R654: the local-runner fake is al-runner-v3 (was the retired .NET al-runner).
   class PassingBackend implements ExecutionBackend {
-    readonly measurePredefinedSymbols = measuredV2_12; // R392
     capabilities(): BackendCapabilities {
       return {
         coverage: "none",
         deploy: "none",
         isolation: "session",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       };
+    }
+    async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+      return { version: "alrunner 3.0.0-test", binarySha256: "b".repeat(64) };
     }
     async status(): Promise<BackendStatus> {
       return { ok: true, details: "fake" };
@@ -2319,7 +2126,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
       mode: "run",
       projectDir,
       testDir,
-      backendKind: "al-runner",
+      backendKind: "al-runner-v3",
       dbPath,
       configPath,
       skipKnownSurvivors: false,
@@ -2396,7 +2203,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
       mode: "run",
       projectDir,
       testDir,
-      backendKind: "al-runner",
+      backendKind: "al-runner-v3",
       dbPath: testDbPath("lethal.sqlite"),
       configPath,
       skipKnownSurvivors: false,
@@ -2548,16 +2355,19 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
 // verify fake stops at `compileTestApp`, the first backend call after `loadInstalledArtifact`, so
 // reaching it with the folder already gone proves verify read the stored files.
 describe("lethal run then lethal verify on one store (R358)", () => {
+  // R654: the local-runner fake is al-runner-v3 (was the retired .NET al-runner).
   class DeployingBackend implements ExecutionBackend {
-    readonly measurePredefinedSymbols = measuredV2_12; // R392
     capabilities(): BackendCapabilities {
       return {
         coverage: "none",
         deploy: "publish",
         isolation: "session",
-        kind: "al-runner",
+        kind: "al-runner-v3",
         authoritative: false,
       };
+    }
+    async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+      return { version: "alrunner 3.0.0-test", binarySha256: "b".repeat(64) };
     }
     async status(): Promise<BackendStatus> {
       return { ok: true, details: "fake" };
@@ -2660,7 +2470,7 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         mode: "run",
         projectDir,
         testDir,
-        backendKind: "al-runner",
+        backendKind: "al-runner-v3",
         dbPath,
         configPath,
         skipKnownSurvivors: false,
@@ -3164,7 +2974,12 @@ describe("C02-06: lethal verify (Task 7)", () => {
  */
 const INVOCATIONS: ReadonlyArray<{ readonly sub: string; readonly argv: readonly string[] }> = [
   { sub: "run", argv: ["run", "--project", "P", "--tests", "T", "--backend", "bcdev"] },
-  { sub: "run", argv: ["run", "--project", "P", "--tests", "T", "--backend", "al-runner"] },
+  // R654: the retired .NET al-runner was the one backend that accepted --workers > 1 (R671). Every
+  // backend now refuses it at parse, so --workers is read by being supplied (1) and refused by name.
+  {
+    sub: "run",
+    argv: ["run", "--project", "P", "--tests", "T", "--backend", "bcdev", "--workers", "1"],
+  },
   { sub: "run", argv: ["run", "--project", "P", "--dry-run"] },
   { sub: "init", argv: ["init", "--project", "P"] },
   { sub: "clear-quarantine", argv: ["clear-quarantine", "--server", "S", "--instance", "I"] },
@@ -3283,7 +3098,7 @@ type Outcome = "reads" | "ignores" | "refused-by-owner" | "refused-other";
  *  measured by changing its value, and `VALUE[flag]` or `zz-<flag>` can equal the supplied value or
  *  be refused (`--backend zz-backend`). Candidates are tried in order, skipping the supplied one. */
 const OTHER_VALUES: Readonly<Record<string, readonly string[]>> = {
-  backend: ["bcdev", "al-runner"],
+  backend: ["bcdev", "al-runner-v3"],
   artifact: ["fedcba9876543210fedcba9876543210"],
   survivors: ["1/M0002"],
 };
@@ -3429,7 +3244,7 @@ describe("C02-07: flags are read or refused, never ignored", () => {
   test("R377: --dry-run reads an optional --backend, validated as run validates it", () => {
     const dry = (...extra: string[]) =>
       parseCliConfig(["run", "--project", "p", "--dry-run", ...extra]);
-    expect(dry("--backend", "al-runner")).toMatchObject({ backendKind: "al-runner" });
+    expect(dry("--backend", "bcdev")).toMatchObject({ backendKind: "bcdev" });
     expect(dry()).not.toHaveProperty("backendKind");
     expect(() => dry("--backend", "alrunner")).toThrow('unknown --backend "alrunner"');
   });

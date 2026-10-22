@@ -152,25 +152,6 @@
               "verdictCount": {
                 "type": "number"
               },
-              "bcBuild": {
-                "type": "string"
-              },
-              "bcBuildAnnouncement": {
-                "type": "string"
-              },
-              "platformAppsDir": {
-                "type": "string"
-              },
-              "testSelector": {
-                "type": "string",
-                "enum": [
-                  "exact",
-                  "substring-with-excludes"
-                ]
-              },
-              "testSelectorReason": {
-                "type": "string"
-              },
               "runnerBuild": {
                 "type": "string"
               },
@@ -1032,9 +1013,6 @@
         },
         "skippedStranded": {
           "type": "number"
-        },
-        "carryRefused": {
-          "type": "string"
         }
       }
     },
@@ -1437,50 +1415,6 @@
       ],
       "properties": {
         "reason": {
-          "type": "string"
-        }
-      }
-    },
-    "alRunnerCanary": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "asserterror",
-        "tableGlobalVar",
-        "transactionRollback"
-      ],
-      "properties": {
-        "asserterror": {
-          "type": "string",
-          "enum": [
-            "defect-confirmed",
-            "defect-not-reproduced",
-            "inconclusive"
-          ]
-        },
-        "tableGlobalVar": {
-          "type": "string",
-          "enum": [
-            "defect-confirmed",
-            "defect-not-reproduced",
-            "inconclusive"
-          ]
-        },
-        "transactionRollback": {
-          "type": "string",
-          "enum": [
-            "defect-confirmed",
-            "defect-not-reproduced",
-            "inconclusive"
-          ]
-        },
-        "asserterrorDetail": {
-          "type": "string"
-        },
-        "tableGlobalVarDetail": {
-          "type": "string"
-        },
-        "transactionRollbackDetail": {
           "type": "string"
         }
       }
