@@ -6,8 +6,10 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +19,7 @@ import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-a
 import {
   MARKER,
   SymbolCacheError,
+  buildDirName,
   fillSymbolCache,
   lookupSymbolCache,
   verifyBuildDir,
@@ -53,6 +56,25 @@ afterAll(() => {
 });
 const POSIX = process.platform !== "win32";
 
+/** file, bytes, name, publisher, version */
+type HandEntry = readonly [string, Buffer, string, string, string];
+
+/** A build dir written by hand, with a marker whose hashes are all correct. */
+function handDir(root: string, list: readonly HandEntry[], build = BUILD): string {
+  const names = list.map((e) => e[2]);
+  const dir = join(root, "bc3", buildDirName(build, names));
+  mkdirSync(dir, { recursive: true });
+  const sha = (b: Buffer) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
+  const packages = list.map(([file, b, name, publisher, version]) => {
+    writeFileSync(join(dir, file), b);
+    return { file, id: `id-${name}`, name, publisher, version, sha256: sha(b) };
+  });
+  const writtenAt = "2026-10-22T00:00:00Z";
+  const marker = { server: "bc3", build, writtenAt, fileCount: list.length, packages };
+  writeFileSync(join(dir, MARKER), JSON.stringify(marker));
+  return dir;
+}
+
 /** A server whose Microsoft packages are `pkgs`; counts every download. */
 function server(pkgs: Record<string, Buffer>, gate?: Promise<void>) {
   const calls: string[] = [];
@@ -68,15 +90,29 @@ function server(pkgs: Record<string, Buffer>, gate?: Promise<void>) {
 
 const MS = { System: pkg("System"), "Base Application": pkg("Base Application") };
 const NAMES = ["System", "Base Application"];
-const fill = (root: string, s = server(MS), names = NAMES) =>
-  fillSymbolCache({ root, server: "bc3", names, download: s.download });
+/** The build dir's name: the build plus the hash of the name set. */
+const DIR = buildDirName(BUILD, NAMES);
+const fill = (
+  root: string,
+  s = server(MS),
+  names = NAMES,
+  rename?: (from: string, to: string) => void,
+) =>
+  fillSymbolCache({
+    root,
+    server: "bc3",
+    names,
+    download: s.download,
+    ...(rename !== undefined ? { rename } : {}),
+  });
 
 describe("fillSymbolCache: temp dir, marker, atomic rename", () => {
-  test("a fill writes a verifying marker and seals the dir under <server>/<build>", async () => {
+  test("a fill writes a verifying marker and seals the dir under <server>/<build>-<hash8>", async () => {
     const root = newRoot();
     const s = server(MS);
     const r = await fill(root, s);
-    expect(r).toMatchObject({ dir: join(root, "bc3", BUILD), build: BUILD, outcome: "filled" });
+    expect(DIR).toMatch(/^28\.4\.53241\.56646-[0-9a-f]{8}$/);
+    expect(r).toMatchObject({ dir: join(root, "bc3", DIR), build: BUILD, outcome: "filled" });
     expect(s.calls).toEqual(NAMES);
     const v = verifyBuildDir(r.dir, "bc3", NAMES);
     expect(v.ok).toBe(true);
@@ -92,7 +128,36 @@ describe("fillSymbolCache: temp dir, marker, atomic rename", () => {
       expect(statSync(join(r.dir, "Microsoft_System.app")).mode & 0o777).toBe(0o444);
     }
     // no temp dir is left beside the build dir
-    expect(readdirSync(join(root, "bc3"))).toEqual([BUILD]);
+    expect(readdirSync(join(root, "bc3"))).toEqual([DIR]);
+  });
+
+  test.skipIf(!POSIX)(
+    "a crash right after the rename still leaves a SEALED dir (sealed before the move)",
+    async () => {
+      const root = newRoot();
+      const crash = (from: string, to: string) => {
+        renameSync(from, to);
+        throw new Error("crashed after the rename");
+      };
+      // The crash reads as a lost race: the loser verifies the dir that is now in place.
+      const r = await fill(root, server(MS), NAMES, crash);
+      expect(r.outcome).toBe("lost-race");
+      expect(statSync(join(root, "bc3", DIR)).mode & 0o777).toBe(0o555);
+      expect(readdirSync(join(root, "bc3"))).toEqual([DIR]);
+    },
+  );
+
+  test("a NEW Microsoft dependency on the same build gets a new dir, and the old one stays", async () => {
+    const root = newRoot();
+    const old = await fill(root, server(MS), ["System"]);
+    const r = await fill(root, server(MS), NAMES);
+    expect(r.outcome).toBe("filled");
+    expect(r.dir).not.toBe(old.dir);
+    expect(readdirSync(join(root, "bc3")).sort()).toEqual(
+      [buildDirName(BUILD, ["System"]), DIR].sort(),
+    );
+    expect(verifyBuildDir(old.dir, "bc3", ["System"]).ok).toBe(true);
+    expect(lookupSymbolCache(root, "bc3", NAMES).chosen?.dir).toBe(r.dir);
   });
 
   test("a dir that already verifies is used: one download (System, for the build), dir untouched", async () => {
@@ -107,12 +172,12 @@ describe("fillSymbolCache: temp dir, marker, atomic rename", () => {
     const after = statSync(join(first.dir, MARKER));
     expect([after.ino, after.mtimeMs]).toEqual([before.ino, before.mtimeMs]);
     expect(readFileSync(join(first.dir, MARKER), "utf8")).toBe(marker);
-    expect(readdirSync(join(root, "bc3"))).toEqual([BUILD]);
+    expect(readdirSync(join(root, "bc3"))).toEqual([DIR]);
   });
 
   test("a partial dir (no marker) is never used and never touched", async () => {
     const root = newRoot();
-    const partial = join(root, "bc3", BUILD);
+    const partial = join(root, "bc3", DIR);
     mkdirSync(partial, { recursive: true });
     writeFileSync(join(partial, "Microsoft_System.app"), MS.System);
     await expect(fill(root)).rejects.toThrow(/no cache-complete\.json.*never modified or deleted/);
@@ -145,8 +210,8 @@ describe("fillSymbolCache: temp dir, marker, atomic rename", () => {
     open();
     const results = await Promise.all([a, b]);
     expect(results.map((r) => r.outcome).sort()).toEqual(["filled", "lost-race"]);
-    expect(readdirSync(join(root, "bc3"))).toEqual([BUILD]);
-    expect(verifyBuildDir(join(root, "bc3", BUILD), "bc3", NAMES).ok).toBe(true);
+    expect(readdirSync(join(root, "bc3"))).toEqual([DIR]);
+    expect(verifyBuildDir(join(root, "bc3", DIR), "bc3", NAMES).ok).toBe(true);
   });
 
   test("a new BC build gets a new dir and the old one is left alone", async () => {
@@ -160,8 +225,8 @@ describe("fillSymbolCache: temp dir, marker, atomic rename", () => {
         "Base Application": pkg("Base Application", "Microsoft", next),
       }),
     );
-    expect(r.dir).toBe(join(root, "bc3", next));
-    expect(readdirSync(join(root, "bc3")).sort()).toEqual([BUILD, next]);
+    expect(r.dir).toBe(join(root, "bc3", buildDirName(next, NAMES)));
+    expect(readdirSync(join(root, "bc3")).sort()).toEqual([DIR, buildDirName(next, NAMES)]);
     expect(verifyBuildDir(old.dir, "bc3", NAMES).ok).toBe(true);
   });
 });
@@ -199,32 +264,11 @@ describe("only Microsoft packages enter the shared cache (orchestrator ruling)",
   });
 
   test("a marker that lists a non-Microsoft package (hashes all correct) fails verification", () => {
-    const root = newRoot();
-    const dir = join(root, "bc3", BUILD);
-    mkdirSync(dir, { recursive: true });
-    const sha = (b: Buffer) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
-    const entry = (file: string, b: Buffer, name: string, publisher: string, version: string) => {
-      writeFileSync(join(dir, file), b);
-      return { file, id: `id-${name}`, name, publisher, version, sha256: sha(b) };
-    };
-    const packages = [
-      entry("Microsoft_System.app", MS.System, "System", "Microsoft", BUILD),
-      entry(
-        "fixture.app",
-        pkg("LethAL Sandbox App", "LethAL", "1.0.0.2"),
-        "LethAL Sandbox App",
-        "LethAL",
-        "1.0.0.2",
-      ),
-    ];
-    const marker = {
-      server: "bc3",
-      build: BUILD,
-      writtenAt: "2026-10-22T00:00:00Z",
-      fileCount: 2,
-      packages,
-    };
-    writeFileSync(join(dir, MARKER), JSON.stringify(marker));
+    const fx = pkg("LethAL Sandbox App", "LethAL", "1.0.0.2");
+    const dir = handDir(newRoot(), [
+      ["Microsoft_System.app", MS.System, "System", "Microsoft", BUILD],
+      ["fixture.app", fx, "LethAL Sandbox App", "LethAL", "1.0.0.2"],
+    ]);
     const v = verifyBuildDir(dir, "bc3");
     expect(v.ok).toBe(false);
     if (!v.ok) expect(v.reason).toContain("fixture.app is published by LethAL");
@@ -245,6 +289,63 @@ describe("only Microsoft packages enter the shared cache (orchestrator ruling)",
     expect(verifyBuildDir(r.dir, "bc3", NAMES).ok).toBe(true);
     expect(readdirSync(r.dir).sort()).toEqual([MARKER, ...msFiles].sort());
   });
+});
+
+describe("verifyBuildDir: the build, regular files, never a throw", () => {
+  test("a System whose manifest version is not the marker's build fails verification", () => {
+    const old = "28.0.1.1";
+    const dir = handDir(newRoot(), [
+      ["Microsoft_System.app", pkg("System", "Microsoft", old), "System", "Microsoft", old],
+    ]);
+    const v = verifyBuildDir(dir, "bc3");
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toContain(`System is 28.0.1.1, the marker's build is ${BUILD}`);
+  });
+
+  const SYS: HandEntry = ["Microsoft_System.app", MS.System, "System", "Microsoft", BUILD];
+
+  test.skipIf(!POSIX)("a symlink in place of a package fails verification, unfollowed", () => {
+    const root = newRoot();
+    const dir = handDir(root, [SYS]);
+    const elsewhere = join(root, "real-system.app");
+    writeFileSync(elsewhere, MS.System);
+    rmSync(join(dir, "Microsoft_System.app"));
+    symlinkSync(elsewhere, join(dir, "Microsoft_System.app"));
+    const v = verifyBuildDir(dir, "bc3");
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toContain("Microsoft_System.app is not a regular file");
+  });
+
+  test("a directory in place of a package fails verification", () => {
+    const root = newRoot();
+    const dir = handDir(root, [SYS]);
+    rmSync(join(dir, "Microsoft_System.app"));
+    mkdirSync(join(dir, "Microsoft_System.app"));
+    const v = verifyBuildDir(dir, "bc3");
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toContain("Microsoft_System.app is not a regular file");
+  });
+
+  // POSIX: as a non-root user a 000 file cannot be read, so the read itself throws EACCES.
+  test.skipIf(!POSIX || process.getuid?.() === 0)(
+    "an unreadable package is a reason, never a throw, and lookup lists it as unverified",
+    () => {
+      const root = newRoot();
+      const dir = handDir(root, [SYS]);
+      chmodSync(join(dir, "Microsoft_System.app"), 0o000);
+      try {
+        expect(() => verifyBuildDir(dir, "bc3")).not.toThrow();
+        const v = verifyBuildDir(dir, "bc3");
+        expect(v.ok).toBe(false);
+        if (!v.ok) expect(v.reason).toContain("EACCES");
+        const found = lookupSymbolCache(root, "bc3", ["System"]);
+        expect(found.chosen).toBeUndefined();
+        expect(found.unverified).toHaveLength(1);
+      } finally {
+        chmodSync(join(dir, "Microsoft_System.app"), 0o644);
+      }
+    },
+  );
 });
 
 describe("lookupSymbolCache (no server call)", () => {
