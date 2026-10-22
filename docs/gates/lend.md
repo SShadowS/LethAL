@@ -199,4 +199,12 @@ The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the off
   for the R601 lend pre-commitment (orchestrator ruling Q5). Review fix round: RP also asserts that
   no baseline test ran here (M-E), and a flip by any session revokes the project's pending runs on
   its server (I-A ruling; offline only, since no leg flips).
-- 2026-10-22, R-585: R1 changes per the pre-commitment 28e7ac7d; live result pending.
+- 2026-10-22, R-585: R1 changes per the pre-commitment 28e7ac7d (R621: a stored no-coverage is re-derived, never
+  carried). **PASS on bc2** at 522c6335 (`/coord/handoff/R-585/lend-bc2.log`), every leg as pre-committed:
+  - R1 carried 15 of 19, one deploy, B's snapshot reused, groupedCalls 0;
+  - R2 and RP carried 7, R3 carried 15;
+  - L1 and N0 lent 12 known survivors (the R585 test scope is recorded and equal);
+  - N1 and N5 lent nothing;
+  - every leg 3 / 12 / 4 per mutant.
+
+  `itest:bcdev` PASS 3 / 12 / 4 on the same head (`bcdev-bc2.log`).
