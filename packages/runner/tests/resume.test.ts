@@ -6223,12 +6223,17 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
     for (const [recorded, method, outcome] of [
       ["al-runner", "Pond", "error"],
       ["al-runner", "Space Step", "fail"],
-      ["bcdev", "Space Step", "error"],
     ] as const) {
       const h = await history(recorded, method, outcome);
       expect(known(h.report).length, `${method} ${outcome}`).toBe(h.survived);
       expect(warned(h.events, "history-al-runner-test-names")).toEqual([]);
     }
+    // R592: a bcdev run lends nothing to this al-runner session, refused at step 1 (another
+    // backend), never by R557's test-name rule.
+    const bc = await history("bcdev", "Space Step", "error");
+    expect(known(bc.report)).toEqual([]);
+    expect(warned(bc.events, "history-backend-build-changed")).toHaveLength(1);
+    expect(warned(bc.events, "history-al-runner-test-names")).toEqual([]);
   });
 
   async function resumed(method: string) {
