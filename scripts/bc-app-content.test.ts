@@ -374,10 +374,14 @@ describe("decideAll / actAll", () => {
     };
     const s = fakeServer(apps);
     s.ids.set(id, "LethAL Sandbox Names Tests");
-    // the server "keeps" another build of the same content: digest equal, raw sha256 not
+    // the server "keeps" another build of the same content: only the header id differs, so the
+    // digest is equal and the raw sha256 is not
+    const other = Buffer.from(NT_COMMENT);
+    other.fill(0xab, 12, 28);
+    expect(contentDigest(other)).toBe(contentDigest(NT_COMMENT));
     s.ops.publish = async (f) => {
       s.published.push(f);
-      apps["LethAL Sandbox Names Tests"] = { pkg: NT_RESIDENT, rows: [row("1.0.0.0")] };
+      apps["LethAL Sandbox Names Tests"] = { pkg: other, rows: [row("1.0.0.0")] };
     };
     const items: AppItem[] = [item("sandbox-names-tests", NT_COMMENT, "dependent")];
     const decided = await decideAll(items, s.ops, "republish", new Map(), () => {});
