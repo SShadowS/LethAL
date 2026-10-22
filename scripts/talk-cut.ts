@@ -36,7 +36,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
+// `/` on every OS (Windows takes it too), so the paths talk-cut builds, and its tests' call
+// sequence, do not depend on the platform the cut runs on.
+import { join } from "node:path/posix";
 import { parseArgs } from "node:util";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { sectionFor } from "./changelog-section.ts";

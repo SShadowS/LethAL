@@ -243,7 +243,12 @@ jobs:
         shell: bash
         run: rm -rf packages/*/dist
 
+      # R449, as in ci.yml's `check`: temp files on D:, the runner's local disk. Without it the
+      # R631 walker test failed here (release trial 39842844449) while `check` passed.
       - name: Unit tests
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: bun test
 
       - name: Build all five targets
