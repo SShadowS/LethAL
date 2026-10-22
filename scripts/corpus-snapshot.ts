@@ -34,7 +34,9 @@
  * local runners (al-runner, itest:alrunner; `isHeavy`). Known limit:
  * two jobs started from ONE non-interactive shell (`a & b`) share a pgid and count as one, and a job
  * on a corpus COPY is invisible to the scan; both should take a slot themselves:
- * `flock -n /coord/locks/heavy.<n> <cmd>`.
+ * `flock -n /coord/locks/heavy.<n> <cmd>`. A slot taken by hand (`flock heavy.N <cmd>`) counts
+ * toward the BaseApp cap only while one of its processes names /work/src/BC.History; a job over a
+ * COPY of the corpus counts toward the total cap only.
  *
  * Exit codes: 0 ok / identical, 1 different or a dump failure, 2 refused.
  * The report prints paths, operators and counts only, never tuple text (it can carry source).
@@ -585,8 +587,20 @@ const TOTAL_CAP = 3;
 const BASEAPP_CAP = 2;
 /** A process whose argv names the BaseApp (BC.History) corpus root. */
 const BASEAPP_ROOT_RE = /\/work\/src\/BC\.History(\/|\s|$)/;
-/** A slot holder dumping the BaseApp set (`corpus-snapshot.ts snapshot|diff bch ...`). */
-const BASEAPP_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\s+\S+\s+bch(\s|$)/;
+/**
+ * Is this slot holder dumping the BaseApp set? Read by the tool's own CLI parser, because flags may
+ * come before the set (`diff --branch /x bch`) and the in-slot re-exec keeps that order (review B1).
+ * An argv the parser refuses counts as BaseApp, which errs on the safe side.
+ */
+function holderIsBaseApp(args: string): boolean {
+  const argv = args.trim().split(/\s+/);
+  const at = argv.findIndex((a) => /(^|\/)corpus-snapshot\.ts$/.test(a));
+  try {
+    return parseCliArgs(argv.slice(at + 1)).positionals[1] === "bch";
+  } catch {
+    return true;
+  }
+}
 
 /**
  * The scan for corpus jobs that take no slot: processes whose argv names a corpus root, minus this
@@ -616,7 +630,7 @@ export function heavyVerdict(
   for (const s of slotPids) {
     const p = procs.find((x) => x.pid === s);
     if (!(s > 1) || p === undefined || !SLOT_HOLDER_RE.test(p.args)) continue;
-    if (BASEAPP_HOLDER_RE.test(p.args)) baseAppSlots++;
+    if (holderIsBaseApp(p.args)) baseAppSlots++;
     for (const d of descendants(procs, s)) skip.add(d);
   }
   // A job is keyed by its itest:alrunner root when it has one (its workers' al-runner children sit

@@ -637,6 +637,40 @@ describe("B5 the heavy-job guard", () => {
       heavyVerdict(parsePs(ps([...base, ...holder("dc"), bch(300)])), SELF, [500], 1, true).refuse,
     ).toBe(false);
   });
+  test("R642 review B1: two held bch slots refuse a 3rd bch job, flags before or after the set", () => {
+    // The CLI accepts flags first, and the in-slot re-exec keeps the user's order. The holders'
+    // children name BC.History but are skipped as the holders' descendants.
+    const holders = (flagsFirst: boolean, set = "bch"): string[] =>
+      [500, 600].flatMap((pid, i) => [
+        flagsFirst
+          ? `${pid} 1 ${pid} bun scripts/corpus-snapshot.ts diff --branch /w/x ${set} --in-slot ${i + 1}`
+          : `${pid} 1 ${pid} bun scripts/corpus-snapshot.ts diff ${set} --branch /w/x --in-slot ${i + 1}`,
+        `${pid + 1} ${pid} ${pid} bun scripts/prod-identity-keys.ts /t /o ${EXTERNAL_SETS[set] ?? ""}/x`,
+      ]);
+    for (const flagsFirst of [true, false]) {
+      const v = heavyVerdict(
+        parsePs(ps([...base, ...holders(flagsFirst)])),
+        SELF,
+        [500, 600],
+        2,
+        true,
+      );
+      expect(v.foreign, `flags first ${flagsFirst}`).toEqual([]);
+      expect(v.refuse, `flags first ${flagsFirst}`).toBe(true);
+      expect(v.message).toContain(BASEAPP_CAP);
+      // Two held dc slots leave room for a 3rd job that is BaseApp.
+      expect(
+        heavyVerdict(
+          parsePs(ps([...base, ...holders(flagsFirst, "dc")])),
+          SELF,
+          [500, 600],
+          2,
+          true,
+        ).refuse,
+        `dc, flags first ${flagsFirst}`,
+      ).toBe(false);
+    }
+  });
   test("R642: a 3rd job that is BaseApp, with 1 BaseApp and 1 non-BaseApp running, is admitted", () => {
     const v = heavyVerdict(parsePs(ps([...base, bch(200), dc(300)])), SELF, [], 0, true);
     expect(v.foreign.length).toBe(2);
