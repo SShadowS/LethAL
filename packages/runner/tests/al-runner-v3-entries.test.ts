@@ -1728,6 +1728,46 @@ describe("timers above 2^31-1 ms (E3a's second daemon, /coord/handoff/R-635/live
     expect(await new LineReader(ch).next(10_000, 5)).toEqual({ kind: "line", line: "late line" });
   });
 
+  test("a stream chunk { value: undefined, done: false } is never read as the timer (no hot spin)", async () => {
+    const chunks: IteratorResult<Uint8Array>[] = [
+      { value: undefined as unknown as Uint8Array, done: false },
+      { value: new TextEncoder().encode("after\n"), done: false },
+    ];
+    let reads = 0;
+    const stream: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          reads += 1;
+          return chunks.shift() ?? { value: undefined, done: true };
+        },
+      }),
+    };
+    expect(await new LineReader(stream).next(300)).toEqual({ kind: "line", line: "after" });
+    expect(reads).toBe(2);
+  });
+
+  test("every timer LineReader sets for a 2_494_890_000 ms deadline is at most 2^31-1 ms", async () => {
+    const delays: number[] = [];
+    const real = globalThis.setTimeout;
+    const spy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: () => void,
+      ms?: number,
+    ) => {
+      delays.push(ms ?? 0);
+      return real(fn, Math.min(ms ?? 0, 2 ** 31 - 1));
+    }) as unknown as typeof setTimeout);
+    try {
+      const ch = new Chan();
+      const got = new LineReader(ch).next(LONG);
+      real(() => ch.push("line"), 20);
+      expect(await got).toEqual({ kind: "line", line: "line" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(delays.length).toBeGreaterThan(0);
+    expect(delays.every((d) => d <= 2 ** 31 - 1)).toBe(true);
+  });
+
   test("a prefetch request that is dropped warns by name, never silently", async () => {
     const warned: string[] = [];
     const spy = spyOn(console, "warn").mockImplementation((m: unknown) => {

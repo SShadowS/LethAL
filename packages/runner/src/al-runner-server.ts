@@ -177,6 +177,9 @@ type ReadLineOutcome =
 /** R635: the largest delay `setTimeout` honours (2^31-1 ms); a larger one overflows and fires at once. */
 export const MAX_TIMER_MS = 2 ** 31 - 1;
 
+/** R635: what LineReader's wait timer resolves to; no stream value can equal it. */
+const TIMER_FIRED: unique symbol = Symbol("LineReader timer fired");
+
 /** Reading one NDJSON line at a time from a byte stream, with a deadline. Exported for tests. */
 export class LineReader {
   private buf = "";
@@ -214,23 +217,20 @@ export class LineReader {
       const read = (this.pending ??= this.it.next());
       const chunk = await Promise.race([
         read,
-        new Promise<{ value: undefined; done: false }>((resolve) => {
+        new Promise<typeof TIMER_FIRED>((resolve) => {
           // R635: a timer above 2^31-1 ms fires at once (it overflows); capped, and a capped
           // timer that fires before the real deadline only waits again (the loop re-checks).
-          timer = setTimeout(
-            () => resolve({ value: undefined, done: false }),
-            Math.min(remaining, capMs),
-          );
+          timer = setTimeout(() => resolve(TIMER_FIRED), Math.min(remaining, capMs));
         }),
       ]).finally(() => clearTimeout(timer));
+      // A unique marker, so a stream chunk `{ value: undefined }` is never read as the timer.
+      if (chunk === TIMER_FIRED) continue;
+      this.pending = undefined;
       if (chunk.done === true) {
-        this.pending = undefined;
         this.done = true;
         continue;
       }
-      if (chunk.value === undefined) continue;
-      this.pending = undefined;
-      this.buf += this.decoder.decode(chunk.value, { stream: true });
+      if (chunk.value !== undefined) this.buf += this.decoder.decode(chunk.value, { stream: true });
     }
   }
 
