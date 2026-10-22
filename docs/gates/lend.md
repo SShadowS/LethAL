@@ -172,3 +172,5 @@ The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the off
     (`lend-bc3.log`). Every leg and the refusals RN1-RN4 were as pre-committed with the addendum.
   - **The 10 live red checks went red at their predicted leg**, plus an N0-only form of RC10
     (`/coord/handoff/R-618/redcheck-live-results.md`). The clean confirm afterwards passed.
+- 2026-10-22, at 03547bf6 (R-618 merged with master after R582, which re-runs every kill on bcdev): **PASS on
+  bc1** (`/coord/handoff/R-618/lend-bc1-merged.log`), every leg's figures unchanged.
