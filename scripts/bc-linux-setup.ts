@@ -228,7 +228,7 @@ export interface BcLogin {
  * password ending in `!` (or holding `=`) arrives intact. Every refusal names a key or a line
  * number, never a value.
  */
-export function parseSecretEnv(text: string): BcLogin {
+export function parseSecretEnv(text: string, path: string = SECRET_PATH): BcLogin {
   const seen = new Map<string, string>();
   const lines = text.split("\n");
   for (const [i, raw] of lines.entries()) {
@@ -236,26 +236,29 @@ export function parseSecretEnv(text: string): BcLogin {
     if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
     const eq = line.indexOf("=");
     // The line itself is not quoted: a line with no `=` may be a bare password.
-    if (eq < 0) throw new SecretFileError(`${SECRET_PATH}: line ${i + 1} is not KEY=value`);
+    if (eq < 0) throw new SecretFileError(`${path}: line ${i + 1} is not KEY=value`);
     const key = line.slice(0, eq).trim();
     if (!(EXPECTED_KEYS as readonly string[]).includes(key)) {
       // Named only when it looks like an env key: a bare password holding `=` would otherwise
       // have its first half printed as the "key".
       const named = /^[A-Z_][A-Z0-9_]*$/.test(key) ? ` ${JSON.stringify(key)}` : "";
       throw new SecretFileError(
-        `${SECRET_PATH}: unexpected key${named} on line ${i + 1}; only ${EXPECTED_KEYS.join(" and ")} are allowed`,
+        `${path}: unexpected key${named} on line ${i + 1}; only ${EXPECTED_KEYS.join(" and ")} are allowed`,
       );
     }
-    if (seen.has(key)) throw new SecretFileError(`${SECRET_PATH}: ${key} is set twice`);
+    if (seen.has(key)) throw new SecretFileError(`${path}: ${key} is set twice`);
     seen.set(key, line.slice(eq + 1));
   }
-  return { user: required(seen, "BC_DEV_USER"), password: required(seen, "BC_DEV_PASSWORD") };
+  return {
+    user: required(seen, "BC_DEV_USER", path),
+    password: required(seen, "BC_DEV_PASSWORD", path),
+  };
 }
 
-function required(seen: ReadonlyMap<string, string>, key: string): string {
+function required(seen: ReadonlyMap<string, string>, key: string, path: string): string {
   const value = seen.get(key);
-  if (value === undefined) throw new SecretFileError(`${SECRET_PATH}: ${key} is missing`);
-  if (value === "") throw new SecretFileError(`${SECRET_PATH}: ${key} is empty`);
+  if (value === undefined) throw new SecretFileError(`${path}: ${key} is missing`);
+  if (value === "") throw new SecretFileError(`${path}: ${key} is empty`);
   return value;
 }
 
@@ -265,7 +268,7 @@ export function readSecretFile(path: string = SECRET_PATH): BcLogin {
       `${path} does not exist. The owner writes it, holding exactly BC_DEV_USER=... and BC_DEV_PASSWORD=...`,
     );
   }
-  return parseSecretEnv(readFileSync(path, "utf8"));
+  return parseSecretEnv(readFileSync(path, "utf8"), path);
 }
 
 /** What may be printed about the login: key names and lengths. */
