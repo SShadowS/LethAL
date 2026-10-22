@@ -36,6 +36,7 @@ import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/a
 import type { TestMethodRef } from "../src/backend";
 import type { SpawnFn } from "../src/publisher";
 import { TestAppError } from "../src/test-app-publish";
+import { ProjectSymlinkRefusedError } from "../src/walk";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const TARGET_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
@@ -290,6 +291,19 @@ describe("§3 the compile proof", () => {
         targetAppId: "",
       }),
     );
+  });
+
+  test("R631: a linked helper folder in the test dir refuses the compile proof by name; v3 not started", async () => {
+    const l = await layout();
+    await mkdir(join(l.root, "helpers"), { recursive: true });
+    await writeFile(join(l.root, "helpers", "H.Codeunit.al"), "codeunit 79150 H { }");
+    await symlink(join(l.root, "helpers"), join(l.testDir, "helpers"), "junction");
+    const v3 = fakeV3(allPass);
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    const err = await b.deploy(l.batch).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((err as Error).message).toContain(join(l.testDir, "helpers"));
+    expect(v3.calls).toHaveLength(0);
   });
 
   test("leg X (a): a batch alc rejects throws AlcCompileError and v3 is spawned 0 times", async () => {

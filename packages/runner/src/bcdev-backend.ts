@@ -1,4 +1,3 @@
-import { readdirSync } from "node:fs";
 import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
@@ -63,6 +62,7 @@ import type {
   RunMutantTransport,
 } from "./run-mutant-transport";
 import { NO_RESULT_FOR_METHOD } from "./stale-test-app";
+import { walkFilesSync } from "./walk";
 import {
   compileTestApp as compileTestAppOf,
   publishTestApp as publishTestAppOf,
@@ -78,7 +78,8 @@ import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
 export function controlLeftoverWarning(packageCachePath: string): string | undefined {
   let names: string[];
   try {
-    names = readdirSync(packageCachePath, { recursive: true }).map(String);
+    // R631: `buildPackageCacheCopy`'s walk; a linked folder refuses there, so it is not reported here.
+    names = walkFilesSync(packageCachePath, { links: "yield-files" }).files;
   } catch {
     return undefined; // no cache folder: nothing left over in it
   }

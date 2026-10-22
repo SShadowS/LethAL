@@ -25,9 +25,10 @@
  * ago is not seen (git's racy-clean assumption), and "settled" assumes the filesystem's timestamps
  * follow this machine's clock (a share whose clock runs behind can settle a file too early).
  */
-import { readFile, readdir, stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { isProjectResource, outputPathKey } from "./orchestrator";
+import { isLinkExcused, walkFiles } from "./walk";
 
 /** Thrown, never turned into a verdict: the session stops, and `--resume` continues it. */
 export class ProjectChangedDuringRunError extends Error {
@@ -92,26 +93,25 @@ export function watchProjectInputs(
   /** The stat at which an input was last seen equal to `expected`. */
   const seen = new Map<string, Seen>();
 
-  const inputs = async (): Promise<string[]> => {
-    const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
+  /** R631 r3 B: `"skip"`, so a link that appears mid-run is reported as drift, not a new error. */
+  const inputs = async (): Promise<{ files: string[]; links: string[] }> => {
+    const walk = await walkFiles(projectDir, { links: "skip" });
     const out: string[] = [];
-    for (const e of entries) {
-      if (!e.isFile()) continue;
-      const rel = relative(projectDir, join(e.parentPath, e.name));
+    for (const rel of walk.files) {
       const isAl = rel.toLowerCase().endsWith(".al");
       const isManifest = rel === "app.json";
       if (!isAl && !isManifest && !isProjectResource(rel)) continue;
-      if (!isAl && !isManifest && NEVER_AN_INPUT.test(e.name)) continue;
+      if (!isAl && !isManifest && NEVER_AN_INPUT.test(basename(rel))) continue;
       if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
       out.push(rel);
     }
-    return out.sort();
+    return { files: out.sort(), links: walk.skippedLinks.filter((l) => !isLinkExcused(l)) };
   };
 
   return {
     async check() {
       const checkedAt = Date.now();
-      const current = await inputs();
+      const { files: current, links } = await inputs();
       if (!resourcesKnown) {
         for (const rel of current) {
           if (expected.has(rel) || rel.toLowerCase().endsWith(".al") || rel === "app.json")
@@ -120,7 +120,7 @@ export function watchProjectInputs(
         }
         resourcesKnown = true;
       }
-      const changes: string[] = [];
+      const changes: string[] = links.map((l) => `added link ${l}`);
       const present = new Set(current);
       for (const rel of current) {
         const want = expected.get(rel);

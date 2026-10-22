@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -136,6 +136,7 @@ import type { SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
+import { walkFiles } from "./walk";
 import type { PublishOutcomeRow } from "./store";
 import {
   TestProjectNestedError,
@@ -309,7 +310,9 @@ async function scanProjectCodeunitIds(
   snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<Map<number, DeclaredObject>> {
   const entries = (
-    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true })
+    snapshot !== undefined
+      ? [...snapshot.keys()]
+      : (await walkFiles(projectDir, { links: "refuse" })).files
   )
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .filter((e) => !EMITTED_FILENAMES.has(basename(e)));

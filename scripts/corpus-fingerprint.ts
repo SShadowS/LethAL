@@ -21,13 +21,17 @@
  *
  *   bun scripts/corpus-fingerprint.ts <corpus-dir>
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { walkFiles } from "../packages/runner/src/walk";
 
-/** The `.al` files an instrument parses, project-relative with forward slashes, sorted. */
+/** The `.al` files an instrument parses, project-relative with forward slashes, sorted. Links are
+ *  never followed (R631); any skipped is said on stderr. */
 export async function corpusEntries(corpusDir: string): Promise<string[]> {
-  const all = await readdir(corpusDir, { recursive: true });
-  return all
+  const walk = await walkFiles(corpusDir, { links: "skip" });
+  if (walk.skippedLinks.length > 0)
+    console.error(`corpusEntries: ${walk.skippedLinks.length} link(s) under ${corpusDir} not followed (R631): ${walk.skippedLinks.slice(0, 10).join(", ")}`);
+  return walk.files
     .filter((f) => f.toLowerCase().endsWith(".al") && !f.includes(".dependencies"))
     .map((f) => f.replaceAll("\\", "/"))
     .sort();

@@ -41,11 +41,11 @@ import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -148,7 +148,8 @@ export function dumperKeyOf(checkout: string): { key: string; dumperHash: string
   return { key, dumperHash };
 }
 
-/** Directories holding `app.json` under `top` (the R-500 rule), sorted. */
+/** Directories holding `app.json` under `top` (the R-500 rule), sorted. A linked folder is never
+ *  descended (R631: `lstat`, not `stat`), and is said on stderr. */
 export function findProjects(top: string): string[] {
   const out: string[] = [];
   const walk = (d: string): void => {
@@ -156,7 +157,9 @@ export function findProjects(top: string): string[] {
     for (const e of readdirSync(d)) {
       if (e === ".alpackages" || e === ".git" || e === "node_modules") continue;
       const p = join(d, e);
-      if (statSync(p).isDirectory()) walk(p);
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) console.error(`findProjects: link ${p} not followed (R631)`);
+      else if (st.isDirectory()) walk(p);
     }
   };
   walk(top);

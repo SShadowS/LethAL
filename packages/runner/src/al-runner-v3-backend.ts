@@ -61,7 +61,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { hashAlTree } from "./baseline-snapshot";
+import { hashAlTree, hashTestDir } from "./baseline-snapshot";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, defaultSpawn } from "./publisher";
 import { TestAppError, symbolPackageId } from "./test-app-publish";
@@ -646,7 +646,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.proof = {
         activeHashExceptSelector: await hashAlTree(active),
         activeAppJsonSha256: await fileSha256(join(active, "app.json")),
-        testDirHash: await hashAlTree(this.cfg.testDir),
+        // R631: the test dir is a USER root: a link refuses rather than hashing a partial tree.
+        testDirHash: await hashTestDir(this.cfg.testDir),
         testAppJsonSha256: await fileSha256(join(this.cfg.testDir, "app.json")),
         deps: await listDeps(this.cfg.packagesDir, true),
         artifactId,
@@ -804,7 +805,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `the selector is not the static selector for the last activated id (${id ?? "baseline"})`,
       );
     }
-    if ((await hashAlTree(this.cfg.testDir)) !== proof.testDirHash) {
+    if ((await hashTestDir(this.cfg.testDir)) !== proof.testDirHash) {
       throw new AlRunnerV3UnprovenBatchError(
         "an .al file in the test dir changed after the alc proof",
       );

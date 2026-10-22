@@ -26,8 +26,9 @@
  * first name of `A, B: TestPage X`, and `resolveVarRef` never resolves a member receiver. Either
  * would read as "not a TestPage" and send the test (see the roadmap items filed by R-236c).
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { walkFiles } from "./walk";
 import {
   type ALSyntaxNode,
   type AttributeRun,
@@ -2823,7 +2824,8 @@ export async function readTestAppSources(
   testDir: string,
   platform: NodeJS.Platform = process.platform,
 ): Promise<Array<{ path: string; text: string }>> {
-  const entries = await readdir(testDir, { recursive: true });
+  // R631: a link in the test project refuses (alc and al-runner would follow it).
+  const entries = (await walkFiles(testDir, { links: "refuse" })).files;
   const alFiles = discoveredRelPaths(
     entries.filter((e) => e.toLowerCase().endsWith(".al")),
     platform,

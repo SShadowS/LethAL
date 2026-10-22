@@ -29,6 +29,7 @@ import { stat } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homeDir } from "./home";
+import { walkFiles } from "./walk";
 
 /** One provisioned BC build in the cache. */
 export interface AlRunnerCacheBuild {
@@ -59,6 +60,8 @@ export interface AlRunnerCacheReport {
    */
   readonly secondaryBytes: number | null;
   readonly secondaryDir: string;
+  /** R631: links found in either tree, not followed and not counted in any size. */
+  readonly skippedLinks?: number;
   /** False when the directory does not exist — a machine that has never run al-runner. Reported
    *  rather than skipped: "no cache" and "a cache nobody measured" must not look alike. */
   readonly present: boolean;
@@ -97,12 +100,11 @@ function prefixOf(version: string): string {
   return version.split(".").slice(0, 2).join(".");
 }
 
-async function directoryBytes(dir: string): Promise<number> {
+/** R631: links are not followed and not counted (al-runner's `ncl-shadow` links into its install). */
+async function directoryBytes(dir: string): Promise<{ bytes: number; skippedLinks: number }> {
   let total = 0;
-  // Paths, not `Dirent`s: a recursive `readdir` returns each entry's path RELATIVE to `dir`, which
-  // is all this needs and avoids depending on which of `parentPath`/`path` the runtime spells.
-  const entries = await readdir(dir, { recursive: true });
-  for (const rel of entries) {
+  const walk = await walkFiles(dir, { links: "skip" });
+  for (const rel of walk.files) {
     try {
       const st = await stat(join(dir, rel));
       if (st.isFile()) total += st.size;
@@ -112,7 +114,7 @@ async function directoryBytes(dir: string): Promise<number> {
       // over it would be worse than being slightly low.
     }
   }
-  return total;
+  return { bytes: total, skippedLinks: walk.skippedLinks.length };
 }
 
 /**
@@ -128,7 +130,9 @@ export async function readAlRunnerCache(
   const root = dir ?? defaultAlRunnerCacheDir();
   const secondRoot = secondaryDir ?? defaultAlRunnerSecondaryCacheDir();
   // A plain total, never a build analysis: see `AlRunnerCacheReport.secondaryBytes` for why.
-  const secondaryBytes = await directoryBytes(secondRoot).catch(() => null);
+  const second = await directoryBytes(secondRoot).catch(() => null);
+  const secondaryBytes = second?.bytes ?? null;
+  let skippedLinks = second?.skippedLinks ?? 0;
   let entries: string[];
   try {
     entries = await readdir(root);
@@ -141,6 +145,7 @@ export async function readAlRunnerCache(
         builds: [],
         secondaryBytes,
         secondaryDir: secondRoot,
+        skippedLinks,
       };
     }
     throw err;
@@ -159,9 +164,11 @@ export async function readAlRunnerCache(
   }
   const builds: AlRunnerCacheBuild[] = [];
   for (const version of versions.sort((a, b) => compareVersions(b, a))) {
+    const sized = await directoryBytes(join(root, version));
+    skippedLinks += sized.skippedLinks;
     builds.push({
       version,
-      bytes: await directoryBytes(join(root, version)),
+      bytes: sized.bytes,
       superseded: newestByPrefix.get(prefixOf(version)) !== version,
     });
   }
@@ -172,6 +179,7 @@ export async function readAlRunnerCache(
     builds,
     secondaryBytes,
     secondaryDir: secondRoot,
+    skippedLinks,
   };
 }
 
@@ -198,10 +206,15 @@ export function describeAlRunnerCache(report: AlRunnerCacheReport): string {
   // R168: the second tree is appended to every branch, including the two that report no artifact
   // cache at all — a machine can have run al-runner enough to fill `~/.cache/al-runner` while the
   // artifact root is missing, and reporting 0 there would be the incomplete answer this fixes.
-  const second =
+  const links =
+    (report.skippedLinks ?? 0) > 0
+      ? ` ${report.skippedLinks} link(s) in these caches were not followed and are not counted (R631).`
+      : "";
+  const second = `${
     report.secondaryBytes === null
       ? ""
-      : ` Separately, al-runner keeps ${formatBytes(report.secondaryBytes)} in ${report.secondaryDir}, its per-PROJECT cache — reported, not analysed and never deleted, the same rule as above (ROADMAP R131/R168).`;
+      : ` Separately, al-runner keeps ${formatBytes(report.secondaryBytes)} in ${report.secondaryDir}, its per-PROJECT cache — reported, not analysed and never deleted, the same rule as above (ROADMAP R131/R168).`
+  }${links}`;
   if (!report.present) {
     return `no al-runner artifact cache at ${report.dir} (nothing has provisioned one on this machine).${second}`;
   }

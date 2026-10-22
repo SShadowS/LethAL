@@ -284,8 +284,9 @@ describe("Caveat union", () => {
       "preproc-files-refused": true,
       "tests-compiled-out": true,
       "test-symbols-unverified": true,
+      "project-symlink-skipped": true,
     };
-    expect(Object.keys(all).length).toBe(24);
+    expect(Object.keys(all).length).toBe(25);
   });
 });
 
@@ -365,6 +366,34 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     const [row] = report.mutants;
     if (row === undefined) throw new Error("buildReport dropped the only mutant");
     expect(row.hangCapable).toBe("loop-condition-target");
+  });
+
+  test("R631: a project-symlink-skipped warning raises the caveat; any other warning does not", () => {
+    const base: RunEventInput[] = [
+      {
+        type: "mutation-set-generated",
+        siteCount: 0,
+        deployedCount: 0,
+        hangCapableCount: 0,
+        totalFiles: 0,
+        instrumentableFiles: 0,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 1 },
+    ];
+    const warn = (code: string): RunEventInput => ({ type: "warning", code, message: "m" });
+    expect(
+      buildReport(STATICS, seq([warn("project-symlink-skipped"), ...base])).validity.caveats,
+    ).toContain("project-symlink-skipped");
+    expect(
+      buildReport(STATICS, seq([warn("something-else"), ...base])).validity.caveats,
+    ).not.toContain("project-symlink-skipped");
   });
 
   test("an outcome built from a manifest entry without hangCapable omits the key entirely", () => {

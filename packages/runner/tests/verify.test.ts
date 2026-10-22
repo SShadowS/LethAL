@@ -35,6 +35,7 @@ import type { NamedMutantsConfig } from "../src/orchestrator";
 import type { MutantOutcome, SessionOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
+import { ProjectSymlinkRefusedError } from "../src/walk";
 import { type PublishedTestApp, TestAppError } from "../src/test-app-publish";
 import { TEST_DIGEST_SCHEME, testDigests, testDigestsOfModel } from "../src/test-digest";
 import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
@@ -548,6 +549,17 @@ describe("assertSourceUnchanged", () => {
       hash.mockRestore();
     }
   }
+
+  test("R631: a linked helper folder in the test project refuses by name before any hash", async () => {
+    const { dir, tests, source } = await project();
+    const helpers = join(dir, "..", "helpers");
+    mkdirSync(helpers);
+    writeFileSync(join(helpers, "H.Codeunit.al"), "codeunit 50300 H { }");
+    symlinkSync(helpers, join(tests, "helpers"), "junction");
+    const e = await refusalWithoutHashing(source, tests);
+    expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((e as Error).message).toContain(join(tests, "helpers"));
+  });
 
   test("a nested test EDIT is refused as test-project-nested before any hash", async () => {
     const { nestedTests, recorded } = await nestedProject();
