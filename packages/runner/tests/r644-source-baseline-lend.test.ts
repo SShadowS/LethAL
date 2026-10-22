@@ -474,17 +474,15 @@ describe("R644 (build review I2, plan test 7): a source survivor carried by --re
     return { m, b, carriedRow, c };
   }
 
-  test("M faced only the weak test in A; B's baseline turns the killer green; C re-runs M (history-tests-not-faced)", async () => {
+  test("M faced only the weak test in A; B's baseline turns the killer green: since R646 B re-runs M, so its row lists the killer", async () => {
     const h = await carriedSource(true);
-    // B carried M as a survivor, and its stored list is what M FACED in A, not what covers it in B.
+    // Before R646, B carried M and the I2 fix kept A's list. Now B does not carry M at all: it runs
+    // M against the killer (which does not kill in B), so C lends a survivor that faced it.
     expect(h.carriedRow.verdict).toBe("survived");
-    expect(h.carriedRow.carried).toBe(1);
-    expect((JSON.parse(h.carriedRow.covering_tests ?? "[]") as string[]).some(isKiller)).toBe(
-      false,
-    );
-    expect(h.c.backend.activated).toContain(h.m);
-    expect(h.c.report.mutants.find((x) => x.mutantCode === h.m)?.verdict).toBe("killed");
-    expect(historyCodes(h.c.events)).toContain("history-tests-not-faced");
+    expect(h.carriedRow.carried).toBe(0);
+    expect((JSON.parse(h.carriedRow.covering_tests ?? "[]") as string[]).some(isKiller)).toBe(true);
+    expect(h.c.backend.activated).not.toContain(h.m);
+    expect(h.c.report.mutants.find((x) => x.mutantCode === h.m)?.verdict).toBe("known-survivor");
   });
 
   test("control: M faced every test in A; C lends it from B's carried row", async () => {
@@ -492,5 +490,135 @@ describe("R644 (build review I2, plan test 7): a source survivor carried by --re
     expect(h.carriedRow.carried).toBe(1);
     expect(h.c.backend.activated).not.toContain(h.m);
     expect(h.c.report.mutants.find((x) => x.mutantCode === h.m)?.verdict).toBe("known-survivor");
+  });
+});
+
+// R646: `--resume` carries a survivor only when every test covering it NOW is one it faced in the
+// run that scored it (R644's rule, in step 5b). A kill carries whatever covers it now.
+const FACE_CODES = new Set(["resume-tests-not-faced", "resume-survivor-no-record"]);
+const faceCodes = (events: readonly RunEvent[]) =>
+  events.flatMap((e) => (e.type === "warning" && FACE_CODES.has(e.code) ? [e.code] : []));
+const batchCarried = (events: readonly RunEvent[]) =>
+  events.some((e) => e.type === "warning" && e.code === "resume-batch-carried");
+
+describe("R646: --resume carries a survivor only against tests it faced", () => {
+  /** Run 1 (unfinished) scores its first mutant M and strands the second. `edit` may rewrite M's
+   *  row before run 2 resumes it. Run 1's snapshot is deleted so run 2's baseline really runs. */
+  async function resumed(
+    run1: { killerRed: boolean; killerKills: boolean },
+    run2: { killerRed: boolean; killerKills: boolean },
+    edit?: (store: ResultsStore, run1Id: number, m: string) => void,
+  ) {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    const backend1 = new Stub({ ...run1, abortSecondMutant: true });
+    await runSession({ ...base(store, dirs), backend: backend1 });
+    const m = backend1.activated[0];
+    if (m === undefined) throw new Error("run 1 ran no mutant");
+    edit?.(store, lastRunId(store), m);
+    store.db.query("DELETE FROM baseline_snapshots").run();
+    const events: RunEvent[] = [];
+    const backend = new Stub(run2);
+    const report = await runSession({
+      ...base(store, dirs),
+      backend,
+      resume: "last",
+      emit: [(e) => events.push(e)],
+    });
+    store.close();
+    const row = report.mutants.find((x) => x.mutantCode === m);
+    return { m, report, events, backend, row };
+  }
+
+  test("reproduction: M scored while the killer was red; the resume's baseline has it green: M re-runs, killed (resume-tests-not-faced)", async () => {
+    const h = await resumed(
+      { killerRed: true, killerKills: true },
+      { killerRed: false, killerKills: true },
+    );
+    expect(h.report.resumedFrom?.runId).toBeDefined();
+    expect(h.backend.activated).toContain(h.m);
+    expect(h.row?.verdict).toBe("killed");
+    expect(h.row?.carried).not.toBe(true);
+    expect(faceCodes(h.events)).toEqual(["resume-tests-not-faced"]);
+  });
+
+  test("control: M faced every test covering it now: carried as survived, not run, no warning", async () => {
+    const h = await resumed(
+      { killerRed: false, killerKills: false },
+      { killerRed: false, killerKills: true },
+    );
+    expect(h.backend.activated).not.toContain(h.m);
+    expect(h.row?.verdict).toBe("survived");
+    expect(h.row?.carried).toBe(true);
+    expect(faceCodes(h.events)).toEqual([]);
+  });
+
+  for (const record of ["[]", null] as const) {
+    test(`a ${record === null ? "NULL" : "[]"} record: M re-runs, killed (resume-survivor-no-record)`, async () => {
+      const h = await resumed(
+        { killerRed: false, killerKills: false },
+        { killerRed: false, killerKills: true },
+        (store, id, m) =>
+          store.db
+            .query("UPDATE mutants SET covering_tests = ? WHERE run_id = ? AND mutant_code = ?")
+            .run(record, id, m),
+      );
+      expect(h.backend.activated).toContain(h.m);
+      expect(h.row?.verdict).toBe("killed");
+      expect(faceCodes(h.events)).toEqual(["resume-survivor-no-record"]);
+    });
+  }
+
+  test("a carried KILL is carried even with no record: a kill stands whatever covers it now", async () => {
+    const h = await resumed(
+      { killerRed: false, killerKills: true },
+      { killerRed: false, killerKills: true },
+      (store, id, m) =>
+        store.db
+          .query("UPDATE mutants SET covering_tests = '[]' WHERE run_id = ? AND mutant_code = ?")
+          .run(id, m),
+    );
+    expect(h.backend.activated).not.toContain(h.m);
+    expect(h.row?.verdict).toBe("killed");
+    expect(h.row?.carried).toBe(true);
+    expect(faceCodes(h.events)).toEqual([]);
+  });
+
+  /** A finished all-green run made unfinished, so `--resume` replays its one batch whole (R192). */
+  async function replayable(emptyRecord: boolean) {
+    const g = await greenSource();
+    const target = g.rows[0]?.mutant_code;
+    if (target === undefined) throw new Error("no source rows");
+    g.store.db.query("UPDATE runs SET finished_at = NULL WHERE id = ?").run(g.src);
+    if (emptyRecord) {
+      g.store.db
+        .query("UPDATE mutants SET covering_tests = '[]' WHERE run_id = ? AND mutant_code = ?")
+        .run(g.src, target);
+    }
+    const events: RunEvent[] = [];
+    const backend = new Stub({ killerRed: false, killerKills: true });
+    const report = await runSession({
+      ...base(g.store, g.dirs),
+      backend,
+      resume: "last",
+      emit: [(e) => events.push(e)],
+    });
+    g.store.close();
+    return { target, report, events, backend };
+  }
+
+  test("whole-batch replay: a survivor with an empty record forces the ordinary path; it re-runs", async () => {
+    const h = await replayable(true);
+    expect(batchCarried(h.events)).toBe(false);
+    expect(h.backend.activated).toEqual([h.target]);
+    expect(h.report.mutants.find((x) => x.mutantCode === h.target)?.verdict).toBe("killed");
+    expect(faceCodes(h.events)).toEqual(["resume-survivor-no-record"]);
+  });
+
+  test("control: whole-batch replay with every survivor recorded: replayed, nothing runs", async () => {
+    const h = await replayable(false);
+    expect(batchCarried(h.events)).toBe(true);
+    expect(h.backend.mutantRuns).toBe(0);
+    expect(faceCodes(h.events)).toEqual([]);
   });
 });
