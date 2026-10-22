@@ -7,6 +7,7 @@ import {
   AL_RUNNER_UNCLASSIFIED_ERROR,
   AL_RUNNER_UNDECIDED_ARM_MISSING,
   AlRunnerBackend,
+  AlRunnerServeDuplicateRowError,
   AlRunnerServerStopUnsetError,
   AlRunnerTestNameError,
   parseReportedStopMs,
@@ -1924,8 +1925,10 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
     }
 
     describe("serveDaemonReusable, the rule alone", () => {
+      // Each row its own name: under v3 a repeated name throws (M-3).
+      let rowSeq = 0;
       const r = (status: string, o: { message?: string; notRun?: boolean } = {}) => ({
-        name: "C.X",
+        name: `C.X${++rowSeq}`,
         status,
         ...o,
       });
@@ -1972,6 +1975,37 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
           expect(serveDaemonReusable([r("error", { notRun: true, message: m })], "v3")).toBe(false);
         });
       }
+      // Build review r1 I-1: a tail must not keep a timeout, a wall-time stop or ANY panic (an
+      // #5698 fix would put the OnRun timeout inside the onrun-failed tail). One test per word,
+      // and a case variant each, so each word's red check names its own test.
+      const ONRUN_TAIL = "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): ";
+      const CASCADE_TAIL =
+        "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (";
+      for (const [c, m] of [
+        ["f timeout", `${ONRUN_TAIL}Test exceeded 3s timeout.`],
+        ["f timeout case", `${ONRUN_TAIL}TIMEOUT after 3s`],
+        ["f timed out", `${ONRUN_TAIL}the trigger timed out`],
+        ["f timed out case", `${CASCADE_TAIL}X: Timed Out)`],
+        ["f exceeded", `${ONRUN_TAIL}CPU limit Exceeded`],
+        ["f wall", `${ONRUN_TAIL}stopped at 10 times N of WALL time`],
+        ["f wall cascade", `${CASCADE_TAIL}X: stopped on wall time)`],
+        ["f deadline", `${ONRUN_TAIL}Deadline reached`],
+        ["f panicked at", `${ONRUN_TAIL}thread 'worker' panicked at src/run.rs:10:5`],
+        ["f panic case", `${CASCADE_TAIL}X: PANIC in the runtime)`],
+      ] as const) {
+        test(`T3 (${c}): a tail never keeps a timeout, a wall-time stop or a panic`, () => {
+          expect(serveDaemonReusable([r("error", { notRun: true, message: m })], "v3")).toBe(false);
+        });
+      }
+      test("M-3: the rule itself throws on a duplicate name under v3, never under v2", () => {
+        const dup = [
+          { ...r("pass"), name: "C.D" },
+          { ...r("fail"), name: "C.D" },
+        ];
+        expect(() => serveDaemonReusable(dup, "v3")).toThrow(AlRunnerServeDuplicateRowError);
+        expect(serveDaemonReusable(dup, "v2")).toBe(true);
+        expect(serveDaemonReusable([r("pass"), r("pass")], "v3")).toBe(true);
+      });
       test("v3 closes on every unknown kind", () => {
         const unknown = [
           r("error", { notRun: true, message: DUP_KEY }),

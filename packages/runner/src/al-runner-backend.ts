@@ -97,10 +97,17 @@ export const RUNNER_ONRUN_TIMEOUT_MESSAGE =
  * Matched at the TYPE position only: a user `Error('out-of-scope: ...')` would match and lose a
  * kill (the safe direction); a message that merely contains the phrase does not match.
  */
-/** R612: the two panic wordings v3 uses (a test's own, and the rest of its codeunit's). */
-const V3_PANIC_WORDING = String.raw`runtime panic \(bug\)|panicked \(a runtime bug\)`;
-/** R612 (plan r3 §1): an entry whose tail is free text must not keep a panic. */
-const NO_PANIC = `(?!.*(?:${V3_PANIC_WORDING}))`;
+/**
+ * R612 (plan r3 §1; build review r1 I-1): words a free-text tail must not contain, matched without
+ * regard to case. "panic" covers both v3 panic wordings and Rust's "panicked at"; the rest cover a
+ * timeout or wall-time stop, which an upstream #5698 fix would put inside the onrun-failed tail.
+ */
+const V3_TAIL_UNSAFE_WORDS = ["panic", "timeout", "timed out", "exceeded", "wall", "deadline"];
+/** Case-insensitive for these words only, so each entry's fixed prefix stays exact. */
+const anyCase = (w: string): string =>
+  [...w].map((ch) => (/[a-z]/.test(ch) ? `[${ch}${ch.toUpperCase()}]` : ch)).join("");
+/** R612: the one tail check both tailed entries share, so they cannot drift apart. */
+const SAFE_TAIL = `(?!.*(?:${V3_TAIL_UNSAFE_WORDS.map(anyCase).join("|")}))`;
 
 /**
  * R612: the v3 refusal reasons MEASURED to leave a `serve` daemon correct and warm for the next
@@ -113,10 +120,10 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   commit:
     /^NotRun: out-of-scope: Commit inside a test under TestIsolation = Function: what the runner keeps is not pinned$/,
   cascade: new RegExp(
-    String.raw`^NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran \(${NO_PANIC}.*$`,
+    String.raw`^NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran \(${SAFE_TAIL}.*$`,
   ),
   "onrun-failed": new RegExp(
-    String.raw`^NotRun: out-of-scope: OnRun failed \(runner behaviour not pinned\): ${NO_PANIC}.*$`,
+    String.raw`^NotRun: out-of-scope: OnRun failed \(runner behaviour not pinned\): ${SAFE_TAIL}.*$`,
   ),
   "no-callee": /^NotRun: out-of-scope: [^:\n]+: call `[^`\n]*` has no callee the checker resolved$/,
 };
@@ -130,12 +137,20 @@ export type ServeDaemonRule = "v2" | "v3";
  * - v2 (R517 I2 + I-1, unchanged): every row is `pass` or `fail`.
  * - v3: every row is `pass`/`fail` without `notRun`, or a `notRun` `error` row whose message is
  *   one of `V3_SERVE_SAFE_REFUSALS`. Anything else (a timeout, a panic, an unknown kind) closes.
+ *   A test name seen twice THROWS `AlRunnerServeDuplicateRowError` (build review r1 M-3: in the
+ *   rule, so every serve path that applies it gets the check). The caller closes the daemon on a
+ *   throw, as for any `runTests` throw (R517 C1).
  */
 export function serveDaemonReusable(
   rows: readonly ServerTestLine[],
   rule: ServeDaemonRule,
 ): boolean {
   if (rule === "v2") return rows.every((t) => t.status === "pass" || t.status === "fail");
+  const seen = new Set<string>();
+  for (const t of rows) {
+    if (seen.has(t.name)) throw new AlRunnerServeDuplicateRowError(t.name);
+    seen.add(t.name);
+  }
   return rows.every((t) => {
     if (t.status === "pass" || t.status === "fail") return t.notRun !== true;
     const m = t.message;
@@ -2029,17 +2044,15 @@ export class AlRunnerBackend implements ExecutionBackend {
     const hungTest = res.tests.find(isTimeoutRow)?.name;
     // R612: the rule is the backend's (`serveDaemonRule`, default v2), never read off the rows.
     const rule = this.cfg.serveDaemonRule ?? "v2";
-    if (!serveDaemonReusable(res.tests, rule)) await server.close();
-    if (rule === "v3") {
-      const seen = new Set<string>();
-      for (const t of res.tests) {
-        if (seen.has(t.name)) {
-          await server.close();
-          throw new AlRunnerServeDuplicateRowError(t.name);
-        }
-        seen.add(t.name);
-      }
+    let reusable: boolean;
+    try {
+      reusable = serveDaemonReusable(res.tests, rule);
+    } catch (e) {
+      // v3: a duplicate test name (a stale writer): never serve another request (R517 C1).
+      await server.close();
+      throw e;
     }
+    if (!reusable) await server.close();
     await watch();
     const byName = new Map<string, ServerTestLine>();
     for (const t of res.tests) byName.set(t.name, t);

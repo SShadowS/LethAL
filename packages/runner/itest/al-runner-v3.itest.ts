@@ -257,6 +257,9 @@ function assertIndex(b: AlRunnerV3Backend, leg: string, target: number, test: nu
 
 // ---------------------------------------------------------------------------------------------
 
+/** R612 M-2: leg C's warn-fact readings, for the receipt. */
+let legCWarnFacts: Record<string, string> | undefined;
+
 /** Returns the warn lines (R612 `serve-keep-reasons`) of a passing leg, for the receipt. */
 async function legC(scratch: string): Promise<readonly string[]> {
   const r = await runV3ContractProbe({
@@ -270,6 +273,10 @@ async function legC(scratch: string): Promise<readonly string[]> {
   });
   for (const f of r.facts)
     console.log(`  C: ${f.fact} = ${f.verdict} | ${f.measured.slice(0, 200)}`);
+  // R612 M-2: the warn readings go into the receipt, and from there into `.gated`.
+  legCWarnFacts = Object.fromEntries(
+    r.facts.filter((f) => V3_WARN_FACTS.includes(f.fact)).map((f) => [f.fact, f.verdict]),
+  );
   // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. R612: 24 facts,
   // a warn fact (V3_WARN_FACTS) only adds its line.
   const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 24, V3_WARN_FACTS);
@@ -1046,6 +1053,7 @@ async function main(): Promise<void> {
       outcome,
       legs,
       lines,
+      ...(legCWarnFacts !== undefined ? { warnFacts: legCWarnFacts } : {}),
       oracleBcBuild: ORACLE_BC_BUILD,
       writtenAt: new Date().toISOString(),
     });

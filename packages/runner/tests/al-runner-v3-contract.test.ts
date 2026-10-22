@@ -417,9 +417,8 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24, []).outcome).toBe("gate-fail");
   });
 
-  test("a session (gateOnlyTrusted) never starts serve; the fact is trusted from the gate", async () => {
-    const s = fakeServe();
-    const r = await runV3ContractProbe({
+  const session = (s: ReturnType<typeof fakeServe>, gated?: Record<string, string>) =>
+    runV3ContractProbe({
       alRunnerPath: "/fake/alrunner",
       expectedVersion: VERSION,
       packagesDir: "/fake/deps",
@@ -431,12 +430,31 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       spawn: fakeV3(),
       serveSpawn: s.spawn,
       gateOnlyTrusted: "the gated build's leg C at 5eb544ef",
+      ...(gated !== undefined ? { gatedWarnFacts: gated } : {}),
     });
+
+  test("M-2: a session never starts serve and shows the GATE's reading, not a claimed matches", async () => {
+    for (const v of ["matches", "diverged"]) {
+      const s = fakeServe();
+      const r = await session(s, { "serve-keep-reasons": v });
+      expect(s.argvs).toEqual([]);
+      const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+      expect(f).toMatchObject({ kind: "warn", verdict: v });
+      expect(f?.measured).toBe(
+        `not re-measured in a session (gate-only); the gate read ${v} (the gated build's leg C at 5eb544ef)`,
+      );
+      expect(v3ContractRefusals(r)).toEqual([]);
+    }
+  });
+
+  test("M-2: a .gated without the reading (gated before R612) is unmeasurable, never matches", async () => {
+    const s = fakeServe();
+    const r = await session(s);
     expect(s.argvs).toEqual([]);
-    expect(r.facts.find((x) => x.fact === "serve-keep-reasons")).toMatchObject({
-      kind: "warn",
-      verdict: "matches",
-    });
+    const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+    expect(f).toMatchObject({ kind: "warn", verdict: "unmeasurable" });
+    expect(f?.measured).toMatch(/\.gated records no reading/);
+    expect(v3ContractRefusals(r)).toEqual([]);
   });
 });
 
@@ -794,5 +812,18 @@ describe("T18: the .gated pin", () => {
     expect(() =>
       parseGated(`{"version":"v","binarySha256":"zz","lethalCommit":"${COMMIT}"}`, "x"),
     ).toThrow(/binarySha256/);
+  });
+
+  test("R612 M-2: .gated carries the gate's warn-fact readings; anything but a verdict is dropped", () => {
+    const base = { version: "v", binarySha256: "a".repeat(64), lethalCommit: COMMIT };
+    expect(
+      parseGated(JSON.stringify({ ...base, warnFacts: { "serve-keep-reasons": "diverged" } }), "x")
+        .warnFacts,
+    ).toEqual({ "serve-keep-reasons": "diverged" });
+    expect(
+      parseGated(JSON.stringify({ ...base, warnFacts: { a: "matches", b: "pass", c: 1 } }), "x")
+        .warnFacts,
+    ).toEqual({ a: "matches" });
+    expect("warnFacts" in parseGated(JSON.stringify(base), "x")).toBe(false);
   });
 });

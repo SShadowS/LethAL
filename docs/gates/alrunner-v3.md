@@ -21,8 +21,9 @@ The legs:
   row against its entry of `V3_SERVE_SAFE_REFUSALS`, the reasons after which the v3 serve rule keeps the daemon.
   It must read `matches` on alpha.2, but any other reading (`diverged`, `unmeasurable`) only prints
   `al-runner-v3-serve-keep-reason-moved` in the log and the receipt `lines`: it is never a `gate-fail` or a `held`,
-  because a moved reason only makes the daemon close (slower, never wrong). It is gate-only: a session trusts
-  the gated record, as for `timeout-is-cpu`.
+  because a moved reason only makes the daemon close (slower, never wrong). It is gate-only, as `timeout-is-cpu`
+  is: the receipt's `warnFacts` carries the reading, the update script copies it into `.gated`, and a session
+  shows that reading (`unmeasurable` when `.gated` predates R612), never a `matches` it did not see.
 - S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `itest:alrunner`'s table.
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.

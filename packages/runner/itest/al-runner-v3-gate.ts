@@ -418,6 +418,9 @@ export interface V3GateReceipt {
   readonly outcome: V3GateOutcome;
   readonly legs: Readonly<Record<string, V3LegOutcome>>;
   readonly lines: readonly string[];
+  /** R612 M-2: leg C's reading of each warn fact (`V3_WARN_FACTS`); the update script copies it
+   *  into `.gated` on a pass. */
+  readonly warnFacts?: Readonly<Record<string, string>>;
   /** F8: the BC build of each leg's oracle server, beside v3's `--bc-version`. */
   readonly oracleBcBuild: Readonly<Record<string, string>>;
   readonly writtenAt: string;

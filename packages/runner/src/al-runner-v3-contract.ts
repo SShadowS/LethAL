@@ -549,6 +549,8 @@ export interface V3ProbeEnv {
   readonly gateOnlyTrusted?: string;
   /** R612 test hook: the `serve` daemon for `serve-keep-reasons` (default: the real binary). */
   readonly serveSpawn?: ServerSpawnFn;
+  /** R612 M-2: `.gated`'s warn-fact readings (what the gate's leg C read), shown by a session. */
+  readonly gatedWarnFacts?: Readonly<Record<string, string>>;
 }
 
 interface Call {
@@ -952,18 +954,24 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         JSON.stringify(c ?? null),
       ),
     );
-    // serve-keep-reasons (R612): GATE-ONLY, like timeout-is-cpu: a session trusts the gated record.
-    facts.push(
-      env.gateOnlyTrusted !== undefined
-        ? fact(
-            "serve-keep-reasons",
-            "warn",
-            "matches",
-            "gate-only (R612): measured by the update gate's leg C",
-            `not re-measured in a session: trusted from ${env.gateOnlyTrusted}`,
-          )
-        : await serveKeepReasons(env, app, root),
-    );
+    // serve-keep-reasons (R612): GATE-ONLY, like timeout-is-cpu. M-2: a gate passes whatever this
+    // fact reads, so a session shows the gate's own reading from `.gated`, never a claimed matches.
+    if (env.gateOnlyTrusted !== undefined) {
+      const read = env.gatedWarnFacts?.["serve-keep-reasons"];
+      const verdict: V3ContractVerdict =
+        read === "matches" || read === "diverged" ? read : "unmeasurable";
+      facts.push(
+        fact(
+          "serve-keep-reasons",
+          "warn",
+          verdict,
+          "gate-only (R612): measured by the update gate's leg C",
+          read === undefined
+            ? `not re-measured in a session (gate-only); .gated records no reading (gated before R612) (${env.gateOnlyTrusted})`
+            : `not re-measured in a session (gate-only); the gate read ${read} (${env.gateOnlyTrusted})`,
+        ),
+      );
+    } else facts.push(await serveKeepReasons(env, app, root));
     // duplicate-key-insert-raises (#5603): BC raises on the second statement-form Insert.
     const keys = await call(["--codeunit", "50655"], { codeunit: 50655 });
     const k = rowOf(keys, "DuplicateNamedKey");
