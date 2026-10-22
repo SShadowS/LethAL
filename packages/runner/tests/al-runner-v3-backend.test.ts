@@ -26,6 +26,7 @@ import {
   AlRunnerV3UnprovenBatchError,
   V3_REFUSED_NEARBY_TAG,
   V3_STATE_NOTE_TAG,
+  WINDOW_BOUND_CAVEAT,
   decodeV3Rows,
   stopSecondsOf,
   v3CallArgv,
@@ -563,6 +564,20 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
     const { b } = await deployed();
     await expect(b.activate("M9999")).rejects.toThrow(/not a mutant of the deployed batch/);
   });
+
+  test("R652 T7: one check per SPAWN: a run served from memory does not check; the next spawn is refused", async () => {
+    const { l, b, v3 } = await deployed();
+    expect((await run(b)).outcome).toBe("pass");
+    expect((await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).outcome).toBe("pass");
+    expect(v3.calls).toHaveLength(1);
+    expect(b.entriesStats().boundChecks).toBe(1);
+    await appendFile(join(active(l), "Logic.Codeunit.al"), " ");
+    // Served from the spawn's rows, which came from the checked bytes.
+    expect((await run(b)).outcome).toBe("pass");
+    await b.activate("M0002");
+    await expect(run(b)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect(v3.calls).toHaveLength(1);
+  });
 });
 
 describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
@@ -1076,6 +1091,12 @@ describe("§6 the Sleep rule through the backend (T12, T31, T32)", () => {
     const v = await runA(b);
     expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-refused"]);
     expect(v.failureMessage?.startsWith("[v3-sleep-noop] covered Sleep at")).toBe(true);
+  });
+
+  test("R652 T11: a one-shot Sleep note (no window, its own checked spawn) does NOT carry the window caveat", async () => {
+    const { b } = await sleeper(sleepCoverage({ hit: true }));
+    await b.activate("M0001");
+    expect((await runA(b)).failureMessage).not.toContain(WINDOW_BOUND_CAVEAT);
   });
 
   test("T12 other direction: the Sleep line listed at 0 hits leaves the pass scored", async () => {
