@@ -41,11 +41,23 @@ appJson.dependencies = appJson.dependencies.filter((d) => d.name !== "Test Runne
 writeFileSync(join(tests, "app.json"), JSON.stringify(appJson, null, 2));
 const cache = join(OUT, `ar-cache-${tag}-${mode}`);
 rmSync(cache, { recursive: true, force: true });
-const withCache = (argv: readonly string[]): string[] => [argv[0] ?? "", "--cache", cache, ...argv.slice(1)];
+const withCache = (argv: readonly string[]): string[] => [
+  argv[0] ?? "",
+  "--cache",
+  cache,
+  ...argv.slice(1),
+];
 
 async function run(argv: string[]): Promise<{ code: number; out: string; err: string }> {
-  const p = Bun.spawn(argv, { env: { ...process.env, ...alRunnerEnv(120) }, stdout: "pipe", stderr: "pipe" });
-  const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+  const p = Bun.spawn(argv, {
+    env: { ...process.env, ...alRunnerEnv(120) },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, err] = await Promise.all([
+    new Response(p.stdout).text(),
+    new Response(p.stderr).text(),
+  ]);
   return { code: await p.exited, out, err };
 }
 
@@ -66,17 +78,31 @@ if (mode === "dry" || mode === "oneshot") {
       continue;
     }
     const r = await run(argv);
-    writeFileSync(join(OUT, `ar-${tag}-oneshot-${m}.log`), `exit ${r.code}\n--- stdout\n${r.out}\n--- stderr\n${r.err}`);
+    writeFileSync(
+      join(OUT, `ar-${tag}-oneshot-${m}.log`),
+      `exit ${r.code}\n--- stdout\n${r.out}\n--- stderr\n${r.err}`,
+    );
     console.log(`${m}: exit ${r.code} -> out/ar-${tag}-oneshot-${m}.xml`);
   }
   if (mode === "dry")
-    console.log(`server: ${AL_RUNNER} --server --cache ${cache}${defines.map((d) => ` --define ${d}`).join("")}`);
+    console.log(
+      `server: ${AL_RUNNER} --server --cache ${cache}${defines.map((d) => ` --define ${d}`).join("")}`,
+    );
 } else if (mode === "server") {
-  const server = new AlRunnerServer(AL_RUNNER, (argv) => defaultServerSpawn(withCache(argv)), defines);
+  const server = new AlRunnerServer(
+    AL_RUNNER,
+    (argv) => defaultServerSpawn(withCache(argv)),
+    defines,
+  );
   try {
     await server.start(600_000);
     const res = await server.runTests(
-      { sourcePaths: [target, tests], coverage: true, perTestCoverage: true, testIsolation: "test" },
+      {
+        sourcePaths: [target, tests],
+        coverage: true,
+        perTestCoverage: true,
+        testIsolation: "test",
+      },
       600_000,
     );
     writeFileSync(join(OUT, `ar-${tag}-server.json`), JSON.stringify(res, null, 2));

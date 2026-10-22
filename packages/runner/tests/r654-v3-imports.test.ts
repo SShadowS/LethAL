@@ -22,7 +22,7 @@ const V2_ONLY = [
 ] as const;
 
 const V2_IMPORT = new RegExp(
-  String.raw`(?:from\s+|import\s*\(\s*)["']\.\/al-runner-(?:${V2_ONLY.join("|")})(?:\.js|\.ts)?["']`,
+  String.raw`(?:from\s+|import\s*\(\s*|import\s+)["']\.\/al-runner-(?:${V2_ONLY.join("|")})(?:\.js|\.ts)?["']`,
   "g",
 );
 
@@ -64,7 +64,7 @@ describe("R654 S1: v3 and the kept modules import nothing S3 deletes", () => {
     }
   });
 
-  test("direction: single-line, multi-line, type-only and dynamic imports are all caught", () => {
+  test("direction: single-line, multi-line, type-only, dynamic and side-effect imports are all caught", () => {
     const text = [
       'import { x } from "./al-runner-backend";',
       "import {",
@@ -73,8 +73,9 @@ describe("R654 S1: v3 and the kept modules import nothing S3 deletes", () => {
       'import type { Z } from "./al-runner-canary.js";',
       'const m = await import("./al-runner-contract");',
       "export { w } from './al-runner-cache';",
+      'import "./al-runner-backend";',
     ].join("\n");
-    expect(v2Imports(text)).toHaveLength(5);
+    expect(v2Imports(text)).toHaveLength(6);
   });
 
   test("direction: the kept modules and similar names are not caught", () => {

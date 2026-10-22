@@ -653,7 +653,8 @@ export function serveDaemonReusable(
     seen.add(t.name);
   }
   return rows.every((t) => {
-    if (t.status === "pass" || t.status === "fail") return t.notRun !== true;    const m = t.message;
+    if (t.status === "pass" || t.status === "fail") return t.notRun !== true;
+    const m = t.message;
     return (
       t.notRun === true &&
       t.status === "error" &&
