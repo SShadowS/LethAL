@@ -1,38 +1,69 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { SessionReport } from "../packages/runner/src/report";
 import { scratchDirs } from "../packages/runner/tests/helpers/scratch";
 import { IDENTITY_SCHEME } from "../packages/schemata/src/project";
-import { FROZEN_REPORT, type RefreezeDeps, figures, main } from "./gift-card-refreeze.ts";
+import {
+  EXPECTED_DEPLOYED,
+  FROZEN_REPORT,
+  RESTORE,
+  type RefreezeDeps,
+  figures,
+  main,
+  movedDemoRows,
+} from "./gift-card-refreeze.ts";
 
 const scratch = scratchDirs();
 
-const mutant = (n: number, verdict: string, procedureName = "GetBalance") => ({
+const mutant = (n: number, procedureName: string, operatorName: string, verdict: string) => ({
   mutantCode: `M${String(n).padStart(4, "0")}`,
   file: "src/GiftCardMgt.Codeunit.al",
   astHash: `hash${n}`,
   codeunitName: "Gift Card Mgt",
   procedureName,
-  operatorName: "lethal.remove-setrange",
+  operatorName,
   operatorMajor: 1,
   verdict,
   killingTest: verdict === "killed" ? "RedeemReducesBalance" : null,
 });
 
-/** A fixture report: 4 mutants, 2 killed, 1 survived, 1 no-coverage in BlockExpiredCards. */
-function report(over: { identityScheme?: number; m2?: string; text?: boolean } = {}) {
+interface Over {
+  identityScheme?: number;
+  /** Verdict of mutant 5, a plain killed `Issue` mutant. */
+  m5?: string;
+  /** Verdict of the GetBalance remove-setrange row (mutant 1). */
+  planted?: string;
+  text?: boolean;
+  count?: number;
+  coverageMode?: string;
+}
+
+/**
+ * A fixture report holding the three demo rows: GetBalance remove-setrange survived (1), Redeem
+ * conditional-boundary survived (2), BlockExpiredCards no-coverage (3, 4); the rest killed in Issue.
+ * 60 mutants by default, so 56 killed, 2 survived, 2 no-coverage.
+ */
+function report(over: Over = {}) {
   const mutants = [
-    mutant(1, "killed"),
-    mutant(2, over.m2 ?? "survived"),
-    mutant(3, "killed"),
-    mutant(4, "no-coverage", "BlockExpiredCards"),
-  ].map((m) => (over.text ? { ...m, originalText: "GiftCard.SetRange(x)", mutatedText: "" } : m));
+    mutant(1, "GetBalance", "lethal.remove-setrange", over.planted ?? "survived"),
+    mutant(2, "Redeem", "lethal.conditional-boundary", "survived"),
+    mutant(3, "BlockExpiredCards", "lethal.remove-setrange", "no-coverage"),
+    mutant(4, "BlockExpiredCards", "lethal.negate-guard", "no-coverage"),
+  ];
+  for (let n = 5; n <= (over.count ?? EXPECTED_DEPLOYED); n++) {
+    const verdict = n === 5 ? (over.m5 ?? "killed") : "killed";
+    mutants.push(mutant(n, "Issue", "lethal.void-method-call", verdict));
+  }
   return {
     identityScheme: over.identityScheme ?? IDENTITY_SCHEME,
-    counts: { killed: 2, survived: 1, noCoverage: 1 },
-    mutationScore: 2 / 3,
+    coverageMode: over.coverageMode ?? "fenced",
+    counts: { killed: 56, survived: 2, noCoverage: 2 },
+    mutationScore: 56 / 58,
     timings: { totalMs: 20630 },
-    mutants,
+    mutants: over.text
+      ? mutants.map((m) => ({ ...m, originalText: "GiftCard.SetRange(x)", mutatedText: "" }))
+      : mutants,
   };
 }
 
@@ -52,8 +83,8 @@ function harness(reports: object[], reachable = true) {
       writeFileSync(out, JSON.stringify(reports[i++]));
       return 0;
     },
-    freeze: async (r) => {
-      calls.push(`freeze ${r}`);
+    freeze: async (r, events) => {
+      calls.push(`freeze ${r} ${events}`);
     },
     redactCheck: async () => {
       calls.push("check");
@@ -63,12 +94,17 @@ function harness(reports: object[], reachable = true) {
     scratch: dir,
     dest: join(dir, "out", "rehearsal.report.json"),
   };
-  const go = async () => ({ code: await main(deps, (s) => lines.push(s)), out: lines.join("\n") });
+  const go = async (d: RefreezeDeps = deps) => ({
+    code: await main(d, (s) => lines.push(s)),
+    out: lines.join("\n"),
+  });
   return { deps, calls, go, dir };
 }
 
+const froze = (calls: string[]) => calls.some((c) => c.startsWith("freeze"));
+
 describe("gift-card-refreeze (R664)", () => {
-  test("three agreeing reports are frozen from run 1, then checked", async () => {
+  test("three agreeing reports are frozen from run 1, with run 1's events, then checked", async () => {
     const h = harness([report(), report(), report()]);
     const { code, out } = await h.go();
     expect(code).toBe(0);
@@ -77,19 +113,19 @@ describe("gift-card-refreeze (R664)", () => {
       "run",
       "run",
       "run",
-      `freeze ${join(h.dir, "run-1.report.json")}`,
+      `freeze ${join(h.dir, "run-1.report.json")} ${join(h.dir, "run-1.events.ndjson")}`,
       "check",
     ]);
     expect(out).toContain("runs 1-3 agree per mutant");
   });
 
   test("one differing mutant refuses, naming it, and freezes nothing", async () => {
-    const h = harness([report(), report(), report({ m2: "killed" })]);
+    const h = harness([report(), report(), report({ m5: "survived" })]);
     const { code, out } = await h.go();
     expect(code).toBe(1);
     expect(out).toContain("run 3 differs from run 1 in 1 mutant(s)");
-    expect(out).toContain("hash2|Gift Card Mgt|GetBalance|lethal.remove-setrange|1");
-    expect(h.calls.some((c) => c.startsWith("freeze"))).toBe(false);
+    expect(out).toContain("hash5|Gift Card Mgt|Issue|lethal.void-method-call|1");
+    expect(froze(h.calls)).toBe(false);
   });
 
   test("a report at an old identity scheme refuses", async () => {
@@ -97,7 +133,7 @@ describe("gift-card-refreeze (R664)", () => {
     const { code, out } = await h.go();
     expect(code).toBe(1);
     expect(out).toContain(`run 2 is at identity scheme 3, not ${IDENTITY_SCHEME}`);
-    expect(h.calls.some((c) => c.startsWith("freeze"))).toBe(false);
+    expect(froze(h.calls)).toBe(false);
   });
 
   test("source text bound for a non-first-party path refuses before anything is written", async () => {
@@ -105,26 +141,73 @@ describe("gift-card-refreeze (R664)", () => {
     const h = harness([r, r, r]);
     const { code, out } = await h.go();
     expect(code).toBe(1);
-    // 4 originalText; the empty mutatedText of a deletion reveals nothing and is not counted.
-    expect(out).toContain("4 unredacted source field(s)");
-    expect(h.calls.some((c) => c.startsWith("freeze"))).toBe(false);
+    // 60 originalText; the empty mutatedText of a deletion reveals nothing and is not counted.
+    expect(out).toContain("60 unredacted source field(s)");
+    expect(froze(h.calls)).toBe(false);
     expect(existsSync(h.deps.dest)).toBe(false);
   });
 
-  test("a failing redact --check on the archived report refuses", async () => {
+  test("a failing redact --check on the archived report refuses with the restore command", async () => {
     const h = harness([report(), report(), report()]);
-    const lines: string[] = [];
-    const code = await main({ ...h.deps, redactCheck: async () => false }, (s) => lines.push(s));
+    const { code, out } = await h.go({ ...h.deps, redactCheck: async () => false });
     expect(code).toBe(1);
-    expect(lines.join("\n")).toContain("--check failed");
-    expect(lines.join("\n")).toContain("do NOT commit it");
+    expect(out).toContain("--check failed");
+    expect(out).toContain(RESTORE);
   });
 
   test("the gift-card report's real destination is first-party, so its source passes", async () => {
     const r = report({ text: true });
     const h = harness([r, r, r]);
-    expect(await main({ ...h.deps, dest: FROZEN_REPORT }, () => {})).toBe(0);
+    const { code } = await h.go({ ...h.deps, dest: FROZEN_REPORT });
+    expect(code).toBe(0);
     expect(h.calls).toContain("check");
+  });
+
+  test("a mutant count other than the pre-committed 60 refuses before the delete", async () => {
+    const r = report({ count: 59 });
+    const h = harness([r, r, r]);
+    const { code, out } = await h.go();
+    expect(code).toBe(1);
+    expect(out).toContain("run 1 deployed 59 mutants, not the pre-committed 60");
+    expect(froze(h.calls)).toBe(false);
+    // Nothing was deleted, so there is nothing to restore.
+    expect(out).not.toContain(RESTORE);
+  });
+
+  test("a report with no valid coverage mode refuses before the delete", async () => {
+    const r = report({ coverageMode: "bogus" });
+    const h = harness([r, r, r]);
+    const { code, out } = await h.go();
+    expect(code).toBe(1);
+    expect(out).toContain("records no coverageMode");
+    expect(froze(h.calls)).toBe(false);
+  });
+
+  test("a moved demo row refuses by name before the delete", async () => {
+    const r = report({ planted: "killed" });
+    const h = harness([r, r, r]);
+    const { code, out } = await h.go();
+    expect(code).toBe(1);
+    expect(out).toContain("demo row(s) moved: GetBalance remove-setrange survived");
+    expect(froze(h.calls)).toBe(false);
+  });
+
+  test("the committed rehearsal report's demo rows hold", () => {
+    const committed = JSON.parse(readFileSync(FROZEN_REPORT, "utf8")) as SessionReport;
+    expect(movedDemoRows(committed)).toEqual([]);
+  });
+
+  test("a freeze that throws after the delete prints the restore command and exits 1", async () => {
+    const h = harness([report(), report(), report()]);
+    const { code, out } = await h.go({
+      ...h.deps,
+      freeze: async () => {
+        throw new Error("campaign: refusing — rehearsal.precommit.md is modified");
+      },
+    });
+    expect(code).toBe(1);
+    expect(out).toContain("rehearsal.precommit.md is modified");
+    expect(out).toContain("git checkout -- docs/campaign/2026-08-16-gift-card/");
   });
 
   test("bc-demo not reachable refuses by name, exit 2, and runs nothing", async () => {
@@ -139,13 +222,27 @@ describe("gift-card-refreeze (R664)", () => {
   test("the printed numbers are computed from the report", () => {
     const lines = figures(report() as never);
     expect(lines[0]).toBe(
-      "deployed 4, killed 2, survived 1, no-coverage 1, score 66.7%, wall time 20.6 s",
+      "deployed 60, killed 56, survived 2, no-coverage 2, score 96.6%, wall time 20.6 s",
     );
-    expect(lines).toContain("<<REFREEZE: deployed>> = 4");
-    expect(lines).toContain("<<REFREEZE: killed>> = 2");
-    expect(lines).toContain("<<REFREEZE: survived>> = 1");
-    expect(lines).toContain("<<REFREEZE: no-coverage>> = 1");
-    expect(lines).toContain("<<REFREEZE: BlockExpiredCards no-coverage>> = 1");
-    expect(lines).toContain("<<REFREEZE: wall s>> = 20.6");
+    expect(lines).toContain(
+      "intro:   60 mutants, and the last measured run took **20.6 seconds**.",
+    );
+    expect(lines).toContain("§4 lead: Times are from the measured 20.6 s run");
+    expect(lines).toContain('§4 0:40: "56 killed, 2 survived, 2 no-coverage.');
+    expect(lines).toContain('§4 2:10: "2 mutants, no test executed any of them.');
+  });
+
+  test("on the committed report, every printed phrase is already in the runbook", () => {
+    const runbook = readFileSync(
+      join(import.meta.dir, "..", "docs", "directions-emea-2026-runbook.md"),
+      "utf8",
+    ).replace(/\s*\n\s*/g, " ");
+    const committed = JSON.parse(readFileSync(FROZEN_REPORT, "utf8")) as SessionReport;
+    const label = /^(intro|§4 lead|§4 0:40|§4 2:10):\s+/;
+    const phrases = figures(committed)
+      .filter((l) => label.test(l))
+      .map((l) => l.replace(label, ""));
+    expect(phrases.length).toBe(4);
+    for (const p of phrases) expect(runbook).toContain(p);
   });
 });

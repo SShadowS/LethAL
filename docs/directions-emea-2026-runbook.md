@@ -4,8 +4,7 @@ Everything needed to run the LethAL demo live, in the order you need it. The pla
 before the conference is `docs/superpowers/plans/2026-08-16-directions-emea-2026-readiness.md`; this
 file is what you hold on the day.
 
-**The demo is `examples/gift-card`.** <<REFREEZE: deployed>> mutants, and the last measured run took
-**<<REFREEZE: wall s>> seconds**.
+**The demo is `examples/gift-card`.** 60 mutants, and the last measured run took **20.6 seconds**.
 Its expected verdicts are frozen at `docs/campaign/2026-08-16-gift-card/`.
 
 ---
@@ -43,10 +42,12 @@ of is a finding, not a number to update.
 
 **Re-freezing the stage (R664), once, on the picked commit.** `bun scripts/gift-card-refreeze.ts`
 runs the demo three times on bc-demo, refuses unless the three agree mutant for mutant at the current
-identity scheme, re-freezes `docs/campaign/2026-08-16-gift-card/rehearsal.*` in place and prints the
-values for every `<<REFREEZE: ...>>` placeholder in this file. Replace each placeholder with its
-printed value, review `git diff docs/campaign/2026-08-16-gift-card/`, then commit. The planted-bug
-rank is the one value it does not compute: read it off the `explain` command it prints.
+identity scheme, re-freezes `docs/campaign/2026-08-16-gift-card/rehearsal.*` in place and prints this
+file's figures as ready-to-paste phrases. Only after it succeeds, replace the matching phrases here
+(the intro line and §4), review `git diff docs/campaign/2026-08-16-gift-card/`, then commit both.
+The planted-bug rank is the one figure it does not compute: read it off the `explain` command it
+prints. If it fails after deleting the old baseline, it prints the `git checkout` that restores it.
+Until then, every figure in this file is the currently committed report's.
 
 **Ten minutes before you walk on**, run `bun scripts/demo-reset.ts` once more. Its last line is
 either `ready. doctor is green.` or a named failing check.
@@ -123,17 +124,17 @@ you prepared. Never present a prepared result as live.
 
 ## 4. The beat-by-beat
 
-Target: five minutes. Times are from the measured <<REFREEZE: wall s>> s run, so the narration has to carry the
+Target: five minutes. Times are from the measured 20.6 s run, so the narration has to carry the
 middle, not the tool.
 
 | Time | What you do | What you say |
 |---|---|---|
 | 0:00 | One slide: three objects, eight tests, all green. **Start the run immediately.** | "You have all written this app. Eight tests, all passing. Would you ship it?" |
 | 0:20 | The run streams verdicts while you walk the test list | Name the tests: error paths, a trigger assertion, an audit-trail check. Let them believe the suite. |
-| 0:40 | Run finishes. Read the summary. | "<<REFREEZE: killed>> killed, <<REFREEZE: survived>> survived, <<REFREEZE: no-coverage>> no-coverage. Coverage on `GetBalance` was 100% the whole time." |
-| 1:00 | `lethal explain report.json --top 10` | **Use `--top 10`, not `--top 5`**: on the frozen report the planted bug ranks <<REFREEZE: planted-bug rank>>, and a cap below that cuts it (see the note below the table). |
+| 0:40 | Run finishes. Read the summary. | "34 killed, 15 survived, 11 no-coverage. Coverage on `GetBalance` was 100% the whole time." |
+| 1:00 | `lethal explain report.json --top 10` | **Use `--top 10`, not `--top 5`**: on the frozen report the planted bug ranks tenth of fifteen, so `--top 10` only just includes it and any smaller cap cuts it (see the note below the table). |
 | 1:20 | The planted survivor: the deleted `SetRange` | "One line gone, every test green. This function now returns the whole store's outstanding balance instead of this card's. `executionProven: true`: a test provably ran `GetBalance`, the procedure this line is in, and did not notice." |
-| 2:10 | The `no-coverage` cluster: `BlockExpiredCards` | "<<REFREEZE: BlockExpiredCards no-coverage>> mutants, no test executed any of them. That is the nightly job. Expiry *is* tested — at redeem time, which is different code." |
+| 2:10 | The `no-coverage` cluster: `BlockExpiredCards` | "11 mutants, no test executed any of them. That is the nightly job. Expiry *is* tested — at redeem time, which is different code." |
 | 2:40 | The honest beat: the expiry boundary survivor | "Is a card valid ON its expiry date? Nobody wrote that down, so the tool will not tell you it is a bug. A survivor is a lead, not a verdict." |
 | 3:10 | The agent loop (§ below), or its recording | "The output was built for this: an agent reads the report, writes the test, re-runs." |
 | 4:40 | Close | "Green suite, shippable bug, one loop to close it. It runs on your app this afternoon." |
@@ -145,7 +146,9 @@ this line. Explain now ranks a survivor by its own reach first, so on a report f
 the rank can move. Re-read both on a new report before you quote them (R257). `executionProven` is
 procedure-level: it says a covering test entered the mutated PROCEDURE, not that the mutated line
 ran. On a current report, `reach` and `reachedBy` answer the line question where they are decided.
-The R664 re-freeze writes that new report: the `<<REFREEZE: ...>>` values in this table come from it.
+Re-read 2026-10-22 (R664) with the current build's `explain --top 10` on the same committed report:
+the planted bug now ranks **tenth of fifteen** survivors, which is what the 1:00 row says. The R664
+re-freeze writes a new report; read the rank again on it.
 
 ### The agent loop (D5)
 
