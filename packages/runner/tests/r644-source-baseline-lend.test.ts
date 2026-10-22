@@ -353,3 +353,144 @@ describe("R644 review I1: a candidate stays inside `execute` until after coverag
     expect(rows[0]?.failureNote).toBe(STRANDED_SKIP_NOTE);
   });
 });
+
+/** A finished all-green source run whose killer kills nothing: every mutant survives. */
+async function greenSource() {
+  const dirs = await project();
+  const store = new ResultsStore(":memory:");
+  const r1 = await runSession({
+    ...base(store, dirs),
+    backend: new Stub({ killerRed: false, killerKills: false }),
+  });
+  const src = lastRunId(store);
+  const rows = coveringOf(store, src);
+  return { dirs, store, r1, src, rows };
+}
+const isKiller = (name: string) => name.startsWith("Killer Tests");
+
+describe("R644 (build review I1): the plan tests the first build lacked", () => {
+  test("(4) per mutant: in one batch, the survivor that did not face the killer is re-run, the others lend", async () => {
+    const g = await greenSource();
+    const target = g.rows[0];
+    if (target === undefined || target.covering_tests === null) throw new Error("no source rows");
+    const faced = (JSON.parse(target.covering_tests) as string[]).filter((t) => !isKiller(t));
+    expect(faced.length).toBeGreaterThan(0);
+    // That one survivor was scored while the killer was red: its list lacks the killer.
+    g.store.db
+      .query("UPDATE mutants SET covering_tests = ? WHERE run_id = ? AND mutant_code = ?")
+      .run(JSON.stringify(faced), g.src, target.mutant_code);
+    const s = await skipping(g.store, g.dirs, { killerRed: false, killerKills: true });
+    g.store.close();
+    expect(g.r1.counts.survived).toBeGreaterThan(1);
+    expect(s.backend.activated).toEqual([target.mutant_code]);
+    expect(s.report.mutants.find((m) => m.mutantCode === target.mutant_code)?.verdict).toBe(
+      "killed",
+    );
+    expect(known(s.report)).toHaveLength(g.r1.counts.survived - 1);
+    expect(historyCodes(s.events)).toEqual(["history-tests-not-faced"]);
+  });
+
+  test("(6) a malformed covering_tests record throws by name; it is never read as empty", async () => {
+    const g = await greenSource();
+    const target = g.rows[0]?.mutant_code;
+    g.store.db
+      .query("UPDATE mutants SET covering_tests = ? WHERE run_id = ? AND mutant_code = ?")
+      .run("{not json", g.src, target ?? "");
+    const backend = new Stub({ killerRed: false, killerKills: true });
+    await expect(
+      runSession({ ...base(g.store, g.dirs), backend, skipKnownSurvivors: true }),
+    ).rejects.toThrow(/corrupt "covering_tests"/);
+    g.store.close();
+    expect(backend.mutantRuns).toBe(0);
+  });
+
+  test("(8) a source refused at run level gets only its own refusal, no R644 warning", async () => {
+    const g = await greenSource();
+    // Refused by R585's scope check (NULL scope), with rows that WOULD warn no-record if R644 saw them.
+    g.store.db.query("UPDATE runs SET test_scope = NULL WHERE id = ?").run(g.src);
+    g.store.db.query("UPDATE mutants SET covering_tests = '[]' WHERE run_id = ?").run(g.src);
+    const s = await skipping(g.store, g.dirs, { killerRed: false, killerKills: true });
+    g.store.close();
+    expect(known(s.report)).toEqual([]);
+    expect(historyCodes(s.events)).toEqual(["history-test-scope-changed"]);
+  });
+
+  test("minor 4: an AMBIGUOUS site match (two rows, different lists) is re-run, not lent", async () => {
+    const g = await greenSource();
+    const target = g.rows[0]?.mutant_code;
+    if (target === undefined) throw new Error("no source rows");
+    // Rule 1 off (another generation hash), so every match goes through rule 2, the site.
+    g.store.db
+      .query("UPDATE runs SET generation_source_sha256 = 'other-generation' WHERE id = ?")
+      .run(g.src);
+    // A second survivor row on the target's site whose list differs. The FIRST row (the original)
+    // holds the full list, so a rule that kept the first list would lend it.
+    const cols = (g.store.db.query("PRAGMA table_info(mutants)").all() as Array<{ name: string }>)
+      .map((c) => c.name)
+      .filter((n) => n !== "id" && n !== "covering_tests");
+    g.store.db
+      .query(
+        `INSERT INTO mutants (${cols.join(", ")}, covering_tests) SELECT ${cols.join(", ")}, '["Weak Tests.Weak"]' FROM mutants WHERE run_id = ? AND mutant_code = ?`,
+      )
+      .run(g.src, target);
+    const s = await skipping(g.store, g.dirs, { killerRed: false, killerKills: true });
+    g.store.close();
+    // The other survivors still lend through their sites; the ambiguous one is re-run.
+    expect(known(s.report)).toHaveLength(g.r1.counts.survived - 1);
+    expect(s.backend.activated).toEqual([target]);
+    expect(historyCodes(s.events)).toEqual(["history-survivor-no-record"]);
+  });
+});
+
+describe("R644 (build review I2, plan test 7): a source survivor carried by --resume", () => {
+  /** Run A (unfinished) scores its first mutant M and strands the second; run B resumes A and
+   *  finishes, carrying M; run C is a history session from B. A's snapshot is deleted so B's
+   *  baseline really runs (a reused snapshot would bring A's red killer back). */
+  async function carriedSource(killerRedInA: boolean) {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    const a = await skipping(store, dirs, {
+      killerRed: killerRedInA,
+      killerKills: false,
+      abortSecondMutant: true,
+    });
+    const m = a.backend.activated[0];
+    if (m === undefined) throw new Error("run A ran no mutant");
+    store.db.query("DELETE FROM baseline_snapshots").run();
+    const b = await skipping(
+      store,
+      dirs,
+      { killerRed: false, killerKills: false },
+      { resume: "last" },
+    );
+    const runB = lastRunId(store);
+    const carriedRow = store.db
+      .query(
+        "SELECT verdict, carried, covering_tests FROM mutants WHERE run_id = ? AND mutant_code = ?",
+      )
+      .get(runB, m) as { verdict: string; carried: number; covering_tests: string | null };
+    const c = await skipping(store, dirs, { killerRed: false, killerKills: true });
+    store.close();
+    return { m, b, carriedRow, c };
+  }
+
+  test("M faced only the weak test in A; B's baseline turns the killer green; C re-runs M (history-tests-not-faced)", async () => {
+    const h = await carriedSource(true);
+    // B carried M as a survivor, and its stored list is what M FACED in A, not what covers it in B.
+    expect(h.carriedRow.verdict).toBe("survived");
+    expect(h.carriedRow.carried).toBe(1);
+    expect((JSON.parse(h.carriedRow.covering_tests ?? "[]") as string[]).some(isKiller)).toBe(
+      false,
+    );
+    expect(h.c.backend.activated).toContain(h.m);
+    expect(h.c.report.mutants.find((x) => x.mutantCode === h.m)?.verdict).toBe("killed");
+    expect(historyCodes(h.c.events)).toContain("history-tests-not-faced");
+  });
+
+  test("control: M faced every test in A; C lends it from B's carried row", async () => {
+    const h = await carriedSource(false);
+    expect(h.carriedRow.carried).toBe(1);
+    expect(h.c.backend.activated).not.toContain(h.m);
+    expect(h.c.report.mutants.find((x) => x.mutantCode === h.m)?.verdict).toBe("known-survivor");
+  });
+});
