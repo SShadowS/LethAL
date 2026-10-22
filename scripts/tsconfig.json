@@ -5,10 +5,11 @@
   //
   // The survey R119 asked for was run before this file landed: of 19 scripts, 11 compiled clean
   // under the repo's own strict flags and 8 did not. R120 then admitted 7 of those 8 without
-  // weakening a flag. The one still outside is `probe-continia-env.ts`, and for a reason no type
-  // fix can reach: it imports `@modelcontextprotocol/sdk`, which is not a dependency of this repo.
-  // Admitting it would mean adding a real dependency for a spent 2026-07-26 probe — the wrong
-  // trade, and a decision rather than an oversight.
+  // weakening a flag. R625 then admitted every live, library and test script. What stays outside
+  // is listed BY NAME, with a reason, in `typecheck-excluded.json` (for example
+  // `probe-continia-env.ts`, which imports `@modelcontextprotocol/sdk`, not a dependency of this
+  // repo, and the spent one-off probes). `typecheck-coverage.test.ts` fails if a tracked script is
+  // in neither list, or in both.
   //
   // Add a script to `files` below once it compiles clean — the list is deliberately explicit, so
   // admitting one is a decision somebody made rather than a glob quietly widening.
@@ -138,6 +139,66 @@
     "bc-symbol-cache.ts",
     "bc-symbol-cache.test.ts",
     "bc-app-content.ts",
-    "bc-app-content.test.ts"
+    "bc-app-content.test.ts",
+    "typecheck-coverage.test.ts",
+    "al-runner-v3-update.test.ts",
+    "al-runner-v3-update.ts",
+    "alrunner-legs-diff.test.ts",
+    "alrunner-legs-diff.ts",
+    "automation-api-guard.test.ts",
+    "build-native-parser.test.ts",
+    "build-native-parser.ts",
+    "bump-instruments.test.ts",
+    "campaign/compile-only.test.ts",
+    "census-fixture-mutants.ts",
+    "census-operator-sites.ts",
+    "changelog-section.test.ts",
+    "changelog-section.ts",
+    "check-native-grammar.ts",
+    "corpus-fingerprint.test.ts",
+    "corpus-snapshot.test.ts",
+    "corpus-snapshot.ts",
+    "demo-reset.ts",
+    "export-mutation-elements.ts",
+    "fixtures/r393/late-write.fixture.ts",
+    "generate-schemas.ts",
+    "importable-scripts.test.ts",
+    "itest-timeline.test.ts",
+    "itest-timeline.ts",
+    "lib/collect-al-files.ts",
+    "lib/grammar-crosscheck.test.ts",
+    "lib/parser-equivalence.test.ts",
+    "lib/parser-equivalence.ts",
+    "lib/run-trigger-flag.test.ts",
+    "lib/run-trigger-flag.ts",
+    "measure-peak.test.ts",
+    "measure-peak.ts",
+    "native-notices.test.ts",
+    "native-notices.ts",
+    "native-parse-smoke.ts",
+    "operator-tables.test.ts",
+    "operator-tables.ts",
+    "probe-fixture-hashes.ts",
+    "probe-grammar-crosscheck.test.ts",
+    "probe-parser-equivalence.ts",
+    "prod-identity-keys.ts",
+    "r121-classify-eval.ts",
+    "r161-emit-proof.ts",
+    "r216-classify-gained.test.ts",
+    "r216-classify-gained.ts",
+    "r402-shape-sweep.ts",
+    "r546-bucket.test.ts",
+    "r546-bucket.ts",
+    "r572-flag-census.ts",
+    "r595-gap-map.ts",
+    "r624-absent-status.ts",
+    "redact-campaign-report.test.ts",
+    "redact-campaign-report.ts",
+    "render-overlay.ts",
+    "snapshot-late-write.test.ts",
+    "statement-containers.ts",
+    "test-preload.ts",
+    "verify-equivalence.test.ts",
+    "verify-equivalence.ts"
   ]
 }
