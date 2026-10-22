@@ -189,6 +189,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
   test("round-trips a completed baseline under its two hashes, latest first", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -230,6 +231,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
   ): { store: ResultsStore; id: number } {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: scheme,
       buildSymbols: [],

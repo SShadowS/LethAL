@@ -752,6 +752,7 @@ describe("R391: a recorded verdict carries only under rule 1 or rule 2", () => {
   test("store: createRun leaves twin_tuples NULL; setTwinTuples([]) records `[]`, distinct from NULL", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       projectPath: "/p",
       backend: "stub",
       appVersion: "1.0.0.0",
@@ -767,6 +768,7 @@ describe("R391: a recorded verdict carries only under rule 1 or rule 2", () => {
     store.setTwinTuples(runId, ["f.al\0t"]);
     expect(store.getRun(runId)?.twinTuples).toEqual(["f.al\0t"]);
     const bare = store.createRun({
+      testScope: [],
       projectPath: "/p",
       backend: "stub",
       appVersion: "1.0.0.0",

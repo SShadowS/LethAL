@@ -1022,6 +1022,7 @@ describe("an environment deleted at teardown takes its stored bundles with it (R
             serverInstance: cfg.resourceServerInstance ?? "",
           });
           const runId = cfg.store.createRun({
+            testScope: [],
             coverageMode: "procedure",
             identityScheme: IDENTITY_SCHEME,
             buildSymbols: [],

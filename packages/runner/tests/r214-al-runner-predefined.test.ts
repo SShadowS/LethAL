@@ -232,7 +232,7 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
       const sameApp = { hash: "same-test-app", deps: "same-deps" };
       const refusedOnSymbols = (symbols: readonly string[]) => {
         let changed = false;
-        store.priorSurvivorKeys(join(root, "app"), "procedure", sameApp, symbols, [], {
+        store.priorSurvivorKeys(join(root, "app"), "procedure", sameApp, symbols, [], [], {
           symbolsChanged: () => {
             changed = true;
           },

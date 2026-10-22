@@ -1,6 +1,7 @@
-// R621: `--resume` carries a stored `no-coverage` without checking it against THIS session's
-// coverage. Written test-first: the two "covered now" cases are RED on master (they carry today);
-// the "uncovered now" controls are green and must stay green.
+// R621: before the fix, `--resume` carried a stored `no-coverage` without checking it against THIS
+// session's coverage. Now a stored no-coverage is never carried: it is re-derived. Written
+// test-first: the "covered now" cases were RED on master (they carried); the "uncovered now"
+// controls are green either way.
 // What makes coverage differ between the two sessions here is the backend's covered set. A real
 // cause on one test app and target: `--resume` allows a TARGET edit (a batch with work left is
 // rebuilt), so a covered procedure edited to call an uncovered one makes it covered, while the
@@ -170,6 +171,9 @@ async function scenario(
   shape: "whole" | "partial",
   nowCovered: ReadonlyArray<typeof LOGIC>,
   editLogic = false,
+  /** Drop run 1's baseline snapshots, so run 2 measures coverage fresh. With one on record for an
+   *  unchanged instrumented tree and test app, run 2 reuses it (R192), coverage included. */
+  noSnapshot = false,
 ) {
   const dirs = await project();
   const store = new ResultsStore(":memory:");
@@ -180,6 +184,7 @@ async function scenario(
   const r1 = await runSession({ backend: first, store, ...dirs, selectorIds, ...split });
   if (editLogic)
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), LOGIC_CALLS_EXTRA_AL);
+  if (noSnapshot) store.db.run("DELETE FROM baseline_snapshots");
   const second = new CoverBackend(nowCovered);
   const events: RunEvent[] = [];
   const r2 = await runSession({
@@ -204,31 +209,40 @@ describe("R621: a stored no-coverage carries only when this session leaves the m
     }
   });
 
-  test("(1) whole carried batch (replayCarriedBatch), covered now: re-run, not carried (RED on master)", async () => {
-    const { r1, r2, events } = await scenario("whole", [LOGIC, EXTRA]);
-    // The no-coverage batch is the one that carried whole (precondition of this case).
+  test("(1) a batch whose every mutant was scored, one stored no-coverage, covered now: not carried whole, re-run", async () => {
+    const { r1, r2, events } = await scenario("whole", [LOGIC, EXTRA], false, true);
+    // Precondition: Extra's batch was fully scored in run 1 (all no-coverage), so on master it is
+    // the whole-batch path (`replayCarriedBatch`) that carries it.
     const extraBatch = inExtra(r1)[0]?.batchIndex;
     expect(
       r1.mutants
         .filter((m) => m.batchIndex === extraBatch)
         .every((m) => m.verdict === "no-coverage"),
     ).toBe(true);
-    expect(events.some((e) => e.type === "warning" && e.code === "resume-batch-carried")).toBe(
-      true,
-    );
-    // Desired: this session's coverage reaches UnderLimit, so its mutants are measured: killed.
+    // This session's coverage reaches UnderLimit, so its mutants are measured: killed.
     expect(inExtra(r2).map((m) => m.verdict)).toEqual(inExtra(r1).map(() => "killed"));
     expect(inExtra(r2).some((m) => m.carried === true)).toBe(false);
+    expect(events.some((e) => e.type === "warning" && e.code === "resume-batch-carried")).toBe(
+      false,
+    );
   });
 
-  test("(2) partly carried batch (scoreBatch), covered now: re-run, fresh coverage wins (RED on master)", async () => {
-    const { r1, r2 } = await scenario("partial", [LOGIC, EXTRA]);
+  test("(2) partly carried batch (scoreBatch), covered now: re-run, fresh coverage wins", async () => {
+    const { r1, r2 } = await scenario("partial", [LOGIC, EXTRA], false, true);
     expect(r1.batches).toBe(1);
     expect(inExtra(r2).map((m) => m.verdict)).toEqual(inExtra(r1).map(() => "killed"));
     expect(inExtra(r2).some((m) => m.carried === true)).toBe(false);
   });
 
-  test("(1) and (2) through a real cause: a target edit makes UnderLimit covered; the resume is not refused (RED on master)", async () => {
+  test("with run 1's snapshot on record (same tree, same test app), the re-derived verdict follows its coverage (R192's trust, R643), never a carry", async () => {
+    for (const shape of ["whole", "partial"] as const) {
+      const { r1, r2 } = await scenario(shape, [LOGIC, EXTRA]);
+      expect(inExtra(r2).map((m) => m.verdict)).toEqual(inExtra(r1).map(() => "no-coverage"));
+      expect(inExtra(r2).some((m) => m.carried === true)).toBe(false);
+    }
+  });
+
+  test("(1) and (2) through a real cause: a target edit makes UnderLimit covered; the resume is not refused", async () => {
     const got: string[] = [];
     const want: string[] = [];
     for (const shape of ["whole", "partial"] as const) {

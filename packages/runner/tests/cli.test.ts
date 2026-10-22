@@ -3055,6 +3055,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const dbPath = testDbPath("r.sqlite");
     const store = new ResultsStore(dbPath);
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -3106,6 +3107,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const dbPath = testDbPath("r.sqlite");
     const store = new ResultsStore(dbPath);
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
