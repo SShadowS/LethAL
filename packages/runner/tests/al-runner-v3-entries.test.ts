@@ -1293,6 +1293,23 @@ describe("13: §5, the coverage window for a pass under a mutant when the Sleep 
     expect(await onDisk(r)).toBe("NONE");
   });
 
+  test("a coverage request that answers a row of another codeunit is a transport failure", async () => {
+    const { r } = await windowOf({
+      serve: {
+        answer: (q, _n, ls) =>
+          q.ids[0] === plainCu
+            ? {
+                lines: ls.map((x) =>
+                  x.type === "test" ? { ...x, name: String(x.name).replace(`${CU}`, `${CU2}`) } : x,
+                ),
+              }
+            : undefined,
+      },
+    });
+    await r.b.activate("M0001");
+    expect(outcome(await r.b.run(ref("A"), OPTS))).toEqual(["error", "pre-dispatch-rejected"]);
+  });
+
   test("§6 then runs on the window's coverage: a covered Sleep is error [v3-sleep-noop]", async () => {
     const { r } = await windowOf({ serve: { coverage: sleepCoverage(true) } });
     await r.b.activate("M0001");
