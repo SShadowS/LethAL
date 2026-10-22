@@ -154,8 +154,13 @@ export function legWindows(lines: readonly LogLine[]): LegWindow[] {
     if (what === "start") {
       out.push({ leg, ...(group !== undefined ? { group } : {}), start: l.elapsed });
     } else {
-      const open = out.findLast((w) => w.leg === leg && w.end === undefined);
-      if (open !== undefined) open.end = l.elapsed;
+      for (let i = out.length - 1; i >= 0; i--) {
+        const w = out[i];
+        if (w !== undefined && w.leg === leg && w.end === undefined) {
+          w.end = l.elapsed;
+          break;
+        }
+      }
     }
   }
   return out;
