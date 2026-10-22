@@ -167,6 +167,37 @@ async function main(): Promise<number> {
     console.error(`REFUSED: ${errText(err)}`);
     return 2;
   }
+  // --status-only <opAttemptId>: ONE GetOperationStatus read (the op seq is the id's last "-" part).
+  // No run, release, stop, publish, unpublish or ForceResetLease. The read does not gate on the lease.
+  const so = process.argv.indexOf("--status-only");
+  if (so >= 0) {
+    const attemptId = process.argv[so + 1] ?? "";
+    const opSeq = Number(attemptId.split("-").pop());
+    if (!/^r649-\d+-\d+$/.test(attemptId)) {
+      console.error(`REFUSED: --status-only needs an id like r649-92932-22828 (got ${attemptId})`);
+      return 2;
+    }
+    const login = readSecretFile();
+    const odata = {
+      baseUrl: `${HOST}:${SERVERS[server].odata}/BC`,
+      apiBaseUrl: `${HOST}:${SERVERS[server].api}/BC`,
+      company: COMPANY,
+      username: login.user,
+      password: login.password,
+      tenant: "default",
+    };
+    const info = await new HarnessVerifier(odata).verify();
+    const st = await new RunMutantTransport(odata, TARGET.id, ARTIFACT_ID).getOperationStatus(
+      { epoch: 0, token: "", serverGeneration: info.serverGeneration },
+      attemptId,
+      opSeq,
+      READ_MS,
+    );
+    console.log(
+      JSON.stringify({ at: new Date().toISOString(), serverGeneration: info.serverGeneration, status: st }),
+    );
+    return 0;
+  }
   const BUILD = join(import.meta.dir, "build", server);
   // --remove-only: run no case, only the removal and read-back (a retry after a failed removal).
   const removeOnly = process.argv.includes("--remove-only");
