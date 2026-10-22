@@ -10,11 +10,15 @@
  * - `defect`: a known upstream defect, `defect-present` / `gone` / `unmeasurable`. `gone` never
  *   refuses; it prints `al-runner-v3-defect-gone` and changes no capability until a human
  *   re-measures and pre-commits (plan §6, §7).
+ * - `warn` (R612, plan r3 §2): `serve-keep-reasons`. Never refuses and never fails the gate; a
+ *   non-`matches` reading prints `al-runner-v3-serve-keep-reason-moved` (`V3_WARN_FACTS`).
  */
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { V3_SERVE_SAFE_REFUSALS, defaultServerSpawn } from "./al-runner-backend";
 import { baseAppJson } from "./al-runner-canary";
+import { AlRunnerServer, type ServerSpawnFn, type ServerTestLine } from "./al-runner-server";
 import { type V3Row, decodeV3Rows } from "./al-runner-v3-backend";
 import { probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
@@ -25,7 +29,8 @@ export type V3DefectVerdict = "defect-present" | "gone" | "unmeasurable";
 
 export interface V3Fact {
   readonly fact: string;
-  readonly kind: "contract" | "defect";
+  /** `warn` (R612): never refuses a session or fails the gate; only prints its line. */
+  readonly kind: "contract" | "defect" | "warn";
   readonly verdict: V3ContractVerdict | V3DefectVerdict;
   readonly expected: string;
   readonly measured: string;
@@ -245,6 +250,30 @@ codeunit 50651 "Probe Hang"
     end;
 }
 
+codeunit 50652 "Probe Cut"
+{
+    Subtype = Test;
+
+    var
+        Logic: Codeunit "Probe Logic";
+        Dirty: Boolean;
+
+    [Test]
+    procedure HangsDirty()
+    begin
+        Dirty := true;
+        Logic.Spin();
+        Dirty := false;
+    end;
+
+    [Test]
+    procedure ChecksClean()
+    begin
+        if Dirty then
+            Error('dirty');
+    end;
+}
+
 codeunit 50656 "Probe Burn Long"
 {
     Subtype = Test;
@@ -373,6 +402,154 @@ const SLEEP_TESTS_AL = `codeunit 50660 "Sleep Probe"
 }
 `;
 
+/**
+ * R612 `serve-keep-reasons` (plan r3 §2): one test per entry of `V3_SERVE_SAFE_REFUSALS`, run in
+ * ONE `serve` request. Its own tests folder, so the not-compiling test (no-callee) never reaches
+ * the one-shot facts. The OnRun overflows at once (row 6's text, without its 53 s loop, R638).
+ */
+const SERVE_TESTS_AL = `codeunit 50670 "Serve Http"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure HttpGet()
+    var
+        Client: HttpClient;
+        Response: HttpResponseMessage;
+    begin
+        Client.Get('http://localhost:1/x', Response);
+    end;
+}
+
+codeunit 50671 "Serve Commit"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure CommitCall()
+    begin
+        Commit();
+    end;
+}
+
+codeunit 50672 "Serve Cascade"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure HttpGet()
+    var
+        Client: HttpClient;
+        Response: HttpResponseMessage;
+    begin
+        Client.Get('http://localhost:1/x', Response);
+    end;
+
+    [Test]
+    procedure LaterFails()
+    begin
+        Error('later');
+    end;
+}
+
+codeunit 50673 "Serve OnRun"
+{
+    Subtype = Test;
+
+    trigger OnRun()
+    var
+        I: Integer;
+    begin
+        I := 2147483647;
+        I += 1;
+    end;
+
+    [Test]
+    procedure Never()
+    begin
+    end;
+}
+
+codeunit 50674 "Serve NoCallee"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure DoesNotCompile()
+    begin
+        NoSuchProcedure(1);
+    end;
+}
+`;
+
+/** R612: each `V3_SERVE_SAFE_REFUSALS` entry and the serve row that must match it. */
+const SERVE_CASES: ReadonlyArray<readonly [string, string]> = [
+  ["http", "Codeunit50670.HttpGet"],
+  ["commit", "Codeunit50671.CommitCall"],
+  ["cascade", "Codeunit50672.LaterFails"],
+  ["onrun-failed", "Codeunit50673.Never"],
+  ["no-callee", "Codeunit50674.DoesNotCompile"],
+];
+
+/** R612: the stop the update gate's serve daemon runs with (leg C's `timeout-classified` N). */
+const SERVE_TEST_TIMEOUT_S = 3;
+const SERVE_DEADLINE_MS = 120_000;
+
+/** R612: `serve-keep-reasons`, a WARN fact: a moved reason only makes the daemon close. */
+async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Promise<V3Fact> {
+  const tests = join(root, "serve-tests");
+  await mkdir(join(tests, "src"), { recursive: true });
+  await writeFile(
+    join(tests, "app.json"),
+    baseAppJson({
+      id: TESTS_ID,
+      name: "LethAL R612 Serve Probe Tests",
+      idFrom: 50650,
+      idTo: 50699,
+      dependencies: [{ id: TARGET_ID, name: TARGET_NAME, publisher: "LethAL", version: "1.0.0.0" }],
+    }),
+  );
+  await writeFile(join(tests, "src", "Serve.Codeunit.al"), SERVE_TESTS_AL);
+  const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: env.cacheDir } : undefined;
+  const spawn: ServerSpawnFn =
+    env.serveSpawn ??
+    ((argv) => defaultServerSpawn(argv, cache !== undefined ? { env: cache } : {}));
+  const server = new AlRunnerServer(env.alRunnerPath, spawn, [], "serve");
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")})`;
+  let rows: readonly ServerTestLine[];
+  try {
+    await server.start(SERVE_DEADLINE_MS, [], SERVE_TEST_TIMEOUT_S);
+    rows = (
+      await server.runTests({ sourcePaths: [app, tests], testIsolation: "test" }, SERVE_DEADLINE_MS)
+    ).tests;
+  } catch (err) {
+    return fact("serve-keep-reasons", "warn", "unmeasurable", expected, String(err));
+  } finally {
+    await server.close();
+  }
+  const moved: string[] = [];
+  for (const [entry, name] of SERVE_CASES) {
+    const r = rows.find((t) => t.name === name);
+    const ok =
+      r !== undefined &&
+      r.notRun === true &&
+      r.status === "error" &&
+      r.message !== undefined &&
+      V3_SERVE_SAFE_REFUSALS[entry]?.test(r.message) === true;
+    if (!ok)
+      moved.push(
+        `${entry}: MOVED ${r === undefined ? `no row ${name}` : `${r.status} notRun=${String(r.notRun)} ${r.message ?? ""}`}`,
+      );
+  }
+  return fact(
+    "serve-keep-reasons",
+    "warn",
+    moved.length === 0 ? "matches" : "diverged",
+    expected,
+    moved.length === 0 ? "all 5 entries match" : moved.join("; "),
+  );
+}
+
 export interface V3ProbeEnv {
   readonly alRunnerPath: string;
   /** `.gated`'s version (or the candidate's own `--version` in the update gate). */
@@ -394,6 +571,10 @@ export interface V3ProbeEnv {
    * run, and the fact cannot refuse a session on other hardware.
    */
   readonly gateOnlyTrusted?: string;
+  /** R612 test hook: the `serve` daemon for `serve-keep-reasons` (default: the real binary). */
+  readonly serveSpawn?: ServerSpawnFn;
+  /** R612 M-2: `.gated`'s warn-fact readings (what the gate's leg C read), shown by a session. */
+  readonly gatedWarnFacts?: Readonly<Record<string, string>>;
 }
 
 interface Call {
@@ -439,7 +620,7 @@ async function writeProject(
 
 const fact = (
   name: string,
-  kind: "contract" | "defect",
+  kind: V3Fact["kind"],
   verdict: V3Fact["verdict"],
   expected: string,
   measured: string,
@@ -701,6 +882,35 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         `exit ${hang.exitCode} ${JSON.stringify(h ?? null)} wall ${hang.wallMs} ms`,
       ),
     );
+    // dependent-fail-after-timeout-is-notrun (pre-commitment r8, R637): v3, not LethAL, keeps a
+    // failure caused by a stopped sibling's state from scoring as a kill. Pin its not-trusted row.
+    const cut = await call(["--test-timeout-secs", "3", "--codeunit", "50652"], {
+      codeunit: 50652,
+    });
+    const hd = rowOf(cut, "HangsDirty");
+    const cc = rowOf(cut, "ChecksClean");
+    facts.push(
+      fact(
+        "dependent-fail-after-timeout-is-notrun",
+        "contract",
+        cut.exitCode === 7 &&
+          // Review M3: exactly these two rows, so a duplicate row cannot hide behind `rowOf`.
+          cut.rows?.length === 2 &&
+          hd?.notRun === true &&
+          hd.message === "Test exceeded 3s timeout." &&
+          cc?.notRun === true &&
+          cc.status === "error" &&
+          (cc.message ?? "").startsWith(
+            "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HangsDirty: ",
+          ) &&
+          (cc.message ?? "").endsWith("this failure is not trusted: dirty")
+          ? "matches"
+          : "diverged",
+        'N=3: exit 7, exactly 2 rows, HangsDirty notRun "Test exceeded 3s timeout.", ChecksClean notRun error "...refused while it ran (HangsDirty: ...this failure is not trusted: dirty"',
+        // Review M2: HangsDirty first, so its divergence shows even when ChecksClean's text is long.
+        `exit ${cut.exitCode}, ${cut.rows?.length ?? "no"} rows, HangsDirty=${JSON.stringify(hd === undefined ? null : { notRun: hd.notRun, message: hd.message })} ChecksClean=${JSON.stringify(cc === undefined ? null : { notRun: cc.notRun, status: cc.status, message: cc.message })}`,
+      ),
+    );
     // timeout-is-cpu (pre-commitment r6; r4's wall-clock spin was invalid: v3's AL clock is virtual):
     //   alone:  `<v3> test --output-json --isolation test ... --test-timeout-secs 2 --codeunit 50656`
     //           `CpuBurnLong` (BURN_LONG, 3.0 s of CPU) -> a notRun row "Test exceeded 2s timeout.";
@@ -797,6 +1007,24 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         JSON.stringify(c ?? null),
       ),
     );
+    // serve-keep-reasons (R612): GATE-ONLY, like timeout-is-cpu. M-2: a gate passes whatever this
+    // fact reads, so a session shows the gate's own reading from `.gated`, never a claimed matches.
+    if (env.gateOnlyTrusted !== undefined) {
+      const read = env.gatedWarnFacts?.["serve-keep-reasons"];
+      const verdict: V3ContractVerdict =
+        read === "matches" || read === "diverged" ? read : "unmeasurable";
+      facts.push(
+        fact(
+          "serve-keep-reasons",
+          "warn",
+          verdict,
+          "gate-only (R612): measured by the update gate's leg C",
+          read === undefined
+            ? `not re-measured in a session (gate-only); .gated records no reading (gated before R612) (${env.gateOnlyTrusted})`
+            : `not re-measured in a session (gate-only); the gate read ${read} (${env.gateOnlyTrusted})`,
+        ),
+      );
+    } else facts.push(await serveKeepReasons(env, app, root));
     // duplicate-key-insert-raises (#5603): BC raises on the second statement-form Insert.
     const keys = await call(["--codeunit", "50655"], { codeunit: 50655 });
     const k = rowOf(keys, "DuplicateNamedKey");

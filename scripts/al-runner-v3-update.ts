@@ -43,7 +43,12 @@ import {
   V3_GATE_LEGS,
   gateOutcome,
 } from "../packages/runner/itest/al-runner-v3-gate";
-import { type GatedBuild, parseGated, sha256OfFile } from "../packages/runner/src/al-runner-v3-pin";
+import {
+  type GatedBuild,
+  parseGated,
+  sha256OfFile,
+  warnFactReadings,
+} from "../packages/runner/src/al-runner-v3-pin";
 
 export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
@@ -178,6 +183,19 @@ async function receiptLines(path: string): Promise<string[]> {
     return Array.isArray(l) ? l.map(String) : [];
   } catch {
     return [];
+  }
+}
+
+/** R612 M-2: the receipt's warn-fact readings, carried into `.gated` on a pass. */
+async function receiptWarnFacts(
+  path: string,
+): Promise<Readonly<Record<string, string>> | undefined> {
+  try {
+    return warnFactReadings(
+      (JSON.parse(await readFile(path, "utf8")) as { warnFacts?: unknown }).warnFacts,
+    );
+  } catch {
+    return undefined;
   }
 }
 
@@ -394,7 +412,10 @@ export async function gateOne(
       await cp(binary, join(dest, "al-runner"));
       await chmod(join(dest, "al-runner"), 0o755);
     }
+    // R612 M-2: this gate's warn-fact readings, so a session shows what the gate read.
+    const warnFacts = await receiptWarnFacts(receipt);
     const next: GatedBuild = {
+      ...(warnFacts !== undefined ? { warnFacts } : {}),
       version,
       binarySha256: sha,
       lethalCommit: commit,

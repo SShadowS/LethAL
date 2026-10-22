@@ -42,6 +42,12 @@
  * R622 (the ledger). Every verify appends a START and an END line to one shared file,
  * /coord/locks/verify-ledger.tsv, or the file LETHAL_VERIFY_LEDGER names (tests use a temp file),
  * and prints how many OTHER verifies overlapped it. See `ledgerLine` for the columns.
+ *
+ * R616 (test DBs and stall figures). The preload puts each test process's scratch SQLite DBs on a
+ * tmpfs when it can (see packages/runner/tests/helpers/test-db.ts), and each process reports where
+ * they went: the `test DBs:` line counts them per worker. `pressure at start:` and `pressure at
+ * end:` give Linux's io and cpu stall figures (PSI), also kept in the ledger, so a timeout can be
+ * read against the disk's state at the time.
  */
 
 import { createHash } from "node:crypto";
@@ -461,6 +467,78 @@ export interface ExecResult {
   readonly output: string;
   /** Set by `execWatched`: the limit it used, and one FAIL line per file that ran over it. */
   readonly watchdog?: { readonly limitS: number; readonly fails: readonly string[] };
+  /** Set by `execWatched`: where each of this run's test processes put its DBs (R616). */
+  readonly testDbs?: readonly TestDbReport[];
+}
+
+/**
+ * R616: the variable that tells the preload where to report where its test DBs went. Each test
+ * process writes `<dir>/<pid>` = `<parent pid>\t<where>`, where `<where>` is `<root> (tmpfs)` or
+ * `on disk (<the fallback's reason>)`.
+ */
+export const TEST_DB_REPORT_DIR = "LETHAL_VERIFY_TEST_DB_REPORT_DIR";
+
+export interface TestDbReport {
+  readonly pid: number;
+  readonly where: string;
+}
+
+/**
+ * The reports of this run's test processes, by the watchdog's rule (`stuckWorkers`): a worker of
+ * the bun test child, or the child itself with verify as its parent. A nested `bun test` started
+ * by a test inherits the variable and writes here too; it is dropped. A half-written file is too.
+ */
+export function readTestDbReports(dir: string, childPid: number, selfPid: number): TestDbReport[] {
+  const out: TestDbReport[] = [];
+  for (const name of readdirSync(dir)) {
+    const [ppidText, where] = readFileSync(join(dir, name), "utf8").split("\t");
+    const pid = Number(name);
+    const ppid = Number(ppidText);
+    if (where === undefined || where === "") continue;
+    if (ppid === childPid || (pid === childPid && ppid === selfPid)) out.push({ pid, where });
+  }
+  return out;
+}
+
+/** The receipt line: where the test DBs went, counted per worker. */
+export function testDbsLine(reports: readonly TestDbReport[]): string {
+  if (reports.length === 0) return "test DBs: no worker reported where its DBs went";
+  const n = reports.length;
+  const byWhere = new Map<string, number>();
+  for (const r of reports) byWhere.set(r.where, (byWhere.get(r.where) ?? 0) + 1);
+  const [only] = byWhere.keys();
+  if (byWhere.size === 1 && only !== undefined) {
+    return `test DBs: ${only} in all ${n} ${n === 1 ? "worker" : "workers"}`;
+  }
+  return `test DBs: ${[...byWhere].map(([w, k]) => `${w} in ${k} of ${n} workers`).join("; ")}`;
+}
+
+/**
+ * R616 review I3: the machine's stall figures, so the next unexplained timeout can be read against
+ * them. Linux PSI (`/proc/pressure/io` and `/cpu`): the share of time tasks waited on that
+ * resource, as avg10/avg60/avg300 (per cent over the last 10 s, 60 s, 300 s), for `some` task and
+ * (where present) for `full` (all tasks). A file that cannot be read (Windows, macOS, an old
+ * kernel) is skipped and named. The text holds no tab, so it fits one ledger column.
+ */
+export function pressureText(read: (path: string) => string): string {
+  const one = (kind: "io" | "cpu"): string => {
+    const path = `/proc/pressure/${kind}`;
+    let text: string;
+    try {
+      text = read(path);
+    } catch (e) {
+      return `${kind} skipped (cannot read ${path}: ${e instanceof Error ? e.message : String(e)})`;
+    }
+    const parts: string[] = [];
+    for (const line of text.split("\n")) {
+      const m = /^(some|full) avg10=([\d.]+) avg60=([\d.]+) avg300=([\d.]+)/.exec(line);
+      if (m !== null) parts.push(`${m[1]} ${m[2]}/${m[3]}/${m[4]}`);
+    }
+    return parts.length === 0
+      ? `${kind} skipped (no avg10 line in ${path})`
+      : `${kind} ${parts.join(" ")}`;
+  };
+  return `${one("io")}; ${one("cpu")}`.replace(/[\t\r\n]/g, " ");
 }
 
 /**
@@ -497,10 +575,11 @@ export async function execWatched(
   const isChild = opts.isChild ?? isChildOf;
   const graceMs = opts.graceMs ?? 3000;
   const beats = mkdtempSync(join(tmpdir(), "verify-heartbeat-"));
+  const dbReports = mkdtempSync(join(tmpdir(), "verify-testdbs-"));
   const argv = cmd[0] === "bun" ? [process.execPath, ...cmd.slice(1)] : [...cmd];
   const proc = Bun.spawn(argv, {
     cwd,
-    env: { ...env, [HEARTBEAT_DIR]: beats },
+    env: { ...env, [HEARTBEAT_DIR]: beats, [TEST_DB_REPORT_DIR]: dbReports },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -584,10 +663,17 @@ export async function execWatched(
     // After the backstop a worker that was never signalled may live on holding the pipes open, so
     // take what has arrived instead of waiting for the end of the stream.
     await (backstopped ? Promise.race([drained.catch(() => {}), Bun.sleep(graceMs)]) : drained);
-    return { code, output: `${out}${err}`, watchdog: { limitS, fails } };
+    return {
+      code,
+      output: `${out}${err}`,
+      watchdog: { limitS, fails },
+      testDbs: readTestDbReports(dbReports, proc.pid, process.pid),
+    };
   } finally {
     clearInterval(timer);
-    rmSync(beats, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    for (const d of [beats, dbReports]) {
+      rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
   }
 }
 
@@ -599,6 +685,8 @@ export const LEDGER_ENV = "LETHAL_VERIFY_LEDGER";
 export const LEDGER_LINE_MAX = 1024;
 /** The worktree column keeps at most this many characters (its tail): 4 bytes each at most. */
 const LEDGER_WORKTREE_MAX = 200;
+/** The pressure column's limit: a full reading is about 110 ASCII characters; an error text may be longer. */
+const PRESSURE_MAX = 300;
 
 /**
  * An open START older than this is not running, even if its pid is alive: that pid was reused. 15
@@ -629,16 +717,22 @@ export interface LedgerSelf {
  *   failed  the failed-test count, `?` when no summary was read; `-` on START
  *   scope   full, changed or packages
  *   worktree the repo root; tabs and newlines become spaces, and a long one keeps only its tail
- * A run that died leaves a START with no END, and any line that does not parse is skipped.
+ *   pressure `pressureText` read at that event (R616), `-` when none was read; cut to its first
+ *            PRESSURE_MAX characters
+ * A run that died leaves a START with no END, and any line that does not parse is skipped. A line
+ * written before R616 has 9 columns (no pressure) and still parses; a verify from before R616
+ * reads only 9-column lines, so it skips the new ones until its branch merges master.
  */
 export function ledgerLine(
   event: "START" | "END",
   self: LedgerSelf,
   finish?: { readonly end: number; readonly ok: boolean; readonly failed: number | undefined },
+  pressure = "-",
 ): string {
   const clean = self.worktree.replace(/[\t\r\n]/g, " ");
   const worktree =
     clean.length > LEDGER_WORKTREE_MAX ? `...${clean.slice(-LEDGER_WORKTREE_MAX)}` : clean;
+  const stall = pressure.replace(/[\t\r\n]/g, " ").slice(0, PRESSURE_MAX);
   const iso = (ms: number): string => new Date(ms).toISOString();
   return `${[
     event,
@@ -650,6 +744,7 @@ export function ledgerLine(
     finish === undefined ? "-" : (finish.failed ?? "?"),
     self.scope,
     worktree,
+    stall,
   ].join("\t")}\n`;
 }
 
@@ -665,7 +760,7 @@ export function parseLedger(text: string): LedgerRun[] {
   const runs = new Map<string, LedgerRun>();
   for (const line of text.split("\n")) {
     const f = line.split("\t");
-    if (f.length !== 9) continue;
+    if (f.length !== 9 && f.length !== 10) continue; // 9: written before R616's pressure column
     const [event, startText, endText, pidText] = f;
     const pid = Number(pidText);
     const start = Date.parse(startText ?? "");
@@ -829,6 +924,8 @@ export async function testStep(
       );
     }
   }
+  // R616 review minor 4: from each worker's own report, so a worker that fell back is named.
+  if (t.testDbs !== undefined) lines.push(testDbsLine(t.testDbs));
   if (t.watchdog !== undefined) {
     // R622: fails on its own line, even when bun's own `worker crashed` line is missing.
     if (t.watchdog.fails.length > 0) {
@@ -897,6 +994,8 @@ export interface VerifyIo extends TestStepIo {
   print(line: string): void;
   /** The R622 ledger; none, no ledger lines. */
   readonly ledger?: LedgerIo;
+  /** R616: the stall figures now (`pressureText`); none, no pressure lines and `-` in the ledger. */
+  readonly pressure?: () => string;
 }
 
 /** The whole run. Prints each line as it goes and returns them all, plus the exit code. */
@@ -934,19 +1033,26 @@ export async function runVerify(
     scope: mode.kind,
     worktree: ledger?.worktree ?? "",
   };
+  // R616: the stall figures at the start and the end, printed and kept in the ledger.
+  const startPressure = io.pressure?.();
+  if (startPressure !== undefined) say(`pressure at start: ${startPressure}`);
   const atStart =
-    ledger === undefined ? undefined : ledgerEvent(ledger, ledgerLine("START", self), self, t0, t0);
+    ledger === undefined
+      ? undefined
+      : ledgerEvent(ledger, ledgerLine("START", self, undefined, startPressure), self, t0, t0);
   if (ledger !== undefined && atStart !== undefined && "count" in atStart) {
     say(`ledger: ${others(atStart.count)} running at start (${ledger.path})`);
   }
   const ledgerEnd = (ok: boolean, summary: TestSummary | null): void => {
+    const endPressure = io.pressure?.();
+    if (endPressure !== undefined) say(`pressure at end: ${endPressure}`);
     if (ledger === undefined || atStart === undefined) return;
     const now = io.now();
     const atEnd =
       "count" in atStart
         ? ledgerEvent(
             ledger,
-            ledgerLine("END", self, { end: now, ok, failed: summary?.fail }),
+            ledgerLine("END", self, { end: now, ok, failed: summary?.fail }, endPressure),
             self,
             now,
             now,
@@ -1034,6 +1140,7 @@ async function main(argv: readonly string[]): Promise<number> {
         pid: process.pid,
         alive: pidAlive,
       },
+      pressure: () => pressureText((p) => readFileSync(p, "utf8")),
     });
     return r.code;
   } finally {

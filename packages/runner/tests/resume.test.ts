@@ -16,6 +16,7 @@ import type {
   BackendStatus,
   CoverageMode,
   ExecutionBackend,
+  PackageUnread,
   RunManyOpts,
   RunManyResult,
   RunOpts,
@@ -60,6 +61,8 @@ import {
   testAppPackage,
 } from "./helpers/proven-test-app";
 import { removeScratchDir, scratchDirs } from "./helpers/scratch";
+import { testDbPath } from "./helpers/test-db";
+import { UNREAD } from "./helpers/unread";
 
 const scratch = scratchDirs();
 
@@ -173,9 +176,9 @@ class CountingBackend implements ExecutionBackend {
     private readonly coverage: CoverageMode = CAPS.coverage,
   ) {}
   /** R495: the served test-app package, installed at its own version, as a real bcdev backend's
-   *  is, so a run's test-app identity is proven. `null` is a failed read. */
-  served: Uint8Array | null = testAppPackage();
-  async fetchPublishedAppPackage(): Promise<Uint8Array | null> {
+   *  is, so a run's test-app identity is proven. `{ unread }` is a failed read. */
+  served: Uint8Array | PackageUnread = testAppPackage();
+  async fetchPublishedAppPackage(): Promise<Uint8Array | PackageUnread> {
     return this.served;
   }
   microsoftMode(): MicrosoftMode {
@@ -1064,7 +1067,7 @@ describe("ResultsStore resume queries (R47)", () => {
     raw.exec(`INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name, operator_name,
       operator_major, file, line, verdict, duration_ms, batch_index)
       VALUES (1, 'M0001', 'old', 'C', 'Post', 'op', 1, 'f.al', 1, 'survived', 5, 0)`);
-    const path = join(tmpdirSync(), "pre-r192.sqlite");
+    const path = testDbPath("pre-r192.sqlite");
     raw.exec(`VACUUM INTO '${path.replaceAll("\\", "/")}'`);
     raw.close();
     const store = new ResultsStore(path);
@@ -3291,9 +3294,9 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
 });
 describe("R247: no verdict crosses a test-app change", () => {
   /** A bcdev-shaped backend: the server holds a test-app package, read by `fetchPublishedAppPackage`.
-   *  `null` is a failed read (identity unknown). */
+   *  `{ unread }` is a failed read (identity unknown). */
   class PackageBackend extends CountingBackend {
-    constructor(pkg: Uint8Array | null, abortFromDeploy?: number) {
+    constructor(pkg: Uint8Array | PackageUnread, abortFromDeploy?: number) {
       super("pass", undefined, abortFromDeploy);
       // R495: served, and installed at its own version (CountingBackend's microsoftMode).
       this.served = pkg;
@@ -3400,7 +3403,7 @@ describe("R247: no verdict crosses a test-app change", () => {
       test("an unreadable test app this session (unknown) is refused", async () => {
         const r = await recorded(APP_A, { finished: false });
         await expect(
-          again(r, new PackageBackend(null), { resume: target(r.runId) }),
+          again(r, new PackageBackend(UNREAD), { resume: target(r.runId) }),
         ).rejects.toThrow(
           new RegExp(
             `run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is unknown \\(not proven installed: .*\\)\\..*R247`,
@@ -4580,7 +4583,7 @@ describe("R512/R513: the store's negative records", () => {
   });
 
   test("an old store gains both tables on open and reads its rows unchanged", async () => {
-    const path = join(tmpdirSync(), "old.sqlite");
+    const path = testDbPath("old.sqlite");
     const first = new ResultsStore(path);
     const id = newRun(first);
     seed(first, id, 0, { astHash: "a", verdict: "survived" });

@@ -24,6 +24,7 @@ import { carryRecord, memberSiteOf, twinSiteOf } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
 import { removeScratchDir } from "./helpers/scratch";
+import { testDbPath } from "./helpers/test-db";
 
 /**
  * R474 (sol, review of R-391's plan): rule 2 matched a mutant on (file, tuple) alone, so `exit(1);`
@@ -186,7 +187,7 @@ async function project(a: readonly string[], b: readonly string[]) {
   await Bun.write(join(testDir, "app.json"), testAppJson());
   return {
     dirs: { projectDir, testDir, instrumentedDir },
-    dbPath: join(root, "lethal.sqlite"),
+    dbPath: testDbPath("lethal.sqlite"),
     writeA: (s: readonly string[]) => Bun.write(join(projectDir, A), TABLE_AL(s)),
     writeB: (s: readonly string[]) => Bun.write(join(projectDir, B), CODEUNIT_AL(s)),
   };

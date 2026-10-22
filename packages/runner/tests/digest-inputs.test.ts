@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { PublishedPackageRead } from "../src/backend";
 import {
   APPLICATION_APP_ID,
   type AppDependency,
@@ -10,13 +11,18 @@ import {
   type PackageReader,
   appInputsOfAppJson,
   appInputsOfManifest,
+  bcdevDependencyFingerprint,
   dependencyFingerprint,
+  packageFolderReader,
+  publishedPackageReader,
   readAppJsonInputs,
   targetOf,
 } from "../src/digest-inputs";
 import { CONTROL_APP_ID } from "../src/harness";
+import { verifyDependencyFingerprint } from "../src/verify";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { scratchDirs } from "./helpers/scratch";
+import { CAUSES, UNREAD } from "./helpers/unread";
 
 const scratch = scratchDirs();
 
@@ -54,8 +60,8 @@ const root = (publisher: string, id = DEP) =>
 const DECLARED: MicrosoftMode = { kind: "declared" };
 
 interface BytesOpts {
-  system?: Uint8Array | null | undefined;
-  control?: Uint8Array | null | undefined;
+  system?: PublishedPackageRead;
+  control?: PublishedPackageRead;
   controlVersion?: string;
   installed?: (id: string) => Promise<readonly string[]>;
 }
@@ -141,7 +147,7 @@ describe("R-371: digest-inputs", () => {
 
   test("an unreadable non-Microsoft dependency throws, never a partial fingerprint", async () => {
     await expect(
-      dependencyFingerprint(root("Other"), async () => null, bytes()),
+      dependencyFingerprint(root("Other"), async () => UNREAD, bytes()),
     ).rejects.toBeInstanceOf(DependencyUnreadableError);
   });
 });
@@ -162,7 +168,7 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
   const msRead =
     (build: string, version = "1.0.0.0"): PackageReader =>
     async (d) =>
-      d.id === MS ? [pkg(MS, "Lib", "Microsoft", build, "", version)] : null;
+      d.id === MS ? [pkg(MS, "Lib", "Microsoft", build, "", version)] : UNREAD;
 
   test("upgrade seen: a Microsoft dependency moving 28.0.1.0 -> 28.0.2.0 (declared 28.0.0.0 fixed) changes it", async () => {
     const declared = appInputsOfAppJson({
@@ -190,7 +196,7 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
             ? [pkg(DEP, "Dep", "Other", "same", depTag(MS, "Lib", "Microsoft"))]
             : d.id === MS
               ? [pkg(MS, "Lib", "Microsoft", build)]
-              : null,
+              : UNREAD,
         bytes(),
       );
     expect(await at("one")).not.toBe(await at("two"));
@@ -214,7 +220,7 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
       return dependencyFingerprint(
         appInputsOfAppJson({}),
         async (d) =>
-          d.id === TEST_RUNNER ? [pkg(TEST_RUNNER, "Test Runner", "Microsoft", build)] : null,
+          d.id === TEST_RUNNER ? [pkg(TEST_RUNNER, "Test Runner", "Microsoft", build)] : UNREAD,
         m,
       );
     };
@@ -229,7 +235,7 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
       async (d) =>
         d.id === APPLICATION_APP_ID
           ? [pkg(APPLICATION_APP_ID, "Application", "Microsoft", build)]
-          : null;
+          : UNREAD;
     const app = appInputsOfAppJson({ application: "28.0.0.0" });
     const a = await dependencyFingerprint(app, read("one"), m);
     expect(m.asked).toEqual([APPLICATION_APP_ID]);
@@ -272,7 +278,7 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
           ]
         : d.id === MS
           ? [pkg(MS, "Base", "Microsoft", "same")]
-          : null;
+          : UNREAD;
     const app = appInputsOfAppJson({ application: "28.0.0.0" });
     const a = await dependencyFingerprint(app, read, bytes());
     const b = await dependencyFingerprint(app, read, bytes());
@@ -282,7 +288,7 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
   test("stability: a control app depending on Test Runner gives the same fingerprint twice", async () => {
     const tr = depTag(TEST_RUNNER, "Test Runner", "Microsoft");
     const read: PackageReader = async (d) =>
-      d.id === TEST_RUNNER ? [pkg(TEST_RUNNER, "Test Runner", "Microsoft", "same")] : null;
+      d.id === TEST_RUNNER ? [pkg(TEST_RUNNER, "Test Runner", "Microsoft", "same")] : UNREAD;
     const at = () =>
       dependencyFingerprint(appInputsOfAppJson({}), read, bytes({ control: controlWith(tr) }));
     expect(await at()).toBe(await at());
@@ -305,7 +311,7 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
               ]
             : d.id === MS
               ? [pkg(MS, "Base", "Microsoft", build)]
-              : null,
+              : UNREAD,
         bytes(),
       );
     expect(await at("one")).not.toBe(await at("two"));
@@ -315,7 +321,7 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
     let reads = 0;
     const read: PackageReader = async (d) => {
       reads += 1;
-      return d.id === MS ? [pkg(MS, "Lib", "Microsoft", "x")] : null;
+      return d.id === MS ? [pkg(MS, "Lib", "Microsoft", "x")] : UNREAD;
     };
     const declared = await dependencyFingerprint(root("Microsoft", MS), read, DECLARED);
     expect(reads).toBe(0);
@@ -330,14 +336,14 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
     const fp = (m: MicrosoftMode, read: PackageReader = ok, r: AppInputs = ms) =>
       dependencyFingerprint(r, read, m);
 
-    test("a Microsoft package that reads null", async () => {
+    test("a Microsoft package that is unread", async () => {
       await refusesNaming(
-        fp(bytes(), async () => null),
+        fp(bytes(), async () => UNREAD),
         "Lib",
       );
     });
-    test("System reads null or undefined or empty", async () => {
-      await refusesNaming(fp(bytes({ system: null })), "System");
+    test("System unread or undefined or empty", async () => {
+      await refusesNaming(fp(bytes({ system: UNREAD })), "System");
       await refusesNaming(fp(bytes({ system: undefined })), "System");
       await refusesNaming(fp(bytes({ system: new Uint8Array() })), "System");
     });
@@ -383,8 +389,8 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
         "Application",
       );
     });
-    test("the control app reads null", async () => {
-      await refusesNaming(fp(bytes({ control: null })), "LethAL Control");
+    test("the control app is unread", async () => {
+      await refusesNaming(fp(bytes({ control: UNREAD })), "LethAL Control");
     });
     test("the control app's Id is not CONTROL_APP_ID", async () => {
       await refusesNaming(
@@ -396,5 +402,67 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
       await refusesNaming(fp(bytes({ control: controlWith("", "1.0.0.19") })), "1.0.0.19");
       await refusesNaming(fp(bytes({ controlVersion: "1.0.0.21" })), "1.0.0.21");
     });
+  });
+});
+
+/**
+ * R630: an unread package keeps refusing with the same `DependencyUnreadableError`, and its message
+ * now names the read's cause. Each through the real reader or caller, never the error alone.
+ */
+describe("R630: an unread package refuses by name AND by cause", () => {
+  const other = root("Other");
+  for (const cause of CAUSES) {
+    const named = `(${cause.unread})`;
+    // C4: `publishedPackageReader`, the reader orchestrator's `testAppDependencies` and verify use.
+    test(`C4: a dependency the server does not hand over names ${JSON.stringify(cause.unread)}`, async () => {
+      await refusesNaming(
+        dependencyFingerprint(
+          other,
+          publishedPackageReader(async () => cause),
+          bytes(),
+        ),
+        named,
+      );
+    });
+    // C5: bytes mode's System and control reads, through `openPackage`.
+    test(`C5: System and the control app unread name ${JSON.stringify(cause.unread)}`, async () => {
+      await refusesNaming(
+        dependencyFingerprint(other, async () => [], bytes({ system: cause })),
+        named,
+      );
+      await refusesNaming(
+        dependencyFingerprint(other, async () => [], bytes({ control: cause })),
+        named,
+      );
+    });
+    // C6: `bcdevDependencyFingerprint`'s own read of the published test app.
+    test(`C6: an unread published test app names ${JSON.stringify(cause.unread)}`, async () => {
+      const testDir = scratch("lethal-r630-tests-");
+      writeFileSync(join(testDir, "app.json"), '{"name": "T", "publisher": "P"}');
+      await refusesNaming(
+        bcdevDependencyFingerprint(async () => cause, testDir, testDir, bytes()),
+        named,
+      );
+    });
+  }
+  test("C4: a backend with no package read names that, through verifyDependencyFingerprint", async () => {
+    const testDir = scratch("lethal-r630-verify-");
+    writeFileSync(
+      join(testDir, "app.json"),
+      JSON.stringify({
+        id: SUB,
+        dependencies: [{ id: DEP, name: "Dep", publisher: "Other", version: "1.0.0.0" }],
+      }),
+    );
+    await refusesNaming(
+      verifyDependencyFingerprint({ microsoftMode: () => bytes() }, testDir, testDir),
+      "(this backend cannot read published packages)",
+    );
+  });
+  test("C4: an al-runner package folder without the dependency names that", async () => {
+    await refusesNaming(
+      dependencyFingerprint(other, packageFolderReader([]), DECLARED),
+      "(no package for it in the package folders)",
+    );
   });
 });

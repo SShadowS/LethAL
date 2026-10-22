@@ -191,12 +191,15 @@ export class StaleTestAppError extends Error {
   constructor(
     missing: readonly StaleTestAppFinding[],
     override readonly cause: "unchanged-endpoints" | "identity-unverified",
+    /** R630: why a package read failed, when one did and the server said. */
+    unread?: string,
   ) {
     const { head, names } = missingTestsHead(missing);
+    const failed = unread !== undefined ? ` (the read failed: ${unread})` : "";
     const identity =
       cause === "unchanged-endpoints"
         ? "The published test app's package was the same at the start of this batch's baseline and at this refusal; a replace-and-restore between the two reads cannot be ruled out."
-        : "LethAL could not compare the published test app's package at the start of this batch's baseline with the one at this refusal, so the app may be older than the source OR may have been replaced between the two.";
+        : `LethAL could not compare the published test app's package at the start of this batch's baseline with the one at this refusal${failed}, so the app may be older than the source OR may have been replaced between the two.`;
     super(
       `${head} ${identity} If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}`,
     );
@@ -235,13 +238,15 @@ export function testAppRefusal(
   missing: readonly StaleTestAppFinding[],
   before: string | undefined,
   after: string | undefined,
+  /** R630: the cause of a read that failed, named in the refusal. */
+  unread?: string,
 ): StaleTestAppError | TestAppChangedError {
   if (before?.startsWith("package:") && after?.startsWith("package:")) {
     return before === after
       ? new StaleTestAppError(missing, "unchanged-endpoints")
       : new TestAppChangedError(missing, before, after);
   }
-  return new StaleTestAppError(missing, "identity-unverified");
+  return new StaleTestAppError(missing, "identity-unverified", unread);
 }
 
 function missingTestsHead(missing: readonly StaleTestAppFinding[]): {

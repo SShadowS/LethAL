@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**95 of 632 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**93 of 637 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -285,6 +285,7 @@ that ordering is the priority.
 - **R632** · probe: can a session tell that a BC server restarted (or had apps published) between a crashed run and its resume? R601's same-server rule cannot · [R632.md](docs/roadmap/R632.md) · open, filed 2026-10-22
 - **R633** · al-runner v3 update gate: two wrong-reason verdicts on 2026-10-22 (alpha.3 infra-fail with no D legs run; alpha.4 and edge-7739d8132 gate-fail on #5613's fix read as a contract break), and every receipt deleted · [R633.md](docs/roadmap/R633.md) · done (abac8803)
 - **R634** · When the target app has installed dependents, their hang-capable loops are not in the hang context: a dependent's loop that calls a mutated target procedure can hang a scored run · [R634.md](docs/roadmap/R634.md) · closed 2026-10-22 — measured price 0: adding each same-corpus dependent's source to the target's hang context…
+- **R637** · al-runner v3: a test that fails after a timed-out test of the same codeunit is scored as a kill, although v3 says such a failure is not trusted · [R637.md](docs/roadmap/R637.md) · closed 2026-10-22 — premise false on alpha.2: v3 marks a failure caused by a stopped sibling notRun…
 
 ## Product gaps a real project hits
 
@@ -658,7 +659,7 @@ that ordering is the priority.
 - **R606** · al-runner v3 serve: resources are in the warm compile key, so a changed resource file forces a full recompile although resources reach the VM only at run time (upstream #5635's first half; local build and measurement only, no PR) · [R606.md](docs/roadmap/R606.md) · closed 2026-10-22 — ruling (owner): implemented upstream…
 - **R607** · al-runner-v3: snapshot reuse and --resume drop the [v3-refused-test-nearby] note · [R607.md](docs/roadmap/R607.md) · open
 - **R608** · al-runner-v3: the compile proof does not bind non-.al files, <testDir>/.alpackages or subfolders of <deps> · [R608.md](docs/roadmap/R608.md) · open
-- **R612** · On al-runner v3, the v2-era serve rule "close the daemon after any non-pass/fail row" makes every suite run cold-start, because #5607's Commit tests are always not run · [R612.md](docs/roadmap/R612.md) · open
+- **R612** · On al-runner v3, the v2-era serve rule "close the daemon after any non-pass/fail row" makes every suite run cold-start, because #5607's Commit tests are always not run · [R612.md](docs/roadmap/R612.md) · done (592ec593)
 - **R609** · al-runner-v3: a no-coverage caused by a refused covering test carries no note · [R609.md](docs/roadmap/R609.md) · open
 - **R613** · al-runner v3: one routine lowering cannot handle (a [RunOnClient] DotNet call) anywhere in a subscriber's static reach makes the reach "not known", so every test is refused although the routine never runs (upstream #5641; local fix only, no PR) · [R613.md](docs/roadmap/R613.md) · closed 2026-10-22 — ruling (owner): implemented upstream…
 - **R610** · al-runner-v3: unmeasured whether --coverage-json lists files reached only by a dynamic call · [R610.md](docs/roadmap/R610.md) · open
@@ -666,7 +667,7 @@ that ordering is the priority.
 - **R611** · R586's T15 backend-identity scanner is blind to case labels, split compares, .includes and src subfolders · [R611.md](docs/roadmap/R611.md) · open
 - **R614** · al-runner-v3 update gate: existing fixture .alpackages are not checked against the pinned symbol tar · [R614.md](docs/roadmap/R614.md) · open
 - **R616** · A parallel full verify times out under real load (two tests at 5000 ms); its worker count does not adapt · [R616.md](docs/roadmap/R616.md) · open, filed 2026-10-21
-- **R617** · bc-linux-setup --held-lease has no test: nothing checks it never takes or releases a lease · [R617.md](docs/roadmap/R617.md) · open
+- **R617** · bc-linux-setup --held-lease has no test: nothing checks it never takes or releases a lease · [R617.md](docs/roadmap/R617.md) · done (8daecd3f)
 - **R621** · --resume carries a stored no-coverage verdict without checking it against this session's coverage: always in a wholly carried batch (replayCarriedBatch), and in a partly carried one (scoreBatch) whenever this session covers the mutant · [R621.md](docs/roadmap/R621.md) · open, filed 2026-10-22
 - **R622** · A full verify HUNG for 10 minutes in real-home-guard.test.ts (one worker at 100% CPU, no timeout fired) instead of failing; not reproduced · [R622.md](docs/roadmap/R622.md) · open, filed 2026-10-22
 - **R623** · An in-place same-version publish of a fixture TARGET under an installed dependent is not measured, so bc-linux-setup.ts and bc-republish.ts refuse it by name · [R623.md](docs/roadmap/R623.md) · open
@@ -674,9 +675,13 @@ that ordering is the priority.
 - **R625** · 123 tracked scripts/*.ts files are outside scripts/tsconfig.json, so bun run typecheck never sees them (24 of them tests) · [R625.md](docs/roadmap/R625.md) · done (c15286fe)
 - **R626** · corpus-snapshot's heavy-job guard counts a parallel itest:alrunner's al-runner children as separate jobs · [R626.md](docs/roadmap/R626.md) · done (bb55c64c)
 - **R627** · contentDigest decodes NavxManifest.xml and navigation.xml as UTF-8 and re-encodes them, so two byte strings that differ only in invalid UTF-8 get one digest · [R627.md](docs/roadmap/R627.md) · open
-- **R630** · bcdev's fetchPublishedAppPackage reads a 5xx, a 404 and a timeout alike as null, so a server error is reported under the wrong cause (every consumer fails closed) · [R630.md](docs/roadmap/R630.md) · open, filed 2026-10-22
+- **R630** · bcdev's fetchPublishedAppPackage reads a 5xx, a 404 and a timeout alike as null, so a server error is reported under the wrong cause (every consumer fails closed) · [R630.md](docs/roadmap/R630.md) · done (ee9f0a3b)
 - **R635** · al-runner v3 backend: use serve's multi-entry runTests (one compile, a resources override per mutant) for bcdev-like speed · [R635.md](docs/roadmap/R635.md) · open, filed 2026-10-22
-- **R636** · R631's link scan caps depth through links, not real depth: a long pnpm link chain with no .al refuses falsely · [R636.md](docs/roadmap/R636.md) · open, filed 2026-10-22
+- **R636** · R631's link scan caps depth through links, not real depth: a long pnpm link chain with no .al refuses falsely · [R636.md](docs/roadmap/R636.md) · done (ee9f0a3b)
+- **R638** · al-runner v3: a test codeunit's OnRun trigger is not under the per-test CPU limit, so a hang there holds the call until LethAL's own deadline (upstream #5698) · [R638.md](docs/roadmap/R638.md) · open, filed 2026-10-22
+- **R639** · al-runner v3: when LethAL's first covering test is a not-trusted row after a timeout, the mutant ends as error and never reaches the hanging sibling's timeout kill · [R639.md](docs/roadmap/R639.md) · open, filed 2026-10-22
+- **R640** · R636's link-scan cap message blames the LAST link for a folder budget shared across the whole walk · [R640.md](docs/roadmap/R640.md) · done (8daecd3f)
+- **R642** · corpus-snapshot's heavy-job guard still allows two heavy jobs; the 32 GB container allows three, with BaseApp corpus jobs still capped at two · [R642.md](docs/roadmap/R642.md) · done (1e6d3b8a)
 
 ---
 

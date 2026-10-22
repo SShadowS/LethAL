@@ -23,6 +23,8 @@ import type {
   BackendStatus,
   BoundArtifact,
   ExecutionBackend,
+  PackageUnread,
+  PublishedPackageRead,
   RunManyCause,
   RunManyOpts,
   RunManyResult,
@@ -76,6 +78,7 @@ import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { IDLE_STATUS, leaseRouter } from "./helpers/lease-wire";
 import type { WireAnswer } from "./helpers/lease-wire";
 import { scratchDirs } from "./helpers/scratch";
+import { testDbPath } from "./helpers/test-db";
 
 const scratch = scratchDirs();
 import {
@@ -165,6 +168,7 @@ import {
   testAppJson,
   testAppPackage,
 } from "./helpers/proven-test-app";
+import { CAUSES, UNREAD } from "./helpers/unread";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
 {
@@ -638,7 +642,7 @@ describe("runSession", () => {
       return {
         dependencies: await dependencyFingerprint(
           app,
-          async () => null,
+          async () => UNREAD,
           from !== undefined ? fakeMicrosoftMode() : { kind: "declared" },
           await targetOf(dirs.projectDir),
         ),
@@ -648,10 +652,8 @@ describe("runSession", () => {
 
     async function r372Run(
       read:
-        | Uint8Array
-        | null
-        | undefined
-        | ((app: { readonly name: string }) => Promise<Uint8Array | null | undefined>),
+        | PublishedPackageRead
+        | ((app: { readonly name: string }) => Promise<PublishedPackageRead>),
       extra: Partial<SessionConfig> = {},
       fetch = true,
       /** `null`: a backend with no microsoftMode. */
@@ -1062,8 +1064,8 @@ describe("runSession", () => {
       store.close();
     });
 
-    test("an unreadable package (null) records NULL and points at the unreadable warning", async () => {
-      const { store, runId, digestWarning } = await r372Run(null);
+    test("an unreadable package records NULL and points at the unreadable warning", async () => {
+      const { store, runId, digestWarning } = await r372Run(UNREAD);
       expect(store.testDigests(runId)).toBeNull();
       expect(digestWarning).toHaveLength(1);
       expect(digestWarning[0]).toContain("published-test-app-unreadable");
@@ -1145,8 +1147,10 @@ describe("runSession", () => {
             "src/Dep.al": `// build ${build}`,
           }),
         );
-      const serverWith = (dep: Uint8Array | null) => async (app: { readonly name: string }) =>
-        app.name === DEP.name ? dep : TESTS_PKG;
+      const serverWith =
+        (dep: Uint8Array | PackageUnread) =>
+        async (app: { readonly name: string }): Promise<Uint8Array | PackageUnread> =>
+          app.name === DEP.name ? dep : TESTS_PKG;
 
       /** Verify's plan against a server holding `dep` for the dependency; `microsoft` undefined
        *  is a backend with no microsoftMode. */
@@ -1156,7 +1160,7 @@ describe("runSession", () => {
         over: {
           readonly maxNewTests?: number;
           readonly microsoft?: MicrosoftMode | null;
-          readonly server?: (app: { readonly name: string }) => Promise<Uint8Array | null>;
+          readonly server?: (app: { readonly name: string }) => Promise<Uint8Array | PackageUnread>;
         } = {},
       ) {
         const { dirs, store, runId } = r;
@@ -1243,7 +1247,7 @@ describe("runSession", () => {
       });
 
       test("an unreadable dependency package records NULL digests and says why", async () => {
-        const { store, runId, digestWarning } = await r372Run(serverWith(null));
+        const { store, runId, digestWarning } = await r372Run(serverWith(UNREAD));
         expect(store.testDigests(runId)).toBeNull();
         expect(digestWarning).toHaveLength(1);
         expect(digestWarning[0]).toContain("dependencies could not be fingerprinted");
@@ -2855,7 +2859,7 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
     // R462: the published test app is hashed before the baseline (R192's snapshot key) and again at
     // the refusal. `before` answers every read until the baseline ran; `after` answers from then on.
     describe("R462: the test app's identity before the baseline and at the refusal", () => {
-      type Read = Uint8Array | null | undefined | "throw";
+      type Read = PublishedPackageRead | "throw";
       async function refuse(before: Read, after: Read): Promise<unknown> {
         const dirs = await qualProject();
         const backend = new QualificationBackend(missingFor);
@@ -2949,7 +2953,7 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       });
 
       test("13: a failed or missing read is identity-unverified, never unchanged or changed", async () => {
-        for (const after of [null, "throw", undefined] as const) {
+        for (const after of [UNREAD, "throw", undefined] as const) {
           const err = await refuse(A, after);
           expect(err).toBeInstanceOf(StaleTestAppError);
           expect((err as StaleTestAppError).cause).toBe("identity-unverified");
@@ -2975,6 +2979,18 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
         expect((testAppRefusal(missing, pkg, undefined) as StaleTestAppError).cause).toBe(
           "identity-unverified",
         );
+      });
+
+      // R630 (review I1): a re-read the server does not answer is identity-unverified, and the
+      // refusal names the read's cause, never a `source:` hash.
+      test("R630: an unread re-read is identity-unverified and names its cause", async () => {
+        for (const cause of CAUSES) {
+          const err = await refuse(A, cause);
+          expect(err).toBeInstanceOf(StaleTestAppError);
+          expect((err as StaleTestAppError).cause).toBe("identity-unverified");
+          expect((err as Error).message).toContain(`(the read failed: ${cause.unread})`);
+          expect((err as Error).message).not.toContain("source:");
+        }
       });
 
       test("the re-read asks for the SAME app even if the local app.json changed during the baseline", async () => {
@@ -3825,8 +3841,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
 
 describe("runSession — I7 second consecutive transport error aborts the session", () => {
   test("stub backend erroring on every active-mutant run throws, persists partial results", async () => {
-    const root = scratch("lethal-orch-i7-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "error"), [
       "IsOverBudget",
@@ -4360,8 +4375,7 @@ describe("runSession — parallel workers", () => {
   });
 
   test("a shard's transport-error abort drains sibling shards before rethrowing", async () => {
-    const root = scratch("lethal-orch-parallel-i7-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(dbPath);
@@ -6798,8 +6812,7 @@ describe("runSession — bisection on compile failure", () => {
   // error, and get silently downgraded into a per-mutant "error" note instead of aborting the
   // run.
   test("a worker's DeploymentError aborts the whole session instead of being bisected", async () => {
-    const root = scratch("lethal-orch-parallel-deployerr-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(dbPath);
@@ -7141,8 +7154,7 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
   // if this outer one were missing — `calls === 1` is what only the outer guard delivers (zero
   // wasted bisection compiles, not merely "eventually aborts correctly").
   test("a worker's ArtifactPrepareError aborts the whole session instead of being bisected", async () => {
-    const root = scratch("lethal-orch-parallel-prepareerr-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(dbPath);
@@ -8482,7 +8494,8 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
     // The original guard still holds independently: an unfinished run is invisible to
     // priorSurvivorKeys, so this does not rely on the correction alone.
     // R496: the identity is the hash and the dependency fingerprint the run itself recorded.
-    const sourceHash = await testAppHashFor(undefined, dirs.testDir);
+    const sourceRead = await testAppHashFor(undefined, dirs.testDir);
+    const sourceHash = typeof sourceRead === "string" ? sourceRead : undefined;
     const recordedDeps = (
       store.db.query("SELECT MAX(test_app_deps) AS d FROM runs").get() as { d: string | null }
     ).d;
@@ -9262,6 +9275,10 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       /** R389: the backend's `dependentCount`, and the test app.json then names the package's id
        *  (APP_ID), so the closed-world guard is asked for real. */
       readonly dependentCount?: (appId: string) => Promise<number>;
+      /** R630: what every failed read (`null` above) answers, so a test can check its cause is named. */
+      readonly unreadCause?: { readonly unread: string };
+      /** R630 C7: the dependency `dep` publishes cannot be read back after the hook. */
+      readonly depPostUnread?: boolean;
     }
 
     async function envRun(o: EnvRun) {
@@ -9282,12 +9299,14 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       let postReads = 0;
       let preReads = 0;
       let acquired = false;
+      const failed = o.unreadCause ?? UNREAD;
       const fetch = async (app: { readonly name: string }) => {
         if (hooked) fetchesAfterHook++;
         if (inHook) readsDuringHook++;
         if (app.name === DEP.name) {
           if (acquired && o.depAfterAcquire !== undefined) return o.depAfterAcquire;
-          if (o.dep === undefined) return null;
+          if (o.dep === undefined) return failed;
+          if (hooked && o.depPostUnread === true) return failed;
           return hooked ? o.dep.post : o.dep.pre;
         }
         const extra = o.served?.[app.name];
@@ -9296,14 +9315,15 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         if (!hooked && o.preSequence !== undefined) {
           const served = o.preSequence[Math.min(preReads, o.preSequence.length - 1)];
           preReads++;
-          return served ?? null;
+          return served ?? failed;
         }
         if (hooked && o.postSequence !== undefined) {
           const served = o.postSequence[Math.min(postReads, o.postSequence.length - 1)];
           postReads++;
-          return served ?? null;
+          return served ?? failed;
         }
-        return hooked ? o.post : o.pre === undefined ? P1 : o.pre;
+        const served = hooked ? o.post : o.pre === undefined ? P1 : o.pre;
+        return served ?? failed;
       };
       const client = new FakeLeaseClient();
       // R496: a lease client that marks the moment the lease is granted, so the server can change
@@ -9402,7 +9422,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       dirs: { projectDir: string },
       pkg: Uint8Array,
       body: string,
-      server: (app: { readonly name: string }) => Promise<Uint8Array | null>,
+      server: (app: { readonly name: string }) => Promise<Uint8Array | PackageUnread>,
     ) => {
       const app = appInputsOfPackage(pkg);
       return testDigestsOfSources([{ path: "x.al", text: body }], [K], {
@@ -10101,6 +10121,28 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         drifted(r, null);
         r.store.close();
       });
+      // R630 C2 (review I1): an unread package at a batch is the same refusal, `.now` stays
+      // undefined (never the `source:` fall-through), and the message names the read's cause.
+      // Revert (drop `testAppHashFor`'s unread branch): `.now` is a `source:` hash.
+      for (const cause of CAUSES) {
+        test(`R630 C2: an unread test app at a batch refuses as drift, naming ${JSON.stringify(cause.unread)}`, async () => {
+          const r = await envRun({
+            noHook: true,
+            ...provenP2,
+            preSequence: [P2, P2, P2, null],
+            unreadCause: cause,
+            dirs: await twoBatches(),
+            extra: { maxGuardsPerBatch: 1 },
+          });
+          drifted(r, null);
+          expect((r.outcome as TestAppDriftedError).now).toBeUndefined();
+          expect((r.outcome as Error).message).toContain(
+            `nothing (the read failed: ${cause.unread})`,
+          );
+          expect((r.outcome as Error).message).not.toContain("source:");
+          r.store.close();
+        });
+      }
       // Sol, final review: `--skip-known-survivors` records a batch's known survivors before its
       // baseline, so the check must come first. Control: without the change, batch 1 skips some.
       test("I1: a drifted batch records no known survivor", async () => {
@@ -10880,6 +10922,49 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       expect(failed.unreadableWarning).toHaveLength(1);
       failed.store.close();
     });
+
+    // R630 C1: R139 check 2's read (`fetchPublishedTestApp` -> `reportPublishedTestApp`), on a plain
+    // session and on an env-tool read-back. The warning names the cause; the outcome is unchanged:
+    // the session runs, no test-app identity, no digests.
+    for (const cause of CAUSES) {
+      for (const shape of ["no hook", "read-back"] as const) {
+        test(`R630 C1 (${shape}): an unread test app warns naming ${JSON.stringify(cause.unread)}, and records no identity`, async () => {
+          const r = await envRun(
+            shape === "no hook"
+              ? { noHook: true, pre: null, post: P2, unreadCause: cause }
+              : { post: null, file: P2, unreadCause: cause },
+          );
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.unreadableWarning).toHaveLength(1);
+          expect(r.unreadableWarning[0]).toContain(`from the server (${cause.unread})`);
+          expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+          expect(r.store.testDigests(r.runId)).toBeNull();
+          expect(r.digestWarning).toHaveLength(1);
+          expect(r.digestWarning[0]).toContain(cause.unread);
+          r.store.close();
+        });
+      }
+    }
+
+    // R630 C7: `proveReadBack`'s publishApps loop. A published app that cannot be read back names
+    // the cause; the read-back stays unproven: no identity, no digests, the session runs.
+    for (const cause of CAUSES) {
+      test(`R630 C7: a publishApps app unread after the hook names ${JSON.stringify(cause.unread)}, and proves nothing`, async () => {
+        const r = await envRun({
+          post: P2,
+          dep: { pre: depPkg("one"), post: depPkg("two") },
+          depPostUnread: true,
+          unreadCause: cause,
+          installed: { [APP_ID]: ["1.0.0.2"], [DEP.id]: ["1.0.0.0"] },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain(`could not be read back (${cause.unread})`);
+        r.store.close();
+      });
+    }
 
     test("a read-back with the publishApps file's version but another app id records NULL", async () => {
       const otherId = new Uint8Array(
@@ -19064,7 +19149,7 @@ const COMPILED: CompiledTestApp = {
 };
 const DOWNGRADE =
   "altool publishapp failed (exit 1):\nCannot install the extension LethAL Sandbox Tests by LethAL 1.0.0.2 because a newer version 1.0.0.9 was already installed.";
-function deps(log: string[], reads: Array<Uint8Array | null | undefined>, publishFails?: string) {
+function deps(log: string[], reads: Array<PublishedPackageRead>, publishFails?: string) {
   const queue = [...reads];
   return {
     publisher: {
@@ -19083,7 +19168,7 @@ function deps(log: string[], reads: Array<Uint8Array | null | undefined>, publis
 describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
   // ONE log PER TEST: a shared log lets an earlier test's publish leak into a later assertion.
   const inLease =
-    (tlog: string[], reads: Array<Uint8Array | null | undefined>, publishFails?: string) =>
+    (tlog: string[], reads: Array<PublishedPackageRead>, publishFails?: string) =>
     async (fence: LeaseFence) => {
       await publishTestApp(fence, COMPILED, deps(tlog, reads, publishFails));
     };
@@ -19188,7 +19273,7 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     await expect(
       runNamedMutants({
         ...fx.cfg,
-        inLease: inLease(tlog, [OLD, null], DOWNGRADE),
+        inLease: inLease(tlog, [OLD, UNREAD], DOWNGRADE),
         requests: [{ mutantId: "M0001", methods: [OVER] }],
       }),
     ).rejects.toMatchObject({ reason: "publish-indeterminate" });
@@ -19453,7 +19538,7 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     const fx = await fixture();
     const err = await runNamedMutants({
       ...fx.cfg,
-      inLease: inLease(tlog, [null]),
+      inLease: inLease(tlog, [UNREAD]),
       requests: [{ mutantId: "M0001", methods: [OVER] }],
     }).catch((e) => e);
     expect(err).toBeInstanceOf(TestAppError);
@@ -19504,7 +19589,7 @@ describe("C02-06 Task 5.4: runVerify", () => {
   async function verifyFixture(
     o: Parameters<typeof installedFixture>[0] & {
       readonly withNewTest?: boolean;
-      readonly reads?: Array<Uint8Array | null | undefined>;
+      readonly reads?: Array<PublishedPackageRead>;
       readonly publishFails?: string;
       readonly compile?: (testDir: string, target: BoundArtifact) => Promise<CompiledTestApp>;
       readonly publish?: (fence: LeaseFence, app: CompiledTestApp) => Promise<PublishedTestApp>;

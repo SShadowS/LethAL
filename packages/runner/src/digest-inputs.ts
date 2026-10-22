@@ -42,6 +42,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { readPackageEntry } from "./app-package";
+import { type PackageUnread, type PublishedPackageRead, isUnread } from "./backend";
 import { CONTROL_APP_ID, UnfilteredExtensionsQueryError } from "./harness";
 import { readAppIdentity } from "./published-test-app";
 
@@ -216,10 +217,15 @@ export async function readAppJsonInputs(dir: string): Promise<AppInputs> {
 
 /**
  * The packages that ran for one dependency: usually one; several when a package folder holds more
- * than one version of it and which one loaded is not known (every one is hashed). `null` when none
- * can be read.
+ * than one version of it and which one loaded is not known (every one is hashed). `{ unread }`,
+ * naming why, when none can be read (R630).
  */
-export type PackageReader = (dep: AppDependency) => Promise<ReadonlyArray<Uint8Array> | null>;
+export type PackageReader = (
+  dep: AppDependency,
+) => Promise<ReadonlyArray<Uint8Array> | PackageUnread>;
+
+/** R630: ` (<cause>)` for a failed read, appended to the message that refuses on it. */
+const causeOf = (r: PublishedPackageRead): string => (isUnread(r) ? ` (${r.unread})` : "");
 
 const isMicrosoft = (publisher: string): boolean => publisher.trim().toLowerCase() === "microsoft";
 const sha256 = (b: Uint8Array | string): string =>
@@ -249,8 +255,8 @@ export const APPLICATION_APP_ID = "c1335042-3002-4257-bf8a-75c898ccb1b8";
 export type MicrosoftMode =
   | {
       readonly kind: "bytes";
-      readSystem(): Promise<Uint8Array | null | undefined>;
-      readControl(): Promise<Uint8Array | null | undefined>;
+      readSystem(): Promise<PublishedPackageRead>;
+      readControl(): Promise<PublishedPackageRead>;
       controlVersion(): Promise<string>;
       installed(appId: string): Promise<readonly string[]>;
     }
@@ -258,11 +264,13 @@ export type MicrosoftMode =
 
 /** A package's identity and manifest, or `DependencyUnreadableError` naming `what`. */
 function openPackage(
-  bytes: Uint8Array | null | undefined,
+  bytes: PublishedPackageRead,
   what: string,
 ): { bytes: Uint8Array; identity: ReturnType<typeof readAppIdentity>; manifest: string } {
-  if (bytes === null || bytes === undefined || bytes.byteLength === 0) {
-    throw new DependencyUnreadableError(`the package of ${what} could not be read`);
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
+    throw new DependencyUnreadableError(
+      `the package of ${what} could not be read${causeOf(bytes)}`,
+    );
   }
   const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   try {
@@ -358,9 +366,10 @@ export async function dependencyFingerprint(
       continue;
     }
     const packages = await read(dep);
-    if (packages === null || packages.length === 0) {
+    if ("unread" in packages || packages.length === 0) {
+      const cause = "unread" in packages ? ` (${packages.unread})` : "";
       throw new DependencyUnreadableError(
-        `the package of dependency "${dep.name}" (${dep.publisher}, ${dep.id}) could not be read`,
+        `the package of dependency "${dep.name}" (${dep.publisher}, ${dep.id}) could not be read${cause}`,
       );
     }
     for (const bytes of packages) {
@@ -417,11 +426,14 @@ export function publishedPackageReader(
   fetchPackage: (app: {
     readonly publisher: string;
     readonly name: string;
-  }) => Promise<Uint8Array | null | undefined>,
+  }) => Promise<PublishedPackageRead>,
 ): PackageReader {
   return async (dep) => {
     const bytes = await fetchPackage({ publisher: dep.publisher, name: dep.name });
-    return bytes === null || bytes === undefined ? null : [bytes];
+    if (bytes === undefined) {
+      return { unread: "this configuration cannot request it (no dev server or no credentials)" };
+    }
+    return isUnread(bytes) ? bytes : [bytes];
   };
 }
 
@@ -458,7 +470,7 @@ export function packageFolderReader(dirs: readonly string[]): PackageReader {
   return async (dep) => {
     index ??= await build();
     const paths = index.get(dep.id);
-    if (paths === undefined) return null;
+    if (paths === undefined) return { unread: "no package for it in the package folders" };
     return Promise.all(paths.map(async (p) => new Uint8Array(await readFile(p))));
   };
 }
@@ -497,7 +509,7 @@ export async function bcdevDependencyFingerprint(
   fetchPackage: (app: {
     readonly publisher: string;
     readonly name: string;
-  }) => Promise<Uint8Array | null | undefined>,
+  }) => Promise<PublishedPackageRead>,
   testDir: string,
   projectDir: string,
   microsoft: MicrosoftMode,
@@ -513,8 +525,11 @@ export async function bcdevDependencyFingerprint(
   if (name === undefined || publisher === undefined)
     throw new DependencyUnreadableError("the test project's app.json names no name and publisher");
   const bytes = await fetchPackage({ publisher, name });
-  if (bytes === null || bytes === undefined)
-    throw new DependencyUnreadableError(`the published test app "${name}" could not be read`);
+  if (!(bytes instanceof Uint8Array)) {
+    throw new DependencyUnreadableError(
+      `the published test app "${name}" could not be read${causeOf(bytes)}`,
+    );
+  }
   return dependencyFingerprint(
     appInputsOfPackage(bytes),
     publishedPackageReader(fetchPackage),

@@ -26,13 +26,15 @@ import type {
   CoverageMode,
   ExecutionBackend,
   NamingGap,
+  PackageUnread,
+  PublishedPackageRead,
   RunManyOpts,
   RunManyResult,
   RunOpts,
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { BcAnswerUnreadError, bcFetch, withDeadline } from "./bc-fetch";
+import { BcAnswerUnreadError, BcRedirectRefusedError, bcFetch, withDeadline } from "./bc-fetch";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
@@ -353,6 +355,61 @@ export function devPackagesUrl(
   return `${base.protocol}//${host}/${serverInstance}/dev/packages?${params}`;
 }
 
+/**
+ * R630: why `dev/packages` gave no package, in words an operator can act on. Each status keeps its
+ * own number. A 404 is NOT proven to mean "not resident" (an environment whose dev endpoint serves
+ * no packages, or a wrong instance or tenant path, answer it too), so it says both.
+ */
+export function unreadOfStatus(status: number): PackageUnread {
+  if (status === 404) {
+    return { unread: "HTTP 404 (no such app on the server, or the dev-endpoint path is wrong)" };
+  }
+  if (status === 401 || status === 403) {
+    return {
+      unread: `HTTP ${status} (the dev endpoint refused the login: check BC_DEV_USER / BC_DEV_PASSWORD)`,
+    };
+  }
+  if (status >= 500 && status <= 599) return { unread: `HTTP ${status} (a server error)` };
+  return { unread: `HTTP ${status}` };
+}
+
+const REFUSED_CODES = new Set(["ECONNREFUSED", "ConnectionRefused"]);
+const DNS_CODES = new Set(["ENOTFOUND", "EAI_AGAIN"]);
+
+/**
+ * R630: why a `dev/packages` request threw. A timeout is our own `BcAnswerUnreadError`, or, since
+ * `withDeadline` aborts the fetch before `bounded`'s guard fires, the fetch's own AbortError or
+ * TimeoutError (review I3). The login rides in a header, never the URL; `secrets` are blanked out
+ * of a message anyway, since a network stack's text is not ours to trust.
+ */
+export function unreadOfError(
+  err: unknown,
+  timeoutMs: number,
+  secrets: readonly string[],
+): PackageUnread {
+  const name = err instanceof Error ? err.name : undefined;
+  const code = (err as { code?: unknown } | null)?.code;
+  if (
+    (err instanceof BcAnswerUnreadError && err.kind === "timeout") ||
+    name === "AbortError" ||
+    name === "TimeoutError"
+  ) {
+    return { unread: `no answer within ${timeoutMs} ms (timeout)` };
+  }
+  if (err instanceof BcRedirectRefusedError) {
+    return { unread: "a redirect was refused (LethAL never follows one from BC)" };
+  }
+  if (typeof code === "string" && REFUSED_CODES.has(code)) {
+    return { unread: `the connection was refused (${code})` };
+  }
+  if (typeof code === "string" && DNS_CODES.has(code)) {
+    return { unread: `the server name did not resolve (DNS, ${code})` };
+  }
+  let text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  for (const s of secrets) if (s.length > 0) text = text.split(s).join("***");
+  return { unread: `the request failed (${text})` };
+}
+
 export class BcDevMcpBackend implements ExecutionBackend {
   /** R582: R577's "a kill must reproduce" rule, on for bcdev too (the re-run is one more fenced
    *  call under the mutant: a single `RunMutant` at position 1, the call's prefix at k > 1). */
@@ -432,8 +489,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   /**
-   * R139 check 2: the bytes of the package this SERVER currently holds for `app`, or `null` when it
-   * cannot be read.
+   * R139 check 2: the bytes of the package this SERVER currently holds for `app`, or `{ unread }`
+   * naming why it cannot be read (R630).
    *
    * The dev endpoint's own `dev/packages` is the read, chosen over the three alternatives the row
    * weighed: it needs no new deployment step, no control-app version bump (which would cost a
@@ -443,16 +500,17 @@ export class BcDevMcpBackend implements ExecutionBackend {
    *
    * NEVER throws, except `UnfilteredExtensionsQueryError` (R-496: the default fetch refused a
    * redirect to an unfiltered extensions list). Every other reachable failure — no server configured, no credentials, a 404 on an
-   * environment whose dev endpoint does not serve packages, a refused connection, a timeout — is a
-   * `null`, because a proactive check that cannot read must not be able to stop a run that check 1
-   * would otherwise complete or refuse on the authoritative signal.
+   * environment whose dev endpoint does not serve packages, a refused connection, a timeout — is an
+   * `{ unread }`, because a proactive check that cannot read must not be able to stop a run that
+   * check 1 would otherwise complete or refuse on the authoritative signal. Its text is
+   * `unreadOfStatus`'s or `unreadOfError`'s.
    */
   async fetchPublishedAppPackage(
     app: { readonly publisher: string; readonly name: string },
     fetchFn: FetchLike = bcFetch,
     timeoutMs: number = PUBLISHED_PACKAGE_TIMEOUT_MS,
-  ): Promise<Uint8Array | null | undefined> {
-    // `undefined`, not `null`: this configuration cannot form the request at all (no dev server or
+  ): Promise<PublishedPackageRead> {
+    // `undefined`, not `{ unread }`: this configuration cannot form the request at all (no dev server or
     // no dev-endpoint credentials configured), so there is nothing for the caller to report. An
     // env-tool session is NOT this case: `startEnvToolSession` (env-tool-session.ts) sets `server`,
     // `serverInstance`, `BC_DEV_USER` and `BC_DEV_PASSWORD`, and R373 reads its test app back
@@ -465,17 +523,17 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
     try {
       // R506: one deadline over the headers AND the body, held even for a body that ignores
-      // its abort. A timeout is still a `null` below.
+      // its abort. A timeout is still an `{ unread }` below.
       return await withDeadline(
         timeoutMs,
         "dev/packages",
-        async (signal) => {
+        async (signal): Promise<Uint8Array | PackageUnread> => {
           const res = await fetchFn(url, {
             method: "GET",
             headers: { authorization: `Basic ${btoa(`${username}:${password}`)}` },
             signal,
           });
-          if (!res.ok) return null;
+          if (!res.ok) return unreadOfStatus(res.status);
           return new Uint8Array(await res.arrayBuffer());
         },
         (m, k) => new BcAnswerUnreadError(m, k),
@@ -484,10 +542,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
       // R-496: the one exception. A redirect to an unfiltered extensions list is a refused
       // request (R433), not an unreadable package, and must stop the run.
       if (err instanceof UnfilteredExtensionsQueryError) throw err;
-      // Deliberately swallowed, and deliberately not narrowed: network stacks report a refused
-      // connection, a DNS failure and an abort as three unrelated error shapes, and every one of
-      // them means the same thing here — this check has nothing to say.
-      return null;
+      // Deliberately swallowed: every failure means this check cannot read. R630: it is named,
+      // so the operator is not sent after the wrong cause.
+      return unreadOfError(err, timeoutMs, [username, password]);
     }
   }
 

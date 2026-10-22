@@ -60,6 +60,7 @@ import {
   V3LegHeld,
   type V3LegOutcome,
   V3_DEFECT_FACTS,
+  V3_WARN_FACTS,
   cdoCheckoutRefusal,
   classifyLegC,
   classifyLegT,
@@ -256,7 +257,11 @@ function assertIndex(b: AlRunnerV3Backend, leg: string, target: number, test: nu
 
 // ---------------------------------------------------------------------------------------------
 
-async function legC(scratch: string): Promise<void> {
+/** R612 M-2: leg C's warn-fact readings, for the receipt. */
+let legCWarnFacts: Record<string, string> | undefined;
+
+/** Returns the warn lines (R612 `serve-keep-reasons`) of a passing leg, for the receipt. */
+async function legC(scratch: string): Promise<readonly string[]> {
   const r = await runV3ContractProbe({
     alRunnerPath: BIN,
     expectedVersion: (execFileSync(BIN, ["--version"], { encoding: "utf8" }) as string).trim(),
@@ -268,12 +273,18 @@ async function legC(scratch: string): Promise<void> {
   });
   for (const f of r.facts)
     console.log(`  C: ${f.fact} = ${f.verdict} | ${f.measured.slice(0, 200)}`);
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail.
-  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 23);
+  // R612 M-2: the warn readings go into the receipt, and from there into `.gated`.
+  legCWarnFacts = Object.fromEntries(
+    r.facts.filter((f) => V3_WARN_FACTS.includes(f.fact)).map((f) => [f.fact, f.verdict]),
+  );
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 25 facts (r8:
+  // R612's warn fact, then R637's contract fact); a warn fact (V3_WARN_FACTS) only adds its line.
+  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 25, V3_WARN_FACTS);
   for (const l of c.lines) console.log(`  C: ${l}`);
   if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);
   if (c.outcome === "infra-fail") throw new V3LegEnvironment(`C: ${c.lines.join("; ")}`);
   if (c.outcome === "held") throw new V3LegHeld(c.lines);
+  return c.lines;
 }
 
 async function legS1(scratch: string): Promise<void> {
@@ -959,7 +970,7 @@ async function main(): Promise<void> {
       const t0 = Date.now();
       console.log(`leg ${leg}:`);
       try {
-        if (leg === "C") await legC(scratch);
+        if (leg === "C") lines.push(...(await legC(scratch)).map((l) => `C: ${l}`));
         else if (leg === "S1") await legS1(scratch);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
@@ -1042,6 +1053,7 @@ async function main(): Promise<void> {
       outcome,
       legs,
       lines,
+      ...(legCWarnFacts !== undefined ? { warnFacts: legCWarnFacts } : {}),
       oracleBcBuild: ORACLE_BC_BUILD,
       writtenAt: new Date().toISOString(),
     });

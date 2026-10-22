@@ -20,8 +20,8 @@ import { ProjectChangedDuringRunError, watchProjectInputs } from "../src/source-
 import { readTestAppSources } from "../src/testpage-scan";
 import {
   ProjectSymlinkRefusedError,
-  REACH_DEPTH_CAP,
   onSkippedLinks,
+  reachLimits,
   reachStats,
   refuseProjectLinks,
   setPackageCacheDirs,
@@ -278,7 +278,24 @@ describe("R631: package caches", () => {
     const e = await refusalOf(buildPackageCacheCopy(cache, join(base, "control.app"), root));
     expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
     expect((e as Error).message).toContain(join(cache, "more"));
-    expect((e as Error).message).toContain("package cache");
+    // R636 N5: a cache-only walk's root IS the cache, so it keeps the name.
+    expect((e as Error).message).toContain(`package cache ${cache}`);
+  });
+
+  // R636 N5: inside a project, the root is the project folder, and the cache is where the link sits.
+  test("a linked subfolder of a project's .alpackages names the project folder, in its package cache", async () => {
+    const base = scratch("lethal-r636-");
+    const dir = join(base, "app");
+    put(dir, "app.json", "{}");
+    put(dir, "src/A.al", CODEUNIT);
+    put(dir, ".alpackages/A.app", "a");
+    put(base, "more/B.app", "b");
+    symlinkSync(join(base, "more"), join(dir, ".alpackages", "more"), "junction");
+    const e = await refusalOf(readTargetSource(dir));
+    expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((e as Error).message).toContain(join(dir, ".alpackages", "more"));
+    expect((e as Error).message).toContain(`project folder ${dir}, in its package cache`);
+    expect((e as Error).message).not.toContain(`package cache ${dir}`);
   });
 });
 
@@ -417,6 +434,9 @@ describe("R631 review r2: a cache link that reaches a .al refuses; the watch agr
       expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
       expect((e as Error).message).toContain(join(dir, "src", "L.al"));
       expect((e as Error).message).toContain("package cache");
+      // R636 N5: the root named is the PROJECT folder, never called "the package cache".
+      expect((e as Error).message).toContain(`project folder ${dir}, in its package cache`);
+      expect((e as Error).message).not.toContain(`package cache ${dir}`);
     } finally {
       setPackageCacheDirs([]);
     }
@@ -473,7 +493,7 @@ describe("R631 review r2: a cache link that reaches a .al refuses; the watch agr
   });
 });
 
-/** Review r2 N3: one visited set per walk, and a depth cut-off that refuses. */
+/** Review r2 N3: one visited set per walk. R636: a folder-count cut-off that refuses, not depth. */
 describe("R631 review r2 N3: the reaches-a-.al scan", () => {
   function chain(root: string, depth: number): void {
     const parts = Array.from({ length: depth }, (_, i) => `d${i}`);
@@ -481,24 +501,126 @@ describe("R631 review r2 N3: the reaches-a-.al scan", () => {
     writeFileSync(join(root, ...parts, "x.app"), "x");
   }
 
-  test("a link deeper than the cap refuses (the cut-off never admits); one within it passes", async () => {
-    for (const [depth, refuses] of [
-      [REACH_DEPTH_CAP + 2, true],
-      [REACH_DEPTH_CAP - 2, false],
+  /** A project whose `node_modules/<name>` links to `target`. */
+  function linkedFrom(base: string, target: string, name = "deep"): string {
+    const dir = join(base, "app");
+    put(dir, "src/A.al", CODEUNIT);
+    mkdirSync(join(dir, "node_modules"), { recursive: true });
+    symlinkSync(target, join(dir, "node_modules", name), "junction");
+    return dir;
+  }
+
+  /** R636: `fn` with the folder cap lowered to `max`, restored whatever happens. */
+  async function withFolderCap<T>(max: number, fn: () => Promise<T>): Promise<T> {
+    const saved = reachLimits.maxFolders;
+    reachLimits.maxFolders = max;
+    try {
+      return await fn();
+    } finally {
+      reachLimits.maxFolders = saved;
+    }
+  }
+
+  // R636 test 3a: the cap counts FOLDERS, not depth, so a flat tree past it refuses and one within
+  // it passes. Revert (depth counting, or no cap check): the flat 12-folder tree is admitted.
+  test("R636: a linked tree of more folders than the cap refuses (the cut-off never admits); one within it passes", async () => {
+    for (const [width, refuses] of [
+      [12, true],
+      [8, false],
     ] as const) {
-      const base = scratch("lethal-r631-");
-      const dir = join(base, "app");
-      put(dir, "src/A.al", CODEUNIT);
-      chain(join(base, "deep"), depth);
-      mkdirSync(join(dir, "node_modules"));
-      symlinkSync(join(base, "deep"), join(dir, "node_modules", "deep"), "junction");
-      const e = await refusalOf(refuseProjectLinks([dir]));
+      const base = scratch("lethal-r636-");
+      for (let i = 0; i < width; i++) put(base, join("wide", `s${i}`, "x.app"), "x");
+      const dir = linkedFrom(base, join(base, "wide"));
+      const e = await withFolderCap(10, () => refusalOf(refuseProjectLinks([dir])));
       if (refuses) {
         expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
         expect((e as Error).message).toContain("could not prove it reaches no .al file");
+        expect((e as Error).message).toContain("more than 10 folders");
       } else expect(e).toBeUndefined();
     }
   });
+
+  // R640: the budget is the WALK's, shared by every link, so the refusal must not say the link it
+  // names holds the excess. Two links of 6 folders each pass a cap of 10 only together. Revert (the
+  // old "it holds more than N folders"): the second link, holding 6, is blamed for more than 10.
+  test("R640: the cap refusal names the walk-wide budget, not the link that was being scanned", async () => {
+    const base = scratch("lethal-r640-");
+    for (const side of ["one", "two"])
+      for (let i = 0; i < 5; i++) put(base, join(side, `s${i}`, "x.app"), "x");
+    const dir = join(base, "app");
+    put(dir, "src/A.al", CODEUNIT);
+    mkdirSync(join(dir, "node_modules"), { recursive: true });
+    symlinkSync(join(base, "one"), join(dir, "node_modules", "one"), "junction");
+    symlinkSync(join(base, "two"), join(dir, "node_modules", "two"), "junction");
+    const e = await withFolderCap(10, () => refusalOf(refuseProjectLinks([dir])));
+    expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+    const message = (e as Error).message;
+    expect(message).toContain("more than 10 folders in all");
+    expect(message).toContain("the limit was reached while scanning this one");
+    expect(message).not.toContain("it holds more than");
+  });
+
+  // R636 test 3b: depth alone never refuses. Revert (a depth cap of 32): refused.
+  test("R636: a 40-deep real folder chain behind a link is admitted at the default cap", async () => {
+    const base = scratch("lethal-r636-");
+    chain(join(base, "deep"), 40);
+    const dir = linkedFrom(base, join(base, "deep"));
+    expect(await refusalOf(refuseProjectLinks([dir]))).toBeUndefined();
+  });
+
+  // R636 test 1: a pnpm-style chain of 20 linked packages with no `.al` (the shape of the
+  // R-630 chain probe): each link costs two depth steps, so a depth cap of 32 refused it.
+  test("R636: a 20-link pnpm chain with no .al is admitted at the default cap", async () => {
+    const root = scratch("lethal-r636-");
+    put(root, "app.json", "{}");
+    put(root, "src/A.al", CODEUNIT);
+    const store = join(root, "node_modules", ".pnpm");
+    const links = 20;
+    for (let i = 0; i < links; i++) {
+      mkdirSync(join(store, `p${i}`, "node_modules"), { recursive: true });
+      writeFileSync(join(store, `p${i}`, "index.js"), "");
+    }
+    symlinkSync(join(store, "p0"), join(root, "node_modules", "p0"), "junction");
+    for (let i = 0; i + 1 < links; i++)
+      symlinkSync(
+        join(store, `p${i + 1}`),
+        join(store, `p${i}`, "node_modules", `p${i + 1}`),
+        "junction",
+      );
+    expect(await refusalOf(refuseProjectLinks([root]))).toBeUndefined();
+  });
+
+  // R636 test 2: the visited set, not the cap, ends a link cycle. Revert (drop the visited set):
+  // the cycle runs to the folder cap and refuses, so the no-.al case goes red (bounded by the
+  // test's own timeout).
+  test("R636: a 2-link cycle with no .al finishes, admitted, in 2 folders; the same cycle holding a .al refuses", async () => {
+    for (const withAl of [false, true]) {
+      const cyc = scratch("lethal-r636-");
+      put(cyc, "src/A.al", CODEUNIT);
+      mkdirSync(join(cyc, "node_modules", "a"), { recursive: true });
+      mkdirSync(join(cyc, "node_modules", "b"), { recursive: true });
+      if (withAl) put(cyc, join("node_modules", "b", "B.al"), CODEUNIT);
+      symlinkSync(
+        join(cyc, "node_modules", "b"),
+        join(cyc, "node_modules", "a", "to-b"),
+        "junction",
+      );
+      symlinkSync(
+        join(cyc, "node_modules", "a"),
+        join(cyc, "node_modules", "b", "to-a"),
+        "junction",
+      );
+      const before = reachStats.foldersScanned;
+      const e = await refusalOf(refuseProjectLinks([cyc]));
+      if (withAl) {
+        expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+        expect((e as Error).message).toContain("reaches a .al file");
+      } else {
+        expect(e).toBeUndefined();
+        expect(reachStats.foldersScanned - before).toBe(2);
+      }
+    }
+  }, 20_000);
 
   test("many links to one store scan each store folder once per walk", async () => {
     const base = scratch("lethal-r631-");

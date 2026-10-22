@@ -1,9 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ResultsStore } from "../packages/runner/src/store";
+import { testDbPath } from "../packages/runner/tests/helpers/test-db";
 import {
   StoreQueryError,
   latestRunId,
@@ -31,7 +31,7 @@ const mutant = (code: string, verdict: "killed" | "survived", killingTest?: stri
 
 /** Built with the store's own class, so the schema is the real one. Runs 1 and 2 finish; 3 does not. */
 function buildStore(): string {
-  const path = join(mkdtempSync(join(tmpdir(), "store-query-")), "lethal.sqlite");
+  const path = testDbPath("lethal.sqlite");
   const store = new ResultsStore(path);
   const newRun = () =>
     store.createRun({
@@ -99,7 +99,7 @@ describe("store-query", () => {
   });
 
   test("an empty store or a run with no rows is refused, not printed as zero", () => {
-    const path = join(mkdtempSync(join(tmpdir(), "store-query-")), "empty.sqlite");
+    const path = testDbPath("empty.sqlite");
     new ResultsStore(path).close();
     const db = open(path);
     expect(() => latestRunId(db)).toThrow(/no finished run/);
