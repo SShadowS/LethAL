@@ -162,4 +162,6 @@ Pre-committed:
 
 **The three rows that carry the demo must not move**: the planted `remove-setrange` in `GetBalance`
 survives, the `conditional-boundary` in `Redeem` survives, and `BlockExpiredCards` is uncovered. If
-any moves, the re-freeze is not committed.
+any moves, the re-freeze is not committed. `Redeem` has TWO `conditional-boundary` mutants, at the
+remaining-amount guard and at the expiry boundary; both survive in the frozen report, and the script
+refuses unless both still do.
