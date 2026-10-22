@@ -35,6 +35,11 @@ What the figures mean:
 - 3 / 12 / 4 over 19 is killed / survived / no-coverage.
 - `groupedCalls` is 15 (R198). That is one `RunMutantMany` call for each scored mutant (3 killed
   plus 12 survived). If the counter stopped being wired, it would read 0 and the gate would fail.
+- Since R582 every kill is re-run once under the mutant after its confirm passed (R577's rule),
+  and must fail again to stay killed. `groupedCalls` stays 15 because all 3 kills are at position
+  1, so each re-run is one single `RunMutant` call, not a group call. Both runs check that every
+  kill carries `killReproduced` and has exactly 2 mutated rows for its killing test in that run
+  (the fixture's store is persistent, so the check reads only the run it made).
 - `warmKills` is 0 (R206). Every kill is at `killPosition` 1. No row is `session-reused`. The gate
   also checks session ids in the results store: the number of distinct ids among grouped rows must
   equal the number of group calls that answered.
@@ -60,3 +65,5 @@ What the figures mean:
   baseline was recorded on Cronus28 (DK), so this also shows the W1 company changes no verdict
   here. Cronus28 is now parked. Which servers the gate may run on now: the proof table in
   [servers.md](servers.md) (proof is per server).
+- R582 (2026-10-22) switched R577's "a kill must reproduce" rule on for bcdev. No verdict and no
+  counter moved here (`docs/superpowers/specs/2026-10-22-r582-bcdev-kill-reproduction-precommitment.md`).

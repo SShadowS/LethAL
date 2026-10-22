@@ -12,6 +12,8 @@ in `#if` blocks. It runs two legs, one session each: `coverageMode: "fenced"` an
 - Each wrapped object must match its unwrapped twin, and no fixture object may be refused.
 - The hub leg must equal the fenced leg mutant by mutant.
 - The fenced leg is frozen.
+- Since R582 each leg re-runs every one of its 60 kills once under the mutant (R577's rule), and
+  checks that each carries `killReproduced` and has exactly 2 mutated rows for its killing test.
 
 ## Frozen figures
 

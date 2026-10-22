@@ -20,7 +20,7 @@ mutant equal to its baseline, with the W1 company (R-583).
     "TABLES_FIGURES.survived": 70,
     "TABLES_FIGURES.noCoverage": 22,
     "TABLES_FIGURES.untargetedTriggerCount": 0,
-    "TABLES_FIGURES.groupedCalls": 399,
+    "TABLES_FIGURES.groupedCalls": 414,
     "TABLES_FIGURES.warmKills": 15,
     "TABLES_FIGURES.killPositions": [
       { "mutantCode": "M0179", "killingTest": "ProcessedRequiresCategory", "killPosition": 5 },
@@ -43,8 +43,13 @@ What the figures mean:
 - 314 / 70 / 22 over 406 is killed / survived / no-coverage, over the deployed mutants. The fixture
   has 428 mutant sites before precedence removes some.
 - `untargetedTriggerCount` is 0: no trigger mutant had to run every test.
-- `groupedCalls` is 399 (R198, R206): 314 + 70 scored mutants, plus 15 warm-kill replays. This is
-  the check that the grouped covering loop is really used.
+- `groupedCalls` is 414 (R198, R206, R582): 314 + 70 scored mutants, plus 15 warm-kill replays,
+  plus 15 warm-kill re-runs. This is the check that the grouped covering loop is really used.
+- Every kill is re-run once under the mutant after its confirm passed (R577's rule, on for bcdev
+  since R582), and must fail again to stay killed. The 299 kills at position 1 re-run as one
+  single `RunMutant` call each, which is not a group call. The 15 warm kills re-run their call's
+  prefix in one `RunMutantMany`. The gate checks that every kill carries `killReproduced` and has
+  exactly 2 mutated rows for its killing test in that run.
 - `warmKills` is 15: kills at group positions 2 to 5. This fixture keeps no session state, so a
   warm kill here only says the killer was not first in the order. Five named mutants pin the
   positions. Their ids moved with R254 and R-463, but they are the same mutants.
@@ -193,3 +198,6 @@ The figures in this section are as of each step.
   `itest:hang`. It is proven offline in `packages/builtin-tier1/tests/shift-integer.test.ts`.
 - R180 (killed 267 to 280) and `toggle-blank-temporal` (280 to 299) followed. See the comments on
   `EXPECTED.killed` in `tables.itest.ts`.
+- R582 switched R577's "a kill must reproduce" rule on for bcdev. No verdict moved; `groupedCalls`
+  went from 399 to 414, one re-run per warm kill
+  (`docs/superpowers/specs/2026-10-22-r582-bcdev-kill-reproduction-precommitment.md`).

@@ -64,7 +64,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   v16 is kept), because `kill-not-reproduced` is a new value of `notMeasured[].cause` (R233).
   **`--resume` on al-runner re-runs a kill recorded before this rule** (no `killReproduced`) instead
   of carrying it, and its warning counts such kills in their own words, apart from prior `error`
-  verdicts. bcdev is unchanged; its switch is R582.
+  verdicts. bcdev has the same rule since R582 (see Changed).
 
 - **The report records which al-runner test selector produced its verdicts** (R558). R551 picks the
   selector once per session by a probe: `--test-exact` when the build accepts it, otherwise R488's
@@ -202,6 +202,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   byte-identical to the build before the split.
 
 ### Changed
+
+- **On bcdev, a kill must reproduce too** (R582). R577's rule is now on for the BC backend: after a
+  kill's unmutated confirm passes, LethAL runs the killing test once more UNDER THE MUTANT, and only
+  a second failure (for a timeout kill, a second timeout at the budget the first run was sent) keeps
+  the kill. Anything else is `error` / `kill-not-reproduced`, never `survived`. A kill at position 1
+  re-runs as one single `RunMutant` call; a warm kill (R206) re-runs its call's prefix in one more
+  `RunMutantMany`. **Cost, per kill:** about half a second for a failing test, and one more whole
+  budget for a timeout kill, with a second `StopHungRunAt` stop whose outcome may not be confirmed
+  (that scores `error` / `stop-outcome-unconfirmed`, not `timeout-killed`). Nothing for survivors.
+  **Resuming a run recorded on bcdev before R582 re-executes every kill** (none carries
+  `killReproduced`), which republishes and re-baselines nearly every batch: it is close to a full
+  rerun, so start a fresh run instead.
 
 - **al-runner coverage is ON by default** (R394). With no `alRunner.coverage` key, `lethal run
   --backend al-runner` now reads al-runner's own `--coverage` (R220): a mutant no green test
