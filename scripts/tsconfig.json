@@ -179,6 +179,8 @@
     "native-notices.ts",
     "native-parse-smoke.ts",
     "native-parse-smoke.test.ts",
+    "release-notes.ts",
+    "release-notes.test.ts",
     "talk-cut.ts",
     "talk-cut.test.ts",
     "operator-tables.test.ts",

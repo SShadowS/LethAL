@@ -135,19 +135,26 @@ checkout's `extensions/lethal-control/.alpackages` unless `--package-cache` name
 3. Builds `lethal-control.app` from `<sha>` in a temporary worktree, before anything is pushed. Its
    manifest must name LethAL Control, equal its `app.json` version, and be at least the script's
    `MIN_CONTROL`.
-4. Runs a `release.yml` workflow_dispatch trial on exactly `<sha>`: it pushes a throwaway branch
+4. Writes the bump in that worktree, before anything is pushed:
+   - package.json `version` (a one-line diff);
+   - CHANGELOG.md, kept whole: `[Unreleased]` is renamed `[<version>] — <date>`, with a fresh empty
+     `[Unreleased]` above it;
+   - with `--notes <file>`, that file as `release-notes/v<version>.md`, which becomes the release
+     body (see [The release body](#the-release-body) below).
+
+   It refuses an empty Unreleased without `--notes`. With `--notes`, an empty Unreleased is allowed,
+   and the version heading then stays empty. It refuses a body that would not fit a GitHub release.
+   It also refuses `--notes` on a `<sha>` whose `release.yml` does not yet call
+   `scripts/release-notes.ts`, since that release would ignore the file. The new tree's own body
+   script must print exactly the expected body.
+5. Runs a `release.yml` workflow_dispatch trial on exactly `<sha>`: it pushes a throwaway branch
    `release-trial/<sha12>`, dispatches on it, waits (60 min at most), refuses unless the run is
    green, and deletes the branch. A dispatch never creates a release. The trial uses the workflow
    file at `<sha>`, so a `<sha>` without R662's `release.yml` fix (the parse expectation read from
    `scripts/native-parse-expect.txt`) fails the trial at the parse step.
-5. Builds the bump commit in that worktree: package.json `version` (a one-line diff) and
-   CHANGELOG.md's `[Unreleased]` cut into `[<version>] — <date>`. An empty Unreleased is refused
-   unless `--notes <file>` gives the section. So is a section that would not fit a GitHub release
-   body (`RELEASE_BODY_LIMIT`, 125,000 characters, less a margin for release.yml's footer, the
-   control-app line and the generated notes). The commit's only parent is `<sha>`. The trial cannot
-   catch an oversized body: `publish` runs only on a tag push, never on a dispatch, so without this
-   check `publish` would fail after the tag is already pushed.
-6. Pushes it to a NEW branch `release/v<version>`, never to master. The owner merges it.
+6. Commits the bump (only parent `<sha>`; it changes package.json and CHANGELOG.md and, with
+   `--notes`, adds the one notes file, nothing else) and pushes it to a NEW branch
+   `release/v<version>`, never to master. The owner merges it.
 7. Tags it `v<version>` (annotated) and pushes the tag, which starts `release.yml`.
 8. Waits for that run (matched by commit sha, or by the tag as its branch), then requires a DRAFT
    release for the tag.
@@ -159,6 +166,20 @@ What it does NOT do: publish the release (that is the owner's click), touch any 
 not a draft or not its own tag, push to master, or wait for CI on the bump commit. `--dry-run` runs
 every read-only check and the local builds for real, and prints each mutating call (commit, tag,
 push, dispatch, upload, edit) instead of making it.
+
+### The release body
+
+`publish` takes the body from `bun scripts/release-notes.ts <tag>`. That prints
+`release-notes/<tag>.md` when the tagged commit has one, and otherwise the CHANGELOG's own section
+for the version. It refuses an empty body, and a body that, with what `publish` adds (release.yml's
+footer, the control-app line, GitHub's generated commit list: `RELEASE_BODY_MARGIN`), would exceed
+GitHub's 125,000-character limit (`RELEASE_BODY_LIMIT`). talk-cut runs the same check before any
+push. A dispatch trial cannot see this, because `publish` runs only on a tag push, so without the
+check `publish` would fail after the tag is already pushed.
+
+On 22 Oct, `[Unreleased]` on master is 156,625 characters, over the limit. There are two ways
+through: pass `--notes <file>` with a shorter body, or shorten `[Unreleased]` on master. **If the
+owner shortens `[Unreleased]` on master, no `--notes` is needed.**
 
 `.github/workflows/ci.yml` runs the same typecheck-and-test gate on every push, on every branch,
 and on every pull request. It does NOT run `biome check .` repo-wide (pre-existing format debt in

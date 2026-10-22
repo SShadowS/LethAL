@@ -12,17 +12,19 @@
  *   3. `lethal-control.app` is built from <sha> with alc (`$LETHAL_ALC_DIR/alc`, the container's
  *      build path, as `kraken-setup.sh` does it) in a temporary detached worktree. Its manifest
  *      must name LethAL Control, equal its app.json's version, and be at least 1.0.0.23.
- *   4. A `release.yml` workflow_dispatch TRIAL on exactly <sha> is green. A dispatch takes a ref,
+ *   4. The bump's files, written in the same worktree: root package.json `version` (a one-line
+ *      diff); CHANGELOG.md, whole, with `[Unreleased]` renamed `[<version>] — <date>` under a fresh
+ *      empty `[Unreleased]`; and with `--notes <file>`, that file as `release-notes/v<version>.md`,
+ *      which release.yml then uses as the body (`release-notes.ts`). An empty Unreleased without
+ *      `--notes` is refused, and so is a body too long for a GitHub release. The new tree's own
+ *      body script must print exactly the expected body.
+ *   5. A `release.yml` workflow_dispatch TRIAL on exactly <sha> is green. A dispatch takes a ref,
  *      not a sha, so a throwaway branch `release-trial/<sha12>` is pushed at <sha>, dispatched,
  *      found by head sha, waited for, and deleted. A dispatch never creates a release: `publish`
  *      runs only on a pushed `v*` tag. The trial uses the workflow file AT <sha>.
- *   5. The bump commit, in the same worktree: root package.json `version` (a one-line diff), and
- *      CHANGELOG.md's `[Unreleased]` becomes `[<version>] — <date>` under a fresh empty
- *      `[Unreleased]`. An empty Unreleased is refused unless `--notes <file>` gives the section,
- *      and so is a section too long for a GitHub release body. Its only parent is <sha>.
- *      `changelog-section.ts v<version>` must print a non-empty section from the new tree.
- *   6. The bump commit is pushed to a NEW branch `release/v<version>`, never to master. The owner
- *      merges it afterwards. There is no CI wait on it.
+ *   6. The bump commit (only parent <sha>; it changes package.json and CHANGELOG.md and adds the
+ *      notes file, nothing else) is pushed to a NEW branch `release/v<version>`, never to master.
+ *      The owner merges it afterwards. There is no CI wait on it.
  *   7. Annotated tag `v<version>` on the bump commit, pushed.
  *   8. `release.yml`'s run for the tag is waited for, then the release must be a draft for the tag.
  *   9. The control app is uploaded to the draft, and one line naming its version and sha256 is
@@ -34,15 +36,16 @@
  * and builds the control app there, since neither leaves the machine.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 // `/` on every OS (Windows takes it too), so the paths talk-cut builds, and its tests' call
 // sequence, do not depend on the platform the cut runs on.
 import { join } from "node:path/posix";
 import { parseArgs } from "node:util";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { sectionFor } from "./changelog-section.ts";
+import { ReleaseNotesRefusedError, notesPath, releaseNotes } from "./release-notes.ts";
 
 export interface RunResult {
   code: number;
@@ -67,7 +70,7 @@ export interface Options {
   sha: string;
   /** Omitted: the next prerelease of <sha>'s package.json version. */
   version?: string;
-  /** A file whose content becomes the new version's changelog section (only when Unreleased is empty). */
+  /** A file committed as `release-notes/v<version>.md`, which becomes the release body. */
   notes?: string;
   dryRun: boolean;
   /** The caller's checkout: git runs here, and the temporary worktree is added from it. */
@@ -86,14 +89,6 @@ export class CommandFailedError extends Error {}
 export const MIN_CONTROL = "1.0.0.23";
 export const WAIT_TIMEOUT_MS = 60 * 60_000;
 export const POLL_MS = 30_000;
-/** GitHub's limit on a release body, in characters. */
-export const RELEASE_BODY_LIMIT = 125_000;
-/**
- * What `publish` adds to the changelog section: release.yml's footer (about 1,250 characters with
- * the longer signing sentence, counted 2026-10-22), the control-app line talk-cut appends (about
- * 130), and GitHub's generated commit list (about 5,000, a guess).
- */
-export const RELEASE_BODY_MARGIN = 1_500 + 200 + 5_000;
 const CI_JOBS = ["check", "unit-linux"] as const;
 const SHA = /^[0-9a-f]{40}$/;
 const SEMVER =
@@ -144,16 +139,6 @@ export function assertTrialRef(args: readonly string[], trialBranch: string): vo
   if (!ok) throw new Error(`internal: refusing to dispatch ${args.join(" ")}`);
 }
 
-/** Refuses a changelog section that, with what `publish` adds, would not fit a release body. */
-export function checkReleaseBodySize(section: string): void {
-  const total = section.length + RELEASE_BODY_MARGIN;
-  if (total > RELEASE_BODY_LIMIT) {
-    throw new TalkCutRefusedError(
-      `the release body would be about ${total} characters (changelog section ${section.length} + margin ${RELEASE_BODY_MARGIN}), over GitHub's ${RELEASE_BODY_LIMIT} limit: shorten [Unreleased] on master, or see R662`,
-    );
-  }
-}
-
 /** 0.1.0-alpha.3 -> 0.1.0-alpha.4. Refuses a version with no numeric prerelease tail. */
 export function nextPrerelease(v: string): string {
   const m = /^(\d+\.\d+\.\d+-[0-9A-Za-z-]+)\.(\d+)$/.exec(v);
@@ -191,14 +176,18 @@ export function bumpPackageJson(text: string, from: string, to: string): string 
 }
 
 export const emptyUnreleasedHint = (version: string) =>
-  `CHANGELOG.md's [Unreleased] section is empty: write it, or pass --notes <file>, whose content becomes the v${version} section`;
+  `CHANGELOG.md's [Unreleased] section is empty: write it, or pass --notes <file>, which is committed as release-notes/v${version}.md and becomes the release body`;
 
-/** CHANGELOG.md with [Unreleased] cut into [version] (its body, or `notes`) under a new empty one. */
+/**
+ * CHANGELOG.md, whole, with `## [Unreleased]` renamed to `## [version] — date` under a fresh empty
+ * `## [Unreleased]`. An empty Unreleased is refused unless `hasNotes` (the body then comes from the
+ * notes file, and the version heading stays empty: the changelog had nothing to say).
+ */
 export function cutChangelog(
   text: string,
   version: string,
   date: string,
-  notes: string | undefined,
+  hasNotes: boolean,
 ): string {
   const lines = text.split("\n");
   const at = lines.flatMap((l, i) => (l.trimEnd() === "## [Unreleased]" ? [i] : []));
@@ -207,23 +196,13 @@ export function cutChangelog(
       `CHANGELOG.md has ${at.length} "## [Unreleased]" headings, expected 1`,
     );
   }
+  if (!hasNotes && sectionFor(text, "Unreleased") === null) {
+    throw new TalkCutRefusedError(emptyUnreleasedHint(version));
+  }
   const i = at[0];
-  const heading = `## [${version}] — ${date}`;
-  const unreleased = sectionFor(text, "Unreleased");
-  if (notes === undefined) {
-    if (unreleased === null) throw new TalkCutRefusedError(emptyUnreleasedHint(version));
-    return [...lines.slice(0, i + 1), "", heading, ...lines.slice(i + 1)].join("\n");
-  }
-  if (unreleased !== null) {
-    throw new TalkCutRefusedError(
-      "--notes was given but [Unreleased] is not empty: two accounts of one release, pick one",
-    );
-  }
-  if (notes.trim() === "") throw new TalkCutRefusedError("--notes file is empty");
-  // The empty Unreleased block (heading plus blank lines) stays; the notes go under the new heading.
-  const next = lines.findIndex((l, j) => j > i && l.startsWith("## ["));
-  const tail = next < 0 ? [] : lines.slice(next);
-  return [...lines.slice(0, i + 1), "", heading, "", notes.trim(), "", ...tail].join("\n");
+  return [...lines.slice(0, i + 1), "", `## [${version}] — ${date}`, ...lines.slice(i + 1)].join(
+    "\n",
+  );
 }
 
 function must(d: Deps, cmd: string, args: readonly string[], cwd: string): string {
@@ -382,7 +361,52 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     d.log(`[3/10] control app ${id.version} built from ${sha} (sha256 ${sha256})`);
 
-    // 4. release.yml trial on exactly <sha>.
+    // 4. The bump's files, and the release body they give, checked before anything is pushed.
+    const pkgPath = join(wt, "package.json");
+    d.writeText(pkgPath, bumpPackageJson(d.readText(pkgPath), current, version));
+    const clPath = join(wt, "CHANGELOG.md");
+    const date = d.now().toISOString().slice(0, 10);
+    const notes = o.notes === undefined ? undefined : d.readText(o.notes);
+    const changelog = cutChangelog(d.readText(clPath), version, date, notes !== undefined);
+    d.writeText(clPath, changelog);
+    const notesFile = notesPath(tag);
+    if (notes !== undefined) d.writeText(join(wt, notesFile), notes);
+    // What the tag's release.yml will run for the body: release-notes.ts since R662, else the
+    // changelog section. An older release.yml would ignore the notes file.
+    const usesNotesScript = git(["show", `${sha}:.github/workflows/release.yml`]).includes(
+      "scripts/release-notes.ts",
+    );
+    if (notes !== undefined && !usesNotesScript) {
+      refuse(
+        `${sha}'s release.yml predates scripts/release-notes.ts, so it would ignore ${notesFile}: cut a later sha`,
+      );
+    }
+    let expected: string;
+    try {
+      expected = releaseNotes(tag, (p) =>
+        p === notesFile ? (notes ?? null) : d.readText(join(wt, p)),
+      ).body;
+    } catch (e) {
+      if (!(e instanceof ReleaseNotesRefusedError)) throw e;
+      throw new TalkCutRefusedError(
+        `${e.message}: ${notes !== undefined ? "shorten the --notes file" : "shorten [Unreleased] on master, or pass --notes <file>"} (see R662)`,
+      );
+    }
+    const printed = d.run(
+      "bun",
+      usesNotesScript ? ["scripts/release-notes.ts", tag] : ["scripts/changelog-section.ts", tag],
+      { cwd: wt },
+    );
+    if (printed.code !== 0 || printed.stdout.trim() !== expected) {
+      refuse(
+        `the new tree's release body script did not print the expected body (exit ${printed.code}): ${printed.stderr.trim()}`,
+      );
+    }
+    d.log(
+      `[4/10] bump prepared: package.json ${version}, CHANGELOG [${version}] — ${date}, release body ${expected.length} characters from ${notes !== undefined ? notesFile : "the changelog section"}`,
+    );
+
+    // 5. release.yml trial on exactly <sha>.
     if (git(["ls-remote", "--heads", "origin", `refs/heads/${trialBranch}`]).trim() !== "") {
       refuse(`branch ${trialBranch} exists on origin: a trial is running or was left behind`);
     }
@@ -399,12 +423,12 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
     mutate("git", ["push", "origin", `${sha}:refs/heads/${trialBranch}`]);
     try {
       mutate("gh", ["workflow", "run", "release.yml", "--ref", trialBranch]);
-      if (o.dryRun) d.log(`[4/10] dry-run: would wait for the release.yml trial on ${trialBranch}`);
+      if (o.dryRun) d.log(`[5/10] dry-run: would wait for the release.yml trial on ${trialBranch}`);
       else {
         const trial = await waitForRun(d, "release.yml trial", () =>
           trialRuns().find((r) => r.headSha === sha && !dispatchedBefore.has(r.databaseId)),
         );
-        d.log(`[4/10] release.yml trial green on ${sha}: run ${trial.databaseId}`);
+        d.log(`[5/10] release.yml trial green on ${sha}: run ${trial.databaseId}`);
       }
     } finally {
       // A failed delete must not hide why the trial stopped; it is logged by name instead.
@@ -417,28 +441,11 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
       }
     }
 
-    // 5. Bump commit, in the same worktree.
-    const pkgPath = join(wt, "package.json");
-    d.writeText(pkgPath, bumpPackageJson(d.readText(pkgPath), current, version));
-    const clPath = join(wt, "CHANGELOG.md");
-    const date = d.now().toISOString().slice(0, 10);
-    const notes = o.notes === undefined ? undefined : d.readText(o.notes);
-    const changelog = cutChangelog(d.readText(clPath), version, date, notes);
-    // The release body is this section; a later body-file option would check its own text here.
-    checkReleaseBodySize(sectionFor(changelog, version) ?? "");
-    d.writeText(clPath, changelog);
+    // 6. The bump commit, pushed to a new branch.
+    const paths = ["package.json", "CHANGELOG.md", ...(notes !== undefined ? [notesFile] : [])];
     let bump = "(dry-run)";
-    mutate("git", [
-      "-C",
-      wt,
-      "commit",
-      "-q",
-      "-m",
-      `release: ${tag}\n\n${CO_AUTHOR}`,
-      "--",
-      "package.json",
-      "CHANGELOG.md",
-    ]);
+    if (!o.dryRun) git(["add", "--", ...paths], wt);
+    mutate("git", ["-C", wt, "commit", "-q", "-m", `release: ${tag}\n\n${CO_AUTHOR}`]);
     if (!o.dryRun) {
       bump = git(["rev-parse", "HEAD"], wt).trim();
       const parents = git(["rev-list", "--parents", "-n", "1", "HEAD"], wt)
@@ -450,15 +457,14 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
       const changed = git(["diff", "--numstat", sha, "HEAD", "--", "package.json"], wt).trim();
       if (changed !== "1\t1\tpackage.json")
         refuse(`package.json diff is "${changed}", expected one line`);
+      const files = git(["diff", "--name-status", sha, "HEAD"], wt).trim();
+      const want = [
+        "M\tCHANGELOG.md",
+        "M\tpackage.json",
+        ...(notes !== undefined ? [`A\t${notesFile}`] : []),
+      ].join("\n");
+      if (files !== want) refuse(`bump commit changes "${files}", expected "${want}"`);
     }
-    const section = d.run("bun", ["scripts/changelog-section.ts", tag], { cwd: wt });
-    if (section.code !== 0 || section.stdout.trim() === "")
-      refuse(`changelog-section.ts ${tag} printed no section: ${section.stderr.trim()}`);
-    d.log(
-      `[5/10] bump commit ${bump} on ${sha}: package.json ${version}, CHANGELOG [${version}] — ${date}`,
-    );
-
-    // 6. Push the bump to a new branch.
     const branch = `release/${tag}`;
     if (
       d.run("git", ["rev-parse", "-q", "--verify", `refs/heads/${branch}`], { cwd: o.repo })
@@ -505,12 +511,12 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
     if (!o.dryRun) await draft();
     mutate("gh", ["release", "upload", tag, app]);
     const line = `**lethal-control.app:** LethAL Control ${id.version}, sha256 \`${sha256}\`.`;
-    const notesFile = join(tmp, "release-body.md");
+    const bodyFile = join(tmp, "release-body.md");
     if (!o.dryRun) {
-      d.writeText(notesFile, `${(await draft()).body.trimEnd()}\n\n${line}\n`);
+      d.writeText(bodyFile, `${(await draft()).body.trimEnd()}\n\n${line}\n`);
       await draft();
     }
-    mutate("gh", ["release", "edit", tag, "--notes-file", notesFile]);
+    mutate("gh", ["release", "edit", tag, "--notes-file", bodyFile]);
     d.log(`[9/10] control app ${id.version} attached, body line appended`);
 
     // 10.
@@ -572,7 +578,10 @@ export const realDeps: Deps = {
   now: () => new Date(),
   sleep: (ms) => Bun.sleep(ms),
   readText: (p) => readFileSync(p, "utf8"),
-  writeText: (p, t) => writeFileSync(p, t),
+  writeText: (p, t) => {
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, t);
+  },
   readBytes: (p) => readFileSync(p),
   tempDir: () => mkdtempSync(join(tmpdir(), "talk-cut-")),
   removeDir: (p) => rmSync(p, { recursive: true, force: true }),

@@ -1,19 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import { sectionFor } from "./changelog-section.ts";
+import { RELEASE_BODY_LIMIT, releaseNotes } from "./release-notes.ts";
 import {
   type Deps,
   type Options,
   POLL_MS,
-  RELEASE_BODY_LIMIT,
-  RELEASE_BODY_MARGIN,
   type RunResult,
   TalkCutRefusedError,
   WAIT_TIMEOUT_MS,
   assertPushTarget,
   assertTrialRef,
   bumpPackageJson,
-  checkReleaseBodySize,
   compareAppVersion,
   emptyUnreleasedHint,
   nextPrerelease,
@@ -53,6 +51,11 @@ intro
 old notes
 `;
 const EMPTY_CHANGELOG = CHANGELOG.replace("### Added\n\n- a thing (R1)\n\n", "");
+/** CHANGELOG, whole, with only the new version heading added under [Unreleased]. */
+const CUT_CHANGELOG = CHANGELOG.replace(
+  "## [Unreleased]\n",
+  "## [Unreleased]\n\n## [0.1.0-alpha.4] — 2026-10-23\n",
+);
 
 const appJson = (v: string) => `﻿{ "name": "LethAL Control", "version": "${v}" }`;
 const appPkg = (v: string, name = "LethAL Control") =>
@@ -108,6 +111,11 @@ class World {
   releaseRunSha = BUMP;
   deleteFails = false;
   worktreeAddFails = false;
+  /** <sha>'s release.yml calls release-notes.ts (R662's), or is older. */
+  releaseYmlUsesNotes = true;
+  /** Overrides what the new tree's release-notes.ts prints. */
+  notesScriptPrints: string | undefined = undefined;
+  staged: string[] = [];
   parent = SHA;
   appVersion = "1.0.0.23";
   appName = "LethAL Control";
@@ -155,6 +163,19 @@ class World {
     if (cmd === "git") {
       if (args[0] === "cat-file") return ok();
       if (args[0] === "show" && args[1] === `${SHA}:package.json`) return ok(PKG);
+      if (args[0] === "show" && args[1] === `${SHA}:.github/workflows/release.yml`) {
+        return ok(this.releaseYmlUsesNotes ? "run: bun scripts/release-notes.ts x" : "old");
+      }
+      if (args[0] === "add" && args[1] === "--") {
+        this.staged.push(...args.slice(2));
+        return ok();
+      }
+      if (args[0] === "diff" && args[1] === "--name-status") {
+        const out = [...new Set(this.staged)]
+          .sort()
+          .map((p) => `${p === "package.json" || p === "CHANGELOG.md" ? "M" : "A"}\t${p}`);
+        return ok(`${out.join("\n")}\n`);
+      }
       if (args[0] === "rev-parse" && args[1] === "-q") {
         const ref = args[3] ?? "";
         const has = ref.startsWith("refs/tags/")
@@ -253,6 +274,16 @@ class World {
       const section = sectionFor(this.files.get(`${WT}/CHANGELOG.md`) ?? "", args[1] ?? "");
       return section === null ? no : ok(`${section}\n`);
     }
+    if (cmd === "bun" && args[0] === "scripts/release-notes.ts" && cwd === WT) {
+      if (this.notesScriptPrints !== undefined) return ok(this.notesScriptPrints);
+      try {
+        return ok(
+          `${releaseNotes(args[1] ?? "", (p) => this.files.get(`${WT}/${p}`) ?? null).body}\n`,
+        );
+      } catch {
+        return no;
+      }
+    }
     if (cmd === "/alc/alc") return ok();
     throw new Error(`fake: unexpected call ${line}`);
   }
@@ -313,17 +344,20 @@ describe("talk-cut happy path", () => {
       "gh release list --limit 1000 --json tagName,isDraft",
       `git worktree add --detach ${WT} ${SHA}`,
       `/alc/alc /project:${WT}/extensions/lethal-control /packagecachepath:/cache /out:${TMP}/lethal-control.app`,
+      `git show ${SHA}:.github/workflows/release.yml`,
+      `bun scripts/release-notes.ts ${TAG}`,
       `git ls-remote --heads origin refs/heads/${TRIAL}`,
       `gh run list --workflow release.yml --event workflow_dispatch --commit ${SHA} --limit 50 --json ${fields}`,
       `git push origin ${SHA}:refs/heads/${TRIAL}`,
       `gh workflow run release.yml --ref ${TRIAL}`,
       `gh run list --workflow release.yml --event workflow_dispatch --commit ${SHA} --limit 50 --json ${fields}`,
       `git push origin --delete refs/heads/${TRIAL}`,
-      `git -C ${WT} commit -q -m release: ${TAG}\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com> -- package.json CHANGELOG.md`,
+      "git add -- package.json CHANGELOG.md",
+      `git -C ${WT} commit -q -m release: ${TAG}\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`,
       "git rev-parse HEAD",
       "git rev-list --parents -n 1 HEAD",
       `git diff --numstat ${SHA} HEAD -- package.json`,
-      `bun scripts/changelog-section.ts ${TAG}`,
+      `git diff --name-status ${SHA} HEAD`,
       `git rev-parse -q --verify refs/heads/release/${TAG}`,
       `git ls-remote --heads origin refs/heads/release/${TAG}`,
       `git -C ${WT} push origin HEAD:refs/heads/release/${TAG}`,
@@ -348,6 +382,7 @@ describe("talk-cut happy path", () => {
       "## [Unreleased]\n\n## [0.1.0-alpha.4] — 2026-10-23\n\n### Added\n\n- a thing (R1)",
     );
     expect(sectionFor(cl, "Unreleased")).toBeNull();
+    expect(cl).toBe(CUT_CHANGELOG);
     // The draft body gained exactly one line, naming the control-app version and sha256.
     const body = w.releases.find((r) => r.tagName === TAG)?.body ?? "";
     const hash = new Bun.CryptoHasher("sha256").update(appPkg("1.0.0.23")).digest("hex");
@@ -505,24 +540,68 @@ describe("talk-cut refusals", () => {
     const w = new World();
     w.changelog = EMPTY_CHANGELOG;
     expect(await refusal(w)).toBe(emptyUnreleasedHint("0.1.0-alpha.4"));
-    expect(w.calls.some((c) => c.includes(" commit ") || c.includes("HEAD:refs/"))).toBe(false);
+    expect(w.mutating()).toEqual([]);
   });
 
-  test("an empty Unreleased section with --notes: the notes become the section", async () => {
+  test("--notes: the file is committed as release-notes/<tag>.md, CHANGELOG stays whole, the body is the notes", async () => {
     const w = new World();
-    w.changelog = EMPTY_CHANGELOG;
     w.files.set("/notes.md", "### Talk\n\n- demo build\n");
     await talkCut(opts({ notes: "/notes.md" }), w.deps());
+    expect(w.files.get(`${WT}/release-notes/${TAG}.md`)).toBe("### Talk\n\n- demo build\n");
+    expect(w.files.get(`${WT}/CHANGELOG.md`)).toBe(CUT_CHANGELOG);
+    expect(w.staged).toEqual(["package.json", "CHANGELOG.md", `release-notes/${TAG}.md`]);
+    const body = releaseNotes(TAG, (p) => w.files.get(`${WT}/${p}`) ?? null).body;
+    expect(body).toBe("### Talk\n\n- demo build");
+    expect(w.logs.some((l) => l.includes(`from release-notes/${TAG}.md`))).toBe(true);
+  });
+
+  test("--notes with an empty Unreleased is allowed: the version heading stays empty", async () => {
+    const w = new World();
+    w.changelog = EMPTY_CHANGELOG;
+    w.files.set("/notes.md", "### Talk\n");
+    await talkCut(opts({ notes: "/notes.md" }), w.deps());
     const cl = w.files.get(`${WT}/CHANGELOG.md`) ?? "";
-    expect(sectionFor(cl, "0.1.0-alpha.4")).toBe("### Talk\n\n- demo build");
-    expect(sectionFor(cl, "Unreleased")).toBeNull();
+    expect(sectionFor(cl, "0.1.0-alpha.4")).toBeNull();
     expect(sectionFor(cl, "0.1.0-alpha.3")).toBe("old notes");
   });
 
-  test("--notes when Unreleased is not empty is refused", async () => {
+  test("an oversize --notes file is refused before any push", async () => {
     const w = new World();
-    w.files.set("/notes.md", "x");
-    expect(await refusal(w, { notes: "/notes.md" })).toContain("two accounts of one release");
+    w.files.set("/notes.md", "x".repeat(RELEASE_BODY_LIMIT));
+    const m = await refusal(w, { notes: "/notes.md" });
+    expect(m).toContain(`release-notes/${TAG}.md would be about`);
+    expect(m).toContain("shorten the --notes file");
+    expect(w.mutating()).toEqual([]);
+  });
+
+  test("--notes on a <sha> whose release.yml predates release-notes.ts is refused", async () => {
+    const w = new World();
+    w.releaseYmlUsesNotes = false;
+    w.files.set("/notes.md", "### Talk\n");
+    expect(await refusal(w, { notes: "/notes.md" })).toContain("would ignore");
+    expect(w.mutating()).toEqual([]);
+  });
+
+  test("without --notes on an older release.yml, changelog-section.ts is the body check", async () => {
+    const w = new World();
+    w.releaseYmlUsesNotes = false;
+    await talkCut(opts(), w.deps());
+    expect(w.calls).toContain(`bun scripts/changelog-section.ts ${TAG}`);
+    expect(w.calls).not.toContain(`bun scripts/release-notes.ts ${TAG}`);
+  });
+
+  test("the new tree's body script printing anything else is refused before any push", async () => {
+    const w = new World();
+    w.notesScriptPrints = "something else\n";
+    expect(await refusal(w)).toContain("did not print the expected body");
+    expect(w.mutating()).toEqual([]);
+  });
+
+  test("a bump commit that changes another file is refused before the branch push", async () => {
+    const w = new World();
+    w.staged.push("stray.txt");
+    expect(await refusal(w)).toContain("bump commit changes");
+    expect(w.pushDests().filter((d) => d.startsWith("refs/heads/release/"))).toEqual([]);
   });
 
   test("the bump commit's parent must be <sha>", async () => {
@@ -575,15 +654,15 @@ describe("talk-cut refusals", () => {
     expect(w.mutating()).toEqual([]);
   });
 
-  test("a changelog section too long for a release body is refused before any push", async () => {
+  test("a changelog section the size of master's (156,625) is refused before any push", async () => {
     const w = new World();
-    const big = `- ${"x".repeat(RELEASE_BODY_LIMIT)}\n`;
-    w.changelog = CHANGELOG.replace("- a thing (R1)\n", big);
+    const big = `- ${"x".repeat(156_625 - 2)}\n`;
+    w.changelog = CHANGELOG.replace("### Added\n\n- a thing (R1)\n", big);
     const m = await refusal(w);
+    expect(m).toContain("(156625 + margin");
     expect(m).toContain(`over GitHub's ${RELEASE_BODY_LIMIT} limit`);
-    expect(m).toContain("shorten [Unreleased] on master, or see R662");
-    expect(w.pushDests().filter((d) => d !== `refs/heads/${TRIAL}`)).toEqual([]);
-    expect(w.calls.some((c) => c.includes(" commit "))).toBe(false);
+    expect(m).toContain("shorten [Unreleased] on master, or pass --notes <file> (see R662)");
+    expect(w.mutating()).toEqual([]);
   });
 
   test("a failed trial-branch delete is logged by name, and the trial's own error goes through", async () => {
@@ -665,12 +744,6 @@ describe("talk-cut helpers", () => {
     expect(() => bumpPackageJson(twice, "0.1.0-alpha.3", "0.1.0-alpha.4")).toThrow(
       TalkCutRefusedError,
     );
-  });
-
-  test("checkReleaseBodySize: a section that fits passes, one character more is refused", () => {
-    const fits = "x".repeat(RELEASE_BODY_LIMIT - RELEASE_BODY_MARGIN);
-    expect(() => checkReleaseBodySize(fits)).not.toThrow();
-    expect(() => checkReleaseBodySize(`${fits}x`)).toThrow(TalkCutRefusedError);
   });
 
   test("compareAppVersion is numeric per part", () => {
