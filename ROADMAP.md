@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**94 of 641 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**95 of 642 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -288,6 +288,7 @@ that ordering is the priority.
 - **R637** · al-runner v3: a test that fails after a timed-out test of the same codeunit is scored as a kill, although v3 says such a failure is not trusted · [R637.md](docs/roadmap/R637.md) · closed 2026-10-22 — premise false on alpha.2: v3 marks a failure caused by a stopped sibling notRun…
 - **R641** · al-runner v3: upstream fixes read as contract breaks or as unmeasurable, edge builds fail the version check, and a gated edge build cannot be re-judged · [R641.md](docs/roadmap/R641.md) · done (9c15aadb)
 - **R644** · History lends a survivor that was never checked against a test that failed in the SOURCE run's baseline but passes now (a false survive, even with equal suites) · [R644.md](docs/roadmap/R644.md) · open, filed 2026-10-22
+- **R646** · --resume carries a survivor scored against fewer tests than now cover it: a test green in the resumed run's baseline but not when it was scored never faced it · [R646.md](docs/roadmap/R646.md) · open, filed 2026-10-22
 
 ## Product gaps a real project hits
 
