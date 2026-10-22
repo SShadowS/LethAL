@@ -9,7 +9,9 @@
  *   as R123 does: the verdicts would be decoded under assumptions that no longer hold.
  * - `defect`: a known upstream defect, `defect-present` / `gone` / `unmeasurable`. `gone` never
  *   refuses; it prints `al-runner-v3-defect-gone` and changes no capability until a human
- *   re-measures and pre-commits (plan §6, §7).
+ *   re-measures and pre-commits (plan §6, §7). R639 (r9) adds `refused` (v3 declines a case BC
+ *   fails: held, only warns) and `unlike-bc` (`refusal-row-shape` only: refuses a normal session,
+ *   warns in the update gate's candidate legs, gate-fail in leg C).
  * - `warn` (R612, plan r3 §2): `serve-keep-reasons`. Never refuses and never fails the gate; a
  *   non-`matches` reading prints `al-runner-v3-serve-keep-reason-moved` (`V3_WARN_FACTS`).
  */
@@ -19,13 +21,60 @@ import { join } from "node:path";
 import { V3_SERVE_SAFE_REFUSALS, defaultServerSpawn } from "./al-runner-backend";
 import { baseAppJson } from "./al-runner-canary";
 import { AlRunnerServer, type ServerSpawnFn, type ServerTestLine } from "./al-runner-server";
-import { type V3Row, decodeV3Rows } from "./al-runner-v3-backend";
+import { type V3Row, V3_REFUSAL_PREFIX, decodeV3Rows } from "./al-runner-v3-backend";
 import { probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
 import { type SpawnFn, defaultSpawn } from "./publisher";
 
 export type V3ContractVerdict = "matches" | "diverged" | "unmeasurable";
-export type V3DefectVerdict = "defect-present" | "gone" | "unmeasurable";
+/**
+ * R639 (pre-commitment r9): `refused` (v3 declines; not BC's reading: held, never gone) and
+ * `unlike-bc` (`refusal-row-shape` only: v3 fails as BC does, with another text; #5700).
+ */
+export type V3DefectVerdict = "defect-present" | "gone" | "unmeasurable" | "refused" | "unlike-bc";
+
+/**
+ * r9: BC's own texts, measured on bc1 (BC 28.4, `docs/measurements/r639/bc1-probe.json`), compared
+ * byte for byte (no trim, no case folding, no prefix match). `r639-bc-readings.test.ts` binds each to
+ * that file. HTTP: 92911's `raw` and 92910's first line, both `fail`.
+ */
+export const BC_HTTP_INTERNAL_TEXT =
+  "The request was blocked by the runtime to prevent accidental use of production services.";
+/** Duplicate key at the end of a test: 92912's `DuplicateNamedKey`, 92913, and 92915's `raw`. */
+export const BC_END_OF_TEST_TEXT =
+  "The record in table Probe Row already exists. Identification fields and values: Key='K1'";
+
+/** r9: a v3 refusal row, exactly: `notRun`, `status: "error"`, `NotRun: out-of-scope: <reason>`. */
+export function isRefusalRow(r: V3Row | undefined): boolean {
+  return (
+    r !== undefined &&
+    r.notRun === true &&
+    r.status === "error" &&
+    (r.message ?? "").startsWith(`${V3_REFUSAL_PREFIX} `)
+  );
+}
+
+/** r9: the exit a call must give for its rows: 1 for any plain fail, else 7 for any notRun, else 0. */
+export function impliedExit(rows: readonly V3Row[]): number {
+  if (rows.some((r) => r.status === "fail" && !r.notRun)) return 1;
+  return rows.some((r) => r.notRun) ? 7 : 0;
+}
+
+/** r9 §2: `refusal-row-shape` (#5608) on 50653's call. */
+function refusalRowShape(c: {
+  readonly exitCode: number;
+  readonly rows: readonly V3Row[] | undefined;
+}): V3DefectVerdict | "diverged" {
+  if (c.rows === undefined) return "unmeasurable";
+  const hs = c.rows.filter((r) => r.method === "HttpGet");
+  const h = hs.length === 1 ? hs[0] : undefined;
+  if (h === undefined || c.exitCode !== impliedExit(c.rows)) return "diverged";
+  if (isRefusalRow(h)) return "defect-present";
+  const m = h.message ?? "";
+  if (h.status !== "fail" || h.notRun || c.exitCode !== 1) return "diverged";
+  if (m === BC_HTTP_INTERNAL_TEXT) return "gone";
+  return m.startsWith(V3_REFUSAL_PREFIX) ? "diverged" : "unlike-bc";
+}
 
 export interface V3Fact {
   readonly fact: string;
@@ -322,6 +371,26 @@ codeunit 50653 "Probe Refusals"
     end;
 }
 
+codeunit 50654 "Probe Refusals Public"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure HttpGetPublic()
+    var
+        Client: HttpClient;
+        Response: HttpResponseMessage;
+    begin
+        Client.Get('http://example.com/x', Response);
+    end;
+
+    [Test]
+    procedure LaterFails()
+    begin
+        Error('later');
+    end;
+}
+
 codeunit 50657 "Probe Commit"
 {
     Subtype = Test;
@@ -336,6 +405,7 @@ codeunit 50657 "Probe Commit"
 codeunit 50655 "Probe Keys"
 {
     Subtype = Test;
+    TestPermissions = Disabled;
 
     [Test]
     procedure DuplicateNamedKey()
@@ -624,10 +694,25 @@ const fact = (
   verdict: V3Fact["verdict"],
   expected: string,
   measured: string,
-): V3Fact => ({ fact: name, kind, verdict, expected, measured: measured.slice(0, 600) });
+  // R639 F4: `measured` is kept whole; only the summary lines that quote it are cut.
+): V3Fact => ({ fact: name, kind, verdict, expected, measured });
 
 const rowOf = (c: Call | undefined, method: string): V3Row | undefined =>
   c?.rows?.find((r) => r.method === method);
+
+/** r9: a decided row is the ONLY row of its method in its call; otherwise `undefined`. */
+const onlyRow = (c: Call, method: string): V3Row | undefined => {
+  const rs = c.rows?.filter((r) => r.method === method) ?? [];
+  return rs.length === 1 ? rs[0] : undefined;
+};
+
+/** r9: how many rows of `method` the call gave (0 when it gave no document). */
+const rowCount = (c: Call, method: string): number =>
+  c.rows?.filter((r) => r.method === method).length ?? 0;
+
+/** F4: a row fact's measured text, the rows first. */
+const rowsText = (c: Call, method: string): string =>
+  `${JSON.stringify(c.rows?.filter((r) => r.method === method) ?? null)} exit ${c.exitCode}`;
 
 /** The probe. Never throws for a v3 answer; a fact it could not read is `unmeasurable`. */
 export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractResult> {
@@ -969,42 +1054,64 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         ),
       );
     }
-    // refusal-row-shape and refusal-cascade (#5610)
+    // refusal-row-shape (#5608), a DEFECT fact since r9 (R639): HttpGet to localhost on 50653.
     const ref = await call(["--codeunit", "50653"], { codeunit: 50653 });
-    const http = rowOf(ref, "HttpGet");
     facts.push(
       fact(
         "refusal-row-shape",
-        "contract",
-        ref.exitCode === 7 &&
-          http?.notRun === true &&
-          (http.message ?? "").startsWith("NotRun: out-of-scope: ")
-          ? "matches"
-          : "diverged",
-        'HttpGet: exit 7, notRun, "NotRun: out-of-scope: ..."',
-        `exit ${ref.exitCode} ${JSON.stringify(http ?? null)}`,
+        "defect",
+        refusalRowShape(ref),
+        `HttpGet: a refusal row with the implied exit (#5608 present); its fix as BC (bc1): fail, notRun false, "${BC_HTTP_INTERNAL_TEXT}", exit 1`,
+        rowsText(ref, "HttpGet"),
       ),
     );
-    const later = rowOf(ref, "LaterFails");
+    // refusal-row-shape-public and refusal-cascade (#5610), on 50654's own call (r9 §3, §4).
+    const pub = await call(["--codeunit", "50654"], { codeunit: 50654 });
+    const hp = onlyRow(pub, "HttpGetPublic");
+    const pubRefused = isRefusalRow(hp);
+    facts.push(
+      fact(
+        "refusal-row-shape-public",
+        "contract",
+        pub.rows !== undefined && pubRefused && pub.exitCode === impliedExit(pub.rows)
+          ? "matches"
+          : "diverged",
+        "HttpGetPublic: a refusal row (notRun, error, NotRun: out-of-scope: ...), and the call's implied exit (7, or 1 when LaterFails is a plain fail)",
+        rowsText(pub, "HttpGetPublic"),
+      ),
+    );
+    const later = onlyRow(pub, "LaterFails");
     facts.push(
       fact(
         "refusal-cascade",
         "defect",
-        later === undefined ? "unmeasurable" : later.notRun ? "defect-present" : "gone",
-        "LaterFails (an Error after a refused test) is notRun",
-        JSON.stringify(later ?? null),
+        !pubRefused || rowCount(pub, "LaterFails") === 0
+          ? "unmeasurable"
+          : later?.notRun === true
+            ? "defect-present"
+            : later?.status === "fail" && later.message === "later"
+              ? "gone"
+              : "diverged",
+        "LaterFails (an Error after a refused HttpGetPublic) is notRun",
+        rowsText(pub, "LaterFails"),
       ),
     );
-    // commit-under-test-isolation (#5607)
+    // commit-under-test-isolation (#5607): r9 §5, a refusal dressed as a fail is never `gone`.
     const commit = await call(["--codeunit", "50657"], { codeunit: 50657 });
-    const c = rowOf(commit, "CommitCall");
+    const c = onlyRow(commit, "CommitCall");
     facts.push(
       fact(
         "commit-under-test-isolation",
         "defect",
-        c === undefined ? "unmeasurable" : c.notRun ? "defect-present" : "gone",
+        rowCount(commit, "CommitCall") === 0
+          ? "unmeasurable"
+          : c?.notRun === true
+            ? "defect-present"
+            : c !== undefined && !(c.message ?? "").startsWith(V3_REFUSAL_PREFIX)
+              ? "gone"
+              : "diverged",
         "CommitCall under --isolation test is notRun",
-        JSON.stringify(c ?? null),
+        rowsText(commit, "CommitCall"),
       ),
     );
     // serve-keep-reasons (R612): GATE-ONLY, like timeout-is-cpu. M-2: a gate passes whatever this
@@ -1025,22 +1132,24 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         ),
       );
     } else facts.push(await serveKeepReasons(env, app, root));
-    // duplicate-key-insert-raises (#5603): BC raises on the second statement-form Insert.
+    // duplicate-key-insert-raises (#5603), r9 §6 (branch F): bc1 FAILS the test at its end.
     const keys = await call(["--codeunit", "50655"], { codeunit: 50655 });
-    const k = rowOf(keys, "DuplicateNamedKey");
+    const k = onlyRow(keys, "DuplicateNamedKey");
     facts.push(
       fact(
         "duplicate-key-insert-raises",
         "defect",
-        k === undefined
+        rowCount(keys, "DuplicateNamedKey") === 0
           ? "unmeasurable"
-          : k.status === "pass"
+          : k?.status === "pass" && !k.notRun
             ? "defect-present"
-            : k.status === "fail"
+            : k?.status === "fail" && !k.notRun && (k.message ?? "") === BC_END_OF_TEST_TEXT
               ? "gone"
-              : "unmeasurable",
-        "DuplicateNamedKey passes (BC raises a duplicate key)",
-        JSON.stringify(k ?? null),
+              : isRefusalRow(k) && (k?.message ?? "").includes("duplicate-key Insert")
+                ? "refused"
+                : "diverged",
+        `DuplicateNamedKey passes (#5603 present); its fix as BC (bc1): fail, "${BC_END_OF_TEST_TEXT}"`,
+        rowsText(keys, "DuplicateNamedKey"),
       ),
     );
     // sleep-is-noop (#5605) and sleep-line-covered, on codeunit 50660 (no CPU-bound sibling).
@@ -1230,8 +1339,21 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
   }
 }
 
+/** Who runs the session: `candidate` only for the update gate's own legs (`cfg.candidate`). */
+export interface V3SessionKind {
+  readonly candidate?: boolean;
+}
+
+/**
+ * r9 §2: `unlike-bc` refuses a NORMAL session by name (a test that reads `GetLastErrorText` or
+ * catches the HTTP error would get another verdict than BC's); only the update gate's candidate
+ * legs warn instead (`al-runner-v3-defect-unlike-bc`), so the gate measures every leg.
+ */
+const refusesUnlikeBc = (f: V3Fact, s: V3SessionKind): boolean =>
+  f.kind === "defect" && f.verdict === "unlike-bc" && s.candidate !== true;
+
 /** Every contract fact that is not `matches`; each refuses the session. */
-export function v3ContractRefusals(r: V3ContractResult): string[] {
+export function v3ContractRefusals(r: V3ContractResult, s: V3SessionKind = {}): string[] {
   return (
     r.facts
       // A defect fact that reads neither present nor gone (r6: `diverged`) is not the defect we
@@ -1239,11 +1361,12 @@ export function v3ContractRefusals(r: V3ContractResult): string[] {
       .filter(
         (f) =>
           (f.kind === "contract" && f.verdict !== "matches") ||
-          (f.kind === "defect" && f.verdict === "diverged"),
+          (f.kind === "defect" && f.verdict === "diverged") ||
+          refusesUnlikeBc(f, s),
       )
       .map(
         (f) =>
-          `[lethal] al-runner-v3 contract ${f.verdict.toUpperCase()} — ${f.fact}\n    expected: ${f.expected}\n    measured: ${f.measured}\n    Re-measure (plan §8) before changing code; the pinned build is in .gated (R586).`,
+          `[lethal] al-runner-v3 contract ${f.verdict.toUpperCase()} — ${f.fact}\n    expected: ${f.expected}\n    measured: ${f.measured.slice(0, 600)}\n    Re-measure (plan §8) before changing code; the pinned build is in .gated (R586).`,
       )
   );
 }
@@ -1254,24 +1377,33 @@ export function v3DefectsGone(r: V3ContractResult): string[] {
     .filter((f) => f.kind === "defect" && f.verdict === "gone")
     .map(
       (f) =>
-        `[lethal] al-runner-v3-defect-gone: ${f.fact}: re-measure before relying on it (measured ${f.measured})`,
+        `[lethal] al-runner-v3-defect-gone: ${f.fact}: re-measure before relying on it (measured ${f.measured.slice(0, 600)})`,
     );
 }
 
 /**
- * Every defect-fact warning a session prints (r6): the `gone` lines, plus one
- * `al-runner-v3-defect-unmeasurable` line per defect fact that could not be measured. Neither
- * refuses: §6 fails closed independently of the facts.
+ * Every defect-fact warning a session prints (r6): the `gone` lines, the `refused` lines (r9), the
+ * `unlike-bc` lines of a candidate session (r9), plus one `al-runner-v3-defect-unmeasurable` line
+ * per defect fact that could not be measured. None refuses: §6 fails closed independently.
  */
-export function v3DefectWarnings(r: V3ContractResult): string[] {
+export function v3DefectWarnings(r: V3ContractResult, s: V3SessionKind = {}): string[] {
+  const defects = (v: string) => r.facts.filter((f) => f.kind === "defect" && f.verdict === v);
   return [
     ...v3DefectsGone(r),
-    ...r.facts
-      .filter((f) => f.kind === "defect" && f.verdict === "unmeasurable")
-      .map(
-        (f) =>
-          `[lethal] al-runner-v3-defect-unmeasurable: ${f.fact}: not measured on this build; no capability depends on it (measured ${f.measured})`,
-      ),
+    // r9 §6: v3 declines a case BC fails; held in the gate, never gone, never a refusal.
+    ...defects("refused").map(
+      (f) =>
+        `[lethal] al-runner-v3-defect-refused: ${f.fact}: v3 declines; not BC's reading (measured ${f.measured.slice(0, 600)})`,
+    ),
+    // r9 §2: only a candidate session gets here (a normal one is refused); every leg prints it.
+    ...(s.candidate === true ? defects("unlike-bc") : []).map(
+      (f) =>
+        `[lethal] al-runner-v3-defect-unlike-bc: ${f.fact}: v3 fails as BC does, with another text (#5700); a normal session refuses this build (measured ${f.measured.slice(0, 600)})`,
+    ),
+    ...defects("unmeasurable").map(
+      (f) =>
+        `[lethal] al-runner-v3-defect-unmeasurable: ${f.fact}: not measured on this build; no capability depends on it (measured ${f.measured.slice(0, 600)})`,
+    ),
   ];
 }
 

@@ -131,6 +131,43 @@ describe("leg T: held only for a known row moving to its BC verdict", () => {
   });
 });
 
+describe("R639 r9 §7: leg T's narrow held for a named refusal", () => {
+  const err = (key: string, errorClass: string, killingTest: string | null = null) => ({
+    ...row(key, "error", killingTest),
+    errorClass,
+  });
+  const k2 = own[1] as NormalizedMutant;
+  const k3 = own[2] as NormalizedMutant;
+  test("T1: a known row going survived -> error/runner-refused is held, with the named-refusal line", () => {
+    const t = classifyLegT(own, [err("K1", "runner-refused"), k2, k3], bc);
+    expect(t.outcome).toBe("held");
+    expect(t.lines).toEqual([
+      "held: K1: survived -> error (a named refusal: v3 notRun or LethAL §6; not BC's verdict; re-pre-commit)",
+    ]);
+  });
+  test("T2: an UNKNOWN row going to error/runner-refused is gate-fail", () => {
+    expect(
+      classifyLegT(own, [own[0] as NormalizedMutant, err("K2", "runner-refused"), k3], bc).outcome,
+    ).toBe("gate-fail");
+  });
+  test("T3: a known row going to an error of another class, or a refusal with a killing test, is gate-fail", () => {
+    expect(classifyLegT(own, [err("K1", "other"), k2, k3], bc).outcome).toBe("gate-fail");
+    expect(classifyLegT(own, [err("K1", "runner-refused", "T"), k2, k3], bc).outcome).toBe(
+      "gate-fail",
+    );
+  });
+  test("T4 (I2): a known row whose ONLY difference from BC is its killing test, moving to error/runner-refused, is gate-fail", () => {
+    const bc4 = [row("K4", "killed", "A")];
+    const own4 = [row("K4", "killed", "B")];
+    expect(classifyLegT(own4, [err("K4", "runner-refused")], bc4).outcome).toBe("gate-fail");
+  });
+  test("T5: a known row moving to error/runner-test-error (K1(a)'s class) is gate-fail", () => {
+    expect(classifyLegT(own, [err("K1", "runner-test-error"), k2, k3], bc).outcome).toBe(
+      "gate-fail",
+    );
+  });
+});
+
 describe("the update-gate outcome", () => {
   const all = (v: "pass" | "held" | "gate-fail" | "infra-fail") =>
     Object.fromEntries(V3_GATE_LEGS.map((l) => [l, v])) as Record<string, typeof v>;

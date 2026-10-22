@@ -40,9 +40,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     `selectorMode` and `campaign freeze` are refused by name.
   - **Never lent across backends:** a v3 run lends history, resume verdicts and baseline snapshots
     only to a v3 session of the same build (`runs.runner_build`).
-  - **Contract probe:** each session re-measures v3's wire contract (25 facts since R612 and r8: 8 defect, 16 contract, 1 warn).
+  - **Contract probe:** each session re-measures v3's wire contract (26 facts since R641 and r9: 9 defect, 16 contract, 1 warn).
+    Two facts are judged against BC's own texts, measured on bc1 (`docs/measurements/r639/`): an
+    upstream fix that fails a test with another text than BC's (`unlike-bc`, #5700) refuses the
+    session by name, and a test v3 declines to run (`refused`, #5623) only warns (R641).
+  - **A refusal never scores** (R641): a v3 row whose message starts `NotRun: out-of-scope:` but is
+    written as a plain `fail` or `pass` reads `error`, never a kill, survive or pass.
   - **Update gate:** `scripts/al-runner-v3-update.ts` moves the pin only after
-    `itest:alrunner-v3` passes.
+    `itest:alrunner-v3` passes. It accepts edge builds' SemVer build metadata, holds one lock over
+    every gate path, and `--edge-rejudge <sha>` re-gates a kept edge binary at `.gated`'s current
+    commit, without a download (R641).
   - **Report:** `executionContexts[]` gains `runnerBuild` and `binarySha256`.
 
 - **On al-runner, a kill must reproduce** (R577). Measured: a Microsoft test that builds its input
