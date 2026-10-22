@@ -9,6 +9,7 @@ import {
   type TestStepIo,
   VerifyArgsError,
   type VerifyIo,
+  type WatchOptions,
   completeness,
   discoverTestFiles,
   execWatched,
@@ -522,13 +523,15 @@ describe("R622 the per-file watchdog", () => {
       await child.exited;
     }
     expect(isChildOf(child.pid, process.pid)).toBe(false);
-  }, 20_000);
+  }, 30_000); // three PowerShell calls on Windows, 1 to 3 s each when cold
 
   const OK = 'import { test } from "bun:test";\ntest("ok", () => {});\n';
   // Synchronous, so bun's per-test timeout cannot fire; it ends ITSELF after 25 s, so a broken
   // watchdog costs 25 s, never a hang.
   const SPIN =
     'import { test } from "bun:test";\ntest("spins", () => {\n  const end = Date.now() + 25_000;\n  while (Date.now() < end) {}\n}, 60_000);\n';
+  // The same, deaf to SIGTERM (review I-A): only the SIGKILL step can stop it before 25 s.
+  const STUBBORN = `process.on("SIGTERM", () => {});\n${SPIN}`;
   // About 20 MB on stdout, far more than an OS pipe holds. On Bun 1.4.2 this cannot go red for
   // review I1's reason (reading only after exit): bun buffers an unread pipe itself (measured, see
   // execWatched). It still pins that a big run is captured whole, and not killed.
@@ -544,8 +547,26 @@ describe("R622 the per-file watchdog", () => {
     files: Record<string, string>,
     p: number,
     limitS: number,
-  ): Promise<{ code: number; text: string; seconds: number; output: string; junit: string }> {
+    opts: Omit<WatchOptions, "print"> = {},
+  ): Promise<{
+    code: number;
+    text: string;
+    seconds: number;
+    output: string;
+    junit: string;
+    printed: Array<{ line: string; childAlive: boolean | undefined }>;
+  }> {
     const root = tempDir("r622");
+    const printed: Array<{ line: string; childAlive: boolean | undefined }> = [];
+    // Whether the serial child named in a line is still alive when the line is printed: true
+    // proves the line came out while the run was still going, not after it ended.
+    const print = (line: string): void => {
+      const pid = /the bun test process (\d+)/.exec(line)?.[1];
+      printed.push({
+        line,
+        childAlive: pid === undefined ? undefined : isChildOf(Number(pid), process.pid),
+      });
+    };
     try {
       const proj = join(root, "proj");
       const home = join(root, "home");
@@ -561,7 +582,7 @@ describe("R622 the per-file watchdog", () => {
         { mode: { kind: "packages", paths: [] }, p },
         {
           exec: async (cmd, env) => {
-            const r = await execWatched(cmd, env, proj, limitS);
+            const r = await execWatched(cmd, env, proj, limitS, { ...opts, print });
             output = r.output;
             return r;
           },
@@ -575,28 +596,82 @@ describe("R622 the per-file watchdog", () => {
       );
       const seconds = (Date.now() - t0) / 1000;
       const junit = existsSync(junitPath) ? readFileSync(junitPath, "utf8") : "";
-      return { code: step.code, text: step.lines.join("\n"), seconds, output, junit };
+      return { code: step.code, text: step.lines.join("\n"), seconds, output, junit, printed };
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      // EBUSY on Windows while a just-killed process still holds a handle: retry, cleanup only.
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
   }
 
-  test("--parallel=2: a file that spins past the limit fails the run in seconds, named; the other file passes", async () => {
-    const r = await watched({ "ok.test.ts": OK, "spin.test.ts": SPIN }, 2, 2);
-    expect(r.code, r.text).toBe(1);
-    expect(r.text).toContain("watchdog: FAIL, spin.test.ts ran over 2 s");
-    expect(r.text).not.toContain("ok.test.ts ran over");
-    expect(r.seconds, r.text).toBeLessThan(15);
-    const ok = parseJunit(r.junit).find((c) => c.file.endsWith("ok.test.ts"));
-    expect(ok?.status, r.output).toBe("pass");
-  }, 40_000);
+  // The file's FAIL line, matched with or without a leading directory: on Windows, bun's path
+  // for the file and the temp folder's short (8.3) path may not make a clean relative path.
+  const failLines = (text: string, file: string, limitS: number): number =>
+    text.match(
+      new RegExp(
+        `^watchdog: FAIL, (?:.*[\\\\/])?${file.replaceAll(".", "\\.")} ran over ${limitS} s`,
+        "gm",
+      ),
+    )?.length ?? 0;
 
-  test("serial: a file that spins past the limit stops the run in seconds, named", async () => {
+  // Skipped on Windows for the same reason as A5 and A7 above: Windows `bun test --parallel` is
+  // unmeasured. The serial watchdog tests below run there.
+  parallelOs(
+    "--parallel=2: a file that spins past the limit fails the run in seconds, named once; the other file passes",
+    async () => {
+      const r = await watched({ "ok.test.ts": OK, "spin.test.ts": SPIN }, 2, 2);
+      expect(r.code, r.text).toBe(1);
+      expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
+      expect(r.text).not.toContain("ok.test.ts ran over");
+      expect(r.seconds, r.text).toBeLessThan(15);
+      const ok = parseJunit(r.junit).find((c) => c.file.endsWith("ok.test.ts"));
+      expect(ok?.status, r.output).toBe("pass");
+    },
+    40_000,
+  );
+
+  test("serial: a file that spins past the limit stops the run in seconds, named once", async () => {
     const r = await watched({ "ok.test.ts": OK, "spin.test.ts": SPIN }, 1, 2);
     expect(r.code, r.text).toBe(1);
-    expect(r.text).toContain("watchdog: FAIL, spin.test.ts ran over 2 s");
+    expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
     expect(r.seconds, r.text).toBeLessThan(15);
   }, 40_000);
+
+  test("review I-A: a file deaf to SIGTERM is SIGKILLed after the grace; the FAIL line is printed while it still runs", async () => {
+    const r = await watched({ "spin.test.ts": STUBBORN }, 1, 2, { graceMs: 2000 });
+    expect(r.code, r.text).toBe(1);
+    expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
+    // limit 2 s + up to 1 s to notice + 2 s grace + margin, well under the 25 s spin.
+    expect(r.seconds, r.text).toBeLessThan(15);
+    // The SIGKILL step stopped it, not the backstop (which would also end a serial run).
+    expect(r.text).toContain("outlived SIGTERM by 2000 ms; sent SIGKILL");
+    expect(r.text).not.toContain("watchdog: backstop");
+    const first = r.printed[0];
+    expect(failLines(first?.line ?? "", "spin.test.ts", 2), JSON.stringify(r.printed)).toBe(1);
+    expect(first?.childAlive, JSON.stringify(r.printed)).toBe(true);
+  }, 40_000);
+
+  test("review I-A: a worker that cannot be confirmed as ours stops the whole run through the backstop", async () => {
+    const r = await watched({ "spin.test.ts": SPIN }, 1, 2, { isChild: () => false });
+    expect(r.code, r.text).toBe(1);
+    expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
+    expect(r.text).toContain("watchdog: backstop");
+    expect(r.seconds, r.text).toBeLessThan(15);
+  }, 40_000);
+
+  parallelOs(
+    "review I-A: --parallel=2, the backstop ends the run though the unconfirmed worker may live on",
+    async () => {
+      const r = await watched({ "ok.test.ts": OK, "spin.test.ts": SPIN }, 2, 2, {
+        isChild: () => false,
+        graceMs: 1000,
+      });
+      expect(r.code, r.text).toBe(1);
+      expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
+      expect(r.text).toContain("watchdog: backstop");
+      expect(r.seconds, r.text).toBeLessThan(15);
+    },
+    40_000,
+  );
 
   test("review I1: a file that prints 20 MB is drained while it runs, so it is neither killed nor hung", async () => {
     const r = await watched({ "loud.test.ts": LOUD }, 1, 3);

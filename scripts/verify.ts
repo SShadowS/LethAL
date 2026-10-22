@@ -409,17 +409,19 @@ export function stuckWorkers(
 }
 
 /**
- * Whether `pid` is alive now with `parent` as its parent, asked of the OS just before a kill, so a
- * pid reused by another process is never hit. Linux reads `/proc`; Windows asks CIM through
- * PowerShell (about a second, and only when a file ran over the limit). Any other OS, or any
- * failure to ask, answers false: the run still fails, but nothing is killed.
+ * Whether `pid` is alive now with `parent` as its parent, asked of the OS just before a signal, so
+ * on Linux a pid reused by another process is never hit (the check and the kill are microseconds
+ * apart, and pids are handed out in sequence). Windows asks CIM through PowerShell, about a second
+ * before the kill, and reuses pids quickly, so there the window is small but not zero. Any other OS,
+ * or any failure to ask, answers false, and `execWatched` then uses its backstop.
  */
 export function isChildOf(pid: number, parent: number): boolean {
   try {
     if (process.platform === "linux") {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
       // `pid (comm) state ppid ...`; comm may hold spaces and parentheses, so split after the LAST ")".
-      return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]) === parent;
+      const [state, ppid] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      return state !== "Z" && Number(ppid) === parent; // a zombie has already ended
     }
     if (process.platform === "win32") {
       const r = Bun.spawnSync(
@@ -454,13 +456,32 @@ export interface ExecResult {
  * 1.4.2 buffers an unread pipe itself (measured: 500 MB, read after exit, no block; probe in
  * `/coord/handoff/R-622/redcheck/pipe-probe/`), so reading while it runs is the safe order should
  * that ever change.
+ *
+ * Review I-A: the watchdog must never itself hang silently. Each line is printed the moment it
+ * happens, not only in the receipt. A confirmed worker gets SIGTERM; one still ours `graceMs` later
+ * gets SIGKILL; one still ours `graceMs` after that, or one that cannot be confirmed as ours at all,
+ * triggers the backstop: SIGKILL to verify's own `bun test` child through the handle verify holds
+ * (a pid that cannot be reused while the handle is held). The run then ends, failed and named.
  */
+export interface WatchOptions {
+  /** Prints a watchdog line the moment it happens. Default: `console.log`. */
+  readonly print?: (line: string) => void;
+  /** The descendant check. Default: `isChildOf`; a test injects a refusal. */
+  readonly isChild?: (pid: number, parent: number) => boolean;
+  /** How long a signal gets before the next step. Default: 3000 ms. */
+  readonly graceMs?: number;
+}
+
 export async function execWatched(
   cmd: readonly string[],
   env: Env,
   cwd: string,
   limitS: number,
+  opts: WatchOptions = {},
 ): Promise<ExecResult> {
+  const print = opts.print ?? ((l: string) => console.log(l));
+  const isChild = opts.isChild ?? isChildOf;
+  const graceMs = opts.graceMs ?? 3000;
   const beats = mkdtempSync(join(tmpdir(), "verify-heartbeat-"));
   const argv = cmd[0] === "bun" ? [process.execPath, ...cmd.slice(1)] : [...cmd];
   const proc = Bun.spawn(argv, {
@@ -469,39 +490,90 @@ export async function execWatched(
     stdout: "pipe",
     stderr: "pipe",
   });
-  const stdout = new Response(proc.stdout).text();
-  const stderr = new Response(proc.stderr).text();
+  let out = "";
+  let err = "";
+  const drain = async (s: ReadableStream<Uint8Array>, add: (t: string) => void): Promise<void> => {
+    const d = new TextDecoder();
+    for await (const chunk of s) add(d.decode(chunk, { stream: true }));
+    add(d.decode());
+  };
+  const drained = Promise.all([
+    drain(proc.stdout, (t) => {
+      out += t;
+    }),
+    drain(proc.stderr, (t) => {
+      err += t;
+    }),
+  ]);
   const fails: string[] = [];
+  const say = (line: string): void => {
+    fails.push(line);
+    print(line);
+  };
+  let backstopped = false;
+  const backstop = (why: string): void => {
+    if (backstopped) return;
+    backstopped = true;
+    proc.kill("SIGKILL");
+    say(
+      `watchdog: backstop, ${why}; sent SIGKILL to this run's bun test process ${proc.pid} through its handle, which stopped the whole run. R622.`,
+    );
+  };
+  const signal = (pid: number, sig: "SIGTERM" | "SIGKILL"): void => {
+    try {
+      process.kill(pid, sig);
+    } catch {
+      // it ended between the check and the signal; the next check sees that
+    }
+  };
+  const sent: Array<{ pid: number; ppid: number; who: string; step: "TERM" | "KILL"; at: number }> =
+    [];
   const timer = setInterval(() => {
+    const now = Date.now();
     for (const b of stuckWorkers(
       readHeartbeats(beats),
-      Date.now(),
+      now,
       limitS * 1000,
       proc.pid,
       process.pid,
     )) {
       rmSync(join(beats, String(b.pid)), { force: true }); // report each file once
-      const file = relative(cwd, b.file).replaceAll("\\", "/");
+      const rel = relative(cwd, b.file);
+      const file = (rel.startsWith("..") ? b.file : rel).replaceAll("\\", "/");
       const serial = b.pid === proc.pid;
       const who = serial ? `the bun test process ${b.pid} (serial)` : `worker ${b.pid}`;
-      if (!isChildOf(b.pid, b.ppid)) {
-        fails.push(
-          `watchdog: FAIL, ${file} ran over ${limitS} s in ${who}, which is gone or no longer bun's, so nothing was killed. R622.`,
-        );
+      say(
+        `watchdog: FAIL, ${file} ran over ${limitS} s in ${who}${serial ? " (a file stuck before its first test is named as the file before it)" : ""}. R622.`,
+      );
+      if (!isChild(b.pid, b.ppid)) {
+        backstop(`${who} could not be confirmed as a child of this run, so it was not signalled`);
         continue;
       }
-      process.kill(b.pid, "SIGTERM");
-      fails.push(
-        `watchdog: FAIL, ${file} ran over ${limitS} s in ${who}; killed it${serial ? ", which stopped the whole run (a file stuck before its first test is named as the file before it)" : ""}. R622.`,
-      );
+      signal(b.pid, "SIGTERM");
+      say(`watchdog: sent SIGTERM to ${who}`);
+      sent.push({ pid: b.pid, ppid: b.ppid, who, step: "TERM", at: now });
+    }
+    for (const w of sent) {
+      if (now - w.at < graceMs || !isChild(w.pid, w.ppid)) continue; // waiting, or it ended
+      if (w.step === "TERM") {
+        signal(w.pid, "SIGKILL");
+        say(`watchdog: ${w.who} outlived SIGTERM by ${graceMs} ms; sent SIGKILL`);
+        w.step = "KILL";
+        w.at = now;
+      } else {
+        backstop(`${w.who} outlived SIGKILL by ${graceMs} ms`);
+      }
     }
   }, 1000);
   try {
-    const [code, out, err] = await Promise.all([proc.exited, stdout, stderr]);
+    const code = await proc.exited;
+    // After the backstop a worker that was never signalled may live on holding the pipes open, so
+    // take what has arrived instead of waiting for the end of the stream.
+    await (backstopped ? Promise.race([drained.catch(() => {}), Bun.sleep(graceMs)]) : drained);
     return { code, output: `${out}${err}`, watchdog: { limitS, fails } };
   } finally {
     clearInterval(timer);
-    rmSync(beats, { recursive: true, force: true });
+    rmSync(beats, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 }
 
