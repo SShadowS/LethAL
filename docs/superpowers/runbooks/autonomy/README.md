@@ -59,6 +59,10 @@ next free id right before writing).
   submit head may start no CI run at all when the same push also carries `[skip ci]` commits
   (R-577, 1ab9cbdc): after pushing, check `gh run list --commit <sha>`; if there is no run, push an
   empty "CI run for the submit" commit on top.
+- **Start CI as soon as the build review passes, not at submit (owner, 2026-10-22).** Push the
+  reviewed head WITHOUT `[skip ci]` at once, so CI (median 5 min) runs while the live gates run.
+  If later commits change code, push again for a fresh run; only the submitted head's run counts.
+  A red run there is fixed before the gates are trusted, never after.
 - **Measure a corpus once per master commit, and reuse it (owner, 2026-10-08).** A full
   BC.History dump of master costs hours, and plan rounds repeated it. Keep master's dump in
   `/coord/cache/dumps/<master sha>/<set>/` (sets: `bch`, `cdo`, `dc`, `do`, `fixtures`), with a
