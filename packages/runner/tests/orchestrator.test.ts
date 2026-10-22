@@ -9,6 +9,7 @@ import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
 import { flatNamesFor, withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
+import { type ChunkedRow, foldChunkedRows, rerunMismatches } from "../itest/chunked-rows";
 import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import {
   AlcCompileError,
@@ -20730,6 +20731,87 @@ describe("R577: a kill must reproduce under the mutant", () => {
     );
     return backend;
   };
+
+  test("U2c (R582): on the group path a cold kill's reproduction emits NO group-call event, a warm kill's exactly one", async () => {
+    // T5's script: M0001 dies at T1 (position 1, cold); with `warm`, M0002 dies at T2 behind T1
+    // (k = 2). The rule-off backend runs the same script, so the difference is the reproductions'.
+    const groupCalls = async (ruleOn: boolean, warm: boolean) => {
+      const Cls = ruleOn ? ReproWarmStub : WarmStubBackend;
+      const backend: WarmStubBackend = new Cls(
+        CAPS_NST,
+        (mutant, ref) => {
+          if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+          if (
+            warm &&
+            mutant === "M0002" &&
+            ref.method === "T2" &&
+            backend.session.get("cache") !== undefined
+          )
+            return "fail";
+          if (mutant === "M0001" && ref.method === "T1") return "fail";
+          return "pass";
+        },
+        ["IsOverBudget"],
+      );
+      let events = 0;
+      const { report, store } = await run(backend, {
+        testAl: FIVE_TESTS_AL,
+        onEvent: (e) => {
+          if (e.type === "group-call") events += 1;
+        },
+      });
+      store.close();
+      expect(rowOf(report, "M0001")?.killPosition).toBe(1);
+      expect(rowOf(report, "M0001")?.verdict).toBe("killed");
+      expect(rowOf(report, "M0001")?.killReproduced).toBe(ruleOn ? true : undefined);
+      if (warm) expect(rowOf(report, "M0002")?.killPosition).toBe(2);
+      return events;
+    };
+    const coldOff = await groupCalls(false, false);
+    expect(coldOff).toBeGreaterThan(0);
+    expect(await groupCalls(true, false)).toBe(coldOff);
+    expect(await groupCalls(true, true)).toBe((await groupCalls(false, true)) + 1);
+  });
+
+  test("U7 (R582 F2): chunked at 2, a warm kill's re-run replays its CHUNK's prefix, read back through itest:chunked's own fold", async () => {
+    // Cold ledger, so the order is by name: chunks [T1, T2], [T3, T4], [T5]. M0001 dies at T4,
+    // chunk position 2: replay and re-run must both be [T3, T4], never `ordered`'s four.
+    const backend = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T4" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      groupRuns: { maxMethodsPerCall: 2 },
+    });
+    const k = rowOf(report, "M0001");
+    expect(k?.verdict).toBe("killed");
+    expect(k?.killPosition).toBe(2);
+    expect(k?.killReproduced).toBe(true);
+    const mutantRows = store.db.query("SELECT id, mutant_code FROM mutants").all() as Array<{
+      id: number;
+      mutant_code: string;
+    }>;
+    const codeOf = new Map(mutantRows.map((r) => [r.id, r.mutant_code]));
+    const fold = foldChunkedRows(
+      store.db
+        .query(
+          "SELECT mutant_row_id, mutant_code, method, session_id FROM test_results WHERE op_kind = 'many' ORDER BY id",
+        )
+        .all() as ChunkedRow[],
+      codeOf,
+    );
+    expect(fold.replays.get("M0001")).toEqual(["T3", "T4"]);
+    expect(rerunMismatches([{ code: "M0001", replay: ["T3", "T4"] }], fold)).toEqual([]);
+    expect(fold.callSizes.get("M0001")).toEqual([2, 2]);
+    store.close();
+  });
 
   test("T5b: a replay under the mutant that passes all k is kill-not-reproduced, with the replay clause", async () => {
     const backend = warmFlaky();

@@ -57,6 +57,7 @@ import {
   printItestTarget,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { assertKillsReproduced } from "./kill-reproduction";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { LOG_THEN_GAP, OVER_BUDGET_GAP, PREDICTED_GAPS } from "./verify-gaps";
 import { assertReachFields } from "./verify-reach-fields";
@@ -257,6 +258,9 @@ async function main(): Promise<void> {
       // A SCRATCH quarantine dir for the full run, for the reason bcdev.itest.ts gives.
       quarantineDir: join(scratch, "quarantine"),
     });
+    // R582: every kill of the full run was re-run under the mutant (verify's own kills in step 3
+    // are not evidenced: `VerifyResult` carries no marker).
+    assertKillsReproduced("verify", report, store);
     // Closed before verify opens the same file through the CLI path.
     store.close();
     store = undefined;

@@ -51,6 +51,7 @@ import {
   assertSingleBatch,
   recordAfterBothLegs,
 } from "./harden-expected";
+import { assertKillsReproduced } from "./kill-reproduction";
 
 if (!process.env.LETHAL_ITEST_HARDEN) {
   console.log(
@@ -161,7 +162,7 @@ async function runLeg(
       console.log(`harden itest: LethAL Control ${await harnessVerifier.fetchControlVersion()}`);
       console.log(`harden itest: BC build (Base Application) ${base.versions.join(", ")}`);
     }
-    return await runSession({
+    const report = await runSession({
       backend,
       store,
       projectDir: PROJECT_DIR,
@@ -178,6 +179,9 @@ async function runLeg(
       // A SCRATCH quarantine dir, never the real ~/.lethal store (see bcdev.itest.ts).
       quarantineDir: join(scratchRoot, `quarantine-${leg}`),
     });
+    // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
+    assertKillsReproduced(`harden/${leg === "a" ? "A" : "B"}`, report, store);
+    return report;
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive.

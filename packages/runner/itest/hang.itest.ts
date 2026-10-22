@@ -70,6 +70,8 @@ import {
   type WarningDiagnostic,
   printHangLegFailureDiagnostics,
 } from "./hang-diagnostics";
+import { stopRowFailures } from "./hang-stop-rows";
+import { killReproductionFailures, latestRunId } from "./kill-reproduction";
 
 if (!process.env.LETHAL_ITEST_HANG) {
   console.log(
@@ -345,6 +347,8 @@ interface LegResult {
    * (`docs/measurements/2026-09-27-r289-hang-rootcause.md`, point 8).
    */
   readonly warnings: readonly WarningDiagnostic[];
+  /** R582: `killReproductionFailures` for this leg, read before the store closes. */
+  readonly repro: readonly string[];
 }
 
 /** `single` is R-204b's leg: `--stop-hung-sessions` with `--no-group-runs`. */
@@ -445,9 +449,10 @@ async function runLeg(scratchRoot: string, mode: LegMode): Promise<LegResult> {
         "SELECT mutant_code, mutant_row_id, method, outcome, duration_ms, failure_message, op_kind FROM test_results ORDER BY id",
       )
       .all() as LegResult["testRows"];
-    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const runId = latestRunId(store);
     const sessionLiveness = store.sessionIdLiveness(runId);
-    return { report, testRows, odataCfg, quarantineDir, sessionLiveness, warnings };
+    const repro = killReproductionFailures(`hang/${mode}`, report, store, runId);
+    return { report, testRows, odataCfg, quarantineDir, sessionLiveness, warnings, repro };
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and the script hangs —
@@ -652,13 +657,15 @@ function assertOnLeg(leg: LegResult): void {
     EXPECTED_WARM_KILLS,
     `R206: expected ${EXPECTED_WARM_KILLS} warm kills (the new arm's four loop kills at position 2); got warmKills=${report.warmKills}`,
   );
+  // R582: a warm kill also adds ONE re-run under the mutant (R577's rule, on for bcdev), so the
+  // pin is `scored + 2 x warmKills`; a position-1 re-run is a single call and adds nothing.
   assert.equal(
     report.groupedCalls,
     report.counts.killed +
       report.counts.survived +
       report.counts.timeoutKilled +
-      EXPECTED_WARM_KILLS,
-    `R198/R206: expected one RunMutantMany call per scored mutant plus one replay per warm kill; got groupedCalls=${report.groupedCalls}`,
+      2 * EXPECTED_WARM_KILLS,
+    `R198/R206/R582: expected one RunMutantMany call per scored mutant plus one replay and one re-run per warm kill; got groupedCalls=${report.groupedCalls}`,
   );
   assert.ok(
     report.validity.caveats.includes("session-warm"),
@@ -687,10 +694,19 @@ function assertOnLeg(leg: LegResult): void {
     `every pass/fail row must carry a session id; ${live.missing} do not`,
   );
   assert.ok(live.answered > 0, "the store must hold answered rows to check");
+  // R582: the stopped grouped calls are the 5 first timeouts plus line 145's warm timeout re-run,
+  // pinned as a NUMBER (`HANG_FIGURES.stoppedCallsOn`), never read back from the report. The
+  // cross-check below says the same 6 from the verdicts.
+  const STOPPED_CALLS_ON = HANG_FIGURES.stoppedCallsOn;
+  assert.equal(
+    timeoutKilled.length + timeoutKilled.filter((m) => (m.killPosition ?? 1) > 1).length,
+    STOPPED_CALLS_ON,
+    `R582: ${STOPPED_CALLS_ON} stopped grouped calls expected: one per timeout kill plus one per warm timeout kill's re-run`,
+  );
   assert.equal(
     live.manyDistinct,
-    (report.groupedCalls ?? 0) - timeoutKilled.length,
-    `distinct session ids among grouped pass/fail rows must equal the group calls that answered (groupedCalls ${report.groupedCalls} minus ${timeoutKilled.length} stopped calls); got ${live.manyDistinct}`,
+    (report.groupedCalls ?? 0) - STOPPED_CALLS_ON,
+    `distinct session ids among grouped pass/fail rows must equal the group calls that answered (groupedCalls ${report.groupedCalls} minus ${STOPPED_CALLS_ON} stopped calls); got ${live.manyDistinct}`,
   );
   assert.equal(
     live.singleRows,
@@ -706,6 +722,16 @@ function assertOnLeg(leg: LegResult): void {
     );
   }
   assertColdConfirms("ON", leg, EXPECTED_COLD_CONFIRMS_ON);
+  assertTwoStops("ON", leg);
+  assert.deepEqual(leg.repro, [], leg.repro.join("; "));
+}
+
+/** R582: every `timeout-killed` mutant was stopped twice by BC, the first run and the re-run. */
+function assertTwoStops(label: string, leg: LegResult): void {
+  const failures = leg.report.mutants
+    .filter((m) => m.verdict === "timeout-killed")
+    .flatMap((m) => stopRowFailures(label, m, leg.testRows, BUDGET_MS, STOP_GRACE_MS));
+  assert.deepEqual(failures, [], failures.join("; "));
 }
 
 /**
@@ -780,6 +806,8 @@ function assertSingleLeg(leg: LegResult): void {
   );
   assert.equal(report.quarantined, undefined, "[SINGLE] the leg must leave the tier unquarantined");
   assertColdConfirms("SINGLE", leg, EXPECTED_COLD_CONFIRMS_SINGLE);
+  assertTwoStops("SINGLE", leg);
+  assert.deepEqual(leg.repro, [], leg.repro.join("; "));
 }
 
 function assertOffLeg(leg: LegResult): void {
@@ -824,6 +852,8 @@ function assertOffLeg(leg: LegResult): void {
     undefined,
     "the OFF leg must quarantine the tier — if it stops doing so, this leg has silently become a no-op",
   );
+  // R582: the kill scored before the quarantine (M0001) was re-run too.
+  assert.deepEqual(leg.repro, [], leg.repro.join("; "));
 }
 
 /**

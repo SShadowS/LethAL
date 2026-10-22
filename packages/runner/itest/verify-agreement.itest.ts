@@ -72,6 +72,7 @@ import {
   describeRow,
   siteOf,
 } from "./harden-expected";
+import { assertKillsReproduced } from "./kill-reproduction";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import {
   SCRATCH_ANSWERS,
@@ -298,7 +299,7 @@ async function main(): Promise<void> {
     const backend = connect();
     const store = new ResultsStore(dbPath);
     try {
-      return await runSession({
+      const report = await runSession({
         backend,
         store,
         projectDir: PROJECT_DIR,
@@ -312,6 +313,10 @@ async function main(): Promise<void> {
         // A SCRATCH quarantine dir, never the real ~/.lethal store (see bcdev.itest.ts).
         quarantineDir: join(scratch, `quarantine-${leg}`),
       });
+      // R582: every kill was re-run under the mutant (verify's own kills are not evidenced:
+      // `VerifyResult` carries no marker).
+      assertKillsReproduced(`agreement/${leg === "a" ? "A" : "B"}`, report, store);
+      return report;
     } finally {
       store.close();
       await backend.close();
