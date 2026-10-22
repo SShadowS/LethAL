@@ -13,7 +13,8 @@ The leg-by-leg tables live in those pre-commitments and are asserted by the ites
 
 The legs:
 
-- C: the contract probe, 25 facts (`runV3ContractProbe`) of three kinds: 8 defect, 16 contract and 1 warn. Since r7
+- C: the contract probe, 26 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of three kinds: 9 defect, 16 contract
+  and 1 warn (r9, below). Since r7
   (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r7-none-selected.md`, 16681485), 8 are
   defect facts (`V3_DEFECT_FACTS` in `al-runner-v3-gate.ts`, `none-selected-exit` included). Since r8
   (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r8-dependent-notrun.md`, 848371cb), 16 are
@@ -28,6 +29,21 @@ The legs:
   because a moved reason only makes the daemon close (slower, never wrong). It is gate-only, as `timeout-is-cpu`
   is: the receipt's `warnFacts` carries the reading, the update script copies it into `.gated`, and a session
   shows that reading (`unmeasurable` when `.gated` predates R612), never a `matches` it did not see.
+  Since r9 (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r9-bc-readings.md`, 4995b8f6, R639),
+  two texts measured on bc1 (`docs/measurements/r639/`) are pinned byte for byte, `BC_HTTP_INTERNAL_TEXT` and
+  `BC_END_OF_TEST_TEXT`, and `r639-bc-readings.test.ts` binds them to that file:
+  - `refusal-row-shape` (#5608) is a DEFECT fact (9 in all). `gone` is exactly bc1's reading. A plain fail with
+    any other text reads `unlike-bc`: `gate-fail` in leg C ("#5700"), a refusal by name in a normal session, and
+    only a warning (`al-runner-v3-defect-unlike-bc`) in the update gate's own candidate legs, printed in every
+    leg's receipt lines that ran under it.
+  - The refusal row shape is now probed by the contract fact `refusal-row-shape-public` (codeunit 50654,
+    `http://example.com/x`, refused by host string with no network), and `refusal-cascade` reads that call.
+  - `commit-under-test-isolation` is `gone` only for a row that is not a refusal written as a fail.
+  - `duplicate-key-insert-raises` (50655, `TestPermissions = Disabled`) is `gone` only for bc1's end-of-test text.
+    v3's #5623 refusal reads `refused`: `held` in leg C (on a contract or warn fact it is `gate-fail`), a warning
+    in a session, and never counted as gone.
+  - In every session, a row whose message starts `NotRun: out-of-scope:` but has no `notRun` scores `error`
+    (`runner-test-error`), never a kill, survive or pass (K1(a)).
 - S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `itest:alrunner`'s table.
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
@@ -44,7 +60,10 @@ The legs:
     mutants. Verdicts and killing tests are compared on all 63.
 - T: `fixtures/sandbox-data`, frozen in `al-runner-v3.tables.baseline.json`, with the 52 known differences
   from `itest:tables` asserted by key AND transition (`TABLES_KNOWN_DIFFERENCES` in
-  `al-runner-v3-tables-known.ts`), in the record run and in every confirm run.
+  `al-runner-v3-tables-known.ts`), in the record run and in every confirm run. r9 §7 adds one narrow `held`: a
+  known row whose VERDICT disagreed with BC's, now `error` through a named refusal (`runner-refused`, no killing
+  test). An `error` of any other class, or a known row that differs from BC only in its killing test, is
+  `gate-fail`.
 
 ## The pin and the update gate
 
@@ -52,13 +71,28 @@ The legs:
   `.gated` file names the build, its sha256 and the LethAL commit that gated it. The backend refuses any build that
   `.gated` does not name (`AlRunnerV3UngatedBuildError`), unless `LETHAL_ALRUNNER_V3_CANDIDATE=1`.
 - The pin is never moved by hand. `bun scripts/al-runner-v3-update.ts` gates newer `v3.0.0-alpha.N` releases, and
-  `--edge` gates the daily `edge` release by download.
+  `--edge` gates the daily `edge` release by download. The version check accepts SemVer build metadata
+  (`al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)`, R639 F1).
+- `--edge-rejudge <edge sha>` (R639) re-gates a KEPT edge binary at `.gated`'s current commit, never a new
+  download, and never reads or writes `edge.last-seen`.
+  - It refuses by name (`al-runner-v3-edge-rejudge-refused`) when `failed/edge-<sha>@<commit>` exists at all, or a
+    `rejudge/` or `held/` receipt names this commit with an outcome other than `infra-fail`: `--regate` to a new
+    commit first.
+  - The binary comes from `failed/edge-<sha>@*/` or `held/edge-<sha>/`: each copy must be the bytes its receipt
+    names, all copies one build, and its `--version` commit the argument. `gateOne` re-hashes it against that sha.
+  - Outcomes are `--edge`'s at this commit, under new keys only: nothing that already exists under `failed/` or
+    `held/` is moved or rewritten. The receipt and `gate.log` are also kept in `rejudge/edge-<sha>@<commit>/`. A
+    pass writes `.gated` with `rejudgedFrom` and no `tarballSha256`.
+- Every gate path (the alpha path, `--regate`, `--edge`, `--edge-rejudge`) holds `<root>/.gate.lock`. A holder is
+  live only when its `/proc/<pid>/cmdline` names `al-runner-v3-update`; a dead, reused, empty or unreadable lock is
+  taken over unless a process still runs under the gate worktree. A skip is logged with the lock, its holder and
+  the manual clear step.
 - The script passes `LETHAL_ITEST_V3_CDO` to the gate itself: the caller's value, or `V3_CDO_DEFAULT`
   (`/work/lethal-wt/cdo-r396`). Without it the gate runs no D leg, and a receipt that lacks legs is `infra-fail`,
   with `why` naming the missing legs ([[R633]]).
 - The D legs make every gate a corpus job, so the alpha path, `--regate` and `--edge` are all skipped for the day,
   with the reason logged, when 2 or more heavy jobs run container-wide or `free -g` shows under 10 GB available. A
-  skipped `--regate` exits 2, so a `&&` chain after it stops.
+  skipped `--regate` or `--edge-rejudge` exits 2, so a `&&` chain after it stops.
 - The evidence is kept. The gate's stdout and stderr go to `gate.log` beside the receipt, on every exit. Both are
   copied beside the outcome they gave: `failed/<tag>@<commit>/`, `held/<tag>/`, `infra/<tag>.receipt.json` and
   `infra/<tag>.gate.log`, and `regate/<commit>.receipt.json` and `regate/<commit>.gate.log`, each file when it
@@ -73,7 +107,8 @@ The legs:
   - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`, or v3's
     coverage paths no longer join LethAL's (`AlRunnerV3CoverageJoinError`, a real behaviour change; in a user
     session the same error is a plain refusal);
-  - `held`: every difference is a move toward BC (a defect fact `defect-present` -> `gone`; X (b) once v3 refuses
+  - `held`: every difference is a move toward BC or a named refusal; read the receipt's lines (a defect fact
+    `defect-present` -> `gone` or `refused`; a leg-T known row to `error`/`runner-refused`; X (b) once v3 refuses
     the broken target with its parsed compile diagnostic, AL0118, while a crash, a signal or unparseable output
     stays `gate-fail`; a leg-T known row reaching its BC row). Kept under `held/` for re-pre-commitment, never
     blacklisted. A #5602 fix that refuses the broken target WITHOUT writing an `--output-json` document reads
@@ -140,3 +175,9 @@ The legs:
   - It then read `matches` inside leg C, on 53d06b01, before R612 merged (24 facts there; all eight legs PASS,
     `/coord/handoff/R-637/live/alrunner-v3-run2.log`). The 25-fact head is not yet run live.
   - R637 was closed by ruling: v3 already marks such a failure not trusted.
+- 2026-10-22: edge-57f1e4f98 was gated by hand at de8f43e2 and gate-failed ([[R641]]): `refusal-row-shape` read
+  `diverged` (#5608 fixed, with a text that is not BC's), `duplicate-key-insert-raises` read `unmeasurable` (#5623
+  refuses a test that ends on a deferred duplicate key, which BC fails), and no session leg ran (the version
+  pattern refused `+edge.20261022`). bc1 then measured BC's own texts (`docs/measurements/r639/`, two runs). r9
+  (4995b8f6) restates the facts, and R639 adds `--edge-rejudge` and the gate lock. Leg C has 26 facts: 9 defect,
+  16 contract and 1 warn. The 26-fact head is not yet run live.
