@@ -9,6 +9,7 @@ import {
   LEDGER_STALE_MS,
   type LedgerIo,
   type SnapState,
+  type TestDbReport,
   type TestStepIo,
   VerifyArgsError,
   type VerifyIo,
@@ -27,12 +28,15 @@ import {
   parseSnapState,
   parseTestSummary,
   pidAlive,
+  pressureText,
+  readTestDbReports,
   runVerify,
   sentinelEnv,
   snapChanges,
   stuckWorkers,
   testChildEnv,
   testCommand,
+  testDbsLine,
   testStep,
 } from "./verify.ts";
 
@@ -559,6 +563,7 @@ describe("R622 the per-file watchdog", () => {
     p: number,
     limitS: number,
     opts: Omit<WatchOptions, "print"> = {},
+    extraEnv: Env = {},
   ): Promise<{
     code: number;
     text: string;
@@ -566,6 +571,7 @@ describe("R622 the per-file watchdog", () => {
     output: string;
     junit: string;
     printed: Array<{ line: string; childAlive: boolean | undefined }>;
+    testDbs: readonly TestDbReport[] | undefined;
   }> {
     const root = tempDir("r622");
     const printed: Array<{ line: string; childAlive: boolean | undefined }> = [];
@@ -588,6 +594,7 @@ describe("R622 the per-file watchdog", () => {
       for (const [name, body] of Object.entries(files)) writeFileSync(join(proj, name), body);
       const junitPath = join(root, "junit.xml");
       let output = "";
+      let testDbs: readonly TestDbReport[] | undefined;
       const t0 = Date.now();
       const step = await testStep(
         { mode: { kind: "packages", paths: [] }, p },
@@ -595,10 +602,11 @@ describe("R622 the per-file watchdog", () => {
           exec: async (cmd, env) => {
             const r = await execWatched(cmd, env, proj, limitS, { ...opts, print });
             output = r.output;
+            testDbs = r.testDbs;
             return r;
           },
           snapState: () => new Map(),
-          env: sentinelEnv(process.env, home, tmp),
+          env: { ...sentinelEnv(process.env, home, tmp), ...extraEnv },
           log: () => "log",
           junitPath: () => junitPath,
           readJunit: () => "",
@@ -607,7 +615,15 @@ describe("R622 the per-file watchdog", () => {
       );
       const seconds = (Date.now() - t0) / 1000;
       const junit = existsSync(junitPath) ? readFileSync(junitPath, "utf8") : "";
-      return { code: step.code, text: step.lines.join("\n"), seconds, output, junit, printed };
+      return {
+        code: step.code,
+        text: step.lines.join("\n"),
+        seconds,
+        output,
+        junit,
+        printed,
+        testDbs,
+      };
     } finally {
       // EBUSY on Windows while a just-killed process still holds a handle: retry, cleanup only.
       rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
