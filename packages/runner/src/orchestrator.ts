@@ -5029,7 +5029,6 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     batchIndex: batchIdx,
   });
   const baselineStartedMs = Date.now();
-  await activateOnce(backend, safety, null);
   const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
   // R192 (second half): on `--resume`, a prior run's COMPLETED baseline for this exact
   // instrumented source against this exact test app stands in for re-running it. Both hashes
@@ -5046,124 +5045,134 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   let hashTestApp: (() => Promise<string | PackageUnread | undefined>) | undefined;
   // R630: why the read before the baseline failed, for the refusal below.
   let firstUnread: string | undefined;
-  if (input.snapshot !== undefined) {
-    const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
-    const batchHash = await hashAlTree(batchDir);
-    hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
-    const read = await hashTestApp();
-    // R495: before `select` carries anything or a snapshot is reused.
-    assertNoTestAppDrift(store, runId, provenTestApp?.hash, read, batchIdx);
-    const testAppHash = hashOf(read);
-    firstUnread = unreadOf(read);
-    // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
-    // here that differs from it (or a session with nothing proven) reuses nothing.
-    // R496: and the snapshot's run must have recorded the same dependency fingerprint.
-    const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
-    const reusable =
-      allowReuse && testAppHash !== undefined && runsWhatWasRead
-        ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
-        : null;
-    reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
-    // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
-    // `findBaselineSnapshot` can lend one from ANY run. Step 1 (R586): it selects by hash and
-    // coverage mode, not by backend, and v3 shares coverage mode "al-runner" with v2. Steps 2 and
-    // 3 (R557, I1 and C1): the run's mark, then the snapshot's own `error` rows: a pre-fix
-    // al-runner snapshot holds a renamed test as an `error` al-runner never ran. A refused snapshot
-    // is not reused, and this batch re-runs its baseline.
-    if (reused !== undefined) {
-      const snap = reused;
-      const snapshotRun = store.getRun(snap.runId);
-      // Ruling (b): `findBaselineSnapshot` returns only a snapshot whose run row exists.
-      if (snapshotRun === null) {
-        throw new Error(
-          `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot names run ${snap.runId}, which this database does not hold (R619)`,
-        );
-      }
-      const refused = store.runMayLend(snapshotRun, input.snapshot.lendingSession, {
-        site: "snapshot",
-        baselineErrorMethods: () =>
-          snap.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
-        renamed: alRunnerRenamed,
-      });
-      if (refused !== undefined) {
-        const notReused = `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot`;
-        switch (refused.step) {
-          case "backend-build":
-            emit({
-              type: "warning",
-              code: "snapshot-backend-build-changed",
-              message: `[lethal] ${notReused} is not reused: ${refused.why}. Batch ${batchIdx}'s baseline is re-run.`,
-            });
-            break;
-          case "al-runner-unmarked":
-            emit({
-              type: "warning",
-              code: "resume-al-runner-test-names",
-              message: `[lethal] --resume: ${notReused} is not reused: run ${snap.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
-            });
-            break;
-          case "al-runner-renamed":
-            emit({
-              type: "warning",
-              code: "resume-al-runner-test-names",
-              message: `[lethal] --resume: ${notReused} ran on al-runner before R557 and recorded ${refused.tests.length} test(s) as errors that al-runner never ran (${namesSample(refused.tests)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
-            });
-            break;
-          case "site":
-            throw new Error(`${notReused}: refused by a site check this site does not pass (R619)`);
-        }
-        reused = undefined;
-      }
-    }
-    // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
-    // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
-    // tests, so a saved row for any other test is DROPPED: it must not come back green and be
-    // sent. A snapshot missing one of this session's tests is not reused at all, since that test
-    // would then never be measured.
-    if (reused !== undefined) {
-      const inScope = new Set(tests.map(testKeyOf));
-      const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
-      reused =
-        new Set(kept.map((b) => testKeyOf(b.ref))).size === inScope.size
-          ? { ...reused, baseline: kept }
-          : undefined;
-    }
-    snapshotKey = { batchHash, testAppHash };
-    if (reused !== undefined) {
-      emit({
-        type: "warning",
-        code: "resume-baseline-reused",
-        message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
-      });
-      for (const saved of reused.baseline) {
-        // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
-        // hub-mode run before R-236c, or BC's own refusal) is replaced by the refused skip, and
-        // its stored coverage is dropped with it, so it can never enter a covering set.
-        const refused = testPageRefusedVerdict(scope, saved.ref);
-        const b = refused !== undefined ? { ref: saved.ref, verdict: refused } : saved;
-        baseline.push(b);
-        store.recordTestResult(
-          runId,
-          null,
-          null,
-          b.ref,
-          b.verdict.outcome,
-          b.verdict.durationMs,
-          b.verdict.failureMessage,
-          undefined,
-          b.verdict.sessionId,
-        );
-      }
-    }
-  }
   // R272: the tests whose baseline ran IN THIS SESSION. Only their durations reach the report: a
   // reused snapshot's (R192) may predate R272, and so be al-runner `--server`'s shared suite time.
   const ranHere = new Set<TestMethodRef>();
-  for (const ref of reused !== undefined ? [] : tests) {
-    const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
-    if (stop) break;
-    baseline.push({ ref, verdict: v });
-    ranHere.add(ref);
+  // R635 §4 (Q1): the baseline bracket, from the null activation through the baseline loop (also
+  // when a reused snapshot leaves the loop over []). The only null activation inside it.
+  backend.baselinePhase?.(true);
+  try {
+    await activateOnce(backend, safety, null);
+    if (input.snapshot !== undefined) {
+      const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
+      const batchHash = await hashAlTree(batchDir);
+      hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
+      const read = await hashTestApp();
+      // R495: before `select` carries anything or a snapshot is reused.
+      assertNoTestAppDrift(store, runId, provenTestApp?.hash, read, batchIdx);
+      const testAppHash = hashOf(read);
+      firstUnread = unreadOf(read);
+      // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
+      // here that differs from it (or a session with nothing proven) reuses nothing.
+      // R496: and the snapshot's run must have recorded the same dependency fingerprint.
+      const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
+      const reusable =
+        allowReuse && testAppHash !== undefined && runsWhatWasRead
+          ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
+          : null;
+      reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
+      // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
+      // `findBaselineSnapshot` can lend one from ANY run. Step 1 (R586): it selects by hash and
+      // coverage mode, not by backend, and v3 shares coverage mode "al-runner" with v2. Steps 2 and
+      // 3 (R557, I1 and C1): the run's mark, then the snapshot's own `error` rows: a pre-fix
+      // al-runner snapshot holds a renamed test as an `error` al-runner never ran. A refused snapshot
+      // is not reused, and this batch re-runs its baseline.
+      if (reused !== undefined) {
+        const snap = reused;
+        const snapshotRun = store.getRun(snap.runId);
+        // Ruling (b): `findBaselineSnapshot` returns only a snapshot whose run row exists.
+        if (snapshotRun === null) {
+          throw new Error(
+            `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot names run ${snap.runId}, which this database does not hold (R619)`,
+          );
+        }
+        const refused = store.runMayLend(snapshotRun, input.snapshot.lendingSession, {
+          site: "snapshot",
+          baselineErrorMethods: () =>
+            snap.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
+          renamed: alRunnerRenamed,
+        });
+        if (refused !== undefined) {
+          const notReused = `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot`;
+          switch (refused.step) {
+            case "backend-build":
+              emit({
+                type: "warning",
+                code: "snapshot-backend-build-changed",
+                message: `[lethal] ${notReused} is not reused: ${refused.why}. Batch ${batchIdx}'s baseline is re-run.`,
+              });
+              break;
+            case "al-runner-unmarked":
+              emit({
+                type: "warning",
+                code: "resume-al-runner-test-names",
+                message: `[lethal] --resume: ${notReused} is not reused: run ${snap.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
+              });
+              break;
+            case "al-runner-renamed":
+              emit({
+                type: "warning",
+                code: "resume-al-runner-test-names",
+                message: `[lethal] --resume: ${notReused} ran on al-runner before R557 and recorded ${refused.tests.length} test(s) as errors that al-runner never ran (${namesSample(refused.tests)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
+              });
+              break;
+            case "site":
+              throw new Error(
+                `${notReused}: refused by a site check this site does not pass (R619)`,
+              );
+          }
+          reused = undefined;
+        }
+      }
+      // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
+      // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
+      // tests, so a saved row for any other test is DROPPED: it must not come back green and be
+      // sent. A snapshot missing one of this session's tests is not reused at all, since that test
+      // would then never be measured.
+      if (reused !== undefined) {
+        const inScope = new Set(tests.map(testKeyOf));
+        const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
+        reused =
+          new Set(kept.map((b) => testKeyOf(b.ref))).size === inScope.size
+            ? { ...reused, baseline: kept }
+            : undefined;
+      }
+      snapshotKey = { batchHash, testAppHash };
+      if (reused !== undefined) {
+        emit({
+          type: "warning",
+          code: "resume-baseline-reused",
+          message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
+        });
+        for (const saved of reused.baseline) {
+          // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
+          // hub-mode run before R-236c, or BC's own refusal) is replaced by the refused skip, and
+          // its stored coverage is dropped with it, so it can never enter a covering set.
+          const refused = testPageRefusedVerdict(scope, saved.ref);
+          const b = refused !== undefined ? { ref: saved.ref, verdict: refused } : saved;
+          baseline.push(b);
+          store.recordTestResult(
+            runId,
+            null,
+            null,
+            b.ref,
+            b.verdict.outcome,
+            b.verdict.durationMs,
+            b.verdict.failureMessage,
+            undefined,
+            b.verdict.sessionId,
+          );
+        }
+      }
+    }
+    for (const ref of reused !== undefined ? [] : tests) {
+      const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
+      if (stop) break;
+      baseline.push({ ref, verdict: v });
+      ranHere.add(ref);
+    }
+  } finally {
+    backend.baselinePhase?.(false);
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
   // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined
@@ -10652,6 +10661,13 @@ async function runMutantsOnBackend(args: {
     const prev = measuredToday.get(key);
     if (prev === undefined || ms > prev.ms) measuredToday.set(key, { ms, byMutant });
   };
+  // R635 §4: once per mutant-loop call, every covered mutant of this shard and its covering refs.
+  await args.backend.prefetchMutants?.(
+    args.mutants.flatMap((m) => {
+      const refs = args.perMutantTests.get(m.mutantId);
+      return refs === undefined || refs.length === 0 ? [] : [{ mutantId: m.mutantId, refs }];
+    }),
+  );
   for (const m of args.mutants) {
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
