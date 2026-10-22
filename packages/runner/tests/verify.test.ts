@@ -68,6 +68,7 @@ import {
 } from "../src/verify";
 import type { ReachFilterOffReason } from "../src/verify-reach";
 import { droppedNewTestsOf } from "../src/verify-read";
+import { ProjectSymlinkRefusedError } from "../src/walk";
 import { tinyBundle } from "./helpers/bundle";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import { scratchDirs } from "./helpers/scratch";
@@ -548,6 +549,17 @@ describe("assertSourceUnchanged", () => {
       hash.mockRestore();
     }
   }
+
+  test("R631: a linked helper folder in the test project refuses by name before any hash", async () => {
+    const { dir, tests, source } = await project();
+    const helpers = join(dir, "..", "helpers");
+    mkdirSync(helpers);
+    writeFileSync(join(helpers, "H.Codeunit.al"), "codeunit 50300 H { }");
+    symlinkSync(helpers, join(tests, "helpers"), "junction");
+    const e = await refusalWithoutHashing(source, tests);
+    expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((e as Error).message).toContain(join(tests, "helpers"));
+  });
 
   test("a nested test EDIT is refused as test-project-nested before any hash", async () => {
     const { nestedTests, recorded } = await nestedProject();

@@ -242,8 +242,11 @@ import type { MutantVerdict } from "./store";
  *
  * 17: R577 added the cause value `kill-not-reproduced` to `$.notMeasured[].cause`. A new value, so
  * it bumps (R233); v16 is frozen.
+ *
+ * 18: R631 added the caveat value `project-symlink-skipped` to `$.caveats[].caveat`. A new value,
+ * so it bumps (R233); v17 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 17;
+export const EXPLAIN_SCHEMA_VERSION = 18;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

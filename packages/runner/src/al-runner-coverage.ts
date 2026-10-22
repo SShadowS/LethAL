@@ -47,7 +47,7 @@
  * object-relative frame BC and the line map use. In a single-object file the base is 1, so this is
  * exactly the old behaviour, and no R407 backstop applies to it.
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { evaluateArms, initParser, parseAL } from "@lethal/engine";
 import { wrapRoot } from "@lethal/engine";
@@ -70,6 +70,7 @@ import {
   undecidedArmsReason,
 } from "./line-map";
 import { effectiveBuildSymbols } from "./preprocessor-symbols";
+import { walkFiles } from "./walk";
 
 /** One `<line>` of one `<class>`, as al-runner writes it. */
 export interface CoberturaLine {
@@ -250,7 +251,9 @@ export async function alRunnerCoverageSupport(
 }> {
   await initParser();
   const rels = (
-    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true })
+    snapshot !== undefined
+      ? [...snapshot.keys()]
+      : (await walkFiles(projectDir, { links: "refuse" })).files
   )
     .map((e) => e.toString())
     .filter((e) => e.toLowerCase().endsWith(".al"))
@@ -321,10 +324,9 @@ export async function buildAlRunnerCoverageIndex(
   const symbols =
     options.symbols ??
     (await effectiveBuildSymbols(instrumentedDir, [], undefined, { kind: "bcdev" }));
-  const rels = (await readdir(instrumentedDir, { recursive: true }))
-    .map((e) => e.toString())
-    .filter((e) => e.toLowerCase().endsWith(".al"))
-    .sort();
+  const rels = (await walkFiles(instrumentedDir, { links: "skip" })).files.filter((e) =>
+    e.toLowerCase().endsWith(".al"),
+  );
   // R219: a file the batch renamed is QUOTED by its project path. And it is KEYED by both names:
   // al-runner labels coverage with whichever path it knows for this app id, measured on c39ad5de
   // on both transports as the project SOURCE path (`proj/Sales/Helper.Codeunit.al`) or a batch's

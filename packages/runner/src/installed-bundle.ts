@@ -1,9 +1,10 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { InstalledArtifactError } from "./artifact";
 import { describeThrown } from "./describe-error";
 import { type AlSource, batchDisplayPaths } from "./line-map";
+import { walkFiles } from "./walk";
 
 /**
  * R360: a published batch's installed files could not be stored. Extends `Error` directly. The run
@@ -141,7 +142,7 @@ export async function readBatchBundle(
 
   let entries: string[];
   try {
-    entries = (await readdir(batchDir, { recursive: true })).map((e) => e.toString());
+    entries = (await walkFiles(batchDir, { links: "skip" })).files;
   } catch (err) {
     throw new InstalledBundleError("bundle-unreadable", `${batchDir}: ${describeThrown(err)}`);
   }

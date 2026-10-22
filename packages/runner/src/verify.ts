@@ -91,6 +91,7 @@ import {
   narrowVerifyRequests,
   reachStateOf,
 } from "./verify-reach";
+import { refuseProjectLinks } from "./walk";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
 export const VERIFY_REFUSALS = [
@@ -747,6 +748,8 @@ export async function assertSourceUnchanged(
 ): Promise<void> {
   await assertProjectReadable(source.projectPath);
   await assertTestProjectSeparate(source.projectPath, testDir);
+  // R631: a link in the target or test root refuses BY NAME before any digest or compile.
+  await refuseProjectLinks([source.projectPath, testDir]);
   const now = await hashTargetSource(source.projectPath, preprocessorSymbols);
   if (now !== source.sourceSha256) {
     throw new VerifyError(
