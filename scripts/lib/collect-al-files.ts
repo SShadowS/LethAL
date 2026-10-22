@@ -28,7 +28,9 @@ export async function collectAlFiles(dir: string): Promise<SourceFile[]> {
   // R631: links are never followed; any skipped is said, so a census never shrinks silently.
   const walk = await walkFiles(dir, { links: "skip" });
   if (walk.skippedLinks.length > 0)
-    console.error(`collectAlFiles: ${walk.skippedLinks.length} link(s) under ${dir} not followed (R631): ${walk.skippedLinks.slice(0, 10).join(", ")}`);
+    console.error(
+      `collectAlFiles: ${walk.skippedLinks.length} link(s) under ${dir} not followed (R631): ${walk.skippedLinks.slice(0, 10).join(", ")}`,
+    );
   const entries = walk.files
     .filter((f) => f.toLowerCase().endsWith(".al"))
     // Plain lexicographic sort on the relative path: readdir's own order is not stable across

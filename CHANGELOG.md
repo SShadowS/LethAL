@@ -830,6 +830,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **LethAL no longer follows links (symlinks, junctions) when it walks a folder** (R631). Bun's
+  recursive `readdir` follows them, so a link cycle hung or crashed with `ELOOP`, and a link out
+  pulled a foreign tree into the run. Every walk now goes through one walker that never descends a
+  link. alc and both al-runners DO follow a linked folder and a linked `.al` file (measured), so:
+  - **A link in the target or test project now refuses by name** (`ProjectSymlinkRefusedError`),
+    before anything compiles, in `lethal run` and `lethal verify`. Links inside `node_modules` and
+    `.git` are excused (never followed); real files there are read as before. A link that appears
+    during a run is reported as drift (`added link <path>`).
+  - **Package caches:** a linked `.app` is copied from its real path (a relative one used to dangle
+    in LethAL's copy). A linked subfolder there refuses by name.
+  - **`lethal doctor`:** the al-runner cache size no longer counts files behind links, and says how
+    many links it did not follow.
+  - A new caveat, `project-symlink-skipped`, is a tripwire: it is raised if a folder LethAL builds
+    ever holds a link it skipped. Explain schema v18 adds it to `$.caveats[].caveat`.
+
 - **The assertion screen reads past al-runner's exception-type prefix** (R553). al-runner writes
   every failure as `<Type>Exception: <message>`, so the screen found no `Assert.` text on any
   al-runner kill and reported `vacuous` where bcdev, on the same kills, reported `partial`. On the

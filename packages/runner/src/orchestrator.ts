@@ -243,7 +243,6 @@ import {
   testAppRefusal,
 } from "./stale-test-app";
 import { type LendingSession, sameHiddenFiles } from "./store";
-import { onSkippedLinks, refuseProjectLinks, walkFiles } from "./walk";
 import type { ResultsStore } from "./store";
 import type { CarryHidden, MutantVerdict, RunRow, RunnerKind, TestAppIdentity } from "./store";
 import { TestAppError } from "./test-app-publish";
@@ -278,6 +277,7 @@ import {
   isTestPageNotRunMessage,
   testPageNotRunMessage,
 } from "./testpage-unsupported";
+import { onSkippedLinks, refuseProjectLinks, walkFiles } from "./walk";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
 // public types are re-exported one by one from here, the module the barrel does list.

@@ -35,7 +35,6 @@ import type { NamedMutantsConfig } from "../src/orchestrator";
 import type { MutantOutcome, SessionOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
-import { ProjectSymlinkRefusedError } from "../src/walk";
 import { type PublishedTestApp, TestAppError } from "../src/test-app-publish";
 import { TEST_DIGEST_SCHEME, testDigests, testDigestsOfModel } from "../src/test-digest";
 import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
@@ -69,6 +68,7 @@ import {
 } from "../src/verify";
 import type { ReachFilterOffReason } from "../src/verify-reach";
 import { droppedNewTestsOf } from "../src/verify-read";
+import { ProjectSymlinkRefusedError } from "../src/walk";
 import { tinyBundle } from "./helpers/bundle";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import { scratchDirs } from "./helpers/scratch";

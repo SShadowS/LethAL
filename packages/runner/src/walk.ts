@@ -140,7 +140,7 @@ const isVanished = (err: unknown): boolean => {
   return code === "ENOENT" || code === "ENOTDIR";
 };
 
-const refusalWhat =(links: LinkPolicy) =>
+const refusalWhat = (links: LinkPolicy) =>
   links === "yield-files" ? "package cache" : "project folder";
 
 export async function walkFiles(

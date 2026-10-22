@@ -30,7 +30,9 @@ import { walkFiles } from "../packages/runner/src/walk";
 export async function corpusEntries(corpusDir: string): Promise<string[]> {
   const walk = await walkFiles(corpusDir, { links: "skip" });
   if (walk.skippedLinks.length > 0)
-    console.error(`corpusEntries: ${walk.skippedLinks.length} link(s) under ${corpusDir} not followed (R631): ${walk.skippedLinks.slice(0, 10).join(", ")}`);
+    console.error(
+      `corpusEntries: ${walk.skippedLinks.length} link(s) under ${corpusDir} not followed (R631): ${walk.skippedLinks.slice(0, 10).join(", ")}`,
+    );
   return walk.files
     .filter((f) => f.toLowerCase().endsWith(".al") && !f.includes(".dependencies"))
     .map((f) => f.replaceAll("\\", "/"))

@@ -28,7 +28,6 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { walkFiles } from "./walk";
 import {
   type ALSyntaxNode,
   type AttributeRun,
@@ -45,6 +44,7 @@ import {
 import type { TestMethodRef } from "./backend";
 import { discoveredRelPaths } from "./line-filter";
 import { testKeyOf } from "./selection";
+import { walkFiles } from "./walk";
 
 /** Checked against Microsoft Learn's TestPage/TestRequestPage method lists (Task 1 Step 0). */
 const OPENING_METHODS = new Set(["openview", "openedit", "opennew", "trap"]);

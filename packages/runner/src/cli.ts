@@ -53,17 +53,17 @@ import {
   probeAlRunnerPredefinedSymbols,
 } from "./al-runner-predefined-probe";
 import type { ServerSpawnFn } from "./al-runner-server";
-import { readSystemRuntime } from "./app-package";
-import { compareAppVersions, nextAbove } from "./app-version";
-import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import { AlRunnerV3Backend } from "./al-runner-v3-backend";
-import { checkGated } from "./al-runner-v3-pin";
 import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
   assertBcVersionMatchesPackages,
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
+import { checkGated } from "./al-runner-v3-pin";
+import { readSystemRuntime } from "./app-package";
+import { compareAppVersions, nextAbove } from "./app-version";
+import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { BackendKind, BackendStatus, ExecutionBackend } from "./backend";
 import { isLocalRunner } from "./backend";
 import { readTargetSource } from "./baseline-snapshot";
@@ -136,7 +136,6 @@ import type { SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
-import { walkFiles } from "./walk";
 import type { PublishOutcomeRow } from "./store";
 import {
   TestProjectNestedError,
@@ -152,6 +151,7 @@ import {
   runVerify,
   testProjectNestedProblem,
 } from "./verify";
+import { walkFiles } from "./walk";
 
 /**
  * `cli.ts` is argument marshaling only — everything that decides pass/fail

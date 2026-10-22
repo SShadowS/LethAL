@@ -1,12 +1,4 @@
-import {
-  copyFile,
-  link,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rename,
-  rm,
-} from "node:fs/promises";
+import { copyFile, link, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { FLAT_NAMES_FILENAME, type MutantManifest } from "@lethal/schemata";

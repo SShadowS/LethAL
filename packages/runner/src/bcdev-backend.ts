@@ -62,12 +62,12 @@ import type {
   RunMutantTransport,
 } from "./run-mutant-transport";
 import { NO_RESULT_FOR_METHOD } from "./stale-test-app";
-import { walkFilesSync } from "./walk";
 import {
   compileTestApp as compileTestAppOf,
   publishTestApp as publishTestAppOf,
 } from "./test-app-publish";
 import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
+import { walkFilesSync } from "./walk";
 
 /**
  * R552: the warning for a `lethal-control.app` an older LethAL left in the user's package cache, or

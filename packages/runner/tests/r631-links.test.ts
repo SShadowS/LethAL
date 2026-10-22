@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
-import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import { describeAlRunnerCache, readAlRunnerCache } from "../src/al-runner-cache";
+import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import { buildPackageCacheCopy } from "../src/artifact";
 import {
   SourceSnapshotUnreadableError,
@@ -29,7 +29,8 @@ import { scratchDirs } from "./helpers/scratch";
  */
 const scratch = scratchDirs();
 
-const CODEUNIT = 'codeunit 50100 "Alpha"\n{\n    procedure A(): Integer\n    begin\n        exit(1);\n    end;\n}\n';
+const CODEUNIT =
+  'codeunit 50100 "Alpha"\n{\n    procedure A(): Integer\n    begin\n        exit(1);\n    end;\n}\n';
 const TEST_CU =
   'codeunit 50110 "Alpha Tests"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure T()\n    begin\n    end;\n}\n';
 
@@ -77,24 +78,37 @@ describe("R631: a linked .al FILE refuses at every user-root reader, by the same
     const t = projectWithLinkedFile(TEST_CU);
     if (t === undefined) return;
     const batch = scratch("lethal-r631-batch-");
-    const errors = [
-      await refusalOf(targetAlFiles(p.dir)),
-      await refusalOf(readTargetSource(p.dir)),
-      await refusalOf(prepareBatchProject(p.dir, batch, { id: "x" }, "1.0.0.1")),
-      await refusalOf(generateMutationSet(p.dir)),
-      await refusalOf(alRunnerCoverageSupport(p.dir)),
-    ];
-    for (const e of errors) {
-      expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
-      expect((e as Error).message).toContain(p.link);
+    // Each reader on its own, so one that stops refusing is named rather than hidden by another.
+    const readers: Record<string, [() => Promise<unknown>, string]> = {
+      targetAlFiles: [() => targetAlFiles(p.dir), p.link],
+      readTargetSource: [() => readTargetSource(p.dir), p.link],
+      prepareBatchProject: [
+        () => prepareBatchProject(p.dir, batch, { id: "x" }, "1.0.0.1"),
+        p.link,
+      ],
+      // With a snapshot, only the resource walk reads the disk.
+      "prepareBatchProject(resources)": [
+        () =>
+          prepareBatchProject(
+            p.dir,
+            scratch("lethal-r631-batch-"),
+            { id: "x" },
+            "1.0.0.1",
+            new Map(),
+          ),
+        p.link,
+      ],
+      generateMutationSet: [() => generateMutationSet(p.dir), p.link],
+      alRunnerCoverageSupport: [() => alRunnerCoverageSupport(p.dir), p.link],
+      discoverTests: [() => discoverTests(t.dir), t.link],
+      readTestAppSources: [() => readTestAppSources(t.dir), t.link],
+    };
+    const got: Record<string, boolean> = {};
+    for (const [name, [run, link]] of Object.entries(readers)) {
+      const e = await refusalOf(run());
+      got[name] = e instanceof ProjectSymlinkRefusedError && e.message.includes(link);
     }
-    for (const e of [
-      await refusalOf(discoverTests(t.dir)),
-      await refusalOf(readTestAppSources(t.dir)),
-    ]) {
-      expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
-      expect((e as Error).message).toContain(t.link);
-    }
+    expect(got).toEqual(Object.fromEntries(Object.keys(readers).map((k) => [k, true])));
   });
 
   test("readTargetSource passes the refusal through, never as SourceSnapshotUnreadableError", async () => {
@@ -112,9 +126,7 @@ describe("R631 r3 A: real AL under node_modules is still read, exactly as before
     const base = scratch("lethal-r631-");
     put(base, "app/src/A.al", CODEUNIT);
     put(base, "app/node_modules/pkg/X.al", CODEUNIT.replace("50100", "50102"));
-    expect(await targetAlFiles(join(base, "app"))).toContain(
-      join("node_modules", "pkg", "X.al"),
-    );
+    expect(await targetAlFiles(join(base, "app"))).toContain(join("node_modules", "pkg", "X.al"));
     put(base, "tests/node_modules/pkg/T.al", TEST_CU);
     const found = await discoverTests(join(base, "tests"));
     expect(found.map((r) => r.method)).toEqual(["T"]);
@@ -134,6 +146,13 @@ describe("R631: the test-app hash never covers a partial test tree", () => {
     const tests = linkedHelper();
     expect(await testAppHashFor(undefined, tests, "skip")).toBeUndefined();
     await expect(hashTestDir(tests, "skip")).rejects.toBeInstanceOf(ProjectSymlinkRefusedError);
+  });
+
+  test("default (refuse): hashTestDir refuses the link by name", async () => {
+    const tests = linkedHelper();
+    const e = await refusalOf(hashTestDir(tests));
+    expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((e as Error).message).toContain(join(tests, "helpers"));
   });
 
   test("control: the same tree without the link hashes", async () => {
@@ -180,7 +199,9 @@ describe("R631 r3 B: a link that appears mid-run is drift", () => {
     if (!fileLink(join(base, "S.al"), join(dir, "src", "S.al"))) return;
     const e = await changesOf(watch);
     expect(e).toBeInstanceOf(ProjectChangedDuringRunError);
-    expect((e as ProjectChangedDuringRunError).changes).toEqual([`added link ${join("src", "S.al")}`]);
+    expect((e as ProjectChangedDuringRunError).changes).toEqual([
+      `added link ${join("src", "S.al")}`,
+    ]);
   });
 
   test("a link inside node_modules is excused: no drift", async () => {

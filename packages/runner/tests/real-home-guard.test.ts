@@ -104,9 +104,7 @@ test("R409: no non-test script that a test imports calls os.homedir() directly",
     ...filesUnder(join(repo, "scripts")).map((f) => join(repo, "scripts", f)),
     ...readdirSync(join(repo, "packages")).flatMap((pkg) => {
       const dir = join(repo, "packages", pkg, "tests");
-      return existsSync(dir)
-        ? filesUnder(dir).map((f) => join(dir, f))
-        : [];
+      return existsSync(dir) ? filesUnder(dir).map((f) => join(dir, f)) : [];
     }),
   ].filter((f) => f.endsWith(".test.ts"));
   const imported = new Set<string>();

@@ -180,7 +180,9 @@ describe("R631 walker: never descends a link", () => {
     }
     const r = await walkFiles(root, { links: "yield-files" });
     expect(r.files).toEqual(["Linked.app", "Real.app"]);
-    expect(r.resolved.get("Linked.app")).toBe(await realpath(join(base, "elsewhere", "Linked.app")));
+    expect(r.resolved.get("Linked.app")).toBe(
+      await realpath(join(base, "elsewhere", "Linked.app")),
+    );
     expect(r.skippedLinks).toEqual(["Dangling.app"]);
     const s = walkFilesSync(root, { links: "yield-files" });
     expect(s.files).toEqual(r.files);

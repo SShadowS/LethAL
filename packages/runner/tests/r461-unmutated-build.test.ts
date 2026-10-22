@@ -559,11 +559,35 @@ describe("14: the new refusal classes", () => {
 describe("R631: links in the target or test root refuse before any compile; a skipped link raises the caveat", () => {
   const compiles = (b: R461Backend) => b.deploys + b.checks + b.plainCompiles;
 
+  test("the refusal comes FIRST: the backend is not asked anything", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.root, "helpers", "Helper.Codeunit.al"), TEST_AL);
+    symlinkSync(join(dirs.root, "helpers"), join(dirs.testDir, "helpers"), "junction");
+    const touched: string[] = [];
+    const backend = new Proxy({} as ExecutionBackend, {
+      get: (_t, k) => {
+        touched.push(String(k));
+        return () => {
+          throw new Error(`backend.${String(k)} was called`);
+        };
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const err = await settle(runSession({ backend, store, ...dirs, selectorIds }));
+    expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect(touched).toEqual([]);
+    store.close();
+  });
+
   test("a linked src folder in the target throws ProjectSymlinkRefusedError with 0 compiles", async () => {
     const dirs = await makeProject();
     await Bun.write(join(dirs.root, "shared", "Shared.Codeunit.al"), SECOND_AL);
     symlinkSync(join(dirs.root, "shared"), join(dirs.projectDir, "src"), "junction");
-    const backend = new R461Backend(dirs.root, () => OK, () => OK);
+    const backend = new R461Backend(
+      dirs.root,
+      () => OK,
+      () => OK,
+    );
     const store = new ResultsStore(":memory:");
     const err = await settle(runSession({ backend, store, ...dirs, selectorIds }));
     expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
@@ -576,7 +600,11 @@ describe("R631: links in the target or test root refuse before any compile; a sk
     const dirs = await makeProject();
     await Bun.write(join(dirs.root, "helpers", "Helper.Codeunit.al"), TEST_AL);
     symlinkSync(join(dirs.root, "helpers"), join(dirs.testDir, "helpers"), "junction");
-    const backend = new R461Backend(dirs.root, () => OK, () => OK);
+    const backend = new R461Backend(
+      dirs.root,
+      () => OK,
+      () => OK,
+    );
     const store = new ResultsStore(":memory:");
     const err = await settle(runSession({ backend, store, ...dirs, selectorIds }));
     expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
@@ -591,11 +619,16 @@ describe("R631: links in the target or test root refuse before any compile; a sk
     await Bun.write(join(dirs.root, "elsewhere", "X.al"), SECOND_AL);
     await mkdir(built, { recursive: true });
     symlinkSync(join(dirs.root, "elsewhere"), join(built, "linked"), "junction");
-    const backend = new R461Backend(dirs.root, () => OK, () => OK, {
-      publish: () => {
-        walkFilesSync(built, { links: "skip" });
+    const backend = new R461Backend(
+      dirs.root,
+      () => OK,
+      () => OK,
+      {
+        publish: () => {
+          walkFilesSync(built, { links: "skip" });
+        },
       },
-    });
+    );
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
     expect(report.validity.caveats).toContain("project-symlink-skipped");
@@ -604,7 +637,11 @@ describe("R631: links in the target or test root refuse before any compile; a sk
 
   test("a clean session has no project-symlink-skipped caveat", async () => {
     const dirs = await makeProject();
-    const backend = new R461Backend(dirs.root, () => OK, () => OK);
+    const backend = new R461Backend(
+      dirs.root,
+      () => OK,
+      () => OK,
+    );
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
     expect(report.validity.caveats).not.toContain("project-symlink-skipped");

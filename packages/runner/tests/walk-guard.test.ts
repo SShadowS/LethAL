@@ -48,7 +48,7 @@ function topLevelArgs(args: string): string[] {
 
 /** (a) a `readdir*` call that is or may be recursive: `recursive` anywhere in the call, or an
  *  options argument that is not an object literal (a variable could carry `recursive`). */
-export function recursiveReaddirs(text: string): string[] {
+function recursiveReaddirs(text: string): string[] {
   const found: string[] = [];
   for (const m of text.matchAll(/\breaddir(Sync)?\s*\(/g)) {
     const args = argsAt(text, (m.index ?? 0) + m[0].length - 1);
@@ -61,9 +61,10 @@ export function recursiveReaddirs(text: string): string[] {
 }
 
 /** (b) a function that calls `readdir*` and `stat`/`statSync` (not `lstat`) and calls itself. */
-export function statWalkers(text: string): string[] {
+function statWalkers(text: string): string[] {
   const found: string[] = [];
-  const decl = /(?:function\s+(\w+)\s*\(|(?:const|let)\s+(\w+)\s*=\s*(?:async\s*)?\([^)]*\)[^=]*=>\s*)/g;
+  const decl =
+    /(?:function\s+(\w+)\s*\(|(?:const|let)\s+(\w+)\s*=\s*(?:async\s*)?\([^)]*\)[^=]*=>\s*)/g;
   for (const m of text.matchAll(decl)) {
     const name = m[1] ?? m[2];
     if (name === undefined) continue;
