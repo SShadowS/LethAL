@@ -13,6 +13,10 @@
  * state on the same server. Seeds are written by `lend-seed.ts`, whose offline test pins that
  * each override changes only its own field.
  *
+ * R-585 (pre-commitment docs/superpowers/specs/2026-10-22-r585-lend-precommitment.md): since R621
+ * a stored no-coverage is never carried, so R1's batch is no longer carried whole. It deploys once,
+ * reuses B's baseline snapshot, re-derives its 4 no-coverage mutants and carries the other 15.
+ *
  * Every per-mutant comparison goes BY IDENTITY KEY through `compareMutants` against the committed
  * `bcdev.baseline.json` (read only; this gate records no baseline). Its own figures are
  * `LEND_FIGURES` / `LEND_MUTANTS` in gate-expected.ts.
@@ -93,8 +97,8 @@ const keySet = (codes: readonly string[]): Set<string> =>
 const ALL = keySet(CODES);
 const KEPT = keySet(LEND_FIGURES.kept);
 /**
- * R618 live run 1: in a PARTLY carried batch, no-coverage is re-derived from this session's coverage
- * (`scoreBatch`), never carried; only a WHOLLY carried batch (`replayCarriedBatch`, R1) carries it.
+ * R618 live run 1, then R621: a stored no-coverage is never carried; it is re-derived from this
+ * session's coverage (`scoreBatch`). A batch holding one is never carried whole (R1 included).
  */
 const NO_COVERAGE = keySet(CODES.filter((c) => LEND_MUTANTS[c].verdict === "no-coverage"));
 const carriedInPartBatch = (rows: Set<string>): Set<string> =>
@@ -412,24 +416,35 @@ async function main(): Promise<void> {
     const B = l1.runId;
     sublegs.push("L1");
 
-    // ---- R1: --resume-run of an UNFINISHED full clone; its one batch is carried whole.
+    // ---- R1: --resume-run of an UNFINISHED full clone. R621: its batch holds 4 stored
+    // no-coverage rows, so it is not carried whole: it deploys, reuses B's snapshot, re-derives
+    // the 4 and carries the other 15 (pre-commitment 2026-10-22-r585-lend-precommitment.md).
     const full = seedRunFrom(store, A);
     const r1 = await session(store, root, "R1", { resume: full });
     printTable("R1", r1.report);
-    assertCodes("R1", r1.events, ["resume-reusing-run", "resume-batch-carried"]);
+    assertCodes("R1", r1.events, ["resume-reusing-run", "resume-baseline-reused"]);
     assert.ok(
       message(r1.events, "resume-reusing-run").includes(
         `reusing run ${full} — ${LEND_FIGURES.resumeWhole.carryable} mutant verdict(s) may be carried`,
       ),
       "R1: resume-reusing-run must name the clone and 19 carryable",
     );
+    assert.ok(
+      message(r1.events, "resume-baseline-reused").includes(`same as run ${B}'s batch 0,`),
+      `R1: the reused snapshot must be run B's (${B})`,
+    );
+    assert.equal(ranHere(r1.events), 0, "R1: a reused baseline runs no unmutated test here");
     assert.equal(r1.report.groupedCalls, LEND_FIGURES.resumeWhole.groupedCalls, "R1: groupedCalls");
     assert.equal(
       (r1.report.artifacts ?? []).length,
-      0,
-      "R1: a batch carried whole deploys nothing",
+      1,
+      "R1: a batch holding a stored no-coverage is deployed once (R621), not carried whole",
     );
-    assert.deepEqual(carriedKeys(r1.report), ALL, "R1: every mutant carried, by key");
+    assert.deepEqual(
+      carriedKeys(r1.report),
+      carriedInPartBatch(ALL),
+      "R1: every mutant but the 4 no-coverage carried, by key (no-coverage re-derived, R621)",
+    );
     assertFrozen("R1", baseline, r1.report);
     assert.deepEqual(
       r1.report.resumedFrom,
