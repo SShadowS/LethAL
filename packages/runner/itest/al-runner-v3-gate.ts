@@ -326,11 +326,15 @@ export function judgeLegT(i: {
 /**
  * R651: one leg's wall-clock split, TIMING ONLY. `phases` sums the orchestrator's `phase-left`
  * events; the mutant loop is its wall (unlike `timings.mutantsMs`, a sum over mutants) and holds
- * the backend's serve-entries timers in brackets. A phase that never ran prints `-`.
+ * the backend's serve-entries timers in brackets; `other` is the loop less those (windows hold
+ * coverage and echo, so those two are not subtracted again). A phase that never ran prints `-`.
  */
 export function v3SplitLine(phases: Readonly<Record<string, number>>, s: V3EntriesStats): string {
   const p = (k: string) => phases[k] ?? "-";
-  return `split ms: deploy ${p("deploy")}, baseline ${p("baseline")}, mutant loop ${p("mutants")} (warm-up ${s.warmupMs}, prefetch ${s.prefetchMs}, live ${s.liveMs}, windows ${s.windowMs} of which coverage ${s.coverageMs} and echo ${s.echoMs})`;
+  const loop = phases.mutants;
+  const named = s.warmupMs + s.prefetchMs + s.liveMs + s.windowMs + s.boundMs;
+  const other = loop === undefined ? "-" : loop - named;
+  return `split ms: deploy ${p("deploy")}, baseline ${p("baseline")}, mutant loop ${p("mutants")} (warm-up ${s.warmupMs}, prefetch ${s.prefetchMs}, live ${s.liveMs}, windows ${s.windowMs} of which coverage ${s.coverageMs} and echo ${s.echoMs}, bound ${s.boundMs} over ${s.boundChecks} checks, other ${other})`;
 }
 
 /** r10 (c): SleeperDoubles's `baseline-batch-finished` verdict, or `undefined` when absent. */

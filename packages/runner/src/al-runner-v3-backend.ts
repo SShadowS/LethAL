@@ -452,10 +452,20 @@ export interface V3EntriesStats {
   windowMs: number;
   coverageMs: number;
   echoMs: number;
+  /** R651: `run()`'s `assertBound` outside the baseline bracket (the mutant loop): count and ms. */
+  boundChecks: number;
+  boundMs: number;
 }
 
 /** R651: the phase timers of `V3EntriesStats`. */
-type V3PhaseTimer = "warmupMs" | "prefetchMs" | "liveMs" | "windowMs" | "coverageMs" | "echoMs";
+type V3PhaseTimer =
+  | "warmupMs"
+  | "prefetchMs"
+  | "liveMs"
+  | "windowMs"
+  | "coverageMs"
+  | "echoMs"
+  | "boundMs";
 
 /** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
@@ -580,6 +590,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     windowMs: 0,
     coverageMs: 0,
     echoMs: 0,
+    boundChecks: 0,
+    boundMs: 0,
   };
 
   private deployedDir: string | undefined;
@@ -1110,7 +1122,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
-    await this.assertBound();
+    // R651: timed outside the baseline bracket only, so the split's `other` sums to the loop.
+    if (this.inBaseline) await this.assertBound();
+    else {
+      this.stats.boundChecks += 1;
+      await this.timed("boundMs", () => this.assertBound());
+    }
     let call = this.rowsByCodeunit.get(ref.codeunitId);
     if (call === undefined) {
       // R635 §4: outside the bracket, serve-entries sends a LIVE one-group request.
@@ -1900,7 +1917,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await this.closeDaemon();
       const s = this.stats;
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}).`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(

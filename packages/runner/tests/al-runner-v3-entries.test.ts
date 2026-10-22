@@ -1894,6 +1894,8 @@ describe("R651: per-phase wall timers, timing only", () => {
       windowMs: s.windowMs,
       coverageMs: s.coverageMs,
       echoMs: s.echoMs,
+      boundMs: s.boundMs,
+      boundChecks: s.boundChecks,
     }).toEqual({
       warmupMs: 1,
       prefetchMs: 10,
@@ -1901,7 +1903,18 @@ describe("R651: per-phase wall timers, timing only", () => {
       windowMs: 12_000,
       coverageMs: 10_000,
       echoMs: 2000,
+      // No request runs inside a bound check; the baseline's two runs are not counted.
+      boundMs: 0,
+      boundChecks: 4,
     });
+  });
+
+  test("boundMs counts only the check: under a clock that moves 1 per read, 1 per check", async () => {
+    let n = 0;
+    const { r, clock } = await clockedRig(() => n++);
+    await scenario(r, clock);
+    const s = r.b.entriesStats();
+    expect([s.boundChecks, s.boundMs]).toEqual([4, 4]);
   });
 
   test("no verdict reads the timers: the same verdicts under a still clock and a wild one", async () => {
@@ -1926,10 +1939,14 @@ describe("R651: per-phase wall timers, timing only", () => {
       windowMs: 9,
       coverageMs: 4,
       echoMs: 5,
+      boundMs: 20,
+      boundChecks: 7,
     };
-    expect(v3SplitLine({ deploy: 7, baseline: 8, mutants: 6 }, stats)).toBe(
-      "split ms: deploy 7, baseline 8, mutant loop 6 (warm-up 1, prefetch 2, live 3, windows 9 of which coverage 4 and echo 5)",
+    // other = 100 - (1 + 2 + 3 + 9 + 20); coverage and echo sit inside windows.
+    expect(v3SplitLine({ deploy: 7, baseline: 8, mutants: 100 }, stats)).toBe(
+      "split ms: deploy 7, baseline 8, mutant loop 100 (warm-up 1, prefetch 2, live 3, windows 9 of which coverage 4 and echo 5, bound 20 over 7 checks, other 65)",
     );
-    expect(v3SplitLine({ baseline: 8 }, stats)).toContain("deploy -, baseline 8, mutant loop -");
+    expect(v3SplitLine({ baseline: 8 }, stats)).toContain("deploy -, baseline 8, mutant loop - (");
+    expect(v3SplitLine({ baseline: 8 }, stats)).toContain("other -)");
   });
 });
