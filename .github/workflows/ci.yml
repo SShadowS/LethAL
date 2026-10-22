@@ -8,9 +8,13 @@ name: CI
 # have already shipped, and a `branches: [master]` filter means a feature branch gets no signal at
 # all until someone opens a pull request — which is exactly how this file was first written, and
 # the push that was meant to test it triggered nothing.
+#
+# workflow_dispatch (R660): when GitHub drops a push event, `gh workflow run ci.yml --ref <branch>`
+# starts the same jobs on that branch head.
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   check:
