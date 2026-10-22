@@ -2,12 +2,15 @@
  * Prints the next free roadmap id (`R<n>`) and its file name.
  *
  *   bun scripts/roadmap-next-id.ts     # stdout: R389 docs/roadmap/R389.md
+ *   bun scripts/roadmap-next-id.ts --no-fetch   # offline: skips the fetch, and says so
  *
  * "Free" means unused ANYWHERE this clone can see: the working tree's `docs/roadmap/`, every local
  * and remote branch (`git for-each-ref` + `git ls-tree`), and every other worktree from
  * `git worktree list`. Other sessions file rows concurrently (R174 was overwritten that way), so
  * the working tree alone is not enough. `_template.md` and any non-`R<nnn>.md` name are ignored.
- * Run it immediately before writing the file; it cannot see a session that has not committed.
+ * It runs `git fetch --quiet` first, so a row another lane pushed since the last fetch is seen
+ * (R659); a failed fetch refuses rather than print an id from stale remote refs.
+ * Run it immediately before writing the file; it cannot see a session that has not pushed.
  */
 
 import { existsSync, readdirSync } from "node:fs";
@@ -52,6 +55,25 @@ function git(args: string[]): string {
   return r.stdout.toString();
 }
 
+export class RoadmapFetchError extends Error {
+  override name = "RoadmapFetchError";
+}
+
+/** R659: fetch before the remote refs are read. Returns the warning to print, if any. */
+export function fetchFirst(args: readonly string[], fetch: () => void): string | undefined {
+  if (args.includes("--no-fetch")) {
+    return "--no-fetch: remote branches are read as last fetched; an id pushed since may look free";
+  }
+  try {
+    fetch();
+  } catch (e) {
+    throw new RoadmapFetchError(
+      `git fetch failed, so the remote branches may be stale; refusing to print an id (--no-fetch skips the fetch): ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  return undefined;
+}
+
 /** Worktree paths from `git worktree list --porcelain`. */
 export function worktreePaths(porcelain: string): string[] {
   return porcelain
@@ -78,6 +100,8 @@ function collect(): Map<string, number[]> {
 }
 
 if (import.meta.main) {
+  const warning = fetchFirst(process.argv.slice(2), () => git(["fetch", "--quiet"]));
+  if (warning !== undefined) console.error(warning);
   const sources = collect();
   const { next, max, maxSeenIn } = nextId(sources);
   console.error(
