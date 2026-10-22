@@ -1085,6 +1085,23 @@ describe("10: R612's keep rule per entry, in entry order", () => {
     expect(r.serve.daemons).toHaveLength(1);
     expect(r.b.entriesStats().daemons).toBe(1);
   });
+
+  test("no loop: a group that hits an unkept row again is not re-sent a second time; it runs live", async () => {
+    const r = await readyRig({
+      serve: {
+        echo: (m, d, n) =>
+          m === "M0002"
+            ? { method: "Echo", status: "error", notRun: true, message: TIMEOUT_1S }
+            : goodEcho(m, d, n),
+      },
+      mutants: ["M0001", "M0002"],
+    });
+    expect(r.serve.daemons).toHaveLength(2);
+    expect(r.serve.requests.filter((q) => q.ids[0] === "M0002|echo")).toHaveLength(1);
+    expect(r.serve.requests.filter((q) => q.ids.includes("M0002|echo"))).toHaveLength(2);
+    await r.b.activate("M0002");
+    expect(outcome(await r.b.run(ref("A"), OPTS))).toEqual(["error", "pre-dispatch-rejected"]);
+  });
 });
 
 describe("11, 20: a refusal of the whole request names its reason and re-sends nothing", () => {
