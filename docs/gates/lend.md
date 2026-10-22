@@ -210,4 +210,6 @@ The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the off
   - N1 and N5 lent nothing;
   - every leg 3 / 12 / 4 per mutant.
 
-  `itest:bcdev` PASS 3 / 12 / 4 on the same head (`bcdev-bc2.log`).
+  `itest:bcdev` PASS 3 / 12 / 4 on the same head (`bcdev-bc2.log`). Both gates re-ran and PASSED, unchanged, on
+  the final head 5a9d1c80 after the build review's wording fix (R1 again carried 15; the logs were overwritten in
+  place).
