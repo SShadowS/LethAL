@@ -40,9 +40,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     `selectorMode` and `campaign freeze` are refused by name.
   - **Never lent across backends:** a v3 run lends history, resume verdicts and baseline snapshots
     only to a v3 session of the same build (`runs.runner_build`).
-  - **Contract probe:** each session re-measures v3's wire contract (25 facts since R612 and r8: 8 defect, 16 contract, 1 warn).
+  - **Contract probe:** each session re-measures v3's wire contract (26 facts since R641 and r9: 9 defect, 16 contract, 1 warn).
+    Two facts are judged against BC's own texts, measured on bc1 (`docs/measurements/r639/`): an
+    upstream fix that fails a test with another text than BC's (`unlike-bc`, #5700) refuses the
+    session by name, and a test v3 declines to run (`refused`, #5623) only warns (R641).
+  - **A refusal never scores** (R641): a v3 row whose message starts `NotRun: out-of-scope:` but is
+    written as a plain `fail` or `pass` reads `error`, never a kill, survive or pass.
   - **Update gate:** `scripts/al-runner-v3-update.ts` moves the pin only after
-    `itest:alrunner-v3` passes.
+    `itest:alrunner-v3` passes. It accepts edge builds' SemVer build metadata, holds one lock over
+    every gate path, and `--edge-rejudge <sha>` re-gates a kept edge binary at `.gated`'s current
+    commit, without a download (R641).
   - **Report:** `executionContexts[]` gains `runnerBuild` and `binarySha256`.
 
 - **On al-runner, a kill must reproduce** (R577). Measured: a Microsoft test that builds its input
@@ -843,6 +850,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`--skip-known-survivors` no longer lends a narrower run's survivors** (R585). A run now records
+  its test scope (the tests its baseline is given, as `runs.test_scope`). History lends only when
+  every test this session sends is in the source run's scope: an equal or wider run lends, a
+  `--tests-only` run does not lend to a session over more tests (a survivor there may be killed by a
+  test it never ran). A refusal warns `history-test-scope-changed`. Runs recorded before R585 have no
+  scope and lend no history: the first `--skip-known-survivors` run after the upgrade executes every
+  mutant. `--resume` already refused a scope change (the session fingerprint) and is unchanged.
+- **`--resume` never carries a stored `no-coverage`** (R621). It is re-derived from this session's
+  coverage: a mutant uncovered now reads `no-coverage` again, one covered now (say, after a target
+  edit added a call to it) is run. So a fully scored batch that holds a `no-coverage` row is no
+  longer carried whole: it is deployed, and its baseline comes from the saved snapshot when one
+  matches (R192). This costs one deploy per such batch per resume; R643 files a cheaper variant.
 - **LethAL no longer follows links (symlinks, junctions) when it walks a folder** (R631). Bun's
   recursive `readdir` follows them, so a link cycle hung or crashed with `ELOOP`, and a link out
   pulled a foreign tree into the run. Every walk now goes through one walker that never descends a

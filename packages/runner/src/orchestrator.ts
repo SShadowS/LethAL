@@ -4223,7 +4223,7 @@ function resolveResume(
   emit({
     type: "warning",
     code: "resume-reusing-run",
-    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192).${
+    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (its own baseline's, or a reused baseline's), so a batch holding one is deployed (R621).${
       testAppHash !== undefined && priorTestAppHash === `${testAppHash}${PENDING_SUFFIX}`
         ? ` Run ${priorRunId} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`
         : ""
@@ -5842,6 +5842,10 @@ async function runSessionBody(
   const testPageRefusedNames = tests
     .filter((t) => testPageRefused.has(testKeyOf(t)))
     .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method }));
+  // R585: this session's test scope (every discovered test the baseline is given, by key), recorded
+  // on the run and compared with the history source's. A TestPage-refused test stays in it: the
+  // same test app refuses it in every session alike.
+  const sessionTestScope = [...new Set(tests.map(testKeyOf))].sort();
   if (testPageRefusedNames.length > 0) {
     emit({
       type: "tests-testpage-refused",
@@ -6010,6 +6014,9 @@ async function runSessionBody(
   const runId = cfg.store.createRun({
     identityScheme: IDENTITY_SCHEME,
     buildSymbols,
+    // R585: the tests this session's baseline is given; history lends only to a session whose
+    // tests are all in it.
+    testScope: sessionTestScope,
     // R557 (I1): this session sends al-runner tests under `alRunnerMethodName`; the mark is what
     // lets its verdicts be lent (`runLendsAlRunnerNames`).
     ...(backendName === "al-runner" ? { alRunnerNames: true } : {}),
@@ -6387,6 +6394,8 @@ async function runSessionBody(
   let historyCarryWarned = false;
   // R557 C1: likewise for its pre-fix al-runner test-names warning.
   let historyAlRunnerNamesWarned = false;
+  // R585: likewise for its test-scope warning.
+  let historyTestScopeWarned = false;
 
   // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
@@ -6930,9 +6939,23 @@ async function runSessionBody(
         historyTestApp,
         buildSymbols,
         carryHidden.files,
+        sessionTestScope,
         {
           // R586: `runMayLend` step 1, first.
           session: lendingSession,
+          testScopeChanged: (old) => {
+            if (historyTestScopeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyTestScopeWarned = true;
+            const what =
+              old.missing === null
+                ? "recorded no test scope (it ran before R585)"
+                : `did not run ${old.missing.length} of this session's test(s) (${namesSample(old.missing)})`;
+            emit({
+              type: "warning",
+              code: "history-test-scope-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ${what}. A survivor there may be killed by a test it did not run (a --tests-only run, say), so no survivor from it is skipped: every mutant is executed (R585).`,
+            });
+          },
           backendBuildRefused: (old) => {
             if (historyBackendWarned || !(cfg.skipKnownSurvivors ?? false)) return;
             historyBackendWarned = true;

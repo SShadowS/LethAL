@@ -233,6 +233,7 @@ async function oldEngineRun(opts: { finished: boolean; buildSymbols?: readonly s
   };
   const buildSymbols = opts.buildSymbols === undefined ? B : opts.buildSymbols;
   const runId = store.createRun({
+    testScope: [],
     projectPath: real.project_path,
     backend: real.backend,
     appVersion: "1.0.0.0",

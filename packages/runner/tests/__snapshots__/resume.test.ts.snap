@@ -302,7 +302,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "code": "resume-reusing-run",
-        "message": "[lethal] --resume: reusing run 1 — 3 mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run 1 without either (R192). 1 prior 'error' verdict(s) will be re-executed. Of those, 1 stranded the tier on a prior run and will be SKIPPED rather than re-executed (a mutant that never terminates reproduces this every time and blocks every mutant behind it; pass --retry-stranded to attempt them).",
+        "message": "[lethal] --resume: reusing run 1 — 3 mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run 1 without either (R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (its own baseline's, or a reused baseline's), so a batch holding one is deployed (R621). 1 prior 'error' verdict(s) will be re-executed. Of those, 1 stranded the tier on a prior run and will be SKIPPED rather than re-executed (a mutant that never terminates reproduces this every time and blocks every mutant behind it; pass --retry-stranded to attempt them).",
         "seq": 5,
         "type": "warning",
       },
