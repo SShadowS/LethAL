@@ -40,7 +40,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     `selectorMode` and `campaign freeze` are refused by name.
   - **Never lent across backends:** a v3 run lends history, resume verdicts and baseline snapshots
     only to a v3 session of the same build (`runs.runner_build`).
-  - **Contract probe:** each session re-measures v3's wire contract (24 facts since r8).
+  - **Contract probe:** each session re-measures v3's wire contract (25 facts since R612 and r8: 8 defect, 16 contract, 1 warn).
   - **Update gate:** `scripts/al-runner-v3-update.ts` moves the pin only after
     `itest:alrunner-v3` passes.
   - **Report:** `executionContexts[]` gains `runnerBuild` and `binarySha256`.

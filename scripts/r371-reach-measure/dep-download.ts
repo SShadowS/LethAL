@@ -49,7 +49,7 @@ let packages = 0;
 let bytes = 0;
 const fetchCounted: typeof fetchPublished = async (app) => {
   const r = await fetchPublished(app);
-  if (r !== null && r !== undefined) {
+  if (r instanceof Uint8Array) {
     packages += 1;
     bytes += r.byteLength;
   }

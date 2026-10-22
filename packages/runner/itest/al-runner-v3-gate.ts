@@ -241,7 +241,8 @@ export function knownDifferencesRefusal(
 
 /**
  * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632).
- * Every other fact of the 24 (r8, R637) is a contract fact and must read `matches`.
+ * Every other fact of the 25 (R612's warn fact, then r8's for R637) is a contract fact and must read
+ * `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
   "upstream-compile-errors",
@@ -253,6 +254,12 @@ export const V3_DEFECT_FACTS = [
   "commit-under-test-isolation",
   "none-selected-exit",
 ] as const;
+
+/**
+ * R612 (plan r3 §2): leg C's warn facts, a third kind. Anything but `matches` prints
+ * `al-runner-v3-serve-keep-reason-moved` in the log and receipt lines and changes no outcome.
+ */
+export const V3_WARN_FACTS: readonly string[] = ["serve-keep-reasons"];
 
 /**
  * RC-2 (I-2): leg C's verdict. A contract fact must read `matches` and a defect fact (`defects`)
@@ -268,6 +275,7 @@ export function classifyLegC(
   }>,
   defects: readonly string[],
   count: number,
+  warns: readonly string[] = V3_WARN_FACTS,
 ): { readonly outcome: "pass" | "held" | "gate-fail" | "infra-fail"; readonly lines: string[] } {
   const lines: string[] = [];
   let fail = facts.length !== count;
@@ -279,7 +287,10 @@ export function classifyLegC(
     if (f.verdict === want) continue;
     // R633 I1: what v3 returned, so the receipt itself carries the evidence.
     const m = f.measured !== undefined ? ` (measured ${f.measured.slice(0, 300)})` : "";
-    if (f.verdict === "unmeasurable") {
+    if (warns.includes(f.fact)) {
+      // R612 (plan r3 §2): costs only speed (the rule then closes), so it never blocks.
+      lines.push(`al-runner-v3-serve-keep-reason-moved: ${f.fact}: ${f.verdict}${m}`);
+    } else if (f.verdict === "unmeasurable") {
       infra = true;
       lines.push(`infra-fail: ${f.fact}: unmeasurable${m}`);
     } else if (want === "defect-present" && f.verdict === "gone") {
@@ -408,6 +419,9 @@ export interface V3GateReceipt {
   readonly outcome: V3GateOutcome;
   readonly legs: Readonly<Record<string, V3LegOutcome>>;
   readonly lines: readonly string[];
+  /** R612 M-2: leg C's reading of each warn fact (`V3_WARN_FACTS`); the update script copies it
+   *  into `.gated` on a pass. */
+  readonly warnFacts?: Readonly<Record<string, string>>;
   /** F8: the BC build of each leg's oracle server, beside v3's `--bc-version`. */
   readonly oracleBcBuild: Readonly<Record<string, string>>;
   readonly writtenAt: string;

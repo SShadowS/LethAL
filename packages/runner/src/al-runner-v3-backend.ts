@@ -491,11 +491,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     // §12: only a gated build runs (the update gate's candidate excepted).
     let gateRecord: string;
+    let gatedWarnFacts: Readonly<Record<string, string>> | undefined;
     try {
       const gated = await checkGated(this.cfg.alRunnerPath, reported, {
         ...(this.cfg.candidate === true ? { candidate: true } : {}),
       });
       this.build = { version: reported, binarySha256: gated.binarySha256 };
+      gatedWarnFacts = gated.warnFacts;
       // M1: a session trusts leg C's gate-only facts from this record instead of re-measuring them.
       gateRecord =
         this.cfg.candidate === true
@@ -515,6 +517,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...(this.cfg.cacheDir !== undefined ? { cacheDir: this.cfg.cacheDir } : {}),
       ...(Bun.which("taskset") !== null ? { tasksetPath: Bun.which("taskset") ?? "" } : {}),
       gateOnlyTrusted: gateRecord,
+      ...(gatedWarnFacts !== undefined ? { gatedWarnFacts } : {}),
       spawn: this.spawn,
     });
     for (const line of v3DefectWarnings(this.contract)) console.warn(line);

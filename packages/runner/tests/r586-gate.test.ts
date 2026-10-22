@@ -164,6 +164,23 @@ describe("RC-2 (I-2): leg C, a fixed defect is held, never a blacklisting", () =
   test("everything as pre-committed is a pass", () => {
     expect(classifyLegC(asMeasured, DEFECTS, 3).outcome).toBe("pass");
   });
+  test("R612 (r3 §2): a warn fact diverged or unmeasurable is a pass plus the moved line; never gate-fail or held", () => {
+    for (const verdict of ["diverged", "unmeasurable"]) {
+      const r = classifyLegC(
+        [...asMeasured, { fact: "w", verdict, measured: "commit: MOVED x" }],
+        DEFECTS,
+        4,
+        ["w"],
+      );
+      expect(r.outcome).toBe("pass");
+      expect(r.lines).toEqual([
+        `al-runner-v3-serve-keep-reason-moved: w: ${verdict} (measured commit: MOVED x)`,
+      ]);
+    }
+    expect(
+      classifyLegC([...asMeasured, { fact: "w", verdict: "matches" }], DEFECTS, 4, ["w"]),
+    ).toEqual({ outcome: "pass", lines: [] });
+  });
   test("one defect fact moving defect-present -> gone is held", () => {
     const r = classifyLegC(
       [asMeasured[0], f("dup", "gone"), asMeasured[2]].flatMap((x) => (x === undefined ? [] : [x])),
