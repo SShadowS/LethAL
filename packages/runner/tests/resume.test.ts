@@ -22,6 +22,8 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { BcDevMcpBackend } from "../src/bcdev-backend";
+import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
@@ -433,6 +435,69 @@ describe("buildResumeIndex — a kill without killReproduced under the reproduct
   test("with the rule off (the default), a pre-rule kill still carries", () => {
     expect(buildResumeIndex(preRule, true).carryable.size).toBe(2);
     expect(buildResumeIndex(preRule, true, false).carryableBySite.size).toBe(2);
+  });
+});
+
+/**
+ * R582 (U4): a run recorded on bcdev BEFORE R582 has `kill_reproduced` NULL on every kill. With the
+ * flag read from `BcDevMcpBackend` itself, those kills are re-executed rather than carried; a
+ * marked kill and a survivor still carry.
+ */
+describe("buildResumeIndex — a pre-R582 bcdev run under BcDevMcpBackend's flag (R582)", () => {
+  test("its unmarked kills are re-executed, a marked kill and a survivor carry", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      coverageMode: "fenced",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+    });
+    const base = {
+      codeunitName: "Sandbox Logic",
+      procedureName: "Post",
+      operatorName: "lethal.negate-conditional",
+      operatorMajor: 1,
+      file: "src/SandboxLogic.Codeunit.al",
+      line: 1,
+      durationMs: 1,
+      batchIndex: 0,
+    };
+    store.recordMutant(runId, {
+      ...base,
+      mutantCode: "M0001",
+      astHash: "k1",
+      verdict: "killed",
+      killingTest: "T",
+    });
+    store.recordMutant(runId, {
+      ...base,
+      mutantCode: "M0002",
+      astHash: "k2",
+      verdict: "killed",
+      killingTest: "T",
+    });
+    store.recordMutant(runId, { ...base, mutantCode: "M0003", astHash: "s", verdict: "survived" });
+    store.recordMutant(runId, {
+      ...base,
+      mutantCode: "M0004",
+      astHash: "k4",
+      verdict: "killed",
+      killingTest: "T",
+      killReproduced: true,
+    });
+    const flag = new BcDevMcpBackend({} as unknown as BcDevConfig).killsMustReproduce === true;
+    const index = buildResumeIndex(store.mutantVerdicts(runId), false, flag);
+    expect(index.unreproducedKills).toBe(2);
+    expect([...index.carryable.values()].map((c) => c.verdict).sort()).toEqual([
+      "killed",
+      "survived",
+    ]);
+    expect([...index.carryable.values()].find((c) => c.verdict === "killed")?.killReproduced).toBe(
+      true,
+    );
+    store.close();
   });
 });
 

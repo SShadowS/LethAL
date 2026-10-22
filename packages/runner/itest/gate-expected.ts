@@ -41,8 +41,9 @@ export const TABLES_FIGURES = {
   platformArtifactKills: 4,
   assertionScreenDiscrimination: "partial",
   untargetedTriggerCount: 0,
-  /** 314 killed + 70 survived scored, plus 15 warm-kill replays. */
-  groupedCalls: 384 + 15,
+  /** 314 killed + 70 survived scored, plus 15 warm-kill replays, plus (R582) 15 warm-kill re-runs
+   *  under the mutant. The 299 kills at position 1 re-run as single calls, which are not grouped. */
+  groupedCalls: 384 + 15 + 15,
   warmKills: 15,
   killPositions: [
     { mutantCode: "M0179", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
@@ -66,20 +67,25 @@ export const TABLES_FIGURES = {
   },
 } as const;
 
-/** `itest:chunked`: the unbounded control leg (MEASURED 2026-09-04) and the chunked leg (DERIVED). */
+/**
+ * `itest:chunked`: the unbounded control leg (MEASURED 2026-09-04) and the chunked leg (DERIVED).
+ * R582 (PREDICTED, pre-commitment 39eaf536): each warm kill's re-run under the mutant is one more
+ * `RunMutantMany`, so control 33 -> 42 (24 scored + 9 replays + 9 re-runs) and chunked 57 -> 62
+ * (52 covering chunk calls + 5 replays + 5 re-runs).
+ */
 export const CHUNKED_FIGURES = {
   control: {
     killed: 17,
     survived: 7,
     noCoverage: 2,
     warmKills: 9,
-    groupedCalls: 33,
+    groupedCalls: 42,
     /** killPosition histogram over the 17 kills. */
     positions: { 1: 8, 2: 3, 3: 3, 4: 2, 5: 1 } as Record<number, number>,
   },
   chunked: {
     warmKills: 5,
-    groupedCalls: 57,
+    groupedCalls: 62,
   },
 } as const;
 
@@ -91,4 +97,7 @@ export const HANG_FIGURES = {
   /** R516: cold confirms of the position-1 timeouts. */
   coldConfirmsOn: 4,
   coldConfirmsSingle: 5,
+  /** R582: the ON leg's grouped calls BC stopped, which answer no session id: the 5 first
+   *  timeouts plus line 145's warm timeout re-run (the 4 position-1 re-runs are single calls). */
+  stoppedCallsOn: 6,
 } as const;

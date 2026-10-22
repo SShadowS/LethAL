@@ -34,7 +34,8 @@ header of `hang.itest.ts`.
     "HANG_FIGURES.budgetMs": 20000,
     "HANG_FIGURES.warmKills": 4,
     "HANG_FIGURES.coldConfirmsOn": 4,
-    "HANG_FIGURES.coldConfirmsSingle": 5
+    "HANG_FIGURES.coldConfirmsSingle": 5,
+    "HANG_FIGURES.stoppedCallsOn": 6
   }
 }
 ```
@@ -47,6 +48,17 @@ header of `hang.itest.ts`.
 - Every timeout at position 1 is confirmed by one unmutated `RunMutant` call before it is scored
   (R516). There are 4 such confirms on the ON leg and 5 on the SINGLE leg
   (`docs/superpowers/specs/2026-10-08-r516-hang-confirm-every-timeout-precommitment.md`).
+- Since R582 every kill is re-run once under the mutant after its confirm passed (R577's rule), a
+  timeout kill at the budget its first run was sent. So BC stops every hanging mutant TWICE: the
+  gate checks that each `timeout-killed` mutant has exactly 2 mutated `timeout` rows for its
+  killing test, both carrying "stopped the session" and "StopSession" and both in
+  [20 000, 50 000) ms. On the ON leg the re-run of line 145's warm timeout is a group call;
+  the other four re-run as single calls.
+- The ON leg's group calls are `scored + 2 x warmKills` (one replay and one re-run per warm kill),
+  42 before R582 and 46 since. 6 of them are stopped and answer no session id
+  (`stoppedCallsOn`): the 5 first timeouts and line 145's re-run. So the distinct grouped session
+  ids are 46 - 6 = 40. The re-runs add about ten 20-25 s stops, which takes the gate to about
+  15 minutes.
 - The ON leg's per-mutant table (`EXPECTED_ON` in `hang.itest.ts`, keyed by line and operator,
   with `killPosition` where it was pre-committed) is asserted by the gate and not pinned here.
 
@@ -61,3 +73,8 @@ R-389 (2026-10-21) published LethAL Control 1.0.0.23, which adds `DependentCount
 gate then passed there with both the ON and SINGLE legs at 24 killed / 5 timeout-killed /
 9 survived. As a fact: another lane's 8-worker local unit run overlapped it from 18:29:01 to
 18:29:21 UTC (about 20 s), and another `itest:hang` ran beside it on `bc1`. No figure moved.
+
+R582 (2026-10-22) switched R577's "a kill must reproduce" rule on for bcdev. No verdict moved;
+the ON leg's group calls went from 42 to 46 and its distinct grouped session ids from 37 to 40,
+and every timeout kill now carries two BC stops. This gate is the first live proof of R577's
+timeout half (`docs/superpowers/specs/2026-10-22-r582-bcdev-kill-reproduction-precommitment.md`).

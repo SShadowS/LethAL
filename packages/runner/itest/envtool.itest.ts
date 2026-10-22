@@ -126,6 +126,7 @@ import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
 import { ENVTOOL_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { assertKillsReproduced } from "./kill-reproduction";
 import { assertReachEvidence } from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_ENVTOOL) {
@@ -251,7 +252,7 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
     // workflow, matching bcdev.itest.ts.
     const store = new ResultsStore(join(PROJECT_DIR, "lethal.sqlite"));
     try {
-      return await runSession({
+      const report = await runSession({
         backend,
         store,
         projectDir: PROJECT_DIR,
@@ -271,6 +272,11 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
         ...afterLeaseAcquiredFor(envSession),
         quarantineDir: join(scratchRoot, "quarantine"),
       });
+      // R582 (UNMEASURED until the owner runs this gate): every kill was re-run under the
+      // mutant. The fixture's store is persistent; the check reads only this run's rows. A re-run
+      // on a hosted environment can score `session-reused`, the fail-safe direction.
+      assertKillsReproduced("envtool", report, store);
+      return report;
     } finally {
       store.close();
       // Without this the spawned bc-dev MCP child keeps the event loop alive and this script

@@ -53,6 +53,7 @@ import {
 } from "./config-path";
 import { TABLES_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { killReproductionFailures } from "./kill-reproduction";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
 import { armOracleDiffs } from "./r254-arm-oracle";
@@ -747,6 +748,8 @@ interface RunOnceResult {
   readonly sessionLiveness: ReturnType<ResultsStore["sessionIdLiveness"]>;
   /** GH-24: every `test_results` row of a `Data Reach Ops` mutant, in run order. */
   readonly reachControlRuns: readonly ReachControlRun[];
+  /** R582: `killReproductionFailures` for this run, read before the store closes. */
+  readonly repro: readonly string[];
 }
 
 async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
@@ -866,7 +869,9 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
           "WHERE tr.run_id = ? AND mu.codeunit_name = 'Data Reach Ops' ORDER BY tr.id",
       )
       .all(runId) as ReachControlRun[];
-    return { report, odataCfg, sessionLiveness, reachControlRuns };
+    // R582: the fixture's store is persistent, so the run id scopes the killer rows.
+    const repro = killReproductionFailures("tables", report, store, runId);
+    return { report, odataCfg, sessionLiveness, reachControlRuns, repro };
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and this script never
@@ -1022,7 +1027,7 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(
     report.groupedCalls,
     EXPECTED.groupedCalls,
-    `R198: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant); got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more means a chunk, a lost-ack retry or an unexpected replay happened on a container gate, which must be explained`,
+    `R198/R582: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant, plus one replay and one re-run under the mutant per warm kill); got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more means a chunk, a lost-ack retry or an unexpected replay happened on a container gate, which must be explained`,
   );
   // R206: the warm kills are a NUMBER measured before the build, every kill carries a position,
   // and three named mutants carry the positions run 334 measured, so the field measures the
@@ -1808,9 +1813,11 @@ async function main(): Promise<void> {
     // (astHash/codeunitName/operatorName/operatorMajor) rather than mutant code — so it survives
     // renumbering that the EXPECTED.verdicts map above deliberately does not.
     await assertGateBaseline(first.report, BASELINE_PATH, "tables itest");
+    assert.deepEqual(first.repro, [], first.repro.join("; "));
 
     const second = await runOnce(scratchB);
     assertVerdictTable(second.report);
+    assert.deepEqual(second.repro, [], second.repro.join("; "));
     await assertTriggerKillAndSurvive(
       second.report,
       await readDeployedManifests(join(scratchB, "instrumented")),
