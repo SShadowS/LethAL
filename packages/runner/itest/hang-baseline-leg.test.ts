@@ -16,6 +16,7 @@ import {
   Z_METHOD,
   baselineLegFailures,
   copyEvidence,
+  quarantineRecordsIn,
   quarantineStopReasons,
   stopHungSessionsFindings,
   writeLegState,
@@ -336,6 +337,37 @@ describe("R-658 quarantineStopReasons (D-C, trigger 7)", () => {
         quarantineRecords: 0,
       }),
     ).toHaveLength(1);
+    // Review I2: a stop with no 408 and no quarantine, so a session may still be live.
+    expect(
+      quarantineStopReasons("ON", {
+        report: report("stop-outcome-unconfirmed"),
+        quarantinedEvents: 0,
+        quarantineRecords: 0,
+      }),
+    ).toHaveLength(1);
+  });
+});
+
+describe("R-658 quarantineRecordsIn (review I1)", () => {
+  test("a record in quarantine-on or quarantine-single is found; OFF's and empty dirs are not", () => {
+    const root = mkdtempSync(join(tmpdir(), "r658-leftover-"));
+    try {
+      expect(quarantineRecordsIn(root)).toEqual([]);
+      for (const m of ["on", "single", "off"]) mkdirSync(join(root, `quarantine-${m}`));
+      writeFileSync(join(root, "quarantine-on", "notes.txt"), "not a record");
+      writeFileSync(join(root, "quarantine-off", "r.json"), "{}");
+      expect(quarantineRecordsIn(root)).toEqual([]);
+      writeFileSync(join(root, "quarantine-single", "r.json"), "{}");
+      expect(quarantineRecordsIn(root)).toEqual(["quarantine-single holds 1 record(s)"]);
+      writeFileSync(join(root, "quarantine-on", "a.json"), "{}");
+      writeFileSync(join(root, "quarantine-on", "b.json"), "{}");
+      expect(quarantineRecordsIn(root)).toEqual([
+        "quarantine-on holds 2 record(s)",
+        "quarantine-single holds 1 record(s)",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

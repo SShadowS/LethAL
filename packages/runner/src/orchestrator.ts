@@ -10042,6 +10042,23 @@ async function confirmWarm(p: {
       ...(verdict.sessionId !== undefined ? { sessionId: verdict.sessionId } : {}),
     });
     feedAttestation(args.attestation, verdict.attestation);
+    // R658 (I1 on the warm replay): our stop was sent, not refused, and BC never sent its 408. A
+    // `completed` reconcile then proves nothing, because our own stop writes that tombstone while
+    // the AL session may still run. Before `classifyNonVerdictStep`, whose `stop-outcome-unconfirmed`
+    // is "no verdict, no quarantine", as the cold confirm does.
+    if (verdict.operation === "in-flight-unknown" && !stopIsRetrySafe(verdict.stopState)) {
+      await quarantineInFlight({
+        safety: args.safety,
+        quarantineStore: args.quarantineStore,
+        resourceKey: args.resourceKey,
+        nowIso: args.nowIso,
+        detail: `warm replay stopped without BC's 408, ${what} (mutant ${m.mutantId})${verdict.failureMessage !== undefined ? `: ${verdict.failureMessage}` : ""}${tombstoneSentence(verdict.stopState)}`,
+      });
+      return error(
+        "stranded",
+        `${STRANDED_NOTE_PREFIX}${what}: the replay ran past its budget and LethAL stopped it, but BC never sent its 408, so the session may still run on the server — container may be stranded (R658)`,
+      );
+    }
     if (cause === "stopped-after-completion") {
       // G3(a): R204's narrowing fired on the REPLAY's own 408; the covering call's wording would
       // describe the mutated run. What it means here is that k's duration could not be established.
@@ -11279,11 +11296,12 @@ async function runMutantsOnBackend(args: {
           failureNote = `deadline exceeded confirming ${ref.method} (infrastructure, not a kill)`;
           cause = "deadline-exceeded";
         } else if (stoppedByUs(confirm)) {
-          // R658 (I3): BC's 408 ended the unmutated run cleanly. It says the test is slow or
-          // hangs with no mutant, which is not `unstable` and not a kill; no quarantine.
+          // R658 (I3): our stop ended the unmutated run cleanly (BC's 408, or phase 3 refused an op
+          // our stop had tombstoned). It says the test is slow or hangs with no mutant, which is not
+          // `unstable` and not a kill; no quarantine.
           verdict = "error";
           cause = "confirm-stopped";
-          failureNote = `confirming ${ref.method}: unmutated, the test also ran past its ${confirmMs} ms budget and LethAL stopped it (BC's 408), so the ${v.outcome} under the mutant is not attributed to it (R658)`;
+          failureNote = `confirming ${ref.method}: unmutated, the test also ran past its ${confirmMs} ms budget and LethAL stopped it (BC's 408, or the op was already tombstoned by that stop), so the ${v.outcome} under the mutant is not attributed to it (R658)`;
         } else {
           // Fails under the mutant AND at baseline: by construction this says nothing about the
           // mutant, so it stays `error cause=unstable` (the verdict is NOT reconsidered below).

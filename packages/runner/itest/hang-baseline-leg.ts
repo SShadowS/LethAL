@@ -7,7 +7,7 @@
  * The only IO here is the leg marker and the evidence copy, both synchronous so the crash
  * handlers can call them, and both swallowing their own failure: neither may change an exit code.
  */
-import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionReport } from "../src/report";
 import { HANG_FIGURES } from "./gate-expected";
@@ -279,8 +279,42 @@ export function quarantineStopReasons(
   if (i.quarantinedEvents > 0) out.push(`[${label}] ${i.quarantinedEvents} quarantined event(s)`);
   if (i.quarantineRecords > 0) out.push(`[${label}] ${i.quarantineRecords} quarantine record(s)`);
   for (const m of i.report.mutants) {
-    if (m.cause === "stranded" || m.cause === "confirm-stopped") {
+    // `stop-outcome-unconfirmed`: a stop with no 408 and no quarantine, so a session may be live.
+    if (
+      m.cause === "stranded" ||
+      m.cause === "confirm-stopped" ||
+      m.cause === "stop-outcome-unconfirmed"
+    ) {
       out.push(`[${label}] ${m.mutantCode} line ${m.line} has cause ${m.cause}`);
+    }
+  }
+  return out;
+}
+
+/** The legs whose quarantine is a STOP (D-C). OFF quarantines by design. */
+export const STOP_ON_QUARANTINE_MODES = ["on", "single"] as const;
+
+/**
+ * Review I1: the quarantine records left in `scratchRoot/quarantine-<mode>`, one line per leg that
+ * holds any. Synchronous so the crash handlers can call it. Read on every non-STOP exit before the
+ * teardown, because a throw in ON or SINGLE skips that leg's D-C check: a record found here is a
+ * STOP all the same. An unreadable dir is a line too, never a silent `[]`.
+ */
+export function quarantineRecordsIn(
+  scratchRoot: string,
+  modes: readonly string[] = STOP_ON_QUARANTINE_MODES,
+): string[] {
+  const out: string[] = [];
+  for (const mode of modes) {
+    const dir = join(scratchRoot, `quarantine-${mode}`);
+    if (!existsSync(dir)) continue;
+    try {
+      const n = readdirSync(dir).filter((f) => f.endsWith(".json")).length;
+      if (n > 0) out.push(`quarantine-${mode} holds ${n} record(s)`);
+    } catch (err) {
+      out.push(
+        `quarantine-${mode} could not be read: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
   return out;

@@ -587,7 +587,8 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "baseline-test-stopped": {
     meaning:
       "One or more baseline tests ran past `--baseline-timeout-ms` with no mutant active, and " +
-      "LethAL stopped each one on the server (BC confirmed with its 408). They are `timeout`, " +
+      "LethAL stopped each one on the server (BC confirmed with its 408, or the op was already " +
+      "tombstoned by that stop). They are `timeout`, " +
       "not green, so they cover no mutant: a mutant covered only by them reads `no-coverage` " +
       "(see baseline-red). The server was left clean. LethAL stops such a test whether or not " +
       "`--stop-hung-sessions` is given, because an abandoned one keeps running and blocks the " +
@@ -595,7 +596,8 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "rather than hung (R658).",
     entailedNegative:
       "Not a statement about any mutant, and not `stop-hung-sessions`: no mutant was stopped. " +
-      "Not a quarantine: a stop BC did not confirm with its 408 quarantines the run instead.",
+      "Not a quarantine: a stop BC never answers quarantines the run instead, at the baseline, " +
+      "the cold kill confirm and the warm replay alike.",
     basis: "R658",
   },
 };
@@ -639,7 +641,8 @@ export type MutantErrorCause =
   // R577: the killer failed (or timed out) under the mutant and passed with no mutant, but the
   // reproduction under the mutant did not end with it failing (or timing out) again.
   | "kill-not-reproduced"
-  // R658: the unmutated cold confirm also ran past its budget and LethAL's stop ended it (BC's 408).
+  // R658: the unmutated cold confirm also ran past its budget and LethAL's stop ended it (BC's 408,
+  // or the op was already tombstoned by that stop).
   | "confirm-stopped";
 
 /**
@@ -3562,7 +3565,7 @@ export function renderConsole(r: SessionReport): string {
   if (r.baselineStopped !== undefined) {
     const n = r.baselineStopped.tests.length;
     lines.push(
-      `BASELINE TEST STOPPED: ${n} baseline test(s) ran past --baseline-timeout-ms (${r.baselineStopped.budgetMs} ms) and LethAL stopped them on the server (BC confirmed with its 408). They are not green and cover no mutant; the server was left clean. Raise --baseline-timeout-ms if a test is slow rather than hung.`,
+      `BASELINE TEST STOPPED: ${n} baseline test(s) ran past --baseline-timeout-ms (${r.baselineStopped.budgetMs} ms) and LethAL stopped them on the server (BC confirmed with its 408, or the op was already tombstoned by that stop). They are not green and cover no mutant; the server was left clean. Raise --baseline-timeout-ms if a test is slow rather than hung.`,
     );
     for (const t of r.baselineStopped.tests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);

@@ -77,6 +77,7 @@ import {
   type LegState,
   baselineLegFailures,
   copyEvidence,
+  quarantineRecordsIn,
   quarantineStopReasons,
   stopHungSessionsFindings,
   writeLegState,
@@ -146,23 +147,47 @@ function printStopBanner(): void {
   );
 }
 
-function crashed(kind: string, err: unknown): void {
-  if (legState === "armed") {
-    fireStop(`${kind} while the BASELINE leg was armed`);
-    console.error(formatFailure(err));
+/**
+ * Review I1: on any exit that is not yet a STOP, a quarantine record left by ON or SINGLE makes it
+ * one, because a throw in those legs skips their D-C check.
+ */
+function stopOnLeftoverQuarantine(scratchRoot: string | undefined): void {
+  if (stopReason !== undefined || scratchRoot === undefined) return;
+  const found = quarantineRecordsIn(scratchRoot);
+  if (found.length > 0) fireStop(`D-C quarantine found on the way out: ${found.join("; ")}`);
+}
+
+async function crashed(kind: string, err: unknown): Promise<void> {
+  if (legState === "armed") fireStop(`${kind} while the BASELINE leg was armed`);
+  else stopOnLeftoverQuarantine(scratchRootForEvidence);
+  console.error(`hang itest: ${kind}`);
+  console.error(formatFailure(err));
+  const msg = err instanceof Error ? err.message : String(err);
+  if (stopReason !== undefined) {
     if (scratchRootForEvidence !== undefined) {
       for (const l of copyEvidence(scratchRootForEvidence, EVIDENCE_DIR, LEG_MODES))
         console.error(`  ${l}`);
     }
     printStopBanner();
-    process.exit(5);
+  } else {
+    // ponytail: no async teardown from a crash handler; it says what was skipped instead.
+    console.error(
+      "  No teardown force-reset ran. If the OFF leg had started, its stranded op marker blocks every later run on this server; see teardown() in hang.itest.ts for the recovery.",
+    );
   }
-  console.error(`hang itest: ${kind}`);
-  console.error(formatFailure(err));
+  // Review M3: a crash writes a failed receipt too, naming the STOP or the crash.
+  try {
+    await emitFailed(
+      "hang",
+      stopReason !== undefined ? `STOP (exit 5): ${stopReason}` : `${kind}: ${msg}`,
+    );
+  } catch (receiptErr) {
+    console.error(`  receipt write failed: ${formatFailure(receiptErr)}`);
+  }
   process.exit(stopReason !== undefined ? 5 : 1);
 }
-process.on("uncaughtException", (err) => crashed("uncaught exception", err));
-process.on("unhandledRejection", (err) => crashed("unhandled rejection", err));
+process.on("uncaughtException", (err) => void crashed("uncaught exception", err));
+process.on("unhandledRejection", (err) => void crashed("unhandled rejection", err));
 /**
  * R-204b: the SINGLE leg's committed per-mutant baseline (R332: refused when missing, recorded
  * once with `LETHAL_ITEST_RECORD_BASELINE=hang.single.baseline.json`, exit 3, never a pass). The ON
@@ -1148,6 +1173,8 @@ async function main(): Promise<void> {
     }
     throw err;
   } finally {
+    // Review I1: a throw in ON or SINGLE skipped their D-C check; a record they left is a STOP.
+    stopOnLeftoverQuarantine(scratchRoot);
     if (stopReason !== undefined) {
       // A STOP: evidence first, before the scratch root goes, and NO teardown.
       for (const l of copyEvidence(scratchRoot, EVIDENCE_DIR, LEG_MODES)) console.error(`  ${l}`);

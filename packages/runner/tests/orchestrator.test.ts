@@ -16719,6 +16719,79 @@ describe("R206: the warm confirmation and the session guard", () => {
     r.store.close();
   });
 
+  // R658 (review C1): the warm replay now always gets our stop. A stop with no 408 whose lost
+  // answer reconciles `completed` (our own tombstone) proves nothing: quarantine, as the cold
+  // confirm does. A REFUSED stop's `completed` is genuine and stays `result-lost`.
+  const lostReplay = async (stopState: StopState) => {
+    const backend = makeBackend();
+    let replays = 0;
+    backend.manyOverride = (call, opts, composed) => {
+      const [first] = opts.methods;
+      if (call !== 0 || first === undefined) return composed;
+      replays += 1;
+      return {
+        kind: "call",
+        methodIndex: 1,
+        verdict: {
+          ref: first.ref,
+          outcome: "error",
+          durationMs: 1,
+          failureMessage: "RunMutantMany failed: HTTP 400",
+          operation: "in-flight-unknown",
+          stopState,
+          fencedOp: composed.fencedOp,
+        },
+        fencedOp: composed.fencedOp,
+      };
+    };
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = (attemptId, opSeq) => ({
+      opKind: "none",
+      opAttemptId: attemptId,
+      opSeq,
+      lastCompletedOpSeq: opSeq,
+      completed: true,
+    });
+    const { lease } = leaseCfg(client);
+    const dir = freshTmpDir();
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend: Object.assign(backend, { setLease: (_l: Lease) => {} }),
+      store,
+      ...dirs,
+      selectorIds,
+      lease,
+      quarantineDir: dir,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+    });
+    store.close();
+    return {
+      replays,
+      m: report.mutants.find((x) => x.mutantCode === "M0002"),
+      report,
+      record: await new QuarantineStore(dir).read("http://cronus281|BC"),
+    };
+  };
+
+  test("R658 C1: a CONFIRMED replay stop with no 408 and a `completed` reconcile is stranded and quarantined", async () => {
+    const r = await lostReplay("confirmed");
+    expect(r.replays).toBe(1); // never retried: our stop may have ended it
+    expect(r.m?.cause).toBe("stranded");
+    expect(r.record).not.toBeNull();
+    expect(r.report.quarantined?.reason).toContain(
+      "LethAL's stop was confirmed and tombstoned the op",
+    );
+  });
+
+  test("R658 C1 twin: a REFUSED replay stop with a `completed` reconcile stays result-lost, unquarantined", async () => {
+    const r = await lostReplay("refused");
+    expect(r.replays).toBe(2); // the one proven-clean retry, also lost
+    expect(r.m?.cause).toBe("result-lost");
+    expect(r.record).toBeNull();
+  });
+
   test("the replay runs exactly the CHUNK's prefix when the killer sits in chunk 2 under --max-methods-per-call 2", async () => {
     // Order on the cold ledger is alphabetical: T1..T5. Make M0004 fail at T4 only when T3 ran in
     // the same session (chunk 2 is [T3, T4]); the replay must be [T3, T4], never [T1..T4].
@@ -21846,7 +21919,7 @@ describe("runSession — R658: a stopped unmutated run", () => {
     expect(s.m2?.verdict).toBe("error");
     expect(s.m2?.cause).toBe("confirm-stopped");
     expect(s.m2?.failureNote).toContain(
-      "LethAL stopped it (BC's 408), so the fail under the mutant",
+      "LethAL stopped it (BC's 408, or the op was already tombstoned by that stop), so the fail",
     );
     expect(s.record).toBeNull();
     expect(s.report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();

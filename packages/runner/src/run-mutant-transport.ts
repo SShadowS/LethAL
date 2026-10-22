@@ -1433,9 +1433,10 @@ export class RunMutantTransport {
         ref: decision.ref,
         outcome: "timeout",
         durationMs,
+        // R658 (M2): the warm confirmation's unmutated replay (mutantId "") scores nothing.
         failureMessage:
-          `RunMutantMany: ${decision.ref.method} exceeded its ${decision.ref.method === watchedRef.method ? "" : ""}budget and was stopped server-side so it could ` +
-          `be scored rather than strand the tier. BC's own words: ${JSON.stringify(rawBody.slice(0, 400))}`,
+          `RunMutantMany: ${decision.ref.method} exceeded its ${decision.ref.method === watchedRef.method ? "" : ""}budget and was stopped server-side ${mutantId === "" ? "so it would not strand the server" : "so it could be scored rather than strand the tier"}. ` +
+          `BC's own words: ${JSON.stringify(rawBody.slice(0, 400))}`,
       });
     }
     if (!res.ok) {
