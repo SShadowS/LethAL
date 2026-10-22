@@ -12,10 +12,12 @@ import { V3_GATE_LEGS, gateOutcome } from "../itest/al-runner-v3-gate";
 import {
   V3_AGENTFLOW_LEGS,
   V3_K_CANDIDATE_SKIP,
+  isSessionTestCall,
   judgeLegK,
   legKSection,
   v3DefaultLegs,
   v3ItestFailures,
+  v3RecordRunFailures,
 } from "../itest/alrunner-v3-legs";
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { buildBackend } from "../src/cli";
@@ -126,6 +128,69 @@ describe("R654 S2, condition (1): on a candidate K is skipped with its summary, 
         SELECTED,
       ),
     ).toEqual([`L1=${V3_K_CANDIDATE_SKIP}`]);
+  });
+});
+
+describe("build review M2: a run in which no leg passed is never a PASS", () => {
+  test("a candidate run of K alone (K skipped, nothing measured) fails with a named reason", () => {
+    expect(v3ItestFailures({ K: V3_K_CANDIDATE_SKIP }, true, ["K"])).toEqual(["no leg passed"]);
+  });
+
+  test("an empty run fails the same way", () => {
+    expect(v3ItestFailures({}, false, [])).toEqual(["no leg passed"]);
+  });
+
+  test("the other direction: one passed leg beside the candidate's skipped K passes", () => {
+    expect(v3ItestFailures({ S1: "pass", K: V3_K_CANDIDATE_SKIP }, true, ["S1", "K"])).toEqual([]);
+  });
+});
+
+describe("build review M4: a record run exits 3 only when every leg it did not record passed", () => {
+  const SEL = ["L1", "Y-A", "Y-B"];
+
+  test("every selected leg recorded: no failure (exit 3, recorded)", () => {
+    const legs = { L1: "gate-fail", "Y-A": "gate-fail", "Y-B": "gate-fail" };
+    expect(v3RecordRunFailures(legs, new Set(SEL), false, SEL)).toEqual([]);
+  });
+
+  test("a leg that failed its table (so recorded nothing) is named (exit 1)", () => {
+    const legs = { L1: "gate-fail", "Y-A": "gate-fail", "Y-B": "gate-fail" };
+    expect(v3RecordRunFailures(legs, new Set(["L1", "Y-B"]), false, SEL)).toEqual([
+      "Y-A=gate-fail",
+    ]);
+  });
+
+  test("an infra failure beside the recorded legs is named too", () => {
+    const legs = { L1: "gate-fail", "Y-A": "infra-fail", "Y-B": "gate-fail" };
+    expect(v3RecordRunFailures(legs, new Set(["L1", "Y-B"]), false, SEL)).toEqual([
+      "Y-A=infra-fail",
+    ]);
+  });
+});
+
+describe("build review M3: K counts the session's own test calls, not the probes'", () => {
+  const TESTS = ["/repo/fixtures/sandbox-tests", "/real/fixtures/sandbox-tests"];
+  const call = (testDir: string) => [
+    "/bin/al-runner",
+    "test",
+    "--output-json",
+    "--codeunit",
+    "79100",
+    "--coverage-json",
+    "/s/cov.json",
+    "/s/backend/active",
+    testDir,
+  ];
+
+  test("a mutant or baseline call (the session's test folder last) counts, given or resolved", () => {
+    expect(isSessionTestCall(call(TESTS[0] ?? ""), TESTS)).toBe(true);
+    expect(isSessionTestCall(call(TESTS[1] ?? ""), TESTS)).toBe(true);
+  });
+
+  test("a contract-probe or predefined-probe call (its own scratch tests) does not count", () => {
+    expect(isSessionTestCall(call("/tmp/lethal-v3-contract-x/tests"), TESTS)).toBe(false);
+    expect(isSessionTestCall(["/bin/al-runner", "--version"], TESTS)).toBe(false);
+    expect(isSessionTestCall(["/bin/al-runner", "serve", TESTS[0] ?? ""], TESTS)).toBe(false);
   });
 });
 

@@ -415,14 +415,13 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * 3.0.0-alpha.2 (91253f2d6), LethAL 0043dda1: record exit 3 at 290 / 57 / 59 over 406, its 52
  * differences from `tables.baseline.json` equal to `precommitment-tables-52.txt` by key and by
  * transition (pre-commitments dcdd1489, abe76fa6, c7c505e6).
- * R654 S2's three v3 legs are pre-committed (43115c78) and wait for their one record run
- * (L1, Y-A and Y-B in one run, then a confirm run); the recording commit empties this list.
+ * R654 S2's three v3 legs (`al-runner-v3.layout.baseline.json`,
+ * `al-runner-v3.symbols-lethala.baseline.json`, `al-runner-v3.symbols-lethalb.baseline.json`) were
+ * recorded 2026-10-22 on al-runner v3 3.0.0-alpha.2 (91253f2d6) in one record run (exit 3,
+ * `/coord/handoff/R-654/s2-record.log`) at 7 / 3 / 0, 5 / 4 / 0 and 5 / 4 / 0 as pre-committed
+ * (43115c78), each identical per mutant to its .NET al-runner twin.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = [
-  "al-runner-v3.layout.baseline.json",
-  "al-runner-v3.symbols-lethala.baseline.json",
-  "al-runner-v3.symbols-lethalb.baseline.json",
-];
+export const PENDING_FIRST_RECORD: readonly string[] = [];
 
 /** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
 export const SYMBOL_BASELINES: readonly string[] = [

@@ -31,7 +31,7 @@
  * No leg needs a BC server.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -96,10 +96,12 @@ import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
+  isSessionTestCall,
   judgeLegK,
   legKSection,
   v3DefaultLegs,
   v3ItestFailures,
+  v3RecordRunFailures,
 } from "./alrunner-v3-legs";
 import {
   BaselineRecordedError,
@@ -558,8 +560,11 @@ async function legY(scratch: string, leg: "Y-A" | "Y-B"): Promise<SessionReport>
 async function legK(scratch: string): Promise<void> {
   let oneShotTestCalls = 0;
   let serveSpawns = 0;
+  // Build review M3: only the backend's own calls on the session's test folder count, never the
+  // contract probe's or the predefined-symbol probe's (their own scratch projects).
+  const sessionTests = [fixture("sandbox-tests"), realpathSync(fixture("sandbox-tests"))];
   const spawn: SpawnFn = (argv, opts) => {
-    if (argv.includes("test")) oneShotTestCalls += 1;
+    if (isSessionTestCall(argv, sessionTests)) oneShotTestCalls += 1;
     return defaultSpawn(argv, opts);
   };
   const serverSpawn: ServerSpawnFn = (argv, opts) => {
@@ -1302,6 +1307,8 @@ async function main(): Promise<void> {
   const lines: string[] = [];
   const root = await mkdtemp(join(tmpdir(), "lethal-itest-v3-"));
   let recorded: BaselineRecordedError | undefined;
+  /** Build review M4: the legs whose baseline this run wrote. */
+  const recordedLegs = new Set<string>();
   try {
     for (const leg of LEGS) {
       const scratch = join(root, leg);
@@ -1371,6 +1378,7 @@ async function main(): Promise<void> {
       } catch (err) {
         if (err instanceof BaselineRecordedError) {
           recorded = err;
+          recordedLegs.add(leg);
           legs[leg] = "gate-fail";
           console.log(`leg ${leg}: RECORDED (not a pass)`);
           continue;
@@ -1414,7 +1422,18 @@ async function main(): Promise<void> {
       writtenAt: new Date().toISOString(),
     });
   }
-  if (recorded !== undefined) throw recorded;
+  if (recorded !== undefined) {
+    // Build review M4: exit 3 ("recorded, not a pass") only when every leg the run did not record
+    // passed. A leg that failed its table (and so wrote nothing) makes the run exit 1, by name.
+    // Shared with leg T's record run, where it changes nothing unless another selected leg failed.
+    const failedBeside = v3RecordRunFailures(legs, recordedLegs, CANDIDATE, LEGS);
+    if (failedBeside.length > 0) {
+      throw new Error(
+        `al-runner-v3 itest: FAIL: a record run with failed leg(s) ${failedBeside.join(", ")}; recorded ${[...recordedLegs].join(", ")} (delete those files before the next record run)`,
+      );
+    }
+    throw recorded;
+  }
   // R654 S2, ruling condition 2: every selected leg must pass, K included on a gated build (a
   // skip there fails); only a candidate's K may read `V3_K_CANDIDATE_SKIP` (`v3ItestFailures`).
   const bad = v3ItestFailures(legs, CANDIDATE, LEGS);

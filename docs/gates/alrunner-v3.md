@@ -114,7 +114,10 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 - **Multi-object and wrapped.** v3 turns coverage off there by design (R602).
 - **Names.** Quoted test names are unselectable on v3 (#5572), and N1 covers the fixture.
 
-**Recording (R332).** Run `LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=L1,Y-A,Y-B LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.layout.baseline.json,al-runner-v3.symbols-lethala.baseline.json,al-runner-v3.symbols-lethalb.baseline.json bun run itest:alrunner-v3`. It exits 3 by design. Then confirm with every leg. Until then, the three files are in `PENDING_FIRST_RECORD`, and the gate refuses to start those legs.
+**Recording (R332).** Run `LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=L1,Y-A,Y-B LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.layout.baseline.json,al-runner-v3.symbols-lethala.baseline.json,al-runner-v3.symbols-lethalb.baseline.json bun run itest:alrunner-v3`. It exits 3 by design. Then confirm with every leg.
+- **Recorded 2026-10-22** on alpha.2 (91253f2d6), once, by that command (`/coord/handoff/R-654/s2-record.log`, exit 3). The figures are 7 / 3 / 0, 5 / 4 / 0 and 5 / 4 / 0 as pre-committed. Each file is identical per mutant to its .NET al-runner twin (`al-runner.layout`, `-symbols-lethala`, `-symbols-lethalb`; 0 differences).
+- **When a file is missing,** `preflightGateBaseline` refuses the WHOLE run, before any leg starts, and names the record command. This happens whenever the run selects the leg whose baseline is missing (L1, Y-A or Y-B; by default all three are selected). It does not skip just that leg.
+- **A record run never exits 3 when a leg that it did not record failed.** It exits 1 and names the leg (`v3RecordRunFailures`). A table mismatch writes no file.
 
 **agentflow.** `scripts/agentflow/gate-table.ts` selects the `alrunner-v3` leg wherever it selects `alrunner`. A challenged run (the four `LETHAL_GATE_*` variables) writes a receipt whose sublegs must equal the default legs, with no corpus and no tables leg (`V3_AGENTFLOW_LEGS`).
 
@@ -216,7 +219,9 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 }
 ```
 
-- Legs L1, Y-A and Y-B: the pre-committed figures (43115c78). The files are recorded once under R332, and until then they are listed in `PENDING_FIRST_RECORD`.
+- Leg L1, `al-runner-v3.layout.baseline.json`: 7 / 3 / 0 over 10, as pre-committed (43115c78).
+- Leg Y-A, `al-runner-v3.symbols-lethala.baseline.json`: 5 / 4 / 0 over 9, as pre-committed.
+- Leg Y-B, `al-runner-v3.symbols-lethalb.baseline.json`: 5 / 4 / 0 over 9, as pre-committed. All three were recorded once under R332 on 2026-10-22, and each is identical per mutant to its .NET al-runner twin.
 
 - Leg T, `al-runner-v3.tables.baseline.json`: 290 / 57 / 59 over 406, as pre-committed. Its rows differ from
   `itest:tables`' baseline on exactly the 52 keys and transitions of the pre-commitment's list (41 Commit, 7

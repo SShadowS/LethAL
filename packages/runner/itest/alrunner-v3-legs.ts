@@ -43,6 +43,8 @@ export const V3_AGENTFLOW_LEGS: readonly string[] = v3DefaultLegs({ cdo: false, 
  * one is `<leg>=missing`, so no leg drops out silently), and every leg in `legs` must be a pass,
  * except K on a candidate build, which must be exactly `V3_K_CANDIDATE_SKIP`. A run whose
  * selection leaves K out (`LETHAL_ITEST_V3_LEGS=T`, a record run of L1,Y-A,Y-B) is not judged on K.
+ * Build review M2: a run in which NO leg passed (a candidate run of K alone, an empty selection)
+ * is a failure, `no leg passed`: a PASS line must mean that something was measured.
  */
 export function v3ItestFailures(
   legs: Readonly<Record<string, string>>,
@@ -55,7 +57,36 @@ export function v3ItestFailures(
     if (candidate && leg === V3_K_LEG && v === V3_K_CANDIDATE_SKIP) continue;
     if (v !== "pass") out.push(`${leg}=${v}`);
   }
+  if (!Object.values(legs).includes("pass")) out.push("no leg passed");
   return out;
+}
+
+/**
+ * Build review M4: a record run exits 3 ("baselines recorded, not a pass") only when every leg it
+ * did NOT record passed. The legs that recorded (`recorded`) count as passed here; any other leg's
+ * failure is returned, and the run exits 1 naming it, so a failed table never hides behind a 3.
+ */
+export function v3RecordRunFailures(
+  legs: Readonly<Record<string, string>>,
+  recorded: ReadonlySet<string>,
+  candidate: boolean,
+  selected: readonly string[],
+): string[] {
+  const asPassed = Object.fromEntries(
+    Object.entries(legs).map(([l, v]) => [l, recorded.has(l) ? "pass" : v]),
+  );
+  return v3ItestFailures(asPassed, candidate, selected);
+}
+
+/**
+ * Build review M3: one of the backend's own mutant or baseline `test` calls (`v3CallArgv`: the
+ * subcommand `test`, the session's test folder LAST), never the contract probe's or the
+ * predefined-symbol probe's, which run against their own scratch projects. `testDirs` holds the
+ * session's test folder as given and as resolved (the backend runs the real path).
+ */
+export function isSessionTestCall(argv: readonly string[], testDirs: readonly string[]): boolean {
+  const last = argv.at(-1);
+  return argv[1] === "test" && last !== undefined && testDirs.includes(last);
 }
 
 /**
