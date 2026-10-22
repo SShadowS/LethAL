@@ -282,7 +282,7 @@ that ordering is the priority.
 - **R628** · R572's value path cannot tell a deep global that only addresses a request from one that feeds the loop's exit: Shopify's paging loops are over-refused (87 keys) · [R628.md](docs/roadmap/R628.md) · closed 2026-10-22 — ruling: the deep carry over-refuses 87 keys in one file (Shopify, bch), 0 in dc/do/cdo; a…
 - **R629** · A hang loop in one project calls a procedure whose copy in a nested project is refused nowhere · [R629.md](docs/roadmap/R629.md) · open, filed 2026-10-22
 - **R631** · Bun's recursive readdir follows directory symlinks (Node does not): a link cycle in a walked tree hangs or throws ELOOP, and a link out walks a foreign tree; product code walks user projects this way · [R631.md](docs/roadmap/R631.md) · open, filed 2026-10-22
-- **R633** · al-runner v3 update gate: two wrong-reason verdicts on 2026-10-22 (alpha.3 infra-fail with no D legs run; alpha.4 and edge-7739d8132 gate-fail on #5613's fix read as a contract break), and every receipt deleted · [R633.md](docs/roadmap/R633.md) · done (23e17f06)
+- **R633** · al-runner v3 update gate: two wrong-reason verdicts on 2026-10-22 (alpha.3 infra-fail with no D legs run; alpha.4 and edge-7739d8132 gate-fail on #5613's fix read as a contract break), and every receipt deleted · [R633.md](docs/roadmap/R633.md) · done (abac8803)
 
 ## Product gaps a real project hits
 
