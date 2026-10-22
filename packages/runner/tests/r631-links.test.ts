@@ -540,6 +540,26 @@ describe("R631 review r2 N3: the reaches-a-.al scan", () => {
     }
   });
 
+  // R640: the budget is the WALK's, shared by every link, so the refusal must not say the link it
+  // names holds the excess. Two links of 6 folders each pass a cap of 10 only together. Revert (the
+  // old "it holds more than N folders"): the second link, holding 6, is blamed for more than 10.
+  test("R640: the cap refusal names the walk-wide budget, not the link that was being scanned", async () => {
+    const base = scratch("lethal-r640-");
+    for (const side of ["one", "two"])
+      for (let i = 0; i < 5; i++) put(base, join(side, `s${i}`, "x.app"), "x");
+    const dir = join(base, "app");
+    put(dir, "src/A.al", CODEUNIT);
+    mkdirSync(join(dir, "node_modules"), { recursive: true });
+    symlinkSync(join(base, "one"), join(dir, "node_modules", "one"), "junction");
+    symlinkSync(join(base, "two"), join(dir, "node_modules", "two"), "junction");
+    const e = await withFolderCap(10, () => refusalOf(refuseProjectLinks([dir])));
+    expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+    const message = (e as Error).message;
+    expect(message).toContain("more than 10 folders in all");
+    expect(message).toContain("the limit was reached while scanning this one");
+    expect(message).not.toContain("it holds more than");
+  });
+
   // R636 test 3b: depth alone never refuses. Revert (a depth cap of 32): refused.
   test("R636: a 40-deep real folder chain behind a link is admitted at the default cap", async () => {
     const base = scratch("lethal-r636-");
