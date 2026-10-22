@@ -250,6 +250,30 @@ codeunit 50651 "Probe Hang"
     end;
 }
 
+codeunit 50652 "Probe Cut"
+{
+    Subtype = Test;
+
+    var
+        Logic: Codeunit "Probe Logic";
+        Dirty: Boolean;
+
+    [Test]
+    procedure HangsDirty()
+    begin
+        Dirty := true;
+        Logic.Spin();
+        Dirty := false;
+    end;
+
+    [Test]
+    procedure ChecksClean()
+    begin
+        if Dirty then
+            Error('dirty');
+    end;
+}
+
 codeunit 50656 "Probe Burn Long"
 {
     Subtype = Test;
@@ -856,6 +880,35 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
           : "diverged",
         'CpuHang at N=3: exit 7, notRun, "Test exceeded 3s timeout."',
         `exit ${hang.exitCode} ${JSON.stringify(h ?? null)} wall ${hang.wallMs} ms`,
+      ),
+    );
+    // dependent-fail-after-timeout-is-notrun (pre-commitment r8, R637): v3, not LethAL, keeps a
+    // failure caused by a stopped sibling's state from scoring as a kill. Pin its not-trusted row.
+    const cut = await call(["--test-timeout-secs", "3", "--codeunit", "50652"], {
+      codeunit: 50652,
+    });
+    const hd = rowOf(cut, "HangsDirty");
+    const cc = rowOf(cut, "ChecksClean");
+    facts.push(
+      fact(
+        "dependent-fail-after-timeout-is-notrun",
+        "contract",
+        cut.exitCode === 7 &&
+          // Review M3: exactly these two rows, so a duplicate row cannot hide behind `rowOf`.
+          cut.rows?.length === 2 &&
+          hd?.notRun === true &&
+          hd.message === "Test exceeded 3s timeout." &&
+          cc?.notRun === true &&
+          cc.status === "error" &&
+          (cc.message ?? "").startsWith(
+            "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HangsDirty: ",
+          ) &&
+          (cc.message ?? "").endsWith("this failure is not trusted: dirty")
+          ? "matches"
+          : "diverged",
+        'N=3: exit 7, exactly 2 rows, HangsDirty notRun "Test exceeded 3s timeout.", ChecksClean notRun error "...refused while it ran (HangsDirty: ...this failure is not trusted: dirty"',
+        // Review M2: HangsDirty first, so its divergence shows even when ChecksClean's text is long.
+        `exit ${cut.exitCode}, ${cut.rows?.length ?? "no"} rows, HangsDirty=${JSON.stringify(hd === undefined ? null : { notRun: hd.notRun, message: hd.message })} ChecksClean=${JSON.stringify(cc === undefined ? null : { notRun: cc.notRun, status: cc.status, message: cc.message })}`,
       ),
     );
     // timeout-is-cpu (pre-commitment r6; r4's wall-clock spin was invalid: v3's AL clock is virtual):
