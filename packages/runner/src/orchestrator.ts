@@ -4223,7 +4223,7 @@ function resolveResume(
   emit({
     type: "warning",
     code: "resume-reusing-run",
-    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192). A stored no-coverage is never carried: it is re-derived from this session's coverage, so a batch holding one is deployed (R621).${
+    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (its own baseline's, or a reused baseline's), so a batch holding one is deployed (R621).${
       testAppHash !== undefined && priorTestAppHash === `${testAppHash}${PENDING_SUFFIX}`
         ? ` Run ${priorRunId} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`
         : ""

@@ -71,9 +71,12 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
 
 ### A stored no-coverage is always re-derived
 
-- **The rule (R621):** `carriedVerdictFor` never returns a stored no-coverage. `scoreBatch` records every mutant this
-  session's coverage leaves uncovered as fresh no-coverage; a mutant covered now is run. So carried = carryable rows
-  minus the stored no-coverage rows, in every batch.
+- **The rule (R621):** `carriedVerdictFor` never returns a stored no-coverage. `scoreBatch` records every mutant left
+  uncovered by the coverage this session uses (its own baseline's, or a reused snapshot's) as fresh no-coverage; a
+  mutant covered now is run. So carried = carryable rows minus the stored no-coverage rows, in every batch.
+- **A side effect (review M2):** a batch that used to be carried whole now takes the partial path, so a stored kill or
+  survive whose mutant is uncovered under the coverage now used becomes a fresh no-coverage instead of being carried.
+  That is the safe direction (nothing is lent against coverage that disagrees); on this fixture no such mutant exists.
 - **A batch holding a stored no-coverage is never carried whole** (`replayCarriedBatch` never sees one). It deploys,
   and its baseline is reused from a matching snapshot when one exists. That is R1. R643 files a cheaper variant.
 - **On this fixture** "frozen no-coverage" and "uncovered now" are the same mutants (`assertFrozen` pins every
