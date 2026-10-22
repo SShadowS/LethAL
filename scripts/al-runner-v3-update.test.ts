@@ -466,26 +466,62 @@ describe("RC-3 (M3): the receipt must prove what it claims", () => {
 
 describe("M4: the gate worktree is prepared, or refused by name", () => {
   test("bun install (F5: --frozen-lockfile) and the native parser build always run", () => {
-    const p = gatePreparation({ worktree: "/w", alpackagesPresent: true, symbolTar: undefined });
+    const p = gatePreparation({
+      worktree: "/w",
+      alpackages: "all",
+      symbolsMarker: FIXTURE_SYMBOLS_TAR_SHA256,
+      symbolTar: undefined,
+    });
     expect("steps" in p && p.steps).toEqual([
       ["bun", "install", "--frozen-lockfile"],
       ["bun", "scripts/build-native-parser.ts"],
     ]);
+    // R614: folders already there whose marker matches are used as they are; no marker is rewritten.
+    expect("steps" in p && p.markerAfter).toBeUndefined();
   });
-  test("missing fixture .alpackages are extracted from the PINNED symbol tar", () => {
+  test("missing fixture .alpackages are extracted from the PINNED symbol tar, then marked", () => {
+    for (const symbolsMarker of [undefined, "0".repeat(64)]) {
+      const p = gatePreparation({
+        worktree: "/w",
+        alpackages: "none",
+        symbolsMarker,
+        symbolTar: "/t.tar",
+        symbolTarSha256: FIXTURE_SYMBOLS_TAR_SHA256,
+      });
+      expect("steps" in p && p.steps.at(-1)).toEqual(["tar", "-xf", "/t.tar", "-C", "/w"]);
+      expect("steps" in p && p.markerAfter).toBe(FIXTURE_SYMBOLS_TAR_SHA256);
+    }
+  });
+  test("R614: present .alpackages without the pinned tar's marker are refused by name", () => {
+    for (const alpackages of ["all", "some"] as const)
+      for (const symbolsMarker of [undefined, "0".repeat(64)]) {
+        const p = gatePreparation({
+          worktree: "/w",
+          alpackages,
+          symbolsMarker,
+          symbolTar: "/t.tar",
+          symbolTarSha256: FIXTURE_SYMBOLS_TAR_SHA256,
+        });
+        expect("refused" in p && p.refused).toMatch(/al-runner-v3-gate-symbols-unverified/);
+        expect("refused" in p && p.refused).toContain(symbolsMarker ?? "(no marker)");
+        expect("refused" in p && p.refused).toContain(FIXTURE_SYMBOLS_TAR_SHA256);
+      }
+  });
+  test("R614: a matching marker with a folder missing is refused too (never half-used)", () => {
     const p = gatePreparation({
       worktree: "/w",
-      alpackagesPresent: false,
-      symbolTar: "/t.tar",
-      symbolTarSha256: FIXTURE_SYMBOLS_TAR_SHA256,
+      alpackages: "some",
+      symbolsMarker: FIXTURE_SYMBOLS_TAR_SHA256,
+      symbolTar: undefined,
     });
-    expect("steps" in p && p.steps.at(-1)).toEqual(["tar", "-xf", "/t.tar", "-C", "/w"]);
+    expect("refused" in p && p.refused).toMatch(/al-runner-v3-gate-symbols-unverified/);
   });
   test("F5: a symbol tar with another sha256 (or none computed) is refused by name", () => {
     for (const symbolTarSha256 of ["0".repeat(64), undefined]) {
       const p = gatePreparation({
         worktree: "/w",
-        alpackagesPresent: false,
+        alpackages: "none",
+        symbolsMarker: undefined,
         symbolTar: "/t.tar",
         ...(symbolTarSha256 !== undefined ? { symbolTarSha256 } : {}),
       });
@@ -493,7 +529,12 @@ describe("M4: the gate worktree is prepared, or refused by name", () => {
     }
   });
   test("missing .alpackages and no tar: refused by name", () => {
-    const p = gatePreparation({ worktree: "/w", alpackagesPresent: false, symbolTar: undefined });
+    const p = gatePreparation({
+      worktree: "/w",
+      alpackages: "none",
+      symbolsMarker: undefined,
+      symbolTar: undefined,
+    });
     expect("refused" in p && p.refused).toMatch(/al-runner-v3-gate-worktree-unprepared/);
   });
 });

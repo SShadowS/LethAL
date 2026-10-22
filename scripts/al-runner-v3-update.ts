@@ -198,35 +198,57 @@ export const GATE_ALPACKAGES = [
 ] as const;
 
 /**
+ * R614: the gate worktree's record of which tar its fixture `.alpackages` came from (the tar's
+ * sha256). At the worktree root, untracked, so the receipt's dirty check ignores it.
+ */
+export const SYMBOLS_MARKER = ".fixture-symbols.sha256";
+
+/**
  * M4: what the gate worktree needs before any leg, or why it cannot be prepared. `bun install` and
  * the native parser build always run (a moved commit can need either). The fixture symbol folders
  * come from the main checkout's `fixture-symbols.tar` when absent; with neither, the gate is refused
  * by name (`al-runner-v3-gate-worktree-unprepared`), an infra-fail before any leg.
+ *
+ * R614: an extraction is followed by writing the tar's sha256 to `SYMBOLS_MARKER` (`markerAfter`).
+ * Folders already there are used only when ALL are present and the marker equals
+ * `FIXTURE_SYMBOLS_TAR_SHA256`; otherwise the gate is refused by name
+ * (`al-runner-v3-gate-symbols-unverified`). Refused, not re-extracted: `tar -x` over old folders
+ * leaves their extra files in place, and deleting folders someone put there by hand is not this
+ * script's call.
  */
 export function gatePreparation(s: {
   readonly worktree: string;
-  readonly alpackagesPresent: boolean;
+  /** How many of `GATE_ALPACKAGES` exist in the worktree. */
+  readonly alpackages: "all" | "some" | "none";
+  /** The content of `SYMBOLS_MARKER` in the worktree, trimmed, when it exists. */
+  readonly symbolsMarker: string | undefined;
   readonly symbolTar: string | undefined;
   /** The tar's sha256, when it is to be extracted (F5). */
   readonly symbolTarSha256?: string;
-}): { readonly steps: readonly string[][] } | { readonly refused: string } {
+}):
+  | { readonly steps: readonly string[][]; readonly markerAfter?: string }
+  | { readonly refused: string } {
   // F5: the lockfile is never rewritten in the gate worktree.
   const steps: string[][] = [
     ["bun", "install", "--frozen-lockfile"],
     ["bun", "scripts/build-native-parser.ts"],
   ];
-  if (!s.alpackagesPresent) {
-    if (s.symbolTar === undefined)
-      return {
-        refused: `al-runner-v3-gate-worktree-unprepared: ${s.worktree} has no fixture .alpackages (${GATE_ALPACKAGES.join(", ")}) and no fixture-symbols.tar was found to extract them from`,
-      };
-    if (s.symbolTarSha256 !== FIXTURE_SYMBOLS_TAR_SHA256)
-      return {
-        refused: `al-runner-v3-gate-symbol-tar-mismatch: ${s.symbolTar} has sha256 ${s.symbolTarSha256 ?? "(not computed)"}, pinned ${FIXTURE_SYMBOLS_TAR_SHA256}`,
-      };
-    steps.push(["tar", "-xf", s.symbolTar, "-C", s.worktree]);
+  if (s.alpackages !== "none") {
+    if (s.alpackages === "all" && s.symbolsMarker === FIXTURE_SYMBOLS_TAR_SHA256) return { steps };
+    return {
+      refused: `al-runner-v3-gate-symbols-unverified: ${s.worktree} has ${s.alpackages} of the fixture .alpackages (${GATE_ALPACKAGES.join(", ")}) and its ${SYMBOLS_MARKER} reads ${s.symbolsMarker ?? "(no marker)"}, expected ${FIXTURE_SYMBOLS_TAR_SHA256}; remove those folders and the marker to have them extracted again`,
+    };
   }
-  return { steps };
+  if (s.symbolTar === undefined)
+    return {
+      refused: `al-runner-v3-gate-worktree-unprepared: ${s.worktree} has no fixture .alpackages (${GATE_ALPACKAGES.join(", ")}) and no fixture-symbols.tar was found to extract them from`,
+    };
+  if (s.symbolTarSha256 !== FIXTURE_SYMBOLS_TAR_SHA256)
+    return {
+      refused: `al-runner-v3-gate-symbol-tar-mismatch: ${s.symbolTar} has sha256 ${s.symbolTarSha256 ?? "(not computed)"}, pinned ${FIXTURE_SYMBOLS_TAR_SHA256}`,
+    };
+  steps.push(["tar", "-xf", s.symbolTar, "-C", s.worktree]);
+  return { steps, markerAfter: FIXTURE_SYMBOLS_TAR_SHA256 };
 }
 
 async function readCurrentGated(root: string): Promise<GatedBuild & { readonly dir: string }> {
@@ -590,17 +612,25 @@ export function realDeps(root = ROOT): UpdateDeps {
       // M4: prepare the worktree, or refuse by name before any leg (a throw here is infra-fail:
       // no receipt is written).
       const tar = ["/work/lethal/.kraken-local/fixture-symbols.tar"].find((p) => existsSync(p));
-      const alpackagesPresent = GATE_ALPACKAGES.every((d) => existsSync(join(GATE_WORKTREE, d)));
+      const present = GATE_ALPACKAGES.filter((d) => existsSync(join(GATE_WORKTREE, d))).length;
+      const alpackages =
+        present === GATE_ALPACKAGES.length ? "all" : present === 0 ? "none" : "some";
+      const markerFile = join(GATE_WORKTREE, SYMBOLS_MARKER);
       const prep = gatePreparation({
         worktree: GATE_WORKTREE,
-        alpackagesPresent,
+        alpackages,
+        symbolsMarker: existsSync(markerFile)
+          ? (await readFile(markerFile, "utf8")).trim()
+          : undefined,
         symbolTar: tar,
-        ...(tar !== undefined && !alpackagesPresent
+        ...(tar !== undefined && alpackages === "none"
           ? { symbolTarSha256: await sha256OfFile(tar) }
           : {}),
       });
       if ("refused" in prep) throw new Error(prep.refused);
       for (const step of prep.steps) await run(step, {}, GATE_WORKTREE);
+      // R614: written only after the extraction succeeded.
+      if (prep.markerAfter !== undefined) await writeFile(markerFile, `${prep.markerAfter}\n`);
       // R633 I1: the itest's own output goes to `gate.log` beside the receipt; `gateOne` keeps it.
       const receipt = env.LETHAL_V3_GATE_RECEIPT;
       await runToLog(

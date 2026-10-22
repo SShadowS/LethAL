@@ -57,6 +57,14 @@ The legs:
   worktree it prepares first (`bun install --frozen-lockfile`, the native parser, the fixture `.alpackages` from
   the symbol tar pinned by sha256) or refuses by name (`al-runner-v3-gate-worktree-unprepared`,
   `al-runner-v3-gate-symbol-tar-mismatch`). Only a `pass` moves `current`.
+- After an extraction the gate writes the tar's sha256 to `.fixture-symbols.sha256` at the gate worktree's root
+  (R614). Fixture `.alpackages` already there are used only when both folders exist and that marker equals the
+  pinned sha (`FIXTURE_SYMBOLS_TAR_SHA256`). Otherwise the gate refuses by name,
+  `al-runner-v3-gate-symbols-unverified`, naming the marker it found and the sha it expected: an infra-fail,
+  retried next run. It refuses rather than extracting again, because `tar -x` over old folders keeps their extra
+  files, and the folders may have been put there by hand. The remedy is to delete both folders and the marker;
+  the next run extracts them from the pinned tar. Folders extracted before R614 have no marker, so the first run
+  after R614 refuses until they are deleted.
 - A leg's outcome comes from its error's TYPE, never its text:
   - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`, or v3's
     coverage paths no longer join LethAL's (`AlRunnerV3CoverageJoinError`, a real behaviour change; in a user
@@ -74,7 +82,6 @@ The legs:
   worktree was dirty (a dirty `pass` is refused), and give its outcome from its legs over the exact leg set.
   Dirty means any tracked change, or any untracked file under `fixtures/` or `packages/` (it would compile into
   a leg); other untracked files are the gate's own outputs. `.gated`'s `lethalCommit` is also the full sha.
-  Existing fixture `.alpackages` are not yet checked against the pinned tar ([[R614]]).
 - `timeout-is-cpu` is GATE-ONLY: its burns are fixed iteration counts calibrated on one machine, so only leg C
   measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
   BUILD: a later LethAL change to how a call's timeout is sent (`v3CallArgv`, `stopSecondsOf`) is not covered by
