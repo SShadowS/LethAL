@@ -21639,3 +21639,307 @@ describe("R653: the orchestrator asks for the kill pair only before a cold fail 
     store.close();
   });
 });
+
+// ————————————————————————————————————————————————————————————————————————
+// R658: an UNMUTATED run (a baseline test, a cold kill confirm) now always gets LethAL's stop.
+// What each stop ending becomes: BC's 408, R204's stopped-after-completion and R203's op-stopped
+// are a clean `timeout` (the server is clean); a stop BC never answered is a strand.
+// ————————————————————————————————————————————————————————————————————————
+describe("runSession — R658: a stopped unmutated run", () => {
+  const TIER = "http://cronus281|BC";
+  const ATTESTED = { observedAny: true, identityMismatch: false };
+  const LOST_OP = { attemptId: "a10", opSeq: 304 } as const;
+  const tombstoned = (attemptId: string, opSeq: number): OperationStatus => ({
+    opKind: "none",
+    opAttemptId: attemptId,
+    opSeq,
+    lastCompletedOpSeq: opSeq,
+    completed: true,
+  });
+  const STOP_408 =
+    "RunMutant exceeded its 120000 ms budget and was stopped server-side so it would not strand the server";
+
+  /** Two baseline tests; the FIRST one dispatched answers `first`, every other run passes. */
+  async function baselineSession(first: Partial<TestVerdict>) {
+    const two = await makeProject(TWO_TEST_AL);
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    const sent: string[] = [];
+    let active: string | null = null;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        active = id;
+      },
+      run: async (ref) => {
+        if (active === null) sent.push(ref.method);
+        if (active === null && sent.length === 1) {
+          return { ref, outcome: "error" as const, durationMs: 1, ...first };
+        }
+        return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+      },
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: dir,
+      lease,
+      testDir: two.testDir,
+    });
+    const [firstSent] = sent;
+    return {
+      report,
+      sent,
+      firstName: `Sandbox Tests.${firstSent ?? "?"}`,
+      client,
+      record: await new QuarantineStore(dir).read(TIER),
+    };
+  }
+
+  test("O1. BC's 408: not green, not quarantined, the next test runs, the lease releases", async () => {
+    const s = await baselineSession({
+      outcome: "timeout",
+      stopState: "confirmed",
+      failureMessage: STOP_408,
+    });
+    expect(s.sent.length).toBeGreaterThanOrEqual(2);
+    expect(s.report.baselineStopped?.tests).toEqual([s.firstName]);
+    expect(s.report.baselineGreen).toBe(false);
+    expect(s.report.validity.baselineTests.failing).toBe(0);
+    expect(s.record).toBeNull();
+    expect(s.report.quarantined).toBeUndefined();
+    expect(s.report.mutants.some((m) => m.verdict === "survived")).toBe(true);
+    expect(s.client.releaseResults.at(-1)?.released).toBe(true);
+  });
+
+  test("O2. a CONFIRMED stop with no 408 quarantines, and says the lease will read clean", async () => {
+    const s = await baselineSession({
+      outcome: "deadline-exceeded",
+      operation: "in-flight-unknown",
+      stopState: "confirmed",
+      failureMessage: "RunMutant timed out before headers: AbortError",
+    });
+    expect(s.record).not.toBeNull();
+    expect(s.report.quarantined?.reason).toContain(
+      "LethAL's stop was confirmed and tombstoned the op, but BC never sent its 408; the control-app lease will read clean and must not be trusted until an NST restart",
+    );
+    expect(s.report.baselineStopped).toBeUndefined();
+  });
+
+  test("O2b. an UNKNOWN stop with no 408 says the stop MAY have tombstoned the op", async () => {
+    const s = await baselineSession({
+      outcome: "deadline-exceeded",
+      operation: "in-flight-unknown",
+      stopState: "unknown",
+      failureMessage: "RunMutant timed out before headers: AbortError",
+    });
+    expect(s.record).not.toBeNull();
+    expect(s.report.quarantined?.reason).toContain("LethAL's stop may have tombstoned the op");
+  });
+
+  test("O3. R204's stopped-after-completion is baseline-test-stopped, not unsupported", async () => {
+    const s = await baselineSession({
+      outcome: "error",
+      stopRefusal: "stopped-after-completion",
+      stopState: "confirmed",
+      failureMessage: "RunMutant: BC answered our stop with its 408, but ... (R204)",
+    });
+    expect(s.report.baselineStopped?.tests).toEqual([s.firstName]);
+    expect(s.report.validity.baselineTests.failing).toBe(0);
+    expect(s.record).toBeNull();
+  });
+
+  test("O3b. a plain error under a REFUSED stop stays unsupported, not stopped", async () => {
+    const s = await baselineSession({
+      outcome: "error",
+      stopState: "refused",
+      failureMessage: "Assert.AreEqual failed",
+    });
+    expect(s.report.baselineStopped).toBeUndefined();
+    expect(s.report.validity.baselineTests.failing).toBe(1);
+  });
+
+  test("O4. a timeout with no stop state (no stop of ours) is not baseline-test-stopped", async () => {
+    const s = await baselineSession({ outcome: "timeout", failureMessage: "timed out" });
+    expect(s.report.baselineStopped).toBeUndefined();
+    expect(s.report.validity.caveats).not.toContain("baseline-test-stopped");
+  });
+
+  test("O5. our own op-stopped is a timeout: no lease loss, the session continues", async () => {
+    const s = await baselineSession({
+      outcome: "error",
+      operation: "lease-lost",
+      leaseInvalidReason: "op-stopped",
+      stopState: "confirmed",
+      failureMessage: "RunMutant lease-invalid (reason: op-stopped)",
+    });
+    expect(s.report.baselineStopped?.tests).toEqual([s.firstName]);
+    expect(s.report.quarantined).toBeUndefined();
+    expect(s.record).toBeNull();
+    expect(s.sent.length).toBeGreaterThanOrEqual(2);
+    expect(s.report.mutants.some((m) => m.verdict === "survived")).toBe(true);
+  });
+
+  test("O5b. a genuine lease loss with a stop state still reaches the lease handler", async () => {
+    const s = await baselineSession({
+      outcome: "error",
+      operation: "lease-lost",
+      leaseInvalidReason: "lease-invalid",
+      stopState: "confirmed",
+      failureMessage: "RunMutant lease-invalid (reason: lease-invalid)",
+    });
+    expect(s.report.quarantined?.reason).toContain("lease-lost");
+    expect(s.report.baselineStopped).toBeUndefined();
+  });
+
+  test("O5c. an op-stopped with NO stop state is not ours to map: the lease handler sees it", async () => {
+    const s = await baselineSession({
+      outcome: "error",
+      operation: "lease-lost",
+      leaseInvalidReason: "op-stopped",
+      failureMessage: "RunMutant lease-invalid (reason: op-stopped)",
+    });
+    expect(s.report.quarantined?.reason).toContain("lease-lost");
+    expect(s.report.baselineStopped).toBeUndefined();
+  });
+
+  /**
+   * One baseline test that passes; M0002's covering run FAILS, so its kill is confirmed by an
+   * unmutated rerun, answered from `answers` in order (the last repeating). `confirms` counts them.
+   * M0001 and the rest pass, so M0001 attests first (design §G).
+   */
+  async function confirmSession(answers: readonly Partial<TestVerdict>[], reconcile = false) {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    if (reconcile) client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const confirms = { count: 0 };
+    let active: string | null = null;
+    let mutantSeen = false;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        active = id;
+        if (id !== null) mutantSeen = true;
+      },
+      run: async (ref) => {
+        if (active === "M0002")
+          return { ref, outcome: "fail" as const, durationMs: 1, attestation: ATTESTED };
+        if (active === null && mutantSeen) {
+          const answer = answers[Math.min(confirms.count, answers.length - 1)] ?? {};
+          confirms.count++;
+          return { ref, outcome: "error" as const, durationMs: 1, ...answer };
+        }
+        return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+      },
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    return {
+      report,
+      confirms,
+      m2: report.mutants.find((m) => m.mutantCode === "M0002"),
+      record: await new QuarantineStore(dir).read(TIER),
+    };
+  }
+
+  test("C1. a confirm BC's 408 ended is confirm-stopped, not unstable, and not quarantined", async () => {
+    const s = await confirmSession([
+      { outcome: "timeout", stopState: "confirmed", failureMessage: STOP_408 },
+    ]);
+    expect(s.m2?.verdict).toBe("error");
+    expect(s.m2?.cause).toBe("confirm-stopped");
+    expect(s.m2?.failureNote).toContain(
+      "LethAL stopped it (BC's 408), so the fail under the mutant",
+    );
+    expect(s.record).toBeNull();
+    expect(s.report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();
+  });
+
+  test("C2. a confirm that FAILS under a refused stop stays unstable", async () => {
+    const s = await confirmSession([
+      { outcome: "fail", stopState: "refused", failureMessage: "x" },
+    ]);
+    expect(s.m2?.cause).toBe("unstable");
+  });
+
+  test("C3. a stop with no 408 that reconciles `completed` (our tombstone) is stranded and quarantined", async () => {
+    const s = await confirmSession(
+      [
+        {
+          outcome: "deadline-exceeded",
+          operation: "in-flight-unknown",
+          stopState: "confirmed",
+          fencedOp: LOST_OP,
+          failureMessage: "RunMutant timed out before headers: AbortError",
+        },
+        { outcome: "pass", attestation: ATTESTED },
+      ],
+      true,
+    );
+    expect(s.confirms.count).toBe(1); // never retried: our stop may have ended it
+    expect(s.m2?.cause).toBe("stranded");
+    expect(s.record).not.toBeNull();
+    expect(s.report.quarantined?.reason).toContain(
+      "LethAL's stop was confirmed and tombstoned the op",
+    );
+  });
+
+  test("C3 twin. NO stop and a reconciled `completed` stays result-lost, unquarantined", async () => {
+    const s = await confirmSession(
+      [
+        {
+          outcome: "error",
+          operation: "in-flight-unknown",
+          fencedOp: LOST_OP,
+          failureMessage: "HTTP 400",
+        },
+      ],
+      true,
+    );
+    expect(s.confirms.count).toBe(2); // the one proven-clean retry, also lost
+    expect(s.m2?.cause).toBe("result-lost");
+    expect(s.record).toBeNull();
+  });
+
+  test("D4 twin. a REFUSED stop and a reconciled `completed` stays result-lost: the tombstone is genuine", async () => {
+    const s = await confirmSession(
+      [
+        {
+          outcome: "error",
+          operation: "in-flight-unknown",
+          stopState: "refused",
+          fencedOp: LOST_OP,
+          failureMessage: "HTTP 400",
+        },
+      ],
+      true,
+    );
+    expect(s.confirms.count).toBe(2);
+    expect(s.m2?.cause).toBe("result-lost");
+    expect(s.record).toBeNull();
+  });
+
+  test("C4. R204's stopped-after-completion at the confirm is confirm-stopped", async () => {
+    const s = await confirmSession([
+      {
+        outcome: "error",
+        stopRefusal: "stopped-after-completion",
+        stopState: "confirmed",
+        failureMessage: "(R204)",
+      },
+    ]);
+    expect(s.m2?.cause).toBe("confirm-stopped");
+    expect(s.record).toBeNull();
+  });
+
+  test("D6. our own op-stopped at the confirm is confirm-stopped, not op-stopped", async () => {
+    const s = await confirmSession([
+      {
+        outcome: "error",
+        operation: "lease-lost",
+        leaseInvalidReason: "op-stopped",
+        stopState: "confirmed",
+        failureMessage: "RunMutant lease-invalid (reason: op-stopped)",
+      },
+    ]);
+    expect(s.m2?.cause).toBe("confirm-stopped");
+    expect(s.report.quarantined).toBeUndefined();
+  });
+});

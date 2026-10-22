@@ -285,8 +285,9 @@ describe("Caveat union", () => {
       "tests-compiled-out": true,
       "test-symbols-unverified": true,
       "project-symlink-skipped": true,
+      "baseline-test-stopped": true,
     };
-    expect(Object.keys(all).length).toBe(25);
+    expect(Object.keys(all).length).toBe(26);
   });
 });
 

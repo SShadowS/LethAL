@@ -5217,7 +5217,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(18);
+    expect(out.explainSchemaVersion).toBe(19);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {
@@ -6637,5 +6637,47 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
         expect(w[0]).toContain("R403");
       }
     }
+  });
+});
+
+/**
+ * R658 (D5): the snapshot key holds no --baseline-timeout-ms, so a baseline with a test LethAL
+ * stopped is never saved for reuse: a `--resume` that raised the budget must run it again.
+ */
+describe("R658 D5: a baseline holding a stopped test records no snapshot", () => {
+  /** Every baseline run comes back stopped by LethAL (BC's 408): `timeout` with a stop state. */
+  class StoppedBaselineBackend extends CountingBackend {
+    private active: string | null = null;
+    override async activate(id: string | null): Promise<void> {
+      this.active = id;
+      await super.activate(id);
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      if (this.active !== null) return super.run(ref, opts);
+      this.baselineRuns += 1;
+      return {
+        ref,
+        outcome: "timeout",
+        durationMs: 5,
+        stopState: "confirmed",
+        failureMessage: "RunMutant exceeded its 120000 ms budget and was stopped server-side",
+      };
+    }
+  }
+  const snapshots = (store: ResultsStore) =>
+    (store.db.query("SELECT COUNT(*) AS n FROM baseline_snapshots").get() as { n: number }).n;
+
+  test("the same session with a green baseline records one (the control), a stopped one none", async () => {
+    const dirs = await makeProject();
+    const green = new ResultsStore(":memory:");
+    await runSession({ backend: new CountingBackend("pass"), store: green, ...dirs, selectorIds });
+    expect(snapshots(green)).toBeGreaterThan(0);
+
+    const stopped = new ResultsStore(":memory:");
+    const backend = new StoppedBaselineBackend("pass");
+    const report = await runSession({ backend, store: stopped, ...dirs, selectorIds });
+    expect(backend.baselineRuns).toBeGreaterThan(0);
+    expect(report.baselineStopped?.tests.length).toBe(backend.baselineRuns);
+    expect(snapshots(stopped)).toBe(0);
   });
 });

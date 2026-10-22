@@ -285,9 +285,16 @@ function checkLease(lease: LeaseSnapshot, now: Date): DoctorCheck {
     lease.expiresAt === ""
       ? ", no expiry recorded"
       : `, expires ${lease.expiresAt}${expired ? " — ALREADY EXPIRED" : ""}`;
+  const reset = "`lethal force-reset-lease --server <url> --instance <name> --config <path>`";
+  // R658 (M8): a `run` op may still be executing AL on the server (an abandoned test outlived its
+  // budget there by minutes, measured), and a reset under it lets the next session overlap it.
+  const recover =
+    lease.opKind === "run"
+      ? `restart the NST first (that is what ends a surviving session), then ${reset}`
+      : `recover it with ${reset}`;
   const advice = expired
-    ? "The holder is past its expiry, so this is an orphaned lease: recover it with `lethal force-reset-lease --server <url> --instance <name> --config <path>`."
-    : "If no session is actually running, recover it with `lethal force-reset-lease --server <url> --instance <name> --config <path>`.";
+    ? `The holder is past its expiry, so this is an orphaned lease: ${recover}.`
+    : `If no session is actually running, ${recover}.`;
   const credential = lease.tokenPresent ? "live token" : "no live token";
   return {
     name: "lease",

@@ -281,7 +281,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v18.schema.json](../schemas/explain-v18.schema.json)
+- `lethal explain`: [../schemas/explain-v19.schema.json](../schemas/explain-v19.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -327,7 +327,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 18`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 19`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -1018,6 +1018,11 @@ into a transcript and do not copy it into an issue.
   infinite is ordinary on real code, and without the flag each one costs the mutant budget, a
   quarantine, and a full redeploy-and-baseline on `--resume` (measured 2026-09-02: about ten
   minutes per hang on a hosted sandbox). With it the mutant is stopped and scored `timeout-killed`.
+  The flag covers MUTANT runs only. A run with no mutant active (a baseline test, a kill confirm, a
+  warm replay) that runs past its budget is stopped either way, with no consent asked, because an
+  abandoned one keeps running on the server and blocks its lease until an NST restart (R658). Tell
+  the user this once. A stopped baseline test is named in `baselineStopped`; a stopped kill confirm
+  is `error` with cause `confirm-stopped`.
 - A report from a real project carries that project's source code in every mutant's `originalText`
   and `mutatedText`. Do not publish one, and run `bun scripts/redact-campaign-report.ts <report>`
   before committing one anywhere public.

@@ -1016,7 +1016,9 @@ RUN — cost and recovery
                              budget, so a never-terminating mutant scores timeout-killed instead
                              of quarantining the run. OFF by default: it stops a session on your
                              server. LethAL only targets a session its own run recorded, under
-                             the lease fence, but that id cannot be independently verified
+                             the lease fence, but that id cannot be independently verified.
+                             A baseline test, kill confirm or warm replay with NO mutant active
+                             is stopped at its budget regardless of this flag (R658)
   --workers <n>              parallel workers (bcdev is limited to 1)
   --compile-concurrency <n>  concurrent alc processes
   --progress-out <path>      stream events to this file as NDJSON, one JSON object per line,

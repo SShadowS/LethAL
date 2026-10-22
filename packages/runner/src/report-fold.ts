@@ -165,6 +165,8 @@ export interface FoldedReport {
   /** R-236c: baseline verdicts classified `tests-testpage-refused`, plus the session scan's
    *  `tests-testpage-refused` event; see `SessionReport.testPageRefused`. */
   readonly testPageRefusedTests?: readonly string[];
+  /** R658: baseline verdicts classified `baseline-test-stopped`; see `SessionReport.baselineStopped`. */
+  readonly baselineStopped?: { readonly tests: readonly string[]; readonly budgetMs: number };
   readonly runnerDisagreementTests?: readonly string[];
   /** R403 phase C: from the `tests-discovered` event, each only when non-empty. */
   readonly testBuildSymbols?: readonly string[];
@@ -301,6 +303,17 @@ export function testMethodsOf(
     });
 }
 
+/** R658: the producer writes `stoppedBudgetMs` with every stopped test, so a stream without it
+ *  is corrupt. */
+function requireStoppedBudget(ms: number | undefined): number {
+  if (ms === undefined) {
+    throw new Error(
+      "foldEvents: a baseline-batch-finished verdict is classified baseline-test-stopped, but no event carries stoppedBudgetMs (R658). The producer writes both.",
+    );
+  }
+  return ms;
+}
+
 export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): FoldedReport {
   let sawMutationSetGenerated = false;
   let sawBaselineBatchFinished = false;
@@ -330,6 +343,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   const permissionsRefusedTests = new Set<string>();
   const testPageUnsupportedTests = new Set<string>();
   const testPageRefusedTests = new Set<string>();
+  const baselineStoppedTests = new Set<string>();
+  let stoppedBudgetMs: number | undefined;
   const runnerDisagreementTests = new Set<string>();
   let testBuildSymbols: readonly string[] = [];
   let excludedTests: readonly ExcludedTestRecord[] = [];
@@ -450,6 +465,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "baseline-batch-finished":
         sawBaselineBatchFinished = true;
+        if (e.stoppedBudgetMs !== undefined) stoppedBudgetMs = e.stoppedBudgetMs;
         // R106: a batch with at least one GREEN test is a batch that reaches the coverage filter.
         // A batch whose baseline is entirely red does not — `runSession` records every mutant
         // "no green baseline tests" and `continue`s BEFORE step 5 — so it owes no `coverage-split`
@@ -473,6 +489,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           if (v.classification.includes("tests-testpage-refused")) {
             testPageRefusedTests.add(v.name);
           }
+          if (v.classification.includes("baseline-test-stopped")) baselineStoppedTests.add(v.name);
           if (v.durationMs !== undefined) {
             baselineDurations.set(v.name, [...(baselineDurations.get(v.name) ?? []), v.durationMs]);
           }
@@ -782,6 +799,14 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       : {}),
     ...(testPageRefusedTests.size > 0
       ? { testPageRefusedTests: [...testPageRefusedTests].sort() }
+      : {}),
+    ...(baselineStoppedTests.size > 0
+      ? {
+          baselineStopped: {
+            tests: [...baselineStoppedTests].sort(),
+            budgetMs: requireStoppedBudget(stoppedBudgetMs),
+          },
+        }
       : {}),
     ...(runnerDisagreementTests.size > 0
       ? { runnerDisagreementTests: [...runnerDisagreementTests].sort() }

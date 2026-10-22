@@ -296,6 +296,38 @@ describe("lethal doctor — the lease check (R110)", () => {
     expect(live.checks.find((c) => c.name === "lease")?.detail).not.toContain("orphaned");
   });
 
+  // R658 (M8): a `run` op may still be executing on the server; a reset under it lets the next
+  // session overlap it. Restart first.
+  const leaseDetail = async (opKind: string) => {
+    const r = await runDoctor(
+      { ...cfgFixture(), now: NOW },
+      {
+        ...green,
+        lease: async () => ({
+          owner: "x",
+          opKind,
+          expiresAt: "2026-08-07T11:00:00.000Z",
+          tokenPresent: true,
+        }),
+      },
+    );
+    return r.checks.find((c) => c.name === "lease")?.detail ?? "";
+  };
+
+  test("R658 D1: an op kind `run` says restart the NST first, then force-reset-lease", async () => {
+    const d = await leaseDetail("run");
+    expect(d).toContain("restart the NST first");
+    expect(d.indexOf("restart the NST")).toBeLessThan(d.indexOf("force-reset-lease"));
+  });
+
+  test("R658 D2: an op kind `publish` or `none` keeps today's text", async () => {
+    for (const kind of ["publish", "none"]) {
+      const d = await leaseDetail(kind);
+      expect(d).not.toContain("restart the NST");
+      expect(d).toContain("orphaned lease: recover it with `lethal force-reset-lease");
+    }
+  });
+
   test("an op marker with NO owner still fails — that is what a killed session leaves", async () => {
     // Green requires BOTH halves. Keying only on `owner` would pass the exact shape the recovery
     // tooling exists for.

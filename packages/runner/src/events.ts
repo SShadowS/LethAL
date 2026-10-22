@@ -84,6 +84,8 @@ export const BASELINE_CLASSIFICATIONS = [
   "tests-testpage-unsupported",
   "tests-testpage-refused",
   "stale-test-app",
+  // R658: a `timeout` OUR stop ended (it carries a `stopState`); keyed on that, not on a message.
+  "baseline-test-stopped",
 ] as const satisfies readonly Caveat[];
 
 export type BaselineClassification = (typeof BASELINE_CLASSIFICATIONS)[number];
@@ -277,6 +279,9 @@ export type RunEventInput =
        */
       readonly type: "baseline-batch-finished";
       readonly batchIndex: number;
+      /** R658: the `--baseline-timeout-ms` a `baseline-test-stopped` test ran past. Present only
+       *  when this batch has one. */
+      readonly stoppedBudgetMs?: number;
       readonly verdicts: readonly {
         readonly name: string;
         readonly outcome: TestOutcome;

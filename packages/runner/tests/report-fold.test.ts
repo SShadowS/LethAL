@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { TestOutcome } from "../src/backend";
 import type { BaselineClassification, RunEvent, RunEventInput } from "../src/events";
-import { buildReport } from "../src/report";
+import { buildReport, renderConsole } from "../src/report";
 import type { SessionReport } from "../src/report";
 import { foldEvents } from "../src/report-fold";
 import type { FoldStatics } from "../src/report-fold";
@@ -106,6 +106,8 @@ function buildWithBaseline(
     readonly classification: readonly BaselineClassification[];
     readonly failureMessage?: string;
   }>,
+  /** R658: the batch's `stoppedBudgetMs`, when a verdict is `baseline-test-stopped`. */
+  stoppedBudgetMs?: number,
 ): SessionReport {
   const events: RunEventInput[] = [
     {
@@ -133,7 +135,12 @@ function buildWithBaseline(
         };
       }),
     },
-    { type: "baseline-batch-finished", batchIndex: 0, verdicts },
+    {
+      type: "baseline-batch-finished",
+      batchIndex: 0,
+      ...(stoppedBudgetMs !== undefined ? { stoppedBudgetMs } : {}),
+      verdicts,
+    },
   ];
   if (verdicts.some((v) => v.outcome === "pass")) {
     events.push({
@@ -1149,5 +1156,45 @@ describe("foldEvents — a stream written before R307", () => {
     expect(report.excludedSites?.files).toEqual([
       { file: "src/Hang.al", kinds: "codeunit_declaration", sites: 2, reason: "hang-refused" },
     ]);
+  });
+});
+
+describe("R658: a baseline test LethAL stopped", () => {
+  const STOPPED = {
+    name: "Hang Tests.Sleeps",
+    outcome: "timeout" as const,
+    classification: ["baseline-test-stopped" as const],
+    failureMessage: "RunMutant exceeded its 10000 ms budget and was stopped server-side",
+  };
+
+  test("R1. folds to baselineStopped, the caveat, and the banner; it is not unsupported", () => {
+    const report = buildWithBaseline(
+      [STOPPED, { name: "Hang Tests.Passes", outcome: "pass", classification: [] }],
+      10000,
+    );
+    expect(report.baselineStopped).toEqual({ tests: ["Hang Tests.Sleeps"], budgetMs: 10000 });
+    expect(report.validity.caveats).toContain("baseline-test-stopped");
+    expect(report.validity.caveats).toContain("baseline-red");
+    expect(report.validity.baselineTests.failing).toBe(0);
+    const text = renderConsole(report);
+    expect(text).toContain(
+      "BASELINE TEST STOPPED: 1 baseline test(s) ran past --baseline-timeout-ms (10000 ms)",
+    );
+    expect(text).toContain("  Hang Tests.Sleeps");
+  });
+
+  test("R2. baseline-red with no stopped test: no field, no caveat, no banner", () => {
+    const report = buildWithBaseline([
+      { name: "Hang Tests.Fails", outcome: "fail", classification: [] },
+      { name: "Hang Tests.Slow", outcome: "timeout", classification: [] },
+    ]);
+    expect(report.validity.caveats).toContain("baseline-red");
+    expect(report.baselineStopped).toBeUndefined();
+    expect(report.validity.caveats).not.toContain("baseline-test-stopped");
+    expect(renderConsole(report)).not.toContain("BASELINE TEST STOPPED");
+  });
+
+  test("a stopped test with no stoppedBudgetMs on its event is a corrupt stream, refused", () => {
+    expect(() => buildWithBaseline([STOPPED])).toThrow(/stoppedBudgetMs \(R658\)/);
   });
 });

@@ -81,6 +81,8 @@ function start(o: {
   hook: () => Promise<StopHookAnswer>;
   status?: () => Record<string, unknown> | Error;
   kept?: () => Response;
+  /** R658: `""` is an unmutated run (the baseline, a confirm). */
+  mutantId?: string;
 }) {
   const run = deferred<Response>();
   const calls: string[] = [];
@@ -105,7 +107,7 @@ function start(o: {
   let out: TestVerdict | undefined;
   const p = new RunMutantTransport(CFG, TA, AR, fetchFn).run({
     ref: REF,
-    mutantId: "M0003",
+    mutantId: o.mutantId ?? "M0003",
     attemptId: "a1",
     timeoutMs: BUDGET,
     stopGraceMs: GRACE,
@@ -171,6 +173,37 @@ describe("R-204b Part A: a stop 408 after the method recorded its completion is 
   test("4b. the row names another opSeq: not ours, timeout", async () => {
     const { v } = await stoppedWith(() => row({ lastCompletedIndex: 1, opSeq: 6 }));
     expect(v.outcome).toBe("timeout");
+  });
+});
+
+describe("R658 (M5): the stop 408's text says what the stop was for", () => {
+  async function stoppedAs(mutantId: string) {
+    const c = start({
+      hook: async () => ({ stopped: true }),
+      status: () => row({ lastCompletedIndex: 0 }),
+      mutantId,
+    });
+    await flush();
+    jest.advanceTimersByTime(BUDGET);
+    await flush();
+    c.run.resolve(new Response(AL_STOP_BODY, { status: 408 }));
+    await flush();
+    const v = c.out();
+    if (v === undefined) throw new Error("the call did not return");
+    return v;
+  }
+
+  test("T1. an UNMUTATED run's 408 is neutral: no claim it was scored", async () => {
+    const v = await stoppedAs("");
+    expect(v.outcome).toBe("timeout");
+    expect(v.failureMessage).toContain("so it would not strand the server");
+    expect(v.failureMessage).not.toContain("scored");
+  });
+
+  test("T2. a MUTANT run's 408 text is unchanged", async () => {
+    const v = await stoppedAs("M0003");
+    expect(v.outcome).toBe("timeout");
+    expect(v.failureMessage).toContain("so it could be scored rather than strand the tier");
   });
 });
 
