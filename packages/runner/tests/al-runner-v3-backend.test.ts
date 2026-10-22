@@ -17,6 +17,7 @@ import { join, normalize } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitStaticSelector } from "@lethal/schemata";
 import {
+  AL_RUNNER_V3_VERSION,
   AlRunnerV3Backend,
   type AlRunnerV3Config,
   AlRunnerV3ResourceSelectorRefusedError,
@@ -766,6 +767,29 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
   });
 });
 
+describe("R639 F1 (R10): the v3 version pattern", () => {
+  test("F1-accept: alpha.2, alpha.3 and an edge build with SemVer build metadata are v3 builds", () => {
+    for (const v of [
+      "alrunner 3.0.0-alpha.2 (91253f2d6)",
+      "al-runner 3.0.0-alpha.3 (c893e3633)",
+      "al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)",
+    ])
+      expect(AL_RUNNER_V3_VERSION.test(v)).toBe(true);
+  });
+  test("F1-empty: empty build metadata is refused", () => {
+    expect(AL_RUNNER_V3_VERSION.test("al-runner 3.0.0-alpha.4+ (57f1e4f98)")).toBe(false);
+  });
+  test("F1-space (M7): build metadata with a space is refused", () => {
+    expect(AL_RUNNER_V3_VERSION.test("al-runner 3.0.0-alpha.4+edge 2026 (57f1e4f98)")).toBe(false);
+  });
+  test("F1-hex: a commit that is not hex is refused", () => {
+    expect(AL_RUNNER_V3_VERSION.test("al-runner 3.0.0+edge (zz)")).toBe(false);
+  });
+  test("F1-v2: a v2 line is refused", () => {
+    expect(AL_RUNNER_V3_VERSION.test("AlRunner 2.12.0 (c39ad5de)")).toBe(false);
+  });
+});
+
 describe("§5 the row decoder", () => {
   const r = ref("A");
   const row = (o: Partial<Parameters<typeof v3RowVerdict>[1]>) => ({
@@ -807,6 +831,26 @@ describe("§5 the row decoder", () => {
     expect(v3RowVerdict(r, row({}), 3, 10, undefined).outcome).toBe("pass");
     const e = v3RowVerdict(r, row({ status: "error", message: "?" }), 3, 10, undefined);
     expect([e.outcome, e.runnerRow]).toEqual(["error", "runner-test-error"]);
+  });
+  const PREFIXED = "NotRun: out-of-scope: x";
+  test("K1-a: a fail whose message starts with the refusal prefix (notRun false) is error/runner-test-error, never a kill", () => {
+    const v = v3RowVerdict(r, row({ status: "fail", message: PREFIXED }), 3, 10, undefined);
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+    expect(v.failureMessage).toContain("a refusal written as a fail; never scored");
+  });
+  test("K1-b: the same with status pass is error, never a pass", () => {
+    const v = v3RowVerdict(r, row({ status: "pass", message: PREFIXED }), 3, 10, undefined);
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+  });
+  test("K1-c (the control): a plain fail with another message still scores fail", () => {
+    expect(
+      v3RowVerdict(r, row({ status: "fail", message: "boom" }), 3, 10, undefined).outcome,
+    ).toBe("fail");
+  });
+  test("K1-d: the prefix NOT at the start still scores fail (the match is anchored)", () => {
+    expect(
+      v3RowVerdict(r, row({ status: "fail", message: `x ${PREFIXED}` }), 3, 10, undefined).outcome,
+    ).toBe("fail");
   });
   test("decodeV3Rows refuses another codeunit's row and a name that is not Codeunit<id>.<method>", () => {
     const doc = (t: object) => JSON.stringify({ tests: [t] });
