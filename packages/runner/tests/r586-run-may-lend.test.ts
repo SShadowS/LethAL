@@ -57,12 +57,19 @@ describe("T14: runMayLend", () => {
       )?.step,
     ).toBe("backend-build");
   });
-  test("v2 <-> bcdev are unchanged by step 1 (R592 is filed separately)", () => {
+  test("R592: v2 <-> bcdev are refused by step 1 in both directions; the same backend lends", () => {
     expect(
       backendBuildRefusal(run("bcdev", null), { backend: "al-runner", runnerBuild: undefined }),
-    ).toBeUndefined();
+    ).toBe(
+      "run 7 ran on bcdev and this session runs al-runner; a verdict is lent only within one backend (R592)",
+    );
     expect(
       backendBuildRefusal(run("al-runner", null), { backend: "bcdev", runnerBuild: undefined }),
+    ).toBe(
+      "run 7 ran on al-runner and this session runs bcdev; a verdict is lent only within one backend (R592)",
+    );
+    expect(
+      backendBuildRefusal(run("bcdev", null), { backend: "bcdev", runnerBuild: undefined }),
     ).toBeUndefined();
     expect(
       lender.runMayLend(
