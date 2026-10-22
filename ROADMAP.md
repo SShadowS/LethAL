@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**96 of 654 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**97 of 656 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -698,7 +698,9 @@ that ordering is the priority.
 - **R654** · Retire the .NET al-runner backend (v2): the Rust runtime (v3) replaces it · [R654.md](docs/roadmap/R654.md) · open, filed 2026-10-22
 - **R655** · al-runner v3: the bound check hashes active/ with links skipped, so a link added under active/ mid-run is not seen (the test dir refuses one since R631) · [R655.md](docs/roadmap/R655.md) · open, filed 2026-10-22
 - **R656** · `--dry-run --backend al-runner-v3` reads bcdev's package cache, not `alRunnerV3.packagesDir` · [R656.md](docs/roadmap/R656.md) · open, filed 2026-10-22
+- **R659** · roadmap-next-id.ts reads remote branches without fetching them, so an id another lane pushed minutes ago looks free · [R659.md](docs/roadmap/R659.md) · open, filed 2026-10-22
 - **R657** · The R553 assertion screen reads an al-runner-v3 kill as bcdev's: v3's failure-message shape is unmeasured · [R657.md](docs/roadmap/R657.md) · open, filed 2026-10-22
+- **R660** · ci.yml has no workflow_dispatch trigger: when GitHub drops a push event, a submit head can get no CI run, and nothing can start one by hand · [R660.md](docs/roadmap/R660.md) · done (0ea6960c)
 
 ---
 
