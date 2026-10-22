@@ -17,7 +17,8 @@
  * lease until BC's own answer lands or `FOLLOW_CAP_MS` passes, so one run records both LethAL's
  * row and what BC itself did. The long cases run last; each may hold the lease ~10 minutes.
  *
- * `R649_CASES=92930,92931` runs only those codeunits (still in the order below).
+ * `R649_CASES=92930,92931` runs only those codeunits (still in the order below). `--remove-only`
+ * runs no case: only the removal and read-back, written under the evidence folder.
  *
  * It writes docs/measurements/r649/<server>-probe.json (`lease.releasedAt` null: the caller fills
  * it after releasing) and logs every step to /coord/handoff/R-649/probe/drive.log.
@@ -89,6 +90,8 @@ const log = (s: string) => {
   console.log(line);
   appendFileSync(LOG, `${line}\n`);
 };
+
+class RemoveOnly extends Error {}
 
 function serverArg(): ServerName {
   const i = process.argv.indexOf("--server");
@@ -165,7 +168,11 @@ async function main(): Promise<number> {
     return 2;
   }
   const BUILD = join(import.meta.dir, "build", server);
-  const OUT = join(REPO, "docs", "measurements", "r649", `${server}-probe.json`);
+  // --remove-only: run no case, only the removal and read-back (a retry after a failed removal).
+  const removeOnly = process.argv.includes("--remove-only");
+  const OUT = removeOnly
+    ? join(EVIDENCE, `${server}-remove-only-${Date.now()}.json`)
+    : join(REPO, "docs", "measurements", "r649", `${server}-probe.json`);
   log(`lease guard: ${holder}`);
   const harnessCommit = git(["rev-parse", "HEAD"]);
   if (git(["status", "--porcelain", "--", "scripts/r649-bc-probe"]) !== "")
@@ -213,6 +220,10 @@ async function main(): Promise<number> {
   let published = false;
   let code = 0;
   try {
+    if (removeOnly) {
+      published = true;
+      throw new RemoveOnly();
+    }
     const build: Record<string, string> = {};
     for (const [n, id] of [
       ["Base Application", BASE_APP],
@@ -373,9 +384,14 @@ async function main(): Promise<number> {
       log(`control-app lease release: ${JSON.stringify(rel)}`);
     }
   } catch (err) {
-    log(`FAILED: ${errText(err)}`);
-    doc.error = errText(err);
-    code = 1;
+    if (err instanceof RemoveOnly) {
+      log("remove-only: no case run");
+      doc.removeOnly = true;
+    } else {
+      log(`FAILED: ${errText(err)}`);
+      doc.error = errText(err);
+      code = 1;
+    }
   } finally {
     // ALWAYS remove, tests first, then the target (once we may have published).
     if (published) {

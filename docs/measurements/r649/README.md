@@ -13,6 +13,8 @@ bun scripts/r649-bc-probe/drive.ts --server bc1
 
 It refuses (exit 2) unless lane bugs holds that server. `R649_CASES=92930,92931` runs only those
 codeunits. The full run may hold the lease about 25 minutes: the two 600 s cases run last.
+`--remove-only` runs no case: it only removes both apps and reads them back absent (a retry after a
+failed removal).
 
 ## The apps
 
