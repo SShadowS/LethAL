@@ -203,6 +203,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`--resume` and `--resume-run` now resume a closed-world run that ended before its
+  post-execution check** (R601, R620). Before, such a run (a crash, Ctrl-C, any exception after the
+  lease) kept its `|pending` test-app identity and was always refused. Now it resumes when it ran
+  on the same server and the closed-world guard gives the same answer now. The resumed run's own
+  check after execution confirms it, or revokes it. Any `lethal run` session whose check after
+  execution flips, fresh or resumed, also revokes every run of the project still pending under its
+  package (either closed tag) on its server, and its `closed-world-changed` warning names them. A
+  refused revoked run now says its closed-world answer changed, not that the test app was
+  republished. Every other case is refused in words that name the cause (the guard is open now,
+  quoting why, or the answer, the test app or the server differs). **Open limits:** a server
+  restart, or a dependent published and removed again, inside the gap between the crash and the
+  resume is not seen (a probe is filed as R632); a guard open at a session's start and a
+  `lethal verify` flip revoke nothing; the server key omits the tenant.
 - **A loop fed by another object's stateful procedure is hang-refused; identity scheme 41, the number
   confirmed at merge** (R572). A loop whose exit reads a flag, a `var` argument or a call fed by a stateful
   procedure in another project object refuses that procedure's chain, the writers of its value path, and the
@@ -829,6 +842,30 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   extension (R506).
 
 ### Fixed
+
+- **LethAL no longer follows links (symlinks, junctions) when it walks a folder** (R631). Bun's
+  recursive `readdir` follows them, so a link cycle hung or crashed with `ELOOP`, and a link out
+  pulled a foreign tree into the run. Every walk now goes through one walker that never descends a
+  link. alc and both al-runners DO follow a linked folder and a linked `.al` file (measured), so:
+  - **A link in the target or test project now refuses by name** (`ProjectSymlinkRefusedError`),
+    before anything compiles, in `lethal run` and `lethal verify`. This covers file links too (a
+    linked README refuses). Links inside `node_modules`, `.git` and `.vscode` are excused (never
+    followed); real files there are read as before. A link that appears during a run is reported
+    as drift (`added link <path>`).
+  - **An excused link that reaches a `.al` file still refuses.** alc compiles `.al` under
+    `node_modules`, `.git` and `.vscode` (measured), so skipping such a link would hide source alc
+    reads. The same holds for a link in a package cache (and for any link named `.alpackages`). A
+    link whose folder tree is too deep to check (over 32 levels) refuses too. During a run, such a
+    link is reported as drift.
+  - **Package caches:** the package cache folder (by default `<project>/.alpackages`, or the
+    configured `packageCachePath`) is not part of the project refusal, so a linked `.app` or a
+    junctioned `.alpackages` runs. A linked `.app` is copied from its real path (a relative one
+    used to dangle in LethAL's copy). A linked subfolder there refuses by name. A link whose
+    target is gone is left out of the copy with a warning that names it.
+  - **`lethal doctor`:** the al-runner cache size no longer counts files behind links, and says how
+    many links it did not follow.
+  - A new caveat, `project-symlink-skipped`, is a tripwire: it is raised if a folder LethAL builds
+    ever holds a link it skipped. Explain schema v18 adds it to `$.caveats[].caveat`.
 
 - **The assertion screen reads past al-runner's exception-type prefix** (R553). al-runner writes
   every failure as `<Type>Exception: <message>`, so the screen found no `Assert.` text on any

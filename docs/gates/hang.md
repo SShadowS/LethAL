@@ -22,6 +22,14 @@ The ON and OFF legs guard against different faults. One fault is minting a kill 
 abort. The other is recording a kill without BC's confirmation. Neither leg is redundant. See the
 header of `hang.itest.ts`.
 
+## What no gate covers: loops in installed dependent apps
+
+LethAL's hang refusals (R164) are decided over the session's own project. A loop in another installed
+app that depends on the target and calls into it is in no hang context. R-634 measured the price on dc,
+do and cdo: adding each same-corpus dependent's source to the target's hang context refused 0 more
+deployed keys on all 25 pairs. A positive control on bch refused 16, so the method finds the shape where
+it exists. The method undercounts a path that runs through a third app. See R634.
+
 ## Frozen figures
 
 ```json gate-figures

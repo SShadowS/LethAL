@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
@@ -106,7 +106,10 @@ import {
   closedWorldGuard,
   digestedAppOfPackage,
   guardedTestAppHash,
+  isClosedIdentity,
   isClosedWorld,
+  pendingIdentitiesOf,
+  resumableTestApp,
   sameClosedWorld,
 } from "./closed-world";
 import {
@@ -202,6 +205,7 @@ import {
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
 import type {
+  Caveat,
   DeclarativeSiteFile,
   MutantErrorCause,
   NotInstrumentedFile,
@@ -277,6 +281,7 @@ import {
   isTestPageNotRunMessage,
   testPageNotRunMessage,
 } from "./testpage-unsupported";
+import { onSkippedLinks, refuseProjectLinks, walkFiles } from "./walk";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
 // public types are re-exported one by one from here, the module the barrel does list.
@@ -868,7 +873,9 @@ export async function generateMutationSet(
   // order, mutant ids, batches and every written `file` are the same on every platform. Reads go
   // through the RAW name (`readKeyOf`): a snapshot taken on Windows is keyed with `\`.
   const listed =
-    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true });
+    snapshot !== undefined
+      ? [...snapshot.keys()]
+      : (await walkFiles(projectDir, { links: "refuse" })).files;
   // The `.al` / generated-file filter reads each name the way its platform does: only win32 treats
   // `\` as a separator. Off win32 `x\MutationFoo.al` is ONE name, not a generated `MutationFoo.al`,
   // so it reaches `discoveredRelPaths` and is refused by name instead of skipped without a word.
@@ -3879,24 +3886,58 @@ function assertSameTestApp(
   row: RunRow | null,
   flag: string,
   testAppHash: string | undefined,
+  pending: PendingResumeCheck,
 ): void {
   if (row === null) throw new Error(`${flag}: the run it found is no longer in this database`);
   if (
     row.testAppProven &&
-    row.testAppHash !== null &&
-    testAppHash !== undefined &&
-    row.testAppHash === testAppHash
+    resumableTestApp(row.testAppHash, testAppHash, row.resourceKey, pending.resourceKey)
   ) {
     return;
   }
+  // R601 (review I3): only a proven pending prior against a proven session gets the R601 words.
+  const note =
+    testAppHash !== undefined && row.testAppProven && row.testAppHash?.endsWith(PENDING_SUFFIX)
+      ? ` ${pendingRefusal(row, testAppHash, pending)}`
+      : "";
+  // R601 (delta review I-1): a revoked identity is a changed closed-world answer, not a republish.
+  const revoked = row.testAppHash?.endsWith(REVOKED_SUFFIX)
+    ? " Its identity was revoked: a closed-world check after execution, its own or a later run's on its server, answered differently (R389, R601)."
+    : "";
   throw new Error(
     `${flag}: run ${row.id} was measured against test app ${describeTestApp(row.testAppHash)}${recordedTestAppNote(
       row.testAppHash,
       row.testAppProven,
     )}, and this session's test app is ${describeTestApp(testAppHash)}${
       testAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-    }. ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495). Drop the resume flag to run from scratch.`,
+    }.${revoked}${note} ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495${note === "" ? "" : ", R601"}). Drop the resume flag to run from scratch.`,
   );
+}
+
+/** R601: what the pending-prior rule compares besides the identity strings. */
+interface PendingResumeCheck {
+  /** This session's server tier (`quarantineResourceKey`), `undefined` when it has none. */
+  readonly resourceKey: string | undefined;
+  /** Why this session is open-world, when it is (`testAppIdentity`). */
+  readonly openWorldWhy: string | undefined;
+}
+
+/** R601: why a pending prior is not resumed by this session, in one or two sentences. */
+function pendingRefusal(row: RunRow, session: string, p: PendingResumeCheck): string {
+  const head = `Run ${row.id} ended before its post-execution closed-world check, so its closed-world answer was never confirmed`;
+  if (!isClosedIdentity(session)) {
+    return `${head}, and this session's closed-world guard does not answer closed now, because: ${p.openWorldWhy ?? "unknown"}. So that answer cannot be confirmed.`;
+  }
+  const sameApp = row.testAppHash === `${session}${PENDING_SUFFIX}`;
+  const server = sameApp
+    ? ` It ran on server ${row.resourceKey ?? "unknown"}, and this session runs on server ${p.resourceKey ?? "unknown"}.`
+    : "";
+  // R601 M-C: with an unknown server nothing visibly differs; say why it still does not match.
+  const why =
+    sameApp && (row.resourceKey === null || p.resourceKey === undefined)
+      ? "and an unknown server never matches."
+      : "and this session's differ.";
+  return `${head}.${server} Such a run is resumed only by a session on the same server whose test app and closed-world answer, asked now, are the same, ${why}`;
 }
 
 /** R495: why an identity lends nothing, said the same way on every path. */
@@ -3949,12 +3990,14 @@ function resolveResume(
   testAppAfterHook = false,
   /** R586: `runMayLend` step 1's session side; absent lends no v3 run (unit callers). */
   lendingSession?: LendingSession,
+  /** R601: the pending-prior rule's server key and open-world reason. */
+  pending: PendingResumeCheck = { resourceKey: undefined, openWorldWhy: undefined },
 ):
   | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
   | undefined {
   if (cfg.resume === undefined) return undefined;
   const sameTestApp = (row: RunRow, flag: string): void => {
-    if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash);
+    if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
   // a throw), then the branch's own checks (each throws), then R557's mark and renamed baseline
@@ -3999,6 +4042,8 @@ function resolveResume(
   let priorHidden: CarryHidden | null;
   // R557: why the resumed run's carry is refused (`lend`), or `undefined`.
   let carryRefused: string | undefined;
+  // R601: the resumed run's recorded test-app identity, for the `resume-reusing-run` clause.
+  let priorTestAppHash: string | null;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -4074,6 +4119,7 @@ function resolveResume(
     if (priorHidden === null)
       throw new Error(`--resume: run ${found} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(foundRow);
+    priorTestAppHash = foundRow.testAppHash;
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -4135,6 +4181,7 @@ function resolveResume(
     if (priorHidden === null)
       throw new Error(`--resume-run ${id} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(row);
+    priorTestAppHash = row.testAppHash;
     priorRunId = id;
   }
 
@@ -4176,6 +4223,10 @@ function resolveResume(
     type: "warning",
     code: "resume-reusing-run",
     message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192).${
+      testAppHash !== undefined && priorTestAppHash === `${testAppHash}${PENDING_SUFFIX}`
+        ? ` Run ${priorRunId} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`
+        : ""
+    }${
       index.nonCarryableRows > 0
         ? ` ${index.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`
         : ""
@@ -5362,6 +5413,21 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
 }
 
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
+  // R631: a link in the target or test root refuses BY NAME before anything compiles. alc and
+  // al-runner follow links, so measuring around one would measure a different build.
+  await refuseProjectLinks([cfg.projectDir, cfg.testDir]);
+  const cleanups: Array<() => void> = [];
+  try {
+    return await runSessionBody(cfg, cleanups);
+  } finally {
+    for (const c of cleanups) c();
+  }
+}
+
+async function runSessionBody(
+  cfg: SessionConfig,
+  cleanups: Array<() => void>,
+): Promise<SessionReport> {
   // Constructed once for the whole session and threaded to every activateOnce call site
   // (baseline activation below, and the per-mutant loop in runMutantsOnBackend) — the latch is
   // per-SESSION (spec §8), not per-call, so every activation attempt must consult and be able
@@ -5383,6 +5449,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // several subscribers through a single-subscriber `cfg.emit` that this line then unwrapped again.
   const collectedEvents: RunEvent[] = [];
   const emit: RunEmitter = createEmitter([(e) => collectedEvents.push(e), ...(cfg.emit ?? [])]);
+  // R631: a tripwire. LethAL-built trees hold no links (the roots refused above), so this never
+  // fires unless something LethAL builds starts carrying one; then the report says so.
+  cleanups.push(
+    onSkippedLinks((root, links) =>
+      emit({
+        type: "warning",
+        // The warning code is the caveat `buildReport` raises from it.
+        code: "project-symlink-skipped" satisfies Caveat,
+        message: `[lethal] ${links.length} link(s) under ${root} were skipped, not followed (R631): ${links.slice(0, 10).join(", ")}`,
+      }),
+    ),
+  );
   // run-configured (spec 2026-08-05 §A, AMENDED): the closed statics set `{ caps, only, testsOnly,
   // stopHungSessions }`, echoed once from the same `cfg` values the `statics` object built at the
   // end of this function (and passed to `buildReport`) also reads — one source, two carriages. No
@@ -5779,6 +5857,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     testDigestParts,
     testDigestDependencies,
     closedWorld: pendingClosedWorld,
+    openWorldWhy,
   } = await testAppIdentity(
     cfg,
     publishedRead,
@@ -5793,7 +5872,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R389: the session's closed-world answer, bound into every test-app hash it reads or records.
   const sessionClosedWorld = pendingClosedWorld?.guard.closedWorld ?? OPEN_WORLD;
   // R389: a closed-world run's identity is recorded PENDING (unmatchable) until its
-  // post-execution recheck confirms it; a run killed before that never supplies a verdict.
+  // post-execution recheck confirms it; a run killed before that never supplies a baseline, and
+  // supplies a verdict only through R601's rule (`resumableTestApp`).
   const recordedTestAppHash = (h: string): string =>
     pendingClosedWorld !== undefined ? `${h}${PENDING_SUFFIX}` : h;
   // R495: the identity resume, history and the R192 snapshot may use, `undefined` unless proven.
@@ -5904,6 +5984,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     testPageRefusedNames,
     envPublishes !== undefined,
     lendingSession,
+    { resourceKey, openWorldWhy },
   );
 
   const runId = cfg.store.createRun({
@@ -6519,7 +6600,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const reason =
         historyTestApp === undefined
           ? "this session's test app is not proven: a dependency changed while it waited for the lease, or could not be read"
-          : prior?.testAppProven !== true || prior.testAppHash !== historyTestApp.hash
+          : prior?.testAppProven !== true ||
+              !resumableTestApp(
+                prior.testAppHash,
+                historyTestApp.hash,
+                prior.resourceKey,
+                resourceKey,
+              )
             ? `that run's test app was ${TEST_APP_UNPROVEN}, or another one`
             : prior.testAppDeps === null
               ? "it recorded no dependency fingerprint (it ran before R496, or its fingerprint could not be taken)"
@@ -7730,11 +7817,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         cfg.store.setTestDigests(runId, pendingClosedWorld.digests, pendingClosedWorld.parts);
       }
     } else {
-      if (historyTestApp !== undefined) cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX);
+      // R601 (review I-A, orchestrator ruling): every flip, fresh or resumed, revokes with itself
+      // the project's runs still pending under this package (either closed tag) on this server.
+      const chained =
+        historyTestApp === undefined
+          ? []
+          : cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX, {
+              projectPath: cfg.projectDir,
+              pendingHashes: pendingIdentitiesOf(historyTestApp.hash),
+            });
+      // R601 (delta review I-1): say which other runs this flip revoked.
+      const alsoRevoked =
+        chained.length === 0
+          ? ""
+          : `; it also revoked ${chained.length} run(s) of this project still pending on this server (${chained.join(", ")}), so they cannot be resumed (R601)`;
       emit({
         type: "warning",
         code: "closed-world-changed",
-        message: `[lethal] the closed-world guard answered differently after execution (${again.why}), so this run records open-world test digests and no later run carries or reuses its verdicts`,
+        message: `[lethal] the closed-world guard answered differently after execution (${again.why}), so this run records open-world test digests and no later run carries or reuses its verdicts${alsoRevoked}`,
       });
     }
   }
@@ -9114,6 +9214,8 @@ async function testAppIdentity(
   closedWorld?: PendingClosedWorld;
   /** R496 F9: the full dependency fingerprint the digests were taken over. */
   testDigestDependencies?: string;
+  /** R601 (review I3): why this session is open-world, when it is (no `closedWorld`). */
+  openWorldWhy?: string;
 }> {
   const { testAppHash, sources } = await reportPublishedTestApp(
     cfg,
@@ -9125,7 +9227,7 @@ async function testAppIdentity(
   );
   const none = (why: string) => {
     warnNoTestDigests(emit, why);
-    return { testAppHash };
+    return { testAppHash, openWorldWhy: why };
   };
   // An env-tool session publishes `envTool.publishApps`, PREBUILT .app files, only after the lease
   // is taken, which is after the read above (`afterLeaseAcquiredFor` in cli.ts calls
@@ -9133,7 +9235,11 @@ async function testAppIdentity(
   // read nor the disk is known to be the body the server runs. R373: when the hook will run, the
   // digests are taken after it (`deferredTestDigests`), which warns if it records none.
   if (cfg.afterLeaseAcquired !== undefined) {
-    if (deferred) return { testAppHash };
+    if (deferred)
+      return {
+        testAppHash,
+        openWorldWhy: "an env-tool session's test app is digested open-world (R389)",
+      };
     return none(
       "this run publishes its test apps itself (envTool.publishApps, prebuilt .app files) after the published test app is read, so neither that read nor the source on disk is known to be the body the server runs",
     );
@@ -9167,7 +9273,7 @@ async function testAppIdentity(
     testDigestDependencies: got.dependencies,
     ...(c !== undefined
       ? { closedWorld: { guard, digests: c.digests, parts: c.parts, recheck: ask } }
-      : {}),
+      : { openWorldWhy: guard.why }),
   };
 }
 
@@ -11254,7 +11360,8 @@ export async function prepareBatchProject(
   // is copied like any resource, and nothing is guessed from an extension.
   const excluded = new Set(excludeOutputs.map(outputPathKey));
 
-  const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
+  // R631: a link refuses here too, so a batch never copies a tree alc would compile differently.
+  const entries = (await walkFiles(projectDir, { links: "refuse" })).files;
 
   // writeInstrumentedProject only wrote files with >=1 mutant spec in this
   // batch; copy every other project source file verbatim (files whose sites
@@ -11312,9 +11419,7 @@ export async function prepareBatchProject(
   // the same bundle, measured with a three-file probe. `alc` compiles that tree fine. When the
   // upstream limitation goes, the flattening and this second copy go with it.
   const rebased = new Map<string, { readonly tail: string; readonly owners: string[] }>();
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const rel = relative(projectDir, join(entry.parentPath, entry.name));
+  for (const rel of entries) {
     const lower = rel.toLowerCase();
     if (!isProjectResource(rel)) continue;
     if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;

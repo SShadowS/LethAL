@@ -1,4 +1,3 @@
-import { readdirSync } from "node:fs";
 import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
@@ -68,6 +67,7 @@ import {
   publishTestApp as publishTestAppOf,
 } from "./test-app-publish";
 import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
+import { walkFilesSync } from "./walk";
 
 /**
  * R552: the warning for a `lethal-control.app` an older LethAL left in the user's package cache, or
@@ -78,7 +78,8 @@ import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
 export function controlLeftoverWarning(packageCachePath: string): string | undefined {
   let names: string[];
   try {
-    names = readdirSync(packageCachePath, { recursive: true }).map(String);
+    // R631: `buildPackageCacheCopy`'s walk; a linked folder refuses there, so it is not reported here.
+    names = walkFilesSync(packageCachePath, { links: "yield-files" }).files;
   } catch {
     return undefined; // no cache folder: nothing left over in it
   }
@@ -86,6 +87,23 @@ export function controlLeftoverWarning(packageCachePath: string): string | undef
   if (found.length === 0) return undefined;
   const leftover = found.join(", ");
   return `[lethal] ${leftover} is a leftover from an older LethAL, which copied the LethAL Control symbol into your package cache (R552). LethAL now compiles against its own copy of this cache, which leaves this file out, and never writes this cache; the file is unused and safe to delete.`;
+}
+
+/**
+ * R631 (review L3): the warning for a `.app` LINK in the package cache whose target is gone, or
+ * `undefined` when there is none. `buildPackageCacheCopy` cannot copy it, so alc will not see it.
+ */
+export function danglingPackageWarning(packageCachePath: string): string | undefined {
+  let dangling: string[];
+  try {
+    dangling = walkFilesSync(packageCachePath, { links: "yield-files" }).skippedLinks.filter((l) =>
+      l.toLowerCase().endsWith(".app"),
+    );
+  } catch {
+    return undefined; // no cache folder, or a linked subfolder, which buildPackageCacheCopy refuses
+  }
+  if (dangling.length === 0) return undefined;
+  return `[lethal] ${dangling.map((l) => join(packageCachePath, l)).join(", ")}: a link in your package cache whose target is gone (R631). LethAL's copy of the cache leaves it out, so alc will not see that package.`;
 }
 
 export interface BcDevConfig {
@@ -354,6 +372,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
   private readonly refusalsWarned = new Set<string>();
   /** R552: the leftover `lethal-control.app` warning is printed once per backend. */
   private leftoverWarned = false;
+  private danglingWarned = false;
   /** R552: this backend's package-cache copy, built on the first compile and removed by `close()`. */
   private packageCacheCopy: Promise<string> | undefined;
   // R298 (`coverageMode: "procedure"`, the hub): refused declared objects, `type:id` -> reason, by
@@ -704,6 +723,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
       if (leftover !== undefined && !this.leftoverWarned) {
         this.leftoverWarned = true;
         console.warn(leftover);
+      }
+      const dangling = danglingPackageWarning(this.cfg.packageCachePath);
+      if (dangling !== undefined && !this.danglingWarned) {
+        this.danglingWarned = true;
+        console.warn(dangling);
       }
     } catch (e) {
       await rm(staging, { recursive: true, force: true }).catch(() => {});

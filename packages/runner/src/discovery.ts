@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type ALSyntaxNode,
@@ -12,6 +12,7 @@ import {
 } from "@lethal/engine";
 import type { TestMethodRef } from "./backend";
 import { discoveredRelPaths } from "./line-filter";
+import { walkFiles } from "./walk";
 
 const CODEUNIT_HEADER_GLOBAL = /codeunit\s+(\d+)\s+("([^"]+)"|(\w+))/gi;
 const SUBTYPE_TEST = /Subtype\s*=\s*Test\s*;/i;
@@ -833,7 +834,8 @@ export async function discoverTests(
   const warnings: DiscoveryWarning[] = [];
   const treeOnlyTests: TestMethodRef[] = [];
   const splitTests: TestMethodRef[] = [];
-  const entries = await readdir(testDir, { recursive: true });
+  // R631: a link in the test project refuses (alc and al-runner would follow it).
+  const entries = (await walkFiles(testDir, { links: "refuse" })).files;
   // R421: normalised to `/` once and sorted in that form; matched and labelled with `rel`, read
   // through the raw name.
   const discovered = discoveredRelPaths(

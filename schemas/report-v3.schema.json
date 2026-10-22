@@ -80,7 +80,8 @@
               "session-warm",
               "preproc-files-refused",
               "tests-compiled-out",
-              "test-symbols-unverified"
+              "test-symbols-unverified",
+              "project-symlink-skipped"
             ]
           }
         },

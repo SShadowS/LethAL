@@ -287,6 +287,9 @@ export interface RunRow {
   /** R565: the run's `dependencySourceSha256`, written after generation (`setDependencySourceSha256`).
    *  `null` when not recorded (before R565, or the run died before generation): no rule-1 carry. */
   readonly dependencySourceSha256: string | null;
+  /** R601: `runs.resource_key`, the server tier the run ran on (`quarantineResourceKey`). `null`
+   *  on a run with no tier identity (al-runner, or no server fields): never equal to anything. */
+  readonly resourceKey: string | null;
   /** R557 (I1): the run carries the R557 test-name mark (`runs.al_runner_names`). `false` on a row
    *  recorded before the column, and on every run that is not an R557+ al-runner session. */
   readonly alRunnerNames: boolean;
@@ -913,7 +916,8 @@ export class ResultsStore {
    * the closed-world digests replace the open-world ones, and the run's test-app identity and its
    * baseline snapshots lose `pending` (`PENDING_SUFFIX`), which makes them reusable. Until then
    * no key a session computes can match them, so a run killed before this never supplies a
-   * verdict or a baseline.
+   * baseline, and supplies a verdict only through R601's rule (`resumableTestApp`). Throws when
+   * the row holds no pending identity, as when another session's flip revoked it (R601 M-B).
    */
   confirmClosedWorld(
     runId: number,
@@ -943,9 +947,26 @@ export class ResultsStore {
   /** R389: the guard's answer changed during the run. In ONE transaction, the run's test-app
    *  identity and every baseline snapshot it recorded get `suffix`, so no later session carries or
    *  reuses from it. A revoked owner whose snapshot somehow kept the old key is excluded by
-   *  `findBaselineSnapshot`'s R496 condition that the run's hash equals the snapshot's. */
-  revokeTestAppHash(runId: number, suffix: string): void {
-    this.db.transaction(() => {
+   *  `findBaselineSnapshot`'s R496 condition that the run's hash equals the snapshot's.
+   *  R601 (review I-A, orchestrator ruling): `chain` is what any flipping `lethal run` session
+   *  passes, fresh or resumed. In the same transaction, every run of `chain.projectPath` still
+   *  recorded as exactly one of `chain.pendingHashes` (`pendingIdentitiesOf`) on this run's server
+   *  (`resource_key`) is revoked too, with its snapshots, so no pending run lends after a session
+   *  on that server saw the answer change. An unknown server fails closed: when this run's key is
+   *  NULL the chain spans every server of the project, and a pending run with a NULL key is revoked
+   *  on any server (it can never resume anyway). Returns the chained runs' ids, ascending. */
+  revokeTestAppHash(
+    runId: number,
+    suffix: string,
+    chain?: { readonly projectPath: string; readonly pendingHashes: readonly string[] },
+  ): number[] {
+    return this.db.transaction((): number[] => {
+      // The chain's server scope: this run's `resource_key`.
+      const server = (
+        this.db.query("SELECT resource_key AS k FROM runs WHERE id = ?").get(runId) as {
+          k: string | null;
+        } | null
+      )?.k;
       const changed = this.db
         .query(
           "UPDATE runs SET test_app_hash = test_app_hash || ? WHERE id = ? AND test_app_hash IS NOT NULL",
@@ -956,6 +977,28 @@ export class ResultsStore {
       this.db
         .query("UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ? WHERE run_id = ?")
         .run(suffix, runId);
+      if (chain === undefined) return [];
+      const ids = (
+        this.db
+          .query(
+            "SELECT id FROM runs WHERE project_path = ?1 AND test_app_hash IN (SELECT value FROM json_each(?2)) AND (?3 IS NULL OR resource_key IS NULL OR resource_key = ?3) ORDER BY id",
+          )
+          .all(chain.projectPath, JSON.stringify(chain.pendingHashes), server ?? null) as {
+          id: number;
+        }[]
+      ).map((r) => r.id);
+      const idList = JSON.stringify(ids);
+      this.db
+        .query(
+          "UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ?1 WHERE run_id IN (SELECT value FROM json_each(?2))",
+        )
+        .run(suffix, idList);
+      this.db
+        .query(
+          "UPDATE runs SET test_app_hash = test_app_hash || ?1 WHERE id IN (SELECT value FROM json_each(?2))",
+        )
+        .run(suffix, idList);
+      return ids;
     })();
   }
 
@@ -1213,9 +1256,10 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build, resource_key FROM runs WHERE id = ?",
       )
       .get(runId) as {
+      resource_key: string | null;
       dependency_source_sha256: string | null;
       al_runner_names: number | null;
       runner_build: string | null;
@@ -1255,6 +1299,7 @@ export class ResultsStore {
       dependencySourceSha256: row.dependency_source_sha256,
       alRunnerNames: row.al_runner_names === 1,
       runnerBuild: row.runner_build,
+      resourceKey: row.resource_key,
     };
   }
 

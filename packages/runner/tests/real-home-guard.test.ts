@@ -4,6 +4,10 @@ import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { defaultAlRunnerCacheDir, defaultAlRunnerSecondaryCacheDir } from "../src/al-runner-cache";
 import { homeDir } from "../src/home";
+import { walkFilesSync } from "../src/walk";
+
+/** R631: never a recursive `readdir`, which follows a link cycle in a lane's scratch dir forever. */
+const filesUnder = (dir: string): string[] => walkFilesSync(dir, { links: "skip" }).files;
 
 /**
  * R264: every default that resolves under the home directory (al-runner's two caches, the
@@ -77,7 +81,7 @@ test("R409: no product source calls os.homedir() directly; home.ts is the one re
     const srcDir = join(packagesDir, pkg, "src");
     let files: string[];
     try {
-      files = readdirSync(srcDir, { recursive: true }).map(String);
+      files = filesUnder(srcDir);
     } catch {
       continue; // a package with no src/
     }
@@ -97,14 +101,10 @@ test("R409: no non-test script that a test imports calls os.homedir() directly",
   // must come from `homeDir()` as well. Scripts no test imports (one-off probes) are not checked.
   const repo = join(import.meta.dir, "..", "..", "..");
   const testFiles = [
-    ...readdirSync(join(repo, "scripts"), { recursive: true })
-      .map(String)
-      .map((f) => join(repo, "scripts", f)),
+    ...filesUnder(join(repo, "scripts")).map((f) => join(repo, "scripts", f)),
     ...readdirSync(join(repo, "packages")).flatMap((pkg) => {
       const dir = join(repo, "packages", pkg, "tests");
-      return existsSync(dir)
-        ? readdirSync(dir, { recursive: true }).map((f) => join(dir, String(f)))
-        : [];
+      return existsSync(dir) ? filesUnder(dir).map((f) => join(dir, f)) : [];
     }),
   ].filter((f) => f.endsWith(".test.ts"));
   const imported = new Set<string>();
