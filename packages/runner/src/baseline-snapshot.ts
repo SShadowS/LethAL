@@ -24,14 +24,20 @@
  * a prior run's fenced line-number coverage apply to this run's artifact.
  */
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
 } from "@lethal/schemata";
 import type { TestMethodRef, TestVerdict } from "./backend";
+import {
+  type LinkPolicy,
+  ProjectSymlinkRefusedError,
+  assertNoUnexcusedLinks,
+  walkFiles,
+} from "./walk";
 
 const CONTROL_FILES: ReadonlySet<string> = new Set([
   CONTROL_SELECTOR_FILENAME,
@@ -59,7 +65,21 @@ export interface BaselineSnapshot {
  * to any instrumented line.
  */
 export async function hashAlTree(dir: string): Promise<string> {
-  const all = await readdir(dir, { recursive: true });
+  return hashAlFiles(dir, (await walkFiles(dir, { links: "skip" })).files);
+}
+
+/**
+ * R631: `hashAlTree` over a USER test root. The walk refuses a link (`ProjectSymlinkRefusedError`),
+ * and a skipped unexcused link refuses too, whatever `links` is, so the hash never quietly leaves
+ * out AL that alc and al-runner would compile. `links` exists only so a test can force a skip.
+ */
+export async function hashTestDir(dir: string, links: LinkPolicy = "refuse"): Promise<string> {
+  const walk = await walkFiles(dir, { links });
+  assertNoUnexcusedLinks(dir, walk.skippedLinks);
+  return hashAlFiles(dir, walk.files);
+}
+
+async function hashAlFiles(dir: string, all: readonly string[]): Promise<string> {
   const entries = all
     .map((f) => f.replaceAll("\\", "/"))
     .filter((f) => f.toLowerCase().endsWith(".al"))
@@ -81,11 +101,10 @@ export async function hashAlTree(dir: string): Promise<string> {
  * from what the target build compiles.
  */
 export async function targetAlFiles(projectDir: string): Promise<string[]> {
-  const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
-  return entries
-    .filter((e) => e.isFile())
-    .map((e) => relative(projectDir, join(e.parentPath, e.name)))
-    .filter((rel) => rel.toLowerCase().endsWith(".al"));
+  // R631: a link refuses (alc follows it, so skipping it would measure another build).
+  return (await walkFiles(projectDir, { links: "refuse" })).files.filter((rel) =>
+    rel.toLowerCase().endsWith(".al"),
+  );
 }
 
 /**
@@ -135,6 +154,8 @@ export async function readTargetSource(
     try {
       return await f();
     } catch (err) {
+      // R631: a refused link is its own named refusal, not an unreadable file.
+      if (err instanceof ProjectSymlinkRefusedError) throw err;
       throw new SourceSnapshotUnreadableError(path, err);
     }
   };
@@ -195,6 +216,8 @@ export function hashPackage(bytes: Uint8Array): string {
 export async function testAppHashFor(
   fetchPackage: (() => Promise<Uint8Array | null | undefined>) | undefined,
   testDir: string,
+  /** R631: only a test forces `"skip"`; a skipped link still makes the answer `undefined`. */
+  links: LinkPolicy = "refuse",
 ): Promise<string | undefined> {
   if (fetchPackage !== undefined) {
     const bytes = await fetchPackage();
@@ -203,7 +226,7 @@ export async function testAppHashFor(
     // `undefined`: the backend cannot form the request (env-tool path). Fall through to source.
   }
   try {
-    return `source:${await hashAlTree(testDir)}`;
+    return `source:${await hashTestDir(testDir, links)}`;
   } catch {
     return undefined;
   }

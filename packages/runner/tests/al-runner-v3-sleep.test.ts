@@ -165,6 +165,29 @@ describe("I-1: the index is built under realpath", () => {
       await rm(base, { recursive: true, force: true });
     }
   });
+
+  test("R631: a link INSIDE the test dir refuses; one inside the deployed batch is skipped", async () => {
+    const { mkdtemp, mkdir, writeFile, symlink, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { ProjectSymlinkRefusedError } = await import("../src/walk");
+    const base = await mkdtemp(join(tmpdir(), "lethal-r631-sleep-"));
+    try {
+      await mkdir(join(base, "active"), { recursive: true });
+      await mkdir(join(base, "tests"), { recursive: true });
+      await mkdir(join(base, "elsewhere"), { recursive: true });
+      await writeFile(join(base, "elsewhere", "S.Codeunit.al"), SRC);
+      await symlink(join(base, "elsewhere"), join(base, "active", "linked"), "junction");
+      const idx = await buildSleepIndex(join(base, "active"), join(base, "tests"));
+      expect(idx.sizes.target).toBe(0);
+      await symlink(join(base, "elsewhere"), join(base, "tests", "linked"), "junction");
+      await expect(
+        buildSleepIndex(join(base, "active"), join(base, "tests")),
+      ).rejects.toBeInstanceOf(ProjectSymlinkRefusedError);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
 });
 const doc = (o: {
   top?: { line: number; hits: number }[];

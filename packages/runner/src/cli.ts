@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -53,17 +53,17 @@ import {
   probeAlRunnerPredefinedSymbols,
 } from "./al-runner-predefined-probe";
 import type { ServerSpawnFn } from "./al-runner-server";
-import { readSystemRuntime } from "./app-package";
-import { compareAppVersions, nextAbove } from "./app-version";
-import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import { AlRunnerV3Backend } from "./al-runner-v3-backend";
-import { checkGated } from "./al-runner-v3-pin";
 import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
   assertBcVersionMatchesPackages,
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
+import { checkGated } from "./al-runner-v3-pin";
+import { readSystemRuntime } from "./app-package";
+import { compareAppVersions, nextAbove } from "./app-version";
+import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { BackendKind, BackendStatus, ExecutionBackend } from "./backend";
 import { isLocalRunner } from "./backend";
 import { readTargetSource } from "./baseline-snapshot";
@@ -151,6 +151,7 @@ import {
   runVerify,
   testProjectNestedProblem,
 } from "./verify";
+import { setPackageCacheDirs, walkFiles } from "./walk";
 
 /**
  * `cli.ts` is argument marshaling only — everything that decides pass/fail
@@ -309,7 +310,9 @@ async function scanProjectCodeunitIds(
   snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<Map<number, DeclaredObject>> {
   const entries = (
-    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true })
+    snapshot !== undefined
+      ? [...snapshot.keys()]
+      : (await walkFiles(projectDir, { links: "refuse" })).files
   )
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .filter((e) => !EMITTED_FILENAMES.has(basename(e)));
@@ -2742,13 +2745,27 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
       `cannot read config file at ${path}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  let parsed: LethalConfigFile;
   try {
-    return JSON.parse(text) as LethalConfigFile;
+    parsed = JSON.parse(text) as LethalConfigFile;
   } catch (err) {
     throw new Error(
       `config file at ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  setPackageCacheDirs(configuredPackageCaches(parsed));
+  return parsed;
+}
+
+/**
+ * R631 (review H1): every package-cache folder the config names, so a refused target or test root
+ * walks one under the cache policy (a linked `.app` is fine there). `.alpackages` always is.
+ */
+export function configuredPackageCaches(c: LethalConfigFile): string[] {
+  const v3 = c.alRunnerV3 as { packagesDir?: unknown } | undefined;
+  return [c.bcdev?.packageCachePath, c.alRunner?.packagesDir, v3?.packagesDir].filter(
+    (p): p is string => typeof p === "string" && p !== "",
+  );
 }
 
 /**

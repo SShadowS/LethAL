@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { scratchDirs } from "../packages/runner/tests/helpers/scratch";
 import { corpusEntries, fingerprintCorpus } from "./corpus-fingerprint";
@@ -80,5 +80,12 @@ describe("corpus fingerprint (R187)", () => {
   test("entries are sorted with forward slashes, whatever the OS produced", async () => {
     const entries = await corpusEntries(corpus(BASE));
     expect(entries).toEqual(["src/A.Codeunit.al", "src/deep/B.Table.al"]);
+  });
+
+  test("R631: a linked folder is not walked (a link out adds nothing)", async () => {
+    const dir = corpus(BASE);
+    const foreign = corpus({ "F.Codeunit.al": "codeunit 9 F { }" });
+    symlinkSync(foreign, join(dir, "src", "linked"), "junction");
+    expect(await corpusEntries(dir)).toEqual(["src/A.Codeunit.al", "src/deep/B.Table.al"]);
   });
 });
