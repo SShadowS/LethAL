@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**100 of 662 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**100 of 663 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -702,11 +702,12 @@ that ordering is the priority.
 - **R655** · al-runner v3: the bound check hashes active/ with links skipped, so a link added under active/ mid-run is not seen (the test dir refuses one since R631) · [R655.md](docs/roadmap/R655.md) · open, filed 2026-10-22
 - **R656** · `--dry-run --backend al-runner-v3` reads bcdev's package cache, not `alRunnerV3.packagesDir` · [R656.md](docs/roadmap/R656.md) · open, filed 2026-10-22
 - **R659** · roadmap-next-id.ts reads remote branches without fetching them, so an id another lane pushed minutes ago looks free · [R659.md](docs/roadmap/R659.md) · done (3fc23858)
-- **R657** · The R553 assertion screen reads an al-runner-v3 kill as bcdev's: v3's failure-message shape is unmeasured · [R657.md](docs/roadmap/R657.md) · open, filed 2026-10-22
+- **R657** · The R553 assertion screen reads an al-runner-v3 kill as bcdev's: v3's failure-message shape is unmeasured · [R657.md](docs/roadmap/R657.md) · done (b1c1055e)
 - **R660** · ci.yml has no workflow_dispatch trigger: when GitHub drops a push event, a submit head can get no CI run, and nothing can start one by hand · [R660.md](docs/roadmap/R660.md) · done (0ea6960c)
 - **R662** · talk-cut script: tag a given commit and make a DRAFT release with lethal-control.app attached, never publishing it · [R662.md](docs/roadmap/R662.md) · done (03448305)
 - **R663** · bc-demo: a fourth BC on Linux instance on server1 for the talk, outside every lease pool, with an idempotent setup that is also the offline demo reset · [R663.md](docs/roadmap/R663.md) · open, filed 2026-10-22
 - **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at identity scheme 41, and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · open, filed 2026-10-22
+- **R667** · al-runner v3: nothing live would catch a future build that prefixes failure messages, which would skew the R553 assertion screen · [R667.md](docs/roadmap/R667.md) · open, filed 2026-10-22
 
 ---
 
