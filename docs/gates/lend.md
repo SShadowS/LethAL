@@ -77,8 +77,9 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
 - **A side effect (review M2):** a batch that used to be carried whole now takes the partial path, so a stored kill or
   survive whose mutant is uncovered under the coverage now used becomes a fresh no-coverage instead of being carried.
   That is the safe direction (nothing is lent against coverage that disagrees); on this fixture no such mutant exists.
-- **A batch holding a stored no-coverage is never carried whole** (`replayCarriedBatch` never sees one). It deploys,
-  and its baseline is reused from a matching snapshot when one exists. That is R1. R643 files a cheaper variant.
+- **No batch is carried whole any more** (R-646c removed `replayCarriedBatch`). Every batch deploys, and its baseline
+  is reused from a matching snapshot when one exists. That is R1, unchanged by R-646c (it already deployed since R621).
+  R643 files a cheaper variant.
 - **On this fixture** "frozen no-coverage" and "uncovered now" are the same mutants (`assertFrozen` pins every
   verdict), so the gate's `carriedInPartBatch` filters on the frozen verdict.
 - **Not reached live:** a stored no-coverage for a mutant covered NOW (the fixture has none). The unit tests in

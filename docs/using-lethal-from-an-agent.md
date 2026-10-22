@@ -902,20 +902,25 @@ every row skipped before R644 has none, a fourth one-time cost on upgrade. A sur
 now is not skipped; it reads `no-coverage`. On `--resume` the same two cases warn
 `resume-tests-not-faced` and `resume-survivor-no-record` (R646, below).
 
+**`--resume` deploys every batch (R-646c).** No batch is recorded from the resumed run without a
+deploy any more: `resume-batch-carried` is no longer emitted. Each batch is deployed, and its
+baseline is reused from a saved snapshot when one matches (`resume-baseline-reused`), or run again
+when none does. That costs one deploy per fully scored batch per resume (about 40 s on a hosted
+server), plus a baseline when no snapshot matches (R643 tracks the cost). The one exception: a batch
+whose every mutant stranded the tier in a prior run (R53) has nothing to run and is not deployed.
+A stranded mutant is skipped before coverage, so it keeps its skip note even when nothing covers it
+now.
+
 **`--resume` re-derives no-coverage (R621).** A stored `no-coverage` is never carried. A mutant this
-session's coverage leaves uncovered reads `no-coverage` again; one it covers is run. A fully scored
-batch holding a `no-coverage` row is therefore deployed on resume (its baseline is reused from the
-saved snapshot when one matches) instead of being carried whole.
+session's coverage leaves uncovered reads `no-coverage` again; one it covers is run.
 
 **`--resume` checks each survivor's tests too (R646).** The same rule as R644, on the resume path:
 a survivor is carried only when every test covering it in this session is one it ran against in the
 resumed run. Otherwise it is run, and the batch warns `resume-tests-not-faced`. A survivor with no
-record is run with `resume-survivor-no-record`, and a fully scored batch holding one is deployed
-rather than carried whole. That costs one deploy per such batch, plus a baseline unless a saved
-snapshot matches: in practice every fully scored batch of a pre-R644 store holding a survivor lent
-by history. A kill is always carried: a test failed under it, whatever covers it now. **Limit:** a
-fully scored batch carried whole (`resume-batch-carried`) runs no baseline here, so its survivors
-are carried with no check, even when a test that passes now covers them (R646 stays open for this).
+record is run with `resume-survivor-no-record`. A kill is carried when a test covers it now: a test
+failed under it, whatever else covers it now. What a reused snapshot does not re-check is the
+environment's data (R192): a test that changed colour since that snapshot, with nothing newer on
+record, is not detected.
 
 ### After verify (guidance)
 
