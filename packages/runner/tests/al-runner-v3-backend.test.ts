@@ -560,6 +560,36 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
     });
   }
 
+  // R655: active/ is LethAL's own copy and holds no link (measured), so one is drift by name.
+  const linkHelpers = async (l: Layout, into: string): Promise<string> => {
+    await mkdir(join(l.root, "helpers"), { recursive: true });
+    await writeFile(join(l.root, "helpers", "H.Codeunit.al"), "codeunit 79150 H { }");
+    const link = join(into, "helpers");
+    await symlink(join(l.root, "helpers"), link, "junction");
+    return link;
+  };
+
+  test("R655: a junction holding an .al added under active/ after deploy is refused at the next send, by path", async () => {
+    const { l, b, v3 } = await deployed();
+    const link = await linkHelpers(l, active(l));
+    const err = await run(b).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect((err as Error).message).toContain(link);
+    expect(v3.calls).toHaveLength(0);
+  });
+
+  test("R655: a link in the batch (cp carries it into active/) is refused at deploy, by path; v3 not started", async () => {
+    const l = await layout();
+    await linkHelpers(l, l.batch);
+    const v3 = fakeV3(allPass);
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    const err = await b.deploy(l.batch).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect((err as Error).message).toContain(join(active(l), "helpers"));
+    await expect(run(b)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect(v3.calls).toHaveLength(0);
+  });
+
   test("activate refuses an id the manifest does not hold", async () => {
     const { b } = await deployed();
     await expect(b.activate("M9999")).rejects.toThrow(/not a mutant of the deployed batch/);
