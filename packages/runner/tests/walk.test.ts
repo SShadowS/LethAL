@@ -127,14 +127,33 @@ describe("R631 walker: never descends a link", () => {
     expect(sorted(s.dirs)).toEqual(want);
   });
 
-  test("refuse: the first link throws ProjectSymlinkRefusedError naming the link and the root", async () => {
+  test("refuse: the first link in SORTED order throws ProjectSymlinkRefusedError naming it and the root, whatever order readdir returns", async () => {
+    // CI's filesystem listed `dangling` or `linkfile.al` first (R631 CI 39739832640): the walker
+    // meets entries in sorted order, so the refusal is the same on every filesystem. A readdir
+    // that returns REVERSED order must not change which link is named.
     const { root } = hostileTree();
-    const err = await walkFiles(root, { links: "refuse" }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
-    const msg = (err as Error).message;
-    expect(msg).toContain(root);
-    expect(DIR_LINKS.some((l) => msg.includes(join(root, l)))).toBe(true);
-    expect(() => walkFilesSync(root, { links: "refuse" })).toThrow(ProjectSymlinkRefusedError);
+    const first = join(root, "a", "to-b");
+    const reversed: WalkFs = { readdir: async (d) => (await readdir(d)).sort().reverse(), lstat };
+    const reversedSync: WalkFsSync = {
+      readdir: (d) => readdirSync(d).sort().reverse(),
+      lstat: lstatSync,
+    };
+    for (const fs of [undefined, reversed]) {
+      const err = await walkFiles(root, { links: "refuse" }, fs).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
+      expect((err as ProjectSymlinkRefusedError).linkPath).toBe(first);
+      expect((err as Error).message).toContain(root);
+    }
+    for (const fs of [undefined, reversedSync]) {
+      let err: unknown;
+      try {
+        walkFilesSync(root, { links: "refuse" }, fs);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
+      expect((err as ProjectSymlinkRefusedError).linkPath).toBe(first);
+    }
   });
 
   test("refuse: a linked .al FILE alone refuses too", async () => {
@@ -230,37 +249,46 @@ describe("R631 walker: entries that vanish mid-walk", () => {
 });
 
 describe("R631 r3 A: node_modules and .git only EXCUSE links; they never drop real files", () => {
-  function excusedTree(): string {
+  /** One spelling of the three excused folders per tree: a case-insensitive filesystem (the
+   *  Windows CI job) folds `node_modules` and `Node_Modules` side by side into one folder. The
+   *  mixed-case tree is what proves the match is case-insensitive. */
+  const SPELLINGS = [
+    { nm: "node_modules", git: ".git", vscode: ".vscode" },
+    { nm: "Node_Modules", git: ".GIT", vscode: ".VSCode" },
+  ] as const;
+
+  function excusedTree(s: (typeof SPELLINGS)[number]): string {
     const base = scratch("lethal-walk-");
     const root = join(base, "root");
     put(root, "src/A.al");
-    put(root, "node_modules/pkg/X.al");
-    put(root, "Node_Modules/other/Y.al");
-    put(root, ".GIT/hooks/real-hook");
+    put(root, `${s.nm}/pkg/X.al`);
+    put(root, `${s.git}/hooks/real-hook`);
     // No `.al` behind these links: that is what makes them excusable (M1).
     put(base, "foreign/tool.js");
-    mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
-    dirLink(join(base, "foreign"), join(root, "node_modules", ".bin", "tool"));
-    dirLink(join(base, "foreign"), join(root, ".GIT", "hooks", "linked"));
-    dirLink(join(base, "foreign"), join(root, "Node_Modules", "other", "deep-link"));
-    mkdirSync(join(root, ".VSCode"));
-    dirLink(join(base, "foreign"), join(root, ".VSCode", "linked"));
+    mkdirSync(join(root, s.nm, ".bin"), { recursive: true });
+    dirLink(join(base, "foreign"), join(root, s.nm, ".bin", "tool"));
+    dirLink(join(base, "foreign"), join(root, s.nm, "pkg", "deep-link"));
+    dirLink(join(base, "foreign"), join(root, s.git, "hooks", "linked"));
+    mkdirSync(join(root, s.vscode));
+    dirLink(join(base, "foreign"), join(root, s.vscode, "linked"));
     return root;
   }
 
-  test("refuse: links inside node_modules / .GIT / Node_Modules / .VSCode are listed, not refused, never descended", async () => {
-    const root = excusedTree();
-    const r = await walkFiles(root, { links: "refuse" });
-    expect(r.skippedLinks).toEqual(
-      sorted([
-        join(".GIT", "hooks", "linked"),
-        join(".VSCode", "linked"),
-        join("Node_Modules", "other", "deep-link"),
-        join("node_modules", ".bin", "tool"),
-      ]),
-    );
-    expect(r.files.some((f) => f.includes("tool.js"))).toBe(false);
-    expect(() => walkFilesSync(root, { links: "refuse" })).not.toThrow();
+  test("refuse: links inside node_modules / .git / .vscode, in either case, are listed, not refused, never descended", async () => {
+    for (const s of SPELLINGS) {
+      const root = excusedTree(s);
+      const r = await walkFiles(root, { links: "refuse" });
+      expect(r.skippedLinks).toEqual(
+        sorted([
+          join(s.git, "hooks", "linked"),
+          join(s.vscode, "linked"),
+          join(s.nm, ".bin", "tool"),
+          join(s.nm, "pkg", "deep-link"),
+        ]),
+      );
+      expect(r.files.some((f) => f.includes("tool.js"))).toBe(false);
+      expect(() => walkFilesSync(root, { links: "refuse" })).not.toThrow();
+    }
   });
 
   test("M1: an excused FOLDER link that reaches a .al (at any depth, through a further link) refuses", async () => {
@@ -297,12 +325,12 @@ describe("R631 r3 A: node_modules and .git only EXCUSE links; they never drop re
     );
   });
 
-  test("refuse: real files under node_modules and Node_Modules are still yielded", async () => {
-    const root = excusedTree();
-    const r = await walkFiles(root, { links: "refuse" });
-    expect(r.files).toContain(join("node_modules", "pkg", "X.al"));
-    expect(r.files).toContain(join("Node_Modules", "other", "Y.al"));
-    expect(r.files).toContain(join(".GIT", "hooks", "real-hook"));
+  test("refuse: real files under node_modules / .git, in either case, are still yielded", async () => {
+    for (const s of SPELLINGS) {
+      const r = await walkFiles(excusedTree(s), { links: "refuse" });
+      expect(r.files).toContain(join(s.nm, "pkg", "X.al"));
+      expect(r.files).toContain(join(s.git, "hooks", "real-hook"));
+    }
   });
 
   test("isLinkExcused: case-insensitive, only INSIDE an excused folder", () => {

@@ -296,7 +296,8 @@ export async function walkFiles(
   const visit = async (relDir: string, policy: Policy): Promise<void> => {
     let names: string[];
     try {
-      names = await fs.readdir(join(root, relDir));
+      // Sorted: the first link a refusal names is the same on every filesystem (CI 39739832640).
+      names = (await fs.readdir(join(root, relDir))).sort();
     } catch (err) {
       if (relDir !== "" && isVanished(err)) return;
       throw err;
@@ -327,7 +328,7 @@ export function walkFilesSync(
   const visit = (relDir: string, policy: Policy): void => {
     let names: string[];
     try {
-      names = fs.readdir(join(root, relDir));
+      names = fs.readdir(join(root, relDir)).sort();
     } catch (err) {
       if (relDir !== "" && isVanished(err)) return;
       throw err;
