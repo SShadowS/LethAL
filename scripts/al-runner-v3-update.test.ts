@@ -10,6 +10,7 @@ import {
   FIXTURE_SYMBOLS_TAR_SHA256,
   type Outcome,
   type UpdateDeps,
+  V3_CDO_DEFAULT,
   candidates,
   edgeOnce,
   expectedSha,
@@ -34,6 +35,7 @@ afterEach(async () => {
 });
 
 async function setup(commit = GATED_COMMIT): Promise<string> {
+  if (root !== "") await rm(root, { recursive: true, force: true });
   root = await mkdtemp(join(tmpdir(), "lethal-r586-update-"));
   const cur = join(root, "3.0.0-alpha.2-91253f2d6");
   await mkdir(cur, { recursive: true });
@@ -64,9 +66,19 @@ function fake(o: {
   legs?: Record<string, string>;
   receiptCommit?: string;
   receiptSha?: string;
+  lines?: string[];
+  heavy?: number;
+  free?: number;
 }) {
-  const seen = { gates: [] as string[], extracts: 0, logs: [] as string[] };
+  const seen = {
+    gates: [] as string[],
+    envs: [] as Readonly<Record<string, string>>[],
+    extracts: 0,
+    logs: [] as string[],
+  };
   const deps: UpdateDeps = {
+    heavyJobs: async () => o.heavy ?? 0,
+    freeGb: async () => o.free ?? 20,
     root,
     listReleases: async () =>
       o.tags ?? ["edge", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v3.0.0-alpha.1"],
@@ -86,6 +98,7 @@ function fake(o: {
     versionOf: async () => "al-runner 3.0.0-alpha.3 (c893e3633)",
     runGate: async (commit, env) => {
       seen.gates.push(commit);
+      seen.envs.push(env);
       if (o.outcome === undefined) return;
       await writeFile(
         env.LETHAL_V3_GATE_RECEIPT ?? "",
@@ -96,6 +109,7 @@ function fake(o: {
           dirty: false,
           outcome: o.outcome,
           legs: o.legs ?? legsFor(o.outcome),
+          lines: o.lines ?? [],
         }),
       );
     },
@@ -218,6 +232,67 @@ linuxOnly("T19: the v3 update gate", () => {
     const g = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
     expect(g.lethalCommit).toBe(REGATE_COMMIT);
   });
+
+  test("R632 A: the gate gets LETHAL_ITEST_V3_CDO (the gate page's checkout by default), on a candidate and on --regate", async () => {
+    await setup();
+    const want = process.env.LETHAL_ITEST_V3_CDO ?? V3_CDO_DEFAULT;
+    expect(V3_CDO_DEFAULT).toBe("/work/lethal-wt/cdo-r396");
+    const a = fake({ outcome: "gate-fail" });
+    await updateOnce(a.deps);
+    expect(a.seen.envs.map((e) => e.LETHAL_ITEST_V3_CDO)).toEqual([want]);
+    const b = fake({ outcome: "gate-fail", receiptSha: sha("alpha2") });
+    await updateOnce(b.deps, { regateAt: REGATE_COMMIT });
+    expect(b.seen.envs.map((e) => e.LETHAL_ITEST_V3_CDO)).toEqual([want]);
+  });
+
+  test("R632 C: the receipt is kept beside the outcome (failed/, held/, infra/, regate/) and its lines are logged", async () => {
+    await setup();
+    const line = "C: gate-fail: none-selected-exit: diverged, pre-committed matches";
+    const a = fake({ outcome: "gate-fail", lines: [line] });
+    expect(await updateOnce(a.deps)).toEqual(["gate-fail"]);
+    const kept = join(failedAt("v3.0.0-alpha.3"), "receipt.json");
+    expect(JSON.parse(await readFile(kept, "utf8")).lines).toEqual([line]);
+    expect(a.seen.logs.join("\n")).toContain(line);
+
+    await setup();
+    const h = fake({ outcome: "held", lines: ["C: held: x"] });
+    expect(await updateOnce(h.deps)).toEqual(["held"]);
+    expect(existsSync(join(root, "held", "v3.0.0-alpha.3", "receipt.json"))).toBe(true);
+
+    await setup();
+    const i = fake({ outcome: "infra-fail", lines: ["D1: infra-fail: unset"] });
+    expect(await updateOnce(i.deps)).toEqual(["infra-fail"]);
+    const inf = join(root, "infra", "v3.0.0-alpha.3.receipt.json");
+    expect(JSON.parse(await readFile(inf, "utf8")).lines).toEqual(["D1: infra-fail: unset"]);
+    expect(i.seen.logs.join("\n")).toContain("D1: infra-fail: unset");
+
+    await setup();
+    const r = fake({ outcome: "gate-fail", receiptSha: sha("alpha2"), lines: ["T: gate-fail"] });
+    expect(await updateOnce(r.deps, { regateAt: REGATE_COMMIT })).toEqual(["gate-fail"]);
+    expect(existsSync(join(root, "regate", `${REGATE_COMMIT}.receipt.json`))).toBe(true);
+    expect(existsSync(join(root, "failed"))).toBe(false);
+  });
+
+  test("R632 D: the failed/ early return is logged, with the --regate hint", async () => {
+    await setup();
+    await updateOnce(fake({ outcome: "gate-fail" }).deps);
+    const b = fake({ outcome: "pass" });
+    expect(await updateOnce(b.deps)).toEqual(["gate-fail"]);
+    expect(b.seen.logs.join("\n")).toMatch(/already gate-failed at abcdef1.*--regate/);
+  });
+
+  test("R632 D: the alpha path and --regate are skipped with 2 heavy jobs or under 10 GB; 1 and 10 proceed", async () => {
+    await setup();
+    for (const o of [{ heavy: 2 }, { free: 9 }]) {
+      const a = fake({ outcome: "pass", ...o });
+      expect(await updateOnce(a.deps)).toEqual(["skipped"]);
+      const r = fake({ outcome: "pass", receiptSha: sha("alpha2"), ...o });
+      expect(await updateOnce(r.deps, { regateAt: REGATE_COMMIT })).toEqual(["skipped"]);
+      expect(a.seen.gates.length + r.seen.gates.length).toBe(0);
+      expect(a.seen.logs.join("\n")).toMatch(/skipped for the day/);
+    }
+    expect(await updateOnce(fake({ outcome: "pass", heavy: 1, free: 10 }).deps)).toEqual(["pass"]);
+  });
 });
 
 describe("RC-3 (M3): the receipt must prove what it claims", () => {
@@ -258,6 +333,20 @@ describe("RC-3 (M3): the receipt must prove what it claims", () => {
     expect(
       (await readReceipt(await write(base({ legs: {} })), "n", "s", GATED_COMMIT)).outcome,
     ).toBe("infra-fail");
+  });
+  test("R632 A: an infra-fail receipt that lacks legs names the missing legs in why", async () => {
+    await setup();
+    const { D1: _d, D1c: _c, ...legs } = legsFor("pass");
+    const r = await readReceipt(
+      await write(base({ outcome: "infra-fail", legs })),
+      "n",
+      "s",
+      GATED_COMMIT,
+    );
+    expect(r.outcome).toBe("infra-fail");
+    expect(r.why).toMatch(/missing legs D1,D1c/);
+    const full = await readReceipt(await write(base()), "n", "s", GATED_COMMIT);
+    expect(full.why).not.toMatch(/missing/);
   });
   test("outcome pass with a gate-fail leg is infra-fail (the legs and the outcome disagree)", async () => {
     await setup();

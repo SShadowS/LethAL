@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { V3_DEFECT_FACTS, classifyLegC } from "../itest/al-runner-v3-gate";
 import type { V3Row } from "../src/al-runner-v3-backend";
 import {
   type V3ContractResult,
@@ -369,6 +370,36 @@ describe("§8 the contract probe", () => {
       }),
     });
     expect(r.facts.find((f) => f.fact === "sleep-is-noop")?.verdict).toBe("gone");
+  });
+
+  test("R632 B (r7): none-selected-exit is a defect fact; #5613's fix (exit 6 with a 0-row document) is gone, so leg C is held", async () => {
+    expect(V3_DEFECT_FACTS).toContain("none-selected-exit");
+    expect(V3_DEFECT_FACTS.length).toBe(8);
+    // alpha.2 as measured: exit 6, no document.
+    const before = await probe();
+    const f0 = before.facts.find((f) => f.fact === "none-selected-exit");
+    expect(f0).toMatchObject({ kind: "defect", verdict: "defect-present" });
+    expect(classifyLegC(before.facts, V3_DEFECT_FACTS, 23).outcome).toBe("pass");
+    // alpha.4 (#5622): exit 6 with a document of 0 rows.
+    const r = await probe({ cu0: () => ({ exitCode: 6, stdout: doc([]) }) });
+    expect(r.facts.find((f) => f.fact === "none-selected-exit")?.verdict).toBe("gone");
+    expect(v3ContractRefusals(r)).toEqual([]);
+    expect(v3DefectsGone(r).join("\n")).toMatch(/defect-gone: none-selected-exit/);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 23).outcome).toBe("held");
+  });
+
+  test("R632 B (r7): none-selected-exit diverges (refuses, gate-fail) on unparseable output, rows, or another exit", async () => {
+    for (const answer of [
+      { exitCode: 6, stdout: "not json" },
+      { exitCode: 6, stdout: doc([row(0, "X", "pass")]) },
+      { exitCode: 0, stdout: doc([]) },
+      { exitCode: 1, stdout: "" },
+    ]) {
+      const r = await probe({ cu0: () => answer });
+      expect(r.facts.find((f) => f.fact === "none-selected-exit")?.verdict).toBe("diverged");
+      expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — none-selected-exit/);
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 23).outcome).toBe("gate-fail");
+    }
   });
 
   test("an unmeasurable defect fact does not refuse but is warned BY NAME (r6)", async () => {

@@ -240,6 +240,21 @@ export function knownDifferencesRefusal(
 }
 
 /**
+ * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632).
+ * Every other fact of the 23 is a contract fact and must read `matches`.
+ */
+export const V3_DEFECT_FACTS = [
+  "upstream-compile-errors",
+  "duplicate-key-insert-raises",
+  "sleep-is-noop",
+  "refusal-cascade",
+  "codeunit-runs-whole",
+  "quoted-name-unselectable",
+  "commit-under-test-isolation",
+  "none-selected-exit",
+] as const;
+
+/**
  * RC-2 (I-2): leg C's verdict. A contract fact must read `matches` and a defect fact (`defects`)
  * `defect-present`. A defect fact reading `gone` (upstream fixed it) is `held`, for the orchestrator
  * to re-pre-commit, never a blacklisting. Any `diverged`, or another fact count, is `gate-fail`. An

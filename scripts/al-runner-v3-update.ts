@@ -49,6 +49,11 @@ export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
 export const GATE_WORKTREE = "/work/lethal-wt/al-runner-v3-gate";
 export const LOG = "/coord/handoff/R-586/v3-updates.log";
+/**
+ * R632 A: the CDO checkout the D legs need (the gate page's `LETHAL_ITEST_V3_CDO`). Without it the
+ * gate runs no D leg, and the receipt is an infra-fail every day (alpha.3, 2026-10-22).
+ */
+export const V3_CDO_DEFAULT = "/work/lethal-wt/cdo-r396";
 
 export type Outcome = "pass" | "held" | "gate-fail" | "infra-fail";
 
@@ -68,6 +73,10 @@ export interface UpdateDeps {
   inUse(): Promise<boolean>;
   log(line: string): Promise<void>;
   now(): string;
+  /** Heavy jobs running container-wide (bun itests, `cli.ts run`, corpus jobs, verify). */
+  heavyJobs(): Promise<number>;
+  /** `free -g`'s available column. */
+  freeGb(): Promise<number>;
 }
 
 /** `v3.0.0-alpha.N` -> N; anything else (edge, other lines) -> undefined. */
@@ -154,7 +163,22 @@ export async function readReceipt(
       outcome: "infra-fail",
       why: `a pass from a gate worktree that was not clean (dirty: ${JSON.stringify(r.dirty)})`,
     };
-  return { outcome: r.outcome, why: `receipt legs ${JSON.stringify(legs)}` };
+  // R632 A: name the legs that never ran (D1 and D1c need LETHAL_ITEST_V3_CDO).
+  const missing = V3_GATE_LEGS.filter((l) => !(l in legs));
+  return {
+    outcome: r.outcome,
+    why: `receipt legs ${JSON.stringify(legs)}${missing.length > 0 ? `; missing legs ${missing.join(",")}` : ""}`,
+  };
+}
+
+/** R632 C: the receipt's own `lines` (each leg's message), or none. */
+async function receiptLines(path: string): Promise<string[]> {
+  try {
+    const l = (JSON.parse(await readFile(path, "utf8")) as { lines?: unknown }).lines;
+    return Array.isArray(l) ? l.map(String) : [];
+  } catch {
+    return [];
+  }
 }
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
@@ -239,7 +263,12 @@ export async function gateOne(
     if (opts.regateAt !== undefined) {
       binary = join(await readlink(join(root, "current")), "al-runner");
     } else {
-      if (existsSync(failedDir)) return "gate-fail";
+      if (existsSync(failedDir)) {
+        await deps.log(
+          `${deps.now()} ${tag}: gate-fail: already gate-failed at ${commit} (${failedDir}); not gated again at this commit, \`--regate\` to re-judge`,
+        );
+        return "gate-fail";
+      }
       const dl = join(work, "dl");
       await mkdir(dl);
       let got: { tarball: string; sums: string };
@@ -273,6 +302,7 @@ export async function gateOne(
         LETHAL_ALRUNNER_V3_PATH: binary,
         ...(opts.regateAt === undefined ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1" } : {}),
         LETHAL_ITEST_V3_TABLES: "1",
+        LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO ?? V3_CDO_DEFAULT,
         LETHAL_V3_GATE_NONCE: nonce,
         LETHAL_V3_GATE_RECEIPT: receipt,
       });
@@ -280,13 +310,27 @@ export async function gateOne(
       // A failing gate still writes its receipt; the receipt decides.
     }
     const { outcome, why } = await readReceipt(receipt, nonce, sha, commit);
-    await deps.log(`${deps.now()} ${tag} (${version}, ${sha}) at ${commit}: ${outcome}: ${why}`);
-    if (outcome === "infra-fail") return infra(deps, name);
+    const lines = await receiptLines(receipt);
+    await deps.log(
+      `${deps.now()} ${tag} (${version}, ${sha}) at ${commit}: ${outcome}: ${why}${lines.length > 0 ? `; lines: ${lines.join(" | ")}` : ""}`,
+    );
+    // R632 C: the receipt outlives `work`, beside the outcome it gave.
+    const keep = async (dir: string, file = "receipt.json") => {
+      if (!existsSync(receipt)) return;
+      await mkdir(dir, { recursive: true });
+      await cp(receipt, join(dir, file));
+    };
+    if (opts.regateAt !== undefined) await keep(join(root, "regate"), `${commit}.receipt.json`);
+    if (outcome === "infra-fail") {
+      if (opts.regateAt === undefined) await keep(join(root, "infra"), `${name}.receipt.json`);
+      return infra(deps, name);
+    }
     await infraCount(root, name, false);
     if (outcome === "gate-fail") {
       if (opts.regateAt === undefined) {
         await mkdir(failedDir, { recursive: true });
         await cp(binary, join(failedDir, "al-runner"));
+        await keep(failedDir);
       }
       return "gate-fail";
     }
@@ -294,6 +338,7 @@ export async function gateOne(
       if (opts.regateAt === undefined) {
         await mkdir(join(root, "held", name), { recursive: true });
         await cp(binary, join(root, "held", name, "al-runner"));
+        await keep(join(root, "held", name));
       }
       await deps.log(
         `${deps.now()} ${tag}: HELD for the orchestrator: every difference is a move toward BC; re-pre-commit, then re-gate`,
@@ -351,7 +396,10 @@ async function infra(deps: UpdateDeps, name: string): Promise<Outcome> {
 export async function updateOnce(
   deps: UpdateDeps,
   opts: { readonly regateAt?: string } = {},
-): Promise<Outcome[]> {
+): Promise<(Outcome | "skipped")[]> {
+  // R632 D: the D legs make every gate a corpus job, on this path too.
+  if (await skippedForTheDay(deps, opts.regateAt !== undefined ? "regate" : "alpha"))
+    return ["skipped"];
   const current = await readCurrentGated(deps.root);
   if (opts.regateAt !== undefined) return [await gateOne(deps, "regate", current, opts)];
   const gatedAlpha = /3\.0\.0-alpha\.(\d+)/.exec(current.version)?.[1];
@@ -380,27 +428,29 @@ export async function updateOnce(
 export interface EdgeDeps {
   /** Edge's commit (short or full sha), from `gh release view edge`. */
   edgeCommit(): Promise<string>;
-  /** Heavy jobs running container-wide (bun itests, `cli.ts run`, corpus jobs, verify). */
-  heavyJobs(): Promise<number>;
-  /** `free -g`'s available column. */
-  freeGb(): Promise<number>;
 }
 
 export type EdgeResult = "skipped" | "no-op" | Outcome;
 
-export async function edgeOnce(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult> {
+/** True, with the reason logged, when 2 or more heavy jobs run or under 10 GB is available. */
+async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean> {
   const heavy = await deps.heavyJobs();
   if (heavy >= 2) {
     await deps.log(
-      `${deps.now()} edge: skipped for the day: ${heavy} heavy jobs are running (limit: 1 other)`,
+      `${deps.now()} ${what}: skipped for the day: ${heavy} heavy jobs are running (limit: 1 other)`,
     );
-    return "skipped";
+    return true;
   }
   const free = await deps.freeGb();
   if (free < 10) {
-    await deps.log(`${deps.now()} edge: skipped for the day: ${free} GB available (needs 10)`);
-    return "skipped";
+    await deps.log(`${deps.now()} ${what}: skipped for the day: ${free} GB available (needs 10)`);
+    return true;
   }
+  return false;
+}
+
+export async function edgeOnce(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult> {
+  if (await skippedForTheDay(deps, "edge")) return "skipped";
   const commit = (await deps.edgeCommit()).trim();
   if (!/^[0-9a-f]{7,40}$/.test(commit)) throw new Error(`edge's commit "${commit}" is not a sha`);
   const seenFile = join(deps.root, "edge.last-seen");
@@ -506,16 +556,7 @@ export function realDeps(root = ROOT): UpdateDeps {
       });
       if ("refused" in prep) throw new Error(prep.refused);
       for (const step of prep.steps) await run(step, {}, GATE_WORKTREE);
-      await run(
-        ["bun", "run", "itest:alrunner-v3"],
-        {
-          ...env,
-          ...(process.env.LETHAL_ITEST_V3_CDO !== undefined
-            ? { LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO }
-            : {}),
-        },
-        GATE_WORKTREE,
-      );
+      await run(["bun", "run", "itest:alrunner-v3"], { ...env }, GATE_WORKTREE);
     },
     inUse: async () => {
       for (const pid of await readdir("/proc")) {
@@ -530,6 +571,35 @@ export function realDeps(root = ROOT): UpdateDeps {
       await writeFile(LOG, `${line}\n`, { flag: "a" }).catch(() => {});
     },
     now: () => new Date().toISOString(),
+    heavyJobs: async () => {
+      let n = 0;
+      for (const pid of await readdir("/proc")) {
+        if (!/^\d+$/.test(pid)) continue;
+        const cmd = (await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")).replaceAll(
+          "\0",
+          " ",
+        );
+        if (
+          /^bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|^bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/.test(
+            cmd,
+          )
+        )
+          n++;
+      }
+      return n;
+    },
+    freeGb: async () => {
+      const p = Bun.spawn(["free", "-g"], { stdout: "pipe" });
+      const out = await new Response(p.stdout).text();
+      const mem = out
+        .split("\n")
+        .find((l) => l.startsWith("Mem:"))
+        ?.trim()
+        .split(/\s+/);
+      const avail = Number(mem?.[6]);
+      if (!Number.isFinite(avail)) throw new Error(`cannot read free -g: ${out}`);
+      return avail;
+    },
   };
 }
 
@@ -561,35 +631,6 @@ export function realEdgeDeps(root = ROOT): UpdateDeps & EdgeDeps {
         .find((s) => s !== undefined);
       if (sha === undefined) throw new Error("edge names no commit");
       return sha;
-    },
-    heavyJobs: async () => {
-      let n = 0;
-      for (const pid of await readdir("/proc")) {
-        if (!/^\d+$/.test(pid)) continue;
-        const cmd = (await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")).replaceAll(
-          "\0",
-          " ",
-        );
-        if (
-          /^bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|^bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/.test(
-            cmd,
-          )
-        )
-          n++;
-      }
-      return n;
-    },
-    freeGb: async () => {
-      const p = Bun.spawn(["free", "-g"], { stdout: "pipe" });
-      const out = await new Response(p.stdout).text();
-      const mem = out
-        .split("\n")
-        .find((l) => l.startsWith("Mem:"))
-        ?.trim()
-        .split(/\s+/);
-      const avail = Number(mem?.[6]);
-      if (!Number.isFinite(avail)) throw new Error(`cannot read free -g: ${out}`);
-      return avail;
     },
   };
 }
