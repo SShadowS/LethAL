@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**94 of 647 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**95 of 649 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -691,7 +691,9 @@ that ordering is the priority.
 - **R645** · The al-runner v3 backend leaves coverage.cobertura.xml in the caller's working directory · [R645.md](docs/roadmap/R645.md) · open, filed 2026-10-22
 - **R648** · two unit test files fail as "(unnamed)" just over 5 s when another verify overlaps: the default hook/test timeout under parallel load · [R648.md](docs/roadmap/R648.md) · done (9a372f98)
 - **R649** · measure BC's real Sleep behaviour (does Sleep(600000) wait, and hit the test timeout?), then re-cast the v3 gate's X (d) from it · [R649.md](docs/roadmap/R649.md) · open, filed 2026-10-22
-- **R651** · al-runner v3 serve-entries: the itest has no per-phase timers (warm-up, prefetch, coverage pass, §5 windows), so the next CDO speed step cannot target a phase · [R651.md](docs/roadmap/R651.md) · open, filed 2026-10-22
+- **R651** · al-runner v3 serve-entries: the itest has no per-phase timers (warm-up, prefetch, coverage pass, §5 windows), so the next CDO speed step cannot target a phase · [R651.md](docs/roadmap/R651.md) · done (e1cd0cd8)
+- **R652** · al-runner v3 serve-entries: assertBound re-hashes the whole tree on every run(), 527 times on CDO (86 s, 62% of the loop); check once per request sent · [R652.md](docs/roadmap/R652.md) · open, filed 2026-10-22
+- **R653** · al-runner v3 serve-entries: each kill's unmutated confirm is a live NONE request (51 on CDO, about 10 s); answer it from the warm-up's NONE rows · [R653.md](docs/roadmap/R653.md) · open, filed 2026-10-22
 
 ---
 
