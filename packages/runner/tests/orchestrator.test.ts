@@ -6974,6 +6974,12 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
   // candidate subset, so the very first check trivially "compiles" and bisection reports
   // "no-repro" — an admitted, but previously unexplained, dead end. Bisecting
   // `manifest.mutants` (every mutant the artifact actually contains) finds it like any other.
+  //
+  // R644 (build review minor 3): since R644, `execute` holds the history candidates too, so on
+  // the SEQUENTIAL path `execute` and `manifest.mutants` are the same set and this test can no
+  // longer tell a bisect over `execute` from one over the manifest. It now guards R644's I1 rule
+  // (the candidate gets the batch's error row). Task 7 itself stays guarded by the worker-shard
+  // test below, where a shard is a strict subset of the manifest.
   test("bisects the FULL embedded manifest, so a malformed known-survivor is findable", async () => {
     const dirs = await makeProject();
     const scratchDir = join(dirs.instrumentedDir, "seed-scratch");
@@ -7017,10 +7023,13 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
       skipKnownSurvivors: true,
     });
     expect(report.counts.errors).toBeGreaterThan(0);
-    // The known survivor itself is recorded separately (verdict "known-survivor", no note); the
-    // culprit's identity lands on `execute`'s error-recorded mutants' shared note instead.
-    const knownSurvivor = report.mutants.find((m) => m.verdict === "known-survivor");
-    expect(knownSurvivor).toBeDefined();
+    // R644 (review I1): the history candidate stays inside `execute` through the compile bisect, so
+    // it is not lent: it gets the batch's error row with the shared note like every other mutant.
+    expect(report.mutants.find((m) => m.verdict === "known-survivor")).toBeUndefined();
+    const candidate = report.mutants.filter(
+      (m) => m.operatorName === "lethal.conditional-boundary" && m.line === boundary.startLine,
+    );
+    expect(candidate.map((m) => m.verdict)).toEqual(["error"]);
     const noted = report.mutants.find((m) => m.failureNote !== undefined);
     expect(noted).toBeDefined();
     expect(noted?.failureNote).toContain("bisected to mutant");
