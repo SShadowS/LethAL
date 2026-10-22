@@ -375,6 +375,9 @@ function bunTest(cwd: string, args: string[], env: Env): { code: number; out: st
 // CI is serial (P=1) on every OS and Windows `bun test --parallel` is unmeasured (R593 follow-up), so
 // the two --parallel spawn tests run where verify.ts runs parallel: Linux and macOS.
 const parallelOs = test.skipIf(process.platform === "win32");
+// On Windows Bun's `process.kill(pid, "SIGTERM")` is libuv's TerminateProcess, which no handler can
+// catch, so a file deaf to SIGTERM cannot exist there: the SIGKILL step has nothing to escalate.
+const posixSignals = test.skipIf(process.platform === "win32");
 
 describe("spawned bun test (the guards hold inside --parallel workers)", () => {
   parallelOs("A5 a missing snapshot is refused serial AND --parallel=2 under testChildEnv", () => {
@@ -636,19 +639,23 @@ describe("R622 the per-file watchdog", () => {
     expect(r.seconds, r.text).toBeLessThan(15);
   }, 40_000);
 
-  test("review I-A: a file deaf to SIGTERM is SIGKILLed after the grace; the FAIL line is printed while it still runs", async () => {
-    const r = await watched({ "spin.test.ts": STUBBORN }, 1, 2, { graceMs: 2000 });
-    expect(r.code, r.text).toBe(1);
-    expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
-    // limit 2 s + up to 1 s to notice + 2 s grace + margin, well under the 25 s spin.
-    expect(r.seconds, r.text).toBeLessThan(15);
-    // The SIGKILL step stopped it, not the backstop (which would also end a serial run).
-    expect(r.text).toContain("outlived SIGTERM by 2000 ms; sent SIGKILL");
-    expect(r.text).not.toContain("watchdog: backstop");
-    const first = r.printed[0];
-    expect(failLines(first?.line ?? "", "spin.test.ts", 2), JSON.stringify(r.printed)).toBe(1);
-    expect(first?.childAlive, JSON.stringify(r.printed)).toBe(true);
-  }, 40_000);
+  posixSignals(
+    "review I-A: a file deaf to SIGTERM is SIGKILLed after the grace; the FAIL line is printed while it still runs",
+    async () => {
+      const r = await watched({ "spin.test.ts": STUBBORN }, 1, 2, { graceMs: 2000 });
+      expect(r.code, r.text).toBe(1);
+      expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
+      // limit 2 s + up to 1 s to notice + 2 s grace + margin, well under the 25 s spin.
+      expect(r.seconds, r.text).toBeLessThan(15);
+      // The SIGKILL step stopped it, not the backstop (which would also end a serial run).
+      expect(r.text).toContain("outlived SIGTERM by 2000 ms; sent SIGKILL");
+      expect(r.text).not.toContain("watchdog: backstop");
+      const first = r.printed[0];
+      expect(failLines(first?.line ?? "", "spin.test.ts", 2), JSON.stringify(r.printed)).toBe(1);
+      expect(first?.childAlive, JSON.stringify(r.printed)).toBe(true);
+    },
+    40_000,
+  );
 
   test("review I-A: a worker that cannot be confirmed as ours stops the whole run through the backstop", async () => {
     const r = await watched({ "spin.test.ts": SPIN }, 1, 2, { isChild: () => false });
