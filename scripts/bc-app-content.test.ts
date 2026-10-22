@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { listPackageEntries, readPackageEntry } from "../packages/runner/src/app-package.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import {
   type AppItem,
   type AppManifest,
+  type Conn,
   ContentUnknownError,
   type DecideInput,
   type ExtensionRow,
@@ -20,7 +22,9 @@ import {
   headerPackageId,
   isInstrumented,
   normaliseNavigation,
+  realOps,
   refusals,
+  residentPackage,
 } from "./bc-app-content.ts";
 
 // Five real alc 18.0.43.1464 builds (/coord/handoff/R-599/offline, digest-offline.log):
@@ -576,5 +580,67 @@ describe("decideAll / actAll", () => {
     expect(refusals(decided)).toHaveLength(1);
     await expect(actAll(decided, s.ops, () => {})).rejects.toThrow(/after a refusal/);
     expect(s.published).toEqual([]);
+  });
+});
+
+/** A Conn whose every request is answered with `status` (never the network). */
+function connAnswering(status: number, body: Uint8Array | string = "x"): Conn {
+  return {
+    server: "bc3",
+    authorization: "Basic fake",
+    fetch: (async () => new Response(body, { status })) as unknown as FetchFn,
+  };
+}
+
+describe("residentPackage: the one strict dev/packages read (R624)", () => {
+  test("2xx: the bytes", async () => {
+    const pkg = fake({});
+    expect(await residentPackage(connAnswering(200, pkg), "LethAL", "X")).toEqual(pkg);
+  });
+
+  test("404: null (the server holds none)", async () => {
+    expect(await residentPackage(connAnswering(404), "LethAL", "X")).toBeNull();
+  });
+
+  test("401 and 403: the server-named login error", async () => {
+    for (const s of [401, 403])
+      await expect(residentPackage(connAnswering(s), "LethAL", "X")).rejects.toThrow(
+        `bc3: the dev endpoint refused the login (HTTP ${s})`,
+      );
+  });
+
+  test("any other failure throws, naming the server, the app and the status", async () => {
+    for (const s of [500, 502, 503])
+      await expect(residentPackage(connAnswering(s), "LethAL", "X Y")).rejects.toThrow(
+        `bc3: LethAL "X Y": the dev endpoint answered HTTP ${s}`,
+      );
+  });
+
+  test("realOps(...).resident gives the login error on a 401 (M3)", async () => {
+    await expect(realOps(connAnswering(401)).resident("LethAL", "X")).rejects.toThrow(
+      "bc3: the dev endpoint refused the login (HTTP 401)",
+    );
+  });
+
+  // M1: a second reader (lenient or not) cannot come back unnoticed. The one-off probes outside
+  // these files (`r372-package-source-probe`, `r624-absent-status.ts`) record a raw status on purpose.
+  test("among the setup scripts, only bc-app-content.ts builds a dev/packages URL, once", () => {
+    const files = [
+      ...readdirSync(import.meta.dir)
+        .filter((f) => /^bc-.*\.ts$/.test(f) && !f.endsWith(".test.ts"))
+        .map((f) => join(import.meta.dir, f)),
+      ...readdirSync(join(import.meta.dir, "r594"))
+        .filter((f) => f.endsWith(".ts"))
+        .map((f) => join(import.meta.dir, "r594", f)),
+    ];
+    const calls = files.map((f) => ({
+      f: f.slice(import.meta.dir.length + 1),
+      n: readFileSync(f, "utf8").split("devPackagesUrl(").length - 1,
+      defines: /function residentPackage\b/.test(readFileSync(f, "utf8")),
+    }));
+    expect(calls.filter((c) => c.n > 0)).toEqual([{ f: "bc-app-content.ts", n: 1, defines: true }]);
+    expect(calls.filter((c) => c.defines).map((c) => c.f)).toEqual(["bc-app-content.ts"]);
+    for (const f of ["bc-republish.ts", "r594/cdo-publish.ts"])
+      expect(readFileSync(join(import.meta.dir, f), "utf8")).toMatch(/\bresidentPackage,/);
   });
 });

@@ -16,14 +16,15 @@
  * refused. This module imports only from `packages/` and `node:`, so both scripts can use it
  * without importing each other the wrong way round.
  *
- * Also here, moved down unchanged from the two scripts: the server names (`HOST`, `SERVERS`,
- * `Conn`, `publishBytes`, ...), the strict dev-endpoint read and the automation API rows
- * (`packageStatus`, `strictResidentPackage`, `rows`, ...), `controlAction`, and the fixture
- * manifests (`manifest`, `fixtureManifests`, `dependsOn`).
+ * Also here, moved down from the two scripts: the server names (`HOST`, `SERVERS`, `Conn`,
+ * `publishBytes`, ...), the ONE dev-endpoint package read every script uses (`residentPackage`,
+ * strict since R624: only a 404 is "absent", `packageStatus`), the automation API rows (`rows`,
+ * ...), `controlAction`, and the fixture manifests (`manifest`, `fixtureManifests`, `dependsOn`).
  */
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { listPackageEntries, readPackageEntry } from "../packages/runner/src/app-package.ts";
 import { compareAppVersions, parseVersionConflict } from "../packages/runner/src/app-version.ts";
 import { bcFetch } from "../packages/runner/src/bc-fetch.ts";
@@ -51,6 +52,13 @@ export interface Conn {
   readonly server: ServerName;
   /** `Basic ...`, built in memory from the secret file. */
   readonly authorization: string;
+  /** Tests only: answers every request made through this Conn. Production never sets it. */
+  readonly fetch?: FetchFn;
+}
+
+/** Every dev-endpoint and API call in this module sends through here (R624: a fake Conn never reaches a server). */
+function send(c: Conn): FetchFn {
+  return c.fetch ?? bcFetch;
 }
 
 function devBase(c: Conn): string {
@@ -66,7 +74,7 @@ export async function publishBytes(c: Conn, fileName: string, bytes: Uint8Array)
   const form = new FormData();
   // Wire shape from bc-dev-mcp (measured on Cronus28 BC 28.4): one multipart part named after the file.
   form.append(fileName, new Blob([bytes]), fileName);
-  const res = await bcFetch(`${devBase(c)}/dev/apps?${params}`, {
+  const res = await send(c)(`${devBase(c)}/dev/apps?${params}`, {
     method: "POST",
     headers: { authorization: c.authorization },
     body: form,
@@ -159,8 +167,14 @@ export function packageStatus(status: number): "present" | "absent" {
   throw new Error(`the dev endpoint answered HTTP ${status} for the resident package; stopped`);
 }
 
-/** `residentPackage`, but strict about what counts as "nothing resident" (`packageStatus`). */
-export async function strictResidentPackage(
+/**
+ * The package the server holds for publisher/name, or `null` when it holds none. The ONE
+ * `dev/packages` read of the setup scripts (R624). Strict: a 404 is the only "none"
+ * (`packageStatus`, measured on bc3 for an absent app: `/coord/handoff/R-624/live/0-absent-status.log`);
+ * 401/403 is a refused login; any other failure throws, so an unreadable server is never taken
+ * for one without the app.
+ */
+export async function residentPackage(
   c: Conn,
   publisher: string,
   name: string,
@@ -170,13 +184,22 @@ export async function strictResidentPackage(
     { publisher, name },
   );
   if (url === null) throw new Error("unreachable: devPackagesUrl refused a fixed URL");
-  const res = await bcFetch(url, { headers: { authorization: c.authorization } });
-  if (packageStatus(res.status) === "absent") return null;
+  const res = await send(c)(url, { headers: { authorization: c.authorization } });
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(`${c.server}: the dev endpoint refused the login (HTTP ${res.status})`);
+  }
+  let state: "present" | "absent";
+  try {
+    state = packageStatus(res.status);
+  } catch (err) {
+    throw new Error(`${c.server}: ${publisher} "${name}": ${(err as Error).message}`);
+  }
+  if (state === "absent") return null;
   return Buffer.from(await res.arrayBuffer());
 }
 
 export async function apiJson(c: Conn, url: string, method = "GET") {
-  const res = await bcFetch(url, {
+  const res = await send(c)(url, {
     method,
     headers: {
       authorization: c.authorization,
@@ -522,7 +545,7 @@ export function decideControl(
 
 /** Everything the decide and act passes do on a server: a fake counts it in tests. */
 export interface ServerOps {
-  /** Strict `dev/packages` read: `null` only on a 404. */
+  /** `residentPackage`: `null` only on a 404, any other failure throws. */
   resident(publisher: string, name: string): Promise<Buffer | null>;
   rows(appId: string): Promise<ExtensionRow[]>;
   publish(fileName: string, bytes: Buffer): Promise<void>;
@@ -531,7 +554,7 @@ export interface ServerOps {
 export function realOps(c: Conn): ServerOps {
   let ext: Promise<string> | undefined;
   return {
-    resident: (publisher, name) => strictResidentPackage(c, publisher, name),
+    resident: (publisher, name) => residentPackage(c, publisher, name),
     rows: async (appId) => {
       ext ??= extensionsApi(c);
       return rows(c, await ext, appId);

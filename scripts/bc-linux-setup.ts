@@ -62,8 +62,6 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { compareAppVersions } from "../packages/runner/src/app-version.ts";
-import { bcFetch } from "../packages/runner/src/bc-fetch.ts";
-import { devPackagesUrl } from "../packages/runner/src/bcdev-backend.ts";
 import { appInputsOfPackage } from "../packages/runner/src/digest-inputs.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
@@ -85,6 +83,7 @@ import {
   publishBytes,
   realOps,
   refusals,
+  residentPackage,
   sha256Of,
 } from "./bc-app-content.ts";
 import {
@@ -94,7 +93,8 @@ import {
   lookupSymbolCache,
 } from "./bc-symbol-cache.ts";
 
-// Moved down into bc-app-content.ts (R599); re-exported so no importer's line changes.
+// Moved down into bc-app-content.ts (R599, `residentPackage` R624); re-exported so no importer's
+// line changes.
 export {
   type AppManifest,
   type Conn,
@@ -103,6 +103,7 @@ export {
   type ServerName,
   manifest,
   publishBytes,
+  residentPackage,
   sha256Of,
 };
 
@@ -533,25 +534,7 @@ export function krakenLeaseFor(
 // ---------------------------------------------------------------------------------------------
 // (d) publishing over the dev endpoint
 
-/** The package the server holds for publisher/name, or `null` when it holds none. */
-export async function residentPackage(
-  c: Conn,
-  publisher: string,
-  name: string,
-): Promise<Buffer | null> {
-  const url = devPackagesUrl(
-    { server: HOST, serverInstance: "BC", tenant: "default", port: SERVERS[c.server].dev },
-    { publisher, name },
-  );
-  if (url === null) throw new Error("unreachable: devPackagesUrl refused a fixed URL");
-  const res = await bcFetch(url, { headers: { authorization: c.authorization } });
-  if (res.status === 401 || res.status === 403) {
-    throw new Error(`${c.server}: the dev endpoint refused the login (HTTP ${res.status})`);
-  }
-  if (!res.ok) return null;
-  return Buffer.from(await res.arrayBuffer());
-}
-
+/** The resident version, through the strict `residentPackage` (`null` only on a 404). */
 async function residentVersion(c: Conn, publisher: string, name: string): Promise<string | null> {
   const pkg = await residentPackage(c, publisher, name);
   return pkg === null ? null : readAppIdentity(pkg).version;
@@ -566,6 +549,8 @@ export type AppOutcome = "published" | "skipped";
  *
  * R599: setup no longer uses this (it decides by content, `bc-app-content.ts`, and the Continia
  * step publishes through `actContinia`). Only `scripts/r594/cdo-publish.ts` still calls it.
+ * R624: its reads are strict, so a server that answers a read with a 5xx stops it rather than
+ * being published to as if it held nothing.
  */
 export async function ensureApp(
   c: Conn,
@@ -910,7 +895,7 @@ export function continiaDependencyProblems(
 
 /** What the Continia step does on the server (R599 F5: a fake counts it in tests). */
 export interface ContiniaOps {
-  /** The lenient read `residentVersion` always used (M6: any failure reads as absent). */
+  /** The strict read (R624): `null` only on a 404; any other failure throws, so it never publishes. */
   residentVersion(publisher: string, name: string): Promise<string | null>;
   publish(fileName: string, bytes: Buffer): Promise<void>;
 }
