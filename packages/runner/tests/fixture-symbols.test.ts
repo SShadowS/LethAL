@@ -210,7 +210,8 @@ describe("R614: prepareFixtureSymbols", () => {
   });
 
   test("a tar member that escapes the worktree is refused, never written", async () => {
-    await setup({ [`${A}/../../../escape.app`]: "x" });
+    // Four levels up from `wt/fx/a/.alpackages` is `root`, outside the worktree.
+    await setup({ [`${A}/../../../../escape.app`]: "x" });
     await expect(prepare()).rejects.toThrow(/unsafe tar member/);
     expect(existsSync(join(root, "escape.app"))).toBe(false);
   });
