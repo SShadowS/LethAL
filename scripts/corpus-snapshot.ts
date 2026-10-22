@@ -27,7 +27,8 @@
  * dump: the tool re-execs itself under `flock -n -E 75 <locks>/heavy.<n>` (slot 1, then 2;
  * `LETHAL_HEAVY_LOCK_DIR`, default /coord/locks). The kernel holds the lock for as long as any
  * process holds the fd, project children included, so SIGKILL needs no cleanup. Inside the slot, a
- * `ps` scan counts the distinct process groups of OTHER heavy jobs that take no slot: corpus jobs and
+ * `ps` scan counts OTHER heavy jobs that take no slot (one per itest:alrunner root, else one per
+ * distinct process group): corpus jobs and
  * local runners (al-runner, itest:alrunner; `isHeavy`). Known limit:
  * two jobs started from ONE non-interactive shell (`a & b`) share a pgid and count as one, and a job
  * on a corpus COPY is invisible to the scan; both should take a slot themselves:
@@ -95,7 +96,8 @@ function scriptOf(argv: readonly string[]): string | undefined {
  * root), or a LOCAL runner: an `al-runner` executable (v2, or the v3 Rust binary), al-runner's
  * `.dll` under dotnet, or the itest:alrunner root process. Matched on the EXECUTABLE or SCRIPT,
  * never on an argument that merely contains the name (a unit test file `al-runner-v3-x.test.ts`
- * is not a runner). A parallel itest counts once: its `--worker` processes are not counted. A BC
+ * is not a runner). A parallel itest counts once: its `--worker` processes are not counted, and
+ * the al-runner children they spawn count under the itest root (`heavyVerdict`). A BC
  * gate against a remote server (itest:hang, itest:bcdev, ...) is not heavy.
  */
 export function isHeavy(args: string): boolean {
@@ -107,11 +109,16 @@ export function isHeavy(args: string): boolean {
   if (exe === "al-runner" || exe === "al-runner.exe") return true;
   const script = scriptOf(argv);
   if (script === undefined) return false;
-  return (
-    script === "itest:alrunner" ||
-    /(^|\/)al-runner\.itest\.ts$/.test(script) ||
-    /(^|\/)al-runner\.dll$/.test(script)
-  );
+  return isItestScript(script) || /(^|\/)al-runner\.dll$/.test(script);
+}
+
+/** The itest:alrunner root, decided by the SCRIPT, never by an argument that contains the name. */
+function isItestScript(script: string): boolean {
+  return script === "itest:alrunner" || /(^|\/)al-runner\.itest\.ts$/.test(script);
+}
+function isItestRoot(args: string): boolean {
+  const script = scriptOf(args.trim().split(/\s+/));
+  return script !== undefined && isItestScript(script) && isHeavy(args);
 }
 
 /** B1: a path whose change can move a production key. */
@@ -569,9 +576,9 @@ function ancestors(procs: readonly Proc[], pid: number): Set<number> {
 /**
  * The scan for corpus jobs that take no slot: processes whose argv names a corpus root, minus this
  * process's ancestors and descendants and the descendants of every pid recorded in a held slot,
- * counted by DISTINCT pgid. Refuse when those plus the slots held by others reach 2.
+ * counted by itest:alrunner root (one job, however many al-runner children its workers spawn), else
+ * by DISTINCT pgid. Refuse when those plus the slots held by others reach 2.
  */
-const ITEST_ROOT_RE = /itest:alrunner|al-runner\.itest\.ts/;
 const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [12]\b/;
 
 export function heavyVerdict(
@@ -597,8 +604,7 @@ export function heavyVerdict(
     let root: Proc | undefined; // the OUTERMOST match: `bun run itest:alrunner` wraps the .itest.ts
     for (const a of ancestors(procs, p.pid)) {
       const q = byPid.get(a);
-      if (q !== undefined && !skip.has(q.pid) && ITEST_ROOT_RE.test(q.args) && isHeavy(q.args))
-        root = q;
+      if (q !== undefined && !skip.has(q.pid) && isItestRoot(q.args)) root = q;
     }
     return root;
   };
@@ -612,7 +618,7 @@ export function heavyVerdict(
   const foreign = [...jobs.values()];
   const refuse = foreign.length + otherSlotsHeld >= 2;
   const message = [
-    `heavy-job guard: ${otherSlotsHeld} other slot(s) held, ${foreign.length} other heavy job(s) (corpus or local runner) by process group${refuse ? " -> REFUSED (at most two heavy jobs container-wide)" : ""}`,
+    `heavy-job guard: ${otherSlotsHeld} other slot(s) held, ${foreign.length} other heavy job(s) (corpus or local runner) by itest root, else by process group${refuse ? " -> REFUSED (at most two heavy jobs container-wide)" : ""}`,
     ...foreign.map((p) => `  pgid ${p.pgid} pid ${p.pid}: ${p.args.slice(0, 100)}`),
   ].join("\n");
   return { refuse, foreign, message };
