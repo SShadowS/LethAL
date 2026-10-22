@@ -240,7 +240,12 @@ import {
   testKeyOf,
   twinSitesOf,
 } from "./selection";
-import type { CoverageAttribution, CurrentCarrySide, RecordedCarrySide } from "./selection";
+import type {
+  CoverageAttribution,
+  CurrentCarrySide,
+  FacedTests,
+  RecordedCarrySide,
+} from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
   describeStaleTestApp,
@@ -7048,15 +7053,26 @@ async function runSessionBody(
         },
       );
       // Sol run 002: never a mutant whose refusal is known only after deploy (`carryBarred`).
-      const knownSurvivors = filterHistory([...manifest.mutants], prior, {
+      // R644: these are CANDIDATES, with the tests each one faced in that run. They stay inside
+      // `execute` through the compile bisect, the no-green branch and coverage (review I1), and
+      // only those whose covering tests NOW are all ones they faced are lent, just before 5b.
+      const history = filterHistory([...manifest.mutants], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
         ...(carryDisabled !== undefined ? { carryDisabled } : {}),
         current: carryCurrent,
-      }).knownSurvivors.filter((m) => !carryBarred(m));
-      const skipped = new Set(knownSurvivors);
-      const execute = manifest.mutants.filter((m) => !skipped.has(m));
-      for (const m of knownSurvivors)
-        record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
+      });
+      const candidates = new Map<string, FacedTests>();
+      for (const m of history.knownSurvivors) {
+        if (carryBarred(m)) continue;
+        const faced = history.faced.get(m.mutantId);
+        if (faced === undefined) {
+          throw new Error(
+            `runSession: filterHistory named ${m.mutantId} a known survivor with no faced-tests entry (R644)`,
+          );
+        }
+        candidates.set(m.mutantId, faced);
+      }
+      const execute = [...manifest.mutants];
 
       // 3. deploy — always, even for in-memory backends: they need the
       // per-batch instrumented dir just as much as a publishing backend
@@ -7180,12 +7196,12 @@ async function runSessionBody(
         // re-deployed scratch subsets until a single offending mutant is
         // isolated, or the narrowing stops reproducing the failure, in
         // which case there's nothing more specific to report than the
-        // original error. `execute` (post-history-filter) would be wrong
-        // here: known survivors are excluded from `execute` but are STILL
-        // compiled into the artifact, so a malformed known-survivor mutant
-        // would break this compile while being provably unfindable by a
-        // search restricted to `execute`. History filtering is an
-        // execution decision, not a compilation decision.
+        // original error. Searching anything narrower would be wrong: every
+        // mutant is compiled into the artifact, so a mutant left out of the
+        // search could break this compile while being provably unfindable.
+        // History filtering is an execution decision, not a compilation
+        // decision. (Since R644, `execute` holds the history candidates
+        // too, so each of them gets an error row below, review I1.)
         const note = await bisectAndNote({
           subsetMutants: manifest.mutants,
           scratchDir: join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}-bisect`),
@@ -7401,7 +7417,7 @@ async function runSessionBody(
             })),
           );
           const split = coverageFilter(
-            execute,
+            execute.filter((m) => !candidates.has(m.mutantId)),
             index,
             greenTests.map((b) => b.ref),
             unsupportedIndex,
@@ -7422,6 +7438,26 @@ async function runSessionBody(
           uncovered = split.uncovered;
           unplaceableIds = split.unplaceable;
           memberCounts = memberCountsByTest(index.byMember);
+          // R644 (minor 3): the history candidates' covering tests, in a SECOND call that emits
+          // nothing, so `coverage-split` (and `untargetedTriggerCount`) count only what the first
+          // call decided, as before R644. Merged so a candidate that is not lent takes every
+          // ordinary path below, `no-coverage` included.
+          if (candidates.size > 0) {
+            const forCandidates = coverageFilter(
+              execute.filter((m) => candidates.has(m.mutantId)),
+              index,
+              greenTests.map((b) => b.ref),
+              unsupportedIndex,
+              isHubCoverageMode(caps.coverage),
+              batchRefused,
+              () => {}, // emits nothing: the console lines count the first call's mutants only
+            );
+            perMutantTests = new Map([...perMutantTests, ...forCandidates.covered]);
+            refusedIds = new Map([...refusedIds, ...forCandidates.refused]);
+            coverageAttribution = new Map([...coverageAttribution, ...forCandidates.attribution]);
+            uncovered = [...uncovered, ...forCandidates.uncovered];
+            unplaceableIds = new Set([...unplaceableIds, ...forCandidates.unplaceable]);
+          }
           // coverage-split: accumulated per batch AT SPLIT TIME, and folded into
           // `SessionReport.untargetedTriggerCount` by report-fold.ts rather than a session-level
           // accumulator here — see events.ts's doc comment on why this is the strongest single
@@ -7505,6 +7541,48 @@ async function runSessionBody(
           }
         }
 
+        // R644: lend a history candidate only when every test covering it NOW is one it faced in
+        // the run that scored it. A test red at that run's baseline never ran against it, so a
+        // candidate it covers now is executed. No record (NULL, `[]`, ambiguous) is never lent.
+        // A candidate step 5 recorded `no-coverage` has no entry and is skipped here, as in 5b.
+        const lent = new Set<string>();
+        const notFaced: MutantManifestEntry[] = [];
+        const noRecord: MutantManifestEntry[] = [];
+        for (const m of execute) {
+          const faced = candidates.get(m.mutantId);
+          const covering = perMutantTests.get(m.mutantId);
+          if (faced === undefined || covering === undefined) continue;
+          if (faced === null) {
+            noRecord.push(m);
+            continue;
+          }
+          const had = new Set(faced);
+          if (covering.length === 0 || !covering.every((ref) => had.has(qualifiedTestName(ref)))) {
+            notFaced.push(m);
+            continue;
+          }
+          lent.add(m.mutantId);
+          // The report row is unchanged (`coveringTests` [], this run ran it against nothing); the
+          // STORE row keeps the source's list, so the run after this one can lend it again.
+          const rowId = record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
+          cfg.store.keepFacedTests(rowId, faced);
+        }
+        if (noRecord.length > 0) {
+          emit({
+            type: "warning",
+            code: "history-survivor-no-record",
+            message: `[lethal] --skip-known-survivors: batch ${batchIdx}: ${noRecord.length} survivor(s) of the latest finished run have no record of the tests they were run against (a row lent before R644, or written before R192), so they are executed, not skipped: ${namesSample(noRecord.map((m) => m.mutantId))} (R644).`,
+          });
+        }
+        if (notFaced.length > 0) {
+          emit({
+            type: "warning",
+            code: "history-tests-not-faced",
+            message: `[lethal] --skip-known-survivors: batch ${batchIdx}: ${notFaced.length} survivor(s) of the latest finished run are covered now by a test they were not run against there (a test red at that run's baseline, or coverage that changed), so they are executed, not skipped: ${namesSample(notFaced.map((m) => m.mutantId))} (R644).`,
+          });
+        }
+        const remaining = lent.size === 0 ? execute : execute.filter((m) => !lent.has(m.mutantId));
+
         // 5b. R47 resume: record the mutants a prior run already scored, WITHOUT executing them, and
         // hand only the remainder to the per-mutant loop.
         //
@@ -7517,10 +7595,10 @@ async function runSessionBody(
         // step 5 has ALREADY recorded those mutants as `no-coverage`, and `mutants` has no unique
         // constraint on (run_id, mutant_code), so a second record() would silently duplicate rather
         // than fail.
-        let toExecute: MutantManifestEntry[] = execute;
+        let toExecute: MutantManifestEntry[] = remaining;
         if (resumeState !== undefined) {
           toExecute = [];
-          for (const m of execute) {
+          for (const m of remaining) {
             const covering = perMutantTests.get(m.mutantId);
             if (covering === undefined) continue; // step 5 already recorded no-coverage
             // R53: a mutant a prior run STRANDED the tier on is not retried by default. Measured on
@@ -7558,7 +7636,7 @@ async function runSessionBody(
               toExecute.push(m);
               continue;
             }
-            record(
+            const carriedRowId = record(
               cfg.store,
               runId,
               m,
@@ -7593,6 +7671,13 @@ async function runSessionBody(
               undefined, // killingTestRef
               carriedReproduction(carried),
             );
+            // R644 (build review I2): a carried survivor was not run here, so its STORE row keeps
+            // the tests it faced where it was scored, never the tests covering it now; a later
+            // history session reads that list as "faced". The report row above is unchanged.
+            // Whether this resume should carry it at all is R646.
+            if (carried.verdict === "survived" || carried.verdict === "known-survivor") {
+              cfg.store.keepCarriedFacedTests(carriedRowId, carried.coveringTests ?? []);
+            }
           }
         }
         return {

@@ -87,6 +87,9 @@ export function serializeKey(k: IdentityKey): string {
 export interface HistorySplit {
   readonly execute: MutantManifestEntry[];
   readonly knownSurvivors: MutantManifestEntry[];
+  /** R644: each known survivor's `FacedTests`, by `mutantId`. These are CANDIDATES: the session
+   *  lends one only after its own baseline shows every test covering it now is in this list. */
+  readonly faced: ReadonlyMap<string, FacedTests>;
 }
 
 /**
@@ -245,13 +248,24 @@ export interface PriorSurvivors {
   /** Every survivor row's `twinSiteOf(file, tuple)`, for rule 2. */
   readonly sites: ReadonlySet<string>;
   readonly recorded: RecordedCarrySide;
+  /** R644: the tests each survivor row actually FACED (its `covering_tests`), by key and by
+   *  site. `null` is "no record": NULL, `[]` (a row lent before R644), or two rows on one key or
+   *  site with different lists (ambiguous). A survivor without a record is never lent. */
+  readonly faced: {
+    readonly byKey: ReadonlyMap<string, FacedTests>;
+    readonly bySite: ReadonlyMap<string, FacedTests>;
+  };
 }
+
+/** R644: what a prior survivor was run against, or `null` when that is not known. */
+export type FacedTests = readonly string[] | null;
 
 /** No history: nothing to carry, and nothing measured. */
 export const NO_PRIOR_SURVIVORS: PriorSurvivors = {
   keys: new Set(),
   sites: new Set(),
   recorded: { hash: null, twins: null, dependencyHash: null },
+  faced: { byKey: new Map(), bySite: new Map() },
 };
 
 export function filterHistory(
@@ -263,19 +277,31 @@ export function filterHistory(
     current: CurrentCarrySide;
   },
 ): HistorySplit {
-  if (!opts.skipKnownSurvivors) return { execute: [...mutants], knownSurvivors: [] };
+  const faced = new Map<string, FacedTests>();
+  if (!opts.skipKnownSurvivors) return { execute: [...mutants], knownSurvivors: [], faced };
   const execute: MutantManifestEntry[] = [];
   const knownSurvivors: MutantManifestEntry[] = [];
-  const hit = (set: ReadonlySet<string>) => (s: string) => (set.has(s) ? true : undefined);
+  // R644 (minor 4): a match reads the matched row's OWN list, through the same rule that matched.
+  const hit =
+    (set: ReadonlySet<string>, lists: ReadonlyMap<string, FacedTests>) =>
+    (s: string): { readonly faced: FacedTests } | undefined =>
+      set.has(s) ? { faced: lists.get(s) ?? null } : undefined;
   for (const m of mutants) {
-    if (
-      !isCarryDisabled(m, opts.carryDisabled) &&
-      carryRecord(m, prior.recorded, opts.current, hit(prior.keys), hit(prior.sites)) === true
-    )
+    const carried = isCarryDisabled(m, opts.carryDisabled)
+      ? undefined
+      : carryRecord(
+          m,
+          prior.recorded,
+          opts.current,
+          hit(prior.keys, prior.faced.byKey),
+          hit(prior.sites, prior.faced.bySite),
+        );
+    if (carried !== undefined) {
       knownSurvivors.push(m);
-    else execute.push(m);
+      faced.set(m.mutantId, carried.faced);
+    } else execute.push(m);
   }
-  return { execute, knownSurvivors };
+  return { execute, knownSurvivors, faced };
 }
 
 /**

@@ -3184,7 +3184,11 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
   });
 
   // R214: the code under test sits in #if R318A; the build defines R318A, so its arm is live (orchestrator ruling q-20260930T055856).
-  test("history control: at the current scheme the old survivor IS skipped (the false verdict)", async () => {
+  // R644: at the current scheme the old survivor is a history CANDIDATE (no scheme warning), but
+  // since R644 it is lent only when the tests covering it NOW are ones it faced. Under the new
+  // naming no test covers it, so it is not lent and reads no-coverage: the false verdict this control
+  // used to show (`known-survivor`) is now refused per mutant as well as by the scheme bump.
+  test("history control: at the current scheme the old survivor is a candidate, and R644 does not lend it", async () => {
     const { dirs, store } = await oldNamingRun(IDENTITY_SCHEME, true);
     const events: RunEvent[] = [];
     const report = await runSession({
@@ -3196,7 +3200,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       skipKnownSurvivors: true,
       emit: [(e) => events.push(e)],
     });
-    expect(wrappedOf(report)).toEqual(["20:known-survivor", "21:known-survivor"]);
+    expect(wrappedOf(report)).toEqual(["20:no-coverage", "21:no-coverage"]);
     expect(
       events.filter((e) => e.type === "warning" && e.code === "history-identity-scheme-changed"),
     ).toHaveLength(0);
