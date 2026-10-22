@@ -615,13 +615,18 @@ export async function takeGateLock(
     );
     return undefined;
   };
-  if (h !== undefined && ((await deps.procCmdline(h.pid)) ?? "").includes("al-runner-v3-update"))
+  if (
+    h !== undefined &&
+    h.pid !== process.pid &&
+    ((await deps.procCmdline(h.pid)) ?? "").includes("al-runner-v3-update")
+  )
     return skip("a live al-runner-v3-update");
   if (h === undefined)
     await deps.log(`${deps.now()} ${what}: the gate lock ${lock} is empty or unreadable: stale`);
   const orphans = await deps.procsWithCwdUnder(GATE_WORKTREE);
   if (orphans.length > 0)
     return skip(`stale, but pid(s) ${orphans.join(", ")} still run under ${GATE_WORKTREE}`);
+  // ponytail: two runs that both find the same stale lock in the same instant can both take it; needs a stale lock plus simultaneous starts. Upgrade: re-read the lock before and after the rename and skip unless it still names the dead holder.
   await rename(lock, `${lock}.stale.${randomUUID()}`).catch(() => {});
   if (!(await linkLock(lock, body))) return skip("another run took it over first");
   await deps.log(`${deps.now()} ${what}: took over the stale gate lock ${lock}`);
@@ -633,7 +638,7 @@ async function keptFolders(root: string, tag: string): Promise<string[]> {
   const failed = join(root, "failed");
   const names = existsSync(failed) ? await readdir(failed) : [];
   return [
-    ...names.filter((n) => n.slice(0, n.indexOf("@")) === tag).map((n) => join(failed, n)),
+    ...names.filter((n) => n.startsWith(`${tag}@`)).map((n) => join(failed, n)),
     join(root, "held", tag),
   ].filter((d) => existsSync(join(d, "al-runner")) && existsSync(join(d, "receipt.json")));
 }

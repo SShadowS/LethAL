@@ -48,8 +48,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     written as a plain `fail` or `pass` reads `error`, never a kill, survive or pass.
   - **Update gate:** `scripts/al-runner-v3-update.ts` moves the pin only after
     `itest:alrunner-v3` passes. It accepts edge builds' SemVer build metadata, holds one lock over
-    every gate path, and `--edge-rejudge <sha>` re-gates a kept edge binary at a new LethAL commit
-    without a download (R641).
+    every gate path, and `--edge-rejudge <sha>` re-gates a kept edge binary at `.gated`'s current
+    commit, without a download (R641).
   - **Report:** `executionContexts[]` gains `runnerBuild` and `binarySha256`.
 
 - **On al-runner, a kill must reproduce** (R577). Measured: a Microsoft test that builds its input

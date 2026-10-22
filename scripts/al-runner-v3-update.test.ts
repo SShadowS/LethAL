@@ -659,6 +659,16 @@ linuxOnly("R639 the gate lock (L1-L6)", () => {
     expect(seen.gates).toEqual([REGATE_COMMIT]);
   });
 
+  test("L7 (M2): a holder whose pid is THIS process (pid reuse after a restart) is stale: gated", async () => {
+    await setup();
+    await holder(process.pid);
+    const { deps, seen } = regate({
+      procs: { [process.pid]: "bun scripts/al-runner-v3-update.ts --regate" },
+    });
+    expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+    expect(seen.gates).toEqual([REGATE_COMMIT]);
+  });
+
   test("L6: a lock that is no longer ours is left alone at release; our own is removed", async () => {
     await setup();
     const other = JSON.stringify({ pid: 99, startedAt: "x", argv: [] });
@@ -785,6 +795,11 @@ linuxOnly("R639 --edge-rejudge (R1-R9)", () => {
 
   test("R4 (I4): a folder whose tag only starts with the tag is not a kept copy of it", async () => {
     await setupKept({ name: `${TAG}0@${OLD}` });
+    await expect(edgeRejudge(rj().deps, EDGE)).rejects.toThrow(/no kept binary with a receipt/);
+  });
+
+  test("R4 (M3): a folder with NO @ that is the tag plus one character is not a kept copy of it", async () => {
+    await setupKept({ name: `${TAG}X` });
     await expect(edgeRejudge(rj().deps, EDGE)).rejects.toThrow(/no kept binary with a receipt/);
   });
 

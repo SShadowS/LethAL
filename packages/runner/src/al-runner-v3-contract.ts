@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { V3_SERVE_SAFE_REFUSALS, defaultServerSpawn } from "./al-runner-backend";
 import { baseAppJson } from "./al-runner-canary";
 import { AlRunnerServer, type ServerSpawnFn, type ServerTestLine } from "./al-runner-server";
-import { type V3Row, decodeV3Rows } from "./al-runner-v3-backend";
+import { type V3Row, V3_REFUSAL_PREFIX, decodeV3Rows } from "./al-runner-v3-backend";
 import { probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
 import { type SpawnFn, defaultSpawn } from "./publisher";
@@ -50,7 +50,7 @@ export function isRefusalRow(r: V3Row | undefined): boolean {
     r !== undefined &&
     r.notRun === true &&
     r.status === "error" &&
-    (r.message ?? "").startsWith("NotRun: out-of-scope: ")
+    (r.message ?? "").startsWith(`${V3_REFUSAL_PREFIX} `)
   );
 }
 
@@ -73,7 +73,7 @@ function refusalRowShape(c: {
   const m = h.message ?? "";
   if (h.status !== "fail" || h.notRun || c.exitCode !== 1) return "diverged";
   if (m === BC_HTTP_INTERNAL_TEXT) return "gone";
-  return m.startsWith("NotRun: out-of-scope:") ? "diverged" : "unlike-bc";
+  return m.startsWith(V3_REFUSAL_PREFIX) ? "diverged" : "unlike-bc";
 }
 
 export interface V3Fact {
@@ -1107,7 +1107,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
           ? "unmeasurable"
           : c?.notRun === true
             ? "defect-present"
-            : c !== undefined && !(c.message ?? "").startsWith("NotRun: out-of-scope:")
+            : c !== undefined && !(c.message ?? "").startsWith(V3_REFUSAL_PREFIX)
               ? "gone"
               : "diverged",
         "CommitCall under --isolation test is notRun",
