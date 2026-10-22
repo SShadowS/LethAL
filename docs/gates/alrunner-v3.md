@@ -64,6 +64,20 @@ The legs:
   known row whose VERDICT disagreed with BC's, now `error` through a named refusal (`runner-refused`, no killing
   test). An `error` of any other class, or a known row that differs from BC only in its killing test, is
   `gate-fail`.
+  - Since r10 (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r10-legt-order.md`, 7bc0a1a5,
+    R647), the leg first classifies its rows and compares them with its own baseline (`compareMutants`), and prints
+    every differing row as one receipt line, `T: <held|gate-fail>: <mutantCode> <key>: <old> -> <new> (<reason>)`.
+    Only then does `judgeLegT` (`al-runner-v3-gate.ts`) judge, in order: Sleep index 0 + 0, 3 refused tests, the
+    pinned 52, then the classification. `held` needs the compare's differing keys to equal the held keys, and has
+    no count check. `pass` needs 0 compare differences, then 290 / 57 / 59 over 406, then the baseline compare.
+    The record branch still checks the counts first. A build that changes the 3 refused tests (the Commit tests)
+    is `gate-fail` by design.
+  - X (d), since r10: right after its session, the leg prints `SleeperDoubles`'s `baseline-batch-finished`
+    verdict (or `absent`), `baselineGreen`, each mutant's `coveringTests`, and the 120 s stop (computed from
+    `BASELINE_TIMEOUT_DEFAULT`). When a per-mutant check fails and that verdict is present and not `pass`, the
+    failure ends "SleeperDoubles is not green at baseline …: the Sleep rule was not exercised; gate-fail". No
+    verdict rule changes: a timed-out baseline is still `gate-fail` ([[R649]] re-casts X (d)). X (b)'s held line
+    goes into the receipt as soon as it is known.
 
 ## The pin and the update gate
 
@@ -201,3 +215,8 @@ The legs:
   pattern refused `+edge.20261022`). bc1 then measured BC's own texts (`docs/measurements/r639/`, two runs). r9
   (4995b8f6) restates the facts, and R639 adds `--edge-rejudge` and the gate lock. Leg C has 26 facts: 9 defect,
   16 contract and 1 warn. The 26-fact head is not yet run live.
+- 2026-10-22: the edge rejudge of `57f1e4f98` at 711c94d9 gate-failed leg T on its counts (290 / 50 / 59, errors 7)
+  before it classified any row, and X (d) read all five mutants `no-coverage` with no baseline verdict printed
+  ([[R647]]). r10 (7bc0a1a5) moves leg T's judgement into `judgeLegT`, after the rows are printed, and makes X (d)
+  print its baseline. No figure or baseline moves. The post-merge `--regate` and `--edge-rejudge` results are
+  recorded in R647 after the merge.
