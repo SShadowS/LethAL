@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   type Dump,
+  EXTERNAL_SETS,
   type Git,
   RefusedError,
   corpusHeadOf,
@@ -412,12 +413,20 @@ describe("B5 the heavy-job guard", () => {
   ];
   const job = (pid: number, pgid: number, root = "/work/src/BC.History/x"): string =>
     `${pid} 1 ${pgid} bun census.ts ${root}`;
-  test("0, 1 or 2 foreign process groups -> go, go, refuse; self, ancestors and children not counted", () => {
+  test("0, 1, 2 or 3 foreign process groups -> go, go, go, refuse; self, ancestors and children not counted", () => {
     expect(heavyVerdict(parsePs(ps(base)), SELF, [], 0).refuse).toBe(false);
     expect(heavyVerdict(parsePs(ps([...base, job(200, 200)])), SELF, [], 0).refuse).toBe(false);
     const two = heavyVerdict(parsePs(ps([...base, job(200, 200), job(300, 300)])), SELF, [], 0);
-    expect(two.refuse).toBe(true);
+    expect(two.refuse).toBe(false);
     expect(two.foreign.map((p) => p.pid)).toEqual([200, 300]);
+    const three = heavyVerdict(
+      parsePs(ps([...base, job(200, 200), job(300, 300), job(400, 400)])),
+      SELF,
+      [],
+      0,
+    );
+    expect(three.refuse).toBe(true);
+    expect(three.foreign.map((p) => p.pid)).toEqual([200, 300, 400]);
   });
   test("a timeout+bun pair is ONE job (one pgid)", () => {
     const pair = [
@@ -441,6 +450,10 @@ describe("B5 the heavy-job guard", () => {
     expect(heavyVerdict(parsePs(ps([...base, ...slot])), SELF, [500], 1).refuse).toBe(false);
     expect(
       heavyVerdict(parsePs(ps([...base, ...slot, job(600, 600)])), SELF, [500], 1).refuse,
+    ).toBe(false);
+    expect(
+      heavyVerdict(parsePs(ps([...base, ...slot, job(600, 600), job(700, 700)])), SELF, [500], 1)
+        .refuse,
     ).toBe(true);
   });
   test("/work/src/DOX is not the DO corpus", () => {
@@ -472,7 +485,7 @@ describe("B5 the heavy-job guard", () => {
     expect(v.foreign.map((p) => p.pid)).toEqual([800]);
   });
   test("R626: two separate itest roots are TWO jobs", () => {
-    const v = heavyVerdict(parsePs(ps([...base, ...itest(700, 1), ...itest(900, 2)])), SELF, [], 0);
+    const v = heavyVerdict(parsePs(ps([...base, ...itest(700, 1), ...itest(900, 2)])), SELF, [], 1);
     expect(v.foreign.map((p) => p.pid)).toEqual([700, 900]);
     expect(v.refuse).toBe(true);
   });
@@ -485,17 +498,17 @@ describe("B5 the heavy-job guard", () => {
     const v = heavyVerdict(parsePs(ps([...base, ...rows])), SELF, [], 0);
     expect(v.foreign.map((p) => p.pid)).toEqual([950, 951, 952]);
   });
-  test("R626: an itest plus an unrelated corpus job, or a lone al-runner, is TWO jobs -> refuse", () => {
+  test("R626: an itest plus an unrelated corpus job, or a lone al-runner, is TWO jobs -> refuse beside a held slot", () => {
     const withCorpus = heavyVerdict(
       parsePs(ps([...base, ...itest(700, 1), job(600, 600)])),
       SELF,
       [],
-      0,
+      1,
     );
     expect(withCorpus.foreign.length).toBe(2);
     expect(withCorpus.refuse).toBe(true);
     const lone = "800 1 800 /work/tools/al-runner/current/al-runner --server";
-    const withRunner = heavyVerdict(parsePs(ps([...base, ...itest(700, 1), lone])), SELF, [], 0);
+    const withRunner = heavyVerdict(parsePs(ps([...base, ...itest(700, 1), lone])), SELF, [], 1);
     expect(withRunner.foreign.length).toBe(2);
     expect(withRunner.refuse).toBe(true);
   });
@@ -519,7 +532,7 @@ describe("B5 the heavy-job guard", () => {
     // Lane A holds slot 2 by hand (no pid written); lane B runs an unslotted corpus job.
     const procs = parsePs(ps([...base, job(200, 200)]));
     for (const pid of [0, Number(""), Number.NaN]) {
-      const v = heavyVerdict(procs, SELF, [pid], 1);
+      const v = heavyVerdict(procs, SELF, [pid], 2);
       expect(
         v.foreign.map((p) => p.pid),
         `slot pid ${pid}`,
@@ -530,7 +543,7 @@ describe("B5 the heavy-job guard", () => {
   test("#1 a STALE slot pid (reused by another job) excludes nothing, so that job is not hidden", () => {
     // pid 200 is now an unrelated corpus job; the slot holder that wrote it is gone.
     const procs = parsePs(ps([...base, job(200, 200), job(201, 201)]));
-    const v = heavyVerdict(procs, SELF, [200], 0);
+    const v = heavyVerdict(procs, SELF, [200], 1);
     expect(v.foreign.map((p) => p.pid)).toEqual([200, 201]);
     expect(v.refuse).toBe(true);
     // A LIVE corpus-snapshot holder's children are still excluded, so they are not counted twice.
@@ -556,7 +569,7 @@ describe("B5 the heavy-job guard", () => {
       "600 1 600 bash -c cd /work/src/BC.History && bun census.ts .",
       "601 600 600 bun census.ts .",
     ];
-    const v = heavyVerdict(parsePs(ps([...base, ...census])), SELF, [], 1);
+    const v = heavyVerdict(parsePs(ps([...base, ...census])), SELF, [], 2);
     expect(v.foreign.map((p) => p.pid)).toEqual([600]);
     expect(v.refuse).toBe(true);
   });
@@ -570,15 +583,83 @@ describe("B5 the heavy-job guard", () => {
     const one = heavyVerdict(parsePs(ps([...base, ...run])), SELF, [], 0);
     expect(one.foreign.map((p) => p.pgid)).toEqual([700]);
     expect(one.refuse).toBe(false);
-    // With one corpus job beside it, that is two others: refuse.
+    // With two corpus jobs beside it, that is three others: refuse.
     expect(heavyVerdict(parsePs(ps([...base, ...run, job(800, 800)])), SELF, [], 0).refuse).toBe(
-      true,
+      false,
     );
+    expect(
+      heavyVerdict(parsePs(ps([...base, ...run, job(800, 800), job(810, 810)])), SELF, [], 0)
+        .refuse,
+    ).toBe(true);
     // A unit test run named after al-runner beside a corpus job is not a second job.
     const unit = "900 1 900 bun test packages/runner/tests/al-runner-v3-backend.test.ts";
     expect(heavyVerdict(parsePs(ps([...base, unit, job(800, 800)])), SELF, [], 0).refuse).toBe(
       false,
     );
+  });
+
+  // R642: three heavy jobs container-wide, of which at most two BaseApp (BC.History) corpus jobs.
+  const dc = (pid: number): string => job(pid, pid, "/work/src/DC/x");
+  const bch = (pid: number): string => job(pid, pid);
+  const TOTAL_CAP = "-> REFUSED (at most three heavy jobs container-wide)";
+  const BASEAPP_CAP = "-> REFUSED (at most two BaseApp corpus jobs)";
+  test("R642: a 3rd NON-BaseApp heavy job is admitted with 2 others running", () => {
+    for (const others of [
+      [dc(200), dc(300)],
+      [bch(200), bch(300)],
+    ]) {
+      const v = heavyVerdict(parsePs(ps([...base, ...others])), SELF, [], 0, false);
+      expect(v.foreign.length).toBe(2);
+      expect(v.refuse, others.join(" | ")).toBe(false);
+      expect(v.message).not.toContain("REFUSED");
+    }
+  });
+  test("R642: a 3rd BaseApp job is refused with 2 other BaseApp jobs running, naming the BaseApp cap", () => {
+    const v = heavyVerdict(parsePs(ps([...base, bch(200), bch(300)])), SELF, [], 0, true);
+    expect(v.refuse).toBe(true);
+    expect(v.message).toContain(BASEAPP_CAP);
+    expect(v.message).not.toContain(TOTAL_CAP);
+    // A held slot whose live holder dumps bch is a BaseApp job too; one that dumps dc is not.
+    const holder = (set: string): string[] => [
+      `500 1 500 bun scripts/corpus-snapshot.ts snapshot ${set} --master --in-slot 2`,
+      `501 500 500 bun scripts/prod-identity-keys.ts /t /o ${EXTERNAL_SETS[set] ?? ""}/x`,
+    ];
+    const bySlot = heavyVerdict(
+      parsePs(ps([...base, ...holder("bch"), bch(300)])),
+      SELF,
+      [500],
+      1,
+      true,
+    );
+    expect(bySlot.refuse).toBe(true);
+    expect(bySlot.message).toContain(BASEAPP_CAP);
+    expect(
+      heavyVerdict(parsePs(ps([...base, ...holder("dc"), bch(300)])), SELF, [500], 1, true).refuse,
+    ).toBe(false);
+  });
+  test("R642: a 3rd job that is BaseApp, with 1 BaseApp and 1 non-BaseApp running, is admitted", () => {
+    const v = heavyVerdict(parsePs(ps([...base, bch(200), dc(300)])), SELF, [], 0, true);
+    expect(v.foreign.length).toBe(2);
+    expect(v.refuse).toBe(false);
+    expect(v.message).not.toContain("REFUSED");
+  });
+  test("R642: a 4th heavy job of any kind is refused with 3 others, naming the total cap", () => {
+    for (const selfBaseApp of [false, true]) {
+      const v = heavyVerdict(
+        parsePs(ps([...base, dc(200), dc(300), dc(400)])),
+        SELF,
+        [],
+        0,
+        selfBaseApp,
+      );
+      expect(v.refuse, `self BaseApp ${selfBaseApp}`).toBe(true);
+      expect(v.message).toContain(TOTAL_CAP);
+      expect(v.message).not.toContain(BASEAPP_CAP);
+    }
+    // Held slots count toward the total: two held plus one unslotted job.
+    const v = heavyVerdict(parsePs(ps([...base, dc(200)])), SELF, [], 2, false);
+    expect(v.refuse).toBe(true);
+    expect(v.message).toContain(TOTAL_CAP);
   });
 
   // Real flock on temp lock files (util-linux; the tool runs in the Linux container only, so these
@@ -603,24 +684,21 @@ describe("B5 the heavy-job guard", () => {
     } catch {}
   };
   const posix = test.skipIf(process.platform === "win32");
-  posix(
-    "both slots held by live holders -> refused; slot 1 busy, slot 2 free -> slot 2",
-    async () => {
-      const dir = fresh("locks");
-      const one = await hold(join(dir, "heavy.1"));
-      try {
-        expect(trySlots(dir, () => ["true"])).toEqual({ slot: 2, code: 0 });
-        const two = await hold(join(dir, "heavy.2"));
-        try {
-          expect(trySlots(dir, () => ["true"])).toBeNull();
-        } finally {
-          kill(two.pid);
-        }
-      } finally {
-        kill(one.pid);
-      }
-    },
-  );
+  posix("slots are tried 1, 2, 3; all three held by live holders -> null (busy)", async () => {
+    const dir = fresh("locks");
+    const held: number[] = [];
+    try {
+      expect(trySlots(dir, () => ["true"])).toEqual({ slot: 1, code: 0 });
+      held.push((await hold(join(dir, "heavy.1"))).pid);
+      expect(trySlots(dir, () => ["true"])).toEqual({ slot: 2, code: 0 });
+      held.push((await hold(join(dir, "heavy.2"))).pid);
+      expect(trySlots(dir, () => ["true"])).toEqual({ slot: 3, code: 0 });
+      held.push((await hold(join(dir, "heavy.3"))).pid);
+      expect(trySlots(dir, () => ["true"])).toBeNull();
+    } finally {
+      for (const pid of held) kill(pid);
+    }
+  });
   posix(
     "a holder that was SIGKILLed frees its slot at once; an orphaned child keeps it held",
     async () => {
