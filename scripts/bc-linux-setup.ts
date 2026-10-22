@@ -505,6 +505,9 @@ export function resolveLane(
   );
 }
 
+/** R617: a unit test reached a real writer under /coord without stubbing it. */
+export class UnitTestCoordWriteError extends Error {}
+
 /** The coord lease in `lane`'s name. `run` is the kraken-call seam (`kraken` in a real run). */
 export function krakenLeaseFor(
   lane: string,
@@ -520,6 +523,13 @@ export function krakenLeaseFor(
       return token;
     },
     recordToken(server, token) {
+      // R617: the test preload sets LETHAL_TEST_FAKE_HOME. A unit test that reaches this writer
+      // would overwrite a real token file wherever /coord exists, and fail only on CI.
+      if (process.env.LETHAL_TEST_FAKE_HOME !== undefined) {
+        throw new UnitTestCoordWriteError(
+          `a unit test reached the real recordToken for ${server}; stub recordToken (it writes ${TOKEN_DIR})`,
+        );
+      }
       writeFileSync(join(TOKEN_DIR, `lease-${server}.txt`), `${token}\n`, "utf8");
     },
     async heartbeat(server, token) {
@@ -780,14 +790,33 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
   throw new Error(USAGE);
 }
 
-/** The caller holds the lease (R594): heartbeat it too, but never take or release it. */
-export function heldLeaseDeps(token: string): LeaseDeps {
+/** R617: `--held-lease` names a token coord does not hold for that server. */
+export class HeldLeaseUnknownError extends Error {}
+
+/**
+ * The caller holds the lease (R594): heartbeat it too, but never take or release it. R617: `take`
+ * proves the token with one heartbeat (coord's `holder` answer carries no token) and refuses by name
+ * before any server call. `run` is the kraken-call seam (`kraken` in a real run).
+ */
+export function heldLeaseDeps(
+  token: string,
+  run: (args: readonly string[]) => Promise<string> = kraken,
+): LeaseDeps {
   return {
-    take: async () => token,
+    async take(server) {
+      try {
+        await run(["heartbeat", server, token]);
+      } catch (err) {
+        throw new HeldLeaseUnknownError(
+          `--held-lease ${token} is not a live lease on ${server} (${errText(err)}); take the lease first, or drop --held-lease`,
+        );
+      }
+      return token;
+    },
     recordToken() {},
     // R598 removed the fixed-lane `krakenLease`; a heartbeat names the token, not a lane.
     heartbeat: async (server, t) => {
-      await kraken(["heartbeat", server, t]);
+      await run(["heartbeat", server, t]);
     },
     release: async () => {},
   };
