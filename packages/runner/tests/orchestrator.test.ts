@@ -78,6 +78,7 @@ import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { IDLE_STATUS, leaseRouter } from "./helpers/lease-wire";
 import type { WireAnswer } from "./helpers/lease-wire";
 import { scratchDirs } from "./helpers/scratch";
+import { testDbPath } from "./helpers/test-db";
 
 const scratch = scratchDirs();
 import {
@@ -3417,10 +3418,19 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
       resume: 1,
       emit: [createEmitter([(e) => events.push(e)])],
     });
-    // Nothing was sent at all: every verdict carried, so no baseline ran.
+    // Nothing was sent at all. R621: the batch holds stored no-coverage rows, so it is not carried
+    // whole; it is deployed, its baseline is the reused snapshot (no test sent), the kills carry
+    // and the no-coverage rows are re-derived (uncovered now too), not carried.
     expect(backend.sent).toEqual([]);
-    expect(events.some((e) => e.type === "baseline-batch-finished")).toBe(false);
-    expect(report.mutants.every((m) => m.carried === true)).toBe(true);
+    expect(events.some((e) => e.type === "warning" && e.code === "resume-baseline-reused")).toBe(
+      true,
+    );
+    expect(
+      report.mutants.map((m) => `${m.procedureName}:${m.verdict}:${m.carried === true}`),
+    ).toEqual([
+      ...Array(3).fill("IsOverBudget:killed:true"),
+      ...Array(3).fill("IsUnderBudget:no-coverage:false"),
+    ]);
     expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
     expect(report.validity.caveats.filter((c) => c === "tests-testpage-refused")).toEqual([
       "tests-testpage-refused",
@@ -3840,8 +3850,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
 
 describe("runSession — I7 second consecutive transport error aborts the session", () => {
   test("stub backend erroring on every active-mutant run throws, persists partial results", async () => {
-    const root = scratch("lethal-orch-i7-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "error"), [
       "IsOverBudget",
@@ -4375,8 +4384,7 @@ describe("runSession — parallel workers", () => {
   });
 
   test("a shard's transport-error abort drains sibling shards before rethrowing", async () => {
-    const root = scratch("lethal-orch-parallel-i7-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(dbPath);
@@ -6813,8 +6821,7 @@ describe("runSession — bisection on compile failure", () => {
   // error, and get silently downgraded into a per-mutant "error" note instead of aborting the
   // run.
   test("a worker's DeploymentError aborts the whole session instead of being bisected", async () => {
-    const root = scratch("lethal-orch-parallel-deployerr-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(dbPath);
@@ -6919,6 +6926,8 @@ async function seedPriorSurvivor(
   target: MutantManifestEntry,
 ): Promise<void> {
   const runId = store.createRun({
+    // R585: ran TEST_AL's one test (`testKeyOf`), the suite the session sends, or nothing lends.
+    testScope: ["79100::OverBudgetDetected"],
     coverageMode: "procedure",
     // R247: measured against the same test app, or no survivor from it is ever skipped. R495: and
     // proven: the package the session's backend serves installed (`servesTestApp`).
@@ -6965,6 +6974,12 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
   // candidate subset, so the very first check trivially "compiles" and bisection reports
   // "no-repro" — an admitted, but previously unexplained, dead end. Bisecting
   // `manifest.mutants` (every mutant the artifact actually contains) finds it like any other.
+  //
+  // R644 (build review minor 3): since R644, `execute` holds the history candidates too, so on
+  // the SEQUENTIAL path `execute` and `manifest.mutants` are the same set and this test can no
+  // longer tell a bisect over `execute` from one over the manifest. It now guards R644's I1 rule
+  // (the candidate gets the batch's error row). Task 7 itself stays guarded by the worker-shard
+  // test below, where a shard is a strict subset of the manifest.
   test("bisects the FULL embedded manifest, so a malformed known-survivor is findable", async () => {
     const dirs = await makeProject();
     const scratchDir = join(dirs.instrumentedDir, "seed-scratch");
@@ -7008,10 +7023,13 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
       skipKnownSurvivors: true,
     });
     expect(report.counts.errors).toBeGreaterThan(0);
-    // The known survivor itself is recorded separately (verdict "known-survivor", no note); the
-    // culprit's identity lands on `execute`'s error-recorded mutants' shared note instead.
-    const knownSurvivor = report.mutants.find((m) => m.verdict === "known-survivor");
-    expect(knownSurvivor).toBeDefined();
+    // R644 (review I1): the history candidate stays inside `execute` through the compile bisect, so
+    // it is not lent: it gets the batch's error row with the shared note like every other mutant.
+    expect(report.mutants.find((m) => m.verdict === "known-survivor")).toBeUndefined();
+    const candidate = report.mutants.filter(
+      (m) => m.operatorName === "lethal.conditional-boundary" && m.line === boundary.startLine,
+    );
+    expect(candidate.map((m) => m.verdict)).toEqual(["error"]);
     const noted = report.mutants.find((m) => m.failureNote !== undefined);
     expect(noted).toBeDefined();
     expect(noted?.failureNote).toContain("bisected to mutant");
@@ -7156,8 +7174,7 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
   // if this outer one were missing — `calls === 1` is what only the outer guard delivers (zero
   // wasted bisection compiles, not merely "eventually aborts correctly").
   test("a worker's ArtifactPrepareError aborts the whole session instead of being bisected", async () => {
-    const root = scratch("lethal-orch-parallel-prepareerr-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(dbPath);
@@ -8506,6 +8523,7 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
       dirs.projectDir,
       backend.capabilities().coverage,
       sourceHash === undefined ? undefined : { hash: sourceHash, deps: recordedDeps ?? "" },
+      [],
       [],
       [],
     );
@@ -11111,6 +11129,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
   test("R373: setRunTestDigests never overwrites a recorded row and throws on a missing run", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -13125,6 +13144,7 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
         : { hash: row.testAppHash, deps: row.testAppDeps ?? "" },
       [],
       row?.carryHidden?.files ?? [],
+      row?.testScope ?? [],
     );
     // Exactly batch 0's survivor (M0001, carried into the finished run 2), and not batch 1's
     // survivor (`IsOverBudget`'s return-value), measured under the lost lease.
@@ -17904,6 +17924,7 @@ async function installedFixture(
     instrumentedDir: join(dirs.instrumentedDir, `run-${fromRunId}-batch-0`),
   };
   const runId = store.createRun({
+    testScope: [],
     coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
     buildSymbols: [],
@@ -20592,6 +20613,78 @@ class ReproStub extends StubBackend {
     return v;
   }
 }
+
+/** R635 §4: a ReproStub that logs the baseline bracket and the prefetch into the same trace. */
+class BracketStub extends ReproStub {
+  inBaseline = false;
+  readonly runs: Array<{ mutant: string | null; inBaseline: boolean }> = [];
+  readonly prefetches: Array<Array<{ mutantId: string; refs: string[] }>> = [];
+  baselinePhase(on: boolean): void {
+    this.inBaseline = on;
+    this.trace.push(`phase ${on}`);
+  }
+  async prefetchMutants(
+    plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+  ): Promise<void> {
+    this.trace.push("prefetch");
+    this.prefetches.push(
+      plans.map((p) => ({ mutantId: p.mutantId, refs: p.refs.map((r) => r.method) })),
+    );
+  }
+  override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    this.runs.push({ mutant: this.activations.at(-1) ?? null, inBaseline: this.inBaseline });
+    return super.run(ref, opts);
+  }
+}
+
+describe("R635 §4: the baseline bracket and the prefetch seam (tests 14, 15)", () => {
+  const session = async () => {
+    const dirs = await makeProject();
+    // IsUnderBudget is covered by no test: its mutants are uncovered and never prefetched.
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    const backend = new BracketStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "fail"), [
+      "IsOverBudget",
+    ]);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    return { backend, report };
+  };
+
+  test("14: baselinePhase(true) then (false) exactly once per batch, bracketing the baseline; the kill confirm runs outside it", async () => {
+    const { backend, report } = await session();
+    expect(report.counts.killed).toBeGreaterThan(0);
+    const t = backend.trace;
+    expect(t.filter((x) => x === "phase true")).toHaveLength(1);
+    expect(t.filter((x) => x === "phase false")).toHaveLength(1);
+    const firstMutant = t.findIndex((x) => /^activate M/.test(x));
+    expect(t.indexOf("phase true")).toBe(t.indexOf("activate null") - 1);
+    expect(t.indexOf("phase false")).toBeLessThan(firstMutant);
+    expect(t.indexOf("phase false")).toBeGreaterThan(t.lastIndexOf("run null", firstMutant));
+    const firstMutantRun = backend.runs.findIndex((r) => r.mutant !== null);
+    const baselineRuns = backend.runs.slice(0, firstMutantRun);
+    expect(baselineRuns.length).toBeGreaterThan(0);
+    expect(baselineRuns.every((r) => r.inBaseline)).toBe(true);
+    const confirms = backend.runs.slice(firstMutantRun).filter((r) => r.mutant === null);
+    expect(confirms.length).toBeGreaterThan(0);
+    expect(backend.runs.slice(firstMutantRun).every((r) => !r.inBaseline)).toBe(true);
+  });
+
+  test("15: prefetchMutants once per mutant-loop call, after the baseline, with exactly the covered mutants and their refs", async () => {
+    const { backend, report } = await session();
+    expect(backend.prefetches).toHaveLength(1);
+    const covered = report.mutants
+      .filter((m) => m.verdict !== "no-coverage")
+      .map((m) => m.mutantCode)
+      .sort();
+    expect(report.mutants.some((m) => m.verdict === "no-coverage")).toBe(true);
+    expect(backend.prefetches[0]?.map((p) => p.mutantId).sort()).toEqual(covered);
+    for (const p of backend.prefetches[0] ?? []) expect(p.refs).toEqual(["OverBudgetDetected"]);
+    const t = backend.trace;
+    expect(t.indexOf("prefetch")).toBeGreaterThan(t.indexOf("phase false"));
+    expect(t.indexOf("prefetch")).toBeLessThan(t.findIndex((x) => /^activate M/.test(x)));
+  });
+});
 
 /** R577: the group path's stub (R206's) with the rule on. */
 class ReproWarmStub extends WarmStubBackend {

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**93 of 635 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**95 of 647 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -274,7 +274,7 @@ that ordering is the priority.
 - **R575** · R531 misses two ways the loop's set can be consumed: `this.P(R)` in the same object, and a second variable of the same SingleInstance codeunit · [R575.md](docs/roadmap/R575.md) · open, filed 2026-10-10
 - **R576** · R571's cross-object hop limits: a helper's body is not followed, and the codeunit's set is matched by global name only · [R576.md](docs/roadmap/R576.md) · open, filed 2026-10-10
 - **R582** · Switch R577's kill-reproduction rule on for the BC backend (bcdev): a flaky test is a false kill there too, and the switch moves every BC gate's pinned call counters · [R582.md](docs/roadmap/R582.md) · done (7a8ff82c)
-- **R585** · --skip-known-survivors reads a --tests-only run's survivors as survivors under the full suite · [R585.md](docs/roadmap/R585.md) · open, filed 2026-10-20
+- **R585** · --skip-known-survivors reads a --tests-only run's survivors as survivors under the full suite · [R585.md](docs/roadmap/R585.md) · done (db38591b)
 - **R592** · History has no backend check: a bcdev run and an al-runner run that both ran coverage `none` are kept apart only incidentally · [R592.md](docs/roadmap/R592.md) · open
 - **R604** · Iterator hangs master already deploys: a split real-table queue, a cursor reset through a wrapper, writers past 4 calls, and aliased state (Copy, RecordRef, var-callee and with aliases) · [R604.md](docs/roadmap/R604.md) · open, filed 2026-10-21
 - **R618** · No BC gate exercises the lend order with an actual lend: every BC itest starts from an empty store, and none uses --resume, --resume-run or --skip-known-survivors · [R618.md](docs/roadmap/R618.md) · done (7084eece)
@@ -285,7 +285,12 @@ that ordering is the priority.
 - **R632** · probe: can a session tell that a BC server restarted (or had apps published) between a crashed run and its resume? R601's same-server rule cannot · [R632.md](docs/roadmap/R632.md) · open, filed 2026-10-22
 - **R633** · al-runner v3 update gate: two wrong-reason verdicts on 2026-10-22 (alpha.3 infra-fail with no D legs run; alpha.4 and edge-7739d8132 gate-fail on #5613's fix read as a contract break), and every receipt deleted · [R633.md](docs/roadmap/R633.md) · done (abac8803)
 - **R634** · When the target app has installed dependents, their hang-capable loops are not in the hang context: a dependent's loop that calls a mutated target procedure can hang a scored run · [R634.md](docs/roadmap/R634.md) · closed 2026-10-22 — measured price 0: adding each same-corpus dependent's source to the target's hang context…
-- **R637** · al-runner v3: a test that fails after a timed-out test of the same codeunit is scored as a kill, although v3 says such a failure is not trusted · [R637.md](docs/roadmap/R637.md) · open, filed 2026-10-22
+- **R637** · al-runner v3: a test that fails after a timed-out test of the same codeunit is scored as a kill, although v3 says such a failure is not trusted · [R637.md](docs/roadmap/R637.md) · closed 2026-10-22 — premise false on alpha.2: v3 marks a failure caused by a stopped sibling notRun…
+- **R641** · al-runner v3: upstream fixes read as contract breaks or as unmeasurable, edge builds fail the version check, and a gated edge build cannot be re-judged · [R641.md](docs/roadmap/R641.md) · done (9c15aadb)
+- **R644** · History lends a survivor that was never checked against a test that failed in the SOURCE run's baseline but passes now (a false survive, even with equal suites) · [R644.md](docs/roadmap/R644.md) · done (33f8f92c)
+- **R646** · --resume carries a survivor scored against fewer tests than now cover it: a test green in the resumed run's baseline but not when it was scored never faced it · [R646.md](docs/roadmap/R646.md) · open, narrowed by R-646b (338041d6)
+- **R647** · al-runner v3 gate: leg T checks its counts before it classifies, so r9 §7's held can never be reached, and X (d) cannot tell a timed-out baseline from a broken Sleep rule · [R647.md](docs/roadmap/R647.md) · done (80491bb9)
+- **R650** · al-runner v3 gate: on leg T's held path the text check runs without R556's bare-hash refusal, so a run whose mutated-text hashes are missing can hide a text change · [R650.md](docs/roadmap/R650.md) · open, filed 2026-10-22
 
 ## Product gaps a real project hits
 
@@ -665,10 +670,10 @@ that ordering is the priority.
 - **R610** · al-runner-v3: unmeasured whether --coverage-json lists files reached only by a dynamic call · [R610.md](docs/roadmap/R610.md) · open
 - **R615** · scripts/bc-linux-setup.ts records every lane's lease token in one shared file per server (TOKEN_DIR fixed to the R-589 folder, lease-<server>.txt), so two lanes overwrite each other's record · [R615.md](docs/roadmap/R615.md) · open, filed 2026-10-21
 - **R611** · R586's T15 backend-identity scanner is blind to case labels, split compares, .includes and src subfolders · [R611.md](docs/roadmap/R611.md) · open
-- **R614** · al-runner-v3 update gate: existing fixture .alpackages are not checked against the pinned symbol tar · [R614.md](docs/roadmap/R614.md) · open
+- **R614** · al-runner-v3 update gate: existing fixture .alpackages are not checked against the pinned symbol tar · [R614.md](docs/roadmap/R614.md) · done (72203cfc)
 - **R616** · A parallel full verify times out under real load (two tests at 5000 ms); its worker count does not adapt · [R616.md](docs/roadmap/R616.md) · open, filed 2026-10-21
 - **R617** · bc-linux-setup --held-lease has no test: nothing checks it never takes or releases a lease · [R617.md](docs/roadmap/R617.md) · done (8daecd3f)
-- **R621** · --resume carries a stored no-coverage verdict without checking it against this session's coverage: always in a wholly carried batch (replayCarriedBatch), and in a partly carried one (scoreBatch) whenever this session covers the mutant · [R621.md](docs/roadmap/R621.md) · open, filed 2026-10-22
+- **R621** · --resume carries a stored no-coverage verdict without checking it against this session's coverage: always in a wholly carried batch (replayCarriedBatch), and in a partly carried one (scoreBatch) whenever this session covers the mutant · [R621.md](docs/roadmap/R621.md) · done (91683742)
 - **R622** · A full verify HUNG for 10 minutes in real-home-guard.test.ts (one worker at 100% CPU, no timeout fired) instead of failing; not reproduced · [R622.md](docs/roadmap/R622.md) · open, filed 2026-10-22
 - **R623** · An in-place same-version publish of a fixture TARGET under an installed dependent is not measured, so bc-linux-setup.ts and bc-republish.ts refuse it by name · [R623.md](docs/roadmap/R623.md) · open
 - **R624** · bc-linux-setup.ts's downloadSymbols and the Continia step's residentVersion read any failed dev/packages answer as "absent" · [R624.md](docs/roadmap/R624.md) · done (fb1a753a)
@@ -676,10 +681,17 @@ that ordering is the priority.
 - **R626** · corpus-snapshot's heavy-job guard counts a parallel itest:alrunner's al-runner children as separate jobs · [R626.md](docs/roadmap/R626.md) · done (bb55c64c)
 - **R627** · contentDigest decodes NavxManifest.xml and navigation.xml as UTF-8 and re-encodes them, so two byte strings that differ only in invalid UTF-8 get one digest · [R627.md](docs/roadmap/R627.md) · open
 - **R630** · bcdev's fetchPublishedAppPackage reads a 5xx, a 404 and a timeout alike as null, so a server error is reported under the wrong cause (every consumer fails closed) · [R630.md](docs/roadmap/R630.md) · done (ee9f0a3b)
-- **R635** · al-runner v3 backend: use serve's multi-entry runTests (one compile, a resources override per mutant) for bcdev-like speed · [R635.md](docs/roadmap/R635.md) · open, filed 2026-10-22
+- **R635** · al-runner v3 backend: use serve's multi-entry runTests (one compile, a resources override per mutant) for bcdev-like speed · [R635.md](docs/roadmap/R635.md) · done (5159e50e)
 - **R636** · R631's link scan caps depth through links, not real depth: a long pnpm link chain with no .al refuses falsely · [R636.md](docs/roadmap/R636.md) · done (ee9f0a3b)
 - **R638** · al-runner v3: a test codeunit's OnRun trigger is not under the per-test CPU limit, so a hang there holds the call until LethAL's own deadline (upstream #5698) · [R638.md](docs/roadmap/R638.md) · open, filed 2026-10-22
+- **R639** · al-runner v3: when LethAL's first covering test is a not-trusted row after a timeout, the mutant ends as error and never reaches the hanging sibling's timeout kill · [R639.md](docs/roadmap/R639.md) · open, filed 2026-10-22
 - **R640** · R636's link-scan cap message blames the LAST link for a folder budget shared across the whole walk · [R640.md](docs/roadmap/R640.md) · done (8daecd3f)
+- **R642** · corpus-snapshot's heavy-job guard still allows two heavy jobs; the 32 GB container allows three, with BaseApp corpus jobs still capped at two · [R642.md](docs/roadmap/R642.md) · done (1e6d3b8a)
+- **R643** · After R621's fix, --resume deploys every fully scored batch that holds a no-coverage row; a snapshot-confirmed whole carry could skip that deploy · [R643.md](docs/roadmap/R643.md) · open, filed 2026-10-22
+- **R645** · The al-runner v3 backend leaves coverage.cobertura.xml in the caller's working directory · [R645.md](docs/roadmap/R645.md) · open, filed 2026-10-22
+- **R648** · two unit test files fail as "(unnamed)" just over 5 s when another verify overlaps: the default hook/test timeout under parallel load · [R648.md](docs/roadmap/R648.md) · done (9a372f98)
+- **R649** · measure BC's real Sleep behaviour (does Sleep(600000) wait, and hit the test timeout?), then re-cast the v3 gate's X (d) from it · [R649.md](docs/roadmap/R649.md) · open, filed 2026-10-22
+- **R651** · al-runner v3 serve-entries: the itest has no per-phase timers (warm-up, prefetch, coverage pass, §5 windows), so the next CDO speed step cannot target a phase · [R651.md](docs/roadmap/R651.md) · open, filed 2026-10-22
 
 ---
 

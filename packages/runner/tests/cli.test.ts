@@ -81,6 +81,7 @@ import { tinyBundle } from "./helpers/bundle";
 import { stalledResponse } from "./helpers/lease-wire";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
+import { testDbPath } from "./helpers/test-db";
 
 const scratch = scratchDirs();
 removeRunScratchAfterAll();
@@ -2313,7 +2314,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     );
     const configPath = join(root, "lethal.config.json");
     await writeFile(configPath, JSON.stringify({ preprocessorSymbols: ["X"] }));
-    const dbPath = join(root, "lethal.sqlite");
+    const dbPath = testDbPath("lethal.sqlite");
     const parsed: RunCliConfig = {
       mode: "run",
       projectDir,
@@ -2396,7 +2397,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
       projectDir,
       testDir,
       backendKind: "al-runner",
-      dbPath: join(root, "lethal.sqlite"),
+      dbPath: testDbPath("lethal.sqlite"),
       configPath,
       skipKnownSurvivors: false,
       workers: 1,
@@ -2413,7 +2414,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
 
   test("R214: --dry-run counts the sites of the build the config names", async () => {
     const { root, projectDir } = await r214Project();
-    const paths = { dbPath: join(root, "lethal.sqlite"), configPath: join(root, "none.json") };
+    const paths = { dbPath: testDbPath("lethal.sqlite"), configPath: join(root, "none.json") };
     const outPath = join(root, "dry-run.json");
     const printed: string[] = [];
     const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
@@ -2451,7 +2452,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
       const log = spyOn(console, "log").mockImplementation(() => {});
       try {
         await printDryRun(projectDir, undefined, {
-          dbPath: join(root, "lethal.sqlite"),
+          dbPath: testDbPath("lethal.sqlite"),
           configPath: join(root, "none.json"),
           outPath,
           preprocessorSymbols: ["X"],
@@ -2492,7 +2493,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
         "--config",
         configPath,
         "--db",
-        join(root, "lethal.sqlite"),
+        testDbPath("lethal.sqlite"),
         "--out",
         outPath,
       ],
@@ -2523,7 +2524,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
         "--config",
         configPath,
         "--db",
-        join(root, "lethal.sqlite"),
+        testDbPath("lethal.sqlite"),
         "--out",
         outPath,
       ],
@@ -2652,7 +2653,7 @@ describe("lethal run then lethal verify on one store (R358)", () => {
       controlSymbolPath: "C:/lethal-control.app",
     };
     await writeFile(configPath, JSON.stringify({ bcdev }));
-    const dbPath = join(root, "lethal.sqlite");
+    const dbPath = testDbPath("lethal.sqlite");
     // The REAL id check runs here: the overrides pass it, the config's defaults would not.
     const report = await runFromCli(
       {
@@ -3051,9 +3052,10 @@ describe("C02-06: lethal verify (Task 7)", () => {
       JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" }, envTool: {} }),
     );
     await writeFile(join(project, "app.json"), "{}");
-    const dbPath = join(root, "r.sqlite");
+    const dbPath = testDbPath("r.sqlite");
     const store = new ResultsStore(dbPath);
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -3102,9 +3104,10 @@ describe("C02-06: lethal verify (Task 7)", () => {
       join(project, "lethal.config.json"),
       JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" } }),
     );
-    const dbPath = join(root, "r.sqlite");
+    const dbPath = testDbPath("r.sqlite");
     const store = new ResultsStore(dbPath);
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],

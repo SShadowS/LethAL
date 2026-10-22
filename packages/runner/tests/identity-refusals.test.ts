@@ -198,8 +198,9 @@ describe("R307 T6 (a): an exact refusal reserves its sites, so the twins keep th
       `${CODEUNIT_FILE} @7 ordinal 1`,
       `${CODEUNIT_FILE} @8 ordinal 2`,
     ]);
-    // Three different verdicts, so a key that moved onto a neighbour carries the wrong one.
-    const verdicts: MutantVerdict[] = ["survived", "killed", "no-coverage"];
+    // Three different verdicts, so a key that moved onto a neighbour carries the wrong one. Each is
+    // carryable (R621: a stored no-coverage never is, so it would read `undefined` here).
+    const verdicts: MutantVerdict[] = ["survived", "killed", "known-survivor"];
     const index = buildResumeIndex(run1.map((m, i) => verdictRow(m, verdicts[i] ?? "error")));
 
     // Run 2: an enum added to Bad's file. It is refused whole; its sites are reserved.
@@ -225,7 +226,7 @@ describe("R307 T6 (a): an exact refusal reserves its sites, so the twins keep th
     const byKey = { ...index, carryRule: sameSourceRule() };
     expect(run2.map((m) => `${label(m)} ${carriedVerdictFor(byKey, m)?.verdict}`)).toEqual([
       `${CODEUNIT_FILE} @7 killed`,
-      `${CODEUNIT_FILE} @8 no-coverage`,
+      `${CODEUNIT_FILE} @8 known-survivor`,
     ]);
     // R391: the source DID change, and the two are twins in their file on both sides, so the real
     // rule carries neither: they run.

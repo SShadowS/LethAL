@@ -139,6 +139,7 @@ function mutantRow(verdict: MutantVerdict) {
 /** A finished run whose one survivor every other check would lend. */
 function finishedRun(store: ResultsStore, backend: string, runnerBuild?: string): number {
   const id = store.createRun({
+    testScope: [],
     projectPath: "P",
     backend,
     appVersion: "1.0.0.0",
@@ -161,7 +162,7 @@ function finishedRun(store: ResultsStore, backend: string, runnerBuild?: string)
 describe("T14 at the store sites", () => {
   const ask = (store: ResultsStore, backend: string, runnerBuild: string | undefined) => {
     const refused: string[] = [];
-    const prior = store.priorSurvivorKeys("P", "al-runner", { hash: "T", deps: "D" }, [], [], {
+    const prior = store.priorSurvivorKeys("P", "al-runner", { hash: "T", deps: "D" }, [], [], [], {
       session: { backend, runnerBuild },
       backendBuildRefused: (i) => refused.push(i.why),
     });
@@ -197,6 +198,7 @@ describe("T14 at the store sites", () => {
   test("resume: a v3 session finds only an unfinished run of its own build", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      testScope: [],
       projectPath: "P",
       backend: "al-runner-v3",
       appVersion: "1.0.0.0",

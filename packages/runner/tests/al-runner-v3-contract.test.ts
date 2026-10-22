@@ -4,10 +4,18 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { V3_DEFECT_FACTS, V3_WARN_FACTS, classifyLegC } from "../itest/al-runner-v3-gate";
+import {
+  V3_DEFECT_FACTS,
+  V3_LEG_C_FACTS,
+  V3_WARN_FACTS,
+  classifyLegC,
+  legCFactLine,
+} from "../itest/al-runner-v3-gate";
 import type { ServerSpawnFn } from "../src/al-runner-server";
 import type { V3Row } from "../src/al-runner-v3-backend";
 import {
+  BC_END_OF_TEST_TEXT,
+  BC_HTTP_INTERNAL_TEXT,
   type V3ContractResult,
   classifySleep,
   runV3ContractProbe,
@@ -50,6 +58,27 @@ const row = (
   ...(o.notRun === true ? { notRun: true } : {}),
 });
 const doc = (tests: unknown[]) => JSON.stringify({ tests });
+const NOT_TRUSTED_MESSAGE =
+  "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HangsDirty: did not run (the test used more than the time limit of 3 s of CPU time and was stopped (--test-timeout-secs)): it can change the global variable Probe Cut.Dirty that this test reads, so the state it would have left is not BC's; this failure is not trusted: dirty";
+const CUT_TIMEOUT = row(50652, "HangsDirty", "error", {
+  notRun: true,
+  message: "Test exceeded 3s timeout.",
+  durationMs: 3007,
+});
+const CUT_NOT_TRUSTED = row(50652, "ChecksClean", "error", {
+  notRun: true,
+  message: NOT_TRUSTED_MESSAGE,
+});
+const cutRows = [CUT_TIMEOUT, CUT_NOT_TRUSTED];
+const PUBLIC_REFUSED = row(50654, "HttpGetPublic", "error", {
+  notRun: true,
+  message: "NotRun: out-of-scope: an outbound HTTP request",
+});
+const PUBLIC_LATER_NOTRUN = row(50654, "LaterFails", "error", {
+  notRun: true,
+  message: "NotRun: out-of-scope: an earlier test was refused",
+});
+const PUBLIC_ROWS = [PUBLIC_REFUSED, PUBLIC_LATER_NOTRUN];
 
 /** A fake alpha.2 that answers every probe call as measured; `over` replaces one answer by key. */
 function fakeV3(over: Over = {}): SpawnFn {
@@ -189,6 +218,8 @@ function fakeV3(over: Over = {}): SpawnFn {
           }),
         ]),
       },
+      // r9 (R639): inferred for alpha.2 (M8): every unhandled HttpClient call refused, then the cascade.
+      cu50654: { exitCode: 7, stdout: doc(PUBLIC_ROWS) },
       cu50657: {
         exitCode: 7,
         stdout: doc([
@@ -198,6 +229,8 @@ function fakeV3(over: Over = {}): SpawnFn {
           }),
         ]),
       },
+      // r8 (R-637), as measured on alpha.2 (/coord/handoff/R-637/r8-measure/out/cut.stdout).
+      "cu50652-n3": { exitCode: 7, stdout: doc(cutRows) },
       cu50655: { exitCode: 0, stdout: doc([row(50655, "DuplicateNamedKey", "pass")]) },
       "cu50660-n3": { exitCode: 1, stdout: doc(sleepRows) },
       cu50660: { exitCode: 1, stdout: doc(sleepRows) },
@@ -349,7 +382,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const run = s.requests.filter((q) => q.command === "runTests");
     expect(run.length).toBe(1);
     expect(run[0]?.testIsolation).toBe("test");
-    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24)).toEqual({ outcome: "pass", lines: [] });
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS)).toEqual({
+      outcome: "pass",
+      lines: [],
+    });
   });
 
   for (const [entry, name] of [
@@ -370,7 +406,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       expect(f?.measured).toContain(`${entry}: MOVED`);
       expect(f?.measured).toContain("reworded");
       expect(v3ContractRefusals(r)).toEqual([]);
-      const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 24);
+      const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS);
       expect(c.outcome).toBe("pass");
       expect(c.lines.join("\n")).toMatch(
         new RegExp(
@@ -400,7 +436,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, fakeServe(SERVE_ROWS, { ready: false }).spawn);
     expect(r.facts.find((x) => x.fact === "serve-keep-reasons")?.verdict).toBe("unmeasurable");
     expect(v3ContractRefusals(r)).toEqual([]);
-    const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 24);
+    const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS);
     expect(c.outcome).toBe("pass");
     expect(c.lines.join("\n")).toMatch(
       /al-runner-v3-serve-keep-reason-moved: serve-keep-reasons: unmeasurable/,
@@ -414,7 +450,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       "Codeunit50671.CommitCall": { ...SERVE_ROWS["Codeunit50671.CommitCall"], message: "x" },
     } as typeof SERVE_ROWS;
     const r = await probe({}, fakeServe(rows).spawn);
-    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24, []).outcome).toBe("gate-fail");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, []).outcome).toBe("gate-fail");
   });
 
   const session = (s: ReturnType<typeof fakeServe>, gated?: Record<string, string>) =>
@@ -480,6 +516,7 @@ describe("§8 the contract probe", () => {
         "timeout-classified",
         "timeout-is-cpu",
         "refusal-row-shape",
+        "refusal-row-shape-public",
         "refusal-cascade",
         "commit-under-test-isolation",
         "duplicate-key-insert-raises",
@@ -490,6 +527,7 @@ describe("§8 the contract probe", () => {
         "upstream-compile-errors",
         "positional-target-wins",
         "serve-keep-reasons",
+        "dependent-fail-after-timeout-is-notrun",
       ].sort(),
     );
   });
@@ -556,7 +594,7 @@ describe("§8 the contract probe", () => {
     const r = await probe({
       cu50655: () => ({
         exitCode: 1,
-        stdout: doc([row(50655, "DuplicateNamedKey", "fail", { message: "already exists" })]),
+        stdout: doc([row(50655, "DuplicateNamedKey", "fail", { message: BC_END_OF_TEST_TEXT })]),
       }),
     });
     expect(r.facts.find((f) => f.fact === "duplicate-key-insert-raises")?.verdict).toBe("gone");
@@ -587,18 +625,18 @@ describe("§8 the contract probe", () => {
 
   test("R632 B (r7): none-selected-exit is a defect fact; #5613's fix (exit 6 with a 0-row document) is gone, so leg C is held", async () => {
     expect(V3_DEFECT_FACTS).toContain("none-selected-exit");
-    expect(V3_DEFECT_FACTS.length).toBe(8);
+    expect(V3_DEFECT_FACTS.length).toBe(9);
     // alpha.2 as measured: exit 6, no document.
     const before = await probe();
     const f0 = before.facts.find((f) => f.fact === "none-selected-exit");
     expect(f0).toMatchObject({ kind: "defect", verdict: "defect-present" });
-    expect(classifyLegC(before.facts, V3_DEFECT_FACTS, 24).outcome).toBe("pass");
+    expect(classifyLegC(before.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
     // alpha.4 (#5622): exit 6 with a document of 0 rows.
     const r = await probe({ cu0: () => ({ exitCode: 6, stdout: doc([]) }) });
     expect(r.facts.find((f) => f.fact === "none-selected-exit")?.verdict).toBe("gone");
     expect(v3ContractRefusals(r)).toEqual([]);
     expect(v3DefectsGone(r).join("\n")).toMatch(/defect-gone: none-selected-exit/);
-    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("held");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("held");
   });
 
   test("R632 B (r7): none-selected-exit diverges (refuses, gate-fail) on unparseable output, rows, or another exit", async () => {
@@ -611,8 +649,85 @@ describe("§8 the contract probe", () => {
       const r = await probe({ cu0: () => answer });
       expect(r.facts.find((f) => f.fact === "none-selected-exit")?.verdict).toBe("diverged");
       expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — none-selected-exit/);
-      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("gate-fail");
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
     }
+  });
+
+  const DEP = "dependent-fail-after-timeout-is-notrun";
+  test("R637 r8 (a): dependent-fail-after-timeout-is-notrun matches v3's measured not-trusted row", async () => {
+    const r = await probe();
+    expect(r.facts.find((f) => f.fact === DEP)).toMatchObject({
+      kind: "contract",
+      verdict: "matches",
+    });
+    expect(r.facts.length).toBe(26);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+  });
+
+  test("R637 r8 (b): a plain fail after the timeout (the guard dropped) diverges, refuses and is gate-fail", async () => {
+    // Exit 1 is the likely shape; exit 7 isolates the row check from the exit-code check.
+    for (const exitCode of [1, 7]) {
+      const r = await probe({
+        "cu50652-n3": () => ({
+          exitCode,
+          stdout: doc([CUT_TIMEOUT, row(50652, "ChecksClean", "fail", { message: "dirty" })]),
+        }),
+      });
+      expect(r.facts.find((f) => f.fact === DEP)?.verdict).toBe("diverged");
+      expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — dependent-fail-after-timeout/);
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+    }
+  });
+
+  test("R637 r8 (c): the not-trusted row missing diverges", async () => {
+    const r = await probe({
+      "cu50652-n3": () => ({ exitCode: 7, stdout: doc([CUT_TIMEOUT]) }),
+    });
+    expect(r.facts.find((f) => f.fact === DEP)?.verdict).toBe("diverged");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+  });
+
+  // Review I1: each condition of the fact has its own red-going test.
+  const depOf = async (exitCode: number, rows: unknown[]) =>
+    (await probe({ "cu50652-n3": () => ({ exitCode, stdout: doc(rows) }) })).facts.find(
+      (f) => f.fact === DEP,
+    )?.verdict;
+
+  test("R637 r8 (d): the measured rows at exit 1 or exit 0 diverge", async () => {
+    expect(await depOf(1, cutRows)).toBe("diverged");
+    expect(await depOf(0, cutRows)).toBe("diverged");
+  });
+
+  test("R637 r8 (e1): a HangsDirty row without notRun diverges", async () => {
+    const { notRun: _, ...plain } = CUT_TIMEOUT;
+    expect(await depOf(7, [plain, CUT_NOT_TRUSTED])).toBe("diverged");
+  });
+
+  test("R637 r8 (e2): a HangsDirty row with another timeout text diverges", async () => {
+    const two = { ...CUT_TIMEOUT, message: "Test exceeded 2s timeout." };
+    expect(await depOf(7, [two, CUT_NOT_TRUSTED])).toBe("diverged");
+  });
+
+  test("R637 r8 (f1): a ChecksClean row with the right suffix but another prefix diverges", async () => {
+    const m = NOT_TRUSTED_MESSAGE.replace("refused while it ran (HangsDirty: ", "x (");
+    expect(await depOf(7, [CUT_TIMEOUT, { ...CUT_NOT_TRUSTED, message: m }])).toBe("diverged");
+  });
+
+  test("R637 r8 (f2): a ChecksClean row with the right prefix but another suffix diverges", async () => {
+    const m = `${NOT_TRUSTED_MESSAGE.slice(0, -"dirty".length)}clean`;
+    expect(await depOf(7, [CUT_TIMEOUT, { ...CUT_NOT_TRUSTED, message: m }])).toBe("diverged");
+  });
+
+  test("R637 r8 (g, review M3): a duplicate ChecksClean row diverges", async () => {
+    const plainFail = row(50652, "ChecksClean", "fail", { message: "dirty" });
+    expect(await depOf(7, [CUT_TIMEOUT, CUT_NOT_TRUSTED, plainFail])).toBe("diverged");
+  });
+
+  test("R637 r8 (review M2): the measured text shows HangsDirty first, then ChecksClean", async () => {
+    const m = (await probe()).facts.find((f) => f.fact === DEP)?.measured ?? "";
+    expect(m.indexOf("HangsDirty=")).toBeGreaterThan(-1);
+    expect(m.indexOf("HangsDirty=")).toBeLessThan(m.indexOf("ChecksClean="));
+    expect(m).toContain('"Test exceeded 3s timeout."');
   });
 
   test("an unmeasurable defect fact does not refuse but is warned BY NAME (r6)", async () => {
@@ -641,6 +756,217 @@ describe("§8 the contract probe", () => {
     const r = await probe({ "cu50660-n3": fastNoClock, cu50660: fastNoClock });
     expect(r.facts.find((f) => f.fact === "sleep-is-noop")?.verdict).toBe("diverged");
     expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — sleep-is-noop/);
+  });
+});
+
+describe("R639 (pre-commitment r9): leg C's BC readings", () => {
+  const EDGE_TEXT =
+    "There was an error while executing the HTTP request, the connecting endpoint violates security requirements. Make sure you are connecting to a valid endpoint.";
+  const LATER_FAIL = row(50653, "LaterFails", "fail", { message: "later" });
+  const http = (o: Parameters<typeof row>[3], status = "fail") => row(50653, "HttpGet", status, o);
+  const at50653 = (exitCode: number, rows: unknown[]) =>
+    probe({ cu50653: () => ({ exitCode, stdout: doc(rows) }) });
+  const verdictOf = (r: V3ContractResult, name: string) =>
+    r.facts.find((f) => f.fact === name)?.verdict;
+  const RRS = "refusal-row-shape";
+
+  test("P1: refusal-row-shape reads gone on BC's exact text, fail, exit 1; leg C held; no refusal", async () => {
+    const r = await at50653(1, [http({ message: BC_HTTP_INTERNAL_TEXT }), LATER_FAIL]);
+    expect(r.facts.find((f) => f.fact === RRS)).toMatchObject({ kind: "defect", verdict: "gone" });
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("held");
+    expect(v3ContractRefusals(r)).toEqual([]);
+  });
+
+  test("P2 (text): BC's text changed by a trailing space, a cut, a suffix or its case is never gone: unlike-bc", async () => {
+    for (const m of [
+      `${BC_HTTP_INTERNAL_TEXT} `,
+      BC_HTTP_INTERNAL_TEXT.slice(0, -1),
+      `${BC_HTTP_INTERNAL_TEXT} more`,
+      BC_HTTP_INTERNAL_TEXT.toLowerCase(),
+    ]) {
+      const r = await at50653(1, [http({ message: m }), LATER_FAIL]);
+      expect(verdictOf(r, RRS)).toBe("unlike-bc");
+    }
+  });
+
+  test("P2 (fields): status error, notRun without the prefix, exit 7, a second HttpGet row, or the prefix with notRun false read diverged", async () => {
+    const cases: Array<[number, unknown[]]> = [
+      [1, [http({ message: BC_HTTP_INTERNAL_TEXT }, "error"), LATER_FAIL]],
+      [7, [http({ message: BC_HTTP_INTERNAL_TEXT, notRun: true }, "error"), LATER_FAIL]],
+      [7, [http({ message: BC_HTTP_INTERNAL_TEXT }), LATER_FAIL]],
+      [1, [http({ message: BC_HTTP_INTERNAL_TEXT }), http({ message: BC_HTTP_INTERNAL_TEXT })]],
+      [1, [http({ message: "NotRun: out-of-scope: an outbound HTTP request" }), LATER_FAIL]],
+    ];
+    for (const [exitCode, rows] of cases) {
+      const r = await at50653(exitCode, rows);
+      expect(verdictOf(r, RRS)).toBe("diverged");
+      expect(v3ContractRefusals(r, { candidate: true }).join("\n")).toMatch(
+        /DIVERGED — refusal-row-shape/,
+      );
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+    }
+  });
+
+  test("P3: alpha.2's measured row (exit 7, notRun, the prefix) is defect-present, a pass; at exit 1 it diverges", async () => {
+    const r = await probe();
+    expect(verdictOf(r, RRS)).toBe("defect-present");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+    const refused = http({ notRun: true, message: "NotRun: out-of-scope: x" }, "error");
+    expect(verdictOf(await at50653(1, [refused, LATER_FAIL]), RRS)).toBe("defect-present");
+    expect(
+      verdictOf(
+        await at50653(1, [refused, row(50653, "LaterFails", "error", { notRun: true })]),
+        RRS,
+      ),
+    ).toBe("diverged");
+  });
+
+  const at50654 = (exitCode: number, rows: unknown[] | "none") =>
+    probe({
+      cu50654: () => ({ exitCode, stdout: rows === "none" ? "" : doc(rows) }),
+    });
+  const PUB_FAIL = row(50654, "HttpGetPublic", "fail", { message: EDGE_TEXT });
+  const PUB_LATER_FAIL = row(50654, "LaterFails", "fail", { message: "later" });
+  const PUB = "refusal-row-shape-public";
+
+  test("P5: refusal-row-shape-public matches a refusal row with the implied exit (7 cascaded, 1 with a plain later fail)", async () => {
+    expect((await probe()).facts.find((f) => f.fact === PUB)).toMatchObject({
+      kind: "contract",
+      verdict: "matches",
+    });
+    expect(verdictOf(await at50654(1, [PUBLIC_REFUSED, PUB_LATER_FAIL]), PUB)).toBe("matches");
+  });
+
+  test("P5: a plain fail (M9 drift), exit 1 with only notRun rows, and no document diverge", async () => {
+    expect(verdictOf(await at50654(1, [PUB_FAIL, PUB_LATER_FAIL]), PUB)).toBe("diverged");
+    expect(verdictOf(await at50654(1, PUBLIC_ROWS), PUB)).toBe("diverged");
+    const r = await at50654(1, "none");
+    expect(verdictOf(r, PUB)).toBe("diverged");
+    expect(v3ContractRefusals(r, { candidate: true }).join("\n")).toMatch(
+      /DIVERGED — refusal-row-shape-public/,
+    );
+  });
+
+  test("P6: refusal-cascade is gone only beside a refused HttpGetPublic; a vacuous plain-fail sibling is unmeasurable", async () => {
+    expect(verdictOf(await probe(), "refusal-cascade")).toBe("defect-present");
+    expect(verdictOf(await at50654(1, [PUBLIC_REFUSED, PUB_LATER_FAIL]), "refusal-cascade")).toBe(
+      "gone",
+    );
+    expect(verdictOf(await at50654(1, [PUB_FAIL, PUB_LATER_FAIL]), "refusal-cascade")).toBe(
+      "unmeasurable",
+    );
+    const other = row(50654, "LaterFails", "fail", { message: "later!" });
+    expect(verdictOf(await at50654(1, [PUBLIC_REFUSED, other]), "refusal-cascade")).toBe(
+      "diverged",
+    );
+  });
+
+  const at50657 = (exitCode: number, rows: unknown[]) =>
+    probe({ cu50657: () => ({ exitCode, stdout: doc(rows) }) });
+  const CUC = "commit-under-test-isolation";
+
+  test("P7: commit-under-test-isolation: the refusal prefix with notRun false diverges; a plain pass is gone", async () => {
+    expect(verdictOf(await probe(), CUC)).toBe("defect-present");
+    const dressed = row(50657, "CommitCall", "fail", { message: "NotRun: out-of-scope: Commit" });
+    const r = await at50657(1, [dressed]);
+    expect(verdictOf(r, CUC)).toBe("diverged");
+    expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — commit-under-test-isolation/);
+    expect(verdictOf(await at50657(0, [row(50657, "CommitCall", "pass")]), CUC)).toBe("gone");
+    expect(verdictOf(await at50657(0, []), CUC)).toBe("unmeasurable");
+  });
+
+  const at50655 = (exitCode: number, rows: unknown[]) =>
+    probe({ cu50655: () => ({ exitCode, stdout: doc(rows) }) });
+  const DUP = "duplicate-key-insert-raises";
+  const DUP_REFUSED = row(50655, "DuplicateNamedKey", "error", {
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Probe Row is deferred",
+  });
+
+  test("P8: the duplicate key, one row per reading (branch F)", async () => {
+    expect(verdictOf(await probe(), DUP)).toBe("defect-present");
+    const fail = (message: string) => row(50655, "DuplicateNamedKey", "fail", { message });
+    expect(verdictOf(await at50655(1, [fail(BC_END_OF_TEST_TEXT)]), DUP)).toBe("gone");
+    expect(verdictOf(await at50655(7, [DUP_REFUSED]), DUP)).toBe("refused");
+    expect(verdictOf(await at50655(1, [fail("already exists")]), DUP)).toBe("diverged");
+    const plainError = row(50655, "DuplicateNamedKey", "error", {
+      message: "duplicate-key Insert",
+    });
+    expect(verdictOf(await at50655(1, [plainError]), DUP)).toBe("diverged");
+    const otherRefusal = { ...DUP_REFUSED, message: "NotRun: out-of-scope: something else" };
+    expect(verdictOf(await at50655(7, [otherRefusal]), DUP)).toBe("diverged");
+    expect(verdictOf(await at50655(0, []), DUP)).toBe("unmeasurable");
+  });
+
+  test("P9: refused is held in leg C, never gone, only warned in a session", async () => {
+    const r = await at50655(7, [DUP_REFUSED]);
+    const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS);
+    expect(c.outcome).toBe("held");
+    expect(c.lines.join("\n")).toMatch(
+      /held: duplicate-key-insert-raises: defect-present -> refused \(v3 declines; not BC's reading; re-pre-commit\)/,
+    );
+    expect(v3DefectsGone(r)).toEqual([]);
+    expect(v3DefectWarnings(r).join("\n")).toMatch(
+      /al-runner-v3-defect-refused: duplicate-key-insert-raises/,
+    );
+    expect(v3ContractRefusals(r)).toEqual([]);
+  });
+
+  test("P9 (M-g): refused on a CONTRACT fact or a WARN fact is gate-fail", () => {
+    const facts = [{ fact: "version", verdict: "refused" }];
+    expect(classifyLegC(facts, [], 1, []).outcome).toBe("gate-fail");
+    expect(classifyLegC([{ fact: "w", verdict: "refused" }], [], 1, ["w"]).outcome).toBe(
+      "gate-fail",
+    );
+  });
+
+  test("P10: 26 facts, 9 defect, 16 contract, 1 warn; the old count of 25 is gate-fail", async () => {
+    const r = await probe();
+    const kinds = (k: string) => r.facts.filter((f) => f.kind === k).length;
+    expect([r.facts.length, kinds("defect"), kinds("contract"), kinds("warn")]).toEqual([
+      26, 9, 16, 1,
+    ]);
+    expect(V3_LEG_C_FACTS).toBe(26);
+    expect(
+      r.facts
+        .filter((f) => f.kind === "defect")
+        .map((f) => f.fact)
+        .sort(),
+    ).toEqual([...V3_DEFECT_FACTS].sort());
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 25).outcome).toBe("gate-fail");
+  });
+
+  test("P11 (F4): measured is kept whole in the fact and in leg C's printed line", async () => {
+    const long = `${"x".repeat(700)}END`;
+    const r = await at50655(1, [row(50655, "DuplicateNamedKey", "fail", { message: long })]);
+    const f = r.facts.find((x) => x.fact === DUP);
+    expect(f?.measured).toContain(long);
+    expect(legCFactLine({ fact: "x", verdict: "v", measured: "m".repeat(250) })).toBe(
+      `  C: x = v | ${"m".repeat(250)}`,
+    );
+  });
+
+  const EDGE_ROWS = [http({ message: EDGE_TEXT }), LATER_FAIL];
+
+  test("P12: edge's row is unlike-bc: gate-fail in leg C (#5700); a CANDIDATE session warns and runs", async () => {
+    const r = await at50653(1, EDGE_ROWS);
+    expect(verdictOf(r, RRS)).toBe("unlike-bc");
+    const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS);
+    expect(c.outcome).toBe("gate-fail");
+    expect(c.lines.join("\n")).toMatch(
+      /gate-fail: refusal-row-shape: unlike-bc \(v3 fails as BC does, with another text; #5700\)/,
+    );
+    expect(v3ContractRefusals(r, { candidate: true })).toEqual([]);
+    expect(v3DefectWarnings(r, { candidate: true }).join("\n")).toMatch(
+      /al-runner-v3-defect-unlike-bc: refusal-row-shape/,
+    );
+  });
+
+  test("P13: the same row refuses a NORMAL session, naming the fact, with no warning in its place", async () => {
+    const r = await at50653(1, EDGE_ROWS);
+    expect(v3ContractRefusals(r).join("\n")).toMatch(/UNLIKE-BC — refusal-row-shape/);
+    expect(v3DefectWarnings(r).join("\n")).not.toMatch(/unlike-bc/);
   });
 });
 

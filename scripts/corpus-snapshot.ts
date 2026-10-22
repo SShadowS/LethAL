@@ -23,8 +23,10 @@
  * origin/master); the branch side is dumped from the worktree as it is, into a temp dir that is
  * deleted afterwards. Projects are joined by path RELATIVE to the set's corpus root.
  *
- * Heavy-job guard (owner rule: two heavy jobs container-wide), for every set but `fixtures`, before a
- * dump: the tool re-execs itself under `flock -n -E 75 <locks>/heavy.<n>` (slot 1, then 2;
+ * Heavy-job guard (owner rule R642: three heavy jobs container-wide, of which at most two BaseApp
+ * (BC.History, set `bch`) corpus jobs; a BaseApp job counts against both caps), for every set but
+ * `fixtures`, before a dump: the tool re-execs itself under `flock -n -E 75 <locks>/heavy.<n>`
+ * (slot 1, then 2, then 3;
  * `LETHAL_HEAVY_LOCK_DIR`, default /coord/locks). The kernel holds the lock for as long as any
  * process holds the fd, project children included, so SIGKILL needs no cleanup. Inside the slot, a
  * `ps` scan counts OTHER heavy jobs that take no slot (one per itest:alrunner root, else one per
@@ -32,7 +34,9 @@
  * local runners (al-runner, itest:alrunner; `isHeavy`). Known limit:
  * two jobs started from ONE non-interactive shell (`a & b`) share a pgid and count as one, and a job
  * on a corpus COPY is invisible to the scan; both should take a slot themselves:
- * `flock -n /coord/locks/heavy.<n> <cmd>`.
+ * `flock -n /coord/locks/heavy.<n> <cmd>`. A slot taken by hand (`flock heavy.N <cmd>`) counts
+ * toward the BaseApp cap only while one of its processes names /work/src/BC.History; a job over a
+ * COPY of the corpus counts toward the total cap only.
  *
  * Exit codes: 0 ok / identical, 1 different or a dump failure, 2 refused.
  * The report prints paths, operators and counts only, never tuple text (it can carry source).
@@ -92,7 +96,7 @@ function scriptOf(argv: readonly string[]): string | undefined {
 }
 
 /**
- * A heavy job by the runbook's rule (two container-wide): a corpus job (its argv names a corpus
+ * A heavy job by the runbook's rule (three container-wide, R642): a corpus job (its argv names a corpus
  * root), or a LOCAL runner: an `al-runner` executable (v2, or the v3 Rust binary), al-runner's
  * `.dll` under dotnet, or the itest:alrunner root process. Matched on the EXECUTABLE or SCRIPT,
  * never on an argument that merely contains the name (a unit test file `al-runner-v3-x.test.ts`
@@ -576,28 +580,57 @@ function ancestors(procs: readonly Proc[], pid: number): Set<number> {
   return out;
 }
 
+/** The heavy slots, tried in this order (owner rule R642: three heavy jobs container-wide). */
+export const SLOTS = [1, 2, 3] as const;
+/** Heavy jobs container-wide, and of those, BaseApp (BC.History) corpus jobs (R642). */
+const TOTAL_CAP = 3;
+const BASEAPP_CAP = 2;
+/** A process whose argv names the BaseApp (BC.History) corpus root. */
+const BASEAPP_ROOT_RE = /\/work\/src\/BC\.History(\/|\s|$)/;
+/**
+ * Is this slot holder dumping the BaseApp set? Read by the tool's own CLI parser, because flags may
+ * come before the set (`diff --branch /x bch`) and the in-slot re-exec keeps that order (review B1).
+ * An argv the parser refuses counts as BaseApp, which errs on the safe side.
+ */
+function holderIsBaseApp(args: string): boolean {
+  const argv = args.trim().split(/\s+/);
+  const at = argv.findIndex((a) => /(^|\/)corpus-snapshot\.ts$/.test(a));
+  try {
+    return parseCliArgs(argv.slice(at + 1)).positionals[1] === "bch";
+  } catch {
+    return true;
+  }
+}
+
 /**
  * The scan for corpus jobs that take no slot: processes whose argv names a corpus root, minus this
  * process's ancestors and descendants and the descendants of every pid recorded in a held slot,
  * counted by itest:alrunner root (one job, however many al-runner children its workers spawn), else
- * by DISTINCT pgid. Refuse when those plus the slots held by others reach 2.
+ * by DISTINCT pgid. Refuse when those plus the slots held by others reach 3 (the total cap), or,
+ * for a BaseApp job (`selfBaseApp`), when the other BaseApp jobs reach 2 (the BaseApp cap): held
+ * slots whose live holder dumps `bch`, plus unslotted jobs with a process naming BC.History.
  */
-const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [12]\b/;
+const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [123]\b/;
 
 export function heavyVerdict(
   procs: readonly Proc[],
   self: number,
   slotPids: readonly number[],
   otherSlotsHeld: number,
+  selfBaseApp = false,
 ): { refuse: boolean; foreign: Proc[]; message: string } {
   const skip = new Set<number>([...ancestors(procs, self), ...descendants(procs, self)]);
   // A slot file's pid is trusted only when it names a live corpus-snapshot slot holder. A manual
   // `flock heavy.<n> <cmd>` writes nothing (empty reads as 0, and pid 0's descendants are the whole
   // container), and a stale pid names someone else. Untrusted -> exclude nothing; a manual holder is
   // then counted as a held slot AND as a foreign job, which errs on the safe side (review r1 #1).
+  // An untrusted slot counts toward the total only; its process, if it names BC.History, is
+  // counted as a BaseApp job by the scan below.
+  let baseAppSlots = 0;
   for (const s of slotPids) {
     const p = procs.find((x) => x.pid === s);
     if (!(s > 1) || p === undefined || !SLOT_HOLDER_RE.test(p.args)) continue;
+    if (holderIsBaseApp(p.args)) baseAppSlots++;
     for (const d of descendants(procs, s)) skip.add(d);
   }
   // A job is keyed by its itest:alrunner root when it has one (its workers' al-runner children sit
@@ -612,16 +645,26 @@ export function heavyVerdict(
     return root;
   };
   const jobs = new Map<string, Proc>();
+  const baseAppJobs = new Set<string>(); // a job is BaseApp when ANY of its processes names BC.History
   for (const p of procs) {
     if (skip.has(p.pid) || !isHeavy(p.args)) continue;
     const root = itestRoot(p);
     const key = root !== undefined ? `root:${root.pid}` : `pgid:${p.pgid}`;
     if (!jobs.has(key)) jobs.set(key, root ?? p);
+    if (BASEAPP_ROOT_RE.test(p.args)) baseAppJobs.add(key);
   }
   const foreign = [...jobs.values()];
-  const refuse = foreign.length + otherSlotsHeld >= 2;
+  const otherBaseApp = baseAppSlots + baseAppJobs.size;
+  const totalRefuse = foreign.length + otherSlotsHeld >= TOTAL_CAP;
+  const baseAppRefuse = selfBaseApp && otherBaseApp >= BASEAPP_CAP;
+  const refuse = totalRefuse || baseAppRefuse;
+  const why = totalRefuse
+    ? " -> REFUSED (at most three heavy jobs container-wide)"
+    : baseAppRefuse
+      ? " -> REFUSED (at most two BaseApp corpus jobs)"
+      : "";
   const message = [
-    `heavy-job guard: ${otherSlotsHeld} other slot(s) held, ${foreign.length} other heavy job(s) (corpus or local runner) by itest root, else by process group${refuse ? " -> REFUSED (at most two heavy jobs container-wide)" : ""}`,
+    `heavy-job guard: ${otherSlotsHeld} other slot(s) held, ${foreign.length} other heavy job(s) (corpus or local runner) by itest root, else by process group; ${otherBaseApp} other BaseApp corpus job(s)${why}`,
     ...foreign.map((p) => `  pgid ${p.pgid} pid ${p.pid}: ${p.args.slice(0, 100)}`),
   ].join("\n");
   return { refuse, foreign, message };
@@ -630,8 +673,8 @@ export function heavyVerdict(
 export const SLOT_BUSY = 75;
 
 /**
- * N3: run `cmd(n)` under `flock -n -E 75 <lockDir>/heavy.<n>`, slot 1 then slot 2. Returns the slot
- * and the command's exit code, or null when both slots are held (both returned 75).
+ * N3: run `cmd(n)` under `flock -n -E 75 <lockDir>/heavy.<n>`, slot 1, then 2, then 3. Returns the
+ * slot and the command's exit code, or null when every slot is held (each returned 75).
  */
 export function trySlots(
   lockDir: string,
@@ -639,7 +682,7 @@ export function trySlots(
   inherit = false,
 ): { slot: number; code: number } | null {
   mkdirSync(lockDir, { recursive: true });
-  for (const slot of [1, 2]) {
+  for (const slot of SLOTS) {
     const r = Bun.spawnSync(
       ["flock", "-n", "-E", String(SLOT_BUSY), join(lockDir, `heavy.${slot}`), ...cmd(slot)],
       inherit
@@ -665,23 +708,17 @@ function lockDir(): string {
 }
 
 /** Inside slot `mine`: record our pid, then the ps scan. Throws RefusedError. */
-function guardInSlot(mine: number, print: (l: string) => void): void {
+function guardInSlot(mine: number, baseApp: boolean, print: (l: string) => void): void {
   const dir = lockDir();
   writeFileSync(join(dir, `heavy.${mine}`), `${process.pid}\n`);
-  const other = mine === 1 ? 2 : 1;
-  const held = slotHeld(dir, other);
-  const otherPid = held
-    ? Number(readFileSync(join(dir, `heavy.${other}`), "utf8").trim())
-    : Number.NaN;
+  const held = SLOTS.filter((s) => s !== mine && slotHeld(dir, s));
+  const pids = held
+    .map((s) => Number(readFileSync(join(dir, `heavy.${s}`), "utf8").trim()))
+    .filter((p) => !Number.isNaN(p));
   const ps = Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], {
     stdout: "pipe",
   }).stdout.toString();
-  const v = heavyVerdict(
-    parsePs(ps),
-    process.pid,
-    Number.isNaN(otherPid) ? [] : [otherPid],
-    held ? 1 : 0,
-  );
+  const v = heavyVerdict(parsePs(ps), process.pid, pids, held.length, baseApp);
   print(v.message);
   if (v.refuse) throw new RefusedError(v.message);
 }
@@ -802,7 +839,7 @@ function slotted(
 ): number | undefined {
   if (set === "fixtures") return undefined;
   if (inSlot !== undefined) {
-    guardInSlot(inSlot, print);
+    guardInSlot(inSlot, set === "bch", print);
     return undefined;
   }
   const r = trySlots(
@@ -817,7 +854,9 @@ function slotted(
     true,
   );
   if (r === null)
-    throw new RefusedError(`heavy-job guard: two heavy slots held (${lockDir()}/heavy.1, heavy.2)`);
+    throw new RefusedError(
+      `heavy-job guard: all three heavy slots held (${lockDir()}/heavy.1, heavy.2, heavy.3)`,
+    );
   return r.code;
 }
 

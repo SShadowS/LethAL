@@ -7,11 +7,13 @@
  * from the known differences alone: the rows where v3's own baseline differs from BC's
  * `tables.baseline.json` (pre-committed as the 52 of `precommitment-tables-52.txt`: 41 Commit #5607,
  * 7 duplicate key #5603, 4 TestPage). A leg-T difference is `held` only when its row is one of those
- * AND it now equals the BC row (verdict and killing test). Anything else is `gate-fail`.
+ * AND it now equals the BC row (verdict and killing test). r9 §7 (R639) adds one narrow case: a
+ * known row whose verdict disagreed with BC's, now `error` through a named refusal
+ * (`runner-refused`, no killing test). Anything else is `gate-fail`.
  */
 import { writeFile } from "node:fs/promises";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
-import type { NormalizedMutant } from "./mutant-equality";
+import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
 export type V3LegOutcome = "pass" | "held" | "gate-fail" | "infra-fail" | "skipped";
 export type V3GateOutcome = "pass" | "held" | "gate-fail" | "infra-fail";
@@ -167,6 +169,16 @@ export function knownDifferenceKeys(
   return keys;
 }
 
+/** r10 (b): one row of leg T that differs from v3's own baseline. `own`/`now` absent: no row. */
+export interface LegTRow {
+  readonly key: string;
+  readonly kind: "held-bc" | "held-refusal" | "gate-fail";
+  /** One of the pinned 52 (a known BC-vs-own difference): picks the gate-fail reason text. */
+  readonly known: boolean;
+  readonly own: NormalizedMutant | undefined;
+  readonly now: NormalizedMutant | undefined;
+}
+
 /**
  * Leg T against its own baseline: `pass` (no difference), `held` (every difference is a known row
  * moving to its BC row), else `gate-fail`. A twin group, a missing or an extra row is `gate-fail`.
@@ -175,12 +187,12 @@ export function classifyLegT(
   own: readonly NormalizedMutant[],
   now: readonly NormalizedMutant[],
   bc: readonly NormalizedMutant[],
-): { readonly outcome: "pass" | "held" | "gate-fail"; readonly lines: readonly string[] } {
+): { readonly outcome: "pass" | "held" | "gate-fail"; readonly rows: readonly LegTRow[] } {
   const known = knownDifferenceKeys(bc, own);
   const o = byKey(own);
   const n = byKey(now);
   const b = byKey(bc);
-  const lines: string[] = [];
+  const rows: LegTRow[] = [];
   let anyFail = false;
   let anyHeld = false;
   for (const k of new Set([...o.keys(), ...n.keys()])) {
@@ -193,19 +205,150 @@ export function classifyLegT(
       ns.length === 1 &&
       (b.get(k)?.length ?? 0) === 1 &&
       sameRow(ns[0], b.get(k)?.[0]);
-    if (toward) {
-      anyHeld = true;
-      lines.push(
-        `held: ${k}: ${os[0]?.verdict} -> ${ns[0]?.verdict} (the BC verdict, a known difference)`,
-      );
-    } else {
-      anyFail = true;
-      lines.push(
-        `gate-fail: ${k}: ${os.map((r) => `${r.verdict}/${r.killingTest}`).join(",") || "absent"} -> ${ns.map((r) => `${r.verdict}/${r.killingTest}`).join(",") || "absent"}${known.has(k) ? " (a known row, but not to its BC verdict)" : ""}`,
-      );
-    }
+    // r9 §7 (R639): a known row whose VERDICT disagreed with BC's, now a named refusal (v3 notRun,
+    // or LethAL §6, which cannot fire on leg T: its Sleep index is pre-committed at 0 + 0).
+    const bk = b.get(k);
+    const refusal =
+      known.has(k) &&
+      os.length === 1 &&
+      ns.length === 1 &&
+      bk?.length === 1 &&
+      os[0]?.verdict !== bk[0]?.verdict &&
+      ns[0]?.verdict === "error" &&
+      ns[0].errorClass === "runner-refused" &&
+      ns[0].killingTest === null;
+    const kind = toward ? "held-bc" : refusal ? "held-refusal" : "gate-fail";
+    if (kind === "gate-fail") anyFail = true;
+    else anyHeld = true;
+    // M3: keys carry the R193 ordinal, so a side holds at most one row per key; a repeated key
+    // (not expected) still reads gate-fail above and shows its first row.
+    rows.push({ key: k, kind, known: known.has(k), own: os[0], now: ns[0] });
   }
-  return { outcome: anyFail ? "gate-fail" : anyHeld ? "held" : "pass", lines };
+  return { outcome: anyFail ? "gate-fail" : anyHeld ? "held" : "pass", rows };
+}
+
+const LEG_T_REASON = {
+  "held-bc": "the BC verdict, a known difference",
+  "held-refusal": "a named refusal: v3 notRun or LethAL §6; not BC's verdict; re-pre-commit",
+  "gate-fail": "a known row, but not to its BC verdict",
+} as const;
+
+const rowSide = (m: NormalizedMutant | undefined): string =>
+  m === undefined ? "absent" : `${m.verdict}/${m.errorClass ?? "-"}/${m.killingTest ?? "-"}`;
+
+/** r10 (b): `T: <held|gate-fail>: <mutantCode> <key>: <old> -> <new> (<reason>)`. */
+export function formatLegTRow(row: LegTRow, mutantCode: string | undefined): string {
+  const reason = row.kind !== "gate-fail" || row.known ? ` (${LEG_T_REASON[row.kind]})` : "";
+  return `T: ${row.kind === "gate-fail" ? "gate-fail" : "held"}: ${mutantCode ?? "-"} ${row.key}: ${rowSide(row.own)} -> ${rowSide(row.now)}${reason}`;
+}
+
+/** The key `compareMutants` names in a difference (`mutant <key>: …` or `mutant <key> [occurrence …`). */
+function differenceKey(d: string, keys: ReadonlySet<string>): string | undefined {
+  for (const k of keys)
+    if (d.startsWith(`mutant ${k}: `) || d.startsWith(`mutant ${k} [occurrence `)) return k;
+  return undefined;
+}
+
+/**
+ * r10 (a): leg T's judgement, pure. Step 0 (always): every classification row and every compare
+ * difference that is not a row become `lines`, one receipt line each. Then, first failure wins:
+ * 1. Sleep index 0 + 0; 2. `unsupportedTests` 3; 3. the pinned 52 (`knownRefusal`); 4. the
+ * classification: `gate-fail`; `held` only when the compare's differing keys EQUAL the held keys
+ * (no count check, I2); `pass` only with 0 compare differences, then 290 / 57 / 59 over 406. The
+ * caller's `assertGateBaseline` compare follows a `pass`.
+ */
+export function judgeLegT(i: {
+  readonly classification: ReturnType<typeof classifyLegT>;
+  readonly compare: MutantComparison;
+  readonly counts: {
+    readonly killed: number;
+    readonly survived: number;
+    readonly noCoverage: number;
+  };
+  readonly total: number;
+  readonly unsupportedTests: number;
+  readonly sleepIndex: { readonly target: number; readonly test: number } | undefined;
+  readonly knownRefusal: string | undefined;
+  /** Key -> the session report's mutant code. */
+  readonly codes: ReadonlyMap<string, string>;
+}): {
+  readonly outcome: "pass" | "held" | "gate-fail";
+  readonly lines: readonly string[];
+  readonly failure?: string;
+} {
+  const { rows } = i.classification;
+  const lines = rows.map((r) => formatLegTRow(r, i.codes.get(r.key)));
+  const rowKeys = new Set(rows.map((r) => r.key));
+  const allKeys = new Set([...rowKeys, ...i.codes.keys()]);
+  const diffKeys = new Set<string>();
+  for (const d of i.compare.differences) {
+    const k = differenceKey(d, allKeys);
+    diffKeys.add(k ?? d);
+    if (k === undefined || !rowKeys.has(k))
+      lines.push(
+        `T: gate-fail: ${(k !== undefined ? i.codes.get(k) : undefined) ?? "-"} ${k ?? "-"}: ${d}`,
+      );
+  }
+  const fail = (failure: string) => ({ outcome: "gate-fail" as const, lines, failure });
+  const s = i.sleepIndex;
+  if (s?.target !== 0 || s.test !== 0)
+    return fail(`T: Sleep index ${JSON.stringify(s)}, pre-committed 0 + 0`);
+  if (i.unsupportedTests !== 3)
+    return fail(`T: ${i.unsupportedTests} refused tests, pre-committed 3`);
+  if (i.knownRefusal !== undefined) return fail(`T: v3's own baseline: ${i.knownRefusal}`);
+  const c = i.classification.outcome;
+  if (c === "gate-fail")
+    return fail(
+      `T: ${rows.filter((r) => r.kind === "gate-fail").length} gate-fail row(s): ${lines.join("; ")}`,
+    );
+  if (c === "held") {
+    const extra = [...diffKeys].filter((k) => !rowKeys.has(k));
+    const missing = [...rowKeys].filter((k) => !diffKeys.has(k));
+    if (extra.length > 0 || missing.length > 0)
+      return fail(
+        `T: held rows and compare differences are not the same keys (compare only: ${extra.join(", ") || "none"}; held only: ${missing.join(", ") || "none"})`,
+      );
+    return { outcome: "held", lines };
+  }
+  if (i.compare.differences.length > 0)
+    return fail(
+      `T: ${i.compare.differences.length} compare difference(s) on a pass: ${lines.join("; ")}`,
+    );
+  const { killed, survived, noCoverage } = i.counts;
+  if (killed !== 290 || survived !== 57 || noCoverage !== 59 || i.total !== 406)
+    return fail(
+      `T: ${killed} / ${survived} / ${noCoverage} over ${i.total}, pre-committed 290 / 57 / 59 over 406`,
+    );
+  return { outcome: "pass", lines };
+}
+
+/** r10 (c): SleeperDoubles's `baseline-batch-finished` verdict, or `undefined` when absent. */
+export interface XdBaselineVerdict {
+  readonly outcome: string;
+  readonly failureMessage?: string;
+}
+
+export const xdBaselineLine = (v: XdBaselineVerdict | undefined): string =>
+  `X (d): SleeperDoubles baseline-batch-finished: ${v === undefined ? "absent" : `${v.outcome}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""}`}`;
+
+/** r10 (c): a failed X (d) check's message, with the not-green reason keyed on SleeperDoubles alone. */
+export function xdFailure(what: string, v: XdBaselineVerdict | undefined): string {
+  if (v === undefined || v.outcome === "pass") return what;
+  return `${what}; X (d): SleeperDoubles is not green at baseline (${v.outcome}: ${v.failureMessage ?? "-"}): the Sleep rule was not exercised; gate-fail`;
+}
+
+/**
+ * r10 M5: X (b)'s held lines go to the receipt (`push`) BEFORE the rest of leg X runs, so a later
+ * gate-fail cannot hide them. A held X (b) then makes the leg held; its lines are already pushed.
+ */
+export async function xbHeldFirst(
+  xHeld: readonly string[],
+  push: (line: string) => void,
+  rest: () => Promise<void>,
+): Promise<void> {
+  for (const l of xHeld) push(`X: ${l}`);
+  await rest();
+  if (xHeld.length > 0) throw new V3LegHeld([]);
 }
 
 /**
@@ -240,8 +383,9 @@ export function knownDifferencesRefusal(
 }
 
 /**
- * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632).
- * Every other fact of the 24 is a contract fact and must read `matches`, except the warn facts.
+ * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632;
+ * `refusal-row-shape` since r9, R639). Every other fact of the 26 is a contract fact and must read
+ * `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
   "upstream-compile-errors",
@@ -252,7 +396,19 @@ export const V3_DEFECT_FACTS = [
   "quoted-name-unselectable",
   "commit-under-test-isolation",
   "none-selected-exit",
+  // r9 (R639): #5608, as r7 did for #5613.
+  "refusal-row-shape",
 ] as const;
+
+/** r9 (R639): leg C's pre-committed fact count: 9 defect, 16 contract, 1 warn. */
+export const V3_LEG_C_FACTS = 26;
+
+/** F4 (R639): leg C's per-fact log line, with `measured` whole. */
+export const legCFactLine = (f: {
+  readonly fact: string;
+  readonly verdict: string;
+  readonly measured: string;
+}): string => `  C: ${f.fact} = ${f.verdict} | ${f.measured}`;
 
 /**
  * R612 (plan r3 §2): leg C's warn facts, a third kind. Anything but `matches` prints
@@ -264,7 +420,9 @@ export const V3_WARN_FACTS: readonly string[] = ["serve-keep-reasons"];
  * RC-2 (I-2): leg C's verdict. A contract fact must read `matches` and a defect fact (`defects`)
  * `defect-present`. A defect fact reading `gone` (upstream fixed it) is `held`, for the orchestrator
  * to re-pre-commit, never a blacklisting. Any `diverged`, or another fact count, is `gate-fail`. An
- * `unmeasurable` fact is `infra-fail`. Precedence: gate-fail, infra-fail, held, pass.
+ * `unmeasurable` fact is `infra-fail`. r9 (R639): `refused` is `held` on a defect fact and
+ * `gate-fail` on any other; `unlike-bc` is always `gate-fail`. Precedence: gate-fail, infra-fail,
+ * held, pass.
  */
 export function classifyLegC(
   facts: ReadonlyArray<{
@@ -286,7 +444,24 @@ export function classifyLegC(
     if (f.verdict === want) continue;
     // R633 I1: what v3 returned, so the receipt itself carries the evidence.
     const m = f.measured !== undefined ? ` (measured ${f.measured.slice(0, 300)})` : "";
-    if (warns.includes(f.fact)) {
+    if (f.verdict === "unlike-bc") {
+      // r9 §2: never admitted, whatever the fact's kind.
+      fail = true;
+      lines.push(
+        `gate-fail: ${f.fact}: unlike-bc (v3 fails as BC does, with another text; #5700)${m}`,
+      );
+    } else if (f.verdict === "refused") {
+      // r9 §6: held for a defect fact; on a contract or a warn fact, gate-fail (M-g).
+      if (want === "defect-present") {
+        held = true;
+        lines.push(
+          `held: ${f.fact}: defect-present -> refused (v3 declines; not BC's reading; re-pre-commit)${m}`,
+        );
+      } else {
+        fail = true;
+        lines.push(`gate-fail: ${f.fact}: refused, pre-committed ${want}${m}`);
+      }
+    } else if (warns.includes(f.fact)) {
       // R612 (plan r3 §2): costs only speed (the rule then closes), so it never blocks.
       lines.push(`al-runner-v3-serve-keep-reason-moved: ${f.fact}: ${f.verdict}${m}`);
     } else if (f.verdict === "unmeasurable") {
@@ -344,6 +519,38 @@ export function failsClosedRefusal(
 }
 
 /**
+ * R635: the transport flags of `itest:alrunner-v3`, `LETHAL_ITEST_V3_TRANSPORT` (`one-shot` or
+ * `serve-entries`) and `LETHAL_ITEST_V3_SECOND_ECHO` (`0` or `1`, serve-entries only). Unset (or
+ * `one-shot` alone) gives `{}`, so the gate's backend config is byte-for-byte what it was. Any other
+ * value refuses by name.
+ */
+export function v3ItestTransport(env: Readonly<Record<string, string | undefined>>): {
+  readonly transport?: "serve-entries";
+  readonly secondEcho?: boolean;
+} {
+  const t = env.LETHAL_ITEST_V3_TRANSPORT;
+  const e = env.LETHAL_ITEST_V3_SECOND_ECHO;
+  if (t !== undefined && t !== "one-shot" && t !== "serve-entries") {
+    throw new Error(
+      `al-runner-v3-itest-transport-refused: LETHAL_ITEST_V3_TRANSPORT=${JSON.stringify(t)}; allowed: one-shot, serve-entries (R635)`,
+    );
+  }
+  if (e !== undefined && e !== "0" && e !== "1") {
+    throw new Error(
+      `al-runner-v3-itest-transport-refused: LETHAL_ITEST_V3_SECOND_ECHO=${JSON.stringify(e)}; allowed: 0, 1 (R635)`,
+    );
+  }
+  if (e !== undefined && t !== "serve-entries") {
+    throw new Error(
+      "al-runner-v3-itest-transport-refused: LETHAL_ITEST_V3_SECOND_ECHO is set without LETHAL_ITEST_V3_TRANSPORT=serve-entries (R635)",
+    );
+  }
+  return t === "serve-entries"
+    ? { transport: "serve-entries", ...(e !== undefined ? { secondEcho: e === "1" } : {}) }
+    : {};
+}
+
+/**
  * G5: the gate worktree is dirty when `git status --porcelain --untracked-files=all` shows any
  * tracked change, or an UNTRACKED file under `fixtures/` or `packages/` (it would compile into a
  * leg). Other untracked files are the gate's own outputs.
@@ -375,7 +582,10 @@ export class V3LegEnvironment extends Error {
   }
 }
 
-/** I-2: every difference is a move toward BC: `held`. */
+/**
+ * I-2, as worded by r9 §8: every difference is a move toward BC or a named refusal; read the
+ * receipt's lines: `held`.
+ */
 export class V3LegHeld extends Error {
   readonly lines: readonly string[];
   constructor(lines: readonly string[]) {

@@ -13,7 +13,11 @@
  * - A not-run row is never killed and never survived; a timeout row is a CPU-time stop (§5).
  * - `Sleep` does nothing (#5605): a covering pass that reaches a project Sleep reads `error` (§6,
  *   `al-runner-v3-sleep.ts`).
- * One-shot only; the static selector only (the resource selector is refused by name).
+ * One-shot with the static selector by default (`selectorMode: "resource"` is refused by name).
+ * R635 adds an opt-in transport, `transport: "serve-entries"` (plan
+ * `docs/superpowers/plans/2026-10-22-r635-v3-serve-entries.md`, r3): the baseline stays one-shot,
+ * every other run goes to a warm `serve` daemon as entries with a per-entry resource override,
+ * each mutant's group vouched for by an echo test (`al-runner-v3-entries.ts`).
  */
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
@@ -22,9 +26,20 @@ import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
+  SELECTOR_RESOURCE_FOLDER,
+  SELECTOR_RESOURCE_NAME,
+  SELECTOR_RESOURCE_NONE,
+  emitResourceSelector,
   emitStaticSelector,
 } from "@lethal/schemata";
-import { verdictFromRunnerTest } from "./al-runner-backend";
+import {
+  V3_SERVE_SAFE_REFUSALS,
+  assertResourceSelectorRuntime,
+  defaultServerSpawn,
+  installResourceSelector,
+  serveDaemonReusable,
+  verdictFromRunnerTest,
+} from "./al-runner-backend";
 import {
   AlRunnerCoverageFrameError,
   type AlRunnerCoverageIndex,
@@ -32,6 +47,13 @@ import {
   buildAlRunnerCoverageIndex,
   normalizeFileKey,
 } from "./al-runner-coverage";
+import {
+  AlRunnerServer,
+  AlRunnerServerRequestError,
+  MAX_TIMER_MS,
+  type ServerSpawnFn,
+  type ServerTestLine,
+} from "./al-runner-server";
 import { assertBcVersionMatchesPackages } from "./al-runner-v3-config";
 import {
   type V3ContractResult,
@@ -40,6 +62,19 @@ import {
   v3ContractSummary,
   v3DefectWarnings,
 } from "./al-runner-v3-contract";
+import {
+  AlRunnerV3EntriesRefusedError,
+  type EntryGroup,
+  SELECTOR_ECHO_FILENAME,
+  type SentEntry,
+  batchRefusalReason,
+  chunkGroups,
+  decodeEntriesAnswer,
+  echoMismatch,
+  emitSelectorEcho,
+  encodeGroups,
+  serveRow,
+} from "./al-runner-v3-entries";
 import { AlRunnerV3UngatedBuildError, checkGated } from "./al-runner-v3-pin";
 import {
   AlRunnerV3CoverageJoinError,
@@ -67,8 +102,16 @@ import { type SpawnFn, defaultSpawn } from "./publisher";
 import { TestAppError, symbolPackageId } from "./test-app-publish";
 import { ProjectSymlinkRefusedError } from "./walk";
 
-/** `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`). */
-export const AL_RUNNER_V3_VERSION = /^al-?runner 3\.\d+\.\d+(?:-[\w.]+)? \([0-9a-f]+\)$/;
+/**
+ * `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`).
+ * R639 F1: an edge build carries SemVer build metadata, `al-runner 3.0.0-alpha.4+edge.20261022
+ * (57f1e4f98)`; the metadata is one or more of `[0-9A-Za-z.-]`, never empty and never a space.
+ */
+export const AL_RUNNER_V3_VERSION =
+  /^al-?runner 3\.\d+\.\d+(?:-[\w.]+)?(?:\+[0-9A-Za-z.-]+)? \([0-9a-f]+\)$/;
+
+/** v3's refusal row prefix (`NotRun: out-of-scope: <reason>`), R586 measure.md row 14. */
+export const V3_REFUSAL_PREFIX = "NotRun: out-of-scope:";
 
 /** v3's timeout row (`notRun: true`), anchored: `Test exceeded <N>s timeout.` */
 export const V3_TIMEOUT_MESSAGE = /^Test exceeded (\d+)s timeout\.$/;
@@ -115,6 +158,16 @@ export class AlRunnerV3ResourceSelectorRefusedError extends Error {
   }
 }
 
+/** R635 §3: the serve daemon was asked to start before `useMutantBudgetFloor` gave it a stop. */
+export class AlRunnerV3ServeStopUnsetError extends Error {
+  constructor() {
+    super(
+      "al-runner-v3: the serve-entries daemon needs the session's --mutant-timeout-ms floor and baseline timeout (useMutantBudgetFloor) before it starts, so it can send --test-timeout; refusing to start it with v3's own default stop (R635 §3, as R517).",
+    );
+    this.name = "AlRunnerV3ServeStopUnsetError";
+  }
+}
+
 export interface AlRunnerV3Config {
   /** The v3 binary (`alrunner` / `al-runner`). */
   readonly alRunnerPath: string;
@@ -137,6 +190,10 @@ export interface AlRunnerV3Config {
   readonly selectorMode?: "static" | "resource";
   /** The target project, for coverage labels that name it (R219). */
   readonly sourceProjectDir?: string;
+  /** R635: absent or `"one-shot"` is today's backend byte for byte. */
+  readonly transport?: "one-shot" | "serve-entries";
+  /** R635 §5 step 2: the echo before the coverage request. Absent: on. */
+  readonly secondEcho?: boolean;
 }
 
 /** One row of v3's `--output-json` `tests[]`, decoded. */
@@ -261,6 +318,18 @@ export function v3RowVerdict(
       runnerRow: "runner-refused",
     };
   }
+  // R639 K1(a), r9 §1: a refusal written WITHOUT notRun (a plain `fail` or `pass` whose message
+  // starts with v3's refusal prefix) never scores: no refusal path becomes a kill, survive or pass.
+  if ((row.message ?? "").startsWith(V3_REFUSAL_PREFIX)) {
+    return {
+      ref,
+      outcome: "error",
+      durationMs: wallMs,
+      failureMessage: `${row.message ?? ""} [al-runner v3: a refusal written as a ${row.status}; never scored (R639)]`,
+      operation: "completed-accepted",
+      runnerRow: "runner-test-error",
+    };
+  }
   return verdictFromRunnerTest(
     ref,
     row.name,
@@ -314,9 +383,10 @@ export function stopSecondsOf(ms: number): number {
   return Math.max(1, Math.ceil(ms / 1000));
 }
 
-/** §5: the outer wall bound of one call, `10 x N x tests + 90 s` (v3 stops a waiting test at 10 x N). */
+/** §5: the outer wall bound of one call, `10 x N x tests + 90 s` (v3 stops a waiting test at 10 x N).
+ *  R635: clamped to `MAX_TIMER_MS` (about 24.8 days); a timer above it overflows and fires at once. */
 export function v3CallDeadlineMs(stopSeconds: number, testsInCodeunit: number): number {
-  return 10 * stopSeconds * 1000 * Math.max(1, testsInCodeunit) + 90_000;
+  return Math.min(MAX_TIMER_MS, 10 * stopSeconds * 1000 * Math.max(1, testsInCodeunit) + 90_000);
 }
 
 /** A file of `<deps>`: what `run()` re-lists cheaply, and its sha256 from `deploy()`. */
@@ -346,7 +416,39 @@ interface CallRows {
   readonly stopSeconds: number;
   readonly wallMs: number;
   readonly coverage: V3CoverageRead;
+  /** R635: every row of this call is `error` (`entries-echo-mismatch`, `-coverage-disagreement`). */
+  readonly refusal?: string;
+  /** R635: a suite test of this codeunit had no row (or two) in its entry: `rowMissing`. */
+  readonly missing?: string;
+  /** R635 §5: the coverage window already ran for this (mutant, codeunit). */
+  readonly windowed?: boolean;
 }
+
+/** R635: what the serve-entries transport did, for `status()`, the close line and the gate. */
+export interface V3EntriesStats {
+  daemons: number;
+  cachedFalse: number;
+  warmups: number;
+  prefetchRequests: number;
+  liveRequests: number;
+  coverageRequests: number;
+  echoRequests: number;
+  /** Prefetch requests dropped on a request error (each warned by name). */
+  prefetchDropped: number;
+  echoMismatches: number;
+  /** §5 step 2 only (the echo BEFORE the coverage request); also counted in `echoMismatches`. */
+  secondEchoMismatches: number;
+  entriesSent: number;
+}
+
+/** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
+interface Daemon {
+  readonly server: AlRunnerServer;
+  dirty: boolean;
+}
+
+/** v3 serve's readiness wait: a cold start may load dependencies (measure.md §8). */
+const SERVE_READY_MS = 300_000;
 
 const sha256Of = (bytes: Uint8Array | string): string =>
   createHash("sha256").update(bytes).digest("hex");
@@ -369,6 +471,20 @@ async function listDeps(dir: string, withSha: boolean): Promise<DepsEntry[]> {
     });
   }
   return out;
+}
+
+/** R635 §2: the echo's object id, the manifest's `selectorIds.controlId`. Missing = loud. */
+async function readEchoId(dir: string): Promise<number> {
+  const m = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+    selectorIds?: { controlId?: unknown };
+  };
+  const id = m.selectorIds?.controlId;
+  if (typeof id !== "number" || !Number.isInteger(id) || id <= 0) {
+    throw new Error(
+      `al-runner-v3: ${join(dir, "mutant-manifest.json")} has no selectorIds.controlId, the echo codeunit's id (R635 §2)`,
+    );
+  }
+  return id;
 }
 
 /** The batch's artifact id and every mutant id, from `mutant-manifest.json`. Missing = loud. */
@@ -401,8 +517,48 @@ async function readManifestIds(
 export class AlRunnerV3Backend implements ExecutionBackend {
   /** R577 with C2: every activate/deploy clears the rows, so a reproduction really re-runs. */
   readonly killsMustReproduce = true;
-  /** One-shot: the stop a call is sent is the largest budget of its refs (F5). */
-  readonly inRunStopIsBudget = true;
+  /** One-shot: the stop a call is sent is the largest budget of its refs (F5). R635: the
+   *  serve-entries daemon has ONE stop for its life, S (R517), never the budget. */
+  get inRunStopIsBudget(): boolean {
+    return !this.entries;
+  }
+  /** R635 §3: `S * 1000` in serve-entries once the floor is known; absent one-shot. */
+  get inRunStopMs(): number | undefined {
+    const s = this.serveStopSeconds();
+    return this.entries && s !== undefined ? s * 1000 : undefined;
+  }
+
+  // R635: the serve-entries state. Unused (and untouched) one-shot.
+  private readonly entries: boolean;
+  /** §4: set ONLY by the orchestrator's `baselinePhase` bracket. */
+  private inBaseline = false;
+  /** §3 (N1): the one-shot baseline's rows per codeunit, recorded inside the bracket. */
+  private baselineRows = new Map<number, readonly V3Row[]>();
+  /** §4: per mutant, the rows a fully valid prefetch answer gave; consumed by `activate`. */
+  private prefetched = new Map<string, Map<number, CallRows>>();
+  /** §3: the covering codeunits of the batch: the warm-up's union. */
+  private union = new Set<number>();
+  private daemon: Daemon | undefined;
+  /** §3 (N2): a live warm-up refusal; every later run is a transport failure. */
+  private entriesRefused: string | undefined;
+  /** §2: the echo codeunit, `selectorIds.controlId` of the deployed manifest. */
+  private echoId: number | undefined;
+  /** §5: true while `active-mutant.txt` legitimately holds a mutant id. */
+  private inWindow = false;
+  private budgetFloor: { readonly floorMs: number; readonly baselineTimeoutMs: number } | undefined;
+  private readonly stats: V3EntriesStats = {
+    daemons: 0,
+    cachedFalse: 0,
+    warmups: 0,
+    prefetchRequests: 0,
+    liveRequests: 0,
+    coverageRequests: 0,
+    echoRequests: 0,
+    echoMismatches: 0,
+    secondEchoMismatches: 0,
+    prefetchDropped: 0,
+    entriesSent: 0,
+  };
 
   private deployedDir: string | undefined;
   private proof: BatchProof | undefined;
@@ -438,8 +594,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     private readonly cfg: AlRunnerV3Config,
     private readonly spawn: SpawnFn = defaultSpawn,
     alcIo: ArtifactIo = defaultArtifactIo,
+    /** R635: the serve daemon's spawn (serve-entries only). */
+    private readonly serverSpawn: ServerSpawnFn = defaultServerSpawn,
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
+    this.entries = cfg.transport === "serve-entries";
     this.compiler = new ArtifactCompiler(
       {
         alcPath: cfg.alcPath,
@@ -520,10 +679,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...(gatedWarnFacts !== undefined ? { gatedWarnFacts } : {}),
       spawn: this.spawn,
     });
-    for (const line of v3DefectWarnings(this.contract)) console.warn(line);
-    const refusals = v3ContractRefusals(this.contract);
+    // R639 r9 §2: `unlike-bc` refuses a normal session; a candidate (update-gate) session warns.
+    const kind = { candidate: this.cfg.candidate === true };
+    for (const line of v3DefectWarnings(this.contract, kind)) console.warn(line);
+    const refusals = v3ContractRefusals(this.contract, kind);
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
-    return { ok: true, details: `${reported}; ${v3ContractSummary(this.contract)}` };
+    return {
+      ok: true,
+      details: `${reported}; ${v3ContractSummary(this.contract)}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}`,
+    };
   }
 
   /** §8: the measured contract, for the gate's leg C and the report line. */
@@ -576,6 +740,31 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return [this.cfg.packagesDir];
   }
 
+  /** R635 §3 (R517): the daemon's stop, `S = max(1, ceil(max(floor, baseline) / 1000))`. */
+  useMutantBudgetFloor(floorMs: number, baselineTimeoutMs: number): void {
+    this.budgetFloor = { floorMs, baselineTimeoutMs };
+  }
+
+  private serveStopSeconds(): number | undefined {
+    const f = this.budgetFloor;
+    return f === undefined ? undefined : stopSecondsOf(Math.max(f.floorMs, f.baselineTimeoutMs));
+  }
+
+  /** R635 §4: the orchestrator's bracket around its baseline step. The ONLY source of `inBaseline`. */
+  baselinePhase(on: boolean): void {
+    this.inBaseline = on;
+  }
+
+  /** R635: the transport's counters (serve-entries). */
+  entriesStats(): Readonly<V3EntriesStats> {
+    return { ...this.stats };
+  }
+
+  /** R635 §4: one-shot keeps `lastActivated === null`; serve-entries reads the bracket only. */
+  private isBaselineCall(): boolean {
+    return this.entries ? this.inBaseline : this.lastActivated === null;
+  }
+
   /** Index-only refusals, merged into selection by `runSession` after each deploy (as v2). */
   async coverageRefusals(): Promise<ReadonlyMap<string, string>> {
     return this.coverageIndex?.refusals ?? new Map();
@@ -599,9 +788,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.batchBlind = undefined;
     this.deployedDir = undefined;
     this.lastActivated = null;
+    this.prefetched = new Map();
+    this.baselineRows = new Map();
+    this.union = new Set();
+    this.echoId = undefined;
   }
 
-  /** A batch as v3 reads it: control files dropped, the static selector at the baseline. */
+  /** A batch as v3 reads it: control files dropped, the static selector at the baseline. R635: in
+   *  serve-entries, R222's resource selector (file = NONE) and the echo at `controlId` instead. */
   private async stage(fromDir: string, toDir: string): Promise<string> {
     await rm(toDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     await cp(fromDir, toDir, { recursive: true });
@@ -609,6 +803,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await rm(join(toDir, f), { force: true });
     }
     const { artifactId } = await readManifestIds(toDir);
+    if (this.entries) {
+      assertResourceSelectorRuntime(
+        JSON.parse(await readFile(join(toDir, "app.json"), "utf8")) as Record<string, unknown>,
+        "resource",
+      );
+      await installResourceSelector(toDir, this.cfg.selectorObjectId, artifactId);
+      const echoId = await readEchoId(toDir);
+      await writeFile(join(toDir, SELECTOR_ECHO_FILENAME), emitSelectorEcho(echoId), "utf8");
+      return artifactId;
+    }
     await writeFile(
       join(toDir, CONTROL_SELECTOR_FILENAME),
       this.selectorText(artifactId, null),
@@ -637,9 +841,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   async deploy(instrumentedDir: string): Promise<null> {
+    await this.closeDaemon();
     this.resetLayoutState();
     const active = this.activeDir();
     const artifactId = await this.stage(instrumentedDir, active);
+    if (this.entries) this.echoId = await readEchoId(active);
     const { ids } = await readManifestIds(active);
     // Step 1: the target. AlcCompileError goes to the orchestrator's R461 / bisection path.
     const target = await this.compileTarget(active);
@@ -776,6 +982,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `al-runner-v3: activate(${mutantId}): not a mutant of the deployed batch's manifest`,
       );
     }
+    if (this.entries) {
+      // R635 §4: the selector never changes; a prefetched answer is MOVED here, consumed once,
+      // so a re-activation (R577's reproduction) runs live.
+      if (mutantId !== null && this.inBaseline) {
+        throw new Error(
+          `al-runner-v3: activate(${mutantId}) inside the baseline phase; the baseline runs no mutant (R635 §4)`,
+        );
+      }
+      const pre = mutantId === null ? undefined : this.prefetched.get(mutantId);
+      if (mutantId !== null && pre !== undefined) {
+        this.prefetched.delete(mutantId);
+        this.rowsByCodeunit = pre;
+      }
+      this.lastActivated = mutantId;
+      return;
+    }
     // The plan is NOT dropped here: keyed by mutant id and read only while that mutant is active,
     // so the R577 reproduction (after the unmutated confirm) runs at the killing call's stop.
     await writeFile(
@@ -804,7 +1026,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw new AlRunnerV3UnprovenBatchError(`the last activated id ${id} is not in the manifest`);
     }
     const selector = await readFile(join(dir, CONTROL_SELECTOR_FILENAME), "utf8");
-    if (selector !== this.selectorText(proof.artifactId, id)) {
+    if (this.entries) {
+      // R635 §2: the resource selector as emitted; the file NONE outside §5's window. The echo
+      // needs no check of its own: it is an .al file of the tree the proof hashed (above).
+      const want = emitResourceSelector({
+        objectId: this.cfg.selectorObjectId,
+        artifactId: proof.artifactId,
+        targetAppId: "",
+      });
+      if (selector !== want) {
+        throw new AlRunnerV3UnprovenBatchError(
+          "the selector is not the resource selector for this artifact",
+        );
+      }
+      const onDisk = await readFile(this.resourcePath(), "utf8").catch(() => "<missing>");
+      if (!this.inWindow && onDisk !== SELECTOR_RESOURCE_NONE) {
+        throw new AlRunnerV3UnprovenBatchError(
+          `${SELECTOR_RESOURCE_NAME} holds ${JSON.stringify(onDisk.slice(0, 40))}, not ${SELECTOR_RESOURCE_NONE}, outside the coverage window`,
+        );
+      }
+    } else if (selector !== this.selectorText(proof.artifactId, id)) {
       throw new AlRunnerV3UnprovenBatchError(
         `the selector is not the static selector for the last activated id (${id ?? "baseline"})`,
       );
@@ -848,10 +1089,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     await this.assertBound();
     let call = this.rowsByCodeunit.get(ref.codeunitId);
     if (call === undefined) {
-      const made = await this.callCodeunit(ref, opts.timeoutMs);
+      // R635 §4: outside the bracket, serve-entries sends a LIVE one-group request.
+      const made =
+        this.entries && !this.inBaseline
+          ? await this.liveCall(ref)
+          : await this.callCodeunit(ref, opts.timeoutMs);
       if ("verdict" in made) return made.verdict;
       call = made.call;
     }
+    if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
+    if (call.missing !== undefined) return this.rowMissing(ref, call.missing, call.wallMs);
     const mine = call.rows.filter(
       (r) => r.codeunit === ref.codeunitId && r.method.toLowerCase() === ref.method.toLowerCase(),
     );
@@ -866,7 +1113,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     const coverage =
-      row.status === "pass" && !row.notRun && this.lastActivated === null
+      row.status === "pass" && !row.notRun && this.isBaselineCall()
         ? this.coverageOf(row.name, call.coverage)
         : undefined;
     if (coverage === "unavailable") {
@@ -885,6 +1132,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const index = this.sleepIndex;
       if (index === undefined)
         throw new Error("al-runner-v3: no Sleep index for the deployed batch");
+      if (this.entries) {
+        // R635 §5: an entry carries no coverage. An empty index has nothing to find; otherwise
+        // the window gives this (mutant, codeunit) a coverage read, once.
+        if (index.sizes.target + index.sizes.test === 0) return verdict;
+        if (call.windowed !== true) {
+          const w = await this.coverageWindow(ref, call);
+          if ("verdict" in w) return w.verdict;
+          call = w.call;
+          if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
+        }
+      }
       // I-1: an index that joins no path of the document is not "no hit": the session stops.
       const joinWhy = sleepJoinRefusal(call.coverage, index);
       if (joinWhy !== undefined) throw new AlRunnerV3CoverageJoinError(joinWhy);
@@ -917,7 +1175,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const before = rows
       .slice(0, k)
       .filter((r) => plan.budgets.has(refKeyOf(killer.codeunitId, r.method)))
-      .map((r) => `${r.method} (${r.notRun ? "not run" : r.status})`);
+      // R637 (S2): a stop and a refusal mean different things to a reader.
+      .map(
+        (r) =>
+          `${r.method} (${r.notRun ? (V3_TIMEOUT_MESSAGE.test(r.message ?? "") ? "timed out" : "refused") : r.status})`,
+      );
     return before.length === 0
       ? undefined
       : `${V3_STATE_NOTE_TAG} ${killer.method} ran after covering test(s) ${before.join(", ")} in the same v3 codeunit run (#5611), so their state may have reached it`;
@@ -953,9 +1215,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (real !== undefined) {
       const root = `${normalizeFileKey(real).replace(/\/+$/, "")}/`;
       const control = new Set(
-        [CONTROL_SELECTOR_FILENAME, CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME].map(
-          normalizeFileKey,
-        ),
+        [
+          CONTROL_SELECTOR_FILENAME,
+          CONTROL_REGISTER_FILENAME,
+          CONTROL_UPGRADE_FILENAME,
+          SELECTOR_ECHO_FILENAME,
+        ].map(normalizeFileKey),
       );
       for (const f of entry.coverage) {
         if (!(f.statements ?? []).some((s) => (s.hits ?? 0) > 0)) continue;
@@ -1104,20 +1369,494 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       wallMs,
       coverage: decodeV3Coverage(covText),
     };
-    if (this.lastActivated === null) {
-      for (const r of decoded.rows) {
-        if (r.notRun && !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))) {
-          const set = this.baselineRefused.get(id) ?? new Set<string>();
-          set.add(r.method);
-          this.baselineRefused.set(id, set);
-        }
-      }
-    }
+    this.noteBaselineRows(id, decoded.rows);
     this.rowsByCodeunit.set(id, call);
     return { call };
   }
 
+  /** I3, and R635 §3 (N1): a baseline call's refusals, and in serve-entries its rows. */
+  private noteBaselineRows(id: number, rows: readonly V3Row[]): void {
+    if (!this.isBaselineCall()) return;
+    if (this.entries) this.baselineRows.set(id, rows);
+    for (const r of rows) {
+      if (r.notRun && !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message))) {
+        const set = this.baselineRefused.get(id) ?? new Set<string>();
+        set.add(r.method);
+        this.baselineRefused.set(id, set);
+      }
+    }
+  }
+
+  private resourcePath(): string {
+    return join(this.activeDir(), SELECTOR_RESOURCE_FOLDER, SELECTOR_RESOURCE_NAME);
+  }
+
+  /** R635 §3: `{ command, sourcePaths, testIsolation }`, the same two roots one-shot passes. */
+  private requestBase(): Record<string, unknown> {
+    return {
+      command: "runTests",
+      sourcePaths: [
+        this.realDirs?.active ?? resolve(this.activeDir()),
+        this.realDirs?.test ?? resolve(this.cfg.testDir),
+      ],
+      testIsolation: "test",
+    };
+  }
+
+  private requireEchoId(): number {
+    const id = this.echoId;
+    if (id === undefined) throw new Error("al-runner-v3: serve-entries before a deploy()");
+    return id;
+  }
+
+  /**
+   * R635 §3: the daemon, started lazily with its union warm-up. Throws
+   * `AlRunnerV3EntriesRefusedError` (N1 before anything is sent, then N3, then disagreement) or
+   * `AlRunnerServerRequestError`; either way no daemon is left behind.
+   */
+  private async ensureDaemon(): Promise<Daemon> {
+    if (this.daemon !== undefined) return this.daemon;
+    const s = this.serveStopSeconds();
+    if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
+    const union = [...this.union].sort((a, b) => a - b);
+    const none = union.filter((cu) => !this.baselineRows.has(cu));
+    if (none.length > 0) {
+      throw new AlRunnerV3EntriesRefusedError(
+        "al-runner-v3-entries-no-baseline-rows",
+        `codeunit(s) ${none.join(", ")} of the warm-up union have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
+      );
+    }
+    const server = new AlRunnerServer(
+      this.cfg.alRunnerPath,
+      (argv) =>
+        this.serverSpawn(
+          argv,
+          this.cfg.cacheDir !== undefined ? { env: { ALRUNNER_CACHE: this.cfg.cacheDir } } : {},
+        ),
+      this.cfg.preprocessorSymbols ?? [],
+      "serve",
+    );
+    await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], s, [
+      "--bc-version",
+      this.cfg.bcVersion,
+      "--no-download",
+    ]);
+    this.stats.daemons += 1;
+    const daemon: Daemon = { server, dirty: false };
+    this.daemon = daemon;
+    try {
+      this.stats.warmups += 1;
+      const { sent, rows } = await this.send(
+        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
+        true,
+      );
+      const disagree: string[] = [];
+      const echo = rows.get(sent[0]?.id ?? "") ?? [];
+      const echoWhy = echoMismatch(echo, SELECTOR_RESOURCE_NONE);
+      if (echoWhy !== undefined) disagree.push(`echo: ${echoWhy}`);
+      for (const e of sent.slice(1)) {
+        const got = rowsClass(rows.get(e.id) ?? []);
+        const want = rowsClass(this.baselineRows.get(e.codeunit) ?? []);
+        if (got !== want)
+          disagree.push(`codeunit ${e.codeunit}: serve [${got}], one-shot [${want}]`);
+      }
+      if (disagree.length > 0) {
+        throw new AlRunnerV3EntriesRefusedError(
+          "al-runner-v3-entries-warmup-disagrees",
+          `the daemon's NONE rows are not this batch's one-shot baseline (${disagree.join("; ")}), so no entry on it is trusted`,
+        );
+      }
+      // Build review r1 M1: a warm-up row R612 does not keep (a union test that times out under
+      // NONE) would leave every later request on an untrusted daemon, and every fresh daemon repeats
+      // it, so re-sending cannot help: refused by name before any mutant entry is sent.
+      for (const e of sent) {
+        const mine = rows.get(e.id) ?? [];
+        if (serveDaemonReusable(serveLines(mine), "v3")) continue;
+        const bad = mine.find((r) => !serveDaemonReusable(serveLines([r]), "v3"));
+        throw new AlRunnerV3EntriesRefusedError(
+          "al-runner-v3-entries-warmup-dirty",
+          `the warm-up row ${bad?.name ?? e.id} (codeunit ${e.codeunit}) is one R612 does not keep (${bad?.message ?? bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
+        );
+      }
+    } catch (err) {
+      await this.closeDaemon();
+      throw err;
+    }
+    return daemon;
+  }
+
+  private async closeDaemon(): Promise<void> {
+    const d = this.daemon;
+    this.daemon = undefined;
+    await d?.server.close();
+  }
+
+  /**
+   * R635 §3, §6: one entries request on the current daemon. Returns the sent table and every
+   * entry's rows only for a fully valid answer; a request error, a partial or invalid answer
+   * closes the daemon and throws `AlRunnerServerRequestError`, and a refusal of the whole request
+   * throws `al-runner-v3-entries-batch-refused`. `cached:false` is counted before the decode (N4).
+   */
+  private async send(
+    groups: readonly EntryGroup[],
+    warmup = false,
+  ): Promise<{
+    readonly sent: readonly SentEntry[];
+    readonly rows: ReadonlyMap<string, readonly V3Row[]>;
+  }> {
+    const daemon = this.daemon;
+    const s = this.serveStopSeconds();
+    if (daemon === undefined || s === undefined)
+      throw new Error("al-runner-v3: send() without a daemon");
+    const sent = encodeGroups(groups, this.requireEchoId());
+    const tests = sent.reduce(
+      (n, e) => n + (e.echo ? 1 : (this.testsPerCodeunit.get(e.codeunit) ?? 1)),
+      0,
+    );
+    this.stats.entriesSent += sent.length;
+    const body = {
+      ...this.requestBase(),
+      entries: sent.map((e) => ({ id: e.id, resources: e.resources, test: e.test })),
+    };
+    let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
+    try {
+      answer = await daemon.server.runEntries(body, v3CallDeadlineMs(s, tests));
+    } catch (err) {
+      await this.closeDaemon();
+      throw err;
+    }
+    if (answer.summary.cached === false) this.stats.cachedFalse += 1;
+    const decoded = decodeEntriesAnswer(sent, answer);
+    if ("why" in decoded) {
+      await this.closeDaemon();
+      throw new AlRunnerServerRequestError(
+        "protocol",
+        `the entries answer is invalid: ${decoded.why}`,
+      );
+    }
+    // Build review r1 L2: only the warm-up or a request of 2+ groups speaks for the batch; a lone
+    // group's refused rows are that mutant's `error` (its echo did not run), never a batch stop.
+    const refused =
+      warmup || groups.length >= 2
+        ? batchRefusalReason(
+            decoded.rows,
+            (m) => Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m)),
+            (m) => V3_TIMEOUT_MESSAGE.test(m),
+          )
+        : undefined;
+    if (refused !== undefined) {
+      await this.closeDaemon();
+      throw new AlRunnerV3EntriesRefusedError(
+        "al-runner-v3-entries-batch-refused",
+        `every entry of the request was refused with one reason outside V3_SERVE_SAFE_REFUSALS: ${refused}. Nothing is re-sent`,
+      );
+    }
+    return { sent, rows: decoded.rows };
+  }
+
+  /**
+   * R635 §3, §7: send `groups` on a warm daemon and turn the answer into per-mutant rows. R612's
+   * keep rule runs per entry IN ENTRY ORDER: at the first unkept entry the daemon is closed; it
+   * and the entries before it stand, every later entry is returned in `resend` as groups (an
+   * unkept ECHO's whole group too). A group's rows are `refusal`s when its echo is wrong.
+   */
+  private async request(groups: readonly EntryGroup[]): Promise<{
+    readonly results: ReadonlyMap<string, Map<number, CallRows>>;
+    readonly resend: readonly EntryGroup[];
+    /** The first row R612 did not keep, at the cut. */
+    readonly cutWhy?: string;
+  }> {
+    const daemon = await this.ensureDaemon();
+    const started = Date.now();
+    const { sent, rows } = await this.send(groups);
+    const wallMs = Date.now() - started;
+    const s = this.serveStopSeconds() ?? 1;
+    let cut = sent.length;
+    for (const [i, e] of sent.entries()) {
+      if (!serveDaemonReusable(serveLines(rows.get(e.id) ?? []), "v3")) {
+        cut = i;
+        break;
+      }
+    }
+    if (cut < sent.length || daemon.dirty) await this.closeDaemon();
+    // An unkept ECHO stands like any entry, but its group's codeunit entries come after it, so the
+    // whole group is re-sent (§7).
+    const standing = sent.slice(0, cut + 1);
+    const results = new Map<string, Map<number, CallRows>>();
+    let echoWhy: string | undefined;
+    for (const e of standing) {
+      const mine = rows.get(e.id) ?? [];
+      if (e.echo) {
+        echoWhy = echoMismatch(mine, e.mutantId);
+        if (echoWhy !== undefined) this.stats.echoMismatches += 1;
+        continue;
+      }
+      const missing = this.suiteMissing(e.codeunit, mine);
+      const call: CallRows = {
+        rows: mine,
+        stopSeconds: s,
+        wallMs,
+        coverage: { kind: "unavailable", why: "an entries answer carries no coverage (R635 §5)" },
+        ...(echoWhy !== undefined
+          ? {
+              refusal: `entries-echo-mismatch: ${e.mutantId}'s echo in the same request does not vouch for its override (${echoWhy}); never scored (R635 §6)`,
+            }
+          : {}),
+        ...(missing !== undefined ? { missing } : {}),
+      };
+      const m = results.get(e.mutantId) ?? new Map<number, CallRows>();
+      m.set(e.codeunit, call);
+      results.set(e.mutantId, m);
+    }
+    const resend: EntryGroup[] = [];
+    for (const e of sent.slice(standing.length)) {
+      if (e.echo) continue;
+      const last = resend.at(-1);
+      if (last !== undefined && last.mutantId === e.mutantId) {
+        resend[resend.length - 1] = {
+          mutantId: e.mutantId,
+          codeunits: [...last.codeunits, e.codeunit],
+        };
+      } else resend.push({ mutantId: e.mutantId, codeunits: [e.codeunit] });
+    }
+    const cutRow = (rows.get(sent[cut]?.id ?? "") ?? []).find(
+      (r) => !serveDaemonReusable(serveLines([r]), "v3"),
+    );
+    return {
+      results,
+      resend,
+      ...(cutRow !== undefined
+        ? { cutWhy: `${cutRow.name}: ${cutRow.message ?? cutRow.status}` }
+        : {}),
+    };
+  }
+
+  /** §6 (#5704): the suite test of `cu` without exactly one row, or `undefined`. */
+  private suiteMissing(cu: number, rows: readonly V3Row[]): string | undefined {
+    for (const t of this.suitePerCodeunit.get(cu) ?? []) {
+      const n = rows.filter((r) => r.method.toLowerCase() === t.method.toLowerCase()).length;
+      if (n !== 1)
+        return `codeunit ${cu}'s entry has ${n} row(s) for ${t.codeunitName}.${t.method}`;
+    }
+    return undefined;
+  }
+
+  /**
+   * R635 §4: once per mutant-loop call, every covered mutant as one group, in chunks. Only a
+   * fully valid answer is stored. A request error leaves its mutants to live requests; a refusal
+   * by name stops the session (no mutant of this batch is scored yet). Each group is re-sent at
+   * most once (§7: no loop).
+   */
+  async prefetchMutants(
+    plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+  ): Promise<void> {
+    if (!this.entries) return;
+    this.prefetched = new Map();
+    const groups: EntryGroup[] = plans.map((p) => ({
+      mutantId: p.mutantId,
+      codeunits: [...new Set(p.refs.map((r) => r.codeunitId))].sort((a, b) => a - b),
+    }));
+    for (const g of groups) for (const cu of g.codeunits) this.union.add(cu);
+    const queue = chunkGroups(groups);
+    const resent = new Set<string>();
+    for (let chunk = queue.shift(); chunk !== undefined; chunk = queue.shift()) {
+      let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
+      try {
+        this.stats.prefetchRequests += 1;
+        out = await this.request(chunk);
+      } catch (err) {
+        if (err instanceof AlRunnerServerRequestError) {
+          // Never silent: its mutants run live, so a cause like a timer overflow shows.
+          this.stats.prefetchDropped += 1;
+          console.warn(
+            `[lethal] al-runner-v3-entries-prefetch-dropped: a prefetch request of ${chunk.length} mutant group(s) gave no usable answer (${err.kind}: ${err.message.slice(0, 300)}); its mutants run as live requests (R635 §6).`,
+          );
+          continue;
+        }
+        throw err;
+      }
+      for (const [m, rows] of out.results) {
+        const had = this.prefetched.get(m) ?? new Map<number, CallRows>();
+        for (const [cu, c] of rows) had.set(cu, c);
+        this.prefetched.set(m, had);
+      }
+      const again = out.resend.filter((g) => !resent.has(g.mutantId));
+      for (const g of again) resent.add(g.mutantId);
+      queue.push(...chunkGroups(again));
+    }
+  }
+
+  /** R635 §4: one group (the echo + `ref`'s codeunit) under `lastActivated ?? NONE`. */
+  private async liveCall(
+    ref: TestMethodRef,
+  ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
+    const started = Date.now();
+    if (this.entriesRefused !== undefined) {
+      return { verdict: transportFailure(ref, this.entriesRefused, 0) };
+    }
+    const m = this.lastActivated ?? SELECTOR_RESOURCE_NONE;
+    this.union.add(ref.codeunitId);
+    try {
+      this.stats.liveRequests += 1;
+      const out = await this.request([{ mutantId: m, codeunits: [ref.codeunitId] }]);
+      const call = out.results.get(m)?.get(ref.codeunitId);
+      if (call === undefined) {
+        // Its echo was the unkept entry, so nothing of the group stands: this mutant's `error`
+        // with the reason (build review r1 L2), never a verdict and never a batch stop.
+        return {
+          verdict: refusalVerdict(
+            ref,
+            `entries-echo-mismatch: ${m}'s echo did not run, so nothing of its group is trusted (${out.cutWhy ?? "no reason"}); never scored (R635 §6)`,
+            Date.now() - started,
+          ),
+        };
+      }
+      this.noteBaselineRows(ref.codeunitId, call.rows);
+      this.rowsByCodeunit.set(ref.codeunitId, call);
+      return { call };
+    } catch (err) {
+      return { verdict: this.liveFailure(ref, err, Date.now() - started) };
+    }
+  }
+
+  /** A live request's throw: a refusal latches (N2: the session stops), a request error is one
+   *  transport failure, the deadline is `deadline-exceeded`; anything else propagates. */
+  private liveFailure(ref: TestMethodRef, err: unknown, wallMs: number): TestVerdict {
+    if (err instanceof AlRunnerV3EntriesRefusedError) {
+      this.entriesRefused = err.message;
+      return transportFailure(ref, err.message, wallMs);
+    }
+    if (err instanceof AlRunnerServerRequestError) {
+      if (err.kind === "deadline") {
+        return {
+          ref,
+          outcome: "deadline-exceeded",
+          durationMs: wallMs,
+          failureMessage: `${err.message}; never a kill (R635 §6)`,
+        };
+      }
+      return transportFailure(ref, err.message, wallMs);
+    }
+    throw err;
+  }
+
+  /**
+   * R635 §5: the coverage window for a pass under a mutant, once per (mutant, codeunit), on one
+   * daemon: the file says the mutant; [echo]; the codeunit with coverage; echo; NONE restored in
+   * a `finally`. The window's rows must equal the entry's, and each echo must read the mutant.
+   */
+  private async coverageWindow(
+    ref: TestMethodRef,
+    call: CallRows,
+  ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
+    if (this.entriesRefused !== undefined) {
+      return { verdict: transportFailure(ref, this.entriesRefused, 0) };
+    }
+    const m = this.lastActivated ?? SELECTOR_RESOURCE_NONE;
+    const echoId = this.requireEchoId();
+    const started = Date.now();
+    let next: CallRows;
+    try {
+      const daemon = await this.ensureDaemon();
+      this.inWindow = true;
+      try {
+        await writeFile(this.resourcePath(), m, "utf8");
+        const echoOk = async (): Promise<string | undefined> => {
+          this.stats.echoRequests += 1;
+          const why = echoMismatch((await this.plain(daemon, echoId, false)).rows, m);
+          if (why !== undefined) this.stats.echoMismatches += 1;
+          return why;
+        };
+        const before = this.cfg.secondEcho === false ? undefined : await echoOk();
+        if (before !== undefined) this.stats.secondEchoMismatches += 1;
+        this.stats.coverageRequests += 1;
+        const cov = await this.plain(daemon, ref.codeunitId, true);
+        const after = await echoOk();
+        const echoWhy = before ?? after;
+        const differ = rowsClass(cov.rows) !== rowsClass(call.rows);
+        next = {
+          ...call,
+          coverage: cov.coverage,
+          windowed: true,
+          ...(echoWhy !== undefined
+            ? {
+                refusal: `entries-echo-mismatch: the coverage window's echo did not read ${m} (${echoWhy}); never scored (R635 §5)`,
+              }
+            : differ
+              ? {
+                  refusal: `entries-coverage-disagreement: under ${m} the coverage request's rows [${rowsClass(cov.rows)}] are not the entry's [${rowsClass(call.rows)}]; never scored (R635 §5)`,
+                }
+              : {}),
+        };
+      } finally {
+        await writeFile(this.resourcePath(), SELECTOR_RESOURCE_NONE, "utf8");
+        this.inWindow = false;
+        if (daemon.dirty) await this.closeDaemon();
+      }
+    } catch (err) {
+      return { verdict: this.liveFailure(ref, err, Date.now() - started) };
+    }
+    this.rowsByCodeunit.set(ref.codeunitId, next);
+    return { call: next };
+  }
+
+  /** R635 §5: a plain request for one codeunit (the echo, or `cu` with coverage) on `daemon`. */
+  private async plain(
+    daemon: Daemon,
+    cu: number,
+    coverage: boolean,
+  ): Promise<{ readonly rows: readonly V3Row[]; readonly coverage: V3CoverageRead }> {
+    const s = this.serveStopSeconds() ?? 1;
+    const body = {
+      ...this.requestBase(),
+      test: `Codeunit${cu}.`,
+      ...(coverage ? { coverage: true, perTestCoverage: true } : {}),
+    };
+    let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
+    try {
+      answer = await daemon.server.runEntries(
+        body,
+        v3CallDeadlineMs(s, this.testsPerCodeunit.get(cu) ?? 1),
+      );
+    } catch (err) {
+      await this.closeDaemon();
+      throw err;
+    }
+    if (answer.summary.cached === false) this.stats.cachedFalse += 1;
+    const rows: V3Row[] = [];
+    for (const t of answer.tests) {
+      const r = serveRow(t);
+      if (typeof r === "string" || r.codeunit !== cu) {
+        await this.closeDaemon();
+        throw new AlRunnerServerRequestError(
+          "protocol",
+          `the plain request for codeunit ${cu} answered ${typeof r === "string" ? r : r.name}`,
+        );
+      }
+      rows.push(r);
+    }
+    if (!serveDaemonReusable(serveLines(rows), "v3")) daemon.dirty = true;
+    return {
+      rows,
+      coverage: coverage
+        ? decodeV3Coverage(
+            JSON.stringify({
+              coverage: answer.summary.coverage,
+              perTestCoverage: answer.summary.perTestCoverage,
+            }),
+          )
+        : { kind: "unavailable", why: "not requested" },
+    };
+  }
+
   async close(): Promise<void> {
+    if (this.entries) {
+      await this.closeDaemon();
+      const s = this.stats;
+      console.warn(
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}.`,
+      );
+    }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(
       () => {},
     );
@@ -1137,6 +1876,37 @@ function refKeyOf(codeunitId: number, method: string): string {
 }
 function refKey(ref: TestMethodRef): string {
   return refKeyOf(ref.codeunitId, ref.method);
+}
+
+/** R635 §6: a row of a group whose echo (or §5 window) does not vouch for it: never scored. */
+function refusalVerdict(ref: TestMethodRef, note: string, wallMs: number): TestVerdict {
+  return {
+    ref,
+    outcome: "error",
+    durationMs: wallMs,
+    failureMessage: note,
+    operation: "completed-accepted",
+    runnerRow: "runner-test-error",
+  };
+}
+
+/** R635: rows as R612's keep rule reads them. */
+function serveLines(rows: readonly V3Row[]): ServerTestLine[] {
+  return rows.map((r) => ({
+    name: r.name,
+    status: r.status,
+    ...(r.message !== undefined ? { message: r.message } : {}),
+    notRun: r.notRun,
+  }));
+}
+
+/** R635 §3, §5: rows compared by method, status, notRun and (for notRun) the reason, in method
+ *  order. A fail's text is not compared: it may carry a call stack. */
+function rowsClass(rows: readonly V3Row[]): string {
+  return rows
+    .map((r) => `${r.method.toLowerCase()}=${r.notRun ? `notRun:${r.message ?? ""}` : r.status}`)
+    .sort()
+    .join(", ");
 }
 
 /** A call that gave no readable answer: `pre-dispatch-rejected`, retried once, then the session stops. */

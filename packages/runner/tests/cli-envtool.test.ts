@@ -32,6 +32,7 @@ import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
 import { tinyBundle } from "./helpers/bundle";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
+import { testDbPath } from "./helpers/test-db";
 
 const scratch = scratchDirs();
 removeRunScratchAfterAll();
@@ -1021,6 +1022,7 @@ describe("an environment deleted at teardown takes its stored bundles with it (R
             serverInstance: cfg.resourceServerInstance ?? "",
           });
           const runId = cfg.store.createRun({
+            testScope: [],
             coverageMode: "procedure",
             identityScheme: IDENTITY_SCHEME,
             buildSymbols: [],
@@ -1054,7 +1056,7 @@ describe("an environment deleted at teardown takes its stored bundles with it (R
   };
 
   it("two runs that each created and deleted their own environment leave no bundle", async () => {
-    const dbPath = join(scratch("lethal-r360-i1-"), "r.sqlite");
+    const dbPath = testDbPath("r.sqlite");
     await envRun(dbPath, "https://env-one");
     expect(bundles(dbPath)).toBe(0);
     await envRun(dbPath, "https://env-two");
@@ -1062,7 +1064,7 @@ describe("an environment deleted at teardown takes its stored bundles with it (R
   });
 
   it("a kept (--keep-env) or quarantined environment keeps its bundle", async () => {
-    const dbPath = join(scratch("lethal-r360-i1-"), "r.sqlite");
+    const dbPath = testDbPath("r.sqlite");
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       await envRun(dbPath, "https://env-kept", { keepEnv: true });
@@ -1079,11 +1081,12 @@ describe("runFromCli hands the run's own output paths to the session (R363)", ()
   it("names the resolved --db with its sidecars, --out and --progress-out", async () => {
     const configPath = await writeTempConfig();
     const dir = scratch("lethal-r363-");
+    const db = testDbPath("results.db");
     const parsed: RunCliConfig = {
       ...RUN_CONFIG_BCDEV,
       backendKind: "al-runner",
       configPath,
-      dbPath: join(dir, "results.db"),
+      dbPath: db,
       outPath: join(dir, "report.json"),
       progressOutPath: join(dir, "events.ndjson"),
     };
@@ -1102,7 +1105,6 @@ describe("runFromCli hands the run's own output paths to the session (R363)", ()
         return FAKE_REPORT;
       },
     });
-    const db = join(dir, "results.db");
     expect(seen).toEqual([
       db,
       `${db}-wal`,

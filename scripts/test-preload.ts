@@ -2,6 +2,15 @@ import { afterAll, afterEach, beforeEach } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  DB_DIR_ENV,
+  DB_DIR_WHY_ENV,
+  chooseDbDir,
+  dbDirPrefix,
+  probeRoot,
+  sweepDeadDbDirs,
+} from "../packages/runner/tests/helpers/test-db.ts";
+import { TEST_DB_REPORT_DIR, pidAlive } from "./verify.ts";
 
 /**
  * One private directory per `bun test` process, made in the real temp folder and removed when the
@@ -84,6 +93,34 @@ function heartbeat(): void {
 }
 heartbeat();
 
+/**
+ * R616: the scratch test DBs go on a tmpfs when it can take them (see `chooseDbDir`), else into
+ * this run's folder on disk, and `LETHAL_TEST_DB_DIR_WHY` names why. Dead workers' tmpfs folders
+ * are swept first. Under verify, each process writes `<dir>/<pid>` = `<parent pid>\t<where>`, so
+ * the receipt names where every worker's DBs went, not one choice made at the start. The tmpfs
+ * folder is removed in `afterAll`; the disk one goes with `runDir`. R358's leak check does not see
+ * either: both are outside the redirected temp folder.
+ */
+const dbChoice = chooseDbDir(process.env, probeRoot);
+let dbDir: string;
+if (dbChoice.tmpfsRoot !== undefined) {
+  sweepDeadDbDirs(dbChoice.tmpfsRoot, pidAlive);
+  dbDir = mkdtempSync(dbDirPrefix(dbChoice.tmpfsRoot, process.pid));
+} else {
+  dbDir = join(runDir, "db");
+  mkdirSync(dbDir);
+}
+process.env[DB_DIR_ENV] = dbDir;
+process.env[DB_DIR_WHY_ENV] = dbChoice.why;
+const dbReportDir = process.env[TEST_DB_REPORT_DIR];
+if (dbReportDir !== undefined && dbReportDir !== "") {
+  const where =
+    dbChoice.tmpfsRoot !== undefined
+      ? `${dbChoice.tmpfsRoot} (tmpfs)`
+      : `on disk (${dbChoice.why})`;
+  writeFileSync(join(dbReportDir, String(process.pid)), `${process.ppid}\t${where}`);
+}
+
 const lethalEntries = (): string[] => readdirSync(tmp).filter((e) => e.startsWith("lethal-"));
 const leaks: string[] = [];
 let file = "";
@@ -119,10 +156,16 @@ afterAll(() => {
           ...(stray.length > 0 ? [`still present at the end of the run: ${stray.join(", ")}`] : []),
         ]
       : [];
-  try {
-    rmSync(runDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-  } catch (err) {
-    lines.push(`could not remove ${runDir}: ${err instanceof Error ? err.message : String(err)}`);
+  for (const dir of dbChoice.tmpfsRoot !== undefined ? [dbDir, runDir] : [runDir]) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    } catch (err) {
+      lines.push(`could not remove ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   if (lines.length > 0) throw new Error(lines.join("\n"));
-});
+  // R648: this hook deletes the temp folders on disk, so the disk sets its time: 0 to 1 ms beside a
+  // second full verify, up to 2.45 s with 3 disk writers added (measured, R-648). bun reports a
+  // timeout here as "(unnamed)", the shape R648 saw in two files. Its own 30 s timeout is over 10x
+  // that and well under verify's 180 s per-file watchdog.
+}, 30_000);

@@ -110,6 +110,12 @@ export function seedRunFrom(store: ResultsStore, fromRunId: number, o: SeedOverr
   if (src.testAppHash === null || src.testAppDeps === null || !src.testAppProven) {
     throw new Error(`seedRunFrom: run ${fromRunId} has no proven test-app identity to clone`);
   }
+  // R585: a clone with a NULL scope would lend no history, and N0 would fail for that reason.
+  if (src.testScope === null) {
+    throw new Error(
+      `seedRunFrom: run ${fromRunId} records no test scope; it is not a clone source`,
+    );
+  }
   const backend = o.backend ?? src.backend;
   const runnerBuild = o.runnerBuild ?? src.runnerBuild ?? undefined;
   const testAppHash = `${o.testAppHash ?? src.testAppHash}${o.hashSuffix ?? ""}`;
@@ -130,6 +136,7 @@ export function seedRunFrom(store: ResultsStore, fromRunId: number, o: SeedOverr
     numberingDigest: src.numberingDigest,
     dependencySourceSha256: src.dependencySourceSha256,
     alRunnerNames: o.alRunnerNames ?? src.alRunnerNames,
+    testScope: src.testScope,
     ...(runnerBuild !== undefined ? { runnerBuild } : {}),
     ...(src.resourceKey !== null ? { resourceKey: src.resourceKey } : {}),
   });

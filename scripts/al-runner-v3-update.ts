@@ -5,6 +5,11 @@
  *
  *   bun scripts/al-runner-v3-update.ts [--regate <lethal commit>]
  *   bun scripts/al-runner-v3-update.ts --edge        (the daily edge-by-download path, `edgeOnce`)
+ *   bun scripts/al-runner-v3-update.ts --edge-rejudge <edge sha>   (R639: a KEPT edge binary,
+ *                                                     re-gated at `.gated`'s commit, `edgeRejudge`)
+ *
+ * Every gate path holds `<root>/.gate.lock` (R639 I3); a run skipped by it exits 2 on `--regate`
+ * and `--edge-rejudge`.
  *
  * 1. Candidates: `v3.0.0-alpha.N` releases of aldevtools/BusinessCentral.AL.Runner with N above the
  *    gated build's. `edge` only through `--edge`, never as an alpha candidate.
@@ -15,7 +20,8 @@
  *    run and accepted only with this run's nonce AND the candidate's binary sha256.
  * 4. Outcomes: `pass` -> installed, `.gated` written, `current` moved (unless a v3 process is
  *    running: "deferred: in use"); `gate-fail` -> `failed/` for good; `held` (every difference a
- *    move toward BC) -> `held/`, never blacklisted, a line for the orchestrator to re-pre-commit;
+ *    move toward BC or a named refusal; read the receipt's lines) -> `held/`, never blacklisted, a
+ *    line for the orchestrator to re-pre-commit;
  *    `infra-fail` -> nothing kept, retried next run, a line after 3 in a row.
  * `--regate <commit>`: gate the CURRENT build at a new LethAL commit; on pass `.gated` takes it.
  * The script never commits.
@@ -27,6 +33,7 @@ import { existsSync } from "node:fs";
 import {
   chmod,
   cp,
+  link,
   mkdir,
   mkdtemp,
   readFile,
@@ -35,6 +42,7 @@ import {
   rename,
   rm,
   symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -43,6 +51,7 @@ import {
   V3_GATE_LEGS,
   gateOutcome,
 } from "../packages/runner/itest/al-runner-v3-gate";
+import { prepareFixtureSymbols } from "../packages/runner/itest/fixture-symbols";
 import {
   type GatedBuild,
   parseGated,
@@ -72,8 +81,15 @@ export interface UpdateDeps {
   /** Extracts `tarball` into the empty `dir`; returns the binary's path. */
   extract(tarball: string, dir: string): Promise<string>;
   versionOf(binary: string): Promise<string>;
-  /** Checks out `commit` detached in the gate worktree and runs the gate with `env`. */
-  runGate(commit: string, env: Readonly<Record<string, string>>): Promise<void>;
+  /**
+   * Checks out `commit` detached in the gate worktree and runs the gate with `env`. `log` takes a
+   * preparation line (R614 I2: how the fixture `.alpackages` were prepared) into the update log.
+   */
+  runGate(
+    commit: string,
+    env: Readonly<Record<string, string>>,
+    log: (line: string) => Promise<void>,
+  ): Promise<void>;
   /** A running process whose executable resolves under `root`. */
   inUse(): Promise<boolean>;
   log(line: string): Promise<void>;
@@ -82,6 +98,10 @@ export interface UpdateDeps {
   heavyJobs(): Promise<number>;
   /** `free -g`'s available column. */
   freeGb(): Promise<number>;
+  /** R639 I3: `/proc/<pid>/cmdline` with NULs as spaces, or undefined when there is no such pid. */
+  procCmdline(pid: number): Promise<string | undefined>;
+  /** R639 I3: the pids (not this one) whose cwd is `dir` or under it: an orphaned itest child. */
+  procsWithCwdUnder(dir: string): Promise<readonly number[]>;
 }
 
 /** `v3.0.0-alpha.N` -> N; anything else (edge, other lines) -> undefined. */
@@ -202,50 +222,14 @@ async function receiptWarnFacts(
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
 /**
- * F5: the fixture symbol tar the gate extracts, pinned by sha256 (measured 2026-10-21 on
- * `/work/lethal/.kraken-local/fixture-symbols.tar`, 1,705,707,520 bytes). A different tar is
- * refused by name; changing it is a deliberate edit here, then a `--regate`.
+ * M4: run in the gate worktree before any leg; a moved commit can need either. F5: the lockfile is
+ * never rewritten there. The fixture `.alpackages` follow, by `prepareFixtureSymbols` (R614, shared
+ * with the itest's own startup): extracted from the pinned tar, verified, or refused by name.
  */
-export const FIXTURE_SYMBOLS_TAR_SHA256 =
-  "bdf460e292f005f1c02cc7b45e83ede1d5c5df280070dc97231f9b314d4f175e";
-
-/** Fixture symbol folders the gate's legs compile against (gitignored, from the kraken tar). */
-export const GATE_ALPACKAGES = [
-  "fixtures/sandbox-tests/.alpackages",
-  "fixtures/sandbox-data-tests/.alpackages",
-] as const;
-
-/**
- * M4: what the gate worktree needs before any leg, or why it cannot be prepared. `bun install` and
- * the native parser build always run (a moved commit can need either). The fixture symbol folders
- * come from the main checkout's `fixture-symbols.tar` when absent; with neither, the gate is refused
- * by name (`al-runner-v3-gate-worktree-unprepared`), an infra-fail before any leg.
- */
-export function gatePreparation(s: {
-  readonly worktree: string;
-  readonly alpackagesPresent: boolean;
-  readonly symbolTar: string | undefined;
-  /** The tar's sha256, when it is to be extracted (F5). */
-  readonly symbolTarSha256?: string;
-}): { readonly steps: readonly string[][] } | { readonly refused: string } {
-  // F5: the lockfile is never rewritten in the gate worktree.
-  const steps: string[][] = [
-    ["bun", "install", "--frozen-lockfile"],
-    ["bun", "scripts/build-native-parser.ts"],
-  ];
-  if (!s.alpackagesPresent) {
-    if (s.symbolTar === undefined)
-      return {
-        refused: `al-runner-v3-gate-worktree-unprepared: ${s.worktree} has no fixture .alpackages (${GATE_ALPACKAGES.join(", ")}) and no fixture-symbols.tar was found to extract them from`,
-      };
-    if (s.symbolTarSha256 !== FIXTURE_SYMBOLS_TAR_SHA256)
-      return {
-        refused: `al-runner-v3-gate-symbol-tar-mismatch: ${s.symbolTar} has sha256 ${s.symbolTarSha256 ?? "(not computed)"}, pinned ${FIXTURE_SYMBOLS_TAR_SHA256}`,
-      };
-    steps.push(["tar", "-xf", s.symbolTar, "-C", s.worktree]);
-  }
-  return { steps };
-}
+export const GATE_STEPS: readonly (readonly string[])[] = [
+  ["bun", "install", "--frozen-lockfile"],
+  ["bun", "scripts/build-native-parser.ts"],
+];
 
 async function readCurrentGated(root: string): Promise<GatedBuild & { readonly dir: string }> {
   const dir = await readlink(join(root, "current"));
@@ -261,12 +245,22 @@ async function infraCount(root: string, name: string, bump: boolean): Promise<nu
   return next;
 }
 
+/** `gateOne`'s options: `--regate`'s commit, or `--edge-rejudge`'s custody-checked kept binary. */
+export interface GateOneOpts {
+  readonly regateAt?: string;
+  /** R639 M4: the kept binary (no download, no extract) and the sha its custody check gave. */
+  readonly binary?: string;
+  readonly binarySha256?: string;
+  /** R639 M5: the kept folder the binary came from, written into `.gated` on a pass. */
+  readonly rejudgedFrom?: string;
+}
+
 /** One candidate (or the current build, on `--regate`) through the gate. */
 export async function gateOne(
   deps: UpdateDeps,
   tag: string,
   gated: GatedBuild,
-  opts: { readonly regateAt?: string } = {},
+  opts: GateOneOpts = {},
 ): Promise<Outcome> {
   const { root } = deps;
   const work = await mkdtemp(join(root, ".work-"));
@@ -276,17 +270,20 @@ export async function gateOne(
     const name = tag;
     const commit = opts.regateAt ?? gated.lethalCommit;
     // I-2: a gate-fail is final for THIS build at THIS LethAL commit only; a LethAL fix (a new
-    // `.gated` commit after a re-pre-commitment) may gate the same build again.
+    // `.gated` commit after a re-pre-commitment) may gate the same build again. R639 I5: checked
+    // before every binary path, so a rejudge can never write into an existing failed/ folder.
     const failedDir = join(root, "failed", `${name}@${commit}`);
+    if (opts.regateAt === undefined && existsSync(failedDir)) {
+      await deps.log(
+        `${deps.now()} ${tag}: gate-fail: already gate-failed at ${commit} (${failedDir}); not gated again at this commit, \`--regate\` to re-judge`,
+      );
+      return "gate-fail";
+    }
     if (opts.regateAt !== undefined) {
       binary = join(await readlink(join(root, "current")), "al-runner");
+    } else if (opts.binary !== undefined) {
+      binary = opts.binary;
     } else {
-      if (existsSync(failedDir)) {
-        await deps.log(
-          `${deps.now()} ${tag}: gate-fail: already gate-failed at ${commit} (${failedDir}); not gated again at this commit, \`--regate\` to re-judge`,
-        );
-        return "gate-fail";
-      }
       const dl = join(work, "dl");
       await mkdir(dl);
       let got: { tarball: string; sums: string };
@@ -310,20 +307,29 @@ export async function gateOne(
       binary = await deps.extract(got.tarball, x);
     }
     const sha = await sha256OfFile(binary);
+    // R639 M4: the bytes gated are the bytes the custody check read.
+    if (opts.binarySha256 !== undefined && sha !== opts.binarySha256)
+      throw new Error(
+        `al-runner-v3-edge-rejudge-refused: ${binary} has sha256 ${sha} now, not the custody-checked ${opts.binarySha256}`,
+      );
     const version = await deps.versionOf(binary);
     const nonce = randomUUID();
     const receipt = join(work, "receipt.json");
     await rm(receipt, { force: true });
     try {
-      await deps.runGate(commit, {
-        LETHAL_ITEST_ALRUNNER_V3: "1",
-        LETHAL_ALRUNNER_V3_PATH: binary,
-        ...(opts.regateAt === undefined ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1" } : {}),
-        LETHAL_ITEST_V3_TABLES: "1",
-        LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO ?? V3_CDO_DEFAULT,
-        LETHAL_V3_GATE_NONCE: nonce,
-        LETHAL_V3_GATE_RECEIPT: receipt,
-      });
+      await deps.runGate(
+        commit,
+        {
+          LETHAL_ITEST_ALRUNNER_V3: "1",
+          LETHAL_ALRUNNER_V3_PATH: binary,
+          ...(opts.regateAt === undefined ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1" } : {}),
+          LETHAL_ITEST_V3_TABLES: "1",
+          LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO ?? V3_CDO_DEFAULT,
+          LETHAL_V3_GATE_NONCE: nonce,
+          LETHAL_V3_GATE_RECEIPT: receipt,
+        },
+        (line) => deps.log(`${deps.now()} ${tag}: ${line}`),
+      );
     } catch (err) {
       // A failing gate still writes its receipt; the receipt decides. R633 I1: the error is logged.
       await deps.log(
@@ -354,6 +360,9 @@ export async function gateOne(
       }
     };
     if (opts.regateAt !== undefined) await keep(join(root, "regate"), `${commit}.`);
+    // R639 §6 step 8: a rejudge's evidence, whatever the outcome; nothing old is moved or rewritten.
+    const rejudge = opts.binary !== undefined;
+    if (rejudge) await keep(join(root, "rejudge", `${name}@${commit}`));
     if (outcome === "infra-fail") {
       if (opts.regateAt === undefined) await keep(join(root, "infra"), `${name}.`);
       return infra(deps, name);
@@ -368,13 +377,15 @@ export async function gateOne(
       return "gate-fail";
     }
     if (outcome === "held") {
-      if (opts.regateAt === undefined) {
-        await mkdir(join(root, "held", name), { recursive: true });
-        await cp(binary, join(root, "held", name, "al-runner"));
-        await keep(join(root, "held", name));
+      const heldDir = join(root, "held", name);
+      // R639: a rejudge never rewrites an existing held/<tag>/ (its record stays in rejudge/).
+      if (opts.regateAt === undefined && !(rejudge && existsSync(heldDir))) {
+        await mkdir(heldDir, { recursive: true });
+        await cp(binary, join(heldDir, "al-runner"));
+        await keep(heldDir);
       }
       await deps.log(
-        `${deps.now()} ${tag}: HELD for the orchestrator: every difference is a move toward BC; re-pre-commit, then re-gate`,
+        `${deps.now()} ${tag}: HELD for the orchestrator: every difference is a move toward BC or a named refusal; read the receipt's lines; re-pre-commit, then re-gate`,
       );
       return "held";
     }
@@ -397,10 +408,17 @@ export async function gateOne(
       version,
       binarySha256: sha,
       lethalCommit: commit,
+      // M5 (R639): only `--regate` (the same binary) inherits the tarball; a rejudge names its
+      // kept folder instead.
       ...(tarballSha !== undefined
         ? { tarballSha256: tarballSha }
-        : gated.tarballSha256 !== undefined
+        : opts.regateAt !== undefined && gated.tarballSha256 !== undefined
           ? { tarballSha256: gated.tarballSha256 }
+          : {}),
+      ...(opts.rejudgedFrom !== undefined
+        ? { rejudgedFrom: opts.rejudgedFrom }
+        : opts.regateAt !== undefined && gated.rejudgedFrom !== undefined
+          ? { rejudgedFrom: gated.rejudgedFrom }
           : {}),
       gatedAt: deps.now(),
     };
@@ -434,8 +452,21 @@ export async function updateOnce(
   opts: { readonly regateAt?: string } = {},
 ): Promise<(Outcome | "skipped")[]> {
   // R632 D: the D legs make every gate a corpus job, on this path too.
-  if (await skippedForTheDay(deps, opts.regateAt !== undefined ? "regate" : "alpha"))
-    return ["skipped"];
+  const what = opts.regateAt !== undefined ? "regate" : "alpha";
+  if (await skippedForTheDay(deps, what)) return ["skipped"];
+  const lock = await takeGateLock(deps, what);
+  if (lock === undefined) return ["skipped"];
+  try {
+    return await updateLocked(deps, opts);
+  } finally {
+    await lock.release();
+  }
+}
+
+async function updateLocked(
+  deps: UpdateDeps,
+  opts: { readonly regateAt?: string },
+): Promise<(Outcome | "skipped")[]> {
   const current = await readCurrentGated(deps.root);
   if (opts.regateAt !== undefined) return [await gateOne(deps, "regate", current, opts)];
   const gatedAlpha = /3\.0\.0-alpha\.(\d+)/.exec(current.version)?.[1];
@@ -452,7 +483,7 @@ export async function updateOnce(
 
 /**
  * The daily EDGE path (owner request, via the orchestrator): upstream's `edge` release by download.
- * - Skipped for the day, with the reason logged, when 2 or more heavy jobs run container-wide or
+ * - Skipped for the day, with the reason logged, when 3 or more other heavy jobs run container-wide or
  *   `free -g` shows under 10 GB available.
  * - A NO-OP when edge's commit equals the one last seen (`<root>/edge.last-seen`).
  * - Otherwise the candidate goes through `gateOne`: the checksum is checked before anything is
@@ -475,17 +506,24 @@ export type EdgeResult = "skipped" | "no-op" | Outcome;
 export const HEAVY_JOB =
   /(^|\/)bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|(^|\/)bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/;
 
-/** R633 I2: a `--regate` that was skipped for the day exits 2, so a `&&` chain stops. */
-export function updateExitCode(regate: boolean, out: readonly string[]): number {
-  return regate && out[0] === "skipped" ? 2 : 0;
+/**
+ * R633 I2: a `--regate` (R639: or an `--edge-rejudge`) that was skipped exits 2, so a `&&` chain
+ * stops.
+ */
+export function updateExitCode(mustRun: boolean, out: readonly string[]): number {
+  return mustRun && out[0] === "skipped" ? 2 : 0;
 }
 
-/** True, with the reason logged, when 2 or more heavy jobs run or under 10 GB is available. */
+/**
+ * True, with the reason logged, when 3 or more OTHER heavy jobs run or under 10 GB is available:
+ * at most 3 heavy jobs container-wide (2026-10-22, 32 GB), counting the gate itself. The BaseApp
+ * cap of two does not apply to the gate.
+ */
 async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean> {
   const heavy = await deps.heavyJobs();
-  if (heavy >= 2) {
+  if (heavy >= 3) {
     await deps.log(
-      `${deps.now()} ${what}: skipped for the day: ${heavy} heavy jobs are running (limit: 1 other)`,
+      `${deps.now()} ${what}: skipped for the day: ${heavy} heavy jobs are running (limit: 2 others)`,
     );
     return true;
   }
@@ -497,8 +535,175 @@ async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean
   return false;
 }
 
+/** The holder a lock file names, or undefined when it is empty or unreadable. */
+async function lockHolder(
+  path: string,
+): Promise<{ readonly pid: number; readonly startedAt: string } | undefined> {
+  try {
+    const h = JSON.parse(await readFile(path, "utf8")) as { pid?: unknown; startedAt?: unknown };
+    return typeof h.pid === "number" && typeof h.startedAt === "string"
+      ? { pid: h.pid, startedAt: h.startedAt }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `link()` a fully written temp file to `lock`: atomic, so the lock is never seen half-written. */
+async function linkLock(lock: string, body: string): Promise<boolean> {
+  const tmp = `${lock}.${randomUUID()}`;
+  await writeFile(tmp, body);
+  try {
+    await link(tmp, lock);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw err;
+  } finally {
+    await unlink(tmp).catch(() => {});
+  }
+}
+
+/**
+ * R639 I3: one lock, `<root>/.gate.lock`, around every gate path (the alpha path, `--regate`,
+ * `--edge`, `--edge-rejudge`), since all of them check out and run in `GATE_WORKTREE`. A holder is
+ * live only when its `/proc/<pid>/cmdline` names `al-runner-v3-update`; a dead, reused, empty or
+ * unreadable holder is stale, and is taken over (by rename, then a second `link`) unless a process
+ * still runs under `GATE_WORKTREE` (an orphaned itest child). Every skip is logged with the manual
+ * clear step and returns `undefined`.
+ */
+export async function takeGateLock(
+  deps: UpdateDeps,
+  what: string,
+): Promise<{ release(): Promise<void> } | undefined> {
+  const lock = join(deps.root, ".gate.lock");
+  const me = { pid: process.pid, startedAt: deps.now() };
+  const body = JSON.stringify({ ...me, argv: process.argv });
+  const release = async () => {
+    const h = await lockHolder(lock);
+    if (h?.pid === me.pid && h.startedAt === me.startedAt) await unlink(lock).catch(() => {});
+  };
+  if (await linkLock(lock, body)) return { release };
+  const h = await lockHolder(lock);
+  const skip = async (why: string) => {
+    await deps.log(
+      `${deps.now()} ${what}: skipped: the gate lock ${lock} is held by pid ${h?.pid ?? "?"} since ${h?.startedAt ?? "?"} (${why}); check that no process runs under ${GATE_WORKTREE}, then \`rm ${lock}\``,
+    );
+    return undefined;
+  };
+  if (
+    h !== undefined &&
+    h.pid !== process.pid &&
+    ((await deps.procCmdline(h.pid)) ?? "").includes("al-runner-v3-update")
+  )
+    return skip("a live al-runner-v3-update");
+  if (h === undefined)
+    await deps.log(`${deps.now()} ${what}: the gate lock ${lock} is empty or unreadable: stale`);
+  const orphans = await deps.procsWithCwdUnder(GATE_WORKTREE);
+  if (orphans.length > 0)
+    return skip(`stale, but pid(s) ${orphans.join(", ")} still run under ${GATE_WORKTREE}`);
+  // ponytail: two runs that both find the same stale lock in the same instant can both take it; needs a stale lock plus simultaneous starts. Upgrade: re-read the lock before and after the rename and skip unless it still names the dead holder.
+  await rename(lock, `${lock}.stale.${randomUUID()}`).catch(() => {});
+  if (!(await linkLock(lock, body))) return skip("another run took it over first");
+  await deps.log(`${deps.now()} ${what}: took over the stale gate lock ${lock}`);
+  return { release };
+}
+
+/** The kept folders of `tag`: `failed/<tag>@*` and `held/<tag>`, each with a binary and a receipt. */
+async function keptFolders(root: string, tag: string): Promise<string[]> {
+  const failed = join(root, "failed");
+  const names = existsSync(failed) ? await readdir(failed) : [];
+  return [
+    ...names.filter((n) => n.startsWith(`${tag}@`)).map((n) => join(failed, n)),
+    join(root, "held", tag),
+  ].filter((d) => existsSync(join(d, "al-runner")) && existsSync(join(d, "receipt.json")));
+}
+
+/**
+ * R639 `--edge-rejudge <edge sha>` (plan r2 §6, r3 I4/I5, M4/M5): re-gate a KEPT edge binary at
+ * `.gated`'s current commit. It never downloads, never reads or writes `edge.last-seen`, and never
+ * deletes, moves or rewrites anything under `failed/` or `held/`. A refusal throws.
+ */
+export async function edgeRejudge(deps: UpdateDeps, arg: string): Promise<Outcome | "skipped"> {
+  const refuse = (why: string): never => {
+    throw new Error(`al-runner-v3-edge-rejudge-refused: ${why}`);
+  };
+  if (!/^[0-9a-f]{7,40}$/.test(arg)) refuse(`"${arg}" is not a 7-40 character sha`);
+  if (await skippedForTheDay(deps, "edge-rejudge")) return "skipped";
+  const lock = await takeGateLock(deps, "edge-rejudge");
+  if (lock === undefined) return "skipped";
+  try {
+    const { root } = deps;
+    const tag = `edge-${arg}`;
+    const current = await readCurrentGated(root);
+    const commit = current.lethalCommit;
+    // I5: at the same commit a verdict is final, whether or not its folder holds a receipt.
+    const judged = () =>
+      refuse(`${tag} already judged at ${commit}; --regate to a new commit first`);
+    if (existsSync(join(root, "failed", `${tag}@${commit}`))) judged();
+    for (const r of [
+      join(root, "rejudge", `${tag}@${commit}`, "receipt.json"),
+      join(root, "held", tag, "receipt.json"),
+    ]) {
+      const k = existsSync(r)
+        ? (JSON.parse(await readFile(r, "utf8")) as { lethalCommit?: unknown; outcome?: unknown })
+        : undefined;
+      if (k?.lethalCommit === commit && k.outcome !== "infra-fail") judged();
+    }
+    // Custody: every kept copy is the bytes its receipt names, and all are one build.
+    const folders = await keptFolders(root, tag);
+    if (folders.length === 0)
+      refuse(`no kept binary with a receipt for ${tag} in failed/ or held/`);
+    const before: string[] = [];
+    let sha: string | undefined;
+    for (const d of folders) {
+      const r = JSON.parse(await readFile(join(d, "receipt.json"), "utf8")) as {
+        binarySha256?: unknown;
+        outcome?: unknown;
+        lethalCommit?: unknown;
+      };
+      const s = await sha256OfFile(join(d, "al-runner"));
+      if (s !== r.binarySha256)
+        refuse(`${d}/al-runner has sha256 ${s}, its receipt names ${String(r.binarySha256)}`);
+      if (sha !== undefined && s !== sha)
+        refuse(`two different kept builds of ${tag} (${sha}, ${s})`);
+      sha = s;
+      before.push(`${String(r.outcome)}@${String(r.lethalCommit)}`);
+    }
+    const [from] = folders;
+    if (from === undefined || sha === undefined) return refuse(`no kept binary for ${tag}`);
+    const binary = join(from, "al-runner");
+    // I4: the kept bytes ARE the build the argument names.
+    const v = /\(([0-9a-f]+)\)$/.exec((await deps.versionOf(binary)).trim())?.[1] ?? "";
+    if (v.length < 7 || !(v.startsWith(arg) || arg.startsWith(v)))
+      refuse(`${binary} reports commit "${v}", not ${arg}`);
+    const outcome = await gateOne(deps, tag, current, {
+      binary,
+      binarySha256: sha,
+      rejudgedFrom: from,
+    });
+    const same = before.every((b) => b.startsWith(`${outcome}@`));
+    await deps.log(
+      `${deps.now()} edge-rejudge ${tag} (${sha}) at ${commit}: ${outcome}; before: ${before.join(", ")}; ${same ? "same" : "different"}`,
+    );
+    return outcome;
+  } finally {
+    await lock.release();
+  }
+}
+
 export async function edgeOnce(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult> {
   if (await skippedForTheDay(deps, "edge")) return "skipped";
+  const lock = await takeGateLock(deps, "edge");
+  if (lock === undefined) return "skipped";
+  try {
+    return await edgeLocked(deps);
+  } finally {
+    await lock.release();
+  }
+}
+
+async function edgeLocked(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult> {
   const commit = (await deps.edgeCommit()).trim();
   if (!/^[0-9a-f]{7,40}$/.test(commit)) throw new Error(`edge's commit "${commit}" is not a sha`);
   const seenFile = join(deps.root, "edge.last-seen");
@@ -595,7 +800,7 @@ export function realDeps(root = ROOT): UpdateDeps {
       throw new Error(`no al-runner binary in ${tarball}`);
     },
     versionOf: async (b) => (await run([b, "--version"])).trim(),
-    runGate: async (commit, env) => {
+    runGate: async (commit, env, log) => {
       if (!existsSync(GATE_WORKTREE))
         await run([
           "git",
@@ -610,18 +815,11 @@ export function realDeps(root = ROOT): UpdateDeps {
       await run(["git", "-C", GATE_WORKTREE, "checkout", "--detach", commit]);
       // M4: prepare the worktree, or refuse by name before any leg (a throw here is infra-fail:
       // no receipt is written).
-      const tar = ["/work/lethal/.kraken-local/fixture-symbols.tar"].find((p) => existsSync(p));
-      const alpackagesPresent = GATE_ALPACKAGES.every((d) => existsSync(join(GATE_WORKTREE, d)));
-      const prep = gatePreparation({
-        worktree: GATE_WORKTREE,
-        alpackagesPresent,
-        symbolTar: tar,
-        ...(tar !== undefined && !alpackagesPresent
-          ? { symbolTarSha256: await sha256OfFile(tar) }
-          : {}),
-      });
-      if ("refused" in prep) throw new Error(prep.refused);
-      for (const step of prep.steps) await run(step, {}, GATE_WORKTREE);
+      for (const step of GATE_STEPS) await run([...step], {}, GATE_WORKTREE);
+      // R614: extracted from the pinned tar, verified against it, or refused by name.
+      // I2: logged at once, so the first run's `marked` (or an `extracted`) shows in the update log.
+      const prepared = await prepareFixtureSymbols({ worktree: GATE_WORKTREE });
+      await log(`fixture .alpackages: ${prepared}`);
       // R633 I1: the itest's own output goes to `gate.log` beside the receipt; `gateOne` keeps it.
       const receipt = env.LETHAL_V3_GATE_RECEIPT;
       await runToLog(
@@ -668,6 +866,19 @@ export function realDeps(root = ROOT): UpdateDeps {
       if (!Number.isFinite(avail)) throw new Error(`cannot read free -g: ${out}`);
       return avail;
     },
+    procCmdline: async (pid) =>
+      readFile(`/proc/${pid}/cmdline`, "utf8")
+        .then((c) => c.replaceAll("\0", " "))
+        .catch(() => undefined),
+    procsWithCwdUnder: async (dir) => {
+      const pids: number[] = [];
+      for (const pid of await readdir("/proc")) {
+        if (!/^\d+$/.test(pid) || Number(pid) === process.pid) continue;
+        const cwd = await readlink(`/proc/${pid}/cwd`).catch(() => "");
+        if (cwd === dir || cwd.startsWith(`${dir}/`)) pids.push(Number(pid));
+      }
+      return pids;
+    },
   };
 }
 
@@ -705,6 +916,11 @@ export function realEdgeDeps(root = ROOT): UpdateDeps & EdgeDeps {
 
 if (import.meta.main && process.argv.includes("--edge")) {
   console.log(`al-runner-v3-update --edge: ${await edgeOnce(realEdgeDeps())}`);
+} else if (import.meta.main && process.argv.includes("--edge-rejudge")) {
+  const sha = process.argv[process.argv.indexOf("--edge-rejudge") + 1] ?? "";
+  const out = await edgeRejudge(realEdgeDeps(), sha);
+  console.log(`al-runner-v3-update --edge-rejudge: ${out}`);
+  process.exitCode = updateExitCode(true, [out]);
 } else if (import.meta.main) {
   const i = process.argv.indexOf("--regate");
   const regateAt = i >= 0 ? process.argv[i + 1] : undefined;

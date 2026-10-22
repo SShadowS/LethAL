@@ -57,8 +57,8 @@ export class AlRunnerV3CoverageJoinError extends Error {
  * What v3 lists, MEASURED (docs/measurements/README.md, "al-runner v3"): the top-level `coverage`
  * holds the files in the CALLED codeunit's static reach, each with every statement, zero-hit ones
  * included; it is NOT every compiled file. `contract-alpha2/cov.json` (`--codeunit 50652` on the
- * probe) lists 3 of the 10 compiled files, one of them reached by nothing with all its statements at
- * 0 hits; the Q23 CDO call lists 478 of the 658 compiled files, unreached files included whole.
+ * `scripts/r586-probe` project, not the contract probe's "Probe Cut") lists 3 of the 10 compiled
+ * files, one of them reached by nothing with all its statements at 0 hits; the Q23 CDO call lists 478 of the 658 compiled files, unreached files included whole.
  *
  * With an EMPTY index (0 + 0) nothing can hide, so the function returns before any comparison.
  * Otherwise:

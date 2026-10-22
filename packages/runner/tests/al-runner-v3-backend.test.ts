@@ -1,7 +1,7 @@
 // R586: AlRunnerV3Backend against a fake v3 and a fake alc. Plan
 // docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md, §3-§6, tests T5, T12, T21, T22,
 // T24, T28-T32 and the decoder rows of §5. Every guard has a test per direction.
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   appendFile,
   mkdir,
@@ -17,6 +17,7 @@ import { join, normalize } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitStaticSelector } from "@lethal/schemata";
 import {
+  AL_RUNNER_V3_VERSION,
   AlRunnerV3Backend,
   type AlRunnerV3Config,
   AlRunnerV3ResourceSelectorRefusedError,
@@ -31,6 +32,8 @@ import {
   v3CallDeadlineMs,
   v3RowVerdict,
 } from "../src/al-runner-v3-backend";
+import type { V3ContractResult } from "../src/al-runner-v3-contract";
+import { sha256OfFile } from "../src/al-runner-v3-pin";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
@@ -368,6 +371,68 @@ describe("M8: status() refuses a package folder with no System Application", () 
     expect(s.ok).toBe(false);
     expect(s.details).not.toMatch(/system-application-not-found/);
     expect(s.details).toMatch(/al-runner-v3-ungated-build/);
+  });
+});
+
+describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and warnings", () => {
+  const VERSION = "al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)";
+  const versionOnly: SpawnFn = async () => ({ exitCode: 0, stdout: `${VERSION}\n`, stderr: "" });
+  const UNLIKE: V3ContractResult = {
+    facts: [
+      {
+        fact: "refusal-row-shape",
+        kind: "defect",
+        verdict: "unlike-bc",
+        expected: "x",
+        measured: "edge text",
+      },
+    ],
+  };
+  async function statusOf(candidate: boolean) {
+    const l = await layout();
+    const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+    await writeFile(
+      join(l.deps, "Microsoft_System Application.app"),
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0"?><Package ${NS}><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
+      }),
+    );
+    const bin = join(l.root, "al-runner");
+    await writeFile(bin, "binary");
+    if (!candidate) {
+      await writeFile(
+        join(l.root, ".gated"),
+        JSON.stringify({
+          version: VERSION,
+          binarySha256: await sha256OfFile(bin),
+          lethalCommit: "a".repeat(40),
+        }),
+      );
+    }
+    const b = backendOf(l, versionOnly, fakeAlc().io, {
+      alRunnerPath: bin,
+      ...(candidate ? { candidate: true } : {}),
+    });
+    // The probe itself is tested in al-runner-v3-contract.test.ts; seed its result, test the wiring.
+    (b as unknown as { contract: V3ContractResult }).contract = UNLIKE;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = await b.status();
+      return { s, warned: warn.mock.calls.map((c) => String(c[0])).join("\n") };
+    } finally {
+      warn.mockRestore();
+    }
+  }
+  test("a candidate backend warns al-runner-v3-defect-unlike-bc and runs", async () => {
+    const { s, warned } = await statusOf(true);
+    expect(s.ok).toBe(true);
+    expect(warned).toMatch(/al-runner-v3-defect-unlike-bc: refusal-row-shape/);
+  });
+  test("a non-candidate backend refuses, naming refusal-row-shape", async () => {
+    const { s, warned } = await statusOf(false);
+    expect(s.ok).toBe(false);
+    expect(s.details).toMatch(/UNLIKE-BC — refusal-row-shape/);
+    expect(warned).not.toMatch(/unlike-bc/);
   });
 });
 
@@ -766,6 +831,29 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
   });
 });
 
+describe("R639 F1 (R10): the v3 version pattern", () => {
+  test("F1-accept: alpha.2, alpha.3 and an edge build with SemVer build metadata are v3 builds", () => {
+    for (const v of [
+      "alrunner 3.0.0-alpha.2 (91253f2d6)",
+      "al-runner 3.0.0-alpha.3 (c893e3633)",
+      "al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)",
+    ])
+      expect(AL_RUNNER_V3_VERSION.test(v)).toBe(true);
+  });
+  test("F1-empty: empty build metadata is refused", () => {
+    expect(AL_RUNNER_V3_VERSION.test("al-runner 3.0.0-alpha.4+ (57f1e4f98)")).toBe(false);
+  });
+  test("F1-space (M7): build metadata with a space is refused", () => {
+    expect(AL_RUNNER_V3_VERSION.test("al-runner 3.0.0-alpha.4+edge 2026 (57f1e4f98)")).toBe(false);
+  });
+  test("F1-hex: a commit that is not hex is refused", () => {
+    expect(AL_RUNNER_V3_VERSION.test("al-runner 3.0.0+edge (zz)")).toBe(false);
+  });
+  test("F1-v2: a v2 line is refused", () => {
+    expect(AL_RUNNER_V3_VERSION.test("AlRunner 2.12.0 (c39ad5de)")).toBe(false);
+  });
+});
+
 describe("§5 the row decoder", () => {
   const r = ref("A");
   const row = (o: Partial<Parameters<typeof v3RowVerdict>[1]>) => ({
@@ -808,6 +896,26 @@ describe("§5 the row decoder", () => {
     const e = v3RowVerdict(r, row({ status: "error", message: "?" }), 3, 10, undefined);
     expect([e.outcome, e.runnerRow]).toEqual(["error", "runner-test-error"]);
   });
+  const PREFIXED = "NotRun: out-of-scope: x";
+  test("K1-a: a fail whose message starts with the refusal prefix (notRun false) is error/runner-test-error, never a kill", () => {
+    const v = v3RowVerdict(r, row({ status: "fail", message: PREFIXED }), 3, 10, undefined);
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+    expect(v.failureMessage).toContain("a refusal written as a fail; never scored");
+  });
+  test("K1-b: the same with status pass is error, never a pass", () => {
+    const v = v3RowVerdict(r, row({ status: "pass", message: PREFIXED }), 3, 10, undefined);
+    expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+  });
+  test("K1-c (the control): a plain fail with another message still scores fail", () => {
+    expect(
+      v3RowVerdict(r, row({ status: "fail", message: "boom" }), 3, 10, undefined).outcome,
+    ).toBe("fail");
+  });
+  test("K1-d: the prefix NOT at the start still scores fail (the match is anchored)", () => {
+    expect(
+      v3RowVerdict(r, row({ status: "fail", message: `x ${PREFIXED}` }), 3, 10, undefined).outcome,
+    ).toBe("fail");
+  });
   test("decodeV3Rows refuses another codeunit's row and a name that is not Codeunit<id>.<method>", () => {
     const doc = (t: object) => JSON.stringify({ tests: [t] });
     expect(
@@ -847,6 +955,27 @@ describe("T24 (I1) and I3: the notes", () => {
     expect(
       (await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).backendNote,
     ).toBeUndefined();
+  });
+
+  test("R637 (S2): the note names a not-run covering sibling as timed out or refused, never just not run", async () => {
+    const l = await layout();
+    const rows = () => [
+      { method: "A", status: "error" as const, notRun: true, message: "Test exceeded 3s timeout." },
+      { method: "C", status: "error" as const, notRun: true, message: "NotRun: out-of-scope: x" },
+      { method: "B", status: "fail" as const, message: "x" },
+    ];
+    const b = backendOf(l, fakeV3(rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate("M0001");
+    b.useCoveringBudgets("M0001", [
+      { ref: ref("A"), budgetMs: 1000 },
+      { ref: ref("B"), budgetMs: 1000 },
+      { ref: ref("C"), budgetMs: 1000 },
+    ]);
+    const note = (await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).backendNote;
+    expect(note).toContain("A (timed out)");
+    expect(note).toContain("C (refused)");
+    expect(note).not.toContain("not run");
   });
 
   test("a first-row kill gets no note", async () => {

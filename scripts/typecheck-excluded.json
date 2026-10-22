@@ -57,6 +57,7 @@
   "scripts/r586-probe/state-notes.ts": "spent probe for R586 (done (8a71e87d)); cited by nothing",
   "scripts/r586-probe/summarise.ts": "spent probe for R586 (done (8a71e87d)); cited by nothing",
   "scripts/r594/compare.ts": "spent probe for R594 (done (c9fc4573)); cited as evidence by README.md, 2026-10-21-r606-cdo-serve-resfix-precommitment.md, R594",
+  "scripts/r639-bc-probe/drive.ts": "spent probe for R639; run once on bc1. It imports packages/runner/src by relative path, which a composite scripts project cannot reach (TS6059/TS6307)",
   "scripts/r72-probe/drive.ts": "spent probe for R72 (done); the folder's README gives its run line, and the folder is cited by R072.md, R169.md, docs/measurements/README.md and source comments",
   "scripts/r83-probe/drive.ts": "spent probe for R83 (done); the folder's README gives its run line, and the folder is cited by R083.md"
 }

@@ -66,6 +66,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     bundle = await bundleFor(instrumentedDir, appPath);
     store = new ResultsStore(":memory:");
     runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -98,6 +99,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     over: { manifestSha256?: string; sha256?: string } = {},
   ): InstalledArtifactRef {
     const runB = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -217,6 +219,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       reason: "no-record",
     });
     const runB = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -242,6 +245,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     const bad = { ...MANIFEST, artifactId: ARTIFACT_ID.toUpperCase() };
     await writeFile(join(ref.instrumentedDir, "mutant-manifest.json"), JSON.stringify(bad));
     const runB = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],

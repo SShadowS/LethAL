@@ -545,4 +545,21 @@ export interface ExecutionBackend {
    * (`[v3-refused-test-nearby] ...`), written into its `failureNote`. Never moves a verdict.
    */
   survivorNote?(covering: readonly TestMethodRef[]): string | undefined;
+
+  /**
+   * R635 §4, OPTIONAL: `true` right before a batch's baseline step (`activateOnce(null)`), `false`
+   * in a `finally` after its baseline loop. al-runner v3's serve-entries transport reads its
+   * baseline (one-shot, coverage, baseline refusals) from this bracket ONLY, never from "no mutant
+   * active", so the kill confirm and Decision 11's rerun are not baseline calls.
+   */
+  baselinePhase?(on: boolean): void;
+
+  /**
+   * R635 §4, OPTIONAL: once at the top of each mutant-loop call, every covered mutant of that
+   * shard with its covering refs. al-runner v3's serve-entries transport sends them as entries
+   * and keeps each fully valid answer for that mutant's first activation.
+   */
+  prefetchMutants?(
+    plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+  ): Promise<void>;
 }

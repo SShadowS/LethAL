@@ -1,8 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
+import { dirname } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { REPORT_SCHEMA_VERSION, renderConsole } from "../src/report";
@@ -11,6 +10,7 @@ import { buildResumeIndex } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
 import { legacyBuildReport } from "./helpers/legacy-report";
+import { testDbPath } from "./helpers/test-db";
 
 /**
  * R69 Phase 2 Task 5 — provenance through store, resume and report.
@@ -219,6 +219,7 @@ describe("ResultsStore runner provenance (R69 Phase 2 Task 5)", () => {
   test("recordMutant persists runner at the column level, NULL when absent", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -245,6 +246,7 @@ describe("ResultsStore runner provenance (R69 Phase 2 Task 5)", () => {
   test("mutantVerdicts reads the runner back, and omits it when NULL", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -261,8 +263,7 @@ describe("ResultsStore runner provenance (R69 Phase 2 Task 5)", () => {
   });
 
   test("migrates a pre-runner-column database and then accepts a runner write", () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-store-runner-"));
-    const dbPath = join(dir, "lethal.sqlite");
+    const dbPath = testDbPath("lethal.sqlite");
     try {
       /** The mutants/runs schema exactly as it stood before R69 Phase 2 Task 5 added `runner`. */
       const PRE_RUNNER_SCHEMA = `
@@ -303,6 +304,7 @@ CREATE TABLE IF NOT EXISTS mutants (
 
       const store = new ResultsStore(dbPath);
       const runId = store.createRun({
+        testScope: [],
         coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
@@ -320,17 +322,17 @@ CREATE TABLE IF NOT EXISTS mutants (
       check.close();
       expect(row.runner).toBe("client-services");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dirname(dbPath), { recursive: true, force: true });
     }
   });
 
   test("opening an already-migrated (runner-having) database is idempotent", () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-store-runner-"));
-    const dbPath = join(dir, "lethal.sqlite");
+    const dbPath = testDbPath("lethal.sqlite");
     try {
       new ResultsStore(dbPath).close();
       const store = new ResultsStore(dbPath); // second open must not throw on ALTER
       const runId = store.createRun({
+        testScope: [],
         coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
@@ -341,7 +343,7 @@ CREATE TABLE IF NOT EXISTS mutants (
       store.recordMutant(runId, mutantRow());
       store.close();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dirname(dbPath), { recursive: true, force: true });
     }
   });
 });

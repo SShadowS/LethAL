@@ -62,10 +62,17 @@ export function removeScratchDirs(dirs: Iterable<string>, rm: typeof rmSync = rm
  * fails the run if a file leaves a `lethal-*` temp entry behind. A directory that cannot be
  * removed (on Windows, usually a database or process the test never closed) fails the file,
  * after every other directory has been tried.
+ *
+ * R648: the removal waits on the disk, so its time follows the disk, not the file. Measured
+ * (R-648) for r619-one-lend's 62 folders: 26 ms alone, 41 ms beside a second full verify, 307 ms
+ * with 3 disk writers added (other files under the writers: up to 3.4 s); on 2026-10-22 a hook in
+ * that file ("(unnamed)") hit bun's 5 s default at 6.66 s. Its own 30 s timeout is over 4x that and
+ * well under verify's 180 s per-file watchdog.
  */
+const SCRATCH_REMOVE_TIMEOUT_MS = 30_000;
 export function scratchDirs(): (prefix: string) => string {
   const made: string[] = [];
-  afterAll(() => removeScratchDirs(made));
+  afterAll(() => removeScratchDirs(made), SCRATCH_REMOVE_TIMEOUT_MS);
   return (prefix) => {
     const d = mkdtempSync(join(tmpdir(), prefix));
     made.push(d);

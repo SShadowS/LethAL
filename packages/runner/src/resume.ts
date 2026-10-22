@@ -336,6 +336,10 @@ export function batchCarriesEntirely(
     if (!retryStranded && wasStranded(index, m)) continue;
     const carried = carriedVerdictFor(index, m);
     if (carried === undefined || carried.coveringTests === undefined) return false;
+    // R646: a survivor with no record of the tests it faced is re-run by step 5b, so its batch
+    // takes the ordinary path. A replayed batch has no fresh baseline to compare a record with.
+    const survivor = carried.verdict === "survived" || carried.verdict === "known-survivor";
+    if (survivor && carried.coveringTests.length === 0) return false;
   }
   return true;
 }
@@ -356,7 +360,7 @@ export function wasStranded(index: ResumeIndex, m: MutantManifestEntry): boolean
  * R391: an edit elsewhere can still renumber a twin onto another mutant's key, so the record is
  * found through `carryRecord` (rule 1 by key, rule 2 by (file, tuple) and, since R474, an
  * unchanged enclosing member, else none). Edits outside the member can still carry under rule 2.
- * One exception (R318): a `no-coverage` never carries onto a mutant with `coverageArmNames`.
+ * One exception (R621): a stored `no-coverage` never carries; it is re-derived.
  */
 export function carriedVerdictFor(
   index: ResumeIndex,
@@ -376,10 +380,12 @@ export function carriedVerdictFor(
     (key) => index.carryable.get(key),
     (site) => index.carryableBySite.get(site),
   );
-  // R318: a renamed split member's key did not move when R318 gave it coverage, so a
-  // `no-coverage` recorded before R318 (when nothing could attribute coverage to it) would carry.
-  // Re-scoring it costs one execution; carrying it keeps a verdict that was never a measurement.
-  if (carried?.verdict === "no-coverage" && m.coverageArmNames !== undefined) return undefined;
+  // R621: a stored `no-coverage` is never carried; it is re-derived from THIS session's coverage.
+  // A mutant uncovered now reads no-coverage again (step 5 records it, unflagged); one covered now
+  // is run. So a batch holding one never carries whole (`batchCarriesEntirely`), and fresh coverage
+  // is never overruled. This subsumes R318's narrower rule (a renamed split member's pre-R318
+  // no-coverage); R318's snapshot guard is a separate rule and stays.
+  if (carried?.verdict === "no-coverage") return undefined;
   return carried;
 }
 

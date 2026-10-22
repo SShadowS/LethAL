@@ -24,6 +24,8 @@ export interface GatedBuild {
   /** R612 M-2: what the gate's leg C read for each warn fact (`V3_WARN_FACTS`). A gate passes
    *  whatever these read, so a session shows them as read, never as `matches`. */
   readonly warnFacts?: Readonly<Record<string, string>>;
+  /** R639 M5: a pass of `--edge-rejudge`: the kept folder its binary came from (no tarball). */
+  readonly rejudgedFrom?: string;
 }
 
 /** R612 M-2: the warn-fact readings in `x` (a receipt's or `.gated`'s field); only verdicts are
@@ -72,6 +74,7 @@ export function parseGated(text: string, where: string): GatedBuild {
     ...(typeof g.tarballSha256 === "string" ? { tarballSha256: g.tarballSha256 } : {}),
     ...(typeof g.gatedAt === "string" ? { gatedAt: g.gatedAt } : {}),
     ...(warnFacts !== undefined ? { warnFacts } : {}),
+    ...(typeof g.rejudgedFrom === "string" ? { rejudgedFrom: g.rejudgedFrom } : {}),
   };
 }
 

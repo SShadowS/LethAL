@@ -240,7 +240,12 @@ import {
   testKeyOf,
   twinSitesOf,
 } from "./selection";
-import type { CoverageAttribution, CurrentCarrySide, RecordedCarrySide } from "./selection";
+import type {
+  CoverageAttribution,
+  CurrentCarrySide,
+  FacedTests,
+  RecordedCarrySide,
+} from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
   describeStaleTestApp,
@@ -300,7 +305,7 @@ import {
 
 import { InstalledBundleError, readBatchBundle } from "./installed-bundle";
 
-const BASELINE_TIMEOUT_DEFAULT = 120_000;
+export const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
 /**
  * Floor for a mutant run's time budget.
@@ -4223,7 +4228,7 @@ function resolveResume(
   emit({
     type: "warning",
     code: "resume-reusing-run",
-    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192).${
+    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (its own baseline's, or a reused baseline's), so a batch holding one is deployed (R621).${
       testAppHash !== undefined && priorTestAppHash === `${testAppHash}${PENDING_SUFFIX}`
         ? ` Run ${priorRunId} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`
         : ""
@@ -5024,7 +5029,6 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     batchIndex: batchIdx,
   });
   const baselineStartedMs = Date.now();
-  await activateOnce(backend, safety, null);
   const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
   // R192 (second half): on `--resume`, a prior run's COMPLETED baseline for this exact
   // instrumented source against this exact test app stands in for re-running it. Both hashes
@@ -5041,124 +5045,134 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   let hashTestApp: (() => Promise<string | PackageUnread | undefined>) | undefined;
   // R630: why the read before the baseline failed, for the refusal below.
   let firstUnread: string | undefined;
-  if (input.snapshot !== undefined) {
-    const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
-    const batchHash = await hashAlTree(batchDir);
-    hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
-    const read = await hashTestApp();
-    // R495: before `select` carries anything or a snapshot is reused.
-    assertNoTestAppDrift(store, runId, provenTestApp?.hash, read, batchIdx);
-    const testAppHash = hashOf(read);
-    firstUnread = unreadOf(read);
-    // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
-    // here that differs from it (or a session with nothing proven) reuses nothing.
-    // R496: and the snapshot's run must have recorded the same dependency fingerprint.
-    const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
-    const reusable =
-      allowReuse && testAppHash !== undefined && runsWhatWasRead
-        ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
-        : null;
-    reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
-    // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
-    // `findBaselineSnapshot` can lend one from ANY run. Step 1 (R586): it selects by hash and
-    // coverage mode, not by backend, and v3 shares coverage mode "al-runner" with v2. Steps 2 and
-    // 3 (R557, I1 and C1): the run's mark, then the snapshot's own `error` rows: a pre-fix
-    // al-runner snapshot holds a renamed test as an `error` al-runner never ran. A refused snapshot
-    // is not reused, and this batch re-runs its baseline.
-    if (reused !== undefined) {
-      const snap = reused;
-      const snapshotRun = store.getRun(snap.runId);
-      // Ruling (b): `findBaselineSnapshot` returns only a snapshot whose run row exists.
-      if (snapshotRun === null) {
-        throw new Error(
-          `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot names run ${snap.runId}, which this database does not hold (R619)`,
-        );
-      }
-      const refused = store.runMayLend(snapshotRun, input.snapshot.lendingSession, {
-        site: "snapshot",
-        baselineErrorMethods: () =>
-          snap.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
-        renamed: alRunnerRenamed,
-      });
-      if (refused !== undefined) {
-        const notReused = `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot`;
-        switch (refused.step) {
-          case "backend-build":
-            emit({
-              type: "warning",
-              code: "snapshot-backend-build-changed",
-              message: `[lethal] ${notReused} is not reused: ${refused.why}. Batch ${batchIdx}'s baseline is re-run.`,
-            });
-            break;
-          case "al-runner-unmarked":
-            emit({
-              type: "warning",
-              code: "resume-al-runner-test-names",
-              message: `[lethal] --resume: ${notReused} is not reused: run ${snap.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
-            });
-            break;
-          case "al-runner-renamed":
-            emit({
-              type: "warning",
-              code: "resume-al-runner-test-names",
-              message: `[lethal] --resume: ${notReused} ran on al-runner before R557 and recorded ${refused.tests.length} test(s) as errors that al-runner never ran (${namesSample(refused.tests)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
-            });
-            break;
-          case "site":
-            throw new Error(`${notReused}: refused by a site check this site does not pass (R619)`);
-        }
-        reused = undefined;
-      }
-    }
-    // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
-    // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
-    // tests, so a saved row for any other test is DROPPED: it must not come back green and be
-    // sent. A snapshot missing one of this session's tests is not reused at all, since that test
-    // would then never be measured.
-    if (reused !== undefined) {
-      const inScope = new Set(tests.map(testKeyOf));
-      const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
-      reused =
-        new Set(kept.map((b) => testKeyOf(b.ref))).size === inScope.size
-          ? { ...reused, baseline: kept }
-          : undefined;
-    }
-    snapshotKey = { batchHash, testAppHash };
-    if (reused !== undefined) {
-      emit({
-        type: "warning",
-        code: "resume-baseline-reused",
-        message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
-      });
-      for (const saved of reused.baseline) {
-        // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
-        // hub-mode run before R-236c, or BC's own refusal) is replaced by the refused skip, and
-        // its stored coverage is dropped with it, so it can never enter a covering set.
-        const refused = testPageRefusedVerdict(scope, saved.ref);
-        const b = refused !== undefined ? { ref: saved.ref, verdict: refused } : saved;
-        baseline.push(b);
-        store.recordTestResult(
-          runId,
-          null,
-          null,
-          b.ref,
-          b.verdict.outcome,
-          b.verdict.durationMs,
-          b.verdict.failureMessage,
-          undefined,
-          b.verdict.sessionId,
-        );
-      }
-    }
-  }
   // R272: the tests whose baseline ran IN THIS SESSION. Only their durations reach the report: a
   // reused snapshot's (R192) may predate R272, and so be al-runner `--server`'s shared suite time.
   const ranHere = new Set<TestMethodRef>();
-  for (const ref of reused !== undefined ? [] : tests) {
-    const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
-    if (stop) break;
-    baseline.push({ ref, verdict: v });
-    ranHere.add(ref);
+  // R635 §4 (Q1): the baseline bracket, from the null activation through the baseline loop (also
+  // when a reused snapshot leaves the loop over []). The only null activation inside it.
+  backend.baselinePhase?.(true);
+  try {
+    await activateOnce(backend, safety, null);
+    if (input.snapshot !== undefined) {
+      const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
+      const batchHash = await hashAlTree(batchDir);
+      hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
+      const read = await hashTestApp();
+      // R495: before `select` carries anything or a snapshot is reused.
+      assertNoTestAppDrift(store, runId, provenTestApp?.hash, read, batchIdx);
+      const testAppHash = hashOf(read);
+      firstUnread = unreadOf(read);
+      // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
+      // here that differs from it (or a session with nothing proven) reuses nothing.
+      // R496: and the snapshot's run must have recorded the same dependency fingerprint.
+      const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
+      const reusable =
+        allowReuse && testAppHash !== undefined && runsWhatWasRead
+          ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
+          : null;
+      reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
+      // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
+      // `findBaselineSnapshot` can lend one from ANY run. Step 1 (R586): it selects by hash and
+      // coverage mode, not by backend, and v3 shares coverage mode "al-runner" with v2. Steps 2 and
+      // 3 (R557, I1 and C1): the run's mark, then the snapshot's own `error` rows: a pre-fix
+      // al-runner snapshot holds a renamed test as an `error` al-runner never ran. A refused snapshot
+      // is not reused, and this batch re-runs its baseline.
+      if (reused !== undefined) {
+        const snap = reused;
+        const snapshotRun = store.getRun(snap.runId);
+        // Ruling (b): `findBaselineSnapshot` returns only a snapshot whose run row exists.
+        if (snapshotRun === null) {
+          throw new Error(
+            `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot names run ${snap.runId}, which this database does not hold (R619)`,
+          );
+        }
+        const refused = store.runMayLend(snapshotRun, input.snapshot.lendingSession, {
+          site: "snapshot",
+          baselineErrorMethods: () =>
+            snap.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
+          renamed: alRunnerRenamed,
+        });
+        if (refused !== undefined) {
+          const notReused = `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot`;
+          switch (refused.step) {
+            case "backend-build":
+              emit({
+                type: "warning",
+                code: "snapshot-backend-build-changed",
+                message: `[lethal] ${notReused} is not reused: ${refused.why}. Batch ${batchIdx}'s baseline is re-run.`,
+              });
+              break;
+            case "al-runner-unmarked":
+              emit({
+                type: "warning",
+                code: "resume-al-runner-test-names",
+                message: `[lethal] --resume: ${notReused} is not reused: run ${snap.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
+              });
+              break;
+            case "al-runner-renamed":
+              emit({
+                type: "warning",
+                code: "resume-al-runner-test-names",
+                message: `[lethal] --resume: ${notReused} ran on al-runner before R557 and recorded ${refused.tests.length} test(s) as errors that al-runner never ran (${namesSample(refused.tests)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
+              });
+              break;
+            case "site":
+              throw new Error(
+                `${notReused}: refused by a site check this site does not pass (R619)`,
+              );
+          }
+          reused = undefined;
+        }
+      }
+      // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
+      // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
+      // tests, so a saved row for any other test is DROPPED: it must not come back green and be
+      // sent. A snapshot missing one of this session's tests is not reused at all, since that test
+      // would then never be measured.
+      if (reused !== undefined) {
+        const inScope = new Set(tests.map(testKeyOf));
+        const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
+        reused =
+          new Set(kept.map((b) => testKeyOf(b.ref))).size === inScope.size
+            ? { ...reused, baseline: kept }
+            : undefined;
+      }
+      snapshotKey = { batchHash, testAppHash };
+      if (reused !== undefined) {
+        emit({
+          type: "warning",
+          code: "resume-baseline-reused",
+          message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
+        });
+        for (const saved of reused.baseline) {
+          // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
+          // hub-mode run before R-236c, or BC's own refusal) is replaced by the refused skip, and
+          // its stored coverage is dropped with it, so it can never enter a covering set.
+          const refused = testPageRefusedVerdict(scope, saved.ref);
+          const b = refused !== undefined ? { ref: saved.ref, verdict: refused } : saved;
+          baseline.push(b);
+          store.recordTestResult(
+            runId,
+            null,
+            null,
+            b.ref,
+            b.verdict.outcome,
+            b.verdict.durationMs,
+            b.verdict.failureMessage,
+            undefined,
+            b.verdict.sessionId,
+          );
+        }
+      }
+    }
+    for (const ref of reused !== undefined ? [] : tests) {
+      const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
+      if (stop) break;
+      baseline.push({ ref, verdict: v });
+      ranHere.add(ref);
+    }
+  } finally {
+    backend.baselinePhase?.(false);
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
   // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined
@@ -5842,6 +5856,10 @@ async function runSessionBody(
   const testPageRefusedNames = tests
     .filter((t) => testPageRefused.has(testKeyOf(t)))
     .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method }));
+  // R585: this session's test scope (every discovered test the baseline is given, by key), recorded
+  // on the run and compared with the history source's. A TestPage-refused test stays in it: the
+  // same test app refuses it in every session alike.
+  const sessionTestScope = [...new Set(tests.map(testKeyOf))].sort();
   if (testPageRefusedNames.length > 0) {
     emit({
       type: "tests-testpage-refused",
@@ -6010,6 +6028,9 @@ async function runSessionBody(
   const runId = cfg.store.createRun({
     identityScheme: IDENTITY_SCHEME,
     buildSymbols,
+    // R585: the tests this session's baseline is given; history lends only to a session whose
+    // tests are all in it.
+    testScope: sessionTestScope,
     // R557 (I1): this session sends al-runner tests under `alRunnerMethodName`; the mark is what
     // lets its verdicts be lent (`runLendsAlRunnerNames`).
     ...(backendName === "al-runner" ? { alRunnerNames: true } : {}),
@@ -6387,6 +6408,8 @@ async function runSessionBody(
   let historyCarryWarned = false;
   // R557 C1: likewise for its pre-fix al-runner test-names warning.
   let historyAlRunnerNamesWarned = false;
+  // R585: likewise for its test-scope warning.
+  let historyTestScopeWarned = false;
 
   // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
@@ -6930,9 +6953,23 @@ async function runSessionBody(
         historyTestApp,
         buildSymbols,
         carryHidden.files,
+        sessionTestScope,
         {
           // R586: `runMayLend` step 1, first.
           session: lendingSession,
+          testScopeChanged: (old) => {
+            if (historyTestScopeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyTestScopeWarned = true;
+            const what =
+              old.missing === null
+                ? "recorded no test scope (it ran before R585)"
+                : `did not run ${old.missing.length} of this session's test(s) (${namesSample(old.missing)})`;
+            emit({
+              type: "warning",
+              code: "history-test-scope-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ${what}. A survivor there may be killed by a test it did not run (a --tests-only run, say), so no survivor from it is skipped: every mutant is executed (R585).`,
+            });
+          },
           backendBuildRefused: (old) => {
             if (historyBackendWarned || !(cfg.skipKnownSurvivors ?? false)) return;
             historyBackendWarned = true;
@@ -7025,15 +7062,26 @@ async function runSessionBody(
         },
       );
       // Sol run 002: never a mutant whose refusal is known only after deploy (`carryBarred`).
-      const knownSurvivors = filterHistory([...manifest.mutants], prior, {
+      // R644: these are CANDIDATES, with the tests each one faced in that run. They stay inside
+      // `execute` through the compile bisect, the no-green branch and coverage (review I1), and
+      // only those whose covering tests NOW are all ones they faced are lent, just before 5b.
+      const history = filterHistory([...manifest.mutants], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
         ...(carryDisabled !== undefined ? { carryDisabled } : {}),
         current: carryCurrent,
-      }).knownSurvivors.filter((m) => !carryBarred(m));
-      const skipped = new Set(knownSurvivors);
-      const execute = manifest.mutants.filter((m) => !skipped.has(m));
-      for (const m of knownSurvivors)
-        record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
+      });
+      const candidates = new Map<string, FacedTests>();
+      for (const m of history.knownSurvivors) {
+        if (carryBarred(m)) continue;
+        const faced = history.faced.get(m.mutantId);
+        if (faced === undefined) {
+          throw new Error(
+            `runSession: filterHistory named ${m.mutantId} a known survivor with no faced-tests entry (R644)`,
+          );
+        }
+        candidates.set(m.mutantId, faced);
+      }
+      const execute = [...manifest.mutants];
 
       // 3. deploy — always, even for in-memory backends: they need the
       // per-batch instrumented dir just as much as a publishing backend
@@ -7157,12 +7205,12 @@ async function runSessionBody(
         // re-deployed scratch subsets until a single offending mutant is
         // isolated, or the narrowing stops reproducing the failure, in
         // which case there's nothing more specific to report than the
-        // original error. `execute` (post-history-filter) would be wrong
-        // here: known survivors are excluded from `execute` but are STILL
-        // compiled into the artifact, so a malformed known-survivor mutant
-        // would break this compile while being provably unfindable by a
-        // search restricted to `execute`. History filtering is an
-        // execution decision, not a compilation decision.
+        // original error. Searching anything narrower would be wrong: every
+        // mutant is compiled into the artifact, so a mutant left out of the
+        // search could break this compile while being provably unfindable.
+        // History filtering is an execution decision, not a compilation
+        // decision. (Since R644, `execute` holds the history candidates
+        // too, so each of them gets an error row below, review I1.)
         const note = await bisectAndNote({
           subsetMutants: manifest.mutants,
           scratchDir: join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}-bisect`),
@@ -7378,7 +7426,7 @@ async function runSessionBody(
             })),
           );
           const split = coverageFilter(
-            execute,
+            execute.filter((m) => !candidates.has(m.mutantId)),
             index,
             greenTests.map((b) => b.ref),
             unsupportedIndex,
@@ -7399,6 +7447,26 @@ async function runSessionBody(
           uncovered = split.uncovered;
           unplaceableIds = split.unplaceable;
           memberCounts = memberCountsByTest(index.byMember);
+          // R644 (minor 3): the history candidates' covering tests, in a SECOND call that emits
+          // nothing, so `coverage-split` (and `untargetedTriggerCount`) count only what the first
+          // call decided, as before R644. Merged so a candidate that is not lent takes every
+          // ordinary path below, `no-coverage` included.
+          if (candidates.size > 0) {
+            const forCandidates = coverageFilter(
+              execute.filter((m) => candidates.has(m.mutantId)),
+              index,
+              greenTests.map((b) => b.ref),
+              unsupportedIndex,
+              isHubCoverageMode(caps.coverage),
+              batchRefused,
+              () => {}, // emits nothing: the console lines count the first call's mutants only
+            );
+            perMutantTests = new Map([...perMutantTests, ...forCandidates.covered]);
+            refusedIds = new Map([...refusedIds, ...forCandidates.refused]);
+            coverageAttribution = new Map([...coverageAttribution, ...forCandidates.attribution]);
+            uncovered = [...uncovered, ...forCandidates.uncovered];
+            unplaceableIds = new Set([...unplaceableIds, ...forCandidates.unplaceable]);
+          }
           // coverage-split: accumulated per batch AT SPLIT TIME, and folded into
           // `SessionReport.untargetedTriggerCount` by report-fold.ts rather than a session-level
           // accumulator here — see events.ts's doc comment on why this is the strongest single
@@ -7482,6 +7550,47 @@ async function runSessionBody(
           }
         }
 
+        // R644: lend a history candidate only when every test covering it NOW is one it faced in
+        // the run that scored it. A test red at that run's baseline never ran against it, so a
+        // candidate it covers now is executed. No record (NULL, `[]`, ambiguous) is never lent.
+        // A candidate step 5 recorded `no-coverage` has no entry and is skipped here, as in 5b.
+        const lent = new Set<string>();
+        const notFaced: MutantManifestEntry[] = [];
+        const noRecord: MutantManifestEntry[] = [];
+        for (const m of execute) {
+          const faced = candidates.get(m.mutantId);
+          const covering = perMutantTests.get(m.mutantId);
+          if (faced === undefined || covering === undefined) continue;
+          if (faced === null) {
+            noRecord.push(m);
+            continue;
+          }
+          if (!facedEveryCoveringTest(faced, covering)) {
+            notFaced.push(m);
+            continue;
+          }
+          lent.add(m.mutantId);
+          // The report row is unchanged (`coveringTests` [], this run ran it against nothing); the
+          // STORE row keeps the source's list, so the run after this one can lend it again.
+          const rowId = record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
+          cfg.store.keepFacedTests(rowId, faced);
+        }
+        if (noRecord.length > 0) {
+          emit({
+            type: "warning",
+            code: "history-survivor-no-record",
+            message: `[lethal] --skip-known-survivors: batch ${batchIdx}: ${noRecord.length} survivor(s) of the latest finished run have no record of the tests they were run against (a row lent before R644, or written before R192), so they are executed, not skipped: ${namesSample(noRecord.map((m) => m.mutantId))} (R644).`,
+          });
+        }
+        if (notFaced.length > 0) {
+          emit({
+            type: "warning",
+            code: "history-tests-not-faced",
+            message: `[lethal] --skip-known-survivors: batch ${batchIdx}: ${notFaced.length} survivor(s) of the latest finished run are covered now by a test they were not run against there (a test red at that run's baseline, or coverage that changed), so they are executed, not skipped: ${namesSample(notFaced.map((m) => m.mutantId))} (R644).`,
+          });
+        }
+        const remaining = lent.size === 0 ? execute : execute.filter((m) => !lent.has(m.mutantId));
+
         // 5b. R47 resume: record the mutants a prior run already scored, WITHOUT executing them, and
         // hand only the remainder to the per-mutant loop.
         //
@@ -7494,10 +7603,12 @@ async function runSessionBody(
         // step 5 has ALREADY recorded those mutants as `no-coverage`, and `mutants` has no unique
         // constraint on (run_id, mutant_code), so a second record() would silently duplicate rather
         // than fail.
-        let toExecute: MutantManifestEntry[] = execute;
+        let toExecute: MutantManifestEntry[] = remaining;
         if (resumeState !== undefined) {
           toExecute = [];
-          for (const m of execute) {
+          const carryNotFaced: MutantManifestEntry[] = [];
+          const carryNoRecord: MutantManifestEntry[] = [];
+          for (const m of remaining) {
             const covering = perMutantTests.get(m.mutantId);
             if (covering === undefined) continue; // step 5 already recorded no-coverage
             // R53: a mutant a prior run STRANDED the tier on is not retried by default. Measured on
@@ -7535,7 +7646,24 @@ async function runSessionBody(
               toExecute.push(m);
               continue;
             }
-            record(
+            // R646: R644's rule for a carried survivor. A test green in this session's baseline but
+            // red where it was scored covers it now and never ran against it, so it is re-run. A
+            // kill carries as is: a test failed under it, whatever else covers it now.
+            const survivor = carried.verdict === "survived" || carried.verdict === "known-survivor";
+            if (survivor) {
+              const faced = carried.coveringTests;
+              if (faced === undefined || faced.length === 0) {
+                carryNoRecord.push(m);
+                toExecute.push(m);
+                continue;
+              }
+              if (!facedEveryCoveringTest(faced, covering)) {
+                carryNotFaced.push(m);
+                toExecute.push(m);
+                continue;
+              }
+            }
+            const carriedRowId = record(
               cfg.store,
               runId,
               m,
@@ -7570,6 +7698,26 @@ async function runSessionBody(
               undefined, // killingTestRef
               carriedReproduction(carried),
             );
+            // R644 (build review I2): a carried survivor was not run here, so its STORE row keeps
+            // the tests it faced where it was scored, never the tests covering it now; a later
+            // history session reads that list as "faced". The report row above is unchanged.
+            if (survivor) {
+              cfg.store.keepCarriedFacedTests(carriedRowId, carried.coveringTests ?? []);
+            }
+          }
+          if (carryNoRecord.length > 0) {
+            emit({
+              type: "warning",
+              code: "resume-survivor-no-record",
+              message: `[lethal] --resume: batch ${batchIdx}: ${carryNoRecord.length} survivor(s) of run ${resumeState.runId} have no record of the tests they were run against (a row written before R192, or lent before R644), so they are executed, not carried: ${namesSample(carryNoRecord.map((m) => m.mutantId))} (R646).`,
+            });
+          }
+          if (carryNotFaced.length > 0) {
+            emit({
+              type: "warning",
+              code: "resume-tests-not-faced",
+              message: `[lethal] --resume: batch ${batchIdx}: ${carryNotFaced.length} survivor(s) of run ${resumeState.runId} are covered now by a test they were not run against there (a test red at that run's baseline, or coverage that changed), so they are executed, not carried: ${namesSample(carryNotFaced.map((m) => m.mutantId))} (R646).`,
+            });
           }
         }
         return {
@@ -8910,6 +9058,21 @@ export function unsupportedCoverageNote(
 /** Human-readable `Codeunit.method` identity for report/notes — unambiguous across codeunits sharing a method name. */
 export function qualifiedTestName(ref: TestMethodRef): string {
   return `${ref.codeunitName}.${ref.method}`;
+}
+
+/**
+ * R644/R646: a prior survivor may be reused (lent by history, carried by `--resume`) only when every
+ * test covering it NOW is one it faced in the run that scored it. A test red at that run's baseline
+ * never ran against it. The caller treats NULL or `[]` as "no record" before asking. An empty
+ * covering list never passes; `runSession` cannot reach one today (no green test returns before
+ * coverage, and the split keeps only covered mutants), so the guard is pinned by a direct test.
+ */
+export function facedEveryCoveringTest(
+  faced: readonly string[],
+  covering: readonly TestMethodRef[],
+): boolean {
+  const had = new Set(faced);
+  return covering.length > 0 && covering.every((ref) => had.has(qualifiedTestName(ref)));
 }
 
 /** What the test project's `app.json` has to say for check 2 to have a local expectation at all. */
@@ -10498,6 +10661,13 @@ async function runMutantsOnBackend(args: {
     const prev = measuredToday.get(key);
     if (prev === undefined || ms > prev.ms) measuredToday.set(key, { ms, byMutant });
   };
+  // R635 §4: once per mutant-loop call, every covered mutant of this shard and its covering refs.
+  await args.backend.prefetchMutants?.(
+    args.mutants.flatMap((m) => {
+      const refs = args.perMutantTests.get(m.mutantId);
+      return refs === undefined || refs.length === 0 ? [] : [{ mutantId: m.mutantId, refs }];
+    }),
+  );
   for (const m of args.mutants) {
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above

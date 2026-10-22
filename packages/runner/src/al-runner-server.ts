@@ -64,6 +64,21 @@
  */
 
 import { type AlRunnerCompileEntry, compileEntriesOf } from "./al-runner-transport";
+import type { EntriesAnswer } from "./al-runner-v3-entries";
+
+/**
+ * R635 (F4): a v3 `serve` request that gave no complete answer: an untyped `{"error"}` line, EOF,
+ * the deadline, or a line that is not JSON. The daemon is closed by the caller; never a verdict.
+ */
+export class AlRunnerServerRequestError extends Error {
+  constructor(
+    readonly kind: "error" | "eof" | "deadline" | "protocol",
+    why: string,
+  ) {
+    super(`al-runner serve: ${why}`);
+    this.name = "AlRunnerServerRequestError";
+  }
+}
 
 /** The subset of a spawned process this client uses, so tests can supply one without a binary. */
 export interface ServerProcessHandle {
@@ -159,12 +174,20 @@ type ReadLineOutcome =
   | { readonly kind: "eof" }
   | { readonly kind: "timeout" };
 
-/** Reading one NDJSON line at a time from a byte stream, with a deadline. */
-class LineReader {
+/** R635: the largest delay `setTimeout` honours (2^31-1 ms); a larger one overflows and fires at once. */
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/** R635: what LineReader's wait timer resolves to; no stream value can equal it. */
+const TIMER_FIRED: unique symbol = Symbol("LineReader timer fired");
+
+/** Reading one NDJSON line at a time from a byte stream, with a deadline. Exported for tests. */
+export class LineReader {
   private buf = "";
   private readonly it: AsyncIterator<Uint8Array>;
   private readonly decoder = new TextDecoder();
   private done = false;
+  /** A read still in flight when a (capped) timer fired; reused by the next wait. */
+  private pending: Promise<IteratorResult<Uint8Array>> | undefined;
 
   constructor(stream: AsyncIterable<Uint8Array>) {
     this.it = stream[Symbol.asyncIterator]();
@@ -175,7 +198,8 @@ class LineReader {
    * "the daemon is still thinking" need different diagnoses and the caller cannot tell them apart
    * from an absent value. Conflating them was the first thing the tests here caught.
    */
-  async next(deadlineMs: number): Promise<ReadLineOutcome> {
+  /** `capMs` is the timer cap; only a test lowers it, to reach "capped timer fired early". */
+  async next(deadlineMs: number, capMs: number = MAX_TIMER_MS): Promise<ReadLineOutcome> {
     const deadline = Date.now() + deadlineMs;
     for (;;) {
       const nl = this.buf.indexOf("\n");
@@ -189,18 +213,25 @@ class LineReader {
       const remaining = deadline - Date.now();
       if (remaining <= 0) return { kind: "timeout" };
       let timer: ReturnType<typeof setTimeout> | undefined;
+      // The read stays pending across a capped timer, so no chunk is ever dropped.
+      if (this.pending === undefined) this.pending = this.it.next();
+      const read = this.pending;
       const chunk = await Promise.race([
-        this.it.next(),
-        new Promise<{ value: undefined; done: false }>((resolve) => {
-          timer = setTimeout(() => resolve({ value: undefined, done: false }), remaining);
+        read,
+        new Promise<typeof TIMER_FIRED>((resolve) => {
+          // R635: a timer above 2^31-1 ms fires at once (it overflows); capped, and a capped
+          // timer that fires before the real deadline only waits again (the loop re-checks).
+          timer = setTimeout(() => resolve(TIMER_FIRED), Math.min(remaining, capMs));
         }),
       ]).finally(() => clearTimeout(timer));
+      // A unique marker, so a stream chunk `{ value: undefined }` is never read as the timer.
+      if (chunk === TIMER_FIRED) continue;
+      this.pending = undefined;
       if (chunk.done === true) {
         this.done = true;
         continue;
       }
-      if (chunk.value === undefined) return { kind: "timeout" };
-      this.buf += this.decoder.decode(chunk.value, { stream: true });
+      if (chunk.value !== undefined) this.buf += this.decoder.decode(chunk.value, { stream: true });
     }
   }
 
@@ -269,6 +300,8 @@ export class AlRunnerServer {
     readinessDeadlineMs: number,
     packagePaths: readonly string[] = [],
     testTimeoutSeconds?: number,
+    /** R635: v3 `serve`'s `--bc-version <v> --no-download`. */
+    extraArgs: readonly string[] = [],
   ): Promise<void> {
     if (this.proc !== undefined) return;
     const argv = [
@@ -277,6 +310,7 @@ export class AlRunnerServer {
       ...packagePaths.flatMap((p) => ["--package-cache", p]),
       ...this.preprocessorSymbols.flatMap((sym) => ["--define", sym]),
       ...(testTimeoutSeconds !== undefined ? ["--test-timeout", String(testTimeoutSeconds)] : []),
+      ...extraArgs,
     ];
     const proc = this.spawn(argv);
     this.proc = proc;
@@ -418,6 +452,51 @@ export class AlRunnerServer {
         total: typeof msg.total === "number" ? msg.total : tests.length,
         compilationErrors: compileEntriesOf(msg.compilationErrors),
       };
+    }
+  }
+
+  /**
+   * R635 (F4): one v3 `runTests` request (entries or plain), its raw lines grouped by type only:
+   * the caller decodes them against what it sent. Unlike `runTests`, an untyped `{"error": ...}`
+   * line ends the request AT ONCE with `AlRunnerServerRequestError`, as do EOF, the deadline and
+   * an unparseable line; it never reads on to the deadline.
+   */
+  async runEntries(
+    body: Readonly<Record<string, unknown>>,
+    deadlineMs: number,
+  ): Promise<EntriesAnswer> {
+    const proc = this.proc;
+    const stdout = this.stdout;
+    if (proc === undefined || stdout === undefined) {
+      throw new Error("al-runner serve: runEntries called before start()");
+    }
+    proc.write(`${JSON.stringify(body)}\n`);
+    const tests: Record<string, unknown>[] = [];
+    const entrySummaries: Record<string, unknown>[] = [];
+    const deadline = Date.now() + deadlineMs;
+    const fail = (kind: AlRunnerServerRequestError["kind"], why: string) =>
+      new AlRunnerServerRequestError(
+        kind,
+        `${why} (${tests.length} test line(s) seen). stderr tail: ${this.stderrTail(600)}`,
+      );
+    for (;;) {
+      const remaining = deadline - Date.now();
+      const next = remaining <= 0 ? ({ kind: "timeout" } as const) : await stdout.next(remaining);
+      if (next.kind === "timeout")
+        throw fail("deadline", `no summary line within ${deadlineMs} ms`);
+      if (next.kind === "eof") throw fail("eof", "stdout ended before the summary");
+      let msg: Record<string, unknown>;
+      try {
+        msg = JSON.parse(next.line) as Record<string, unknown>;
+      } catch {
+        throw fail("protocol", `unparseable stdout line: ${next.line.slice(0, 200)}`);
+      }
+      if (msg.type === undefined && "error" in msg) {
+        throw fail("error", `the request was refused: ${JSON.stringify(msg.error).slice(0, 400)}`);
+      }
+      if (msg.type === "test") tests.push(msg);
+      else if (msg.type === "entrySummary") entrySummaries.push(msg);
+      else if (msg.type === "summary") return { tests, entrySummaries, summary: msg };
     }
   }
 

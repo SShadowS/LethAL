@@ -1,8 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
+import { dirname } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { CARRYABLE_VERDICTS } from "../src/resume";
 import {
@@ -13,6 +12,7 @@ import {
   runLendsAlRunnerNames,
 } from "../src/store";
 import { tinyBundle } from "./helpers/bundle";
+import { testDbPath } from "./helpers/test-db";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 const APP = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
@@ -44,6 +44,7 @@ describe("ResultsStore", () => {
   test("round-trips a run with mutants and test results", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -59,7 +60,7 @@ describe("ResultsStore", () => {
     store.recordMutant(runId, mutantRow("killed", { killingTest: "PostingUpdatesTotal" }));
     store.recordMutant(runId, mutantRow("survived", { mutantCode: "M0002", astHash: "def456" }));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], [], []).keys).toEqual(
       new Set(["def456|Sample|Post|conditional-boundary|1"]),
     );
     store.close();
@@ -68,6 +69,7 @@ describe("ResultsStore", () => {
   test("priorSurvivorKeys reads only the latest finished run for the project", () => {
     const store = new ResultsStore(":memory:");
     const r1 = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -82,6 +84,7 @@ describe("ResultsStore", () => {
     store.recordMutant(r1, mutantRow("survived"));
     store.finishRun(r1, { batchCount: 1, baselineGreen: true });
     const r2 = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -95,7 +98,7 @@ describe("ResultsStore", () => {
     });
     store.recordMutant(r2, mutantRow("killed"));
     store.finishRun(r2, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys.size).toBe(0);
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], [], []).keys.size).toBe(0);
     store.close();
   });
 
@@ -108,6 +111,7 @@ describe("ResultsStore", () => {
     const key = "abc123|Sample|Post|conditional-boundary|1";
 
     const r1 = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -121,11 +125,14 @@ describe("ResultsStore", () => {
     });
     store.recordMutant(r1, mutantRow("survived"));
     store.finishRun(r1, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], [], []).keys).toEqual(
+      new Set([key]),
+    );
 
     // Run 2 skips re-testing it (skip-known-survivors) and records it as
     // "known-survivor" instead of re-deriving "survived".
     const r2 = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -143,6 +150,7 @@ describe("ResultsStore", () => {
     // Run 3 starts (mid-flight, not yet finished) and must still see the key
     // via run 2's now-latest-finished results.
     store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -153,7 +161,9 @@ describe("ResultsStore", () => {
       backend: "bcdev",
       appVersion: "3",
     });
-    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], [], []).keys).toEqual(
+      new Set([key]),
+    );
     store.close();
   });
 
@@ -164,6 +174,7 @@ describe("ResultsStore", () => {
     test("recordMutant returns the inserted row id", () => {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
+        testScope: [],
         coverageMode: "procedure",
         testAppHash: "T",
         testAppProven: true,
@@ -184,6 +195,7 @@ describe("ResultsStore", () => {
     test("recordTestResult accepts a mutant_row_id distinct from mutant_code", () => {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
+        testScope: [],
         coverageMode: "procedure",
         testAppHash: "T",
         testAppProven: true,
@@ -212,6 +224,7 @@ describe("ResultsStore", () => {
   test("records real deployment provenance over the createRun placeholder", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -244,6 +257,7 @@ describe("ResultsStore", () => {
   test("recordArtifact keeps one row per batch, and runs.artifact_id is the last batch's", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -286,6 +300,7 @@ describe("ResultsStore", () => {
   test("recordArtifact refuses a second row for the same batch, and changes nothing when it does", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -336,6 +351,7 @@ describe("ResultsStore", () => {
   test("recordArtifact stores the manifest hash and trustedArtifactRecord returns it", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -373,7 +389,7 @@ describe("ResultsStore", () => {
   });
 
   test("a batch_artifacts row written before the column exists reads back manifestSha256 null", () => {
-    const path = join(tmpdir(), `lethal-store-manifest-sha-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-manifest-sha.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -422,6 +438,7 @@ describe("ResultsStore", () => {
   test("artifactsForRun is empty for a run that published nothing", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -437,7 +454,7 @@ describe("ResultsStore", () => {
   });
 
   test("migrates a pre-5A runs table that lacks the provenance columns", () => {
-    const path = join(tmpdir(), `lethal-store-5a-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-5a.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -456,6 +473,7 @@ describe("ResultsStore", () => {
 
     const store = new ResultsStore(path);
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -483,7 +501,7 @@ describe("ResultsStore", () => {
   // R354: a runs table from before R354 gains coverage_mode, its rows read NULL (unknown), and a
   // NULL never equals a mode: history skips nothing from it. A new row records its mode.
   test("migrates a pre-R354 runs table: coverage_mode is added and existing rows are NULL", () => {
-    const path = join(tmpdir(), `lethal-store-r354-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-r354.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -518,12 +536,13 @@ describe("ResultsStore", () => {
     store.finishRun(1, { batchCount: 1, baselineGreen: true });
     const seen: unknown[] = [];
     expect(
-      store.priorSurvivorKeys("P", "procedure", T_APP, [], [], {
+      store.priorSurvivorKeys("P", "procedure", T_APP, [], [], [], {
         coverageModeChanged: (i) => seen.push(i),
       }).keys.size,
     ).toBe(0);
     expect(seen).toEqual([{ runId: 1, coverageMode: null }]);
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "fenced",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -541,7 +560,7 @@ describe("ResultsStore", () => {
   // R247: a runs table from before R247 gains test_app_hash and its rows read NULL (unknown). NULL
   // never matches, NULL against NULL included: history skips nothing from it.
   test("migrates a pre-R247 runs table: test_app_hash is added and existing rows are NULL", () => {
-    const path = join(tmpdir(), `lethal-store-r247-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-r247.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -576,13 +595,14 @@ describe("ResultsStore", () => {
     store.finishRun(1, { batchCount: 1, baselineGreen: true });
     for (const current of [T_APP, undefined]) {
       const seen: unknown[] = [];
-      const keys = store.priorSurvivorKeys("P", "procedure", current, [], [], {
+      const keys = store.priorSurvivorKeys("P", "procedure", current, [], [], [], {
         testAppChanged: (i) => seen.push(i),
       }).keys;
       expect(keys.size).toBe(0);
       expect(seen).toEqual([{ runId: 1, testAppHash: null, proven: false, deps: null }]);
     }
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "package:abc",
       testAppProven: true,
@@ -602,7 +622,7 @@ describe("ResultsStore", () => {
   // R-278: a runs table from before R-278 gains test_digests and its rows read NULL, which
   // lethal verify refuses as a run that predates it.
   test("migrates a pre-R-278 runs table: test_digests is added, old rows are NULL, new ones round-trip", () => {
-    const path = join(tmpdir(), `lethal-store-r278-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-r278.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -633,6 +653,7 @@ describe("ResultsStore", () => {
     expect(store.testDigests(1)).toBeNull();
     const digests = { "50100::m": "a".repeat(64) };
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testDigests: digests,
       identityScheme: IDENTITY_SCHEME,
@@ -651,7 +672,7 @@ describe("ResultsStore", () => {
   // R495: a runs table from before R495 gains test_app_proven, and its rows read NULL (not proven):
   // a recorded hash, even with digests, lends nothing until a run proves it again.
   test("migrates a pre-R495 runs table: test_app_proven is added and an existing row lends nothing", () => {
-    const path = join(tmpdir(), `lethal-store-r495-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-r495.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -690,15 +711,17 @@ describe("ResultsStore", () => {
     store.finishRun(1, { batchCount: 1, baselineGreen: true });
     const seen: unknown[] = [];
     const A = { hash: "package:a", deps: "D" };
-    const keys = store.priorSurvivorKeys("P", "procedure", A, [], [], {
+    const keys = store.priorSurvivorKeys("P", "procedure", A, [], [], [], {
       testAppChanged: (i) => seen.push(i),
     }).keys;
     expect(keys.size).toBe(0);
     expect(seen).toEqual([{ runId: 1, testAppHash: "package:a", proven: false, deps: null }]);
     // Control: proven again (and given the facts later checks need), the same row lends.
     store.setRunTestAppHash(1, "package:a", true, "D");
-    store.db.run("UPDATE runs SET build_symbols = '[]', twin_tuples = '[]' WHERE id = 1");
-    expect(store.priorSurvivorKeys("P", "procedure", A, [], []).keys.size).toBe(1);
+    store.db.run(
+      "UPDATE runs SET build_symbols = '[]', twin_tuples = '[]', test_scope = '[]' WHERE id = 1",
+    );
+    expect(store.priorSurvivorKeys("P", "procedure", A, [], [], []).keys.size).toBe(1);
     store.close();
     rmSync(path, { force: true });
   });
@@ -707,7 +730,7 @@ describe("ResultsStore", () => {
   // al-runner row without the mark lends no survivor; a bcdev row without it lends as before; the
   // mark, once set, lends again.
   test("R557: migrates al_runner_names; an unmarked al-runner run lends no survivor, an unmarked bcdev run does", () => {
-    const path = join(tmpdir(), `lethal-store-r557-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-r557.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -739,14 +762,18 @@ describe("ResultsStore", () => {
     const A = { hash: "package:a", deps: "D" };
     for (const id of [1, 2]) {
       store.setRunTestAppHash(id, "package:a", true, "D");
-      store.db.run("UPDATE runs SET build_symbols = '[]', twin_tuples = '[]' WHERE id = ?", [id]);
+      // R585: and a test scope, so the controls that lend pass the last check (an old row has none).
+      store.db.run(
+        "UPDATE runs SET build_symbols = '[]', twin_tuples = '[]', test_scope = '[]' WHERE id = ?",
+        [id],
+      );
       store.setCarryHidden(id, NO_HIDDEN);
       store.recordMutant(id, mutantRow("survived"));
       store.finishRun(id, { batchCount: 1, baselineGreen: true });
     }
     const unmarked: unknown[] = [];
     const ask = (p: string) =>
-      store.priorSurvivorKeys(p, "procedure", A, [], [], {
+      store.priorSurvivorKeys(p, "procedure", A, [], [], [], {
         alRunnerUnmarked: (i) => unmarked.push(i),
       }).keys.size;
     expect(ask("P")).toBe(0);
@@ -762,10 +789,44 @@ describe("ResultsStore", () => {
     rmSync(path, { force: true });
   });
 
+  test("R585: migrates test_scope; an old row reads null, a new one round-trips sorted and de-duplicated", () => {
+    const path = testDbPath("lethal-store-r585.sqlite");
+    const legacy = new Database(path);
+    legacy.exec(`CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    project_path TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    app_version TEXT NOT NULL
+  );`);
+    legacy.exec(
+      "INSERT INTO runs (project_path, backend, app_version) VALUES ('P','bcdev','0.0.0.0')",
+    );
+    legacy.close();
+    const store = new ResultsStore(path);
+    expect(store.getRun(1)?.testScope).toBeNull();
+    const id = store.createRun({
+      testScope: ["9::B", "9::A", "9::B"],
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      coverageMode: "procedure",
+    });
+    expect(store.getRun(id)?.testScope).toEqual(["9::A", "9::B"]);
+    store.db.run("UPDATE runs SET test_scope = '{}' WHERE id = ?", [id]);
+    expect(() => store.getRun(id)).toThrow(/corrupt "test_scope"/);
+    store.close();
+    rmSync(path, { force: true });
+  });
+
   test("R557: createRun stamps al_runner_names only when asked; runLendsAlRunnerNames reads it per backend", () => {
     const store = new ResultsStore(":memory:");
     const make = (backend: string, alRunnerNames?: boolean) =>
       store.createRun({
+        testScope: [],
         coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
@@ -789,6 +850,7 @@ describe("ResultsStore", () => {
   test("priorSurvivorKeys returns a same-test-app run's survivors and none across a change", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "package:a",
       testAppProven: true,
@@ -803,7 +865,7 @@ describe("ResultsStore", () => {
     store.recordMutant(runId, mutantRow("survived"));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
     expect(
-      store.priorSurvivorKeys("/p", "procedure", { hash: "package:a", deps: "D" }, [], []).keys
+      store.priorSurvivorKeys("/p", "procedure", { hash: "package:a", deps: "D" }, [], [], []).keys
         .size,
     ).toBe(1);
     const seen: unknown[] = [];
@@ -811,6 +873,7 @@ describe("ResultsStore", () => {
       "/p",
       "procedure",
       { hash: "package:b", deps: "D" },
+      [],
       [],
       [],
       { testAppChanged: (i) => seen.push(i) },
@@ -825,6 +888,7 @@ describe("ResultsStore", () => {
   test("R496: priorSurvivorKeys returns nothing across a dependency change, or from NULL deps", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "package:a",
       testAppProven: true,
@@ -840,7 +904,7 @@ describe("ResultsStore", () => {
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
     const seen: unknown[] = [];
     const ask = (deps: string) =>
-      store.priorSurvivorKeys("/p", "procedure", { hash: "package:a", deps }, [], [], {
+      store.priorSurvivorKeys("/p", "procedure", { hash: "package:a", deps }, [], [], [], {
         testAppChanged: (i) => seen.push(i),
       }).keys.size;
     expect(ask("one")).toBe(1);
@@ -863,10 +927,20 @@ describe("ResultsStore", () => {
       backend: "bcdev",
       appVersion: "1",
     };
-    const noDeps = store.createRun({ ...base, testAppHash: "package:a", testAppProven: true });
+    const noDeps = store.createRun({
+      testScope: [],
+      ...base,
+      testAppHash: "package:a",
+      testAppProven: true,
+    });
     expect(store.getRun(noDeps)?.testAppProven).toBe(false);
     expect(store.getRun(noDeps)?.testAppDeps).toBeNull();
-    const unproven = store.createRun({ ...base, testAppHash: "package:a", testAppDeps: "D" });
+    const unproven = store.createRun({
+      testScope: [],
+      ...base,
+      testAppHash: "package:a",
+      testAppDeps: "D",
+    });
     expect(store.getRun(unproven)?.testAppDeps).toBeNull();
     store.setRunTestAppHash(noDeps, "package:a", true, null);
     expect(store.getRun(noDeps)?.testAppProven).toBe(false);
@@ -889,6 +963,7 @@ describe("ResultsStore", () => {
   test("R496: clearRunTestDigests clears the digests and their parts, and refuses an unknown run", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -909,7 +984,7 @@ describe("ResultsStore", () => {
   // baseline_snapshots before it) SCHEMA's CREATE TABLE IF NOT EXISTS must be enough on its own,
   // with no migrate() step, even on a database that predates this table entirely.
   test("a database created before batch_artifacts is migrated on open and accepts recordArtifact", () => {
-    const path = join(tmpdir(), `lethal-store-batch-artifacts-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-batch-artifacts.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -932,6 +1007,7 @@ describe("ResultsStore", () => {
 
     const store = new ResultsStore(path);
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1005,8 +1081,7 @@ CREATE TABLE IF NOT EXISTS mutants (
      * change cannot quietly reintroduce the ordering bug.
      */
     test("a pre-R166 database opens, gains procedure_name, and gets an identity index covering it", () => {
-      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
-      const dbPath = join(dir, "lethal.sqlite");
+      const dbPath = testDbPath("lethal.sqlite");
       try {
         const old = new Database(dbPath, { create: true });
         old.exec(PRE_43_SCHEMA);
@@ -1018,6 +1093,7 @@ CREATE TABLE IF NOT EXISTS mutants (
 
         const store = new ResultsStore(dbPath);
         const runId = store.createRun({
+          testScope: [],
           coverageMode: "procedure",
           testAppHash: "T",
           testAppProven: true,
@@ -1032,7 +1108,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         store.recordMutant(runId, mutantRow("survived"));
         store.finishRun(runId, { batchCount: 1, baselineGreen: true });
         // The identity must round-trip through the new column, not silently key on the old tuple.
-        expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(
+        expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], [], []).keys).toEqual(
           new Set(["abc123|Sample|Post|conditional-boundary|1"]),
         );
         store.close();
@@ -1046,13 +1122,12 @@ CREATE TABLE IF NOT EXISTS mutants (
         check.close();
         expect(idx.sql ?? "").toContain("procedure_name");
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dirname(dbPath), { recursive: true, force: true });
       }
     });
 
     test("a pre-4.3 database is migrated on open and then accepts a failure_note write", () => {
-      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
-      const dbPath = join(dir, "lethal.sqlite");
+      const dbPath = testDbPath("lethal.sqlite");
       try {
         // Create the database as a pre-4.3 LethAL would have left it.
         const old = new Database(dbPath, { create: true });
@@ -1062,6 +1137,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         // Opening with the current ResultsStore must add the column…
         const store = new ResultsStore(dbPath);
         const runId = store.createRun({
+          testScope: [],
           coverageMode: "procedure",
           testAppHash: "T",
           testAppProven: true,
@@ -1086,13 +1162,12 @@ CREATE TABLE IF NOT EXISTS mutants (
         check.close();
         expect(row.failure_note).toBe("compile failed; bisected to mutant M0001");
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dirname(dbPath), { recursive: true, force: true });
       }
     });
 
     test("R577: a pre-R577 database gains kill_reproduced and reproduced_failure; an old kill reads back unmarked, a new one round-trips", () => {
-      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
-      const dbPath = join(dir, "lethal.sqlite");
+      const dbPath = testDbPath("lethal.sqlite");
       try {
         const old = new Database(dbPath, { create: true });
         old.exec(PRE_43_SCHEMA);
@@ -1107,6 +1182,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         const store = new ResultsStore(dbPath);
         const oldRows = store.mutantVerdicts(1);
         const runId = store.createRun({
+          testScope: [],
           coverageMode: "procedure",
           testAppHash: "T",
           testAppProven: true,
@@ -1140,18 +1216,18 @@ CREATE TABLE IF NOT EXISTS mutants (
           reproducedFailure: "failed again",
         });
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dirname(dbPath), { recursive: true, force: true });
       }
     });
 
     test("recordMutant persists failure_note at the column level, NULL when absent", () => {
       // Direct column-level coverage (Task 6 Minor): read the value back out
       // of the column itself, not just through the absence of a throw.
-      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
-      const dbPath = join(dir, "lethal.sqlite");
+      const dbPath = testDbPath("lethal.sqlite");
       try {
         const store = new ResultsStore(dbPath);
         const runId = store.createRun({
+          testScope: [],
           coverageMode: "procedure",
           testAppHash: "T",
           testAppProven: true,
@@ -1182,17 +1258,17 @@ CREATE TABLE IF NOT EXISTS mutants (
           { id: withoutNote, failure_note: null },
         ]);
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dirname(dbPath), { recursive: true, force: true });
       }
     });
 
     test("opening an already-migrated database is a no-op (idempotent)", () => {
-      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
-      const dbPath = join(dir, "lethal.sqlite");
+      const dbPath = testDbPath("lethal.sqlite");
       try {
         new ResultsStore(dbPath).close();
         const store = new ResultsStore(dbPath); // second open must not throw on ALTER
         const runId = store.createRun({
+          testScope: [],
           coverageMode: "procedure",
           testAppHash: "T",
           testAppProven: true,
@@ -1206,7 +1282,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         store.recordMutant(runId, mutantRow("killed"));
         store.close();
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dirname(dbPath), { recursive: true, force: true });
       }
     });
   });
@@ -1218,6 +1294,7 @@ CREATE TABLE IF NOT EXISTS mutants (
     test("a NULL runner column maps to the documented default: absent, not thrown", () => {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
+        testScope: [],
         coverageMode: "procedure",
         testAppHash: "T",
         testAppProven: true,
@@ -1239,6 +1316,7 @@ CREATE TABLE IF NOT EXISTS mutants (
     test("a corrupt runner column value throws, naming the value and the mutant row", () => {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
+        testScope: [],
         coverageMode: "procedure",
         testAppHash: "T",
         testAppProven: true,
@@ -1281,6 +1359,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("recordArtifact stores the app path and batch dir, and artifactRecordById returns the batch, its run's highest batch and the source hash", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1319,6 +1398,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
 
     // Absent paths and no recorded source hash read back null, never a plausible default.
     const other = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1344,6 +1424,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("artifactRecordById is null for an unknown id", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1362,6 +1443,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("artifactRecordById throws when the store records one id twice", () => {
     const store = new ResultsStore(":memory:");
     const r1 = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1373,6 +1455,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       appVersion: "0.0.0.0",
     });
     const r2 = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1390,9 +1473,10 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   });
 
   test("a database from before C02-06 gains the five columns, and old rows read back null", () => {
-    const path = join(tmpdir(), `lethal-store-c0206-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-c0206.sqlite");
     const before = new ResultsStore(path);
     const runId = before.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -1442,6 +1526,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("batchMutantRows reads carried as true, false, or null", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1482,6 +1567,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("baselineTests reads only baseline rows, with their codeunit names", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1500,6 +1586,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const m = store.recordMutant(runId, mutantRow("killed"));
     store.recordTestResult(runId, m, "M0001", { ...ref, method: "OnlyUnderMutant" }, "fail", 1);
     const later = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1521,6 +1608,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("sessionIdsOf returns every session id of a run and none of another's", () => {
     const store = new ResultsStore(":memory:");
     const a = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1532,6 +1620,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       appVersion: "0.0.0.0",
     });
     const b = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1556,6 +1645,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const store = new ResultsStore(":memory:");
     // Run A, shaped the way runSession writes one.
     const a = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1571,10 +1661,11 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     store.recordArtifact(a, artifact(0, A0, { appPath: "x.app", instrumentedDir: "d" }));
     store.recordMutant(a, mutantRow("survived", { carried: false, coveringTests: [] }));
     store.finishRun(a, { batchCount: 1, baselineGreen: true });
-    const aKeys = store.priorSurvivorKeys("P", "procedure", T_APP, [], []);
+    const aKeys = store.priorSurvivorKeys("P", "procedure", T_APP, [], [], []);
     expect(aKeys.keys.size).toBe(1);
     // Run B, the verify row, created exactly as decision 4 says.
     const b = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1595,12 +1686,13 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       carryableVerdicts: [...CARRYABLE_VERDICTS],
     };
     expect(store.findResumableRun(query)).toBeNull();
-    expect(store.priorSurvivorKeys("P", "procedure", T_APP, [], [])).toEqual(aKeys);
+    expect(store.priorSurvivorKeys("P", "procedure", T_APP, [], [], [])).toEqual(aKeys);
     expect(store.artifactRecordById(A0)?.runId).toBe(a);
 
     // Negative control: a row with A's backend and fingerprint and a survivor IS found, so the
     // null above is the verify row's exclusion, not a query that can find nothing.
     const c = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       testAppHash: "T",
       testAppProven: true,
@@ -1623,6 +1715,7 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
   let next = 0;
   function run(store: ResultsStore, resourceKey?: string): number {
     return store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -1657,20 +1750,17 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
   });
 
   test("R449: a file store commits without an fsync per commit (WAL, synchronous NORMAL)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r449-"));
-    const store = new ResultsStore(join(dir, "s.sqlite"));
+    const store = new ResultsStore(testDbPath("s.sqlite"));
     try {
       expect(store.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(store.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 1 });
     } finally {
       store.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test("review r1 #4: a checkpoint a reader keeps busy warns once, naming the WAL size", () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r360-wal-"));
-    const path = join(dir, "r.sqlite");
+    const path = testDbPath("r.sqlite");
     const store = new ResultsStore(path);
     const reader = new Database(path);
     const warn = spyOn(console, "warn").mockImplementation(() => {});
@@ -1694,7 +1784,6 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
       warn.mockRestore();
       reader.close();
       store.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -1763,8 +1852,7 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
   });
 
   test("review r1 #2: reverse finish order keeps the most recently PUBLISHED bundle, on two connections", () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r360-order-"));
-    const path = join(dir, "r.sqlite");
+    const path = testDbPath("r.sqlite");
     const connA = new ResultsStore(path);
     const connB = new ResultsStore(path);
     try {
@@ -1781,7 +1869,6 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     } finally {
       connA.close();
       connB.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -1880,8 +1967,7 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
   });
 
   test("an older database gains payload_sha256, bundle_pruned_by and runs.resource_key on open", () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r360-"));
-    const path = join(dir, "old.sqlite");
+    const path = testDbPath("old.sqlite");
     const legacy = new Database(path, { create: true });
     legacy.exec(
       "CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finished_at TEXT, project_path TEXT NOT NULL, backend TEXT NOT NULL, app_version TEXT NOT NULL, batch_count INTEGER, baseline_green INTEGER);" +
@@ -1900,6 +1986,5 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     publish(store, r, 0);
     expect(has(store, r, 0)).toBe(true);
     store.close();
-    rmSync(dir, { recursive: true, force: true });
   });
 });

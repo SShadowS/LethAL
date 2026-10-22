@@ -887,6 +887,36 @@ repackages the file, the bytes differ and the run stays unproven (safe, but no r
 fingerprint, so the first run after this upgrade carries nothing on `--resume`, skips nothing on
 `--skip-known-survivors` and re-runs every baseline.
 
+**`--skip-known-survivors` checks the test scope (R585).** A run records the tests its baseline was
+given. History skips a survivor only when every test this session sends was in that run's set, so a
+`--tests-only` run lends to a session with the same or a narrower scope, never to a wider one. Other
+than that it skips nothing and warns `history-test-scope-changed`, naming the missing tests or that
+the run recorded no scope (every run before R585: a third one-time cost on upgrade).
+
+**`--skip-known-survivors` checks each survivor's tests (R644).** A survivor ran only against the
+tests that passed at its run's baseline, and its row records them. After this session's baseline, a
+survivor is skipped only when every test that covers it now is one it ran against then. Otherwise it
+is run, and the batch warns `history-tests-not-faced` (a test failed at that run's baseline, or
+coverage changed). A survivor with no such record is run too, with `history-survivor-no-record`:
+every row skipped before R644 has none, a fourth one-time cost on upgrade. A survivor no test covers
+now is not skipped; it reads `no-coverage`. On `--resume` the same two cases warn
+`resume-tests-not-faced` and `resume-survivor-no-record` (R646, below).
+
+**`--resume` re-derives no-coverage (R621).** A stored `no-coverage` is never carried. A mutant this
+session's coverage leaves uncovered reads `no-coverage` again; one it covers is run. A fully scored
+batch holding a `no-coverage` row is therefore deployed on resume (its baseline is reused from the
+saved snapshot when one matches) instead of being carried whole.
+
+**`--resume` checks each survivor's tests too (R646).** The same rule as R644, on the resume path:
+a survivor is carried only when every test covering it in this session is one it ran against in the
+resumed run. Otherwise it is run, and the batch warns `resume-tests-not-faced`. A survivor with no
+record is run with `resume-survivor-no-record`, and a fully scored batch holding one is deployed
+rather than carried whole. That costs one deploy per such batch, plus a baseline unless a saved
+snapshot matches: in practice every fully scored batch of a pre-R644 store holding a survivor lent
+by history. A kill is always carried: a test failed under it, whatever covers it now. **Limit:** a
+fully scored batch carried whole (`resume-batch-carried`) runs no baseline here, so its survivors
+are carried with no check, even when a test that passes now covers them (R646 stays open for this).
+
 ### After verify (guidance)
 
 A verify `killed` proves the test kills that mutant in the installed build. Make it the record

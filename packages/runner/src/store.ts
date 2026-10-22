@@ -7,7 +7,7 @@ import type { PublishOutcome } from "./deployment-verifier";
 import type { InstalledBundleRows, InstalledBundleWrite } from "./installed-bundle";
 import { normalizeRelPath } from "./line-filter";
 import { sameBuildSymbols } from "./preprocessor-symbols";
-import type { CoverageAttribution, PriorSurvivors } from "./selection";
+import type { CoverageAttribution, FacedTests, PriorSurvivors } from "./selection";
 import {
   type IdentityKey,
   NO_PRIOR_SURVIVORS,
@@ -15,6 +15,13 @@ import {
   serializeKey,
   twinSiteOf,
 } from "./selection";
+
+/** R644: two faced lists name the same tests (order ignored); a `null` (no record) equals nothing. */
+function sameFaced(a: FacedTests, b: FacedTests): boolean {
+  if (a === null || b === null) return false;
+  const set = new Set(a);
+  return set.size === new Set(b).size && b.every((t) => set.has(t));
+}
 
 /** C02-06: `artifactRecordById` found one artifact id on more than one batch row, a corrupt store.
  *  Typed so `lethal verify` can refuse it without matching message text. */
@@ -295,6 +302,9 @@ export interface RunRow {
   readonly alRunnerNames: boolean;
   /** R586: `runs.runner_build` (an al-runner-v3 run's build), `null` on every other run. */
   readonly runnerBuild: string | null;
+  /** R585: the sorted keys (`testKeyOf`) of the tests the run's baseline was given. `null` on a
+   *  row recorded before the column: unknown, so it lends no history. */
+  readonly testScope: readonly string[] | null;
 }
 
 /** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build. */
@@ -440,6 +450,19 @@ function parseBuildSymbols(value: string | null): readonly string[] | null {
   const parsed: unknown = JSON.parse(value);
   if (!Array.isArray(parsed) || parsed.some((s) => typeof s !== "string")) {
     throw new Error(`store.ts: corrupt "build_symbols" column value ${JSON.stringify(value)}`);
+  }
+  return parsed as string[];
+}
+
+/** R585: `runs.test_scope`, the run's sorted baseline test keys (`testKeyOf`). NULL (before R585)
+ *  reads as unknown; anything but a string array is a corrupt row and throws. */
+function parseTestScope(value: string | null, runId: number): readonly string[] | null {
+  if (value === null) return null;
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed) || parsed.some((s) => typeof s !== "string")) {
+    throw new Error(
+      `store.ts: run ${runId} has a corrupt "test_scope" column value ${JSON.stringify(value)}`,
+    );
   }
   return parsed as string[];
 }
@@ -796,6 +819,8 @@ export class ResultsStore {
       // R586: `<--version line> <binary sha256>` of an al-runner-v3 run; NULL on every other run
       // and on older rows. `runMayLend` step 1 lends a v3 run only to a v3 session of that build.
       ["runs", "runner_build TEXT", runCols],
+      // R585: NULL on an older row, read as "test scope unknown": it lends no history.
+      ["runs", "test_scope TEXT", runCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
       if (!known.some((c) => c.name === name)) {
@@ -862,6 +887,10 @@ export class ResultsStore {
     alRunnerNames?: boolean;
     /** R586: the al-runner-v3 build (`runnerBuildOf`); absent writes NULL (every other backend). */
     runnerBuild?: string;
+    /** R585: the keys (`testKeyOf`) of the tests this run's baseline is given. Required, so no run
+     *  is recorded without saying; `null` writes NULL ("unknown", which lends no history): only a
+     *  caller copying an older run's NULL passes it. Stored sorted and de-duplicated. */
+    testScope: readonly string[] | null;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
@@ -872,8 +901,8 @@ export class ResultsStore {
       info.testAppDeps !== undefined;
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build, test_scope) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -896,6 +925,7 @@ export class ResultsStore {
         info.dependencySourceSha256 ?? null,
         info.alRunnerNames === true ? 1 : null,
         info.runnerBuild ?? null,
+        info.testScope === null ? null : JSON.stringify([...new Set(info.testScope)].sort()),
       ) as {
       id: number;
     };
@@ -1256,9 +1286,10 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build, resource_key FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build, resource_key, test_scope FROM runs WHERE id = ?",
       )
       .get(runId) as {
+      test_scope: string | null;
       resource_key: string | null;
       dependency_source_sha256: string | null;
       al_runner_names: number | null;
@@ -1300,6 +1331,7 @@ export class ResultsStore {
       alRunnerNames: row.al_runner_names === 1,
       runnerBuild: row.runner_build,
       resourceKey: row.resource_key,
+      testScope: parseTestScope(row.test_scope, row.id),
     };
   }
 
@@ -2099,6 +2131,48 @@ export class ResultsStore {
       .run(key.runId, key.batchIndex, markedByRun);
   }
 
+  /**
+   * R644: a lent `known-survivor` row keeps the tests the survivor was run against in the run that
+   * scored it, so the next session can check its covering tests against them and lend it again.
+   * Store only: the report row still lists none (this run ran it against nothing). An empty list
+   * would read as "no record" there, so it is a caller-contract violation.
+   */
+  keepFacedTests(mutantRowId: number, tests: readonly string[]): void {
+    if (tests.length === 0) {
+      throw new Error(
+        `store.ts: keepFacedTests(${mutantRowId}): an empty list is no record (R644)`,
+      );
+    }
+    this.db
+      .query("UPDATE mutants SET covering_tests = ? WHERE id = ? AND verdict = 'known-survivor'")
+      .run(JSON.stringify(tests), mutantRowId);
+    const r = this.db.query("SELECT changes() AS n").get() as { n: number };
+    if (r.n !== 1) {
+      throw new Error(
+        `store.ts: keepFacedTests: row ${mutantRowId} is not one known-survivor row (R644)`,
+      );
+    }
+  }
+
+  /**
+   * R644 (build review I2): a survivor CARRIED by `--resume` was not run in this session, so its
+   * store row keeps the tests it faced in the run that scored it (`tests`, its stored list), never
+   * the tests covering it now. An empty list stays empty: "no record", which history never lends.
+   */
+  keepCarriedFacedTests(mutantRowId: number, tests: readonly string[]): void {
+    this.db
+      .query(
+        "UPDATE mutants SET covering_tests = ? WHERE id = ? AND carried = 1 AND verdict IN ('survived', 'known-survivor')",
+      )
+      .run(JSON.stringify(tests), mutantRowId);
+    const r = this.db.query("SELECT changes() AS n").get() as { n: number };
+    if (r.n !== 1) {
+      throw new Error(
+        `store.ts: keepCarriedFacedTests: row ${mutantRowId} is not one carried survivor row (R644)`,
+      );
+    }
+  }
+
   recordTestResult(
     runId: number,
     mutantRowId: number | null,
@@ -2252,7 +2326,19 @@ export class ResultsStore {
     /** R442: THIS run's `carryHidden.files`. A latest run that hid other files whole numbered its
      *  twins differently, so it yields no keys. */
     hiddenFiles: readonly string[],
+    /** R585: the keys (`testKeyOf`) of the tests THIS session's baseline is given. A run lends only
+     *  when every one of them is in its recorded `test_scope`: a survivor of a narrower suite may be
+     *  killed by a test it never ran. A NULL scope (before R585) lends nothing. */
+    sessionTests: readonly string[],
     on: {
+      /** R585: the latest finished run's test scope does not hold every test of this session
+       *  (`missing`, sorted), or was not recorded (`missing` null). Checked LAST of all, after
+       *  `runMayLend` lends (review I1), so a pre-R585 run refused for another reason keeps that
+       *  reason's name. */
+      readonly testScopeChanged?: (info: {
+        runId: number;
+        missing: readonly string[] | null;
+      }) => void;
       /** R442: the latest finished run recorded no `carry_hidden` (before R442, or it died before
        *  generation): untrusted, no keys. Checked after the symbols. */
       readonly carryUntrusted?: (info: { runId: number }) => void;
@@ -2312,9 +2398,10 @@ export class ResultsStore {
     const none = NO_PRIOR_SURVIVORS;
     const run = this.db
       .query(
-        "SELECT id, backend, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256, al_runner_names, runner_build FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, backend, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256, al_runner_names, runner_build, test_scope FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
+      test_scope: string | null;
       backend: string;
       al_runner_names: number | null;
       runner_build: string | null;
@@ -2407,6 +2494,20 @@ export class ResultsStore {
       }
       return none;
     }
+    // R585: the very last check, AFTER `runMayLend` lends (steps 2 and 3 included), so every
+    // pre-R585 run (NULL scope) refused for another reason keeps that reason's name (review I1).
+    // Remove-only. Equal or wider lends; narrower, other or unknown does not.
+    const scope = parseTestScope(run.test_scope, run.id);
+    if (scope === null) {
+      on.testScopeChanged?.({ runId: run.id, missing: null });
+      return none;
+    }
+    const held = new Set(scope);
+    const missing = [...new Set(sessionTests)].filter((t) => !held.has(t)).sort();
+    if (missing.length > 0) {
+      on.testScopeChanged?.({ runId: run.id, missing });
+      return none;
+    }
     // Review M5: `siteChecks` lent only with a parsed `carry_hidden`; read again for the rows.
     const hidden = parseCarryHidden(run.carry_hidden, run.id);
     if (hidden === null) {
@@ -2417,10 +2518,11 @@ export class ResultsStore {
     const hiddenTuples = new Set(hidden.tuples);
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal, file, member_hash FROM mutants " +
+        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal, file, member_hash, covering_tests FROM mutants " +
           "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor')",
       )
       .all(run.id) as Array<{
+      covering_tests: string | null;
       file: string;
       member_hash: string | null;
       ast_hash: string;
@@ -2456,27 +2558,54 @@ export class ResultsStore {
           ordinal: r.identity_ordinal ?? 0,
         };
         // The tuple is the key without its ordinal (`serializeKey` adds it only above 0).
+        // R644: NULL (before R192) and `[]` (a row lent before R644) are both "no record". A
+        // malformed value throws (`parseCoveringTests`), never a quiet re-run.
+        const listed =
+          r.covering_tests === null ? [] : this.parseCoveringTests(r.covering_tests, r);
         return {
           key: serializeKey(key),
           tuple: serializeKey({ ...key, ordinal: 0 }),
           file: r.file,
           memberHash: r.member_hash,
+          faced: listed.length === 0 ? null : listed,
         };
       });
+    // R644 (minor 4): one entry per key and per site. Two rows on one with different lists are
+    // ambiguous: no record, so the mutant is re-run.
+    const facedBy = (pairs: ReadonlyArray<readonly [string, FacedTests]>) => {
+      const m = new Map<string, FacedTests>();
+      for (const [k, f] of pairs) {
+        const had = m.get(k);
+        m.set(k, had === undefined ? f : sameFaced(had, f) ? had : null);
+      }
+      return m;
+    };
+    const siteOf = (k: { file: string; tuple: string; memberHash: string | null }) =>
+      k.memberHash === null ? undefined : memberSiteOf(twinSiteOf(k.file, k.tuple), k.memberHash);
     // R391: rule 2 (`carryRecord`) needs the survivors' (file, tuple) and the run's own twin facts.
     const twins = parseTwinTuples(run.twin_tuples, run.id);
     return {
       keys: new Set(kept.map((k) => k.key)),
       // R474: a rule-2 site also names the member's hash; a NULL one (an older row) names none.
       sites: new Set(
-        kept.flatMap((k) =>
-          k.memberHash === null ? [] : [memberSiteOf(twinSiteOf(k.file, k.tuple), k.memberHash)],
-        ),
+        kept.flatMap((k) => {
+          const site = siteOf(k);
+          return site === undefined ? [] : [site];
+        }),
       ),
       recorded: {
         hash: run.generation_source_sha256,
         twins: twins === null ? null : new Set(twins),
         dependencyHash: run.dependency_source_sha256,
+      },
+      faced: {
+        byKey: facedBy(kept.map((k) => [k.key, k.faced] as const)),
+        bySite: facedBy(
+          kept.flatMap((k) => {
+            const site = siteOf(k);
+            return site === undefined ? [] : [[site, k.faced] as const];
+          }),
+        ),
       },
     };
   }
