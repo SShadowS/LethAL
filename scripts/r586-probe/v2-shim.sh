@@ -18,6 +18,12 @@ case "${1:-}" in
   --server)
     shift
     log "serve" "$*"
+    # R612 TAP (measurement only): each summary's `"cached":…` field, one per line, beside the log;
+    # tap2: every answer line to <tag>.answers.ndjson (raw test rows kept), each summary replaced by a
+    # one-line marker with its daemon pid, because a summary carries the whole coverage document.
+    t="${R586_SHIM_LOG:-}"
+    t="${t%.shim.tsv}"
+    [ -n "${R586_SHIM_LOG:-}" ] && exec "$R" serve "$@" > >(tee >(grep --line-buffered -o '"cached":[a-z]*' >> "$t.cached.txt") >(sed -u -E "s/^.*\"type\":\"summary\".*\$/{\"type\":\"summary-marker\",\"daemon\":$$}/" >> "$t.answers.ndjson"))
     exec "$R" serve "$@" ;;
 esac
 # Optional (measurement only): R586_ISOLATION replaces the mode LethAL sends after `--isolation`.

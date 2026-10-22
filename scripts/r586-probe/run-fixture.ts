@@ -109,6 +109,7 @@ const backend = new AlRunnerBackend({
   ...(leg === "resource" ? { selectorMode: "resource" as const } : {}),
   ...(a.packages !== undefined ? { packagesDir: resolve(a.packages) } : {}),
   ...(symbols.length > 0 ? { preprocessorSymbols: symbols } : {}),
+  ...(process.env.R612_SERVE_RULE === "v3" ? { serveDaemonRule: "v3" as const } : {}), // R612 TAP
 });
 const t0 = Date.now();
 let report: SessionReport;
