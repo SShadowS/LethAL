@@ -7017,10 +7017,13 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
       skipKnownSurvivors: true,
     });
     expect(report.counts.errors).toBeGreaterThan(0);
-    // The known survivor itself is recorded separately (verdict "known-survivor", no note); the
-    // culprit's identity lands on `execute`'s error-recorded mutants' shared note instead.
-    const knownSurvivor = report.mutants.find((m) => m.verdict === "known-survivor");
-    expect(knownSurvivor).toBeDefined();
+    // R644 (review I1): the history candidate stays inside `execute` through the compile bisect, so
+    // it is not lent: it gets the batch's error row with the shared note like every other mutant.
+    expect(report.mutants.find((m) => m.verdict === "known-survivor")).toBeUndefined();
+    const candidate = report.mutants.filter(
+      (m) => m.operatorName === "lethal.conditional-boundary" && m.line === boundary.startLine,
+    );
+    expect(candidate.map((m) => m.verdict)).toEqual(["error"]);
     const noted = report.mutants.find((m) => m.failureNote !== undefined);
     expect(noted).toBeDefined();
     expect(noted?.failureNote).toContain("bisected to mutant");

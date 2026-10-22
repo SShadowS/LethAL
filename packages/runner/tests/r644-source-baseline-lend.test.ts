@@ -329,9 +329,13 @@ describe("R644 review I1: a candidate stays inside `execute` until after coverag
     });
     const stranded = aborted.backend.activated[1];
     if (stranded === undefined) throw new Error("run 1 ran fewer than two mutants");
-    // Run 2, finished: the history source. The killer is red there, so nothing it scored is lent
-    // to a session where the killer is green.
-    const r1 = (await skipping(store, dirs, { killerRed: true, killerKills: false })).report;
+    // Run 2, finished: the history source. Its survivors are given NO record (`[]`, as a row lent
+    // before R644 holds), so none is lent and each takes the ordinary path. (A red killer would not
+    // do: `--resume` may reuse run 2's own baseline snapshot, where the killer is red again.)
+    const r1 = (await skipping(store, dirs, { killerRed: false, killerKills: false })).report;
+    store.db
+      .query("UPDATE mutants SET covering_tests = '[]' WHERE run_id = ?")
+      .run(lastRunId(store));
     // Run 3: --resume (run 1) and --skip-known-survivors (run 2).
     const s = await skipping(
       store,

@@ -62,6 +62,7 @@ describe("filterHistory", () => {
     keys: new Set([survivorKey]),
     sites: new Set<string>(),
     recorded: { hash: "same", twins: null, dependencyHash: "dep" },
+    faced: { byKey: new Map(), bySite: new Map() },
   };
   const current = () => ({
     hash: "same",

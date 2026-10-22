@@ -7,7 +7,7 @@ import type { PublishOutcome } from "./deployment-verifier";
 import type { InstalledBundleRows, InstalledBundleWrite } from "./installed-bundle";
 import { normalizeRelPath } from "./line-filter";
 import { sameBuildSymbols } from "./preprocessor-symbols";
-import type { CoverageAttribution, PriorSurvivors } from "./selection";
+import type { CoverageAttribution, FacedTests, PriorSurvivors } from "./selection";
 import {
   type IdentityKey,
   NO_PRIOR_SURVIVORS,
@@ -15,6 +15,13 @@ import {
   serializeKey,
   twinSiteOf,
 } from "./selection";
+
+/** R644: two faced lists name the same tests (order ignored); a `null` (no record) equals nothing. */
+function sameFaced(a: FacedTests, b: FacedTests): boolean {
+  if (a === null || b === null) return false;
+  const set = new Set(a);
+  return set.size === new Set(b).size && b.every((t) => set.has(t));
+}
 
 /** C02-06: `artifactRecordById` found one artifact id on more than one batch row, a corrupt store.
  *  Typed so `lethal verify` can refuse it without matching message text. */
@@ -2124,6 +2131,29 @@ export class ResultsStore {
       .run(key.runId, key.batchIndex, markedByRun);
   }
 
+  /**
+   * R644: a lent `known-survivor` row keeps the tests the survivor was run against in the run that
+   * scored it, so the next session can check its covering tests against them and lend it again.
+   * Store only: the report row still lists none (this run ran it against nothing). An empty list
+   * would read as "no record" there, so it is a caller-contract violation.
+   */
+  keepFacedTests(mutantRowId: number, tests: readonly string[]): void {
+    if (tests.length === 0) {
+      throw new Error(
+        `store.ts: keepFacedTests(${mutantRowId}): an empty list is no record (R644)`,
+      );
+    }
+    this.db
+      .query("UPDATE mutants SET covering_tests = ? WHERE id = ? AND verdict = 'known-survivor'")
+      .run(JSON.stringify(tests), mutantRowId);
+    const r = this.db.query("SELECT changes() AS n").get() as { n: number };
+    if (r.n !== 1) {
+      throw new Error(
+        `store.ts: keepFacedTests: row ${mutantRowId} is not one known-survivor row (R644)`,
+      );
+    }
+  }
+
   recordTestResult(
     runId: number,
     mutantRowId: number | null,
@@ -2469,10 +2499,11 @@ export class ResultsStore {
     const hiddenTuples = new Set(hidden.tuples);
     const rows = this.db
       .query(
-        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal, file, member_hash FROM mutants " +
+        "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal, file, member_hash, covering_tests FROM mutants " +
           "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor')",
       )
       .all(run.id) as Array<{
+      covering_tests: string | null;
       file: string;
       member_hash: string | null;
       ast_hash: string;
@@ -2508,27 +2539,54 @@ export class ResultsStore {
           ordinal: r.identity_ordinal ?? 0,
         };
         // The tuple is the key without its ordinal (`serializeKey` adds it only above 0).
+        // R644: NULL (before R192) and `[]` (a row lent before R644) are both "no record". A
+        // malformed value throws (`parseCoveringTests`), never a quiet re-run.
+        const listed =
+          r.covering_tests === null ? [] : this.parseCoveringTests(r.covering_tests, r);
         return {
           key: serializeKey(key),
           tuple: serializeKey({ ...key, ordinal: 0 }),
           file: r.file,
           memberHash: r.member_hash,
+          faced: listed.length === 0 ? null : listed,
         };
       });
+    // R644 (minor 4): one entry per key and per site. Two rows on one with different lists are
+    // ambiguous: no record, so the mutant is re-run.
+    const facedBy = (pairs: ReadonlyArray<readonly [string, FacedTests]>) => {
+      const m = new Map<string, FacedTests>();
+      for (const [k, f] of pairs) {
+        const had = m.get(k);
+        m.set(k, had === undefined ? f : sameFaced(had, f) ? had : null);
+      }
+      return m;
+    };
+    const siteOf = (k: { file: string; tuple: string; memberHash: string | null }) =>
+      k.memberHash === null ? undefined : memberSiteOf(twinSiteOf(k.file, k.tuple), k.memberHash);
     // R391: rule 2 (`carryRecord`) needs the survivors' (file, tuple) and the run's own twin facts.
     const twins = parseTwinTuples(run.twin_tuples, run.id);
     return {
       keys: new Set(kept.map((k) => k.key)),
       // R474: a rule-2 site also names the member's hash; a NULL one (an older row) names none.
       sites: new Set(
-        kept.flatMap((k) =>
-          k.memberHash === null ? [] : [memberSiteOf(twinSiteOf(k.file, k.tuple), k.memberHash)],
-        ),
+        kept.flatMap((k) => {
+          const site = siteOf(k);
+          return site === undefined ? [] : [site];
+        }),
       ),
       recorded: {
         hash: run.generation_source_sha256,
         twins: twins === null ? null : new Set(twins),
         dependencyHash: run.dependency_source_sha256,
+      },
+      faced: {
+        byKey: facedBy(kept.map((k) => [k.key, k.faced] as const)),
+        bySite: facedBy(
+          kept.flatMap((k) => {
+            const site = siteOf(k);
+            return site === undefined ? [] : [[site, k.faced] as const];
+          }),
+        ),
       },
     };
   }
