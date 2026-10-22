@@ -87,6 +87,19 @@ export const REPRODUCTION_EXPECTED: Readonly<Record<string, ReproductionFigures>
   envtool: { killerRowsPerKill: 2 },
 };
 
+/**
+ * R582: `killReproductionFailures` for the run a gate just made (the store's newest), thrown as one
+ * error when any fails. Called right after `runSession`, while the store is open.
+ */
+export function assertKillsReproduced(
+  leg: string,
+  report: SessionReport,
+  store: ResultsStore,
+): void {
+  const failures = killReproductionFailures(leg, report, store, latestRunId(store));
+  if (failures.length > 0) throw new Error(failures.join("; "));
+}
+
 /** The newest run in `store`: the one a gate just made, read right after its `runSession`. */
 export function latestRunId(store: ResultsStore): number {
   const row = store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number | null };

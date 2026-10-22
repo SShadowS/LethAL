@@ -9,6 +9,7 @@ import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
 import { flatNamesFor, withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
+import { type ChunkedRow, foldChunkedRows, rerunMismatches } from "../itest/chunked-rows";
 import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import {
   AlcCompileError,
@@ -20695,6 +20696,46 @@ describe("R577: a kill must reproduce under the mutant", () => {
     expect(coldOff).toBeGreaterThan(0);
     expect(await groupCalls(true, false)).toBe(coldOff);
     expect(await groupCalls(true, true)).toBe((await groupCalls(false, true)) + 1);
+  });
+
+  test("U7 (R582 F2): chunked at 2, a warm kill's re-run replays its CHUNK's prefix, read back through itest:chunked's own fold", async () => {
+    // Cold ledger, so the order is by name: chunks [T1, T2], [T3, T4], [T5]. M0001 dies at T4,
+    // chunk position 2: replay and re-run must both be [T3, T4], never `ordered`'s four.
+    const backend = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T4" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      groupRuns: { maxMethodsPerCall: 2 },
+    });
+    const k = rowOf(report, "M0001");
+    expect(k?.verdict).toBe("killed");
+    expect(k?.killPosition).toBe(2);
+    expect(k?.killReproduced).toBe(true);
+    const mutantRows = store.db.query("SELECT id, mutant_code FROM mutants").all() as Array<{
+      id: number;
+      mutant_code: string;
+    }>;
+    const codeOf = new Map(mutantRows.map((r) => [r.id, r.mutant_code]));
+    const fold = foldChunkedRows(
+      store.db
+        .query(
+          "SELECT mutant_row_id, mutant_code, method, session_id FROM test_results WHERE op_kind = 'many' ORDER BY id",
+        )
+        .all() as ChunkedRow[],
+      codeOf,
+    );
+    expect(fold.replays.get("M0001")).toEqual(["T3", "T4"]);
+    expect(rerunMismatches([{ code: "M0001", replay: ["T3", "T4"] }], fold)).toEqual([]);
+    expect(fold.callSizes.get("M0001")).toEqual([2, 2]);
+    store.close();
   });
 
   test("T5b: a replay under the mutant that passes all k is kill-not-reproduced, with the replay clause", async () => {

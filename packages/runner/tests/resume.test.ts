@@ -10,8 +10,6 @@ import {
   verdictFromRunnerTest,
 } from "../src/al-runner-backend";
 import { reserveAppVersion } from "../src/app-version";
-import { BcDevMcpBackend } from "../src/bcdev-backend";
-import type { BcDevConfig } from "../src/bcdev-backend";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -24,6 +22,8 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { BcDevMcpBackend } from "../src/bcdev-backend";
+import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";

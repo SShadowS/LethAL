@@ -74,6 +74,12 @@ import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import {
+  type ChunkedFold,
+  type ChunkedRow,
+  foldChunkedRows,
+  rerunMismatches,
+} from "./chunked-rows";
+import {
   assertLaunchMatchesConfig,
   itestConfigName,
   itestConfigPath,
@@ -82,6 +88,7 @@ import {
 } from "./config-path";
 import { CHUNKED_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { killReproductionFailures, latestRunId } from "./kill-reproduction";
 import { assertReachEvidence, assertReachIdenticalAcrossLegs } from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_CHUNKED) {
@@ -190,13 +197,11 @@ async function readOptionalLaunchConfig(): Promise<LaunchLocalConfig["configurat
   return (JSON.parse(text) as LaunchLocalConfig).configurations[0] ?? {};
 }
 
-/** One mutant's replay: the methods recorded with `mutant_code IS NULL` and `op_kind = 'many'`. */
-interface LegResult {
+/** The leg's report and its `op_kind = 'many'` rows, folded (`chunked-rows.ts`). */
+interface LegResult extends ChunkedFold {
   readonly report: SessionReport;
-  /** mutantCode -> the replay's method names, in recorded order (absent when none ran). */
-  readonly replays: ReadonlyMap<string, readonly string[]>;
-  /** mutantCode -> how many methods each covering call ran, in call order. */
-  readonly callSizes: ReadonlyMap<string, readonly number[]>;
+  /** R582: `killReproductionFailures` for this leg, read before the store closes. */
+  readonly repro: readonly string[];
 }
 
 async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<LegResult> {
@@ -284,49 +289,28 @@ async function runLeg(scratchRoot: string, maxMethodsPerCall?: number): Promise<
       quarantineDir: join(scratchRoot, "quarantine"),
     });
 
-    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const runId = latestRunId(store);
     const codeOf = new Map<number, string>();
     for (const r of store.db
       .query("SELECT id, mutant_code FROM mutants WHERE run_id = ?")
       .all(runId) as Array<{ id: number; mutant_code: string }>) {
       codeOf.set(r.id, r.mutant_code);
     }
-    const replays = new Map<string, string[]>();
-    const callSizes = new Map<string, number[]>();
-    let lastSession: number | null = null;
-    let lastCode: string | null = null;
-    for (const r of store.db
+    const rows = store.db
       .query(
-        "SELECT mutant_row_id, mutant_code, method, op_kind, session_id FROM test_results " +
+        "SELECT mutant_row_id, mutant_code, method, session_id FROM test_results " +
           "WHERE run_id = ? AND op_kind = 'many' ORDER BY id",
       )
-      .all(runId) as Array<{
-      mutant_row_id: number | null;
-      mutant_code: string | null;
-      method: string;
-      op_kind: string;
-      session_id: number | null;
-    }>) {
-      const owner = r.mutant_row_id === null ? undefined : codeOf.get(r.mutant_row_id);
-      if (owner === undefined) continue;
-      if (r.mutant_code === null) {
-        // A replay row: `mutantCode` null, still attributed to the mutant it confirms.
-        const list = replays.get(owner) ?? [];
-        list.push(r.method);
-        replays.set(owner, list);
-      } else {
-        // A covering row. One call is one session, so a change of session id starts a new call.
-        const sizes = callSizes.get(owner) ?? [];
-        if (r.session_id !== lastSession || owner !== lastCode || sizes.length === 0) {
-          sizes.push(0);
-        }
-        sizes[sizes.length - 1] = (sizes[sizes.length - 1] ?? 0) + 1;
-        callSizes.set(owner, sizes);
-        lastSession = r.session_id;
-        lastCode = owner;
-      }
-    }
-    return { report, replays, callSizes };
+      .all(runId) as ChunkedRow[];
+    // R582: the re-runs under the mutant are folded apart from the covering calls.
+    const fold = foldChunkedRows(rows, codeOf);
+    const repro = killReproductionFailures(
+      maxMethodsPerCall === undefined ? "chunked/control" : "chunked/chunked",
+      report,
+      store,
+      runId,
+    );
+    return { report, ...fold, repro };
   } finally {
     store.close();
     await backend.close();
@@ -484,6 +468,11 @@ async function main(): Promise<void> {
         undefined,
         `chunked: ${c.code} is cold and must have written NO replay rows`,
       );
+      assert.equal(
+        chunked.reruns.get(c.code),
+        undefined,
+        `chunked: ${c.code} is cold, so its re-run under the mutant is a single call and must have written NO many re-run rows (R582)`,
+      );
     }
 
     // 6. THE REPLAY LISTS — the assertion this gate exists for. A replay must be its CHUNK's
@@ -502,6 +491,15 @@ async function main(): Promise<void> {
         `chunked: ${w.code}'s replay ran ${JSON.stringify(got)}, expected exactly its CHUNK's methods ${JSON.stringify(w.replay)}. A replay built from \`ordered\` instead of \`chunkPrefix\` fails HERE and nowhere else in this repo (R208)`,
       );
     }
+    // 6b. R582 (F2): each warm kill's re-run under the mutant replays the SAME list as its
+    //     confirm. Its rows are kept out of the cap check above (`chunked-rows.ts`), so without
+    //     this a re-run over `ordered`'s prefix would pass every other assertion.
+    const rerunFailures = rerunMismatches(CHUNKED.warm, chunked);
+    assert.deepEqual(rerunFailures, [], rerunFailures.join("; "));
+
+    // 6c. R582: every kill on both legs was re-run, by marker and by its 2 killer rows.
+    assert.deepEqual(control.repro, [], control.repro.join("; "));
+    assert.deepEqual(chunked.repro, [], chunked.repro.join("; "));
 
     // 7. And the control's own replays are the longer, ordered-prefix ones — so the two legs
     //    disagree about replay length exactly where the design says they must.

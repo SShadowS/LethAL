@@ -40,6 +40,7 @@ import {
   printItestTarget,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { assertKillsReproduced } from "./kill-reproduction";
 import {
   NAMES_PROJECT_DIR,
   NAMES_SELECTOR_IDS,
@@ -143,7 +144,7 @@ async function runFenced(scratchRoot: string): Promise<SessionReport> {
   );
   const store = new ResultsStore(join(scratchRoot, "lethal.sqlite"));
   try {
-    return await runSession({
+    const report = await runSession({
       backend,
       store,
       projectDir: NAMES_PROJECT_DIR,
@@ -159,6 +160,9 @@ async function runFenced(scratchRoot: string): Promise<SessionReport> {
       // A scratch quarantine dir, never the real store (see bcdev.itest.ts).
       quarantineDir: join(scratchRoot, "quarantine"),
     });
+    // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
+    assertKillsReproduced("bcdev-names", report, store);
+    return report;
   } finally {
     store.close();
     await backend.close();

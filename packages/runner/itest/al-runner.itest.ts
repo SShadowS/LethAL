@@ -112,6 +112,11 @@ import {
 import { ALRUNNER_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
+  killReproductionFailures,
+  latestRunId,
+  unmeasuredReproductionFigures,
+} from "./kill-reproduction";
+import {
   LAYOUT_MAX_GUARDS,
   LAYOUT_PROJECT_DIR,
   LAYOUT_SELECTOR_IDS,
@@ -141,11 +146,6 @@ import {
   assertNoReachAttestation,
   printReachSummary,
 } from "./reach-evidence";
-import {
-  killReproductionFailures,
-  latestRunId,
-  unmeasuredReproductionFigures,
-} from "./kill-reproduction";
 import { SYMBOL_SETS, assertSymbolBuild, printSymbolTable, symbolSetLabel } from "./symbol-fixture";
 import {
   WRAPPED_PROJECT_DIR,
@@ -1327,10 +1327,16 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
       ),
     );
     check("cli-default kill reproduction (R577)", () => {
-      const reproFailures = killReproductionFailures("cli-default", report, store, latestRunId(store), {
-        activations: resource.activations,
-        serverSuiteRuns: rec.record.serverRunTests,
-      });
+      const reproFailures = killReproductionFailures(
+        "cli-default",
+        report,
+        store,
+        latestRunId(store),
+        {
+          activations: resource.activations,
+          serverSuiteRuns: rec.record.serverRunTests,
+        },
+      );
       assert.deepEqual(reproFailures, [], reproFailures.join("; "));
     });
     check("cli-default report selector (R558)", () =>

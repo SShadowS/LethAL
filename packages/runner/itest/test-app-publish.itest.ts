@@ -60,6 +60,7 @@ import {
   printItestTarget,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { assertKillsReproduced } from "./kill-reproduction";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { expectedTestAppVersion } from "./test-app-version";
 
@@ -253,6 +254,8 @@ async function main(): Promise<void> {
       selectorIds: SELECTOR_IDS,
       ...shared,
     });
+    // R582: every kill of the full run was re-run under the mutant.
+    assertKillsReproduced("testapp", report, store);
     assert.equal(report.quarantined, undefined, "step 1: the full run must not quarantine");
     const committed = (await readGateBaseline(BASELINE_PATH)).entries;
     const diffs = diffMutants(committed, normalizeForComparison(report));
@@ -413,6 +416,8 @@ async function main(): Promise<void> {
       assert.equal(k.mutant.mutantId, kill.mutantCode);
       assert.equal(k.verdict, "killed", `${step}: kill verdict (${k.failureNote ?? ""})`);
       assert.equal(k.killingTest, "OverBudgetDetected", `${step}: killing test`);
+      // R582: the named kill was re-run under the mutant too.
+      assert.equal(k.killReproduced, true, `${step}: the named kill carries killReproduced`);
       assert.equal(s.mutant.mutantId, survivor.mutantCode);
       assert.equal(s.verdict, "survived", `${step}: survivor verdict (${s.failureNote ?? ""})`);
       console.log(
