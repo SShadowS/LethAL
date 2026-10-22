@@ -56,7 +56,7 @@ const SYSTEM_APP = "63ca2fa4-4f03-4f2b-a480-172fef340d3f";
 const CALL_TIMEOUT_MS = 120_000;
 
 /** One control-app call per codeunit. 92912 has two tests, so its one call is RunMutantMany. */
-const CASES: { codeunit: number; methods: string[]; measured: boolean }[] = [
+const ALL_CASES: { codeunit: number; methods: string[]; measured: boolean }[] = [
   { codeunit: 92910, methods: ["HttpGet"], measured: false },
   { codeunit: 92911, methods: ["HttpGetRaw"], measured: true },
   { codeunit: 92912, methods: ["DuplicateNamedKey", "AfterDupSentinel"], measured: false },
@@ -64,6 +64,39 @@ const CASES: { codeunit: number; methods: string[]; measured: boolean }[] = [
   { codeunit: 92914, methods: ["DuplicateNamedKeyThenRead"], measured: false },
   { codeunit: 92915, methods: ["DuplicateNamedKeyThenReadRaw"], measured: true },
 ];
+/**
+ * R639_RUN=2: the re-run after run 1's permission refusal. Only the duplicate-key codeunits run
+ * (now with TestPermissions = Disabled), and the result is MERGED into run 1's file: run 1's
+ * HTTP rows stay current, its duplicate-key rows move to `history`.
+ */
+const RUN = process.env.R639_RUN === "2" ? 2 : 1;
+const CASES = RUN === 2 ? ALL_CASES.filter((k) => k.codeunit >= 92912) : ALL_CASES;
+const RERUN = new Set(CASES.map((k) => k.codeunit));
+
+/** Run 2's document folded into run 1's (see `RUN`). */
+export function merge(
+  run1: Record<string, unknown>,
+  run2: Record<string, unknown>,
+): Record<string, unknown> {
+  const header = (d: Record<string, unknown>, run: number) => {
+    const { results: _r, history: _h, runs: _s, ...rest } = d;
+    return { run, ...rest };
+  };
+  const tag = (rs: unknown, run: number) =>
+    ((rs ?? []) as Record<string, unknown>[]).map((r) => ({ run, ...r }));
+  const old = tag(run1.results, 1);
+  return {
+    ...run1,
+    ...header(run2, 2),
+    run: undefined,
+    runs: [header(run1, 1), header(run2, 2)],
+    results: [...old.filter((r) => !RERUN.has(r.codeunit as number)), ...tag(run2.results, 2)],
+    history: {
+      note: "run 1's duplicate-key rows: every one failed on the FIRST Insert with a permission refusal (the codeunits had no TestPermissions), so they measured no duplicate key. Superseded by run 2.",
+      results: old.filter((r) => RERUN.has(r.codeunit as number)),
+    },
+  };
+}
 
 mkdirSync(EVIDENCE, { recursive: true });
 const log = (s: string) => {
@@ -205,6 +238,10 @@ async function main(): Promise<number> {
     probeSourceSha,
     appSha256: appSha,
     testHttpRequestPolicy: "absent",
+    testPermissions:
+      RUN === 2
+        ? "Disabled on 92912-92915 (run 2); absent on 92910/92911 (run 1, which read no table)"
+        : "absent",
     runnerPath:
       'LethAL Control RunMutant (one method per call, mutantId ""); 92912 through RunMutantMany (both methods, one call, stopAtFirstFailure false)',
     lease: { holder: JSON.parse(holder), releasedAt: null },
@@ -249,6 +286,12 @@ async function main(): Promise<number> {
       }
     }
     doc.absentBefore = true;
+    // The control app's artifact registry for our target, before publish (a row left by a prior run?).
+    const regBefore = await postAction(odata, "LethALControl_RegisteredArtifact", {
+      targetAppId: TARGET.id,
+    });
+    log(`RegisteredArtifact(${TARGET.id}) before publish = ${JSON.stringify(regBefore)}`);
+    doc.registeredArtifactBefore = regBefore;
 
     // Step 5: publish target, then tests; read each back installed.
     published = true;
@@ -366,7 +409,7 @@ async function main(): Promise<number> {
       .map((t) => (typeof t.stackTrace === "string" ? t.stackTrace : ""))
       .find((s) => s !== "");
     // The runner is the callstack frame that names the Test Runner; null when none does.
-    doc.runnerCodeunit = frame?.split(";").find((f) => f.includes("Test Runner")) ?? null;
+    doc.runnerCodeunit = frame?.split(";").find((f) => f.includes("Test Runner - Isol.")) ?? null;
     doc.callstackSample = frame ?? null;
   } catch (err) {
     log(`FAILED: ${errText(err)}`);
@@ -394,7 +437,13 @@ async function main(): Promise<number> {
     }
     doc.removal = removal;
     mkdirSync(join(REPO, "docs", "measurements", "r639"), { recursive: true });
-    writeFileSync(OUT, `${JSON.stringify(doc, null, 2)}\n`);
+    // Run 2's own document is kept whole as evidence; the committed file gets the merge.
+    if (RUN === 2) writeFileSync(join(EVIDENCE, "run2.json"), `${JSON.stringify(doc, null, 2)}\n`);
+    const final =
+      RUN === 2
+        ? merge(JSON.parse(readFileSync(OUT, "utf8")) as Record<string, unknown>, doc)
+        : doc;
+    writeFileSync(OUT, `${JSON.stringify(final, null, 2)}\n`);
     log(`wrote ${OUT}`);
   }
   return code;

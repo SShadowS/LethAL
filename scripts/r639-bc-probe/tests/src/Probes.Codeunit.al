@@ -34,6 +34,7 @@ codeunit 92911 "R639 Http Local Raw"
 codeunit 92912 "R639 Dup End"
 {
     Subtype = Test;
+    TestPermissions = Disabled;
 
     [Test]
     procedure DuplicateNamedKey()
@@ -61,6 +62,7 @@ codeunit 92912 "R639 Dup End"
 codeunit 92913 "R639 Dup End Alone"
 {
     Subtype = Test;
+    TestPermissions = Disabled;
 
     [Test]
     procedure DuplicateNamedKey()
@@ -80,6 +82,7 @@ codeunit 92913 "R639 Dup End Alone"
 codeunit 92914 "R639 Dup Then Read"
 {
     Subtype = Test;
+    TestPermissions = Disabled;
 
     [Test]
     procedure DuplicateNamedKeyThenRead()
@@ -100,6 +103,7 @@ codeunit 92914 "R639 Dup Then Read"
 codeunit 92915 "R639 Dup Then Read Raw"
 {
     Subtype = Test;
+    TestPermissions = Disabled;
 
     [Test]
     procedure DuplicateNamedKeyThenReadRaw()
