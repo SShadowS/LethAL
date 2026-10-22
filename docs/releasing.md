@@ -122,6 +122,68 @@ Draft, not published, because two things still need a human:
 2. **Read the generated notes.** They come from commit subjects, which were written for this
    repository's own record rather than for a stranger.
 
+### Talk cut: the scripted cut (R662)
+
+`bun scripts/talk-cut.ts <sha> [--version <v>] [--notes <file>] [--package-cache <dir>] [--dry-run]`
+does steps 1, 2 and 7 for one chosen commit, and the hand-attach above. Run it inside the kraken
+container (it compiles the control app with `$LETHAL_ALC_DIR/alc`, against the symbols in the main
+checkout's `extensions/lethal-control/.alpackages` unless `--package-cache` names others). In order:
+
+1. Refuses unless the latest `ci.yml` run on `<sha>` succeeded, with jobs `check` and `unit-linux`.
+2. Refuses if tag `v<version>` exists (local or origin) or a release for it exists. `--version`
+   defaults to the next prerelease of `<sha>`'s package.json version.
+3. Builds `lethal-control.app` from `<sha>` in a temporary worktree, before anything is pushed. Its
+   manifest must name LethAL Control, equal its `app.json` version, and be at least the script's
+   `MIN_CONTROL`.
+4. Writes the bump in that worktree, before anything is pushed:
+   - package.json `version` (a one-line diff);
+   - CHANGELOG.md, kept whole: `[Unreleased]` is renamed `[<version>] — <date>`, with a fresh empty
+     `[Unreleased]` above it;
+   - with `--notes <file>`, that file as `release-notes/v<version>.md`, which becomes the release
+     body (see [The release body](#the-release-body) below).
+
+   It refuses an empty Unreleased without `--notes`. With `--notes`, an empty Unreleased is allowed,
+   and the version heading then stays empty. It refuses a body that would not fit a GitHub release.
+   It also refuses `--notes` on a `<sha>` whose `release.yml` does not yet call
+   `scripts/release-notes.ts`, since that release would ignore the file. The new tree's own body
+   script must print exactly the expected body.
+5. Runs a `release.yml` workflow_dispatch trial on exactly `<sha>`: it pushes a throwaway branch
+   `release-trial/<sha12>`, dispatches on it, waits (60 min at most), refuses unless the run is
+   green, and deletes the branch. A dispatch never creates a release. The trial uses the workflow
+   file at `<sha>`, so a `<sha>` without R662's `release.yml` fix (the parse expectation read from
+   `scripts/native-parse-expect.txt`) fails the trial at the parse step.
+6. Commits the bump (only parent `<sha>`; it changes package.json and CHANGELOG.md and, with
+   `--notes`, adds the one notes file, nothing else) and pushes it to a NEW branch
+   `release/v<version>`, never to master. The owner merges it.
+7. Tags it `v<version>` (annotated) and pushes the tag, which starts `release.yml`.
+8. Waits for that run (matched by commit sha, or by the tag as its branch), then requires a DRAFT
+   release for the tag.
+9. Uploads the control app from step 3 and appends one line with its version and sha256 to the
+   draft's body.
+10. Prints the draft URL.
+
+What it does NOT do: publish the release (that is the owner's click), touch any release that is
+not a draft or not its own tag, push to master, or wait for CI on the bump commit. `--dry-run` runs
+every read-only check and the local builds for real, and prints each mutating call (commit, tag,
+push, dispatch, upload, edit) instead of making it.
+
+### The release body
+
+`publish` takes the body from `bun scripts/release-notes.ts <tag>`. That prints
+`release-notes/<tag>.md` when the tagged commit has one, and otherwise the CHANGELOG's own section
+for the version. It refuses an empty body, a body of 80 characters or fewer (`MIN_BODY_CHARS`),
+and a body that, with what `publish` adds (release.yml's
+footer, the control-app line, GitHub's generated commit list: `RELEASE_BODY_MARGIN`), would exceed
+GitHub's 125,000-character limit (`RELEASE_BODY_LIMIT`). talk-cut runs the same check before any
+push. A dispatch trial cannot see this, because `publish` runs only on a tag push, so without the
+check `publish` would fail after the tag is already pushed. The unit suite checks the same body
+for the root package.json version (`changelog-section.test.ts`), so the tag's `build` job agrees
+with `publish`: a release cut with `--notes` and an empty `[Unreleased]` passes both.
+
+On 22 Oct, `[Unreleased]` on master is 156,625 characters, over the limit. There are two ways
+through: pass `--notes <file>` with a shorter body, or shorten `[Unreleased]` on master. **If the
+owner shortens `[Unreleased]` on master, no `--notes` is needed.**
+
 `.github/workflows/ci.yml` runs the same typecheck-and-test gate on every push, on every branch,
 and on every pull request. It does NOT run `biome check .` repo-wide (pre-existing format debt in
 `engine`/`builtin-tier1` would fail every build) and it does NOT run the live integration gates,
@@ -181,16 +243,19 @@ Apple `cc -arch x86_64`, as it does on every macOS build; no LLVM 23.1.2 linker 
 
 ### Checks per target
 
-- `native-parser`: `bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "files 32
-  nodes 7382 errors 0"` parses every fixture file through the addon directly. `--expect` is
-  required, and all five targets expect the same line (the parse does not depend on the platform).
-  This checks the addon on its own, before any binary is compiled.
+- `native-parser`: `bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect
+  "$(cat scripts/native-parse-expect.txt)"` parses every fixture file through the addon directly.
+  `--expect` is required, and all five targets expect the same line (the parse does not depend on
+  the platform). This checks the addon on its own, before any binary is compiled. The expected
+  line lives in that committed file, and `scripts/native-parse-smoke.test.ts` checks it on every CI
+  push, so a fixture change fails ordinary CI instead of the release (R662: the 22 Oct trial failed
+  on an inline value nobody updated after R-463 added fixtures).
 - `smoke`: runs each compiled binary from a directory with no `packages/` tree, so it cannot load a
   `.node` from disk. `--version` must not say DIRTY; the hidden `lethal native-check` must print
   `native <triple> clang version 23.1.2 ... nodes 56` (a missing embedded addon exits non-zero with
   `NativeParserMissingError`); and `run --project fixtures/sandbox-data --dry-run` must print the
-  two count lines `dry run: 29 file(s), 407 mutant site(s), 387 deployed mutant(s), 1 batch(es)` and
-  `batch 0 (407 mutant site(s), 387 deployed):`.
+  two count lines in the committed `scripts/release-dry-run-expect.txt`, which the same unit test
+  checks against a local dry run.
 
 ### Building from source
 
