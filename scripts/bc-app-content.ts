@@ -360,7 +360,11 @@ export function decideApp(i: DecideInput): Decision {
   });
   // 1
   if (i.resident === null && i.rows.length === 0)
-    return { action: "publish", how: "new", line: `publish   new ${name} ${local.version} (${seen})` };
+    return {
+      action: "publish",
+      how: "new",
+      line: `publish   new ${name} ${local.version} (${seen})`,
+    };
   // 2 (I2): every later row needs exactly one installed row at the downloaded version
   if (i.resident === null) return unknown("no package to download, but the server lists rows");
   const residentVersion = readAppIdentity(i.resident).version;
@@ -380,7 +384,10 @@ export function decideApp(i: DecideInput): Decision {
   }
   // 4
   if (residentDigest === localDigest)
-    return { action: "skip", line: `skip      ${name} ${residentVersion}: same content, digest ${short(localDigest)} (${seen})` };
+    return {
+      action: "skip",
+      line: `skip      ${name} ${residentVersion}: same content, digest ${short(localDigest)} (${seen})`,
+    };
   const cmp = compareAppVersions(residentVersion, local.version);
   // 5
   if (cmp < 0)
@@ -438,7 +445,13 @@ export function decideControl(
   if (resident !== null || rs.length > 0) {
     const v = resident === null ? undefined : readAppIdentity(resident).version;
     const [row, ...more] = rs;
-    if (v === undefined || row === undefined || more.length > 0 || !row.isInstalled || rowVersion(row) !== v)
+    if (
+      v === undefined ||
+      row === undefined ||
+      more.length > 0 ||
+      !row.isInstalled ||
+      rowVersion(row) !== v
+    )
       return {
         action: "refuse",
         why: "content-unknown",
@@ -447,12 +460,18 @@ export function decideControl(
   }
   try {
     const a = controlAction(
-      resident === null ? null : { version: readAppIdentity(resident).version, sha256: sha256Of(resident) },
+      resident === null
+        ? null
+        : { version: readAppIdentity(resident).version, sha256: sha256Of(resident) },
       pinned,
     );
     return a === "already-pinned"
       ? { action: "skip", line: `already-pinned LethAL Control ${pinned.version} (${seen})` }
-      : { action: "publish", how: resident === null ? "new" : "upgrade", line: `publish   LethAL Control ${pinned.version} (${seen})` };
+      : {
+          action: "publish",
+          how: resident === null ? "new" : "upgrade",
+          line: `publish   LethAL Control ${pinned.version} (${seen})`,
+        };
   } catch (err) {
     return {
       action: "refuse",
@@ -531,7 +550,8 @@ export async function decideAll(
           if (dir === item.dir || m.id === undefined || !dependsOn(m, me)) continue;
           const drs = await ops.rows(m.id);
           log(`  dependent ${m.name} of ${id.name}: ${describeRows(drs)}`);
-          if (installedDependent === null && drs.some((r) => r.isInstalled)) installedDependent = m.name;
+          if (installedDependent === null && drs.some((r) => r.isInstalled))
+            installedDependent = m.name;
         }
       }
       decision = decideApp({
@@ -581,7 +601,8 @@ export async function actAll(
     const rawOk = back !== null && sha256Of(back) === sha256Of(item.local);
     const digestOk = back !== null && contentDigest(back) === contentDigest(item.local);
     const [row, ...more] = rs;
-    const rowOk = row !== undefined && more.length === 0 && row.isInstalled && rowVersion(row) === id.version;
+    const rowOk =
+      row !== undefined && more.length === 0 && row.isInstalled && rowVersion(row) === id.version;
     if (v !== id.version || !rawOk || !digestOk || !rowOk)
       throw new Error(
         `read-back of ${id.name} (${item.dir}) does not match the local build: the server holds ${v}${back === null ? "" : ` sha256 ${sha256Of(back)}`}, the local build is ${id.version} sha256 ${sha256Of(item.local)} (${describeRows(rs)}); stopped`,

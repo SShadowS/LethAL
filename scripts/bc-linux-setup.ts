@@ -972,7 +972,9 @@ export async function decideContinia(
       ok = false;
       continue;
     }
-    summary.push(`  publish   ${local.name} ${local.version} (Dev scope, sha256 ${sha256Of(bytes)})`);
+    summary.push(
+      `  publish   ${local.name} ${local.version} (Dev scope, sha256 ${sha256Of(bytes)})`,
+    );
     toPublish.push(bytes);
   }
   return { ok, toPublish };
@@ -1020,7 +1022,12 @@ export interface RunDeps {
   /** The pinned LethAL Control build, sha256-checked. */
   readonly controlBytes: () => Buffer;
   /** Compiles one `PUBLISH_PLAN` step; publishes nothing. */
-  readonly compile: (c: Conn, step: PublishStep, symbols: string, log: string[]) => Promise<AppItem[]>;
+  readonly compile: (
+    c: Conn,
+    step: PublishStep,
+    symbols: string,
+    log: string[],
+  ) => Promise<AppItem[]>;
   readonly fixtures: () => ReadonlyMap<string, AppManifest>;
   readonly doctor: (configPath: string, projectDir: string, testsDir: string) => Promise<boolean>;
 }
