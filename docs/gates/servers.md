@@ -85,9 +85,10 @@ version the server held during that proof, read by `lethal doctor`'s `control-ve
 each server's queue. A proof holds only for the control version it ran under, because control
 builds take different paths in some gates.
 
-**As of 2026-10-21, every BC gate is proven on every bc server under the LethAL Control build master
+**As of 2026-10-22, every BC gate is proven on every bc server under the LethAL Control build master
 requires** (the build `extensions/lethal-control/app.json` and `CONTROL_SHA256` in
-`scripts/bc-linux-setup.ts` pin): 13 gates on each of bc1, bc2 and bc3, 39 pairs. bc2 was moved to
+`scripts/bc-linux-setup.ts` pin): 14 gates on each of bc1, bc2 and bc3, 42 pairs. R618's `itest:lend`
+was added on 2026-10-22 and passed on all three. The rest of this paragraph is R-604's history. bc2 was moved to
 that build first, measured 2026-10-21 by `bc-republish.ts control` as an upgrade with nothing removed,
 read back with the pinned sha256 (`/coord/handoff/R-604/control-bc2.log`), and its 13 gates were
 re-proven after it. bc1's 9 gates proven earlier under the older build were re-proven too. On bc1
@@ -138,6 +139,9 @@ fixture apps change.
 | `bc3` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-chunked.log` |
 | `bc3` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-harden.log` |
 | `bc3` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-agreement.log` |
+| `bc1` | `itest:lend` | 1.0.0.23 | R618, 2026-10-22, `/coord/handoff/R-618/lend-bc1-run2.log` (run 1 BLOCKED at R2, see docs/gates/lend.md) |
+| `bc2` | `itest:lend` | 1.0.0.23 | R618, 2026-10-22, `/coord/handoff/R-618/lend-bc2.log` |
+| `bc3` | `itest:lend` | 1.0.0.23 | R618, 2026-10-22, `/coord/handoff/R-618/lend-bc3.log` |
 
 **R582's run (2026-10-22, build 7a8ff82c, LethAL Control 1.0.0.23).** R582 switched R577's "a kill
 must reproduce" rule on for bcdev, which moved some counters. Each of the 13 BC gates ran ONCE, on

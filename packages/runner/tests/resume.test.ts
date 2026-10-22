@@ -2025,6 +2025,25 @@ describe("runSession --resume (R47)", () => {
     ).rejects.toThrow(/no such run/);
   });
 
+  // R618 (orchestrator ruling 2): a finished run has nothing left to score, so `--resume-run` of
+  // one is refused by name before any run row or lease; the same run, unfinished, resumes.
+  test("--resume-run of a FINISHED run is refused by name; the same run unfinished resumes", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds });
+    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    expect(store.getRun(runId)?.finished).toBe(true);
+    const resume = () =>
+      runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds, resume: runId });
+    await expect(resume()).rejects.toThrow(
+      `--resume-run ${runId}: run ${runId} already finished; nothing to resume.`,
+    );
+    const after = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    expect(after).toBe(runId);
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [runId]);
+    expect((await resume()).resumedFrom?.runId).toBe(runId);
+  });
+
   test("C02-02: report.artifacts carries the COMPILED appVersion, not the reserved one", async () => {
     // CountingBackend's opt-in artifact always reports "1.0.0.0" (a fixed stand-in for what a
     // real backend compiled), while this project's own app.json is ALSO "1.0.0.0", so the

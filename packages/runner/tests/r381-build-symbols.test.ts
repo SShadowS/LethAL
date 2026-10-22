@@ -261,6 +261,8 @@ describe("R-381: report.buildSymbols equals the effective set", () => {
       await Bun.write(join(root, "tests", "app.json"), testAppJson());
       const store = new ResultsStore(":memory:");
       const first = await session(root, store, true, { preprocessorSymbols: ["CFG"] });
+      // R618: --resume-run refuses a finished run, so resume it as an interrupted one.
+      store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
       const resumed = await session(root, store, true, {
         preprocessorSymbols: ["CFG"],
         resume: 1,
