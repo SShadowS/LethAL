@@ -113,18 +113,21 @@ runs live (Q3).
 
 ## What this gate cannot reach
 
-- **The resume sites' `backendBuildRefusal`.** In a bcdev session `--resume` only finds runs of the
-  same backend (its SQL), and `--resume-run` checks backend equality first. So deleting the
-  `assertLends` call at either site reddens no leg here. The al-runner-v3 legs and the unit tests
-  in `tests/r586-run-may-lend.test.ts` cover them.
-- **The snapshot site's R557 check** (`runLendsAlRunnerNames` on the snapshot's run). A bcdev
-  session cannot hold an al-runner snapshot of the same coverage mode. The al-runner legs and unit
-  tests cover it.
+- **The resume sites' step 1 (`backendBuildRefusal`).** In a bcdev session `--resume` only finds
+  runs of the same backend (its SQL), and `--resume-run` checks backend equality first. So
+  breaking step 1 inside `ResultsStore.runMayLend` for either resume site reddens no leg here.
+  `tests/r619-one-lend.test.ts` covers it through `--resume-run` (`--resume` cannot reach it: its
+  SQL selects the backend and, on v3, the build).
+- **The snapshot site's R557 check** (steps 2 and 3 of `runMayLend` on the snapshot's run). A
+  bcdev session cannot hold an al-runner snapshot of the same coverage mode. The al-runner legs
+  and `tests/r619-one-lend.test.ts` cover it.
 - **The history site's R557 check and its order against coverage mode and test app.** These are
   pinned offline in `tests/r618-lend-order.test.ts` (the N1o unit test and the RC4a case), not live.
 - **Another `runner_build`.** Only v3 compares builds.
-- **`runMayLend` itself.** It has no production caller; each site copies its steps inline. That
-  is filed as [R619](../roadmap/R619.md).
+- **Which site calls `runMayLend`.** Since [R619](../roadmap/R619.md) all four lend sites call
+  `ResultsStore.runMayLend` once each, with no inline copy left. That each one calls it, and that
+  the step it returns is the site's refusal, is pinned offline by `tests/r619-one-lend.test.ts`
+  (one call log per site), not live.
 
 ## Clone fidelity
 
