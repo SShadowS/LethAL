@@ -43,8 +43,10 @@ next free id right before writing).
 - **A lone timeout in a full `verify` while another full `verify` overlaps is starvation, not a
   result** (R482): keep the log, re-run once, and investigate only if it fails again or fails with
   no overlap. Never raise a timeout to make it pass.
-- **At most two BaseApp-corpus jobs at once.** The container has 24 GB; a third census or diff
-  process gets OOM-killed (R-458 planner, 2026-10-05). The two-heavy-job limit counts corpus jobs and
+- **At most two BaseApp-corpus jobs at once.** At 24 GB a third census or diff process was
+  OOM-killed (R-458 planner, 2026-10-05). Since 2026-10-22 the container has 32 GB: the heavy-job
+  limit is THREE, but still at most TWO of them may be BaseApp (BC.History) corpus jobs (three of
+  those would not fit with margin). The heavy-job limit counts corpus jobs and
   local runners (itest:alrunner, the Rust runtime); a BC gate against a remote server (bc1/bc2/bc3) is
   about 100 MB locally and does NOT count: run up to one per bc server in parallel, and back off if
   `free -g` shows under 10 GB available (2026-10-21). A parallel itest counts as ONE job: count its
