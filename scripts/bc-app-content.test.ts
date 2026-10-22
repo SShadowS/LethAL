@@ -205,6 +205,11 @@ describe("navigation.xml: ControlGUID values and two element orders are not cont
         "navigation.xml": t,
       });
     expect(contentDigest(pkg(doc(g1, g2)))).not.toBe(contentDigest(pkg(doc(g2, g1))));
+    // an action MOVED between groups (TargetIDs swapped across the two parents) still differs: a
+    // run never crosses a parent's tags
+    const swapped = doc(group("One", "2"), group("Two", "1"));
+    expect(normaliseNavigation(doc(g1, g2))).not.toBe(normaliseNavigation(swapped));
+    expect(contentDigest(pkg(doc(g1, g2)))).not.toBe(contentDigest(pkg(swapped)));
     // and two sibling elements of another kind are not reordered
     const other = (a: string, b: string) => `<X>\n  <Other A="${a}" />\n  <Other A="${b}" />\n</X>`;
     expect(normaliseNavigation(other("1", "2"))).not.toBe(normaliseNavigation(other("2", "1")));
@@ -507,6 +512,7 @@ describe("decideAll / actAll", () => {
     for (const [what, after] of [
       ["published, not installed", [row("1.0.0.0", false, "new")]],
       ["two rows", [row("1.0.0.0", true, "new"), row("1.0.0.0", true, "old")]],
+      ["one installed row at another version", [row("0.9.0.0", true, "new")]],
     ] as const) {
       const apps: Record<string, FakeApp> = {
         "LethAL Sandbox Names Tests": { pkg: NT_LOCAL, rows: [row("1.0.0.0")] },
