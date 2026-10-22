@@ -28,6 +28,8 @@ scripts/r289-probe/sidecar-creds.*.json
 
 # AL symbol packages (large, machine-local)
 .alpackages/
+# R614: which symbol tar a worktree's fixture .alpackages match (written by prepareFixtureSymbols)
+/.fixture-symbols.sha256
 
 # Serena's project memories — machine-local agent scratch, not project source
 .serena/

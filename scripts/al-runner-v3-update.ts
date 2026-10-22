@@ -51,6 +51,7 @@ import {
   V3_GATE_LEGS,
   gateOutcome,
 } from "../packages/runner/itest/al-runner-v3-gate";
+import { prepareFixtureSymbols } from "../packages/runner/itest/fixture-symbols";
 import {
   type GatedBuild,
   parseGated,
@@ -80,8 +81,15 @@ export interface UpdateDeps {
   /** Extracts `tarball` into the empty `dir`; returns the binary's path. */
   extract(tarball: string, dir: string): Promise<string>;
   versionOf(binary: string): Promise<string>;
-  /** Checks out `commit` detached in the gate worktree and runs the gate with `env`. */
-  runGate(commit: string, env: Readonly<Record<string, string>>): Promise<void>;
+  /**
+   * Checks out `commit` detached in the gate worktree and runs the gate with `env`. `log` takes a
+   * preparation line (R614 I2: how the fixture `.alpackages` were prepared) into the update log.
+   */
+  runGate(
+    commit: string,
+    env: Readonly<Record<string, string>>,
+    log: (line: string) => Promise<void>,
+  ): Promise<void>;
   /** A running process whose executable resolves under `root`. */
   inUse(): Promise<boolean>;
   log(line: string): Promise<void>;
@@ -214,50 +222,14 @@ async function receiptWarnFacts(
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
 /**
- * F5: the fixture symbol tar the gate extracts, pinned by sha256 (measured 2026-10-21 on
- * `/work/lethal/.kraken-local/fixture-symbols.tar`, 1,705,707,520 bytes). A different tar is
- * refused by name; changing it is a deliberate edit here, then a `--regate`.
+ * M4: run in the gate worktree before any leg; a moved commit can need either. F5: the lockfile is
+ * never rewritten there. The fixture `.alpackages` follow, by `prepareFixtureSymbols` (R614, shared
+ * with the itest's own startup): extracted from the pinned tar, verified, or refused by name.
  */
-export const FIXTURE_SYMBOLS_TAR_SHA256 =
-  "bdf460e292f005f1c02cc7b45e83ede1d5c5df280070dc97231f9b314d4f175e";
-
-/** Fixture symbol folders the gate's legs compile against (gitignored, from the kraken tar). */
-export const GATE_ALPACKAGES = [
-  "fixtures/sandbox-tests/.alpackages",
-  "fixtures/sandbox-data-tests/.alpackages",
-] as const;
-
-/**
- * M4: what the gate worktree needs before any leg, or why it cannot be prepared. `bun install` and
- * the native parser build always run (a moved commit can need either). The fixture symbol folders
- * come from the main checkout's `fixture-symbols.tar` when absent; with neither, the gate is refused
- * by name (`al-runner-v3-gate-worktree-unprepared`), an infra-fail before any leg.
- */
-export function gatePreparation(s: {
-  readonly worktree: string;
-  readonly alpackagesPresent: boolean;
-  readonly symbolTar: string | undefined;
-  /** The tar's sha256, when it is to be extracted (F5). */
-  readonly symbolTarSha256?: string;
-}): { readonly steps: readonly string[][] } | { readonly refused: string } {
-  // F5: the lockfile is never rewritten in the gate worktree.
-  const steps: string[][] = [
-    ["bun", "install", "--frozen-lockfile"],
-    ["bun", "scripts/build-native-parser.ts"],
-  ];
-  if (!s.alpackagesPresent) {
-    if (s.symbolTar === undefined)
-      return {
-        refused: `al-runner-v3-gate-worktree-unprepared: ${s.worktree} has no fixture .alpackages (${GATE_ALPACKAGES.join(", ")}) and no fixture-symbols.tar was found to extract them from`,
-      };
-    if (s.symbolTarSha256 !== FIXTURE_SYMBOLS_TAR_SHA256)
-      return {
-        refused: `al-runner-v3-gate-symbol-tar-mismatch: ${s.symbolTar} has sha256 ${s.symbolTarSha256 ?? "(not computed)"}, pinned ${FIXTURE_SYMBOLS_TAR_SHA256}`,
-      };
-    steps.push(["tar", "-xf", s.symbolTar, "-C", s.worktree]);
-  }
-  return { steps };
-}
+export const GATE_STEPS: readonly (readonly string[])[] = [
+  ["bun", "install", "--frozen-lockfile"],
+  ["bun", "scripts/build-native-parser.ts"],
+];
 
 async function readCurrentGated(root: string): Promise<GatedBuild & { readonly dir: string }> {
   const dir = await readlink(join(root, "current"));
@@ -345,15 +317,19 @@ export async function gateOne(
     const receipt = join(work, "receipt.json");
     await rm(receipt, { force: true });
     try {
-      await deps.runGate(commit, {
-        LETHAL_ITEST_ALRUNNER_V3: "1",
-        LETHAL_ALRUNNER_V3_PATH: binary,
-        ...(opts.regateAt === undefined ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1" } : {}),
-        LETHAL_ITEST_V3_TABLES: "1",
-        LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO ?? V3_CDO_DEFAULT,
-        LETHAL_V3_GATE_NONCE: nonce,
-        LETHAL_V3_GATE_RECEIPT: receipt,
-      });
+      await deps.runGate(
+        commit,
+        {
+          LETHAL_ITEST_ALRUNNER_V3: "1",
+          LETHAL_ALRUNNER_V3_PATH: binary,
+          ...(opts.regateAt === undefined ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1" } : {}),
+          LETHAL_ITEST_V3_TABLES: "1",
+          LETHAL_ITEST_V3_CDO: process.env.LETHAL_ITEST_V3_CDO ?? V3_CDO_DEFAULT,
+          LETHAL_V3_GATE_NONCE: nonce,
+          LETHAL_V3_GATE_RECEIPT: receipt,
+        },
+        (line) => deps.log(`${deps.now()} ${tag}: ${line}`),
+      );
     } catch (err) {
       // A failing gate still writes its receipt; the receipt decides. R633 I1: the error is logged.
       await deps.log(
@@ -824,7 +800,7 @@ export function realDeps(root = ROOT): UpdateDeps {
       throw new Error(`no al-runner binary in ${tarball}`);
     },
     versionOf: async (b) => (await run([b, "--version"])).trim(),
-    runGate: async (commit, env) => {
+    runGate: async (commit, env, log) => {
       if (!existsSync(GATE_WORKTREE))
         await run([
           "git",
@@ -839,18 +815,11 @@ export function realDeps(root = ROOT): UpdateDeps {
       await run(["git", "-C", GATE_WORKTREE, "checkout", "--detach", commit]);
       // M4: prepare the worktree, or refuse by name before any leg (a throw here is infra-fail:
       // no receipt is written).
-      const tar = ["/work/lethal/.kraken-local/fixture-symbols.tar"].find((p) => existsSync(p));
-      const alpackagesPresent = GATE_ALPACKAGES.every((d) => existsSync(join(GATE_WORKTREE, d)));
-      const prep = gatePreparation({
-        worktree: GATE_WORKTREE,
-        alpackagesPresent,
-        symbolTar: tar,
-        ...(tar !== undefined && !alpackagesPresent
-          ? { symbolTarSha256: await sha256OfFile(tar) }
-          : {}),
-      });
-      if ("refused" in prep) throw new Error(prep.refused);
-      for (const step of prep.steps) await run(step, {}, GATE_WORKTREE);
+      for (const step of GATE_STEPS) await run([...step], {}, GATE_WORKTREE);
+      // R614: extracted from the pinned tar, verified against it, or refused by name.
+      // I2: logged at once, so the first run's `marked` (or an `extracted`) shows in the update log.
+      const prepared = await prepareFixtureSymbols({ worktree: GATE_WORKTREE });
+      await log(`fixture .alpackages: ${prepared}`);
       // R633 I1: the itest's own output goes to `gate.log` beside the receipt; `gateOne` keeps it.
       const receipt = env.LETHAL_V3_GATE_RECEIPT;
       await runToLog(
