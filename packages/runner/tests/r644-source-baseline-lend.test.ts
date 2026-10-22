@@ -19,7 +19,7 @@ import type {
 } from "../src/backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
-import { runSession } from "../src/orchestrator";
+import { facedEveryCoveringTest, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { STRANDED_SKIP_NOTE } from "../src/resume";
 import { ResultsStore } from "../src/store";
@@ -584,16 +584,39 @@ describe("R646: --resume carries a survivor only against tests it faced", () => 
     expect(faceCodes(h.events)).toEqual([]);
   });
 
+  // Review finding 1: the realistic `[]` is a `known-survivor` a history session lent before R644,
+  // written here as such a row (verdict `known-survivor`, list `[]`).
+  test("5b: a pre-R644 lent row (known-survivor, []) is re-run, killed (resume-survivor-no-record)", async () => {
+    const h = await resumed(
+      { killerRed: false, killerKills: false },
+      { killerRed: false, killerKills: true },
+      (store, id, m) =>
+        store.db
+          .query(
+            "UPDATE mutants SET verdict = 'known-survivor', covering_tests = '[]' WHERE run_id = ? AND mutant_code = ?",
+          )
+          .run(id, m),
+    );
+    expect(h.backend.activated).toContain(h.m);
+    expect(h.row?.verdict).toBe("killed");
+    expect(faceCodes(h.events)).toEqual(["resume-survivor-no-record"]);
+  });
+
   /** A finished all-green run made unfinished, so `--resume` replays its one batch whole (R192). */
-  async function replayable(emptyRecord: boolean) {
+  async function replayable(
+    emptyRecord: boolean,
+    verdict: "survived" | "known-survivor" = "survived",
+  ) {
     const g = await greenSource();
     const target = g.rows[0]?.mutant_code;
     if (target === undefined) throw new Error("no source rows");
     g.store.db.query("UPDATE runs SET finished_at = NULL WHERE id = ?").run(g.src);
     if (emptyRecord) {
       g.store.db
-        .query("UPDATE mutants SET covering_tests = '[]' WHERE run_id = ? AND mutant_code = ?")
-        .run(g.src, target);
+        .query(
+          "UPDATE mutants SET verdict = ?, covering_tests = '[]' WHERE run_id = ? AND mutant_code = ?",
+        )
+        .run(verdict, g.src, target);
     }
     const events: RunEvent[] = [];
     const backend = new Stub({ killerRed: false, killerKills: true });
@@ -615,10 +638,31 @@ describe("R646: --resume carries a survivor only against tests it faced", () => 
     expect(faceCodes(h.events)).toEqual(["resume-survivor-no-record"]);
   });
 
+  test("whole-batch replay: a pre-R644 lent row (known-survivor, []) forces the ordinary path; it re-runs", async () => {
+    const h = await replayable(true, "known-survivor");
+    expect(batchCarried(h.events)).toBe(false);
+    expect(h.backend.activated).toEqual([h.target]);
+    expect(h.report.mutants.find((x) => x.mutantCode === h.target)?.verdict).toBe("killed");
+    expect(faceCodes(h.events)).toEqual(["resume-survivor-no-record"]);
+  });
+
   test("control: whole-batch replay with every survivor recorded: replayed, nothing runs", async () => {
     const h = await replayable(false);
     expect(batchCarried(h.events)).toBe(true);
     expect(h.backend.mutantRuns).toBe(0);
     expect(faceCodes(h.events)).toEqual([]);
+  });
+});
+
+// Review finding 2: an EMPTY covering-now list never lends or carries. `runSession` cannot produce
+// one today (no green test returns before coverage), so the shared rule is pinned directly.
+describe("R646: facedEveryCoveringTest", () => {
+  const weak: TestMethodRef = { codeunitId: 79100, codeunitName: "Weak Tests", method: "Weak" };
+  test("an empty covering-now list never passes, whatever the record", () => {
+    expect(facedEveryCoveringTest(["Weak Tests.Weak"], [])).toBe(false);
+  });
+  test("control: a covering test inside the record passes; one outside does not", () => {
+    expect(facedEveryCoveringTest(["Weak Tests.Weak"], [weak])).toBe(true);
+    expect(facedEveryCoveringTest([], [weak])).toBe(false);
   });
 });

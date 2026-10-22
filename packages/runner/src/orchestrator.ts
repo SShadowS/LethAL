@@ -9054,9 +9054,11 @@ export function qualifiedTestName(ref: TestMethodRef): string {
 /**
  * R644/R646: a prior survivor may be reused (lent by history, carried by `--resume`) only when every
  * test covering it NOW is one it faced in the run that scored it. A test red at that run's baseline
- * never ran against it. The caller treats NULL or `[]` as "no record" before asking.
+ * never ran against it. The caller treats NULL or `[]` as "no record" before asking. An empty
+ * covering list never passes; `runSession` cannot reach one today (no green test returns before
+ * coverage, and the split keeps only covered mutants), so the guard is pinned by a direct test.
  */
-function facedEveryCoveringTest(
+export function facedEveryCoveringTest(
   faced: readonly string[],
   covering: readonly TestMethodRef[],
 ): boolean {
