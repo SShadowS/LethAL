@@ -571,6 +571,7 @@ function ancestors(procs: readonly Proc[], pid: number): Set<number> {
  * process's ancestors and descendants and the descendants of every pid recorded in a held slot,
  * counted by DISTINCT pgid. Refuse when those plus the slots held by others reach 2.
  */
+const ITEST_ROOT_RE = /itest:alrunner|al-runner\.itest\.ts/;
 const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [12]\b/;
 
 export function heavyVerdict(
@@ -589,12 +590,26 @@ export function heavyVerdict(
     if (!(s > 1) || p === undefined || !SLOT_HOLDER_RE.test(p.args)) continue;
     for (const d of descendants(procs, s)) skip.add(d);
   }
-  const byPgid = new Map<number, Proc>();
+  // A job is keyed by its itest:alrunner root when it has one (its workers' al-runner children sit
+  // in their own process groups, R626), else by process group.
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const itestRoot = (p: Proc): Proc | undefined => {
+    let root: Proc | undefined; // the OUTERMOST match: `bun run itest:alrunner` wraps the .itest.ts
+    for (const a of ancestors(procs, p.pid)) {
+      const q = byPid.get(a);
+      if (q !== undefined && !skip.has(q.pid) && ITEST_ROOT_RE.test(q.args) && isHeavy(q.args))
+        root = q;
+    }
+    return root;
+  };
+  const jobs = new Map<string, Proc>();
   for (const p of procs) {
     if (skip.has(p.pid) || !isHeavy(p.args)) continue;
-    if (!byPgid.has(p.pgid)) byPgid.set(p.pgid, p);
+    const root = itestRoot(p);
+    const key = root !== undefined ? `root:${root.pid}` : `pgid:${p.pgid}`;
+    if (!jobs.has(key)) jobs.set(key, root ?? p);
   }
-  const foreign = [...byPgid.values()];
+  const foreign = [...jobs.values()];
   const refuse = foreign.length + otherSlotsHeld >= 2;
   const message = [
     `heavy-job guard: ${otherSlotsHeld} other slot(s) held, ${foreign.length} other heavy job(s) (corpus or local runner) by process group${refuse ? " -> REFUSED (at most two heavy jobs container-wide)" : ""}`,
