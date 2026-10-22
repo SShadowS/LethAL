@@ -62,7 +62,8 @@ next free id right before writing).
 - **Start CI as soon as the build review passes, not at submit (owner, 2026-10-22).** Push the
   reviewed head WITHOUT `[skip ci]` at once, so CI (median 5 min) runs while the live gates run.
   If later commits change code, push again for a fresh run; only the submitted head's run counts.
-  A red run there is fixed before the gates are trusted, never after.
+  A red run there is fixed before the gates are trusted, never after. If no run appears 10 minutes
+  after a push (GitHub can drop push events), start one: `gh workflow run ci.yml --ref <branch>` (R660).
 - **Measure a corpus once per master commit, and reuse it (owner, 2026-10-08).** A full
   BC.History dump of master costs hours, and plan rounds repeated it. Keep master's dump in
   `/coord/cache/dumps/<master sha>/<set>/` (sets: `bch`, `cdo`, `dc`, `do`, `fixtures`), with a
