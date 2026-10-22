@@ -19,7 +19,7 @@ failed removal).
 ## The apps
 
 Compiled offline with alc 18.0.43.1464, against `/coord/cache/bc-symbols/<server>/` (System
-28.0.54946.56477) and LethAL Control 1.0.0.23 (`CONTROL_APP` in `scripts/bc-linux-setup.ts`), once
+28.0.54946.56477) and the 2026-10-22 LethAL Control 1.0.0.23 (`CONTROL_APP` in `scripts/bc-linux-setup.ts`), once
 per server into the gitignored `scripts/r649-bc-probe/build/<server>/`. Both compiled with no
 diagnostics on all three caches. The caches hold the same System version, but their files differ by
 sha256, so each server has its own build.
@@ -47,7 +47,7 @@ sha256, so each server has its own build.
 
 ## Results (bc2, 2026-10-22, pre-commitment fcb16407)
 
-BC 28.4 on bc2, LethAL Control 1.0.0.23, lane bugs' coord lease 15:41:26Z-15:53:41Z. The full readings are in
+Measured on BC 28.4 on bc2, LethAL Control 1.0.0.23, lane bugs' coord lease 15:41:26Z-15:53:41Z. The full readings are in
 `bc2-probe.json`; the driver log is `/coord/handoff/R-649/probe/drive.log`.
 
 | # | Test | LethAL's row | BC's own outcome |
