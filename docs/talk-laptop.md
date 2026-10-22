@@ -23,22 +23,40 @@ git clone https://github.com/SShadowS/LethAL.git lethal && cd lethal && git chec
 ```bash
 bun install
 git clone https://github.com/SShadowS/bc-dev-mcp .lethal-cache/bc-dev-mcp && (cd .lethal-cache/bc-dev-mcp && git checkout 8371d0b && bun install && bun run build)
-code --install-extension ms-dynamics-smb.al
+code --install-extension ms-dynamics-smb.al@18.0.2819426
 ```
+
+Do all of §2 and the bundle copy below **tonight, while the laptop has a network**: `bun install`, the
+bc-dev-mcp clone and the extension install all download.
 
 - **bc-dev-mcp** is the tool LethAL runs tests through. It runs on `node` (18 or newer). Commit
   `8371d0b` is the one the gates run. Another location works too: set `LETHAL_BC_DEV_MCP` to it.
-- **alc and altool** (the AL compiler and publisher) come from the AL Language extension. Without
-  VS Code, unzip the extension's VSIX anywhere and set `LETHAL_ALC_DIR` to its `extension/bin/linux`
-  folder. Setup writes the paths it found into the demo config, so `lethal run` uses the same ones.
-- **The native AL parser** (`packages/engine/vendor/native/lethal-parser.linux-x64.node`) is not in
-  git. Build it with `bun scripts/build-native-parser.ts` (needs Rust and LLVM clang 23.1.2), or
-  `mkdir -p packages/engine/vendor/native` and copy the file built in the kraken container at the
-  SAME commit into that folder (a clone does not have the folder).
-- **The pinned LethAL Control build** goes in `.lethal-cache/control/`. Copy the file that
-  `CONTROL_APP` in `scripts/bc-linux-setup.ts` names (it is in the coord folder) there, keeping its
-  file name. Setup checks its sha256 (`CONTROL_SHA256`) and refuses any other build; when the file
-  is missing, its refusal prints the exact path it wants.
+- **alc and altool** (the AL compiler and publisher) come from the AL Language extension, version
+  18.0.2819426, the one the kraken container ran the simulation with (a newer one also works if
+  it still compiles runtime 17.0). The command above needs VS Code and its `code` command on the
+  laptop. Without VS Code, download that version's VSIX, unzip it anywhere and set `LETHAL_ALC_DIR`
+  to its `extension/bin/linux` folder. Setup writes the paths it found into the demo config, so
+  `lethal run` uses the same ones.
+- **The bundle: two files the laptop cannot make itself.** They are in the coord folder, at
+  `handoff/R-663b/laptop-bundle/` under your coord root (`/coord` in the container), with a
+  `SHA256SUMS` file. Copy that folder to the laptop tonight (scp or a USB stick), then from the
+  checkout's root:
+
+  ```bash
+  B=<where you copied laptop-bundle>
+  (cd "$B" && sha256sum -c SHA256SUMS)
+  mkdir -p .lethal-cache/control packages/engine/vendor/native
+  cp "$B/LethAL_LethAL Control_1.0.0.23.app" .lethal-cache/control/
+  cp "$B"/lethal-parser.linux-x64.node "$B"/lethal-parser.linux-x64.provenance.json packages/engine/vendor/native/
+  ```
+
+  - **LethAL Control 1.0.0.23** (sha256 `c2a95948…`). Setup checks it against `CONTROL_SHA256` and
+    refuses any other build. bc-demo's database is in memory, so every setup after a reboot needs it.
+  - **The native AL parser.** `lethal run` loads it, and building it needs Rust and LLVM clang 23,
+    which the laptop does not have. The bundled one was built from the parser sources as of master
+    443c6d36. If the picked commit changed `packages/engine/native/`, the loader refuses it as stale
+    (`NativeParserStaleError`), and a fresh one must be built in the container and copied the same
+    way.
 - **The login.** Write `.lethal-demo.env` in the checkout's root, holding exactly two lines,
   `BC_DEV_USER=...` and `BC_DEV_PASSWORD=...` (the same BCRUNNER login as bc1-bc3). Or set the
   environment variables `BC_DEV_USER` and `BC_DEV_PASSWORD`; they win over the file. The script
