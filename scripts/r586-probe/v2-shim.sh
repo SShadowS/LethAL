@@ -18,6 +18,8 @@ case "${1:-}" in
   --server)
     shift
     log "serve" "$*"
+    # R612 TAP (measurement only): each summary's `"cached":…` field, one per line, beside the log.
+    [ -n "${R586_SHIM_LOG:-}" ] && exec "$R" serve "$@" > >(tee >(grep --line-buffered -o '"cached":[a-z]*' >> "${R586_SHIM_LOG%.shim.tsv}.cached.txt"))
     exec "$R" serve "$@" ;;
 esac
 # Optional (measurement only): R586_ISOLATION replaces the mode LethAL sends after `--isolation`.
