@@ -34,7 +34,7 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
     "LEND_FIGURES.history.knownSurvivors": 12,
     "LEND_FIGURES.history.groupedCalls": 3,
     "LEND_FIGURES.resumeWhole.carryable": 19,
-    "LEND_FIGURES.resumeWhole.carried": 19,
+    "LEND_FIGURES.resumeWhole.carried": 15,
     "LEND_FIGURES.resumeWhole.groupedCalls": 0,
     "LEND_FIGURES.resumeSnapshot.carryable": 9,
     "LEND_FIGURES.resumeSnapshot.carried": 7,
@@ -59,27 +59,32 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
   lent. `groupedCalls` is 15.
 - L1 and N0 score 3 / 0 / 4, with the 12 survivors recorded as known survivors and not run.
   `knownSurvivors` is 12. `groupedCalls` is 3.
-- R1 carries all 19 mutants of the one batch whole. `carried` is 19, and nothing is deployed.
+- R1's one batch holds 4 stored no-coverage rows, so since R621 it is not carried whole. It deploys once,
+  reuses L1's run B snapshot (no baseline test runs here), re-derives the 4 as fresh no-coverage and carries
+  the other 15 by key. `carryable` is 19, `carried` 15, `groupedCalls` 0.
 - R2 has 9 KEPT rows. It carries 7 of them, every one this session covers; its two KEPT rows that this session
-  leaves uncovered come back as fresh no-coverage (see "In a partly carried batch, uncovered mutants are re-derived"
-  below). It re-runs the other 10, one of them from an `error` row. `carried` is 7, `nonCarryableRows` 1,
+  leaves uncovered come back as fresh no-coverage (see "A stored no-coverage is always re-derived" below). It re-runs the other 10, one of them from an `error` row. `carried` is 7, `nonCarryableRows` 1,
   `groupedCalls` 8.
 - R3's K2 has 18 rows (not asserted). It carries 15 of them, every one this session covers, re-derives the three uncovered
   ones, and scores M0019 as no-coverage. `carried` is 15.
 - The sentinel row (M0004 in K) has `durationMs` 987654.
 
-### In a partly carried batch, uncovered mutants are re-derived
+### A stored no-coverage is always re-derived
 
-- **Partly carried batch:** `scoreBatch` records the mutants this session's own coverage selection leaves uncovered
-  as fresh no-coverage, before any carry lookup. Every other mutant is looked up, and a stored no-coverage for a
-  mutant covered now IS carried. So carried = carryable rows minus rows uncovered in this session.
-- **Wholly carried batch:** `replayCarriedBatch` (R1) carries every verdict, no-coverage included.
-- **On this fixture** the two rules give the same sets: `assertFrozen` pins every verdict, so "frozen no-coverage" and
-  "uncovered now" are the same mutants, and the gate's `carriedInPartBatch` filters on the frozen verdict.
-- **Status:** the case where a stored no-coverage is carried against this session's coverage is filed as
-  [R621](../roadmap/R621.md). No gate exercises it.
+- **The rule (R621):** `carriedVerdictFor` never returns a stored no-coverage. `scoreBatch` records every mutant left
+  uncovered by the coverage this session uses (its own baseline's, or a reused snapshot's) as fresh no-coverage; a
+  mutant covered now is run. So carried = carryable rows minus the stored no-coverage rows, in every batch.
+- **A side effect (review M2):** a batch that used to be carried whole now takes the partial path, so a stored kill or
+  survive whose mutant is uncovered under the coverage now used becomes a fresh no-coverage instead of being carried.
+  That is the safe direction (nothing is lent against coverage that disagrees); on this fixture no such mutant exists.
+- **A batch holding a stored no-coverage is never carried whole** (`replayCarriedBatch` never sees one). It deploys,
+  and its baseline is reused from a matching snapshot when one exists. That is R1. R643 files a cheaper variant.
+- **On this fixture** "frozen no-coverage" and "uncovered now" are the same mutants (`assertFrozen` pins every
+  verdict), so the gate's `carriedInPartBatch` filters on the frozen verdict.
+- **Not reached live:** a stored no-coverage for a mutant covered NOW (the fixture has none). The unit tests in
+  `tests/r621-no-coverage-carry.test.ts` cover it.
 - **How it was found:** live run 1 on bc1 was BLOCKED at R2 (7 carried against 9 pre-committed;
-  `/coord/handoff/R-618/live-run-1.md`), and the pre-commitment got an addendum before the re-run.
+  `/coord/handoff/R-618/live-run-1.md`); R621 was filed and closed by R-585.
 
 ## The legs
 
@@ -91,7 +96,7 @@ A's run row and rows, with only the named field changed.
 |---|---|---|---|
 | L0 | none | no flag | frozen; H contains `\|closed-world:public` (refused by name otherwise); one unsuffixed snapshot |
 | L1 | none | `--skip-known-survivors` | the 12 survivors known, by key; no lend warning |
-| R1 | F: unfinished full clone | `--resume-run F` | `resume-reusing-run` (19), `resume-batch-carried`; all carried; no deploy |
+| R1 | F: unfinished full clone | `--resume-run F` | `resume-reusing-run` (19), `resume-baseline-reused` naming B; one deploy; no baseline test ran here; all but the 4 no-coverage carried by key (R621) |
 | R2 | SP1 to SP4 (snapshot owners), then K | `--resume` | resolves to K; `resume-baseline-reused` names L1's run B; KEPT minus its two uncovered rows carried by key; the sentinel's `priorDurationMs`; no baseline test ran here |
 | R3 | SV3 (a v3 snapshot owner), K2 | `--resume-run K2` | `snapshot-backend-build-changed`, exact; the baseline re-ran (as many tests as L0's) |
 | N0 | finished clone | `--skip-known-survivors` | as L1: the clone lends |
@@ -197,3 +202,14 @@ The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the off
   for the R601 lend pre-commitment (orchestrator ruling Q5). Review fix round: RP also asserts that
   no baseline test ran here (M-E), and a flip by any session revokes the project's pending runs on
   its server (I-A ruling; offline only, since no leg flips).
+- 2026-10-22, R-585: R1 changes per the pre-commitment 28e7ac7d (R621: a stored no-coverage is re-derived, never
+  carried). **PASS on bc2** at 522c6335 (`/coord/handoff/R-585/lend-bc2.log`), every leg as pre-committed:
+  - R1 carried 15 of 19, one deploy, B's snapshot reused, groupedCalls 0;
+  - R2 and RP carried 7, R3 carried 15;
+  - L1 and N0 lent 12 known survivors (the R585 test scope is recorded and equal);
+  - N1 and N5 lent nothing;
+  - every leg 3 / 12 / 4 per mutant.
+
+  `itest:bcdev` PASS 3 / 12 / 4 on the same head (`bcdev-bc2.log`). Both gates re-ran and PASSED, unchanged, on
+  the final head 5a9d1c80 after the build review's wording fix (R1 again carried 15; the logs were overwritten in
+  place).

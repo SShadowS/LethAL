@@ -635,6 +635,7 @@ async function buildVerifyHappyPathOutput() {
     const store = new ResultsStore(":memory:");
     const preprocessorSymbols: string[] = [];
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],

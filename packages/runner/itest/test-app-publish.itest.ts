@@ -345,6 +345,7 @@ async function main(): Promise<void> {
       inLease?: (fence: LeaseFence) => Promise<void>,
     ): Promise<NamedMutantsResult> => {
       const runId = store.createRun({
+        testScope: [],
         coverageMode: backend.capabilities().coverage,
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],

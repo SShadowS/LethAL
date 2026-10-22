@@ -64,6 +64,7 @@ function driveRecordOverFakeStore(emit: RunEmitter): readonly MutantManifestEntr
   const store = new ResultsStore(":memory:");
   try {
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -118,6 +119,7 @@ function driveOneCarriedRecord(emit: RunEmitter): void {
   const store = new ResultsStore(":memory:");
   try {
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -215,6 +217,7 @@ describe("emitted mutant events agree with recorded outcomes", () => {
       "The length of the string is 18, but it must be less than or equal to 10 characters";
     try {
       const runId = store.createRun({
+        testScope: [],
         coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],

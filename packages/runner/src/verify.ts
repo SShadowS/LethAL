@@ -1878,6 +1878,9 @@ export async function runVerify(
         projectPath: source.projectPath,
         backend: "lethal-verify",
         appVersion: "0.0.0.0",
+        // R585: verify sends named (mutant, test) pairs, not a baseline suite, so it records no
+        // test scope; it lends no history (it records no proven test app either).
+        testScope: null,
       });
       res = await (deps.runNamed ?? runNamedMutants)({
         backend,

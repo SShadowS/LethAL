@@ -35,6 +35,7 @@ function buildStore(): string {
   const store = new ResultsStore(path);
   const newRun = () =>
     store.createRun({
+      testScope: [],
       projectPath: "fixtures/sandbox-app",
       backend: "bcdev",
       appVersion: "1.0.0.0",

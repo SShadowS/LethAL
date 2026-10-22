@@ -568,6 +568,7 @@ async function snapshotCase(c: {
     throw new Error("run 1 recorded no proven test app");
   }
   const other = store.createRun({
+    testScope: [],
     coverageMode: row.coverageMode ?? "none",
     identityScheme: row.identityScheme,
     buildSymbols: [],

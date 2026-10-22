@@ -131,6 +131,7 @@ function oneBatchRun(
   projectPath = "P",
 ): number {
   const runId = store.createRun({
+    testScope: [],
     coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
     buildSymbols: [],
@@ -221,6 +222,7 @@ describe("resolveVerifySource", () => {
   test("verify refuses an artifact that is not its run's highest batch", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -240,6 +242,7 @@ describe("resolveVerifySource", () => {
   test("an id from another batch of the same artifact's run is wrong-batch, even when that batch has the same code", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -333,6 +336,7 @@ describe("resolveVerifySource", () => {
     for (const c of cases) {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
+        testScope: [],
         coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
@@ -354,6 +358,7 @@ describe("resolveVerifySource", () => {
   test("source-predates-verify names all four reasons a run records no source hash", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -407,6 +412,7 @@ describe("resolveVerifySource", () => {
   test("a request mixing a wrong-batch id and a carried id refuses as wrong-batch and names both", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
@@ -1803,6 +1809,7 @@ function installedRun(
   const appBytes = new TextEncoder().encode(`app-${artifactId}`);
   writeFileSync(join(dir, "x.app"), appBytes);
   const runId = store.createRun({
+    testScope: [],
     coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
     buildSymbols: [],
@@ -3720,6 +3727,7 @@ describe("C02-09: gap ids", () => {
           { hash: info.testAppHash, deps: info.testAppDeps ?? "the next run's" },
           info.buildSymbols ?? [],
           info.carryHidden.files,
+          [],
         ).keys.size,
       ).toBe(0);
       w.store.close();

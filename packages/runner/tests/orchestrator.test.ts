@@ -3418,10 +3418,19 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
       resume: 1,
       emit: [createEmitter([(e) => events.push(e)])],
     });
-    // Nothing was sent at all: every verdict carried, so no baseline ran.
+    // Nothing was sent at all. R621: the batch holds stored no-coverage rows, so it is not carried
+    // whole; it is deployed, its baseline is the reused snapshot (no test sent), the kills carry
+    // and the no-coverage rows are re-derived (uncovered now too), not carried.
     expect(backend.sent).toEqual([]);
-    expect(events.some((e) => e.type === "baseline-batch-finished")).toBe(false);
-    expect(report.mutants.every((m) => m.carried === true)).toBe(true);
+    expect(events.some((e) => e.type === "warning" && e.code === "resume-baseline-reused")).toBe(
+      true,
+    );
+    expect(
+      report.mutants.map((m) => `${m.procedureName}:${m.verdict}:${m.carried === true}`),
+    ).toEqual([
+      ...Array(3).fill("IsOverBudget:killed:true"),
+      ...Array(3).fill("IsUnderBudget:no-coverage:false"),
+    ]);
     expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
     expect(report.validity.caveats.filter((c) => c === "tests-testpage-refused")).toEqual([
       "tests-testpage-refused",
@@ -6917,6 +6926,8 @@ async function seedPriorSurvivor(
   target: MutantManifestEntry,
 ): Promise<void> {
   const runId = store.createRun({
+    // R585: ran TEST_AL's one test (`testKeyOf`), the suite the session sends, or nothing lends.
+    testScope: ["79100::OverBudgetDetected"],
     coverageMode: "procedure",
     // R247: measured against the same test app, or no survivor from it is ever skipped. R495: and
     // proven: the package the session's backend serves installed (`servesTestApp`).
@@ -8503,6 +8514,7 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
       dirs.projectDir,
       backend.capabilities().coverage,
       sourceHash === undefined ? undefined : { hash: sourceHash, deps: recordedDeps ?? "" },
+      [],
       [],
       [],
     );
@@ -11108,6 +11120,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
   test("R373: setRunTestDigests never overwrites a recorded row and throws on a missing run", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      testScope: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -13122,6 +13135,7 @@ describe("R508: a lease lost mid-batch, then --resume", () => {
         : { hash: row.testAppHash, deps: row.testAppDeps ?? "" },
       [],
       row?.carryHidden?.files ?? [],
+      row?.testScope ?? [],
     );
     // Exactly batch 0's survivor (M0001, carried into the finished run 2), and not batch 1's
     // survivor (`IsOverBudget`'s return-value), measured under the lost lease.
@@ -17901,6 +17915,7 @@ async function installedFixture(
     instrumentedDir: join(dirs.instrumentedDir, `run-${fromRunId}-batch-0`),
   };
   const runId = store.createRun({
+    testScope: [],
     coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
     buildSymbols: [],
