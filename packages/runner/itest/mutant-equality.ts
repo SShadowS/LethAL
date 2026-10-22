@@ -194,6 +194,20 @@ export function diffMutants(
 }
 
 /**
+ * R556's bare-hash refusal, the one predicate (`compareWithCommitted` and, since R650, leg T's held
+ * path): when the baseline records any mutated-text hash, the rows of `actual` that have none. A
+ * non-empty result refuses the compare, because `compareMutants` would count those rows
+ * unverified and the text check would switch itself off. Empty when the baseline has no hash.
+ */
+export function bareHashRows(
+  baseline: readonly NormalizedMutant[],
+  actual: readonly NormalizedMutant[],
+): readonly NormalizedMutant[] {
+  if (!baseline.some((e) => e.mutatedTextSha256 !== undefined)) return [];
+  return actual.filter((m) => m.mutatedTextSha256 === undefined);
+}
+
+/**
  * `diffMutants` plus the R556 text check. A paired row's `mutatedTextSha256` is compared only when
  * BOTH sides carry one; a mismatch is a difference ("mutated text differs under an unchanged key").
  * `sameScheme` is true only when both sides record the same identity scheme. Otherwise keys may
