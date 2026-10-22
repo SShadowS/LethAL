@@ -212,10 +212,15 @@ export function publishOrder(
   return republishPlan(requested, all).publish.filter((d) => requested.includes(d));
 }
 
-/** A fixture is a target when any fixture depends on it (row 6 then looks for its dependents). */
+/**
+ * A fixture is a target when it is a `PUBLISH_PLAN` target or any fixture depends on it (row 6 then
+ * looks for its dependents, and a refusal above its build names `--mint`; review M4: sandbox-probes
+ * has no dependent but is a target).
+ */
 export function roleOf(dir: string, all: ReadonlyMap<string, AppManifest>): "target" | "dependent" {
   const me = all.get(dir);
   if (me === undefined) throw new Error(`unknown fixture ${JSON.stringify(dir)}`);
+  if (PUBLISH_PLAN.some((s) => s.target === dir)) return "target";
   return [...all].some(([d, m]) => d !== dir && dependsOn(m, me)) ? "target" : "dependent";
 }
 
@@ -353,8 +358,13 @@ async function republish(args: Args): Promise<void> {
       // 4. publish in order, reading each back
       await actAll(decided, ops, log);
     } finally {
-      // 5. the rows after, whatever happened
-      await printRows("after", items, ops, all, log);
+      // 5. the rows after, whatever happened; a failed read here never replaces the run's own
+      // refusal or read-back error (review M3)
+      try {
+        await printRows("after", items, ops, all, log);
+      } catch (err) {
+        log(`  after     the rows could not be read: ${errText(err)}`);
+      }
     }
   });
 }

@@ -7,7 +7,9 @@
  * (`/coord/handoff/R-599/measure.md`, F2). So raw sha256 never matches between two builds of one
  * source, and the comparison is `contentDigest`: sha256 over every zip entry, sorted by name, each
  * framed as name, NUL, length, NUL, inflated bytes, with the `<Build Timestamp="...">` attribute
- * removed. Raw sha256 stays the read-back check after a publish (the bytes sent must come back).
+ * removed and `navigation.xml` normalised (`normaliseNavigation`: its random ControlGUIDs and two
+ * measured unordered element kinds). Raw sha256 stays the read-back check after a publish (the
+ * bytes sent must come back).
  *
  * `decideApp` is the pure decision table (plan r3, rows 1 to 9). `decideAll` / `actAll` run it
  * over a list of apps against one server: decide EVERY app first, and act only if nothing was
@@ -232,6 +234,37 @@ export class ContentUnknownError extends Error {}
 
 const MANIFEST = "NavxManifest.xml";
 const TIMESTAMP = /(<Build\b[^>]*?)\s+Timestamp="[^"]*"/g;
+const NAVIGATION = "navigation.xml";
+const CONTROL_GUID = /(\sControlGUID=")[^"]*(")/g;
+/** The two self-closing element kinds whose sibling order alc does not fix (measured, R599). */
+const UNORDERED = [
+  String.raw`<ActionChange\b[^>]*\/>`,
+  String.raw`<Actions xsi:type="ActionDefinition"[^>]*\/>`,
+];
+
+/** Sorts each run of sibling `element`s (only whitespace between them), keeping the whitespace. */
+function sortRuns(text: string, element: string): string {
+  const one = new RegExp(element, "g");
+  const run = new RegExp(`${element}(?:\\s*${element})+`, "g");
+  return text.replace(run, (r) => {
+    const sorted = (r.match(one) ?? []).sort();
+    let i = 0;
+    return r.replace(one, () => sorted[i++] ?? "");
+  });
+}
+
+/**
+ * R599, measured (`/coord/handoff/R-599/nondeterminism*.log`): alc writes a random `ControlGUID` per
+ * action into `navigation.xml` on every compile, and lists a parent's self-closing `<ActionChange/>`
+ * children, and its self-closing `<Actions xsi:type="ActionDefinition"/>` children, in no fixed order.
+ * Inside `navigation.xml` ONLY: every `ControlGUID` value is blanked, and each run of direct sibling
+ * elements of exactly those two kinds is put in a canonical order (sorted by each element's full text
+ * after the blanking; every element kept, duplicates included). Group elements (which have children)
+ * and everything else are left as they are.
+ */
+export function normaliseNavigation(text: string): string {
+  return UNORDERED.reduce(sortRuns, text.replace(CONTROL_GUID, "$1$2"));
+}
 
 /** Each entry's bytes as the digest hashes them (the manifest without its build timestamp). */
 function normalisedEntries(pkg: Buffer): Map<string, Buffer> {
@@ -258,6 +291,9 @@ function normalisedEntries(pkg: Buffer): Map<string, Buffer> {
   if (hits !== 1)
     throw new ContentUnknownError(`${MANIFEST} has ${hits} Build Timestamp attributes, not 1`);
   out.set(MANIFEST, Buffer.from(text.replace(TIMESTAMP, "$1"), "utf8"));
+  const nav = out.get(NAVIGATION);
+  if (nav !== undefined)
+    out.set(NAVIGATION, Buffer.from(normaliseNavigation(nav.toString("utf8")), "utf8"));
   return out;
 }
 

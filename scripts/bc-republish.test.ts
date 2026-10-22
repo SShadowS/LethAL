@@ -107,6 +107,11 @@ describe("publishOrder and roleOf (R599: nothing is removed, so no dependent is 
     expect(roleOf("u", all)).toBe("dependent");
     expect(() => roleOf("nope", all)).toThrow(/unknown fixture/);
   });
+
+  test("a PUBLISH_PLAN target with no dependent (sandbox-probes) is a target, so it is told --mint (M4)", () => {
+    const probes = new Map<string, AppManifest>([["sandbox-probes", app("p")]]);
+    expect(roleOf("sandbox-probes", probes)).toBe("target");
+  });
 });
 
 describe("controlAction (never removes the control app)", () => {

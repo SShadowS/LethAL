@@ -564,8 +564,8 @@ export type AppOutcome = "published" | "skipped";
  * gate run leaves the target at a higher minted version, and a downgrade would be refused). After
  * a publish, the server must report exactly the local version.
  *
- * R599: the fixture path no longer uses this (it decides by content, `bc-app-content.ts`).
- * `ensureContinia`'s act pass and `scripts/r594/cdo-publish.ts` still do.
+ * R599: setup no longer uses this (it decides by content, `bc-app-content.ts`, and the Continia
+ * step publishes through `actContinia`). Only `scripts/r594/cdo-publish.ts` still calls it.
  */
 export async function ensureApp(
   c: Conn,
@@ -908,14 +908,6 @@ export function continiaDependencyProblems(
   return out;
 }
 
-/**
- * P1 then the install. Every Microsoft app must be resident at exactly the pinned version (or at
- * `acceptBuild`, R594's ruling for bc3: a NEW oracle, recorded, never silently), or nothing is
- * published: another build makes R546's frozen oracle incomparable. Then every Continia app's
- * declared dependencies are checked against the server, and only if all would be accepted is each
- * file published, skipped when the server holds exactly that version, and refused when it holds a
- * different one (a third-party app is never replaced here).
- */
 /** What the Continia step does on the server (R599 F5: a fake counts it in tests). */
 export interface ContiniaOps {
   /** The lenient read `residentVersion` always used (M6: any failure reads as absent). */
@@ -934,6 +926,13 @@ export function realContiniaOps(c: Conn): ContiniaOps {
  * The DECIDE half of the Continia step (R599 F5): every read and check, no publish. Returns the
  * files to publish, or `ok: false` when anything stops it; its rules are unchanged (an equal
  * version skips, a different one refuses).
+ *
+ * P1 first: every Microsoft app must be resident at exactly the pinned version (or at
+ * `acceptBuild`, R594's ruling for bc3: a NEW oracle, recorded, never silently), or nothing is
+ * published: another build makes R546's frozen oracle incomparable. Then every Continia app's
+ * declared dependencies are checked against the server; a file is published only if all would be
+ * accepted, skipped when the server holds exactly that version, and refused when it holds a
+ * different one (a third-party app is never replaced here).
  */
 export async function decideContinia(
   ops: ContiniaOps,
@@ -1233,7 +1232,11 @@ async function setupServer(
       summary.push("  predicted: nothing published, no config or launch file written, no doctor");
       return true;
     }
-    // ACT: control, then Continia (before the fixtures, as before), then each step's apps.
+    // ACT: control, then Continia (before the fixtures, as before), then each step's apps. The
+    // backup check sees the FULL list before the first publish (review M1): `actAll`'s own check
+    // would see only its slice.
+    if (refusals(decided).length > 0 || !continia.ok)
+      throw new Error("unreachable: the act pass after a refusal");
     const [controlDecided, ...fixtureDecided] = decided;
     await actAll(controlDecided === undefined ? [] : [controlDecided], ops, log);
     await actContinia(cops, continia.toPublish, summary);

@@ -37,9 +37,12 @@ server it:
    `dev/packages` download and the automation API's extension rows) and prints one decision per app,
    with the rows it saw. Only if NOTHING was refused does it publish, in Dev scope over the dev
    endpoint: its pinned LethAL Control build first (`CONTROL_APP`, checked against
-   `CONTROL_SHA256`; after a control-app bump, update both first), then each target before its
-   dependents, each read back by version, raw sha256 and content digest, with exactly one installed
-   row. One refusal anywhere means nothing is published;
+   `CONTROL_SHA256`; after a control-app bump, update both first), then the Continia apps with
+   `--with-continia`, then each target before its dependents. Each published app is read back by
+   version, raw sha256 and content digest, with exactly one installed row. One refusal anywhere
+   means nothing is published. An app that was skipped or kept is NOT read again after the act
+   pass (for example a test app whose target was just upgraded): `lethal doctor` is the only later
+   check on it;
 5. runs `lethal doctor` on every config it wrote.
 
 `--predict` runs the decide half only: it takes the lease, fills the shared symbol cache if it is
@@ -53,8 +56,16 @@ in a random per-compile id in the package header (it is the automation API's `pa
 build timestamp in `NavxManifest.xml` (`/coord/handoff/R-599/measure.md`, F2). So the raw sha256 of a
 fresh build never equals the server's, and the setup compares a NORMALISED content digest instead:
 sha256 over every zip entry, sorted by name, with that timestamp removed (`contentDigest` in
-`scripts/bc-app-content.ts`). It refuses, rather than guesses, a package with no or two timestamps,
-no manifest, no entries or a duplicate entry. The decision, in order:
+`scripts/bc-app-content.ts`). An app with navigation (a page with `UsageCategory`, a report or page
+extension's action changes) varies in one more entry, `navigation.xml`: alc writes a random
+`ControlGUID` per action, and lists a parent's self-closing `<ActionChange/>` children and its
+self-closing `<Actions xsi:type="ActionDefinition"/>` children in no fixed order (measured over 5
+compiles of all 26 fixture, example and control apps, `/coord/handoff/R-599/nondeterminism-5x-all.log`).
+So inside `navigation.xml` ONLY, every `ControlGUID` value is blanked and each run of those two sibling
+kinds is put in a canonical order (every element kept, duplicates included); nothing else in it, and
+nothing in any other entry, is touched. With that, every one of the 26 apps compiles to one digest. It
+refuses, rather than guesses, a package with no or two timestamps, no manifest, no entries or a
+duplicate entry. The decision, in order:
 
 | what the server holds | decision |
 |---|---|
@@ -237,7 +248,7 @@ chunked 42 / 62 on bc3, hang 46 / 40 / 6 on bc2. Logs are `/coord/handoff/R-582/
 |---|---|
 | `bc1` | `itest:verify-scale`, `itest:bcdev`, `itest:bcdev-names`, `itest:verify`, `itest:testapp` |
 | `bc2` | `itest:hang`, `itest:harden` (second run; the first was BLOCKED on a pre-commitment counting error, r3a), `itest:agreement`, `itest:bcdev-wrapped`, `itest:stale-publish`, `itest:lease` |
-| `bc3` | `itest:tables`, `itest:chunked` |
+| `bc3` | `itest:tables`, `itest:chunked`, `itest:bcdev-names` (R-599's live check, run 1, build 42c7dc7b, after the in-place publish of Sandbox Names Tests and back: 36 / 0 / 0, every kill reproduced with 2 killer rows; `/coord/handoff/R-599/live/6-gate.log`) |
 
 `itest:stale-publish` and `itest:lease` have no per-mutant figures; they passed their own checks.
 `itest:envtool` is host-only and not proven on any bc server. `itest:alrunner` and

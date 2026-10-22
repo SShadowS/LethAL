@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { listPackageEntries, readPackageEntry } from "../packages/runner/src/app-package.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import {
   type AppItem,
@@ -18,6 +19,7 @@ import {
   decideControl,
   headerPackageId,
   isInstrumented,
+  normaliseNavigation,
   refusals,
 } from "./bc-app-content.ts";
 
@@ -116,6 +118,116 @@ describe("contentDigest (normalised: no header id, no build timestamp)", () => {
     for (const bad of [fake({ timestamp: null }), dup, buildFakeAppWithEntries({})]) {
       expect(() => contentDigest(bad)).toThrow(ContentUnknownError);
     }
+  });
+});
+
+// Real alc builds (5 compiles each: /coord/handoff/R-599/nondeterminism-5x-all.log): two of probes
+// (random ControlGUIDs), two of data (ActionDefinition order differs), two of wrapped (ActionChange
+// order differs), and probes after a real AL navigation edit (ProbeList's UsageCategory Lists ->
+// Administration, reverted in the fixture afterwards).
+const PROBES1 = pkgOf("probes1");
+const PROBES2 = pkgOf("probes2");
+const DATA1 = pkgOf("data1");
+const DATA2 = pkgOf("data2");
+const WRAPPED1 = pkgOf("wrapped1");
+const WRAPPED2 = pkgOf("wrapped2");
+const PROBES_NAVEDIT = pkgOf("probes-navedit");
+
+const nav = (p: Buffer) => readPackageEntry(p, "navigation.xml")?.toString("utf8") ?? "";
+
+/** The same package rebuilt (stored zip), with `edit` applied to each entry's text. */
+function rebuilt(p: Buffer, edit: (name: string, text: string) => string = (_n, t) => t): Buffer {
+  return buildFakeAppWithEntries(
+    listPackageEntries(p).map((n) => {
+      const bytes = readPackageEntry(p, n) ?? Buffer.alloc(0);
+      return [n, n.endsWith(".xml") ? edit(n, bytes.toString("utf8")) : bytes] as const;
+    }),
+  );
+}
+const inNav = (f: (t: string) => string) => (n: string, t: string) =>
+  n === "navigation.xml" ? f(t) : t;
+const navEdit = (p: Buffer, from: string | RegExp, to: string) =>
+  rebuilt(
+    p,
+    inNav((t) => t.replace(from, to)),
+  );
+
+describe("navigation.xml: ControlGUID values and two element orders are not content (R599)", () => {
+  test("two real builds of probes, of data and of wrapped each have one digest", () => {
+    for (const [a, b] of [
+      [PROBES1, PROBES2],
+      [DATA1, DATA2],
+      [WRAPPED1, WRAPPED2],
+    ] as const) {
+      expect(nav(a)).not.toBe(nav(b)); // the raw entry really differs
+      expect(contentDigest(a)).toBe(contentDigest(b));
+    }
+  });
+
+  test("a changed TargetID changes the digest (ActionChange and ActionDefinition)", () => {
+    const base = contentDigest(rebuilt(WRAPPED1));
+    const w = navEdit(WRAPPED1, 'TargetID="78910"', 'TargetID="78911"');
+    expect(contentDigest(w)).not.toBe(base);
+    const d = navEdit(DATA1, 'TargetID="79323"', 'TargetID="79324"');
+    expect(contentDigest(d)).not.toBe(contentDigest(rebuilt(DATA1)));
+  });
+
+  test("an added or a removed action changes the digest; duplicates are kept", () => {
+    const base = contentDigest(rebuilt(WRAPPED1));
+    const change = /<ActionChange TargetID="78909" TargetType="Page" \/>/;
+    const removed = navEdit(WRAPPED1, change, "");
+    const doubled = rebuilt(
+      WRAPPED1,
+      inNav((t) =>
+        t.replace(change, (m) => `${m}\n    <ActionChange TargetID="78909" TargetType="Page" />`),
+      ),
+    );
+    expect(contentDigest(removed)).not.toBe(base);
+    expect(contentDigest(doubled)).not.toBe(base);
+    // the multiset is kept: all three elements survive the normalisation
+    expect(normaliseNavigation(nav(doubled)).match(/<ActionChange /g)).toHaveLength(3);
+    const def = /<Actions xsi:type="ActionDefinition"[^>]*Name="Data Value Card"[^>]*\/>/;
+    const lessData = navEdit(DATA1, def, "");
+    expect(contentDigest(lessData)).not.toBe(contentDigest(rebuilt(DATA1)));
+  });
+
+  test("reordering two ActionGroupDefinition groups (or any other element) still changes the digest", () => {
+    const group = (caption: string, target: string) =>
+      `<Actions xsi:type="ActionGroupDefinition" Caption="${caption}" ControlGUID="{x}">\n      <Actions xsi:type="ActionDefinition" TargetID="${target}" ControlGUID="{y}" />\n    </Actions>`;
+    const doc = (a: string, b: string) =>
+      `<NavigationDefinition>\n  <ActionContainers ActionContainerType="Departments">\n    ${a}\n    ${b}\n  </ActionContainers>\n</NavigationDefinition>`;
+    const g1 = group("One", "1");
+    const g2 = group("Two", "2");
+    expect(normaliseNavigation(doc(g1, g2))).not.toBe(normaliseNavigation(doc(g2, g1)));
+    const pkg = (t: string) =>
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": '<Package><Build Timestamp="t" /></Package>',
+        "navigation.xml": t,
+      });
+    expect(contentDigest(pkg(doc(g1, g2)))).not.toBe(contentDigest(pkg(doc(g2, g1))));
+    // and two sibling elements of another kind are not reordered
+    const other = (a: string, b: string) => `<X>\n  <Other A="${a}" />\n  <Other A="${b}" />\n</X>`;
+    expect(normaliseNavigation(other("1", "2"))).not.toBe(normaliseNavigation(other("2", "1")));
+  });
+
+  test("ControlGUID and ActionChange order are NOT normalised outside navigation.xml", () => {
+    const pkg = (t: string) =>
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": '<Package><Build Timestamp="t" /></Package>',
+        "src/Other.xml": t,
+      });
+    expect(contentDigest(pkg('<A ControlGUID="{1}" />'))).not.toBe(
+      contentDigest(pkg('<A ControlGUID="{2}" />')),
+    );
+    const ac = (a: string, b: string) =>
+      `<ActionChange TargetID="${a}" TargetType="Page" />\n<ActionChange TargetID="${b}" TargetType="Page" />`;
+    expect(contentDigest(pkg(ac("1", "2")))).not.toBe(contentDigest(pkg(ac("2", "1"))));
+  });
+
+  test("a real AL navigation edit (UsageCategory) changes navigation.xml and the digest", () => {
+    expect(contentDigest(PROBES_NAVEDIT)).not.toBe(contentDigest(PROBES1));
+    expect(changedEntries(PROBES1, PROBES_NAVEDIT)).toContain("navigation.xml");
+    expect(normaliseNavigation(nav(PROBES_NAVEDIT))).not.toBe(normaliseNavigation(nav(PROBES1)));
   });
 });
 
@@ -388,6 +500,30 @@ describe("decideAll / actAll", () => {
     await expect(actAll(decided, s.ops, () => {})).rejects.toThrow(
       /read-back of LethAL Sandbox Names Tests \(sandbox-names-tests\) does not match/,
     );
+  });
+
+  test("a read-back with the right bytes but no single installed row stops the run (I1)", async () => {
+    const id = "b9c876b5-8c82-4ed9-879d-90b799667dfe";
+    for (const [what, after] of [
+      ["published, not installed", [row("1.0.0.0", false, "new")]],
+      ["two rows", [row("1.0.0.0", true, "new"), row("1.0.0.0", true, "old")]],
+    ] as const) {
+      const apps: Record<string, FakeApp> = {
+        "LethAL Sandbox Names Tests": { pkg: NT_LOCAL, rows: [row("1.0.0.0")] },
+      };
+      const s = fakeServer(apps);
+      s.ids.set(id, "LethAL Sandbox Names Tests");
+      s.ops.publish = async (f, bytes) => {
+        s.published.push(f);
+        apps["LethAL Sandbox Names Tests"] = { pkg: bytes, rows: [...after] };
+      };
+      const items: AppItem[] = [item("sandbox-names-tests", NT_COMMENT, "dependent")];
+      const decided = await decideAll(items, s.ops, "republish", new Map(), () => {});
+      await expect(
+        actAll(decided, s.ops, () => {}),
+        what,
+      ).rejects.toThrow(/read-back of .* does not match/);
+    }
   });
 
   test("F6.1: BC's 422 'newer version ... already installed' names R605 and --mint", async () => {

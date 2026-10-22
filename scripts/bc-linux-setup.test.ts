@@ -808,12 +808,13 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     const h = harness(GOOD, f.over);
     const code = await h.go(["--server", "bc3", "--lane", "bugs", "--with-continia"]);
     const out = h.printed.join("\n");
-    expect(out).toContain("refuse    above-build sandbox-names-tests");
-    expect(out).toContain("publish   new sandbox-probes"); // decided, never done
-    expect(out).toContain("STOPPED   1 app(s) refused: NOTHING was published");
+    // first: nothing published (Control first in the act order, so it would be the first one)
     expect(f.calls.publish).toEqual([]);
     expect(f.calls.doctor).toBe(0);
     expect(code).toBe(1);
+    expect(out).toContain("refuse    above-build sandbox-names-tests");
+    expect(out).toContain("publish   new sandbox-probes"); // decided, never done
+    expect(out).toContain("STOPPED   1 app(s) refused: NOTHING was published");
   });
 
   test("--predict on an EMPTY cache fills it (write-once), publishes nothing, writes no config", async () => {
