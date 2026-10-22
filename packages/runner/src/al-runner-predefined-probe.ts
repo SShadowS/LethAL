@@ -1,13 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import {
-  type AlRunnerCanaryFsOps,
-  baseAppJson,
-  cleanUpQuietly,
-  defaultFsOps,
-} from "./al-runner-canary";
+import { type AlRunnerCanaryFsOps, cleanUpQuietly, defaultFsOps } from "./al-runner-canary";
 import { OneShotTransport, buildAlRunnerArgv, qualifiedTestName } from "./al-runner-transport";
+import { baseAppJson } from "./al-runner-v3-probe";
 import {
   AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0,
   type AlRunnerPredefinedProbe,

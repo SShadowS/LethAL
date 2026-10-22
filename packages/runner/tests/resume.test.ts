@@ -7,8 +7,8 @@ import {
   AL_RUNNER_UNDECIDED_ARM_MISSING,
   AlRunnerTestNameError,
   oneShotLimits,
-  verdictFromRunnerTest,
 } from "../src/al-runner-backend";
+import { verdictFromRunnerTest } from "../src/al-runner-rows";
 import { reserveAppVersion } from "../src/app-version";
 import type { CompiledArtifact } from "../src/artifact";
 import type {

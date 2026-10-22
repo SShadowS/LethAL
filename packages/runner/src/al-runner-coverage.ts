@@ -362,7 +362,7 @@ export async function buildAlRunnerCoverageIndex(
       const file = shown(rel);
       refusedFiles.push(file);
       skippedFiles.push(...keysOf(rel));
-      for (const [key, reason] of refusedObjectsOfFile(root, file, "al-runner")) {
+      for (const [key, reason] of refusedObjectsOfFile(root, file, "al-runner-index")) {
         exempt.add(key);
         refusals.set(key, reason);
         console.warn(`[lethal] ${reason}`);

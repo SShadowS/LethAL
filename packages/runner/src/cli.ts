@@ -31,8 +31,6 @@ import {
   AlRunnerBackend,
   type AlRunnerConfig,
   type AlRunnerProvisionResult,
-  assertResourceSelectorRuntime,
-  runtimeBelow14,
 } from "./al-runner-backend";
 import { readAlRunnerCache } from "./al-runner-cache";
 import type { AlRunnerCacheReport } from "./al-runner-cache";
@@ -134,6 +132,7 @@ import { QuarantineStore } from "./quarantine-store";
 import { renderConsole, writeJsonReport } from "./report";
 import type { SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
+import { assertResourceSelectorRuntime, runtimeBelow14 } from "./resource-selector";
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
