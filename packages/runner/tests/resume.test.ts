@@ -61,6 +61,7 @@ import {
   testAppPackage,
 } from "./helpers/proven-test-app";
 import { removeScratchDir, scratchDirs } from "./helpers/scratch";
+import { testDbPath } from "./helpers/test-db";
 import { UNREAD } from "./helpers/unread";
 
 const scratch = scratchDirs();
@@ -1066,7 +1067,7 @@ describe("ResultsStore resume queries (R47)", () => {
     raw.exec(`INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name, operator_name,
       operator_major, file, line, verdict, duration_ms, batch_index)
       VALUES (1, 'M0001', 'old', 'C', 'Post', 'op', 1, 'f.al', 1, 'survived', 5, 0)`);
-    const path = join(tmpdirSync(), "pre-r192.sqlite");
+    const path = testDbPath("pre-r192.sqlite");
     raw.exec(`VACUUM INTO '${path.replaceAll("\\", "/")}'`);
     raw.close();
     const store = new ResultsStore(path);
@@ -4582,7 +4583,7 @@ describe("R512/R513: the store's negative records", () => {
   });
 
   test("an old store gains both tables on open and reads its rows unchanged", async () => {
-    const path = join(tmpdirSync(), "old.sqlite");
+    const path = testDbPath("old.sqlite");
     const first = new ResultsStore(path);
     const id = newRun(first);
     seed(first, id, 0, { astHash: "a", verdict: "survived" });
