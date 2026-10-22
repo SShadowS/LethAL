@@ -794,9 +794,9 @@ describe("runSession", () => {
       let n = 0;
       const revoked: number[] = [];
       const store = new (class extends ResultsStore {
-        override revokeTestAppHash(runId: number, suffix: string): void {
+        override revokeTestAppHash(runId: number, suffix: string): number[] {
           revoked.push(runId);
-          super.revokeTestAppHash(runId, suffix);
+          return super.revokeTestAppHash(runId, suffix);
         }
       })(":memory:");
       const r = await r372Run(

@@ -37,6 +37,8 @@ function source(): { store: ResultsStore; a: number } {
     twinTuples: [],
     numberingDigest: "num",
     dependencySourceSha256: "dep",
+    // R601: copied, so a pending clone resumes on its source's server.
+    resourceKey: "http://bc1|BC",
   });
   CODES.forEach((code, i) => {
     const m = LEND_MUTANTS[code];
@@ -154,6 +156,7 @@ describe("R618 seedRunFrom: each override changes only its own field", () => {
     ],
     ["coverageMode", { coverageMode: "al-runner" }, ["coverageMode"]],
     ["hashSuffix pending", { hashSuffix: PENDING_SUFFIX }, ["testAppHash"]],
+    ["testAppHash", { testAppHash: `${H}+internal`, hashSuffix: PENDING_SUFFIX }, ["testAppHash"]],
     ["alRunnerNames", { alRunnerNames: true }, ["alRunnerNames"]],
     ["revoke", { revoke: true }, ["testAppHash"]],
     ["rows: false", { rows: false }, []],
@@ -176,6 +179,14 @@ describe("R618 seedRunFrom: each override changes only its own field", () => {
       `${H}|closed-world:revoked`,
     );
     expect(REVOKED_SUFFIX).toBe("|closed-world:revoked");
+    // R601: RN1d's seed, the tag swapped and still pending.
+    expect(
+      store.getRun(
+        seedRunFrom(store, a, { testAppHash: `${H}+internal`, hashSuffix: PENDING_SUFFIX }),
+      )?.testAppHash,
+    ).toBe(`${H}+internal|pending`);
+    // R601: the clone runs on its source's server.
+    expect(store.getRun(seedRunFrom(store, a))?.resourceKey).toBe("http://bc1|BC");
     store.close();
   });
 });

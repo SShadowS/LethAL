@@ -3484,6 +3484,11 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
     "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${TEST_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.0" /><InternalsVisibleTo /></Package>`,
     "src/SandboxTests.Codeunit.al": TEST_AL,
   });
+  /** R601 D2: the same app id and version, other bytes. */
+  const PKG_OTHER = buildFakeAppWithEntries({
+    "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${TEST_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.0" /><InternalsVisibleTo /></Package>`,
+    "src/SandboxTests.Codeunit.al": `${TEST_AL}\n// another build\n`,
+  });
   class GuardBackend extends CountingBackend {
     asked = 0;
     constructor(
@@ -3612,29 +3617,62 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
     });
   }
 
-  // A run killed after scoring, before its post-execution confirmation: its identity and its
-  // snapshots stay pending, so the same answer neither resumes it nor reuses its baseline.
-  test("interrupted before confirmation: nothing carries, no baseline is reused; control: confirmed carries", async () => {
-    class KilledAtConfirm extends ResultsStore {
-      override confirmClosedWorld(): void {
+  /** R601 I1: the server a session runs on. A pending prior resumes only on the same one. */
+  const SERVER = { resourceServer: "http://bc-r601", resourceServerInstance: "BC" };
+  /** The server, with a fresh quarantine dir: an aborted session quarantines its tier (R47). */
+  const onServer = (
+    server: { resourceServer: string; resourceServerInstance: string } = SERVER,
+  ) => ({ ...server, quarantineDir: scratch("lethal-r601-q-") });
+  /** R601 M1: `confirmClosedWorld` throws for its first `kills` calls (a run killed after scoring,
+   *  before its post-execution confirmation), then confirms. */
+  class KilledAtConfirm extends ResultsStore {
+    constructor(
+      path: string,
+      private kills: number,
+    ) {
+      super(path);
+    }
+    override confirmClosedWorld(...args: Parameters<ResultsStore["confirmClosedWorld"]>): void {
+      if (this.kills > 0) {
+        this.kills -= 1;
         throw new Error("killed before confirmation");
       }
+      super.confirmClosedWorld(...args);
     }
+  }
+  const snapHashes = (store: ResultsStore, runId: number) =>
+    (
+      store.db
+        .query("SELECT test_app_hash AS h FROM baseline_snapshots WHERE run_id = ?")
+        .all(runId) as { h: string }[]
+    ).map((r) => r.h);
+  const newestRun = (store: ResultsStore) =>
+    (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+  /** The crash: run 1 on SERVER, count 0, batch 1 aborted, killed at its confirmation. */
+  const crashed = async (kills = 1) => {
     const dirs = await project(true);
-    const store = new KilledAtConfirm(":memory:");
-    await expect(session(dirs, store, new GuardBackend(() => 0, 2))).rejects.toThrow(
+    const store = new KilledAtConfirm(":memory:", kills);
+    await expect(session(dirs, store, new GuardBackend(() => 0, 2), onServer())).rejects.toThrow(
       "killed before confirmation",
     );
     const [h] = hashes(store);
+    if (h === undefined) throw new Error("the crashed session recorded no run");
     expect(h).toMatch(/\|closed-world:public\+internal\|pending$/);
+    return { dirs, store, prior: newestRun(store), h, base: h.slice(0, -"|pending".length) };
+  };
+  const warningOf = (events: readonly RunEvent[], code: string) =>
+    events.flatMap((e) => (e.type === "warning" && e.code === code ? [e.message] : []));
+  const nothingRan = (b: CountingBackend) => b.deploys + b.baselineRuns + b.mutantRuns;
+
+  // A run killed after scoring, before its post-execution confirmation: its identity and its
+  // snapshots stay pending, and no lookup reuses its baseline, even under its own pending key.
+  test("interrupted before confirmation: the run and its snapshots stay pending; no baseline is reused", async () => {
+    const { store } = await crashed();
     const snaps = store.db.query("SELECT test_app_hash AS h FROM baseline_snapshots").all() as {
       h: string;
     }[];
     expect(snaps.length).toBeGreaterThan(0);
     for (const s of snaps) expect(s.h).toMatch(/\|pending$/);
-    const second = new GuardBackend(() => 0);
-    await expect(session(dirs, store, second, { resume: "last" })).rejects.toThrow(/R247/);
-    expect(second.deploys + second.baselineRuns + second.mutantRuns).toBe(0);
     // The pending owner is excluded by the lookup too, even under its own (pending) key.
     const pendingSnap = store.db
       .query("SELECT batch_hash, test_app_hash FROM baseline_snapshots")
@@ -3652,6 +3690,271 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
       ),
     ).toBeNull();
     store.close();
+  });
+
+  // R601: a crashed closed-world run resumes on the same server when this session's guard gives
+  // the same closed answer; its own re-ask confirms or revokes everything it carries.
+  const DIFFERS =
+    "Such a run is resumed only by a session on the same server whose test app and closed-world answer, asked now, are the same, and this session's differ.";
+  for (const mode of ["last", "run"] as const) {
+    describe(`R601: --resume ${mode} of a run killed before its confirmation`, () => {
+      const resumeOf = (prior: number) => (mode === "last" ? ("last" as const) : prior);
+      const flag = (prior: number) => (mode === "last" ? "--resume" : `--resume-run ${prior}`);
+      const resume = (
+        c: Awaited<ReturnType<typeof crashed>>,
+        backend: CountingBackend,
+        events: RunEvent[] = [],
+        server: Partial<Parameters<typeof runSession>[0]> = onServer(),
+        prior = c.prior,
+      ) =>
+        session(c.dirs, c.store, backend, {
+          resume: resumeOf(prior),
+          emit: [(e) => events.push(e)],
+          ...server,
+        });
+
+      test("T1: the same closed answer now: carries, and its own re-ask confirms only the resumed run", async () => {
+        const c = await crashed();
+        const third = new GuardBackend(() => 0);
+        const events: RunEvent[] = [];
+        const report = await resume(c, third, events);
+        expect(report.mutants.filter((m) => m.carried === true).length).toBeGreaterThan(0);
+        expect(warningOf(events, "resume-reusing-run")[0]).toContain(
+          `Run ${c.prior} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`,
+        );
+        expect(third.asked).toBe(2);
+        // The batch the crash left open is baselined here, never from the pending prior's snapshot.
+        expect(third.baselineRuns).toBeGreaterThan(0);
+        const resumed = newestRun(c.store);
+        expect(hashes(c.store)).toEqual([c.h, c.base]);
+        expect(snapHashes(c.store, resumed).length).toBeGreaterThan(0);
+        for (const h of snapHashes(c.store, resumed)) expect(h).toBe(c.base);
+        for (const h of snapHashes(c.store, c.prior)) expect(h).toBe(c.h);
+        c.store.close();
+      });
+
+      test("D1: the guard answers open now: refused in R601's words, with the guard's reason; nothing runs", async () => {
+        const c = await crashed();
+        const b = new GuardBackend(() => 1);
+        await expect(resume(c, b)).rejects.toThrow(
+          `${flag(c.prior)}: run ${c.prior} was measured against test app ${c.h}, and this session's test app is ${c.base.slice(0, c.base.indexOf("|"))}. Run ${c.prior} ended before its post-execution closed-world check, so its closed-world answer was never confirmed, and this session's closed-world guard does not answer closed now, because: 1 published app(s) declare the test app as a dependency. So that answer cannot be confirmed.`,
+        );
+        expect(nothingRan(b)).toBe(0);
+        c.store.close();
+      });
+
+      test("D2a: closed now, other flags: refused as differing; nothing runs", async () => {
+        const c = await crashed();
+        const flags = c.h.replace(
+          "|closed-world:public+internal|pending",
+          "|closed-world:public|pending",
+        );
+        c.store.db.run("UPDATE runs SET test_app_hash = ? WHERE id = ?", [flags, c.prior]);
+        const b = new GuardBackend(() => 0);
+        await expect(resume(c, b)).rejects.toThrow(DIFFERS);
+        expect(nothingRan(b)).toBe(0);
+        c.store.close();
+      });
+
+      test("D2b: closed now, another package: refused as differing; nothing runs", async () => {
+        const c = await crashed();
+        const b = new GuardBackend(() => 0);
+        b.served = PKG_OTHER;
+        await expect(resume(c, b)).rejects.toThrow(DIFFERS);
+        expect(nothingRan(b)).toBe(0);
+        c.store.close();
+      });
+
+      test("D3(i), defensive: no guard asked, a bare pending prior (a shape production never writes): refused", async () => {
+        const c = await crashed();
+        const bare = `${c.base.slice(0, c.base.indexOf("|"))}|pending`;
+        c.store.db.run("UPDATE runs SET test_app_hash = ? WHERE id = ?", [bare, c.prior]);
+        const b = new CountingBackend();
+        b.served = PKG;
+        await expect(resume(c, b)).rejects.toThrow(
+          "this session's closed-world guard does not answer closed now, because: this backend cannot ask the server which apps depend on the test app.",
+        );
+        expect(nothingRan(b)).toBe(0);
+        c.store.close();
+      });
+
+      test("D3(ii), control: no guard asked, the real pending prior: refused", async () => {
+        const c = await crashed();
+        const b = new CountingBackend();
+        b.served = PKG;
+        await expect(resume(c, b)).rejects.toThrow("does not answer closed now");
+        expect(nothingRan(b)).toBe(0);
+        c.store.close();
+      });
+
+      test("D4 + D4b: accepted, then its own re-ask flips: the resumed run AND the pending chain are revoked", async () => {
+        const c = await crashed();
+        const b = new GuardBackend((call) => (call === 1 ? 0 : 1));
+        const events: RunEvent[] = [];
+        await resume(c, b, events);
+        expect(b.asked).toBe(2);
+        expect(warningOf(events, "closed-world-changed")).toHaveLength(1);
+        const resumed = newestRun(c.store);
+        const revoked = `${c.h}|closed-world:revoked`;
+        expect(hashes(c.store)).toEqual([revoked, revoked]);
+        for (const h of [...snapHashes(c.store, resumed), ...snapHashes(c.store, c.prior)])
+          expect(h).toBe(revoked);
+        // D4b: the prior lends nothing again, even when the guard answers 0, 0 now.
+        const again = new GuardBackend(() => 0);
+        await expect(resume(c, again)).rejects.toThrow(
+          `${flag(c.prior)}: run ${c.prior} was measured against test app ${revoked}`,
+        );
+        expect(nothingRan(again)).toBe(0);
+        c.store.close();
+      });
+
+      test("D5: the same answer on ANOTHER server: refused, naming both servers; nothing runs", async () => {
+        const c = await crashed();
+        const b = new GuardBackend(() => 0);
+        const other = onServer({ resourceServer: "http://bc-other", resourceServerInstance: "BC" });
+        await expect(resume(c, b, [], other)).rejects.toThrow(
+          `Run ${c.prior} ended before its post-execution closed-world check, so its closed-world answer was never confirmed. It ran on server http://bc-r601|BC, and this session runs on server http://bc-other|BC. ${DIFFERS}`,
+        );
+        expect(nothingRan(b)).toBe(0);
+        c.store.close();
+      });
+
+      test("D5c: the same answer, this session's server unknown: refused, an unknown server never matches", async () => {
+        const c = await crashed();
+        const b = new GuardBackend(() => 0);
+        await expect(
+          resume(c, b, [], { quarantineDir: scratch("lethal-r601-q-") }),
+        ).rejects.toThrow(
+          "It ran on server http://bc-r601|BC, and this session runs on server unknown. Such a run is resumed only by a session on the same server whose test app and closed-world answer, asked now, are the same, and an unknown server never matches.",
+        );
+        expect(nothingRan(b)).toBe(0);
+        c.store.close();
+      });
+
+      test("D6: a FRESH session on the same server flips: the older pending run is revoked and a resume of it carries nothing", async () => {
+        const c = await crashed();
+        const fresh = new GuardBackend((call) => (call === 1 ? 0 : 1));
+        const events: RunEvent[] = [];
+        await session(c.dirs, c.store, fresh, { emit: [(e) => events.push(e)], ...onServer() });
+        expect(fresh.asked).toBe(2);
+        const changed = warningOf(events, "closed-world-changed");
+        expect(changed).toHaveLength(1);
+        // I-1: the flip names the other run it revoked.
+        expect(changed[0]).toEndWith(
+          `; it also revoked 1 run(s) of this project still pending on this server (${c.prior}), so they cannot be resumed (R601)`,
+        );
+        const revoked = `${c.h}|closed-world:revoked`;
+        expect(hashes(c.store)).toEqual([revoked, revoked]);
+        for (const h of snapHashes(c.store, c.prior)) expect(h).toBe(revoked);
+        const again = new GuardBackend(() => 0);
+        const refusal = resume(c, again);
+        await expect(refusal).rejects.toThrow(
+          `${flag(c.prior)}: run ${c.prior} was measured against test app ${revoked}`,
+        );
+        // I-1: the refusal names the cause, a changed answer, not a republish.
+        await expect(refusal).rejects.toThrow(
+          `. Its identity was revoked: a closed-world check after execution, its own or a later run's on its server, answered differently (R389, R601). A verdict`,
+        );
+        expect(nothingRan(again)).toBe(0);
+        c.store.close();
+      });
+
+      test("T2: the resumed run crashes too: the next resume carries from it and confirms", async () => {
+        const c = await crashed(2);
+        await expect(resume(c, new GuardBackend(() => 0))).rejects.toThrow(
+          "killed before confirmation",
+        );
+        const first = newestRun(c.store);
+        const b = new GuardBackend(() => 0);
+        const events: RunEvent[] = [];
+        const report = await resume(c, b, events, onServer(), first);
+        expect(warningOf(events, "resume-reusing-run")[0]).toContain(`reusing run ${first} —`);
+        expect(report.mutants.filter((m) => m.carried === true).length).toBeGreaterThan(0);
+        expect(hashes(c.store)).toEqual([c.h, c.h, c.base]);
+        c.store.close();
+      });
+    });
+  }
+
+  /** A copy of run `from` and its snapshots, with `set` applied to the row; snapshots take the
+   *  copy's `test_app_hash`. */
+  const cloneRun = (store: ResultsStore, from: number, set: Record<string, string>) => {
+    const cols = (store.db.query("PRAGMA table_info(runs)").all() as { name: string }[])
+      .map((c) => c.name)
+      .filter((n) => n !== "id")
+      .join(", ");
+    store.db.run(`INSERT INTO runs (${cols}) SELECT ${cols} FROM runs WHERE id = ?`, [from]);
+    const id = newestRun(store);
+    for (const [k, v] of Object.entries(set))
+      store.db.run(`UPDATE runs SET ${k} = ? WHERE id = ?`, [v, id]);
+    store.db.run(
+      "INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload) SELECT ?1, batch_index, batch_hash, (SELECT test_app_hash FROM runs WHERE id = ?1), payload FROM baseline_snapshots WHERE run_id = ?2",
+      [id, from],
+    );
+    return id;
+  };
+
+  test("D4c: a flip leaves a confirmed run, another project's pending run and another server's pending run unchanged", async () => {
+    const c = await crashed();
+    const confirmed = cloneRun(c.store, c.prior, { test_app_hash: c.base });
+    const otherProject = cloneRun(c.store, c.prior, { project_path: `${c.dirs.projectDir}-other` });
+    const otherServer = cloneRun(c.store, c.prior, { resource_key: "http://bc-other|BC" });
+    const kept = [confirmed, otherProject, otherServer];
+    const before = kept.map((id) => [hashes(c.store)[id - 1], snapHashes(c.store, id)]);
+    for (const [, snaps] of before) expect(snaps).not.toEqual([]);
+    await session(c.dirs, c.store, new GuardBackend((call) => (call === 1 ? 0 : 1)), onServer());
+    // Control: the flip did revoke this project's pending run on this server.
+    expect(hashes(c.store)[c.prior - 1]).toBe(`${c.h}|closed-world:revoked`);
+    expect(kept.map((id) => [hashes(c.store)[id - 1], snapHashes(c.store, id)])).toEqual(before);
+    c.store.close();
+  });
+
+  test("D4c-tag (M-3): a flip also revokes the same package's pending run under the OTHER closed tag", async () => {
+    const c = await crashed();
+    const tag = `${c.base.replace(/\+internal$/, "")}|pending`;
+    expect(tag).not.toBe(c.h);
+    const other = cloneRun(c.store, c.prior, { test_app_hash: tag });
+    await session(c.dirs, c.store, new GuardBackend((call) => (call === 1 ? 0 : 1)), onServer());
+    expect(hashes(c.store)[other - 1]).toBe(`${tag}|closed-world:revoked`);
+    for (const h of snapHashes(c.store, other)) expect(h).toBe(`${tag}|closed-world:revoked`);
+    c.store.close();
+  });
+
+  test("D4c-nokey (M-7): a flipping session with no server key revokes the project's pending run on a known server", async () => {
+    const c = await crashed();
+    await session(c.dirs, c.store, new GuardBackend((call) => (call === 1 ? 0 : 1)), {
+      quarantineDir: scratch("lethal-r601-q-"),
+    });
+    expect(hashes(c.store)[c.prior - 1]).toBe(`${c.h}|closed-world:revoked`);
+    c.store.close();
+  });
+
+  test("M-8: --resume last picks the newest run, pending on ANOTHER server, over an older resumable one here: refused by name, no fallback", async () => {
+    const c = await crashed(2);
+    const other = { resourceServer: "http://bc-other", resourceServerInstance: "BC" };
+    await expect(
+      session(c.dirs, c.store, new GuardBackend(() => 0, 2), onServer(other)),
+    ).rejects.toThrow("killed before confirmation");
+    const newer = newestRun(c.store);
+    expect(newer).toBeGreaterThan(c.prior);
+    const b = new GuardBackend(() => 0);
+    await expect(session(c.dirs, c.store, b, { resume: "last", ...onServer() })).rejects.toThrow(
+      `--resume: run ${newer} was measured against test app ${c.h}, and this session's test app is ${c.base}. Run ${newer} ended before its post-execution closed-world check, so its closed-world answer was never confirmed. It ran on server http://bc-other|BC, and this session runs on server http://bc-r601|BC.`,
+    );
+    expect(nothingRan(b)).toBe(0);
+    c.store.close();
+  });
+
+  test("M2: --resume-run of a resumed-then-revoked run (D4's shape): refused; nothing runs", async () => {
+    const c = await crashed();
+    const revoked = `${c.h}|closed-world:revoked`;
+    c.store.db.run("UPDATE runs SET test_app_hash = ? WHERE id = ?", [revoked, c.prior]);
+    const b = new GuardBackend(() => 0);
+    await expect(session(c.dirs, c.store, b, { resume: c.prior, ...onServer() })).rejects.toThrow(
+      `--resume-run ${c.prior}: run ${c.prior} was measured against test app ${revoked}`,
+    );
+    expect(nothingRan(b)).toBe(0);
+    c.store.close();
   });
 
   test("findBaselineSnapshot excludes a revoked owner; revocation updates run and snapshots together", async () => {
