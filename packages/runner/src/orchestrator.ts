@@ -108,6 +108,7 @@ import {
   guardedTestAppHash,
   isClosedIdentity,
   isClosedWorld,
+  pendingIdentitiesOf,
   resumableTestApp,
   sameClosedWorld,
 } from "./closed-world";
@@ -3894,13 +3895,17 @@ function assertSameTestApp(
     testAppHash !== undefined && row.testAppProven && row.testAppHash?.endsWith(PENDING_SUFFIX)
       ? ` ${pendingRefusal(row, testAppHash, pending)}`
       : "";
+  // R601 (delta review I-1): a revoked identity is a changed closed-world answer, not a republish.
+  const revoked = row.testAppHash?.endsWith(REVOKED_SUFFIX)
+    ? " Its identity was revoked: a closed-world check after execution, its own or a later run's on its server, answered differently (R389, R601)."
+    : "";
   throw new Error(
     `${flag}: run ${row.id} was measured against test app ${describeTestApp(row.testAppHash)}${recordedTestAppNote(
       row.testAppHash,
       row.testAppProven,
     )}, and this session's test app is ${describeTestApp(testAppHash)}${
       testAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-    }.${note} ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495${note === "" ? "" : ", R601"}). Drop the resume flag to run from scratch.`,
+    }.${revoked}${note} ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495${note === "" ? "" : ", R601"}). Drop the resume flag to run from scratch.`,
   );
 }
 
@@ -7775,18 +7780,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         cfg.store.setTestDigests(runId, pendingClosedWorld.digests, pendingClosedWorld.parts);
       }
     } else {
-      if (historyTestApp !== undefined) {
-        // R601 (review I-A, orchestrator ruling): every flip, fresh or resumed, revokes with itself
-        // the project's runs still pending under this identity on this server.
-        cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX, {
-          projectPath: cfg.projectDir,
-          pendingHash: `${historyTestApp.hash}${PENDING_SUFFIX}`,
-        });
-      }
+      // R601 (review I-A, orchestrator ruling): every flip, fresh or resumed, revokes with itself
+      // the project's runs still pending under this package (either closed tag) on this server.
+      const chained =
+        historyTestApp === undefined
+          ? []
+          : cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX, {
+              projectPath: cfg.projectDir,
+              pendingHashes: pendingIdentitiesOf(historyTestApp.hash),
+            });
+      // R601 (delta review I-1): say which other runs this flip revoked.
+      const alsoRevoked =
+        chained.length === 0
+          ? ""
+          : `; it also revoked ${chained.length} run(s) of this project still pending on this server (${chained.join(", ")}), so they cannot be resumed (R601)`;
       emit({
         type: "warning",
         code: "closed-world-changed",
-        message: `[lethal] the closed-world guard answered differently after execution (${again.why}), so this run records open-world test digests and no later run carries or reuses its verdicts`,
+        message: `[lethal] the closed-world guard answered differently after execution (${again.why}), so this run records open-world test digests and no later run carries or reuses its verdicts${alsoRevoked}`,
       });
     }
   }

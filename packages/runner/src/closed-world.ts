@@ -164,6 +164,18 @@ const CLOSED_TAG = /\|closed-world:public(\+internal)?$/;
 /** Whether a session identity is closed-world (the guard answered closed at its start). */
 export const isClosedIdentity = (session: string): boolean => CLOSED_TAG.test(session);
 
+/** R601 (delta review M-3): the pending identities a flip of `identity` revokes: both closed tags
+ *  of its package, since the dependent count that flipped does not depend on the tag. */
+export const pendingIdentitiesOf = (identity: string): string[] => {
+  const pkg = identity.replace(CLOSED_TAG, "");
+  return pkg === identity
+    ? [`${identity}${PENDING_SUFFIX}`]
+    : [
+        `${pkg}|closed-world:public${PENDING_SUFFIX}`,
+        `${pkg}|closed-world:public+internal${PENDING_SUFFIX}`,
+      ];
+};
+
 /**
  * R601: a resume may carry from `recorded` when it is this session's identity, or this session's
  * CLOSED identity still pending, recorded on the same server: the prior run ended before its

@@ -948,19 +948,20 @@ export class ResultsStore {
    *  identity and every baseline snapshot it recorded get `suffix`, so no later session carries or
    *  reuses from it. A revoked owner whose snapshot somehow kept the old key is excluded by
    *  `findBaselineSnapshot`'s R496 condition that the run's hash equals the snapshot's.
-   *  R601 (review I-A, orchestrator ruling): `chain` is what any flipping session passes, fresh or
-   *  resumed. In the same transaction, every run of `chain.projectPath` still recorded as exactly
-   *  `chain.pendingHash` on this run's server (`resource_key`) is revoked too, with its snapshots,
-   *  so no pending run lends after a session on that server saw the answer change. An unknown
-   *  server fails closed: when this run's key is NULL the chain spans every server of the project,
-   *  and a pending run with a NULL key is revoked on any server (it can never resume anyway). */
+   *  R601 (review I-A, orchestrator ruling): `chain` is what any flipping `lethal run` session
+   *  passes, fresh or resumed. In the same transaction, every run of `chain.projectPath` still
+   *  recorded as exactly one of `chain.pendingHashes` (`pendingIdentitiesOf`) on this run's server
+   *  (`resource_key`) is revoked too, with its snapshots, so no pending run lends after a session
+   *  on that server saw the answer change. An unknown server fails closed: when this run's key is
+   *  NULL the chain spans every server of the project, and a pending run with a NULL key is revoked
+   *  on any server (it can never resume anyway). Returns the chained runs' ids, ascending. */
   revokeTestAppHash(
     runId: number,
     suffix: string,
-    chain?: { readonly projectPath: string; readonly pendingHash: string },
-  ): void {
-    this.db.transaction(() => {
-      // Read before the run's own row changes: the chain's server scope.
+    chain?: { readonly projectPath: string; readonly pendingHashes: readonly string[] },
+  ): number[] {
+    return this.db.transaction((): number[] => {
+      // The chain's server scope: this run's `resource_key`.
       const server = (
         this.db.query("SELECT resource_key AS k FROM runs WHERE id = ?").get(runId) as {
           k: string | null;
@@ -976,18 +977,28 @@ export class ResultsStore {
       this.db
         .query("UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ? WHERE run_id = ?")
         .run(suffix, runId);
-      if (chain === undefined) return;
-      const scope =
-        "project_path = ?2 AND test_app_hash = ?3 AND (?4 IS NULL OR resource_key IS NULL OR resource_key = ?4)";
-      const args = [suffix, chain.projectPath, chain.pendingHash, server ?? null] as const;
+      if (chain === undefined) return [];
+      const ids = (
+        this.db
+          .query(
+            "SELECT id FROM runs WHERE project_path = ?1 AND test_app_hash IN (SELECT value FROM json_each(?2)) AND (?3 IS NULL OR resource_key IS NULL OR resource_key = ?3) ORDER BY id",
+          )
+          .all(chain.projectPath, JSON.stringify(chain.pendingHashes), server ?? null) as {
+          id: number;
+        }[]
+      ).map((r) => r.id);
+      const idList = JSON.stringify(ids);
       this.db
         .query(
-          `UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ?1 WHERE run_id IN (SELECT id FROM runs WHERE ${scope})`,
+          "UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ?1 WHERE run_id IN (SELECT value FROM json_each(?2))",
         )
-        .run(...args);
+        .run(suffix, idList);
       this.db
-        .query(`UPDATE runs SET test_app_hash = test_app_hash || ?1 WHERE ${scope}`)
-        .run(...args);
+        .query(
+          "UPDATE runs SET test_app_hash = test_app_hash || ?1 WHERE id IN (SELECT value FROM json_each(?2))",
+        )
+        .run(suffix, idList);
+      return ids;
     })();
   }
 

@@ -3837,13 +3837,23 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
         const events: RunEvent[] = [];
         await session(c.dirs, c.store, fresh, { emit: [(e) => events.push(e)], ...onServer() });
         expect(fresh.asked).toBe(2);
-        expect(warningOf(events, "closed-world-changed")).toHaveLength(1);
+        const changed = warningOf(events, "closed-world-changed");
+        expect(changed).toHaveLength(1);
+        // I-1: the flip names the other run it revoked.
+        expect(changed[0]).toEndWith(
+          `; it also revoked 1 run(s) of this project still pending on this server (${c.prior}), so they cannot be resumed (R601)`,
+        );
         const revoked = `${c.h}|closed-world:revoked`;
         expect(hashes(c.store)).toEqual([revoked, revoked]);
         for (const h of snapHashes(c.store, c.prior)) expect(h).toBe(revoked);
         const again = new GuardBackend(() => 0);
-        await expect(resume(c, again)).rejects.toThrow(
+        const refusal = resume(c, again);
+        await expect(refusal).rejects.toThrow(
           `${flag(c.prior)}: run ${c.prior} was measured against test app ${revoked}`,
+        );
+        // I-1: the refusal names the cause, a changed answer, not a republish.
+        await expect(refusal).rejects.toThrow(
+          `. Its identity was revoked: a closed-world check after execution, its own or a later run's on its server, answered differently (R389, R601). A verdict`,
         );
         expect(nothingRan(again)).toBe(0);
         c.store.close();
@@ -3896,6 +3906,42 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
     // Control: the flip did revoke this project's pending run on this server.
     expect(hashes(c.store)[c.prior - 1]).toBe(`${c.h}|closed-world:revoked`);
     expect(kept.map((id) => [hashes(c.store)[id - 1], snapHashes(c.store, id)])).toEqual(before);
+    c.store.close();
+  });
+
+  test("D4c-tag (M-3): a flip also revokes the same package's pending run under the OTHER closed tag", async () => {
+    const c = await crashed();
+    const tag = `${c.base.replace(/\+internal$/, "")}|pending`;
+    expect(tag).not.toBe(c.h);
+    const other = cloneRun(c.store, c.prior, { test_app_hash: tag });
+    await session(c.dirs, c.store, new GuardBackend((call) => (call === 1 ? 0 : 1)), onServer());
+    expect(hashes(c.store)[other - 1]).toBe(`${tag}|closed-world:revoked`);
+    for (const h of snapHashes(c.store, other)) expect(h).toBe(`${tag}|closed-world:revoked`);
+    c.store.close();
+  });
+
+  test("D4c-nokey (M-7): a flipping session with no server key revokes the project's pending run on a known server", async () => {
+    const c = await crashed();
+    await session(c.dirs, c.store, new GuardBackend((call) => (call === 1 ? 0 : 1)), {
+      quarantineDir: scratch("lethal-r601-q-"),
+    });
+    expect(hashes(c.store)[c.prior - 1]).toBe(`${c.h}|closed-world:revoked`);
+    c.store.close();
+  });
+
+  test("M-8: --resume last picks the newest run, pending on ANOTHER server, over an older resumable one here: refused by name, no fallback", async () => {
+    const c = await crashed(2);
+    const other = { resourceServer: "http://bc-other", resourceServerInstance: "BC" };
+    await expect(
+      session(c.dirs, c.store, new GuardBackend(() => 0, 2), onServer(other)),
+    ).rejects.toThrow("killed before confirmation");
+    const newer = newestRun(c.store);
+    expect(newer).toBeGreaterThan(c.prior);
+    const b = new GuardBackend(() => 0);
+    await expect(session(c.dirs, c.store, b, { resume: "last", ...onServer() })).rejects.toThrow(
+      `--resume: run ${newer} was measured against test app ${c.h}, and this session's test app is ${c.base}. Run ${newer} ended before its post-execution closed-world check, so its closed-world answer was never confirmed. It ran on server http://bc-other|BC, and this session runs on server http://bc-r601|BC.`,
+    );
+    expect(nothingRan(b)).toBe(0);
     c.store.close();
   });
 
