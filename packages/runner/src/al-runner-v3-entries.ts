@@ -256,11 +256,10 @@ export function decodeEntriesAnswer(
     rows.set(id, mine);
   }
   const sums: Counts = { passed: 0, failed: 0, errors: 0, notRun: 0, total: 0 };
-  for (const [i, e] of sent.entries()) {
-    const mine = rows.get(e.id) ?? [];
-    if (e.echo && mine.length > 1) return { why: `echo entry ${e.id} has ${mine.length} rows` };
-    const c = countsOf(mine);
-    const s = answer.entrySummaries[i] ?? {};
+  for (const e of sent) {
+    // The echo's "exactly one row" is `echoMismatch`'s: a wrong echo errors its group.
+    const c = countsOf(rows.get(e.id) ?? []);
+    const s = answer.entrySummaries.find((x) => String(x.entry) === e.id) ?? {};
     for (const k of COUNT_KEYS) {
       if (s[k] !== c[k]) {
         return {
