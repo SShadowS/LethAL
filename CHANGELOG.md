@@ -207,13 +207,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   post-execution check** (R601, R620). Before, such a run (a crash, Ctrl-C, any exception after the
   lease) kept its `|pending` test-app identity and was always refused. Now it resumes when it ran
   on the same server and the closed-world guard gives the same answer now. The resumed run's own
-  check after execution confirms it, or revokes it. Any session whose check after execution flips,
-  fresh or resumed, also revokes every run of the project still pending under its identity on its
-  server. Every
-  other case is refused in words that name the cause (the guard is open now, quoting why, or the
-  answer, the test app or the server differs). **Open limits:** a server restart, or a dependent
-  published and removed again, inside the gap between the crash and the resume is not seen (a
-  probe is filed as R632); the server key omits the tenant.
+  check after execution confirms it, or revokes it. Any `lethal run` session whose check after
+  execution flips, fresh or resumed, also revokes every run of the project still pending under its
+  package (either closed tag) on its server, and its `closed-world-changed` warning names them. A
+  refused revoked run now says its closed-world answer changed, not that the test app was
+  republished. Every other case is refused in words that name the cause (the guard is open now,
+  quoting why, or the answer, the test app or the server differs). **Open limits:** a server
+  restart, or a dependent published and removed again, inside the gap between the crash and the
+  resume is not seen (a probe is filed as R632); a guard open at a session's start and a
+  `lethal verify` flip revoke nothing; the server key omits the tenant.
 - **A loop fed by another object's stateful procedure is hang-refused; identity scheme 41, the number
   confirmed at merge** (R572). A loop whose exit reads a flag, a `var` argument or a call fed by a stateful
   procedure in another project object refuses that procedure's chain, the writers of its value path, and the

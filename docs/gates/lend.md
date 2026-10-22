@@ -143,8 +143,10 @@ override reads back as its source in `getRun`, `mutantVerdicts`, `priorSurvivorK
 A crashed closed-world run keeps `|pending`. Since [R601](../roadmap/R601.md) it is resumable on
 the same server by a session whose guard gives the same closed answer now; that session's own
 re-ask after execution confirms or revokes its run, and the pending run is never confirmed by it.
-Any session whose re-ask flips, fresh or resumed, also revokes every run of the project still
-pending under its identity on its server. RP pins the accepted case live and RN1d a pending run
+Any `lethal run` session whose re-ask flips, fresh or resumed, also revokes every run of the
+project still pending under its package (either closed tag) on its server, and names them in its
+`closed-world-changed` warning; a `lethal verify` flip revokes nothing (R601's stated limits). RP
+pins the accepted case live and RN1d a pending run
 whose closed answer differs. No live leg flips (the fixture's answer is stable), so the revoke on a
 flip, and the other refusals (the guard open now, another server), are pinned offline in
 `tests/resume.test.ts`. A quarantined run is confirmed and stays resumable (an offline orchestrator
