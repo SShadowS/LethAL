@@ -171,6 +171,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A loop fed by another object's stateful procedure is hang-refused; identity scheme 41, the number
+  confirmed at merge** (R572). A loop whose exit reads a flag, a `var` argument or a call fed by a stateful
+  procedure in another project object refuses that procedure's chain, the writers of its value path, and the
+  guards in the loop body that decide whether such a writer runs (`r572-guard-writer`). A guard is refused as a
+  single site, so its procedure's same-tuple twins renumber (measured on BaseApp: 34 ordinals moved, 0 tuples
+  moved). History, `--resume` and marks recorded under scheme 40 are not carried.
 - **al-runner coverage is ON by default** (R394). With no `alRunner.coverage` key, `lethal run
   --backend al-runner` now reads al-runner's own `--coverage` (R220): a mutant no green test
   reaches reads `no-coverage` instead of `survived`, and each mutant runs only its covering tests.

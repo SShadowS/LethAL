@@ -4116,7 +4116,10 @@ function r572LoopRows(loop: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContex
  *   but has no `exit(<call>)` into another object;
  * - `m2ReachCutOff`: a stateful chain whose writer reach stopped at the hop cap with calls unread;
  * - `m3CopyShared`: a `Copy(X, true)` in a refused chain's object (an alias of shared state);
- * - `m3RecRefByValue`: a forced RecordRef cursor handed BY VALUE to a callee.
+ * - `m3RecRefByValue`: a forced RecordRef cursor handed BY VALUE to a callee;
+ * - `s3AliasViaVarCallee`: a refused chain procedure hands a name to a same-object callee's `var`
+ *   parameter that the callee assigns from a global (`CopyInto(L)` doing `R := G`);
+ * - `s4WithGlobal`: a refused chain procedure holds a `with G do` whose subject is a global.
  * Not an R604 gap: `backstopCutOffs` counts each time a depth BACKSTOP cut a walk off and refused
  * (`R572_FLAG_DEPTH`, `R572_SLICE_PROCS`), so the backstops' cost shows in the re-price.
  */
@@ -4126,6 +4129,8 @@ export interface R572Gaps {
   m2ReachCutOff: number;
   m3CopyShared: number;
   m3RecRefByValue: number;
+  s3AliasViaVarCallee: number;
+  s4WithGlobal: number;
   backstopCutOffs: number;
 }
 let r572GapSink: R572Gaps | null = null;
@@ -4169,6 +4174,8 @@ export function r572Census(ctx: SemanticContext): {
     m2ReachCutOff: 0,
     m3CopyShared: 0,
     m3RecRefByValue: 0,
+    s3AliasViaVarCallee: 0,
+    s4WithGlobal: 0,
     backstopCutOffs: 0,
   };
   r572GapSink = gaps;
@@ -4245,6 +4252,42 @@ function r572CensusRun(
           }
         });
         if (hit) gaps.h2SplitQueue++;
+      }
+      // R604 (S3, S4): aliases of a global the value path does not follow, in a refused chain
+      for (const r of lr) {
+        if (!r.stateful) continue;
+        for (const p of r.chain) {
+          const o = objectOf(p);
+          if (o === null) continue;
+          const globals = objectGlobalNames(o);
+          visitAll(p, (n) => {
+            if (n.rawKind === "with_statement") {
+              const s = n.childForFieldName("record");
+              if (s !== null && isIdentifierLike(s) && globals.has(normalizeAlName(s.text)))
+                gaps.s4WithGlobal++;
+              return;
+            }
+            const c = r531Call(n);
+            if (c === null || c.args.length === 0) return;
+            for (const t of r570Targets(n, c, ctx)) {
+              const to = objectOf(t);
+              if (to === null || !samePos(to, o) || !sameFile(rootOf(to), rootOf(o))) continue;
+              c.args.forEach((_a, i) => {
+                const prm = r531Param(t, i);
+                if (prm === null || !prm[1]) return;
+                const k = r531ParamKey(prm[0]);
+                visitAll(t, (x) => {
+                  if (x.kind !== ALNodeKind.assignment_statement) return;
+                  const l = x.childForFieldName("left");
+                  const rhs = x.childForFieldName("right");
+                  if (l === null || rhs === null || rootName(l) !== k) return;
+                  if (isIdentifierLike(rhs) && globals.has(normalizeAlName(rhs.text)))
+                    gaps.s3AliasViaVarCallee++;
+                });
+              });
+            }
+          });
+        }
       }
     });
   const extra = new Map<string, ALSyntaxNode>();

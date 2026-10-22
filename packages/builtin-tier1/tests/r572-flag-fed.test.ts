@@ -1751,6 +1751,8 @@ describe("R604 census: one counter per gap master already has (not refusals)", (
     m2ReachCutOff: 0,
     m3CopyShared: 0,
     m3RecRefByValue: 0,
+    s3AliasViaVarCallee: 0,
+    s4WithGlobal: 0,
     backstopCutOffs: 0,
   };
   const RESET = `codeunit 57202 "R572 Reset"
@@ -1939,6 +1941,55 @@ ${deep(n)}
 }`,
     });
     expect(g.m3RecRefByValue).toBeGreaterThan(0);
+  });
+  /** GetNext reads the global record `G` through `body`; `Bump` (body-called) writes `G`. */
+  const alias = (body: string, extra = ""): Files => ({
+    "Buf.Table.al": BUF,
+    [C]: `codeunit 57202 "R572 Alias"
+{
+    var
+        G: Record "R572 Buf";
+
+    procedure GetNext(): Boolean
+    var
+        L: Record "R572 Buf";
+    begin
+${body}
+    end;
+
+    procedure Bump()
+    begin
+        G.Val := 'x';
+        G.Modify();
+    end;
+${extra}
+}`,
+    [L]: loop(
+      `        It: Codeunit "R572 Alias";`,
+      `        while It.GetNext() do
+            It.Bump();`,
+    ),
+  });
+  it("S3: a global aliased into a local by a same-object `var` callee", () => {
+    const g = gapsOf(
+      alias(
+        `        CopyInto(L);
+        exit(L.Val = '');`,
+        `
+    local procedure CopyInto(var R: Record "R572 Buf")
+    begin
+        R := G;
+    end;`,
+      ),
+    );
+    expect(g.s3AliasViaVarCallee).toBe(1);
+  });
+  it("S4: `with G do exit(Val = '')` in a chain procedure", () => {
+    const g = gapsOf(
+      alias(`        with G do
+            exit(Val = '');`),
+    );
+    expect(g.s4WithGlobal).toBe(1);
   });
   it("control: test 2's tracker has none of the five", () => {
     const g = gapsOf({
