@@ -24,6 +24,8 @@ Control and the gift-card pair (the database is in memory, so a server1 reboot e
 `examples/gift-card/lethal.config.demo.json` and runs `doctor`. It needs no internet. If bc-demo does
 not answer, it prints what only the owner can do on server1 and exits 2. Then pass
 `--config examples/gift-card/lethal.config.demo.json` to `demo-reset.ts` and to `run` below.
+**On the talk laptop itself** (server1, network off, a plain clone), add `--laptop` to this script
+and to `gift-card-refreeze.ts`: [talk-laptop.md](talk-laptop.md) has every command (R663b).
 
 Then confirm the frozen numbers still hold, which is the one check that would catch a change nobody
 expected:
@@ -154,8 +156,11 @@ re-freeze writes a new report; read the rank again on it.
 
 Prompt the agent with the shipped skill and one instruction:
 
-> Read `report.json`. Take the top survivor. Write the test that kills it, publish the test app, and
-> re-run LethAL narrowed to that file to show the verdict flip.
+> Read `report.json`. Take the survivor in `GetBalance`: the deleted `SetRange`. Write the test that
+> kills it, publish the test app, and re-run LethAL narrowed to that file to show the verdict flip.
+
+You pick the lead on stage, so the prompt names it: the planted bug ranks tenth of fifteen
+survivors, so "the top survivor" would send the agent to a different one than the talk shows (R664).
 
 The kill it should write is a **second gift card**: issue two, redeem against one, assert each
 balance separately. That makes the missing `SetRange` load-bearing for the first time.

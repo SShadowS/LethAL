@@ -1,0 +1,71 @@
+{
+  "ok": {
+    "code": 0,
+    "out": [
+      "\nbc-demo-setup:\nbc-demo (OData 7348, dev 7349, API 7352; not a gate server, no lease)\n  login: BC_DEV_USER (8 chars), BC_DEV_PASSWORD (19 chars)\n  symbols   /cache/bc-demo/28.4-abcd1234\n  wrote     <REPO>/examples/gift-card/lethal.config.demo.json\n  publish   LethAL Control 1.0.0.23 (rows: none)\n  dependent Gift Card Demo Tests of Gift Card Demo: rows: none\n  publish   new Gift Card Demo 1.0.0.1 (rows: none)\n  publish   new Gift Card Demo Tests 1.0.0.1 (rows: none)\n  published new LethAL Control 1.0.0.23; read back: raw sha256 4bc01c6879a06f8a60f57f6a145e46e61f800968e1974518cc371135da90d389 = local, digest 82c0ef5aa026, rows: 1.0.0.23 installed=true packageId=p\n  published new Gift Card Demo 1.0.0.1; read back: raw sha256 9623cfa2ed9fe080f4525ff62b85e2d1ccd48704d3801fc52985777a3e08d358 = local, digest 86db8e3468ff, rows: 1.0.0.1 installed=true packageId=p\n  published new Gift Card Demo Tests 1.0.0.1; read back: raw sha256 f93fc3c0cd9f4c9d02e3dcdc82f24ecfe3d8fe42dfc087a03b0ef44d3109cfed = local, digest 9db136e58722, rows: 1.0.0.1 installed=true packageId=p\n  doctor    ok",
+      "\nok"
+    ],
+    "calls": [
+      "allocation",
+      "reachable",
+      "readSecret",
+      "fillSymbols",
+      "writeConfig",
+      "compile",
+      "serverOps",
+      "doctor <REPO>/examples/gift-card/lethal.config.demo.json"
+    ],
+    "written": {
+      "<REPO>/examples/gift-card/lethal.config.demo.json": {
+        "selectorIds": {
+          "selectorId": 90199,
+          "controlId": 90198,
+          "tableId": 90197
+        },
+        "bcdev": {
+          "mcpCommand": ["node", "/x/bc-dev-mcp.js"],
+          "server": "http://192.168.2.157:7349",
+          "serverInstance": "BC",
+          "tenant": "default",
+          "port": 7349,
+          "baseUrl": "http://192.168.2.157:7348/BC",
+          "apiBaseUrl": "http://192.168.2.157:7352/BC",
+          "company": "CRONUS International Ltd.",
+          "username": "BCRUNNER",
+          "password": "s3cret-not-printed!",
+          "packageCachePath": "/cache/bc-demo/28.4-abcd1234",
+          "controlSymbolPath": "/coord/handoff/R-389/control-1.0.0.23/LethAL_LethAL Control_1.0.0.23.app",
+          "env": {
+            "BC_DEV_USER": "BCRUNNER",
+            "BC_DEV_PASSWORD": "s3cret-not-printed!",
+            "BC_DEV_API_PORT": "7352"
+          }
+        }
+      }
+    }
+  },
+  "dry": {
+    "code": 0,
+    "out": [
+      "\nbc-demo-setup (dry run):\nbc-demo (OData 7348, dev 7349, API 7352; not a gate server, no lease)\n  would probe http://192.168.2.157:7349, fill or reuse /coord/cache/bc-symbols/bc-demo/<build>-<hash8>, write <REPO>/examples/gift-card/lethal.config.demo.json, publish LethAL Control, gift-card and gift-card-tests, run doctor",
+      "\nok"
+    ],
+    "calls": ["allocation"],
+    "written": {}
+  },
+  "down": {
+    "code": 2,
+    "out": [
+      "\nbc-demo-setup:\nbc-demo (OData 7348, dev 7349, API 7352; not a gate server, no lease)\n  bc-demo does not answer on http://192.168.2.157:7349. Only the owner can start it:\n    1. On server1, check `free -g`: one more BC instance needs a few GB.\n    2. Start a fourth BC on Linux instance the way bc3 runs (BC 28.4 W1, tenant default, instance BC, company CRONUS International Ltd.), with its OData, dev and API ports on host ports 7348, 7349 and 7352, and a restart policy.\n    3. Open 7348, 7349 and 7352 in server1's firewall to the laptop.\n    4. Login: create the same user as on bc1-bc3 (/coord/secrets/bc-linux.env), or write /coord/secrets/bc-demo.env with exactly BC_DEV_USER=... and BC_DEV_PASSWORD=...\n    5. Do NOT add bc-demo to /coord/machine/allocation.json: it is outside every lease pool.\n    6. Re-run: bun scripts/bc-demo-setup.ts",
+      "\nNOT UP: owner steps above"
+    ],
+    "calls": ["allocation"],
+    "written": {}
+  },
+  "unknown": {
+    "code": 1,
+    "out": ["unknown argument \"--x\"; usage: bun scripts/bc-demo-setup.ts [--dry-run]"],
+    "calls": [],
+    "written": {}
+  }
+}

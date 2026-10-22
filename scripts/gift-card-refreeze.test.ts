@@ -219,6 +219,40 @@ describe("gift-card-refreeze (R664)", () => {
     expect(h.calls).toEqual(["probe"]);
   });
 
+  test("R663b laptop: a refused preflight exits 1 before the probe and runs nothing", async () => {
+    const h = harness([report(), report(), report()]);
+    const { code, out } = await h.go({
+      ...h.deps,
+      laptopHost: "http://localhost",
+      preflight: async () => {
+        throw new Error("bc-dev-mcp is missing: no x/package.json");
+      },
+    });
+    expect(code).toBe(1);
+    expect(out).toContain("REFUSED: bc-dev-mcp is missing");
+    expect(h.calls).toEqual([]);
+  });
+
+  test("R663b laptop: not reachable names the laptop host and its start step, not /coord", async () => {
+    const h = harness([], false);
+    const { code, out } = await h.go({
+      ...h.deps,
+      laptopHost: "http://localhost",
+      preflight: async () => {},
+    });
+    expect(code).toBe(2);
+    expect(out).toContain("does not answer on http://localhost:7349");
+    expect(out).toContain("docker compose -p bc-demo");
+    expect(out).not.toContain("/coord");
+  });
+
+  test("R663b: kraken mode (no laptop fields) still prints the owner steps", async () => {
+    const h = harness([], false);
+    const { out } = await h.go();
+    expect(out).toContain("does not answer on http://192.168.2.157:7349");
+    expect(out).toContain("Only the owner can start it");
+  });
+
   test("the printed numbers are computed from the report", () => {
     const lines = figures(report() as never);
     expect(lines[0]).toBe(

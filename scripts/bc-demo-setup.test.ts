@@ -11,15 +11,30 @@ import {
   type ServerOps,
   portsOf,
 } from "./bc-app-content.ts";
+import { sha256Of } from "./bc-app-content.ts";
 import {
   DEMO_CONFIG,
   type DemoDeps,
   DemoInPoolError,
+  LAPTOP_BC_DEV_MCP,
+  LAPTOP_CONTROL,
+  LAPTOP_SYMBOLS,
+  LOCAL_CACHE,
+  LOCAL_LOGIN,
+  type LaptopIo,
+  LaptopRefused,
+  NATIVE_PARSER,
+  REAL_DEPS,
   checkNotPooled,
+  laptopDeps,
+  laptopLogin,
+  laptopTools,
   ownerSteps,
   run,
 } from "./bc-demo-setup.ts";
-import { GATE_FIXTURES, gitIgnores, parseArgs } from "./bc-linux-setup.ts";
+import { CONTROL_APP, GATE_FIXTURES, gitIgnores, parseArgs } from "./bc-linux-setup.ts";
+import { SYMBOL_CACHE_ROOT } from "./bc-symbol-cache.ts";
+import { laptopPreflight } from "./gift-card-refreeze.ts";
 
 const REPO = join(import.meta.dir, "..");
 const PASSWORD = "s3cret-not-printed!";
@@ -242,3 +257,342 @@ describe("R663: bc-demo-setup", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("R663b: kraken mode is unchanged", () => {
+  // Captured from master de7999fc's bc-demo-setup.ts with these same fakes (only the checkout
+  // path, `<REPO>`, differs between checkouts).
+  const pin = JSON.parse(
+    readFileSync(join(import.meta.dir, "testdata", "bc-demo-kraken-pin.json"), "utf8").replaceAll(
+      "<REPO>",
+      REPO,
+    ),
+  ) as Record<string, unknown>;
+  const cases: [string, string[], Partial<DemoDeps>][] = [
+    ["ok", [], {}],
+    ["dry", ["--dry-run"], {}],
+    ["down", [], { reachable: async () => false }],
+    ["unknown", ["--x"], {}],
+  ];
+  for (const [name, argv, over] of cases) {
+    test(`${name}: output, calls and written config equal master's, byte for byte`, async () => {
+      const { deps, calls, written } = fakeDeps(over);
+      const out: string[] = [];
+      const laptop = async (): Promise<DemoDeps> => {
+        throw new Error("kraken mode built laptop deps");
+      };
+      const code = await run(argv, deps, (s) => out.push(s), laptop);
+      expect({ code, out, calls, written: Object.fromEntries(written) }).toEqual(
+        pin[name] as never,
+      );
+    });
+  }
+
+  test("kraken mode's real deps keep their /coord paths and carry no laptop section", () => {
+    expect(REAL_DEPS.laptop).toBeUndefined();
+    expect(SYMBOL_CACHE_ROOT).toBe("/coord/cache/bc-symbols");
+    expect(CONTROL_APP.startsWith("/coord/handoff/")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// R663b laptop mode
+
+const FORBIDDEN = ["/coord", "/home/dev", "/work/tools"];
+const guard = (p: string) => {
+  if (FORBIDDEN.some((f) => p === f || p.startsWith(`${f}/`)))
+    throw new Error(`laptop mode touched ${p}`);
+};
+const HOME = "/home/laptop";
+const EXT_ALC = `${HOME}/.vscode/extensions/ms-dynamics-smb.al-18.0.1/bin/linux/alc`;
+const CONTROL_BYTES = Buffer.from("pinned control");
+const LOGIN_FILE = "BC_DEV_USER=BCRUNNER\nBC_DEV_PASSWORD=from-the-file!\n";
+
+interface IoOver {
+  env?: Record<string, string>;
+  drop?: string[];
+  files?: Record<string, string>;
+  ignored?: boolean;
+  node?: boolean;
+  noExtension?: boolean;
+}
+
+/** A laptop: every path read goes through `guard`, which throws on /coord and container paths. */
+function fakeIo(over: IoOver = {}) {
+  const files = new Map<string, string | Buffer>([
+    [join(LAPTOP_BC_DEV_MCP, "package.json"), '{"bin":{"bc-dev-mcp":"dist/index.js"}}'],
+    [join(LAPTOP_BC_DEV_MCP, "dist", "index.js"), ""],
+    [LAPTOP_CONTROL, CONTROL_BYTES],
+    [NATIVE_PARSER, ""],
+    [LOCAL_LOGIN, LOGIN_FILE],
+    ...Object.entries(over.files ?? {}),
+  ]);
+  for (const d of over.drop ?? []) files.delete(d);
+  const read: string[] = [];
+  const io: LaptopIo = {
+    env: over.env ?? {},
+    exists: (p) => {
+      guard(p);
+      return files.has(p);
+    },
+    readText: (p) => {
+      guard(p);
+      read.push(p);
+      const v = files.get(p);
+      if (v === undefined) throw new Error(`no ${p}`);
+      return v.toString();
+    },
+    readBytes: (p) => {
+      guard(p);
+      read.push(p);
+      const v = files.get(p);
+      if (v === undefined) throw new Error(`no ${p}`);
+      return Buffer.from(v);
+    },
+    isIgnored: (p) => {
+      guard(p);
+      return over.ignored ?? true;
+    },
+    which: (cmd) => (cmd === "node" && over.node !== false ? "/usr/bin/node" : null),
+    home: HOME,
+    alTools: async (dir) => {
+      guard(dir);
+      return over.noExtension === true || dir !== `${HOME}/.vscode/extensions`
+        ? undefined
+        : { alcPath: EXT_ALC, altoolPath: `${EXT_ALC.slice(0, -3)}altool` };
+    },
+  };
+  return { io, read };
+}
+
+const SHA = sha256Of(CONTROL_BYTES);
+const inCheckout = (p: string) => p.startsWith(`${REPO}/`);
+
+describe("R663b laptop mode: paths", () => {
+  test("every default resolves inside the checkout or the laptop user's home, never /coord", async () => {
+    const { io } = fakeIo();
+    const t = await laptopTools(io, SHA);
+    expect(t.host).toBe("http://localhost");
+    expect(t.symbolRoot).toBe(LAPTOP_SYMBOLS);
+    expect(t.controlPath).toBe(LAPTOP_CONTROL);
+    expect(t.mcpCommand).toEqual(["node", join(LAPTOP_BC_DEV_MCP, "dist", "index.js")]);
+    expect(t.alcPath).toBe(EXT_ALC);
+    for (const p of [t.symbolRoot, t.controlPath, LAPTOP_BC_DEV_MCP, NATIVE_PARSER, LOCAL_LOGIN])
+      expect({ p, inside: inCheckout(p) }).toEqual({ p, inside: true });
+    expect(LAPTOP_SYMBOLS.startsWith(`${LOCAL_CACHE}/`)).toBe(true);
+  });
+
+  test("the login file and the cache are git-ignored in this repository", () => {
+    expect(gitIgnores(LOCAL_LOGIN)).toBe(true);
+    expect(gitIgnores(join(LAPTOP_SYMBOLS, "bc-demo", "x.app.json"))).toBe(true);
+    expect(gitIgnores(join(LAPTOP_BC_DEV_MCP, "package.json"))).toBe(true);
+  });
+
+  test("LETHAL_DEMO_HOST overrides the host (the container simulation); a non-host refuses", async () => {
+    const t = await laptopTools(
+      fakeIo({ env: { LETHAL_DEMO_HOST: "http://192.168.2.157" } }).io,
+      SHA,
+    );
+    expect(t.host).toBe("http://192.168.2.157");
+    await expect(
+      laptopTools(fakeIo({ env: { LETHAL_DEMO_HOST: "localhost:7349" } }).io, SHA),
+    ).rejects.toThrow(LaptopRefused);
+  });
+
+  test("LETHAL_ALC_DIR and LETHAL_BC_DEV_MCP override the defaults", async () => {
+    const { io } = fakeIo({
+      env: { LETHAL_ALC_DIR: "/opt/al", LETHAL_BC_DEV_MCP: "/opt/mcp" },
+      files: {
+        "/opt/al/alc": "",
+        "/opt/al/altool": "",
+        "/opt/mcp/package.json": '{"bin":{"bc-dev-mcp":"dist/index.js"}}',
+        "/opt/mcp/dist/index.js": "",
+      },
+    });
+    const t = await laptopTools(io, SHA);
+    expect([t.alcPath, t.altoolPath]).toEqual(["/opt/al/alc", "/opt/al/altool"]);
+    expect(t.mcpCommand).toEqual(["node", "/opt/mcp/dist/index.js"]);
+  });
+});
+
+describe("R663b laptop mode: each missing dependency is refused by name", () => {
+  const cases: [string, IoOver, string][] = [
+    ["node", { node: false }, "node is not on PATH"],
+    ["bc-dev-mcp", { drop: [join(LAPTOP_BC_DEV_MCP, "package.json")] }, "bc-dev-mcp is missing"],
+    [
+      "bc-dev-mcp build",
+      { drop: [join(LAPTOP_BC_DEV_MCP, "dist", "index.js")] },
+      "bc-dev-mcp is not built",
+    ],
+    ["alc (no extension)", { noExtension: true }, "no AL Language extension"],
+    [
+      "alc (LETHAL_ALC_DIR)",
+      { env: { LETHAL_ALC_DIR: "/opt/empty" } },
+      "LETHAL_ALC_DIR has no alc",
+    ],
+    ["control app", { drop: [LAPTOP_CONTROL] }, "LethAL Control is missing"],
+    ["control app sha", { files: { [LAPTOP_CONTROL]: "another build" } }, "not the pinned"],
+    ["native parser", { drop: [NATIVE_PARSER] }, "native AL parser is missing"],
+  ];
+  for (const [name, over, message] of cases) {
+    test(name, async () => {
+      const p = laptopTools(fakeIo(over).io, SHA);
+      await expect(p).rejects.toThrow(LaptopRefused);
+      await expect(p).rejects.toThrow(message);
+      await expect(p).rejects.toThrow("docs/talk-laptop.md");
+    });
+  }
+
+  test("refreeze's preflight refuses a checkout with no laptop config, naming setup", async () => {
+    await expect(laptopPreflight(fakeIo().io, SHA)).rejects.toThrow(
+      `${DEMO_CONFIG} does not exist: run bun scripts/bc-demo-setup.ts --laptop first`,
+    );
+    await laptopPreflight(fakeIo({ files: { [DEMO_CONFIG]: "{}" } }).io, SHA);
+  });
+});
+
+describe("R663b laptop mode: the login", () => {
+  test("from the environment, when both variables are set (the file is not read)", () => {
+    const { io, read } = fakeIo({ env: { BC_DEV_USER: "U", BC_DEV_PASSWORD: "P" } });
+    expect(laptopLogin(io)).toEqual({ user: "U", password: "P" });
+    expect(read).toEqual([]);
+  });
+
+  test("from .lethal-demo.env when the environment has neither", () => {
+    const { io, read } = fakeIo();
+    expect(laptopLogin(io)).toEqual({ user: "BCRUNNER", password: "from-the-file!" });
+    expect(read).toEqual([LOCAL_LOGIN]);
+  });
+
+  test("a login file that git does not ignore is refused before it is read", () => {
+    const { io, read } = fakeIo({ ignored: false });
+    expect(() => laptopLogin(io)).toThrow(LaptopRefused);
+    expect(() => laptopLogin(io)).toThrow("not ignored by .gitignore");
+    expect(read).toEqual([]);
+  });
+
+  test("only one variable set is refused, naming the missing one", () => {
+    expect(() => laptopLogin(fakeIo({ env: { BC_DEV_USER: "U" } }).io)).toThrow(
+      "BC_DEV_PASSWORD is missing",
+    );
+    expect(() => laptopLogin(fakeIo({ env: { BC_DEV_PASSWORD: "P" } }).io)).toThrow(
+      "BC_DEV_USER is missing",
+    );
+  });
+
+  test("neither the environment nor the file is refused by name", () => {
+    expect(() => laptopLogin(fakeIo({ drop: [LOCAL_LOGIN] }).io)).toThrow("no login");
+  });
+});
+
+describe("R663b laptop mode: a whole setup run", () => {
+  test("touches no /coord or container path, and writes a checkout-local, localhost config", async () => {
+    const { io } = fakeIo();
+    const t = await laptopTools(io, SHA);
+    const login = laptopLogin(io);
+    const k = fakeDeps();
+    // kraken's allocation file is under /coord: laptop mode never reads it.
+    expect(laptopDeps(io, t, login).allocation()).toBeNull();
+    const throwing = Object.fromEntries(
+      Object.keys(k.deps).map((key) => [
+        key,
+        () => {
+          throw new Error(`kraken dep ${key} used in laptop mode`);
+        },
+      ]),
+    ) as unknown as DemoDeps;
+    const out: string[] = [];
+    const code = await run(
+      [LAPTOP_FLAG_ARG],
+      throwing,
+      (s) => out.push(s),
+      async () => ({
+        ...laptopDeps(io, t, login),
+        // the server, the compile and doctor are faked as in kraken mode
+        reachable: k.deps.reachable,
+        fillSymbols: async () => join(LAPTOP_SYMBOLS, "bc-demo", "28.4-abcd1234"),
+        controlBytes: k.deps.controlBytes,
+        compile: k.deps.compile,
+        serverOps: k.deps.serverOps,
+        doctor: k.deps.doctor,
+        writeConfig: k.deps.writeConfig,
+      }),
+    );
+    const text = out.join("\n");
+    expect(code).toBe(0);
+    expect(text).toContain("bc-demo-setup (laptop)");
+    expect(text).not.toContain("from-the-file!");
+    const cfg = k.written.get(DEMO_CONFIG) as { bcdev: Record<string, unknown> };
+    expect(cfg.bcdev.server).toBe("http://localhost:7349");
+    expect(cfg.bcdev.baseUrl).toBe("http://localhost:7348/BC");
+    expect(cfg.bcdev.apiBaseUrl).toBe("http://localhost:7352/BC");
+    expect(cfg.bcdev.controlSymbolPath).toBe(LAPTOP_CONTROL);
+    expect(cfg.bcdev.packageCachePath).toBe(join(LAPTOP_SYMBOLS, "bc-demo", "28.4-abcd1234"));
+    expect(cfg.bcdev.alcPath).toBe(EXT_ALC);
+    expect(cfg.bcdev.mcpCommand).toEqual(["node", join(LAPTOP_BC_DEV_MCP, "dist", "index.js")]);
+    const json = JSON.stringify(cfg);
+    for (const f of FORBIDDEN) expect({ f, hit: json.includes(f) }).toEqual({ f, hit: false });
+  });
+
+  test("LETHAL_DEMO_HOST reaches every URL of the written config", async () => {
+    const { io } = fakeIo({ env: { LETHAL_DEMO_HOST: "http://10.0.0.9" } });
+    const k = fakeDeps();
+    const code = await run(
+      ["--laptop"],
+      k.deps,
+      () => {},
+      async () => ({
+        ...laptopDeps(io, await laptopTools(io, SHA), laptopLogin(io)),
+        reachable: k.deps.reachable,
+        fillSymbols: k.deps.fillSymbols,
+        controlBytes: k.deps.controlBytes,
+        compile: k.deps.compile,
+        serverOps: k.deps.serverOps,
+        doctor: k.deps.doctor,
+        writeConfig: k.deps.writeConfig,
+      }),
+    );
+    expect(code).toBe(0);
+    const { bcdev } = k.written.get(DEMO_CONFIG) as { bcdev: Record<string, unknown> };
+    expect([bcdev.server, bcdev.baseUrl, bcdev.apiBaseUrl]).toEqual([
+      "http://10.0.0.9:7349",
+      "http://10.0.0.9:7348/BC",
+      "http://10.0.0.9:7352/BC",
+    ]);
+  });
+
+  test("not up: the laptop start steps, not kraken's owner steps", async () => {
+    const { io } = fakeIo();
+    const out: string[] = [];
+    const code = await run(
+      [LAPTOP_FLAG_ARG],
+      fakeDeps().deps,
+      (s) => out.push(s),
+      async () => ({
+        ...laptopDeps(io, await laptopTools(io, SHA), laptopLogin(io)),
+        reachable: async () => false,
+      }),
+    );
+    expect(code).toBe(2);
+    const text = out.join("\n");
+    expect(text).toContain("docker compose -p bc-demo");
+    expect(text).not.toContain("/coord");
+  });
+
+  test("a refused dependency fails the run before any server call", async () => {
+    const out: string[] = [];
+    const code = await run(
+      [LAPTOP_FLAG_ARG],
+      fakeDeps().deps,
+      (s) => out.push(s),
+      async () =>
+        laptopDeps(fakeIo().io, await laptopTools(fakeIo({ node: false }).io, SHA), {
+          user: "u",
+          password: "p",
+        }),
+    );
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("node is not on PATH");
+  });
+});
+
+const LAPTOP_FLAG_ARG = "--laptop";

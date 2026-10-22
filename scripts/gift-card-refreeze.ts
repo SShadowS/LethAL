@@ -2,7 +2,10 @@
  * R664: re-freeze the gift-card demo's `rehearsal` stage on bc-demo, from three runs that agree
  * mutant for mutant, at this build's identity scheme.
  *
- *   bun scripts/gift-card-refreeze.ts
+ *   bun scripts/gift-card-refreeze.ts [--laptop]
+ *
+ * `--laptop` (R663b, `docs/talk-laptop.md`): probe `LETHAL_DEMO_HOST` (default localhost) and first
+ * refuse by name any tool `lethal run` needs that the checkout lacks (`laptopPreflight`).
  *
  * Run `bun scripts/bc-demo-setup.ts` first: it publishes the apps and writes the gitignored config
  * this script runs with. This script calls only bc-demo (never bc1-bc3), through `lethal run`.
@@ -42,7 +45,19 @@ import { REDACTION_MARKER } from "../packages/runner/src/explain";
 import type { SessionReport } from "../packages/runner/src/report";
 import { IDENTITY_SCHEME } from "../packages/schemata/src/project";
 import { DEMO_PORTS, DEMO_SERVER, HOST } from "./bc-app-content.ts";
-import { DEMO_CONFIG, REAL_DEPS as DEMO_DEPS, ownerSteps } from "./bc-demo-setup.ts";
+import {
+  DEFAULT_LAPTOP_HOST,
+  DEMO_CONFIG,
+  REAL_DEPS as DEMO_DEPS,
+  LAPTOP_FLAG,
+  type LaptopIo,
+  LaptopRefused,
+  laptopStartSteps,
+  laptopTools,
+  ownerSteps,
+  probe,
+  realIo,
+} from "./bc-demo-setup.ts";
 import { firstPartyVerdict } from "./redact-campaign-report.ts";
 
 const REPO = join(import.meta.dir, "..");
@@ -69,6 +84,19 @@ export interface RefreezeDeps {
   readonly scratch: string;
   /** Where `freeze` archives the report. */
   readonly dest: string;
+  /** R663b laptop mode only: refuses by name when a dependency or the config is missing. */
+  readonly preflight?: () => Promise<void>;
+  /** R663b laptop mode only: the host the probe used, for the not-up message. */
+  readonly laptopHost?: string;
+}
+
+/** R663b: laptop mode's preflight. Every tool `lethal run` needs, and setup's config. */
+export async function laptopPreflight(io: LaptopIo, controlSha?: string): Promise<void> {
+  await laptopTools(io, controlSha);
+  if (!io.exists(DEMO_CONFIG))
+    throw new LaptopRefused(
+      `${DEMO_CONFIG} does not exist: run bun scripts/bc-demo-setup.ts --laptop first (docs/talk-laptop.md)`,
+    );
 }
 
 export class RefreezeRefused extends Error {}
@@ -143,9 +171,12 @@ export function figures(r: SessionReport): string[] {
 }
 
 async function refreeze(deps: RefreezeDeps, print: (s: string) => void): Promise<void> {
+  if (deps.preflight !== undefined) await deps.preflight();
   if (!(await deps.reachable())) {
     throw new BcDemoUnreachable(
-      `bc-demo-unreachable: ${DEMO_SERVER} does not answer on ${HOST}:${DEMO_PORTS.dev}; nothing was run. Only the owner can start it:\n${ownerSteps().join("\n")}`,
+      deps.laptopHost === undefined
+        ? `bc-demo-unreachable: ${DEMO_SERVER} does not answer on ${HOST}:${DEMO_PORTS.dev}; nothing was run. Only the owner can start it:\n${ownerSteps().join("\n")}`
+        : `bc-demo-unreachable: ${DEMO_SERVER} does not answer on ${deps.laptopHost}:${DEMO_PORTS.dev}; nothing was run.\n${laptopStartSteps(deps.laptopHost).join("\n")}`,
     );
   }
   print(`commit ${deps.commit()}`);
@@ -236,9 +267,15 @@ const spawn = async (cmd: string[]): Promise<number> =>
 if (import.meta.main) {
   const scratch = mkdtempSync(join(tmpdir(), "gift-card-refreeze-"));
   const cli = join(REPO, "packages", "runner", "src", "cli.ts");
+  // R663b: `--laptop` (docs/talk-laptop.md). Without it, nothing below changes.
+  const io = realIo();
+  const laptopHost = process.argv.includes(LAPTOP_FLAG)
+    ? (io.env.LETHAL_DEMO_HOST ?? DEFAULT_LAPTOP_HOST)
+    : undefined;
   process.exit(
     await main({
-      reachable: DEMO_DEPS.reachable,
+      ...(laptopHost !== undefined ? { laptopHost, preflight: () => laptopPreflight(io) } : {}),
+      reachable: laptopHost !== undefined ? () => probe(laptopHost) : DEMO_DEPS.reachable,
       run: (out, events) =>
         spawn([
           "bun",

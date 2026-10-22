@@ -305,6 +305,10 @@ and gift-card-tests, decided by content as above; and runs `lethal doctor`. Noth
 internet, so it works with the network off. Measured on 2026-10-22 it was not up
 (`/coord/handoff/R-663/measure.md`).
 
+With `--laptop` (R663b) it runs on server1 itself with no `/coord`: localhost (or
+`LETHAL_DEMO_HOST`), the login from `.lethal-demo.env` or the environment, and the cache, control
+app and bc-dev-mcp under the checkout's `.lethal-cache/`. See [talk-laptop.md](../talk-laptop.md).
+
 ## Other servers
 
 - **Cronus28 is parked** (owner, 2026-10-21). It became unreachable from the kraken container that
