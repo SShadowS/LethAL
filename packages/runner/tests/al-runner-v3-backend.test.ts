@@ -1,7 +1,7 @@
 // R586: AlRunnerV3Backend against a fake v3 and a fake alc. Plan
 // docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md, §3-§6, tests T5, T12, T21, T22,
 // T24, T28-T32 and the decoder rows of §5. Every guard has a test per direction.
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   appendFile,
   mkdir,
@@ -32,6 +32,8 @@ import {
   v3CallDeadlineMs,
   v3RowVerdict,
 } from "../src/al-runner-v3-backend";
+import type { V3ContractResult } from "../src/al-runner-v3-contract";
+import { sha256OfFile } from "../src/al-runner-v3-pin";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
@@ -369,6 +371,68 @@ describe("M8: status() refuses a package folder with no System Application", () 
     expect(s.ok).toBe(false);
     expect(s.details).not.toMatch(/system-application-not-found/);
     expect(s.details).toMatch(/al-runner-v3-ungated-build/);
+  });
+});
+
+describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and warnings", () => {
+  const VERSION = "al-runner 3.0.0-alpha.4+edge.20261022 (57f1e4f98)";
+  const versionOnly: SpawnFn = async () => ({ exitCode: 0, stdout: `${VERSION}\n`, stderr: "" });
+  const UNLIKE: V3ContractResult = {
+    facts: [
+      {
+        fact: "refusal-row-shape",
+        kind: "defect",
+        verdict: "unlike-bc",
+        expected: "x",
+        measured: "edge text",
+      },
+    ],
+  };
+  async function statusOf(candidate: boolean) {
+    const l = await layout();
+    const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+    await writeFile(
+      join(l.deps, "Microsoft_System Application.app"),
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0"?><Package ${NS}><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
+      }),
+    );
+    const bin = join(l.root, "al-runner");
+    await writeFile(bin, "binary");
+    if (!candidate) {
+      await writeFile(
+        join(l.root, ".gated"),
+        JSON.stringify({
+          version: VERSION,
+          binarySha256: await sha256OfFile(bin),
+          lethalCommit: "a".repeat(40),
+        }),
+      );
+    }
+    const b = backendOf(l, versionOnly, fakeAlc().io, {
+      alRunnerPath: bin,
+      ...(candidate ? { candidate: true } : {}),
+    });
+    // The probe itself is tested in al-runner-v3-contract.test.ts; seed its result, test the wiring.
+    (b as unknown as { contract: V3ContractResult }).contract = UNLIKE;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = await b.status();
+      return { s, warned: warn.mock.calls.map((c) => String(c[0])).join("\n") };
+    } finally {
+      warn.mockRestore();
+    }
+  }
+  test("a candidate backend warns al-runner-v3-defect-unlike-bc and runs", async () => {
+    const { s, warned } = await statusOf(true);
+    expect(s.ok).toBe(true);
+    expect(warned).toMatch(/al-runner-v3-defect-unlike-bc: refusal-row-shape/);
+  });
+  test("a non-candidate backend refuses, naming refusal-row-shape", async () => {
+    const { s, warned } = await statusOf(false);
+    expect(s.ok).toBe(false);
+    expect(s.details).toMatch(/UNLIKE-BC — refusal-row-shape/);
+    expect(warned).not.toMatch(/unlike-bc/);
   });
 });
 
