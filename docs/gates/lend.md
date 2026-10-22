@@ -101,7 +101,7 @@ A's run row and rows, with only the named field changed.
 | RN1d | KPd: unfinished pending clone with the OTHER closed tag (`public` and `public+internal` swapped) | `--resume` | it picked KPd; refused at the test app before the lease, in R601's words ("... and this session's differ"), tail `(R247, R495, R601)` |
 | RN2 | KR: unfinished clone, revoked | `--resume-run KR` | refused at the test app (`H\|closed-world:revoked`) |
 | RN4 | none | `--resume-run A` | refused: A already finished (R618 ruling 2) |
-| RP | KP: unfinished pending clone of K's shape (`H\|pending`, A's server), the newest unfinished run | `--resume` | it picked KP (R601): `resume-reusing-run` names KP, 9 carryable, 1 error row, and R601's clause; `resume-baseline-reused` names N5's run; KEPT minus its two uncovered rows carried by key; the sentinel carried from KP; R2's figures; frozen; its own run row ends exactly H (its live re-ask confirmed it); KP still `H\|pending` |
+| RP | KP: unfinished pending clone of K's shape (`H\|pending`, A's server), the newest unfinished run | `--resume` | it picked KP (R601): `resume-reusing-run` names KP, 9 carryable, 1 error row, and R601's clause; `resume-baseline-reused` names N5's run; no baseline test ran here; KEPT minus its two uncovered rows carried by key; the sentinel carried from KP; R2's figures; frozen; its own run row ends exactly H (its live re-ask confirmed it); KP still `H\|pending` |
 
 The RN legs throw before the session creates a run row and before it takes the lease. Every leg
 also checks that its own run row records H and D, so that a republish between legs cannot make a
@@ -142,9 +142,11 @@ override reads back as its source in `getRun`, `mutantVerdicts`, `priorSurvivorK
 
 A crashed closed-world run keeps `|pending`. Since [R601](../roadmap/R601.md) it is resumable on
 the same server by a session whose guard gives the same closed answer now; that session's own
-re-ask after execution confirms or revokes its run, and the pending run is never rewritten. RP pins
-the accepted case live and RN1d a pending run whose closed answer differs. The other refusals
-(the guard open now, another server, a re-ask that flips) are pinned offline in
+re-ask after execution confirms or revokes its run, and the pending run is never confirmed by it.
+Any session whose re-ask flips, fresh or resumed, also revokes every run of the project still
+pending under its identity on its server. RP pins the accepted case live and RN1d a pending run
+whose closed answer differs. No live leg flips (the fixture's answer is stable), so the revoke on a
+flip, and the other refusals (the guard open now, another server), are pinned offline in
 `tests/resume.test.ts`. A quarantined run is confirmed and stays resumable (an offline orchestrator
 test, Q1).
 
@@ -190,4 +192,6 @@ The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the off
 - 2026-10-22, R601 (built offline, not yet run live): RN1 (a pending clone, refused) becomes RN1d (a
   pending clone with the other closed tag, refused at the test app) and RP (a pending clone of K's
   shape, resumed, its own run confirmed live). No figure changes: RP reuses R2's. The live run waits
-  for the R601 lend pre-commitment (orchestrator ruling Q5).
+  for the R601 lend pre-commitment (orchestrator ruling Q5). Review fix round: RP also asserts that
+  no baseline test ran here (M-E), and a flip by any session revokes the project's pending runs on
+  its server (I-A ruling; offline only, since no leg flips).

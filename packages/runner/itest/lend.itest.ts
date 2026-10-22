@@ -656,6 +656,7 @@ async function main(): Promise<void> {
       message(rp.events, "resume-baseline-reused").includes(`same as run ${n5.runId}'s batch 0,`),
       `RP: the reused snapshot must be N5's run's (${n5.runId}), the newest confirmed owner`,
     );
+    assert.equal(ranHere(rp.events), 0, "RP: a reused baseline runs no unmutated test here (M-E)");
     assert.deepEqual(
       carriedKeys(rp.report),
       carriedInPartBatch(KEPT),

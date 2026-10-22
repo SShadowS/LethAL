@@ -207,7 +207,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   post-execution check** (R601, R620). Before, such a run (a crash, Ctrl-C, any exception after the
   lease) kept its `|pending` test-app identity and was always refused. Now it resumes when it ran
   on the same server and the closed-world guard gives the same answer now. The resumed run's own
-  check after execution confirms it, or revokes it together with the pending run it resumed. Every
+  check after execution confirms it, or revokes it. Any session whose check after execution flips,
+  fresh or resumed, also revokes every run of the project still pending under its identity on its
+  server. Every
   other case is refused in words that name the cause (the guard is open now, quoting why, or the
   answer, the test app or the server differs). **Open limits:** a server restart, or a dependent
   published and removed again, inside the gap between the crash and the resume is not seen (a
