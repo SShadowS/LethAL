@@ -1103,6 +1103,21 @@ describe("10: R612's keep rule per entry, in entry order", () => {
     await r.b.activate("M0002");
     expect(outcome(await r.b.run(ref("A"), OPTS))).toEqual(["error", "pre-dispatch-rejected"]);
   });
+
+  test("a warm-up row R612 does not keep (a baseline timeout) lets the daemon serve one request, then closes it", async () => {
+    // B times out under NONE, in the one-shot baseline and in the warm-up alike, so they agree.
+    const rows: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S }
+          : x,
+      );
+    const r = await readyRig({ serve: { rows }, mutants: ["M0001"] });
+    expect(r.serve.requests.map((q) => q.daemon)).toEqual([0, 0]);
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS);
+    expect(r.serve.daemons).toHaveLength(2);
+  });
 });
 
 describe("11, 20: a refusal of the whole request names its reason and re-sends nothing", () => {
