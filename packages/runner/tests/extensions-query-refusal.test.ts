@@ -12,6 +12,7 @@ import {
 import { PermissionCanaryClient, runPermissionCanary } from "../src/permission-canary";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
+import { UNREAD } from "./helpers/unread";
 
 /**
  * R433 / R-385 T0: BC's automation `extensions` list, asked for every row (no `$filter`) or
@@ -303,7 +304,7 @@ describe("R496: the fingerprint's installed checks are per-app filtered reads on
     buildInputs: "",
   };
   const read = async (dep: { readonly id: string }) =>
-    dep.id === A.id ? [pkg(A, B)] : dep.id === B.id ? [pkg(B)] : null;
+    dep.id === A.id ? [pkg(A, B)] : dep.id === B.id ? [pkg(B)] : UNREAD;
   /** A server whose extensions endpoint answers the filtered id with one installed 1.0.0.0 row. */
   function server() {
     const urls: string[] = [];
@@ -484,7 +485,8 @@ describe("R-496 review: no BC request follows a redirect (bc-fetch's refuseRedir
     expect(String(err)).toContain("HTTP 302");
     expect(String(err)).toContain(harmless);
     expect(urls).toHaveLength(1);
-    // Through the callers: HarnessInfo fails as a transport error, the package read as "unreadable".
+    // Through the callers: HarnessInfo fails as a transport error, the package read as unread,
+    // naming the refused redirect (R630).
     const viaHarness = autoFollowing(303, harmless);
     await expect(
       new HarnessVerifier(CFG, viaHarness.fetchFn).checkReachable(),
@@ -493,7 +495,7 @@ describe("R-496 review: no BC request follows a redirect (bc-fetch's refuseRedir
     const viaDev = autoFollowing(302, harmless);
     expect(
       await new BcDevMcpBackend(BCDEV_CFG).fetchPublishedAppPackage(APP, viaDev.fetchFn),
-    ).toBeNull();
+    ).toEqual({ unread: "a redirect was refused (LethAL never follows one from BC)" });
     expect(viaDev.urls).toHaveLength(1);
   });
 

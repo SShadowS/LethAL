@@ -31,7 +31,13 @@ import {
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
 } from "@lethal/schemata";
-import type { TestMethodRef, TestVerdict } from "./backend";
+import {
+  type PackageUnread,
+  type PublishedPackageRead,
+  type TestMethodRef,
+  type TestVerdict,
+  isUnread,
+} from "./backend";
 import {
   type LinkPolicy,
   ProjectSymlinkRefusedError,
@@ -211,18 +217,21 @@ export function hashPackage(bytes: Uint8Array): string {
  * The test app's identity for the snapshot key. The published package when the backend can read
  * it (bcdev), else the test project's own `.al` tree (al-runner compiles the test bundle itself, so
  * the source IS what runs). `undefined` when neither can be established, which means "do not
- * reuse": an unknown test app is not an unchanged one.
+ * reuse": an unknown test app is not an unchanged one. R630: a failed package read is returned AS
+ * ITSELF (`{ unread }`), so a refusal can name its cause; it is never a hash.
  */
 export async function testAppHashFor(
-  fetchPackage: (() => Promise<Uint8Array | null | undefined>) | undefined,
+  fetchPackage: (() => Promise<PublishedPackageRead>) | undefined,
   testDir: string,
   /** R631: only a test forces `"skip"`; a skipped link still makes the answer `undefined`. */
   links: LinkPolicy = "refuse",
-): Promise<string | undefined> {
+): Promise<string | PackageUnread | undefined> {
   if (fetchPackage !== undefined) {
     const bytes = await fetchPackage();
     if (bytes instanceof Uint8Array) return `package:${hashPackage(bytes)}`;
-    if (bytes === null) return undefined; // the read failed; not the same as "no package concept"
+    // R630 review I1: explicit, before the fall-through below. The read failed, which is not the
+    // same as "no package concept", and must never become the source tree's hash.
+    if (isUnread(bytes)) return bytes;
     // `undefined`: the backend cannot form the request (env-tool path). Fall through to source.
   }
   try {
