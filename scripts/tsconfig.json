@@ -129,6 +129,13 @@
     "report-diff.ts",
     "report-diff.test.ts",
     "store-query.ts",
-    "store-query.test.ts"
+    "store-query.test.ts",
+    "bc-linux-setup.ts",
+    "bc-linux-setup.test.ts",
+    "bc-republish.ts",
+    "bc-republish.test.ts",
+    "r594/cdo-publish.ts",
+    "bc-symbol-cache.ts",
+    "bc-symbol-cache.test.ts"
   ]
 }
