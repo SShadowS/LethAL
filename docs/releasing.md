@@ -132,20 +132,28 @@ checkout's `extensions/lethal-control/.alpackages` unless `--package-cache` name
 1. Refuses unless the latest `ci.yml` run on `<sha>` succeeded, with jobs `check` and `unit-linux`.
 2. Refuses if tag `v<version>` exists (local or origin) or a release for it exists. `--version`
    defaults to the next prerelease of `<sha>`'s package.json version.
-3. Runs a `release.yml` workflow_dispatch trial on exactly `<sha>`: it pushes a throwaway branch
+3. Builds `lethal-control.app` from `<sha>` in a temporary worktree, before anything is pushed. Its
+   manifest must name LethAL Control, equal its `app.json` version, and be at least the script's
+   `MIN_CONTROL`.
+4. Runs a `release.yml` workflow_dispatch trial on exactly `<sha>`: it pushes a throwaway branch
    `release-trial/<sha12>`, dispatches on it, waits (60 min at most), refuses unless the run is
    green, and deletes the branch. A dispatch never creates a release. The trial uses the workflow
-   file at `<sha>`.
-4. Builds the bump commit in a temporary worktree: package.json `version` (a one-line diff) and
+   file at `<sha>`, so a `<sha>` without R662's `release.yml` fix (the parse expectation read from
+   `scripts/native-parse-expect.txt`) fails the trial at the parse step.
+5. Builds the bump commit in that worktree: package.json `version` (a one-line diff) and
    CHANGELOG.md's `[Unreleased]` cut into `[<version>] — <date>`. An empty Unreleased is refused
-   unless `--notes <file>` gives the section. The commit's only parent is `<sha>`.
-5. Pushes it to a NEW branch `release/v<version>`, never to master. The owner merges it.
-6. Tags it `v<version>` (annotated) and pushes the tag, which starts `release.yml`.
-7. Waits for that run, then requires a DRAFT release for the tag.
-8. Builds `lethal-control.app`, requires its manifest version to equal its `app.json` and to be at
-   least the script's `MIN_CONTROL`, uploads it, and appends one line with its version and sha256
-   to the draft's body.
-9. Prints the draft URL.
+   unless `--notes <file>` gives the section. So is a section that would not fit a GitHub release
+   body (`RELEASE_BODY_LIMIT`, 125,000 characters, less a margin for release.yml's footer, the
+   control-app line and the generated notes). The commit's only parent is `<sha>`. The trial cannot
+   catch an oversized body: `publish` runs only on a tag push, never on a dispatch, so without this
+   check `publish` would fail after the tag is already pushed.
+6. Pushes it to a NEW branch `release/v<version>`, never to master. The owner merges it.
+7. Tags it `v<version>` (annotated) and pushes the tag, which starts `release.yml`.
+8. Waits for that run (matched by commit sha, or by the tag as its branch), then requires a DRAFT
+   release for the tag.
+9. Uploads the control app from step 3 and appends one line with its version and sha256 to the
+   draft's body.
+10. Prints the draft URL.
 
 What it does NOT do: publish the release (that is the owner's click), touch any release that is
 not a draft or not its own tag, push to master, or wait for CI on the bump commit. `--dry-run` runs

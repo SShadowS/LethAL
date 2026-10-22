@@ -9,24 +9,25 @@
  *   1. CI is green on <sha>: the latest `ci.yml` run for that exact head sha succeeded, with both
  *      jobs `check` and `unit-linux` successful.
  *   2. No tag `v<version>` (local or origin) and no release for it exists.
- *   3. A `release.yml` workflow_dispatch TRIAL on exactly <sha> is green. A dispatch takes a ref,
+ *   3. `lethal-control.app` is built from <sha> with alc (`$LETHAL_ALC_DIR/alc`, the container's
+ *      build path, as `kraken-setup.sh` does it) in a temporary detached worktree. Its manifest
+ *      must name LethAL Control, equal its app.json's version, and be at least 1.0.0.23.
+ *   4. A `release.yml` workflow_dispatch TRIAL on exactly <sha> is green. A dispatch takes a ref,
  *      not a sha, so a throwaway branch `release-trial/<sha12>` is pushed at <sha>, dispatched,
  *      found by head sha, waited for, and deleted. A dispatch never creates a release: `publish`
  *      runs only on a pushed `v*` tag. The trial uses the workflow file AT <sha>.
- *   4. The bump commit, built in a temporary detached worktree: root package.json `version` (a
- *      one-line diff), and CHANGELOG.md's `[Unreleased]` becomes `[<version>] — <date>` under a
- *      fresh empty `[Unreleased]`. An empty Unreleased is refused unless `--notes <file>` gives
- *      the section. Its only parent is <sha>. `changelog-section.ts v<version>` must print a
- *      non-empty section from the new tree.
- *   5. The bump commit is pushed to a NEW branch `release/v<version>`, never to master. The owner
+ *   5. The bump commit, in the same worktree: root package.json `version` (a one-line diff), and
+ *      CHANGELOG.md's `[Unreleased]` becomes `[<version>] — <date>` under a fresh empty
+ *      `[Unreleased]`. An empty Unreleased is refused unless `--notes <file>` gives the section,
+ *      and so is a section too long for a GitHub release body. Its only parent is <sha>.
+ *      `changelog-section.ts v<version>` must print a non-empty section from the new tree.
+ *   6. The bump commit is pushed to a NEW branch `release/v<version>`, never to master. The owner
  *      merges it afterwards. There is no CI wait on it.
- *   6. Annotated tag `v<version>` on the bump commit, pushed.
- *   7. `release.yml`'s run for the tag is waited for, then the release must be a draft for the tag.
- *   8. `lethal-control.app` is built with alc (`$LETHAL_ALC_DIR/alc`, the container's build path,
- *      as `kraken-setup.sh` does it), its manifest version must equal its app.json's and be at
- *      least 1.0.0.23. It is uploaded to the draft, and one line naming its version and sha256 is
+ *   7. Annotated tag `v<version>` on the bump commit, pushed.
+ *   8. `release.yml`'s run for the tag is waited for, then the release must be a draft for the tag.
+ *   9. The control app is uploaded to the draft, and one line naming its version and sha256 is
  *      appended to the draft's body. `isDraft` is re-checked before each mutating gh call.
- *   9. The draft URL, and a reminder that publishing is the owner's click.
+ *  10. The draft URL, and a reminder that publishing is the owner's click.
  *
  * `--dry-run` runs every read-only check for real and replaces every mutating call (commit, tag,
  * push, dispatch, upload, edit) with a log line. It still makes and removes the temporary worktree
@@ -82,6 +83,14 @@ export class CommandFailedError extends Error {}
 export const MIN_CONTROL = "1.0.0.23";
 export const WAIT_TIMEOUT_MS = 60 * 60_000;
 export const POLL_MS = 30_000;
+/** GitHub's limit on a release body, in characters. */
+export const RELEASE_BODY_LIMIT = 125_000;
+/**
+ * What `publish` adds to the changelog section: release.yml's footer (about 1,250 characters with
+ * the longer signing sentence, counted 2026-10-22), the control-app line talk-cut appends (about
+ * 130), and GitHub's generated commit list (about 5,000, a guess).
+ */
+export const RELEASE_BODY_MARGIN = 1_500 + 200 + 5_000;
 const CI_JOBS = ["check", "unit-linux"] as const;
 const SHA = /^[0-9a-f]{40}$/;
 const SEMVER =
@@ -97,6 +106,49 @@ export function isMutating(cmd: string, args: readonly string[]): boolean {
     return (a === "release" && b !== "list" && b !== "view") || (a === "workflow" && b === "run");
   }
   return false;
+}
+
+/**
+ * A git push may only be `push origin <src>:<dest>` with dest one of the three refs talk-cut owns,
+ * or `push origin --delete <trial branch>`. Anything else (master, another remote, --all) throws.
+ */
+export function assertPushTarget(args: readonly string[], tag: string, trialBranch: string): void {
+  const at = args.indexOf("push");
+  const rest = args.slice(at + 1);
+  const trialRef = `refs/heads/${trialBranch}`;
+  const allowed = [`refs/heads/release/${tag}`, `refs/tags/${tag}`, trialRef];
+  const [remote, a, b] = rest;
+  const ok =
+    at >= 0 &&
+    remote === "origin" &&
+    ((rest.length === 2 &&
+      a !== undefined &&
+      a.includes(":") &&
+      allowed.includes(a.slice(a.indexOf(":") + 1))) ||
+      (rest.length === 3 && a === "--delete" && b === trialRef));
+  if (!ok) throw new Error(`internal: refusing to push ${args.join(" ")}`);
+}
+
+/** A dispatch may only be `workflow run release.yml --ref <trial branch>`: never a tag or master. */
+export function assertTrialRef(args: readonly string[], trialBranch: string): void {
+  const ok =
+    args.length === 5 &&
+    args[0] === "workflow" &&
+    args[1] === "run" &&
+    args[2] === "release.yml" &&
+    args[3] === "--ref" &&
+    args[4] === trialBranch;
+  if (!ok) throw new Error(`internal: refusing to dispatch ${args.join(" ")}`);
+}
+
+/** Refuses a changelog section that, with what `publish` adds, would not fit a release body. */
+export function checkReleaseBodySize(section: string): void {
+  const total = section.length + RELEASE_BODY_MARGIN;
+  if (total > RELEASE_BODY_LIMIT) {
+    throw new TalkCutRefusedError(
+      `the release body would be about ${total} characters (changelog section ${section.length} + margin ${RELEASE_BODY_MARGIN}), over GitHub's ${RELEASE_BODY_LIMIT} limit: shorten [Unreleased] on master, or see R662`,
+    );
+  }
 }
 
 /** 0.1.0-alpha.3 -> 0.1.0-alpha.4. Refuses a version with no numeric prerelease tail. */
@@ -188,6 +240,7 @@ interface Run {
   status: string;
   conclusion: string;
   headSha: string;
+  headBranch?: string;
   createdAt: string;
   url?: string;
 }
@@ -206,37 +259,21 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
   if (!SHA.test(o.sha)) refuse(`${o.sha} is not a full 40-hex sha`);
   const sha = o.sha;
   const sha12 = sha.slice(0, 12);
+  const trialBranch = `release-trial/${sha12}`;
+  let tag = "";
   const git = (args: readonly string[], cwd = o.repo) => must(d, "git", args, cwd);
 
   /** Mutating calls go through here only: a log line under --dry-run. */
   const mutate = (cmd: string, args: readonly string[], cwd = o.repo): string => {
     if (!isMutating(cmd, args))
       throw new Error(`internal: ${cmd} ${args.join(" ")} is not mutating`);
-    if (cmd === "git" && args.includes("push")) assertPushTarget(args);
-    if (cmd === "gh" && args[0] === "workflow") assertTrialRef(args);
+    if (cmd === "git" && args.includes("push")) assertPushTarget(args, tag, trialBranch);
+    if (cmd === "gh" && args[0] === "workflow") assertTrialRef(args, trialBranch);
     if (o.dryRun) {
       d.log(`  dry-run: would run ${cmd} ${args.join(" ")}`);
       return "";
     }
     return must(d, cmd, args, cwd);
-  };
-  const trialBranch = `release-trial/${sha12}`;
-  let tag = "";
-  /** Every push names one of the three refs this script owns, never master or anything else. */
-  const assertPushTarget = (args: readonly string[]): void => {
-    const spec = args.at(-1) ?? "";
-    const dest = spec.includes(":") ? spec.slice(spec.indexOf(":") + 1) : spec;
-    const allowed = [`refs/heads/release/${tag}`, `refs/tags/${tag}`, `refs/heads/${trialBranch}`];
-    if (args[args.indexOf("push") + 1] !== "origin" || !allowed.includes(dest)) {
-      throw new Error(`internal: refusing to push ${args.join(" ")}`);
-    }
-  };
-  /** A dispatch with a v* ref could look like a tag push; the trial ref is the trial branch only. */
-  const assertTrialRef = (args: readonly string[]): void => {
-    const ref = args[args.indexOf("--ref") + 1] ?? "";
-    if (ref !== trialBranch || ref.startsWith("v") || ref.startsWith("refs/tags/")) {
-      throw new Error(`internal: refusing to dispatch on ref ${ref}`);
-    }
   };
 
   // 1. CI green on <sha>.
@@ -285,7 +322,7 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
       else if (job.conclusion !== "success")
         refuse(`ci.yml run ${latest.databaseId} job ${name} concluded ${job.conclusion}`);
     }
-    d.log(`[1/9] CI green on ${sha}: ci.yml run ${latest.databaseId}, jobs ${CI_JOBS.join(", ")}`);
+    d.log(`[1/10] CI green on ${sha}: ci.yml run ${latest.databaseId}, jobs ${CI_JOBS.join(", ")}`);
   }
 
   const current = (JSON.parse(git(["show", `${sha}:package.json`])) as { version: string }).version;
@@ -311,47 +348,82 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
   const clash = releases.find((r) => r.tagName === tag);
   if (clash !== undefined)
     refuse(`a release for ${tag} exists (draft: ${clash.isDraft}); it is left untouched`);
-  d.log(`[2/9] ${tag} is free: no local or origin tag, no release (${current} -> ${version})`);
+  d.log(`[2/10] ${tag} is free: no local or origin tag, no release (${current} -> ${version})`);
 
-  // 3. release.yml trial on exactly <sha>.
-  if (git(["ls-remote", "--heads", "origin", `refs/heads/${trialBranch}`]).trim() !== "") {
-    refuse(`branch ${trialBranch} exists on origin: a trial is running or was left behind`);
-  }
-  const trialRuns = () =>
-    listRuns(d, o.repo, [
-      "--workflow",
-      "release.yml",
-      "--event",
-      "workflow_dispatch",
-      "--commit",
-      sha,
-    ]);
-  const dispatchedBefore = new Set(trialRuns().map((r) => r.databaseId));
-  mutate("git", ["push", "origin", `${sha}:refs/heads/${trialBranch}`]);
-  try {
-    mutate("gh", ["workflow", "run", "release.yml", "--ref", trialBranch]);
-    if (o.dryRun) d.log(`[3/9] dry-run: would wait for the release.yml trial on ${trialBranch}`);
-    else {
-      const trial = await waitForRun(d, "release.yml trial", () =>
-        trialRuns().find((r) => r.headSha === sha && !dispatchedBefore.has(r.databaseId)),
-      );
-      d.log(`[3/9] release.yml trial green on ${sha}: run ${trial.databaseId}`);
-    }
-  } finally {
-    mutate("git", ["push", "origin", "--delete", `refs/heads/${trialBranch}`]);
-  }
-
-  // 4. Bump commit, in a temporary worktree.
   const tmp = d.tempDir();
   const wt = join(tmp, "tree");
-  git(["worktree", "add", "--detach", wt, sha]);
+  let added = false;
   try {
+    git(["worktree", "add", "--detach", wt, sha]);
+    added = true;
+
+    // 3. Control app, built from <sha> before anything is pushed.
+    const ctl = join(wt, "extensions", "lethal-control");
+    const app = join(tmp, "lethal-control.app");
+    must(
+      d,
+      join(o.alcDir, "alc"),
+      [`/project:${ctl}`, `/packagecachepath:${o.packageCache}`, `/out:${app}`],
+      wt,
+    );
+    const bytes = d.readBytes(app);
+    const id = readAppIdentity(Buffer.from(bytes));
+    const declared = (
+      JSON.parse(d.readText(join(ctl, "app.json")).replace(BOM, "")) as { version: string }
+    ).version;
+    if (id.name !== "LethAL Control") refuse(`built app is ${id.name}, not LethAL Control`);
+    if (id.version !== declared)
+      refuse(`built control app is ${id.version}, app.json says ${declared}`);
+    if (compareAppVersion(id.version, MIN_CONTROL) < 0)
+      refuse(`control app ${id.version} is below ${MIN_CONTROL}`);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    d.log(`[3/10] control app ${id.version} built from ${sha} (sha256 ${sha256})`);
+
+    // 4. release.yml trial on exactly <sha>.
+    if (git(["ls-remote", "--heads", "origin", `refs/heads/${trialBranch}`]).trim() !== "") {
+      refuse(`branch ${trialBranch} exists on origin: a trial is running or was left behind`);
+    }
+    const trialRuns = () =>
+      listRuns(d, o.repo, [
+        "--workflow",
+        "release.yml",
+        "--event",
+        "workflow_dispatch",
+        "--commit",
+        sha,
+      ]);
+    const dispatchedBefore = new Set(trialRuns().map((r) => r.databaseId));
+    mutate("git", ["push", "origin", `${sha}:refs/heads/${trialBranch}`]);
+    try {
+      mutate("gh", ["workflow", "run", "release.yml", "--ref", trialBranch]);
+      if (o.dryRun) d.log(`[4/10] dry-run: would wait for the release.yml trial on ${trialBranch}`);
+      else {
+        const trial = await waitForRun(d, "release.yml trial", () =>
+          trialRuns().find((r) => r.headSha === sha && !dispatchedBefore.has(r.databaseId)),
+        );
+        d.log(`[4/10] release.yml trial green on ${sha}: run ${trial.databaseId}`);
+      }
+    } finally {
+      // A failed delete must not hide why the trial stopped; it is logged by name instead.
+      try {
+        mutate("git", ["push", "origin", "--delete", `refs/heads/${trialBranch}`]);
+      } catch (e) {
+        d.log(
+          `  could not delete trial branch ${trialBranch} on origin: ${e instanceof Error ? e.message : String(e)}. Delete it by hand.`,
+        );
+      }
+    }
+
+    // 5. Bump commit, in the same worktree.
     const pkgPath = join(wt, "package.json");
     d.writeText(pkgPath, bumpPackageJson(d.readText(pkgPath), current, version));
     const clPath = join(wt, "CHANGELOG.md");
     const date = d.now().toISOString().slice(0, 10);
     const notes = o.notes === undefined ? undefined : d.readText(o.notes);
-    d.writeText(clPath, cutChangelog(d.readText(clPath), version, date, notes));
+    const changelog = cutChangelog(d.readText(clPath), version, date, notes);
+    // The release body is this section; a later body-file option would check its own text here.
+    checkReleaseBodySize(sectionFor(changelog, version) ?? "");
+    d.writeText(clPath, changelog);
     let bump = "(dry-run)";
     mutate("git", [
       "-C",
@@ -380,10 +452,10 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
     if (section.code !== 0 || section.stdout.trim() === "")
       refuse(`changelog-section.ts ${tag} printed no section: ${section.stderr.trim()}`);
     d.log(
-      `[4/9] bump commit ${bump} on ${sha}: package.json ${version}, CHANGELOG [${version}] — ${date}`,
+      `[5/10] bump commit ${bump} on ${sha}: package.json ${version}, CHANGELOG [${version}] — ${date}`,
     );
 
-    // 5. Push the bump to a new branch.
+    // 6. Push the bump to a new branch.
     const branch = `release/${tag}`;
     if (
       d.run("git", ["rev-parse", "-q", "--verify", `refs/heads/${branch}`], { cwd: o.repo })
@@ -393,14 +465,14 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
     if (git(["ls-remote", "--heads", "origin", `refs/heads/${branch}`]).trim() !== "")
       refuse(`branch ${branch} exists on origin`);
     mutate("git", ["-C", wt, "push", "origin", `HEAD:refs/heads/${branch}`]);
-    d.log(`[5/9] pushed ${bump} to ${branch} (not master: the owner merges it)`);
+    d.log(`[6/10] pushed ${bump} to ${branch} (not master: the owner merges it)`);
 
-    // 6. Tag.
+    // 7. Tag.
     mutate("git", ["-C", wt, "tag", "-a", tag, "-m", tag, "HEAD"]);
     mutate("git", ["-C", wt, "push", "origin", `refs/tags/${tag}:refs/tags/${tag}`]);
-    d.log(`[6/9] tagged ${bump} ${tag} and pushed it`);
+    d.log(`[7/10] tagged ${bump} ${tag} and pushed it`);
 
-    // 7. release.yml for the tag, then the draft.
+    // 8. release.yml for the tag, then the draft.
     const draft = async (): Promise<Release> => {
       const r = json<Release>(
         d,
@@ -414,37 +486,19 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
     };
     let url: string | null = null;
     if (o.dryRun)
-      d.log(`[7/9] dry-run: would wait for release.yml on ${tag}, then require a draft`);
+      d.log(`[8/10] dry-run: would wait for release.yml on ${tag}, then require a draft`);
     else {
+      // A tag push may report the commit or the tag object as its head sha; the branch is the tag.
       const run = await waitForRun(d, `release.yml on ${tag}`, () =>
         listRuns(d, o.repo, ["--workflow", "release.yml", "--branch", tag]).find(
-          (r) => r.headSha === bump,
+          (r) => r.headSha === bump || r.headBranch === tag,
         ),
       );
       url = (await draft()).url;
-      d.log(`[7/9] release.yml run ${run.databaseId} green; draft ${url}`);
+      d.log(`[8/10] release.yml run ${run.databaseId} green; draft ${url}`);
     }
 
-    // 8. Control app.
-    const ctl = join(wt, "extensions", "lethal-control");
-    const app = join(tmp, "lethal-control.app");
-    must(
-      d,
-      join(o.alcDir, "alc"),
-      [`/project:${ctl}`, `/packagecachepath:${o.packageCache}`, `/out:${app}`],
-      wt,
-    );
-    const bytes = d.readBytes(app);
-    const id = readAppIdentity(Buffer.from(bytes));
-    const declared = (
-      JSON.parse(d.readText(join(ctl, "app.json")).replace(BOM, "")) as { version: string }
-    ).version;
-    if (id.name !== "LethAL Control") refuse(`built app is ${id.name}, not LethAL Control`);
-    if (id.version !== declared)
-      refuse(`built control app is ${id.version}, app.json says ${declared}`);
-    if (compareAppVersion(id.version, MIN_CONTROL) < 0)
-      refuse(`control app ${id.version} is below ${MIN_CONTROL}`);
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    // 9. Attach the control app built in step 3.
     if (!o.dryRun) await draft();
     mutate("gh", ["release", "upload", tag, app]);
     const line = `**lethal-control.app:** LethAL Control ${id.version}, sha256 \`${sha256}\`.`;
@@ -454,15 +508,15 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
       await draft();
     }
     mutate("gh", ["release", "edit", tag, "--notes-file", notesFile]);
-    d.log(`[8/9] control app ${id.version} (sha256 ${sha256}) attached, body line appended`);
+    d.log(`[9/10] control app ${id.version} attached, body line appended`);
 
-    // 9.
+    // 10.
     d.log(
-      `[9/9] draft: ${url ?? "(dry-run, none)"}. Publishing it is the owner's click; this script never publishes.`,
+      `[10/10] draft: ${url ?? "(dry-run, none)"}. Publishing it is the owner's click; this script never publishes.`,
     );
     return { url };
   } finally {
-    d.run("git", ["worktree", "remove", "--force", wt], { cwd: o.repo });
+    if (added) d.run("git", ["worktree", "remove", "--force", wt], { cwd: o.repo });
     d.removeDir(tmp);
   }
 }
@@ -478,7 +532,7 @@ function listRuns(d: Deps, repo: string, filter: readonly string[]): Run[] {
       "--limit",
       "50",
       "--json",
-      "databaseId,status,conclusion,headSha,createdAt,url",
+      "databaseId,status,conclusion,headSha,headBranch,createdAt,url",
     ],
     repo,
   );

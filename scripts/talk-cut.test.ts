@@ -5,10 +5,15 @@ import {
   type Deps,
   type Options,
   POLL_MS,
+  RELEASE_BODY_LIMIT,
+  RELEASE_BODY_MARGIN,
   type RunResult,
   TalkCutRefusedError,
   WAIT_TIMEOUT_MS,
+  assertPushTarget,
+  assertTrialRef,
   bumpPackageJson,
+  checkReleaseBodySize,
   compareAppVersion,
   emptyUnreleasedHint,
   nextPrerelease,
@@ -60,6 +65,7 @@ interface Run {
   status: string;
   conclusion: string;
   headSha: string;
+  headBranch?: string;
   createdAt: string;
 }
 interface Release {
@@ -98,6 +104,10 @@ class World {
   trialCompletes = true;
   releaseConclusion = "success";
   releaseIsDraft = true;
+  /** The head sha the tag's release.yml run reports (GitHub may give the tag object's). */
+  releaseRunSha = BUMP;
+  deleteFails = false;
+  worktreeAddFails = false;
   parent = SHA;
   appVersion = "1.0.0.23";
   appName = "LethAL Control";
@@ -155,6 +165,7 @@ class World {
       if (args[0] === "ls-remote")
         return ok(this.originRefs.has(args[3] ?? "") ? `x\t${args[3]}\n` : "");
       if (args[0] === "push" && args[2] === "--delete") {
+        if (this.deleteFails) return no;
         this.originRefs.delete(args[3] ?? "");
         return ok();
       }
@@ -168,7 +179,8 @@ class World {
             databaseId: 700,
             status: "completed",
             conclusion: this.releaseConclusion,
-            headSha: BUMP,
+            headSha: this.releaseRunSha,
+            headBranch: tag,
             createdAt: "z",
           });
           this.releases.push({
@@ -181,6 +193,7 @@ class World {
         return ok();
       }
       if (args[0] === "worktree" && args[1] === "add") {
+        if (this.worktreeAddFails) return no;
         this.files.set(`${WT}/package.json`, PKG);
         this.files.set(`${WT}/CHANGELOG.md`, this.changelog);
         this.files.set(`${WT}/extensions/lethal-control/app.json`, appJson(this.declaredVersion));
@@ -288,7 +301,7 @@ describe("talk-cut happy path", () => {
     const w = new World();
     const { url } = await talkCut(opts(), w.deps());
     expect(url).toBe(`https://x/${TAG}`);
-    const fields = "databaseId,status,conclusion,headSha,createdAt,url";
+    const fields = "databaseId,status,conclusion,headSha,headBranch,createdAt,url";
     expect(w.calls).toEqual([
       `git cat-file -e ${SHA}^{commit}`,
       `gh api repos/{owner}/{repo}/commits/${SHA} --jq .sha`,
@@ -298,13 +311,14 @@ describe("talk-cut happy path", () => {
       `git rev-parse -q --verify refs/tags/${TAG}`,
       `git ls-remote --tags origin refs/tags/${TAG}`,
       "gh release list --limit 1000 --json tagName,isDraft",
+      `git worktree add --detach ${WT} ${SHA}`,
+      `/alc/alc /project:${WT}/extensions/lethal-control /packagecachepath:/cache /out:${TMP}/lethal-control.app`,
       `git ls-remote --heads origin refs/heads/${TRIAL}`,
       `gh run list --workflow release.yml --event workflow_dispatch --commit ${SHA} --limit 50 --json ${fields}`,
       `git push origin ${SHA}:refs/heads/${TRIAL}`,
       `gh workflow run release.yml --ref ${TRIAL}`,
       `gh run list --workflow release.yml --event workflow_dispatch --commit ${SHA} --limit 50 --json ${fields}`,
       `git push origin --delete refs/heads/${TRIAL}`,
-      `git worktree add --detach ${WT} ${SHA}`,
       `git -C ${WT} commit -q -m release: ${TAG}\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com> -- package.json CHANGELOG.md`,
       "git rev-parse HEAD",
       "git rev-list --parents -n 1 HEAD",
@@ -317,7 +331,6 @@ describe("talk-cut happy path", () => {
       `git -C ${WT} push origin refs/tags/${TAG}:refs/tags/${TAG}`,
       `gh run list --workflow release.yml --branch ${TAG} --limit 50 --json ${fields}`,
       `gh release view ${TAG} --json tagName,isDraft,url,body`,
-      `/alc/alc /project:${WT}/extensions/lethal-control /packagecachepath:/cache /out:${TMP}/lethal-control.app`,
       `gh release view ${TAG} --json tagName,isDraft,url,body`,
       `gh release upload ${TAG} ${TMP}/lethal-control.app`,
       `gh release view ${TAG} --json tagName,isDraft,url,body`,
@@ -343,7 +356,7 @@ describe("talk-cut happy path", () => {
     );
     expect(w.uploads).toEqual([`${TMP}/lethal-control.app`]);
     expect(w.originRefs.has(`refs/heads/${TRIAL}`)).toBe(false); // the trial branch is gone
-    expect(w.logs.filter((l) => /^\[\d\/9\]/.test(l))).toHaveLength(9);
+    expect(w.logs.filter((l) => /^\[\d+\/10\]/.test(l))).toHaveLength(10);
     // The alpha.3 draft was never touched.
     expect(w.releases[0]).toEqual({
       tagName: "v0.1.0-alpha.3",
@@ -393,7 +406,7 @@ describe("talk-cut happy path", () => {
       "gh release",
       "gh release",
     ]);
-    expect(w.logs.filter((l) => /^\[\d\/9\]/.test(l))).toHaveLength(9);
+    expect(w.logs.filter((l) => /^\[\d+\/10\]/.test(l))).toHaveLength(10);
   });
 });
 
@@ -474,7 +487,8 @@ describe("talk-cut refusals", () => {
     w.trialConclusion = "failure";
     expect(await refusal(w)).toContain("trial: run 500 concluded failure");
     expect(w.originRefs.has(`refs/heads/${TRIAL}`)).toBe(false);
-    expect(w.calls.some((c) => c.includes("worktree add"))).toBe(false);
+    expect(w.calls.some((c) => c.includes(" commit "))).toBe(false);
+    expect(w.calls.at(-1)).toBe(`rmdir ${TMP}`);
   });
 
   test("a trial that never completes times out, and the branch is still deleted", async () => {
@@ -539,18 +553,100 @@ describe("talk-cut refusals", () => {
     expect(w.uploads).toEqual([]);
   });
 
-  test("a control app below 1.0.0.23 is refused, and nothing is uploaded", async () => {
+  test("a control app below 1.0.0.23 is refused before anything is pushed", async () => {
     const w = new World();
     w.appVersion = "1.0.0.22";
     w.declaredVersion = "1.0.0.22";
     expect(await refusal(w)).toContain("below 1.0.0.23");
-    expect(w.uploads).toEqual([]);
+    expect(w.mutating()).toEqual([]);
   });
 
-  test("a control app whose manifest disagrees with app.json is refused", async () => {
+  test("a control app whose manifest disagrees with app.json is refused before any push", async () => {
     const w = new World();
     w.appVersion = "1.0.0.24";
     expect(await refusal(w)).toContain("app.json says 1.0.0.23");
+    expect(w.mutating()).toEqual([]);
+  });
+
+  test("a built app that is not LethAL Control is refused before any push", async () => {
+    const w = new World();
+    w.appName = "Something Else";
+    expect(await refusal(w)).toContain("not LethAL Control");
+    expect(w.mutating()).toEqual([]);
+  });
+
+  test("a changelog section too long for a release body is refused before any push", async () => {
+    const w = new World();
+    const big = `- ${"x".repeat(RELEASE_BODY_LIMIT)}\n`;
+    w.changelog = CHANGELOG.replace("- a thing (R1)\n", big);
+    const m = await refusal(w);
+    expect(m).toContain(`over GitHub's ${RELEASE_BODY_LIMIT} limit`);
+    expect(m).toContain("shorten [Unreleased] on master, or see R662");
+    expect(w.pushDests().filter((d) => d !== `refs/heads/${TRIAL}`)).toEqual([]);
+    expect(w.calls.some((c) => c.includes(" commit "))).toBe(false);
+  });
+
+  test("a failed trial-branch delete is logged by name, and the trial's own error goes through", async () => {
+    const w = new World();
+    w.trialConclusion = "failure";
+    w.deleteFails = true;
+    expect(await refusal(w)).toContain("trial: run 500 concluded failure");
+    expect(w.logs.some((l) => l.includes(`could not delete trial branch ${TRIAL}`))).toBe(true);
+  });
+
+  test("the temp dir is removed even when git worktree add fails", async () => {
+    const w = new World();
+    w.worktreeAddFails = true;
+    await expect(talkCut(opts(), w.deps())).rejects.toThrow("worktree add");
+    expect(w.calls.at(-1)).toBe(`rmdir ${TMP}`);
+    expect(w.calls.some((c) => c.startsWith("git worktree remove"))).toBe(false);
+  });
+
+  test("the tag's release.yml run is found by its branch when its head sha is the tag object", async () => {
+    const w = new World();
+    w.releaseRunSha = "d".repeat(40);
+    const { url } = await talkCut(opts(), w.deps());
+    expect(url).toBe(`https://x/${TAG}`);
+    expect(w.uploads).toHaveLength(1);
+  });
+});
+
+describe("talk-cut push and dispatch guards", () => {
+  const T = TAG;
+  const bad: [string, string[]][] = [
+    ["HEAD:refs/heads/master", ["push", "origin", "HEAD:refs/heads/master"]],
+    ["HEAD:master", ["push", "origin", "HEAD:master"]],
+    ["master", ["push", "origin", "master"]],
+    ["another remote", ["push", "upstream", `HEAD:refs/heads/release/${T}`]],
+    ["--all", ["push", "origin", "--all"]],
+    ["deleting another branch", ["push", "origin", "--delete", "refs/heads/master"]],
+  ];
+  for (const [name, args] of bad) {
+    test(`push ${name} throws`, () => {
+      expect(() => assertPushTarget(args, T, TRIAL)).toThrow("refusing to push");
+    });
+  }
+  test("the four legitimate pushes are accepted", () => {
+    for (const args of [
+      ["push", "origin", `${SHA}:refs/heads/${TRIAL}`],
+      ["push", "origin", "--delete", `refs/heads/${TRIAL}`],
+      ["-C", WT, "push", "origin", `HEAD:refs/heads/release/${T}`],
+      ["-C", WT, "push", "origin", `refs/tags/${T}:refs/tags/${T}`],
+    ]) {
+      expect(() => assertPushTarget(args, T, TRIAL)).not.toThrow();
+    }
+  });
+  for (const ref of [T, `refs/tags/${T}`, "master"]) {
+    test(`dispatch with --ref ${ref} throws`, () => {
+      expect(() => assertTrialRef(["workflow", "run", "release.yml", "--ref", ref], TRIAL)).toThrow(
+        "refusing to dispatch",
+      );
+    });
+  }
+  test("the trial dispatch is accepted", () => {
+    expect(() =>
+      assertTrialRef(["workflow", "run", "release.yml", "--ref", TRIAL], TRIAL),
+    ).not.toThrow();
   });
 });
 
@@ -569,6 +665,12 @@ describe("talk-cut helpers", () => {
     expect(() => bumpPackageJson(twice, "0.1.0-alpha.3", "0.1.0-alpha.4")).toThrow(
       TalkCutRefusedError,
     );
+  });
+
+  test("checkReleaseBodySize: a section that fits passes, one character more is refused", () => {
+    const fits = "x".repeat(RELEASE_BODY_LIMIT - RELEASE_BODY_MARGIN);
+    expect(() => checkReleaseBodySize(fits)).not.toThrow();
+    expect(() => checkReleaseBodySize(`${fits}x`)).toThrow(TalkCutRefusedError);
   });
 
   test("compareAppVersion is numeric per part", () => {
