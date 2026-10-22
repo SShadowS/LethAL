@@ -65,6 +65,7 @@ import { hashAlTree, hashTestDir } from "./baseline-snapshot";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, defaultSpawn } from "./publisher";
 import { TestAppError, symbolPackageId } from "./test-app-publish";
+import { ProjectSymlinkRefusedError } from "./walk";
 
 /** `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`). */
 export const AL_RUNNER_V3_VERSION = /^al-?runner 3\.\d+\.\d+(?:-[\w.]+)? \([0-9a-f]+\)$/;
@@ -805,7 +806,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `the selector is not the static selector for the last activated id (${id ?? "baseline"})`,
       );
     }
-    if ((await hashTestDir(this.cfg.testDir)) !== proof.testDirHash) {
+    // R631: a link that appears in the test dir mid-run is drift like any other change.
+    const testDirHashNow = await hashTestDir(this.cfg.testDir).catch((err: unknown) => {
+      if (err instanceof ProjectSymlinkRefusedError) {
+        throw new AlRunnerV3UnprovenBatchError(
+          `a link appeared in the test dir after the alc proof (${err.linkPath})`,
+        );
+      }
+      throw err;
+    });
+    if (testDirHashNow !== proof.testDirHash) {
       throw new AlRunnerV3UnprovenBatchError(
         "an .al file in the test dir changed after the alc proof",
       );

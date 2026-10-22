@@ -12,11 +12,13 @@ import {
   targetAlFiles,
   testAppHashFor,
 } from "../src/baseline-snapshot";
+import { danglingPackageWarning } from "../src/bcdev-backend";
+import { configuredPackageCaches } from "../src/cli";
 import { discoverTests } from "../src/discovery";
 import { generateMutationSet, prepareBatchProject } from "../src/orchestrator";
 import { ProjectChangedDuringRunError, watchProjectInputs } from "../src/source-drift";
 import { readTestAppSources } from "../src/testpage-scan";
-import { ProjectSymlinkRefusedError } from "../src/walk";
+import { ProjectSymlinkRefusedError, onSkippedLinks } from "../src/walk";
 import { scratchDirs } from "./helpers/scratch";
 
 /**
@@ -67,58 +69,83 @@ async function refusalOf(p: Promise<unknown>): Promise<unknown> {
   );
 }
 
-describe("R631: a linked .al FILE refuses at every user-root reader, by the same class and path", () => {
-  test("target scan, batch prepare, the no-snapshot paths and test discovery", async () => {
-    await initParser();
-    const p = projectWithLinkedFile();
-    if (p === undefined) {
-      console.log("SKIPPED (EPERM): linked .al file at every reader");
-      return;
-    }
-    const t = projectWithLinkedFile(TEST_CU);
-    if (t === undefined) return;
-    const batch = scratch("lethal-r631-batch-");
-    // Each reader on its own, so one that stops refusing is named rather than hidden by another.
-    const readers: Record<string, [() => Promise<unknown>, string]> = {
-      targetAlFiles: [() => targetAlFiles(p.dir), p.link],
-      readTargetSource: [() => readTargetSource(p.dir), p.link],
-      prepareBatchProject: [
-        () => prepareBatchProject(p.dir, batch, { id: "x" }, "1.0.0.1"),
-        p.link,
-      ],
-      // With a snapshot, only the resource walk reads the disk.
-      "prepareBatchProject(resources)": [
-        () =>
-          prepareBatchProject(
-            p.dir,
-            scratch("lethal-r631-batch-"),
-            { id: "x" },
-            "1.0.0.1",
-            new Map(),
-          ),
-        p.link,
-      ],
-      generateMutationSet: [() => generateMutationSet(p.dir), p.link],
-      alRunnerCoverageSupport: [() => alRunnerCoverageSupport(p.dir), p.link],
-      discoverTests: [() => discoverTests(t.dir), t.link],
-      readTestAppSources: [() => readTestAppSources(t.dir), t.link],
-    };
-    const got: Record<string, boolean> = {};
-    for (const [name, [run, link]] of Object.entries(readers)) {
-      const e = await refusalOf(run());
-      got[name] = e instanceof ProjectSymlinkRefusedError && e.message.includes(link);
-    }
-    expect(got).toEqual(Object.fromEntries(Object.keys(readers).map((k) => [k, true])));
-  });
+/** A project with `src/A.al` and a JUNCTIONED `src/linked` folder holding `Linked.al`. Junctions
+ *  need no privilege, so this variant runs on the Windows CI job too (review M2). */
+function projectWithLinkedFolder(text = CODEUNIT): { dir: string; link: string } {
+  const base = scratch("lethal-r631-");
+  const dir = join(base, "app");
+  put(dir, "app.json", JSON.stringify({ id: "x", name: "App", version: "1.0.0.0" }));
+  put(dir, "src/A.al", text);
+  put(base, "outside/Linked.al", text.replace("50100", "50101").replace("50110", "50111"));
+  const link = join(dir, "src", "linked");
+  symlinkSync(join(base, "outside"), link, "junction");
+  return { dir, link };
+}
 
-  test("readTargetSource passes the refusal through, never as SourceSnapshotUnreadableError", async () => {
-    const p = projectWithLinkedFile();
-    if (p === undefined) return;
-    const e = await refusalOf(readTargetSource(p.dir));
-    expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
-    expect(e).not.toBeInstanceOf(SourceSnapshotUnreadableError);
+const LINK_KINDS = {
+  "a junctioned folder": projectWithLinkedFolder,
+  "a linked .al file": projectWithLinkedFile,
+} as const;
+
+for (const [kind, make] of Object.entries(LINK_KINDS))
+  describe(`R631: ${kind} refuses at every user-root reader, by the same class and path`, () => {
+    test("target scan, batch prepare, the no-snapshot paths and test discovery", async () => {
+      await initParser();
+      const p = make();
+      if (p === undefined) {
+        console.log(`SKIPPED (EPERM): ${kind} at every reader`);
+        return;
+      }
+      const t = make(TEST_CU);
+      if (t === undefined) {
+        console.log(`SKIPPED (EPERM): ${kind} at every reader`);
+        return;
+      }
+      const batch = scratch("lethal-r631-batch-");
+      // Each reader on its own, so one that stops refusing is named rather than hidden by another.
+      const readers: Record<string, [() => Promise<unknown>, string]> = {
+        targetAlFiles: [() => targetAlFiles(p.dir), p.link],
+        readTargetSource: [() => readTargetSource(p.dir), p.link],
+        prepareBatchProject: [
+          () => prepareBatchProject(p.dir, batch, { id: "x" }, "1.0.0.1"),
+          p.link,
+        ],
+        // With a snapshot, only the resource walk reads the disk.
+        "prepareBatchProject(resources)": [
+          () =>
+            prepareBatchProject(
+              p.dir,
+              scratch("lethal-r631-batch-"),
+              { id: "x" },
+              "1.0.0.1",
+              new Map(),
+            ),
+          p.link,
+        ],
+        generateMutationSet: [() => generateMutationSet(p.dir), p.link],
+        alRunnerCoverageSupport: [() => alRunnerCoverageSupport(p.dir), p.link],
+        discoverTests: [() => discoverTests(t.dir), t.link],
+        readTestAppSources: [() => readTestAppSources(t.dir), t.link],
+      };
+      const got: Record<string, boolean> = {};
+      for (const [name, [run, link]] of Object.entries(readers)) {
+        const e = await refusalOf(run());
+        got[name] = e instanceof ProjectSymlinkRefusedError && e.message.includes(link);
+      }
+      expect(got).toEqual(Object.fromEntries(Object.keys(readers).map((k) => [k, true])));
+    });
+
+    test("readTargetSource passes the refusal through, never as SourceSnapshotUnreadableError", async () => {
+      const p = make();
+      if (p === undefined) {
+        console.log(`SKIPPED (EPERM): ${kind} pass-through`);
+        return;
+      }
+      const e = await refusalOf(readTargetSource(p.dir));
+      expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+      expect(e).not.toBeInstanceOf(SourceSnapshotUnreadableError);
+    });
   });
-});
 
 describe("R631 r3 A: real AL under node_modules is still read, exactly as before", () => {
   test("targetAlFiles and discoverTests yield node_modules/pkg/*.al", async () => {
@@ -259,5 +286,63 @@ describe("R631: doctor's al-runner cache size", () => {
     expect(report.totalBytes).toBe(100);
     expect(report.skippedLinks).toBe(1);
     expect(describeAlRunnerCache(report)).toContain("1 link(s) in these caches were not followed");
+  });
+});
+
+describe("R631 review L2: a link that appears mid-run is drift, never the tripwire", () => {
+  test("the drift watch does not announce the new link to onSkippedLinks", async () => {
+    const base = scratch("lethal-r631-");
+    const dir = join(base, "app");
+    put(dir, "app.json", "{}");
+    put(dir, "src/A.al", CODEUNIT);
+    put(base, "shared/S.al", CODEUNIT);
+    const watch = watchProjectInputs(dir, await readTargetSource(dir));
+    await watch.check();
+    symlinkSync(join(base, "shared"), join(dir, "shared"), "junction");
+    const heard: string[] = [];
+    const off = onSkippedLinks((_root, links) => heard.push(...links));
+    try {
+      const e = await refusalOf(watch.check());
+      expect(e).toBeInstanceOf(ProjectChangedDuringRunError);
+    } finally {
+      off();
+    }
+    expect(heard).toEqual([]);
+  });
+
+  test("a junctioned .alpackages present at the start is not drift", async () => {
+    const base = scratch("lethal-r631-");
+    const dir = join(base, "app");
+    put(dir, "app.json", "{}");
+    put(dir, "src/A.al", CODEUNIT);
+    put(base, "symbols/Sys.app", "s");
+    symlinkSync(join(base, "symbols"), join(dir, ".alpackages"), "junction");
+    const watch = watchProjectInputs(dir, await readTargetSource(dir));
+    await watch.check();
+    expect(await refusalOf(watch.check())).toBeUndefined();
+  });
+});
+
+describe("R631 review L3: a dangling .app link in the package cache warns", () => {
+  test("danglingPackageWarning names the dangling link; a healthy cache is silent", () => {
+    const base = scratch("lethal-r631-");
+    const cache = join(base, "cache");
+    put(cache, "Real.app", "r");
+    expect(danglingPackageWarning(cache)).toBeUndefined();
+    if (!fileLink(join(base, "gone.app"), join(cache, "Gone.app"))) return;
+    expect(danglingPackageWarning(cache)).toContain(join(cache, "Gone.app"));
+  });
+});
+
+describe("R631 review H1: configured package caches", () => {
+  test("configuredPackageCaches reads bcdev, alRunner and alRunnerV3 cache paths", () => {
+    expect(
+      configuredPackageCaches({
+        bcdev: { packageCachePath: "a" },
+        alRunner: { packagesDir: "b" },
+        alRunnerV3: { packagesDir: "c" },
+      }),
+    ).toEqual(["a", "b", "c"]);
+    expect(configuredPackageCaches({})).toEqual([]);
   });
 });

@@ -151,7 +151,7 @@ import {
   runVerify,
   testProjectNestedProblem,
 } from "./verify";
-import { walkFiles } from "./walk";
+import { setPackageCacheDirs, walkFiles } from "./walk";
 
 /**
  * `cli.ts` is argument marshaling only — everything that decides pass/fail
@@ -2745,13 +2745,27 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
       `cannot read config file at ${path}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  let parsed: LethalConfigFile;
   try {
-    return JSON.parse(text) as LethalConfigFile;
+    parsed = JSON.parse(text) as LethalConfigFile;
   } catch (err) {
     throw new Error(
       `config file at ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  setPackageCacheDirs(configuredPackageCaches(parsed));
+  return parsed;
+}
+
+/**
+ * R631 (review H1): every package-cache folder the config names, so a refused target or test root
+ * walks one under the cache policy (a linked `.app` is fine there). `.alpackages` always is.
+ */
+export function configuredPackageCaches(c: LethalConfigFile): string[] {
+  const v3 = c.alRunnerV3 as { packagesDir?: unknown } | undefined;
+  return [c.bcdev?.packageCachePath, c.alRunner?.packagesDir, v3?.packagesDir].filter(
+    (p): p is string => typeof p === "string" && p !== "",
+  );
 }
 
 /**

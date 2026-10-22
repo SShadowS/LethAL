@@ -72,15 +72,12 @@ function countingFs(): { fs: WalkFs; dirs: string[] } {
         return readdir(d);
       },
       lstat: (p) => lstat(p),
-      stat: (p) => stat(p),
-      realpath: (p) => realpath(p),
     },
   };
 }
 
 function countingFsSync(): { fs: WalkFsSync; dirs: string[] } {
   const dirs: string[] = [];
-  const nodeFs = require("node:fs") as typeof import("node:fs");
   return {
     dirs,
     fs: {
@@ -89,8 +86,6 @@ function countingFsSync(): { fs: WalkFsSync; dirs: string[] } {
         return readdirSync(d);
       },
       lstat: (p) => lstatSync(p),
-      stat: (p) => nodeFs.statSync(p),
-      realpath: (p) => nodeFs.realpathSync(p),
     },
   };
 }
@@ -213,8 +208,6 @@ describe("R631 walker: entries that vanish mid-walk", () => {
         if (p.endsWith("gone.al")) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         return lstat(p);
       },
-      stat: (p) => stat(p),
-      realpath: (p) => realpath(p),
     };
     expect((await walkFiles(base, { links: "skip" }, fs)).files).toEqual(["keep.al"]);
     await expect(walkFiles(join(base, "nope"), { links: "skip" })).rejects.toThrow();
@@ -230,26 +223,64 @@ describe("R631 r3 A: node_modules and .git only EXCUSE links; they never drop re
     put(root, "node_modules/pkg/X.al");
     put(root, "Node_Modules/other/Y.al");
     put(root, ".GIT/hooks/real-hook");
-    put(base, "foreign/F.al");
+    // No `.al` behind these links: that is what makes them excusable (M1).
+    put(base, "foreign/tool.js");
     mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
     dirLink(join(base, "foreign"), join(root, "node_modules", ".bin", "tool"));
     dirLink(join(base, "foreign"), join(root, ".GIT", "hooks", "linked"));
     dirLink(join(base, "foreign"), join(root, "Node_Modules", "other", "deep-link"));
+    mkdirSync(join(root, ".VSCode"));
+    dirLink(join(base, "foreign"), join(root, ".VSCode", "linked"));
     return root;
   }
 
-  test("refuse: links inside node_modules / .GIT / Node_Modules are listed, not refused, never descended", async () => {
+  test("refuse: links inside node_modules / .GIT / Node_Modules / .VSCode are listed, not refused, never descended", async () => {
     const root = excusedTree();
     const r = await walkFiles(root, { links: "refuse" });
     expect(r.skippedLinks).toEqual(
       sorted([
         join(".GIT", "hooks", "linked"),
+        join(".VSCode", "linked"),
         join("Node_Modules", "other", "deep-link"),
         join("node_modules", ".bin", "tool"),
       ]),
     );
-    expect(r.files.some((f) => f.includes("F.al"))).toBe(false);
+    expect(r.files.some((f) => f.includes("tool.js"))).toBe(false);
     expect(() => walkFilesSync(root, { links: "refuse" })).not.toThrow();
+  });
+
+  test("M1: an excused FOLDER link that reaches a .al (at any depth, through a further link) refuses", async () => {
+    const base = scratch("lethal-walk-");
+    const root = join(base, "root");
+    put(root, "src/A.al");
+    put(base, "deeper/x/B.al");
+    put(base, "shared/readme.md");
+    dirLink(join(base, "deeper"), join(base, "shared", "via"));
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    dirLink(join(base, "shared"), join(root, "node_modules", "lib"));
+    const err = await walkFiles(root, { links: "refuse" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((err as Error).message).toContain(join(root, "node_modules", "lib"));
+    expect((err as Error).message).toContain("reaches a .al file");
+    expect(() => walkFilesSync(root, { links: "refuse" })).toThrow(ProjectSymlinkRefusedError);
+  });
+
+  test("M1: an excused .al FILE link refuses; a linked cycle under an excused folder terminates", async () => {
+    const base = scratch("lethal-walk-");
+    const root = join(base, "root");
+    put(root, "src/A.al");
+    put(base, "loop/x.txt");
+    mkdirSync(join(root, ".git"), { recursive: true });
+    dirLink(join(base, "loop"), join(base, "loop", "self"));
+    dirLink(join(base, "loop"), join(root, ".git", "loop"));
+    expect((await walkFiles(root, { links: "refuse" })).skippedLinks).toEqual([
+      join(".git", "loop"),
+    ]);
+    put(base, "B.al");
+    if (!fileLink(join(base, "B.al"), join(root, ".git", "B.al"))) return;
+    await expect(walkFiles(root, { links: "refuse" })).rejects.toBeInstanceOf(
+      ProjectSymlinkRefusedError,
+    );
   });
 
   test("refuse: real files under node_modules and Node_Modules are still yielded", async () => {
@@ -263,6 +294,7 @@ describe("R631 r3 A: node_modules and .git only EXCUSE links; they never drop re
   test("isLinkExcused: case-insensitive, only INSIDE an excused folder", () => {
     expect(isLinkExcused(join("Node_Modules", ".bin", "x"))).toBe(true);
     expect(isLinkExcused(join("a", ".git", "x"))).toBe(true);
+    expect(isLinkExcused(join(".vscode", "settings.json"))).toBe(true);
     expect(isLinkExcused(join("src", "linked"))).toBe(false);
     expect(isLinkExcused("node_modules")).toBe(false);
   });

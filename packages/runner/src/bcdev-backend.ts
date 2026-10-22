@@ -89,6 +89,23 @@ export function controlLeftoverWarning(packageCachePath: string): string | undef
   return `[lethal] ${leftover} is a leftover from an older LethAL, which copied the LethAL Control symbol into your package cache (R552). LethAL now compiles against its own copy of this cache, which leaves this file out, and never writes this cache; the file is unused and safe to delete.`;
 }
 
+/**
+ * R631 (review L3): the warning for a `.app` LINK in the package cache whose target is gone, or
+ * `undefined` when there is none. `buildPackageCacheCopy` cannot copy it, so alc will not see it.
+ */
+export function danglingPackageWarning(packageCachePath: string): string | undefined {
+  let dangling: string[];
+  try {
+    dangling = walkFilesSync(packageCachePath, { links: "yield-files" }).skippedLinks.filter((l) =>
+      l.toLowerCase().endsWith(".app"),
+    );
+  } catch {
+    return undefined; // no cache folder, or a linked subfolder, which buildPackageCacheCopy refuses
+  }
+  if (dangling.length === 0) return undefined;
+  return `[lethal] ${dangling.map((l) => join(packageCachePath, l)).join(", ")}: a link in your package cache whose target is gone (R631). LethAL's copy of the cache leaves it out, so alc will not see that package.`;
+}
+
 export interface BcDevConfig {
   readonly mcpCommand: readonly string[]; // e.g. ["bun", "x", "bc-dev-mcp"] — argv to spawn
   readonly project: string; // AL project dir (launch.json defaults source)
@@ -355,6 +372,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
   private readonly refusalsWarned = new Set<string>();
   /** R552: the leftover `lethal-control.app` warning is printed once per backend. */
   private leftoverWarned = false;
+  private danglingWarned = false;
   /** R552: this backend's package-cache copy, built on the first compile and removed by `close()`. */
   private packageCacheCopy: Promise<string> | undefined;
   // R298 (`coverageMode: "procedure"`, the hub): refused declared objects, `type:id` -> reason, by
@@ -705,6 +723,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
       if (leftover !== undefined && !this.leftoverWarned) {
         this.leftoverWarned = true;
         console.warn(leftover);
+      }
+      const dangling = danglingPackageWarning(this.cfg.packageCachePath);
+      if (dangling !== undefined && !this.danglingWarned) {
+        this.danglingWarned = true;
+        console.warn(dangling);
       }
     } catch (e) {
       await rm(staging, { recursive: true, force: true }).catch(() => {});

@@ -28,7 +28,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { isProjectResource, outputPathKey } from "./orchestrator";
-import { isLinkExcused, walkFiles } from "./walk";
+import { isLinkIgnored, walkFiles } from "./walk";
 
 /** Thrown, never turned into a verdict: the session stops, and `--resume` continues it. */
 export class ProjectChangedDuringRunError extends Error {
@@ -95,7 +95,8 @@ export function watchProjectInputs(
 
   /** R631 r3 B: `"skip"`, so a link that appears mid-run is reported as drift, not a new error. */
   const inputs = async (): Promise<{ files: string[]; links: string[] }> => {
-    const walk = await walkFiles(projectDir, { links: "skip" });
+    // `quiet`: a new link here is drift, not the tripwire caveat (R631 review L2).
+    const walk = await walkFiles(projectDir, { links: "skip", quiet: true });
     const out: string[] = [];
     for (const rel of walk.files) {
       const isAl = rel.toLowerCase().endsWith(".al");
@@ -105,7 +106,10 @@ export function watchProjectInputs(
       if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
       out.push(rel);
     }
-    return { files: out.sort(), links: walk.skippedLinks.filter((l) => !isLinkExcused(l)) };
+    return {
+      files: out.sort(),
+      links: walk.skippedLinks.filter((l) => !isLinkIgnored(projectDir, l)),
+    };
   };
 
   return {

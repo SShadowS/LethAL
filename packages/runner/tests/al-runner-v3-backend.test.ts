@@ -475,6 +475,15 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
       (l) => appendFile(join(l.deps, "Microsoft_System.app"), "x"),
     ],
     ["the test app's app.json changed", (l) => appendFile(join(l.testDir, "app.json"), " ")],
+    [
+      // R631 review L1: drift, never ProjectSymlinkRefusedError (asserted by the class below).
+      "R631: a test-dir junction holding an .al appears mid-run",
+      async (l) => {
+        await mkdir(join(l.root, "helpers"), { recursive: true });
+        await writeFile(join(l.root, "helpers", "H.Codeunit.al"), "codeunit 79150 H { }");
+        await symlink(join(l.root, "helpers"), join(l.testDir, "helpers"), "junction");
+      },
+    ],
   ];
   for (const [name, tamper] of cases) {
     test(`${name} -> AlRunnerV3UnprovenBatchError, 0 spawns`, async () => {

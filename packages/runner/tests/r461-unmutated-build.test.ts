@@ -16,7 +16,7 @@ import { refusalLine } from "../src/cli";
 import { firstCallOnly, runSession } from "../src/orchestrator";
 import { StaleTestAppError, TestAppChangedError } from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
-import { ProjectSymlinkRefusedError, walkFilesSync } from "../src/walk";
+import { ProjectSymlinkRefusedError, setPackageCacheDirs, walkFilesSync } from "../src/walk";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -646,5 +646,94 @@ describe("R631: links in the target or test root refuse before any compile; a sk
     const report = await runSession({ backend, store, ...dirs, selectorIds });
     expect(report.validity.caveats).not.toContain("project-symlink-skipped");
     store.close();
+  });
+});
+
+describe("R631 review H1: the package cache is governed by the cache policy, not refused", () => {
+  /** `true` when the file link was made; `false` on Windows EPERM. */
+  function fileLink(target: string, at: string): boolean {
+    try {
+      symlinkSync(target, at, "file");
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EPERM") return false;
+      throw err;
+    }
+  }
+
+  async function runs(dirs: Awaited<ReturnType<typeof makeProject>>): Promise<unknown> {
+    const backend = new R461Backend(
+      dirs.root,
+      () => OK,
+      () => OK,
+    );
+    const store = new ResultsStore(":memory:");
+    try {
+      return await settle(runSession({ backend, store, ...dirs, selectorIds }));
+    } finally {
+      store.close();
+    }
+  }
+
+  test("a linked .app in <project>/.alpackages and <tests>/.alpackages RUNS", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.root, "store", "Sys.app"), "system");
+    await mkdir(join(dirs.projectDir, ".alpackages"));
+    await mkdir(join(dirs.testDir, ".alpackages"));
+    if (
+      !fileLink(
+        join(dirs.root, "store", "Sys.app"),
+        join(dirs.projectDir, ".alpackages", "Sys.app"),
+      )
+    )
+      return;
+    fileLink(join(dirs.root, "store", "Sys.app"), join(dirs.testDir, ".alpackages", "Sys.app"));
+    expect(await runs(dirs)).toBeUndefined();
+  });
+
+  test("a junctioned .alpackages in the default layout RUNS", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.root, "shared-symbols", "Sys.app"), "system");
+    symlinkSync(
+      join(dirs.root, "shared-symbols"),
+      join(dirs.projectDir, ".alpackages"),
+      "junction",
+    );
+    symlinkSync(join(dirs.root, "shared-symbols"), join(dirs.testDir, ".alpackages"), "junction");
+    expect(await runs(dirs)).toBeUndefined();
+  });
+
+  test("a linked SUBFOLDER inside .alpackages refuses (cache policy)", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.root, "more", "X.app"), "x");
+    await mkdir(join(dirs.projectDir, ".alpackages"));
+    symlinkSync(join(dirs.root, "more"), join(dirs.projectDir, ".alpackages", "more"), "junction");
+    const err = await runs(dirs);
+    expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((err as Error).message).toContain("package cache");
+  });
+
+  test("a CONFIGURED cache folder (not named .alpackages) gets the same policy; unregistered it refuses", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.root, "store", "Sys.app"), "system");
+    await mkdir(join(dirs.projectDir, "symbols"));
+    if (!fileLink(join(dirs.root, "store", "Sys.app"), join(dirs.projectDir, "symbols", "Sys.app")))
+      return;
+    expect(await runs(dirs)).toBeInstanceOf(ProjectSymlinkRefusedError);
+    setPackageCacheDirs([join(dirs.projectDir, "symbols")]);
+    try {
+      expect(await runs(dirs)).toBeUndefined();
+    } finally {
+      setPackageCacheDirs([]);
+    }
+  });
+
+  test("a linked README at the project root refuses by name", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.root, "README.md"), "readme");
+    if (!fileLink(join(dirs.root, "README.md"), join(dirs.projectDir, "README.md"))) return;
+    const err = await runs(dirs);
+    expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((err as Error).message).toContain(join(dirs.projectDir, "README.md"));
   });
 });
