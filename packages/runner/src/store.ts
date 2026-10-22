@@ -2283,8 +2283,9 @@ export class ResultsStore {
     sessionTests: readonly string[],
     on: {
       /** R585: the latest finished run's test scope does not hold every test of this session
-       *  (`missing`, sorted), or was not recorded (`missing` null). Checked LAST of the site checks
-       *  (review I1), so a pre-R585 run refused for another reason keeps that reason's name. */
+       *  (`missing`, sorted), or was not recorded (`missing` null). Checked LAST of all, after
+       *  `runMayLend` lends (review I1), so a pre-R585 run refused for another reason keeps that
+       *  reason's name. */
       readonly testScopeChanged?: (info: {
         runId: number;
         missing: readonly string[] | null;
@@ -2428,18 +2429,6 @@ export class ResultsStore {
             on.hiddenFilesChanged?.({ runId: run.id, before: seen.files, now: hiddenFiles });
             return true;
           }
-          // R585: last (review I1). Equal or wider lends; narrower, other or unknown does not.
-          const scope = parseTestScope(run.test_scope, run.id);
-          if (scope === null) {
-            on.testScopeChanged?.({ runId: run.id, missing: null });
-            return true;
-          }
-          const held = new Set(scope);
-          const missing = [...new Set(sessionTests)].filter((t) => !held.has(t)).sort();
-          if (missing.length > 0) {
-            on.testScopeChanged?.({ runId: run.id, missing });
-            return true;
-          }
           return false;
         },
         baselineErrorMethods: () => this.baselineErrorMethods(run.id),
@@ -2454,6 +2443,20 @@ export class ResultsStore {
       } else if (refused.step === "al-runner-renamed") {
         names?.refused({ runId: run.id, tests: refused.tests });
       }
+      return none;
+    }
+    // R585: the very last check, AFTER `runMayLend` lends (steps 2 and 3 included), so every
+    // pre-R585 run (NULL scope) refused for another reason keeps that reason's name (review I1).
+    // Remove-only. Equal or wider lends; narrower, other or unknown does not.
+    const scope = parseTestScope(run.test_scope, run.id);
+    if (scope === null) {
+      on.testScopeChanged?.({ runId: run.id, missing: null });
+      return none;
+    }
+    const held = new Set(scope);
+    const missing = [...new Set(sessionTests)].filter((t) => !held.has(t)).sort();
+    if (missing.length > 0) {
+      on.testScopeChanged?.({ runId: run.id, missing });
       return none;
     }
     // Review M5: `siteChecks` lent only with a parsed `carry_hidden`; read again for the rows.

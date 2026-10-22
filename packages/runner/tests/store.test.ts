@@ -762,7 +762,7 @@ describe("ResultsStore", () => {
     const A = { hash: "package:a", deps: "D" };
     for (const id of [1, 2]) {
       store.setRunTestAppHash(id, "package:a", true, "D");
-      // R585: and a test scope, so the row reaches the R557 step (an old row has none).
+      // R585: and a test scope, so the controls that lend pass the last check (an old row has none).
       store.db.run(
         "UPDATE runs SET build_symbols = '[]', twin_tuples = '[]', test_scope = '[]' WHERE id = ?",
         [id],

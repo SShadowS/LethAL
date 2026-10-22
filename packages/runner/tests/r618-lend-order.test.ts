@@ -132,7 +132,7 @@ describe("R618: priorSurvivorKeys refuses in its stated order (history site)", (
   });
 });
 
-describe("R585: the test-scope check, LAST of the history site's own checks (review I1)", () => {
+describe("R585: the test-scope check, LAST of all, after runMayLend lends (review I1)", () => {
   const one = (over: Parameters<typeof seed>[1]) => {
     const store = new ResultsStore(":memory:");
     seed(store, over);
@@ -140,7 +140,7 @@ describe("R585: the test-scope check, LAST of the history site's own checks (rev
     store.close();
     return got;
   };
-  test("a NULL scope (a pre-R585 run) lends nothing, by name", () => {
+  test("a NULL scope on a run that passes every other check lends nothing, by name", () => {
     expect(one({ testScope: null })).toEqual({ keys: 0, fired: ["testScopeChanged"] });
   });
   test("a scope missing a test this session sends lends nothing; an equal one lends", () => {
@@ -151,6 +151,12 @@ describe("R585: the test-scope check, LAST of the history site's own checks (rev
     expect(one({ testScope: null, buildSymbols: ["OTHER"] })).toEqual({
       keys: 0,
       fired: ["symbolsChanged"],
+    });
+  });
+  test("order: a NULL-scope pre-R557 (unmarked) al-runner run is named history-al-runner-test-names", () => {
+    expect(one({ testScope: null, backend: "al-runner" })).toEqual({
+      keys: 0,
+      fired: ["alRunnerUnmarked"],
     });
   });
   test("order: a NULL-scope run under another test app is named by the test app", () => {
