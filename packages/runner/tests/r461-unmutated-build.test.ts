@@ -480,8 +480,9 @@ describe("R461: the unmutated build is compiled once, at the first compile failu
       }),
     );
     expect(err2).toBeInstanceOf(UnmutatedBuildFailedError);
-    // Batch 0 carried without a deploy; batch 1 retried and refused again.
-    expect(second.deploys).toBe(1);
+    // Batch 0 deployed and carried (R-646c: no batch is carried without a deploy); batch 1
+    // retried and refused again.
+    expect(second.deploys).toBe(2);
     expect(second.plainCompiles).toBe(1);
     const run2 = store.mutantVerdicts(2);
     expect(run2.map((r) => r.verdict).sort()).toEqual(run1.map((r) => r.verdict).sort());

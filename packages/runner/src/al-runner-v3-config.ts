@@ -8,7 +8,9 @@
  *     "bcVersion": "28.0.46665.47126",                         // required, four numbers
  *     "coverage": "al-runner",                                 // or "none"; default "al-runner"
  *     "alcPath": "<optional; else the AL extension's alc>",
- *     "cacheDir": "<optional ALRUNNER_CACHE>"
+ *     "cacheDir": "<optional ALRUNNER_CACHE>",
+ *     "transport": "one-shot",                                 // or "serve-entries" (R635)
+ *     "secondEcho": true                                       // R635 §5, serve-entries only
  *   }
  *
  * `serverMode` and `selectorMode` are refused by name (one-shot, static selector only).
@@ -25,9 +27,22 @@ export interface AlRunnerV3ConfigSection {
   readonly coverage: "al-runner" | "none";
   readonly alcPath?: string;
   readonly cacheDir?: string;
+  /** R635: `"one-shot"` (default) or `"serve-entries"`. */
+  readonly transport: "one-shot" | "serve-entries";
+  /** R635 §5: the echo before the coverage request (default on; serve-entries only). */
+  readonly secondEcho: boolean;
 }
 
-const KEYS = ["path", "packagesDir", "bcVersion", "coverage", "alcPath", "cacheDir"];
+const KEYS = [
+  "path",
+  "packagesDir",
+  "bcVersion",
+  "coverage",
+  "alcPath",
+  "cacheDir",
+  "transport",
+  "secondEcho",
+];
 /** Keys of the v2 section that mean a transport v1 of v3 does not have. */
 const REFUSED = ["serverMode", "selectorMode", "alRunnerPath"];
 
@@ -74,10 +89,22 @@ export function validateAlRunnerV3Config(raw: unknown): AlRunnerV3ConfigSection 
       throw new Error(`"alRunnerV3.${k}" must be a non-empty string`);
     }
   }
+  if (r.transport !== undefined && r.transport !== "one-shot" && r.transport !== "serve-entries") {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.transport" must be "one-shot" or "serve-entries", got ${JSON.stringify(r.transport)} (R635).`,
+    );
+  }
+  if (r.secondEcho !== undefined && typeof r.secondEcho !== "boolean") {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.secondEcho" must be a boolean, got ${JSON.stringify(r.secondEcho)} (R635).`,
+    );
+  }
   return {
     path: (r.path as string | undefined) ?? AL_RUNNER_V3_DEFAULT_PATH,
     packagesDir: r.packagesDir,
     bcVersion: r.bcVersion,
+    transport: r.transport ?? "one-shot",
+    secondEcho: r.secondEcho ?? true,
     coverage: (r.coverage as "al-runner" | "none" | undefined) ?? "al-runner",
     ...(typeof r.alcPath === "string" ? { alcPath: r.alcPath } : {}),
     ...(typeof r.cacheDir === "string" ? { cacheDir: r.cacheDir } : {}),

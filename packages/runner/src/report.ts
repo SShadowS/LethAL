@@ -434,10 +434,11 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
     meaning:
       "This run was assembled with `--resume`. The verdicts carried are real measurements " +
       "taken over the same source (identity-matched) and the same scope (fingerprint-matched) " +
-      "— a composite of two sessions. A batch whose every mutant carried was not republished " +
-      "(R192), and a batch whose instrumented source and test app hash the same as a prior " +
-      "run's may have had that run's BASELINE reused rather than re-run; the run's warnings " +
-      "(`resume-batch-carried`, `resume-baseline-reused`) name which.",
+      "— a composite of two sessions. Every batch was republished; a batch whose instrumented " +
+      "source and test app hash the same as a prior run's may have had that run's BASELINE " +
+      "reused rather than re-run, and the run's `resume-baseline-reused` warnings name which " +
+      "(R192). A carried survivor was run, where it was scored, against every test that covers " +
+      "it in this run (R646).",
     entailedNegative:
       "Not a reliability downgrade the way `baseline-red` is — calling a resumed run " +
       "'degraded' would put an honest resume in the same bucket as a red baseline. What a " +
@@ -1664,8 +1665,9 @@ export interface SessionReport {
    *
    * OPTIONAL in the schema so archived reports stay valid (R157's rule), but ALWAYS written by
    * this build, `[]` included, the same as `groupedCalls`. Empty on a `deploy: "none"` backend,
-   * which never publishes anything. A batch carried whole by `--resume` (R192) has no entry here
-   * either, because nothing was published for it in THIS run.
+   * which never publishes anything. A batch `--resume` skipped whole, because every mutant in it
+   * stranded the tier in a prior run (R53, R-646c), has no entry here either: nothing was
+   * published for it in THIS run.
    *
    * `runs.artifact_id`/`runs.artifact_sha256` in the store still hold only the LAST batch's
    * values (each publish overwrote the row); this is the field that names every batch's own

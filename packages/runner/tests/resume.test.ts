@@ -36,7 +36,6 @@ import {
   CARRYABLE_VERDICTS,
   STRANDED_NOTE_PREFIX,
   STRANDED_SKIP_NOTE,
-  batchCarriesEntirely,
   buildResumeIndex,
   carriedVerdictFor,
   isStrandedNote,
@@ -1356,7 +1355,9 @@ describe("runSession --resume (R47)", () => {
     }
   });
 
-  test("R360 I4: a resumed run that publishes nothing (every batch carried) passes the end-of-run check", async () => {
+  // R-646c: a fully carried batch is deployed now; the one batch a resume still does not publish
+  // is one whose every mutant stranded the tier (R53), so that is the shape tested here.
+  test("R360 I4: a resumed run that publishes nothing (every mutant a stranded skip) passes the end-of-run check", async () => {
     const dirs = await makeProject();
     // How many mutants the project has, from a control run.
     const control = await runSession({
@@ -1376,16 +1377,24 @@ describe("runSession --resume (R47)", () => {
       selectorIds,
     });
     expect(first.quarantined).toBeDefined();
+    // Every scored row becomes a stranding row too, so the whole batch is skipped on resume. A run
+    // holding only errors is not found by `--resume` (R52), so it is named with `--resume-run`.
+    const firstId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    store.db
+      .query("UPDATE mutants SET verdict = 'error', failure_note = ? WHERE run_id = ?")
+      .run(`${STRANDED_NOTE_PREFIX}seeded by the test`, firstId);
     const again = new CountingBackend("pass", undefined, undefined, true);
     const report = await runSession({
       backend: again,
       store,
       ...dirs,
       selectorIds,
-      resume: "last",
+      resume: firstId,
     });
     expect(again.deploys).toBe(0);
     expect(report.artifacts ?? []).toEqual([]);
+    expect(report.mutants).toHaveLength(n);
+    expect(report.mutants.every((m) => m.failureNote === STRANDED_SKIP_NOTE)).toBe(true);
     expect(report.quarantined).toBeUndefined();
   });
 
@@ -1465,11 +1474,12 @@ describe("runSession --resume (R47)", () => {
     expect(second.mutantRuns).toBeLessThan(control.mutantRuns);
   });
 
-  test("R192: a batch where EVERY mutant carries is neither deployed nor baselined, and keeps its coverage facts", async () => {
+  test("R192, R-646c: a batch where EVERY mutant carries is deployed, reuses its baseline snapshot, runs nothing, and keeps its coverage facts", async () => {
     // Measured on a hosted sandbox: twelve resumes each republished a fully-scored batch (40 s)
-    // and re-ran its 407-test baseline (215 s) to carry verdicts that could not change. The
-    // carried verdicts now keep the covering tests and attribution they were measured under, so
-    // the batch is recorded from the store and the deploy never happens.
+    // and re-ran its 407-test baseline (215 s) to carry verdicts that could not change. R192 then
+    // recorded such a batch from the store with no deploy. R-646c removed that replay (a carried
+    // survivor must be checked against the tests covering it in THIS session, R646): the batch
+    // deploys again, but its baseline still comes from the snapshot, so no baseline test runs.
     const dirs = await makeProject({ secondFile: true });
     const store = new ResultsStore(":memory:");
     const first = new CountingBackend("pass", undefined, 2, true); // batch 0 fully scored, batch 1 aborts
@@ -1502,15 +1512,17 @@ describe("runSession --resume (R47)", () => {
       resume: "last",
       emit: [(e) => events.push(e)],
     });
-    // ONE deploy: batch 1's. Batch 0 was recorded from the prior run without a publish.
-    expect(second.deploys).toBe(1);
-    const skipped = events.filter((e) => e.type === "warning" && e.code === "resume-batch-carried");
-    expect(skipped).toHaveLength(1);
-    expect(events.some((e) => e.type === "batch-published" && e.batchIndex === 0)).toBe(false);
+    // TWO deploys: batch 0 is no longer recorded without a publish (R-646c).
+    expect(second.deploys).toBe(2);
+    expect(events.some((e) => e.type === "warning" && e.code === "resume-batch-carried")).toBe(
+      false,
+    );
+    expect(events.some((e) => e.type === "batch-published" && e.batchIndex === 0)).toBe(true);
     expect(events.some((e) => e.type === "batch-published" && e.batchIndex === 1)).toBe(true);
-    // C02-02: the carried batch has no entry of its own (nothing was published for it this run);
-    // only batch 1, the one that actually deployed, does.
-    expect((report.artifacts ?? []).map((a) => a.batchIndex)).toEqual([1]);
+    // Both baselines came from the snapshots run 1 recorded: no baseline test ran here.
+    expect(second.baselineRuns).toBe(0);
+    // C02-02: both batches published this run, so both have an entry.
+    expect((report.artifacts ?? []).map((a) => a.batchIndex)).toEqual([0, 1]);
     const firstBatch1Artifact = firstReport.artifacts?.find((a) => a.batchIndex === 1);
     const secondBatch1Artifact = report.artifacts?.find((a) => a.batchIndex === 1);
     if (firstBatch1Artifact === undefined || secondBatch1Artifact === undefined) {
@@ -1563,15 +1575,15 @@ describe("runSession --resume (R47)", () => {
       resume: "last",
       emit: [(e) => events.push(e)],
     });
-    // Batch 0 was recorded from the store (first half); batch 1 was deployed for its mutants...
-    expect(second.deploys).toBe(1);
-    // ...and its baseline came from the snapshot: NOT ONE baseline test ran in this session.
+    // Both batches are deployed (R-646c: batch 0, fully carried, no longer skips its deploy)...
+    expect(second.deploys).toBe(2);
+    // ...and both baselines came from the snapshots: NOT ONE baseline test ran in this session.
     expect(second.baselineRuns).toBe(0);
     expect(second.mutantRuns).toBeGreaterThan(0);
     const reused = events.filter(
       (e) => e.type === "warning" && e.code === "resume-baseline-reused",
     );
-    expect(reused).toHaveLength(1);
+    expect(reused).toHaveLength(2);
     expect(reused[0]?.type === "warning" ? reused[0].message : "").toContain(
       `run ${firstReport.resumedFrom?.runId ?? 1}`,
     );
@@ -1660,25 +1672,6 @@ describe("runSession --resume (R47)", () => {
     ).rejects.toThrow(/R247/);
     expect(second.baselineRuns).toBe(0);
     expect(second.deploys).toBe(0);
-  });
-
-  test("R192: a batch whose carried rows predate the coverage columns is deployed as before", () => {
-    // A pre-R192 database holds verdicts without covering tests. Skipping on those would record
-    // a carried survivor with an invented empty list, so the batch takes the ordinary path.
-    const withFacts = sameSource(
-      buildResumeIndex(
-        [row({ astHash: "a", coveringTests: ["T.one"], coverageAttribution: "exact" })],
-        false,
-      ),
-    );
-    const withoutFacts = sameSource(buildResumeIndex([row({ astHash: "a" })], false));
-    const mutant = manifestEntry("a");
-    expect(batchCarriesEntirely(withFacts, [mutant], false)).toBe(true);
-    expect(batchCarriesEntirely(withoutFacts, [mutant], false)).toBe(false);
-    // An empty batch carries nothing and is never "entirely carried".
-    expect(batchCarriesEntirely(withFacts, [], false)).toBe(false);
-    // One mutant that must execute is enough to take the ordinary path.
-    expect(batchCarriesEntirely(withFacts, [mutant, manifestEntry("b")], false)).toBe(false);
   });
 
   test("a batch where EVERY mutant carries does not trip the attestation gate", async () => {
@@ -2809,9 +2802,11 @@ describe("R354: no verdict crosses a coverage-mode change", () => {
       const reused = events.flatMap((e) =>
         e.type === "warning" && e.code === "resume-baseline-reused" ? [e.message] : [],
       );
-      expect(reused).toHaveLength(1);
-      expect(reused[0]).toContain(`same as run ${idA}'s batch 1`);
-      expect(reused[0]).not.toContain(`run ${idB}'s`);
+      // R-646c: batch 0, fully carried, is deployed too and reuses a snapshot as well; both are A's.
+      expect(reused).toHaveLength(2);
+      expect(reused[0]).toContain(`same as run ${idA}'s batch 0`);
+      expect(reused[1]).toContain(`same as run ${idA}'s batch 1`);
+      for (const m of reused) expect(m).not.toContain(`run ${idB}'s`);
     });
   }
 
@@ -3383,14 +3378,16 @@ describe("R247: no verdict crosses a test-app change", () => {
       const target = (runId: number) => (mode === "last" ? ("last" as const) : runId);
       const flag = (runId: number) => (mode === "last" ? "--resume" : `--resume-run ${runId}`);
 
-      test("the same test app carries: the fully scored batch is neither deployed nor baselined", async () => {
+      test("the same test app carries: the fully scored batch is deployed and reuses its snapshot, nothing re-run there", async () => {
         const r = await recorded(APP_A, { finished: false });
         const backend = new PackageBackend(APP_A);
         const report = await again(r, backend, { resume: target(r.runId) });
         expect(report.resumedFrom?.runId).toBe(r.runId);
         expect(report.mutants.filter((m) => m.carried === true).length).toBeGreaterThan(0);
-        // ONE deploy, batch 1's: batch 0 carried whole (R192) without a deploy or a baseline.
-        expect(backend.deploys).toBe(1);
+        // TWO deploys: since R-646c the fully scored batch 0 is deployed too; its baseline is the
+        // snapshot run 1 recorded, and its every mutant carries.
+        expect(backend.deploys).toBe(2);
+        expect(backend.baselineRuns).toBe(0);
         expect(
           report.mutants.filter((m) => m.carried === true).every((m) => m.batchIndex === 0),
         ).toBe(true);
@@ -3637,7 +3634,8 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
         expect(reused).toEqual([]);
         expect(third.baselineRuns).toBeGreaterThan(0);
       } else {
-        expect(reused).toHaveLength(1);
+        // R-646c: batch 0 (fully scored in run 2) is deployed too, and reuses run 1's snapshot.
+        expect(reused).toHaveLength(2);
         expect(third.baselineRuns).toBe(0);
       }
       store.close();
@@ -4187,13 +4185,15 @@ describe("R512: an attestation-invalidated batch's baseline snapshot, then --res
   });
 
   test("R512 control: without the snapshot, the same resume re-runs the baseline and kills nothing", async () => {
-    const { report, second, reused } = await scenario("timeout", true);
+    const { report, second, reused, run1 } = await scenario("timeout", true);
     const b1 = report.mutants.filter((m) => m.batchIndex === 1);
     console.log(
       "R512 control batch1",
       JSON.stringify(b1.map((m) => [m.mutantCode, m.verdict, m.failureNote ?? null])),
     );
-    expect(reused).toEqual([]);
+    // R-646c: batch 0 (fully scored) is deployed too and reuses ITS snapshot; batch 1 has none.
+    expect(reused.filter((m) => m.includes(`run ${run1}'s batch 1`))).toEqual([]);
+    expect(reused).toHaveLength(1);
     expect(second.baselineRuns).toBeGreaterThan(0);
     expect(b1.filter((m) => m.verdict === "timeout-killed" || m.verdict === "killed")).toEqual([]);
   });
@@ -6416,10 +6416,13 @@ describe("R557: a pre-fix al-runner run's false misses never come back (C1)", ()
     expect(w[0]).toContain(`run ${r.second}`);
   });
 
-  test("I1 (c) control: the same rows of a MARKED run are carried", async () => {
+  // R-646c: the batch is no longer replayed whole from run 2's rows. It takes the ordinary path,
+  // where history (run 1, marked) lends the survivors before the resume's step 5b would carry
+  // them, so the control now reads them as known survivors rather than as carried rows.
+  test("I1 (c) control: the same survivors of a MARKED run are not refused: every one reads known-survivor, no warning", async () => {
     const r = await knownThenInterrupted(false);
     expect(r.recordedKnown).toBeGreaterThan(0);
-    expect(carriedOf(r.report).length).toBeGreaterThan(0);
+    expect(known(r.report).length).toBe(r.recordedKnown);
     expect(warned(r.events, "resume-al-runner-test-names")).toEqual([]);
   });
 
