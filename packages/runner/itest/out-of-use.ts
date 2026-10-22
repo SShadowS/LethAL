@@ -95,10 +95,19 @@ export function outOfUseRefusal(server: string, opts: OutOfUseOptions): string |
         : `${CLEARING_ENV}=${JSON.stringify(v)} does not name ${server}, so it does not override this marker.`;
   } else {
     const v = opts.env[OWNER_ENV];
+    // Exactly ONE owner line, well formed: two (even if one matches), or a malformed one, refuse.
+    const owners = marker
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => /^owner:/i.test(l));
+    const [only] = owners;
+    const token = only === undefined ? undefined : /^owner: ([^\s]+)$/.exec(only)?.[1];
     if (
       v !== undefined &&
-      TOKEN.test(v) &&
-      marker.split(/\r?\n/).some((l) => l.trim() === `owner: ${v}`)
+      owners.length === 1 &&
+      token !== undefined &&
+      TOKEN.test(token) &&
+      token === v
     ) {
       log(
         `!!! ${server} has an out-of-use marker, ${path}, owned by this run (${OWNER_ENV} matches its owner line); let through. The marker:\n${body}`,

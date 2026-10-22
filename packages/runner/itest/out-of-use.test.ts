@@ -96,6 +96,51 @@ describe("outOfUseRefusal", () => {
       expect(logged).toBe("");
     }
   });
+
+  test("owner: two or more owner lines refuse, even when one matches", () => {
+    for (const extra of [`owner: ${TOKEN}\n`, "owner: r658-hang-00000000\n", "owner:\n"]) {
+      const { r, logged } = refusal(
+        { "bc2.md": `${MARKER}owner: ${TOKEN}\n${extra}` },
+        { LETHAL_OUT_OF_USE_OWNER: TOKEN },
+        "owner",
+      );
+      expect(r).toContain("bc2 is OUT OF USE");
+      expect(logged).toBe("");
+    }
+  });
+
+  test("owner: a malformed owner line refuses, even when the env value equals its text", () => {
+    const cases: [string, string][] = [
+      ["owner:", TOKEN], // nothing after it
+      ["owner: ", ""],
+      ["owner: abc", "abc"], // too short
+      ["owner: bad/token!", "bad/token!"], // outside the token shape
+      [`owner: ${TOKEN} extra`, TOKEN],
+      [`Owner: ${TOKEN}`, TOKEN],
+    ];
+    for (const [line, v] of cases) {
+      const { r, logged } = refusal(
+        { "bc2.md": `${MARKER}${line}\n` },
+        { LETHAL_OUT_OF_USE_OWNER: v },
+        "owner",
+      );
+      expect({ line, refused: r?.includes("bc2 is OUT OF USE") }).toEqual({ line, refused: true });
+      expect(logged).toBe("");
+    }
+  });
+
+  test("owner: a marker in use with `owner: T`, STOP-rewritten with no owner line, refuses T", () => {
+    const inUse = `# bc2 is OUT OF USE\n\n- **Reason:** in use by an R-658 itest:hang run\nowner: ${TOKEN}\n`;
+    expect(
+      refusal({ "bc2.md": inUse }, { LETHAL_OUT_OF_USE_OWNER: TOKEN }, "owner").r,
+    ).toBeUndefined();
+    const stop =
+      "# bc2 is OUT OF USE\n\n- **Reason:** STOP or hold: leg marker stop, gate exit 5. Do not trust a clean read.\n";
+    const { r, logged } = refusal({ "bc2.md": stop }, { LETHAL_OUT_OF_USE_OWNER: TOKEN }, "owner");
+    expect(r).toContain("bc2 is OUT OF USE");
+    expect(r).toContain("STOP or hold: leg marker stop");
+    expect(logged).toBe("");
+  });
 });
 
 describe("markedServerFor: the dev port names the server, on the BC on Linux host only", () => {
