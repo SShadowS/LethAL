@@ -21,7 +21,9 @@ function trackedScripts(): string[] {
 }
 
 const tracked = trackedScripts();
-const tsconfig = Bun.JSONC.parse(readFileSync(join(REPO_ROOT, "scripts/tsconfig.json"), "utf8")) as {
+const tsconfig = Bun.JSONC.parse(
+  readFileSync(join(REPO_ROOT, "scripts/tsconfig.json"), "utf8"),
+) as {
   files: string[];
 };
 const inFiles = new Set(tsconfig.files.map((f) => `scripts/${f}`));
