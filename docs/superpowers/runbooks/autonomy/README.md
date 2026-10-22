@@ -86,6 +86,17 @@ next free id right before writing).
     unmeasured" question, AND propose the narrowing for anything over a cost bar. Fold everything
     in, and re-measure ONCE. A second review looks only at the changed parts (a delta brief, not the
     whole plan). A third full round needs a reason in the message to the orchestrator.
+  - **Small tasks: ONE build review, no plan review (owner, 2026-10-22).** A task is small when its
+    diff can move no verdict, kill, survive, refusal, lend or publish: docs-only, roadmap-only,
+    test-only (new or tightened tests, no product change), a pure message or wording change, or a
+    script that no gate, verify, merge chain, setup or campaign path runs, or a new fail-closed
+    refusal in an operational path that can only BLOCK (never admit a build or change a verdict).
+    For those: build
+    test-first, red-check as usual, then one opus BUILD review of the final diff; no plan, no plan
+    review, no delta rounds unless the build review finds a blocker. Anything that changes a
+    verdict rule, a guard, a gate figure, what is deployed or what lends keeps the full process
+    (plan, one deep review, pre-commitment). When unsure, it is not small; say which in the
+    message to the orchestrator.
   - **Use the master dump cache (rule above) every time.** Before any master-leg dump, look in
     `/coord/cache/dumps/<master sha>/`. After a fresh master dump, WRITE it there with `DONE`, so
     the next lane and the next round reuse it. Branch legs re-dump only the projects the change can

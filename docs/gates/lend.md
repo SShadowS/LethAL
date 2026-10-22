@@ -98,9 +98,10 @@ A's run row and rows, with only the named field changed.
 | N1 | finished v3 clone | `--skip-known-survivors` | `history-backend-build-changed`, exact; nothing lent |
 | N5 | finished clone, revoked | `--skip-known-survivors` | `history-test-app-changed` naming `H\|closed-world:revoked`; nothing lent |
 | RN3 | KV: unfinished v3 clone | `--resume-run KV` | refused: another backend |
-| RN1 | KP: unfinished pending clone | `--resume` | refused at the test app (`H\|pending`), and it picked KP |
+| RN1d | KPd: unfinished pending clone with the OTHER closed tag (`public` and `public+internal` swapped) | `--resume` | it picked KPd; refused at the test app before the lease, in R601's words ("... and this session's differ"), tail `(R247, R495, R601)` |
 | RN2 | KR: unfinished clone, revoked | `--resume-run KR` | refused at the test app (`H\|closed-world:revoked`) |
 | RN4 | none | `--resume-run A` | refused: A already finished (R618 ruling 2) |
+| RP | KP: unfinished pending clone of K's shape (`H\|pending`, A's server), the newest unfinished run | `--resume` | it picked KP (R601): `resume-reusing-run` names KP, 9 carryable, 1 error row, and R601's clause; `resume-baseline-reused` names N5's run; no baseline test ran here; KEPT minus its two uncovered rows carried by key; the sentinel carried from KP; R2's figures; frozen; its own run row ends exactly H (its live re-ask confirmed it); KP still `H\|pending` |
 
 The RN legs throw before the session creates a run row and before it takes the lease. Every leg
 also checks that its own run row records H and D, so that a republish between legs cannot make a
@@ -132,15 +133,24 @@ runs live (Q3).
 ## Clone fidelity
 
 A seed is not a full copy of a real run (review M2). It copies every field a lend check reads
-(`getRun`'s fields) and the mutant rows through `recordMutant`, but not `resource_key`, `app_id`,
-`test_digests`, `batch_artifacts`, `installed_bundles` or `test_results`. An interrupted clone is
+(`getRun`'s fields, `resource_key` included since R601) and the mutant rows through `recordMutant`,
+but not `app_id`, `test_digests`, `batch_artifacts`, `installed_bundles` or `test_results`. An interrupted clone is
 therefore not exactly what a real interruption leaves: a real one would also hold its own
 snapshot and test results. `lend-seed.test.ts` (offline, in CI) pins that a clone with no
 override reads back as its source in `getRun`, `mutantVerdicts`, `priorSurvivorKeys` and
 `findResumableRun`, and that each override changes only its own field. N0 is the same check live.
 
-A crashed closed-world run keeps `|pending` and is never resumable; RN1 pins that refusal. A
-quarantined one is confirmed and stays resumable (an offline orchestrator test, Q1).
+A crashed closed-world run keeps `|pending`. Since [R601](../roadmap/R601.md) it is resumable on
+the same server by a session whose guard gives the same closed answer now; that session's own
+re-ask after execution confirms or revokes its run, and the pending run is never confirmed by it.
+Any `lethal run` session whose re-ask flips, fresh or resumed, also revokes every run of the
+project still pending under its package (either closed tag) on its server, and names them in its
+`closed-world-changed` warning; a `lethal verify` flip revokes nothing (R601's stated limits). RP
+pins the accepted case live and RN1d a pending run
+whose closed answer differs. No live leg flips (the fixture's answer is stable), so the revoke on a
+flip, and the other refusals (the guard open now, another server), are pinned offline in
+`tests/resume.test.ts`. A quarantined run is confirmed and stays resumable (an offline orchestrator
+test, Q1).
 
 ## Out of scope
 
@@ -159,10 +169,14 @@ The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the off
 - RC4a: delete the history site's R557 mark check: `r618-lend-order.test.ts` goes red (offline).
 - N5: delete the history site's test-app hash comparison: `r618-lend-order.test.ts`'s N5 test goes
   red (offline only; RC6 and RC7 break other sites).
-- RC7: make `assertSameTestApp` return early: RN1 still throws, later, from the R496 recheck under
-  the lease (`TestAppRepublishedError`), so the refusal-head check goes red. RC7b breaks both
-  checks: only then is a pending run carried.
-- **No red check:** RN2 (the gate stops at RN1 under RC7 and RC7b, so RN2's own route is never
+- RC7: make `assertSameTestApp` return early: RN1d still throws, later, from the R496 recheck
+  under the lease (`TestAppRepublishedError`, after a run row exists), so the refusal-head check
+  goes red. RC7b breaks both checks: only then is KPd carried, and RN1d goes red as not refused.
+- R601 (pre-committed in the R601 lend addendum): LRC1 (planted: the pending rule ignores the
+  closed flags) turns RN1d red; LRC2 (planted: the post-execution re-ask skipped for a session that
+  resumed a pending run), LRC3 (revert: the rule back to equality, refused before the lease) and
+  LRC4 (revert: the R496 recheck back to equality alone, `TestAppRepublishedError`) turn RP red.
+- **No red check:** RN2 (the gate stops at RN1d under RC7 and RC7b, so RN2's own route is never
   shown red) and RN3 (old code, not broken here).
 
 ## History
@@ -177,3 +191,9 @@ The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the off
     (`/coord/handoff/R-618/redcheck-live-results.md`). The clean confirm afterwards passed.
 - 2026-10-22, at 03547bf6 (R-618 merged with master after R582, which re-runs every kill on bcdev): **PASS on
   bc1** (`/coord/handoff/R-618/lend-bc1-merged.log`), every leg's figures unchanged.
+- 2026-10-22, R601 (built offline, not yet run live): RN1 (a pending clone, refused) becomes RN1d (a
+  pending clone with the other closed tag, refused at the test app) and RP (a pending clone of K's
+  shape, resumed, its own run confirmed live). No figure changes: RP reuses R2's. The live run waits
+  for the R601 lend pre-commitment (orchestrator ruling Q5). Review fix round: RP also asserts that
+  no baseline test ran here (M-E), and a flip by any session revokes the project's pending runs on
+  its server (I-A ruling; offline only, since no leg flips).

@@ -151,9 +151,16 @@ export class TestAppDriftedError extends Error {
   readonly now: string | undefined;
   readonly batchIndex: number;
 
-  constructor(proven: string, now: string | undefined, batchIndex: number) {
+  constructor(
+    proven: string,
+    now: string | undefined,
+    batchIndex: number,
+    /** R630: why the read failed, when it did and the server said. */
+    unread?: string,
+  ) {
+    const failed = unread !== undefined ? `the read failed: ${unread}` : "the read failed";
     super(
-      `the test app changed during the session, or can no longer be read: it was proven to be ${proven}, and at batch ${batchIndex} it reads ${now ?? "nothing (the read failed)"}. Verdicts carried, survivors skipped and snapshots reused from there would describe the proven test app, not the one that runs, so the session stops before batch ${batchIndex} records anything, and its run keeps no test-app identity (R495). Re-run once nothing republishes the test app mid-run.`,
+      `the test app changed during the session, or can no longer be read: it was proven to be ${proven}, and at batch ${batchIndex} it reads ${now ?? `nothing (${failed})`}. Verdicts carried, survivors skipped and snapshots reused from there would describe the proven test app, not the one that runs, so the session stops before batch ${batchIndex} records anything, and its run keeps no test-app identity (R495). Re-run once nothing republishes the test app mid-run.`,
     );
     this.name = "TestAppDriftedError";
     this.proven = proven;

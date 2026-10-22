@@ -613,6 +613,12 @@ describe("R387: a hung suite under the default --server path", () => {
 });
 
 describe("R387: validateAlRunnerConfig refuses unknown keys and bad values by name", () => {
+  test("R612 T7: the internal serveDaemonRule is not a config key, refused by name", () => {
+    expect(() =>
+      validateAlRunnerConfig({ alRunnerPath: "a", serveDaemonRule: "v3" } as never),
+    ).toThrow(/unknown key\(s\): serveDaemonRule\./);
+  });
+
   test("a misspelled key is refused, naming it and the allowed keys", () => {
     expect(() => validateAlRunnerConfig({ alRunnerPath: "a", servermode: true } as never)).toThrow(
       /unknown key\(s\): servermode\. Allowed: alRunnerPath, packagesDir, serverMode, selectorMode, coverage/,

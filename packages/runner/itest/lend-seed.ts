@@ -4,9 +4,10 @@ import type { CoverageMode } from "../src/backend";
  * names, so a negative leg of `itest:lend` can only be refused by the field it changed (plan r2 §2).
  *
  * NOT a full copy (review M2). The run row copies every field `getRun` returns, which is every
- * field a lend check reads. It does NOT copy `resource_key`, `app_id`, `test_digests` or
- * `test_digest_parts`, `batch_artifacts`, `installed_bundles` or `test_results`. So a seed is never
- * a prune target and cannot be `lethal verify`-ed. Mutant rows are written back through
+ * field a lend check reads, `resource_key` included (R601: a pending prior resumes only on its own
+ * server). It does NOT copy `app_id`, `test_digests` or `test_digest_parts`, `batch_artifacts`,
+ * `installed_bundles` or `test_results`. So a seed holds no bundle to prune and cannot be
+ * `lethal verify`-ed. Mutant rows are written back through
  * `recordMutant`; their identity key is never changed (I1).
  *
  * Every write goes through the store's API. The two raw SQL statements here are READS
@@ -71,6 +72,8 @@ export interface SeedOverrides {
   readonly backend?: string;
   readonly runnerBuild?: string;
   readonly coverageMode?: CoverageMode;
+  /** R601: the test-app hash in place of the source run's (`hashSuffix` is still appended). */
+  readonly testAppHash?: string;
   /** Appended to the source run's test-app hash (`PENDING_SUFFIX`, `REVOKED_SUFFIX`). */
   readonly hashSuffix?: string;
   readonly alRunnerNames?: boolean;
@@ -109,6 +112,7 @@ export function seedRunFrom(store: ResultsStore, fromRunId: number, o: SeedOverr
   }
   const backend = o.backend ?? src.backend;
   const runnerBuild = o.runnerBuild ?? src.runnerBuild ?? undefined;
+  const testAppHash = `${o.testAppHash ?? src.testAppHash}${o.hashSuffix ?? ""}`;
   const id = store.createRun({
     projectPath: src.projectPath,
     backend,
@@ -117,7 +121,7 @@ export function seedRunFrom(store: ResultsStore, fromRunId: number, o: SeedOverr
     identityScheme: src.identityScheme,
     buildSymbols: src.buildSymbols,
     coverageMode: o.coverageMode ?? src.coverageMode,
-    testAppHash: `${src.testAppHash}${o.hashSuffix ?? ""}`,
+    testAppHash,
     testAppProven: true,
     testAppDeps: src.testAppDeps,
     carryHidden: src.carryHidden,
@@ -127,6 +131,7 @@ export function seedRunFrom(store: ResultsStore, fromRunId: number, o: SeedOverr
     dependencySourceSha256: src.dependencySourceSha256,
     alRunnerNames: o.alRunnerNames ?? src.alRunnerNames,
     ...(runnerBuild !== undefined ? { runnerBuild } : {}),
+    ...(src.resourceKey !== null ? { resourceKey: src.resourceKey } : {}),
   });
   if (o.rows !== false) {
     const rows = storedMutants(store, fromRunId).filter(
@@ -159,8 +164,7 @@ export function seedRunFrom(store: ResultsStore, fromRunId: number, o: SeedOverr
       runId: id,
       batchIndex: snap.batch_index,
       batchHash: snap.batch_hash,
-      testAppHash:
-        o.snapshot === "source" ? snap.test_app_hash : `${src.testAppHash}${o.hashSuffix ?? ""}`,
+      testAppHash: o.snapshot === "source" ? snap.test_app_hash : testAppHash,
       baseline: JSON.parse(snap.payload),
     });
   }

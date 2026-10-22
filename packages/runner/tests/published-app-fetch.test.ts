@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { BcRedirectRefusedError } from "../src/bc-fetch";
 import { BcDevMcpBackend, devPackagesUrl } from "../src/bcdev-backend";
+import { UnfilteredExtensionsQueryError } from "../src/harness";
 import { deafBody, deafFetch } from "./helpers/lease-wire";
 
 /**
@@ -8,8 +10,8 @@ import { deafBody, deafFetch } from "./helpers/lease-wire";
  * change and no second credential source — the same server/instance/tenant and the same
  * BC_DEV_USER/BC_DEV_PASSWORD the backend already passes to bc-dev-mcp.
  *
- * Every failure path returns null rather than throwing. A check that cannot read must never be able
- * to stop a run.
+ * Every failure path returns `{ unread }` naming its cause (R630) rather than throwing. A check that
+ * cannot read must never be able to stop a run.
  */
 
 const APP = { publisher: "LethAL", name: "LethAL Sandbox Data Tests" };
@@ -66,21 +68,93 @@ describe("BcDevMcpBackend.fetchPublishedAppPackage", () => {
     expect(seen[0]?.auth).toBe(`Basic ${btoa("sshadows:1234")}`);
   });
 
-  it("returns null when the server was ASKED and answered anything but 200", async () => {
+  // R630: the server was ASKED and gave no package, and `unread` names why. Each status keeps its
+  // own number; a 404 is not proven to mean "not resident" (review I2), so it says both readings.
+  for (const [status, cause] of [
+    [404, "HTTP 404 (no such app on the server, or the dev-endpoint path is wrong)"],
+    [401, "HTTP 401 (the dev endpoint refused the login: check BC_DEV_USER / BC_DEV_PASSWORD)"],
+    [403, "HTTP 403 (the dev endpoint refused the login: check BC_DEV_USER / BC_DEV_PASSWORD)"],
+    [500, "HTTP 500 (a server error)"],
+    [503, "HTTP 503 (a server error)"],
+    [409, "HTTP 409"],
+  ] as const) {
+    it(`R630: a ${status} answer is unread, naming ${JSON.stringify(cause)}`, async () => {
+      const backend = new BcDevMcpBackend(BASE_CFG);
+      const read = await backend.fetchPublishedAppPackage(
+        APP,
+        async () => new Response("nope", { status }),
+      );
+      expect(read).toEqual({ unread: cause });
+    });
+  }
+
+  it("R630: a refused connection is unread, naming it, never throwing", async () => {
     const backend = new BcDevMcpBackend(BASE_CFG);
-    const bytes = await backend.fetchPublishedAppPackage(
-      APP,
-      async () => new Response("nope", { status: 404 }),
-    );
-    expect(bytes).toBeNull();
+    const read = await backend.fetchPublishedAppPackage(APP, async () => {
+      throw Object.assign(new TypeError("Unable to connect."), { code: "ConnectionRefused" });
+    });
+    expect(read).toEqual({ unread: "the connection was refused (ConnectionRefused)" });
   });
 
-  it("returns null when the request itself fails, never throwing", async () => {
+  it("R630: a name that does not resolve is unread as DNS", async () => {
     const backend = new BcDevMcpBackend(BASE_CFG);
-    const bytes = await backend.fetchPublishedAppPackage(APP, async () => {
-      throw new Error("ECONNREFUSED");
+    const read = await backend.fetchPublishedAppPackage(APP, async () => {
+      throw Object.assign(new TypeError("getaddrinfo ENOTFOUND cronus283"), { code: "ENOTFOUND" });
     });
-    expect(bytes).toBeNull();
+    expect(read).toEqual({ unread: "the server name did not resolve (DNS, ENOTFOUND)" });
+  });
+
+  it("R630: a refused redirect is named", async () => {
+    const backend = new BcDevMcpBackend(BASE_CFG);
+    const read = await backend.fetchPublishedAppPackage(APP, async () => {
+      throw new BcRedirectRefusedError("BC answered with HTTP 302 redirect to x");
+    });
+    expect(read).toEqual({ unread: "a redirect was refused (LethAL never follows one from BC)" });
+  });
+
+  it("R630: any other failure names its class and message, with the login blanked out", async () => {
+    const backend = new BcDevMcpBackend(BASE_CFG);
+    const read = await backend.fetchPublishedAppPackage(APP, async () => {
+      throw new Error("socket hang up for sshadows:1234");
+    });
+    expect(read).toEqual({ unread: "the request failed (Error: socket hang up for ***:***)" });
+  });
+
+  // R630 review I3: `withDeadline` aborts the fetch before `bounded`'s guard fires, so a fetch
+  // that HONOURS its signal rejects with an AbortError, and that is the timeout too.
+  it("R630 I3: a fetch that honours its abort signal reads as a timeout", async () => {
+    const backend = new BcDevMcpBackend(BASE_CFG);
+    const honours = (_url: string, init?: { signal?: AbortSignal }) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("The operation was aborted.", "AbortError")),
+        );
+      });
+    expect(await backend.fetchPublishedAppPackage(APP, honours, 20)).toEqual({
+      unread: "no answer within 20 ms (timeout)",
+    });
+  });
+
+  it("R630: no cause text carries the login", async () => {
+    const backend = new BcDevMcpBackend(BASE_CFG);
+    for (const status of [401, 403, 404, 500]) {
+      const read = await backend.fetchPublishedAppPackage(
+        APP,
+        async () => new Response("sshadows 1234", { status }),
+      );
+      expect(JSON.stringify(read)).not.toContain("sshadows");
+      expect(JSON.stringify(read)).not.toContain("1234");
+    }
+  });
+
+  it("R-496: an UnfilteredExtensionsQueryError is still thrown", async () => {
+    const backend = new BcDevMcpBackend(BASE_CFG);
+    const err = await backend
+      .fetchPublishedAppPackage(APP, async () => {
+        throw new UnfilteredExtensionsQueryError("unfiltered");
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
   });
 
   it("returns UNDEFINED, not null, when no credentials are configured: nothing was tried", async () => {
@@ -95,15 +169,17 @@ describe("BcDevMcpBackend.fetchPublishedAppPackage", () => {
   });
 
   // R506 K1-K2: the read is bounded through the body even when the body ignores its abort, and a
-  // timeout is still the documented "could not read" `null`. No wall-clock asserts: a missing
-  // bound goes red by bun's 5 s test timeout.
+  // timeout is still the documented "could not read" answer, now naming the timeout (R630). No
+  // wall-clock asserts: a missing bound goes red by bun's 5 s test timeout.
   for (const [name, make] of [
     ["K1 a body that ignores its abort", deafBody],
     ["K2 a fetch that never answers", deafFetch],
   ] as const) {
-    it(`${name} resolves null within the bound`, async () => {
+    it(`${name} resolves unread, as a timeout, within the bound`, async () => {
       const backend = new BcDevMcpBackend(BASE_CFG);
-      expect(await backend.fetchPublishedAppPackage(APP, make(), 20)).toBeNull();
+      expect(await backend.fetchPublishedAppPackage(APP, make(), 20)).toEqual({
+        unread: "no answer within 20 ms (timeout)",
+      });
     });
   }
 });

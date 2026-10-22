@@ -252,6 +252,54 @@ describe("AlRunnerServer.runTests", () => {
     await server.close();
   });
 
+  test("R612 T5: a boolean notRun is carried; an absent one stays absent", async () => {
+    const { server } = serverWith((_req, emit) => {
+      emit(JSON.stringify({ type: "test", name: "C.A", status: "error", notRun: true }));
+      emit(JSON.stringify({ type: "test", name: "C.B", status: "pass", notRun: false }));
+      emit(JSON.stringify({ type: "test", name: "C.C", status: "pass" }));
+      emit(summary({ total: 3 }));
+    });
+    await server.start(2000);
+    const res = await server.runTests({ sourcePaths: ["app"] }, 2000);
+    expect(res.tests.map((t) => t.notRun)).toEqual([true, false, undefined]);
+    expect("notRun" in (res.tests[2] ?? {})).toBe(false);
+    await server.close();
+  });
+
+  for (const bad of [null, "true", 1]) {
+    test(`R612 T5: a non-boolean notRun (${JSON.stringify(bad)}) throws: the protocol moved`, async () => {
+      const { server } = serverWith((_req, emit) => {
+        emit(JSON.stringify({ type: "test", name: "C.A", status: "error", notRun: bad }));
+        emit(summary());
+      });
+      await server.start(2000);
+      await expect(server.runTests({ sourcePaths: ["app"] }, 2000)).rejects.toThrow(
+        /notRun that is not a boolean/,
+      );
+      await server.close();
+    });
+  }
+
+  test("R612: the subcommand is --server by default and `serve` when asked (v3)", async () => {
+    const argvs: string[][] = [];
+    const spawn: ServerSpawnFn = (argv) => {
+      argvs.push([...argv]);
+      const f = new FakeServer(() => undefined);
+      queueMicrotask(() => f.emit('{"ready":true}'));
+      return f;
+    };
+    const v2 = new AlRunnerServer("al", spawn);
+    await v2.start(2000, [], 3);
+    await v2.close();
+    const v3 = new AlRunnerServer("al", spawn, [], "serve");
+    await v3.start(2000, [], 3);
+    await v3.close();
+    expect(argvs).toEqual([
+      ["al", "--server", "--test-timeout", "3"],
+      ["al", "serve", "--test-timeout", "3"],
+    ]);
+  });
+
   test("refuses runTests before start, rather than writing to nothing", async () => {
     const { server } = serverWith((_req, emit) => emit(summary()));
     await expect(server.runTests({ sourcePaths: ["app"] }, 500)).rejects.toThrow(

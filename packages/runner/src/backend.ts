@@ -376,6 +376,19 @@ export interface BoundArtifact {
   readonly manifestObjectKeys: ReadonlySet<string>;
 }
 
+/** R630: the server was ASKED and gave no package. `unread` names why, for the operator. */
+export interface PackageUnread {
+  readonly unread: string;
+}
+
+/** What `fetchPublishedAppPackage` answers: bytes, a failed read with its cause, or `undefined`
+ *  (never asked). */
+export type PublishedPackageRead = Uint8Array | PackageUnread | undefined;
+
+/** R630: whether `r` is a failed read. */
+export const isUnread = (r: PublishedPackageRead): r is PackageUnread =>
+  r !== undefined && !(r instanceof Uint8Array);
+
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
   /**
@@ -453,9 +466,9 @@ export interface ExecutionBackend {
    * Three answers, and the difference between the last two is what keeps the check honest:
    *
    * - **bytes** — the server answered.
-   * - **`null`** — it was ASKED and did not answer (refused connection, 404, timeout, non-200).
-   *   The caller says so, because a check that fails silently reads exactly like a check that
-   *   passed.
+   * - **`{ unread }`** — it was ASKED and did not answer (refused connection, 404, timeout,
+   *   non-200), and `unread` says which (R630). The caller says so, with the cause, because a check
+   *   that fails silently reads exactly like a check that passed.
    * - **`undefined`** — it was never asked, because this configuration cannot form the request at
    *   all (no server named, no credentials). Check 2 stays silent: there is no failure to report,
    *   only a capability that does not apply here. R-372: the run then records no test digests
@@ -468,7 +481,7 @@ export interface ExecutionBackend {
   fetchPublishedAppPackage?(app: {
     readonly publisher: string;
     readonly name: string;
-  }): Promise<Uint8Array | null | undefined>;
+  }): Promise<PublishedPackageRead>;
 
   /**
    * R-371, OPTIONAL: the folders a backend that publishes nothing loads dependency packages from

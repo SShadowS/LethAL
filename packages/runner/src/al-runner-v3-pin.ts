@@ -21,6 +21,20 @@ export interface GatedBuild {
   readonly lethalCommit: string;
   readonly tarballSha256?: string;
   readonly gatedAt?: string;
+  /** R612 M-2: what the gate's leg C read for each warn fact (`V3_WARN_FACTS`). A gate passes
+   *  whatever these read, so a session shows them as read, never as `matches`. */
+  readonly warnFacts?: Readonly<Record<string, string>>;
+}
+
+/** R612 M-2: the warn-fact readings in `x` (a receipt's or `.gated`'s field); only verdicts are
+ *  kept, since a warn fact changes no outcome. `undefined` when there are none. */
+export function warnFactReadings(x: unknown): Readonly<Record<string, string>> | undefined {
+  if (typeof x !== "object" || x === null) return undefined;
+  const kept = Object.entries(x).filter(
+    (e): e is [string, string] =>
+      e[1] === "matches" || e[1] === "diverged" || e[1] === "unmeasurable",
+  );
+  return kept.length > 0 ? Object.fromEntries(kept) : undefined;
 }
 
 /** The binary is not a gated build. Extends `Error` directly. */
@@ -50,12 +64,14 @@ export function parseGated(text: string, where: string): GatedBuild {
   if (typeof g.lethalCommit !== "string" || !/^[0-9a-f]{40}$/.test(g.lethalCommit)) {
     throw new AlRunnerV3UngatedBuildError(`${where} has no lethalCommit`);
   }
+  const warnFacts = warnFactReadings(g.warnFacts);
   return {
     version: g.version,
     binarySha256: g.binarySha256,
     lethalCommit: g.lethalCommit,
     ...(typeof g.tarballSha256 === "string" ? { tarballSha256: g.tarballSha256 } : {}),
     ...(typeof g.gatedAt === "string" ? { gatedAt: g.gatedAt } : {}),
+    ...(warnFacts !== undefined ? { warnFacts } : {}),
   };
 }
 

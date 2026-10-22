@@ -79,13 +79,14 @@ import type {
   BackendCapabilities,
   CoverageMode,
   ExecutionBackend,
+  PackageUnread,
   RunManyCause,
   RunManyOpts,
   RunManyResult,
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { isAlRunnerV2, isBcdev, isLocalRunner, stopIsRetrySafe } from "./backend";
+import { isAlRunnerV2, isBcdev, isLocalRunner, isUnread, stopIsRetrySafe } from "./backend";
 import {
   decodeSource,
   hashAlTree,
@@ -106,7 +107,10 @@ import {
   closedWorldGuard,
   digestedAppOfPackage,
   guardedTestAppHash,
+  isClosedIdentity,
   isClosedWorld,
+  pendingIdentitiesOf,
+  resumableTestApp,
   sameClosedWorld,
 } from "./closed-world";
 import {
@@ -3883,24 +3887,58 @@ function assertSameTestApp(
   row: RunRow | null,
   flag: string,
   testAppHash: string | undefined,
+  pending: PendingResumeCheck,
 ): void {
   if (row === null) throw new Error(`${flag}: the run it found is no longer in this database`);
   if (
     row.testAppProven &&
-    row.testAppHash !== null &&
-    testAppHash !== undefined &&
-    row.testAppHash === testAppHash
+    resumableTestApp(row.testAppHash, testAppHash, row.resourceKey, pending.resourceKey)
   ) {
     return;
   }
+  // R601 (review I3): only a proven pending prior against a proven session gets the R601 words.
+  const note =
+    testAppHash !== undefined && row.testAppProven && row.testAppHash?.endsWith(PENDING_SUFFIX)
+      ? ` ${pendingRefusal(row, testAppHash, pending)}`
+      : "";
+  // R601 (delta review I-1): a revoked identity is a changed closed-world answer, not a republish.
+  const revoked = row.testAppHash?.endsWith(REVOKED_SUFFIX)
+    ? " Its identity was revoked: a closed-world check after execution, its own or a later run's on its server, answered differently (R389, R601)."
+    : "";
   throw new Error(
     `${flag}: run ${row.id} was measured against test app ${describeTestApp(row.testAppHash)}${recordedTestAppNote(
       row.testAppHash,
       row.testAppProven,
     )}, and this session's test app is ${describeTestApp(testAppHash)}${
       testAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-    }. ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495). Drop the resume flag to run from scratch.`,
+    }.${revoked}${note} ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495${note === "" ? "" : ", R601"}). Drop the resume flag to run from scratch.`,
   );
+}
+
+/** R601: what the pending-prior rule compares besides the identity strings. */
+interface PendingResumeCheck {
+  /** This session's server tier (`quarantineResourceKey`), `undefined` when it has none. */
+  readonly resourceKey: string | undefined;
+  /** Why this session is open-world, when it is (`testAppIdentity`). */
+  readonly openWorldWhy: string | undefined;
+}
+
+/** R601: why a pending prior is not resumed by this session, in one or two sentences. */
+function pendingRefusal(row: RunRow, session: string, p: PendingResumeCheck): string {
+  const head = `Run ${row.id} ended before its post-execution closed-world check, so its closed-world answer was never confirmed`;
+  if (!isClosedIdentity(session)) {
+    return `${head}, and this session's closed-world guard does not answer closed now, because: ${p.openWorldWhy ?? "unknown"}. So that answer cannot be confirmed.`;
+  }
+  const sameApp = row.testAppHash === `${session}${PENDING_SUFFIX}`;
+  const server = sameApp
+    ? ` It ran on server ${row.resourceKey ?? "unknown"}, and this session runs on server ${p.resourceKey ?? "unknown"}.`
+    : "";
+  // R601 M-C: with an unknown server nothing visibly differs; say why it still does not match.
+  const why =
+    sameApp && (row.resourceKey === null || p.resourceKey === undefined)
+      ? "and an unknown server never matches."
+      : "and this session's differ.";
+  return `${head}.${server} Such a run is resumed only by a session on the same server whose test app and closed-world answer, asked now, are the same, ${why}`;
 }
 
 /** R495: why an identity lends nothing, said the same way on every path. */
@@ -3953,12 +3991,14 @@ function resolveResume(
   testAppAfterHook = false,
   /** R586: `runMayLend` step 1's session side; absent lends no v3 run (unit callers). */
   lendingSession?: LendingSession,
+  /** R601: the pending-prior rule's server key and open-world reason. */
+  pending: PendingResumeCheck = { resourceKey: undefined, openWorldWhy: undefined },
 ):
   | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
   | undefined {
   if (cfg.resume === undefined) return undefined;
   const sameTestApp = (row: RunRow, flag: string): void => {
-    if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash);
+    if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
   // a throw), then the branch's own checks (each throws), then R557's mark and renamed baseline
@@ -4003,6 +4043,8 @@ function resolveResume(
   let priorHidden: CarryHidden | null;
   // R557: why the resumed run's carry is refused (`lend`), or `undefined`.
   let carryRefused: string | undefined;
+  // R601: the resumed run's recorded test-app identity, for the `resume-reusing-run` clause.
+  let priorTestAppHash: string | null;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -4078,6 +4120,7 @@ function resolveResume(
     if (priorHidden === null)
       throw new Error(`--resume: run ${found} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(foundRow);
+    priorTestAppHash = foundRow.testAppHash;
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -4139,6 +4182,7 @@ function resolveResume(
     if (priorHidden === null)
       throw new Error(`--resume-run ${id} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(row);
+    priorTestAppHash = row.testAppHash;
     priorRunId = id;
   }
 
@@ -4180,6 +4224,10 @@ function resolveResume(
     type: "warning",
     code: "resume-reusing-run",
     message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192).${
+      testAppHash !== undefined && priorTestAppHash === `${testAppHash}${PENDING_SUFFIX}`
+        ? ` Run ${priorRunId} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`
+        : ""
+    }${
       index.nonCarryableRows > 0
         ? ` ${index.nonCarryableRows} prior 'error' verdict(s) will be re-executed.`
         : ""
@@ -4900,7 +4948,7 @@ async function batchTestAppReader(
   testDir: string,
   /** R389: the session's closed-world answer, bound into the hash as the run's identity is. */
   closedWorld: ClosedWorld,
-): Promise<() => Promise<string | undefined>> {
+): Promise<() => Promise<string | PackageUnread | undefined>> {
   const packageReader = backend.fetchPublishedAppPackage;
   const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
   return async () => {
@@ -4913,10 +4961,18 @@ async function batchTestAppReader(
               : packageReader.call(backend, { publisher: manifest.publisher, name: manifest.name }),
       testDir,
     );
-    // R389: a snapshot taken under another guard answer is never reused.
-    return h === undefined ? undefined : guardedTestAppHash(h, closedWorld);
+    // R389: a snapshot taken under another guard answer is never reused. R630: a failed read
+    // passes through as itself, so the refusal it leads to can name its cause.
+    return typeof h === "string" ? guardedTestAppHash(h, closedWorld) : h;
   };
 }
+
+/** R630: a test-app read as the hash it gives, or `undefined` (failed or unknown). Every use as a
+ *  hash goes through this ONCE per site, so a failed read is never compared or reused as one. */
+const hashOf = (r: string | PackageUnread | undefined): string | undefined =>
+  typeof r === "string" ? r : undefined;
+const unreadOf = (r: string | PackageUnread | undefined): string | undefined =>
+  typeof r === "object" ? r.unread : undefined;
 
 /**
  * R495: a session that PROVED its test app (`proven`) and reads a different one (`now`) at a batch
@@ -4931,12 +4987,13 @@ function assertNoTestAppDrift(
   store: ResultsStore,
   runId: number,
   proven: string | undefined,
-  now: string | undefined,
+  read: string | PackageUnread | undefined,
   batchIdx: number,
 ): void {
+  const now = hashOf(read);
   if (proven === undefined || now === proven) return;
   store.setRunTestAppHash(runId, null, false, null);
-  throw new TestAppDriftedError(proven, now, batchIdx);
+  throw new TestAppDriftedError(proven, now, batchIdx, unreadOf(read));
 }
 
 async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<ScoreBatchResult> {
@@ -4981,14 +5038,18 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     | undefined;
   let reused: BaselineSnapshot | undefined;
   // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
-  let hashTestApp: (() => Promise<string | undefined>) | undefined;
+  let hashTestApp: (() => Promise<string | PackageUnread | undefined>) | undefined;
+  // R630: why the read before the baseline failed, for the refusal below.
+  let firstUnread: string | undefined;
   if (input.snapshot !== undefined) {
     const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
     hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
-    const testAppHash = await hashTestApp();
+    const read = await hashTestApp();
     // R495: before `select` carries anything or a snapshot is reused.
-    assertNoTestAppDrift(store, runId, provenTestApp?.hash, testAppHash, batchIdx);
+    assertNoTestAppDrift(store, runId, provenTestApp?.hash, read, batchIdx);
+    const testAppHash = hashOf(read);
+    firstUnread = unreadOf(read);
     // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
     // here that differs from it (or a session with nothing proven) reuses nothing.
     // R496: and the snapshot's run must have recorded the same dependency fingerprint.
@@ -5238,13 +5299,19 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   });
   if (missingFromServer.length > 0) {
     // R462: a failed re-read proves nothing, so it is `undefined`, never a guess.
-    const after = await hashTestApp?.().catch(() => undefined);
+    const reread = await hashTestApp?.().catch(() => undefined);
+    const after = hashOf(reread);
     // R495 (sol, final review): a re-read that is not the proven test app (changed, or unreadable)
     // withdraws the run's proof, so neither this run's snapshots, the one just recorded included,
     // nor its verdicts lend anything later.
     const proven = input.snapshot?.provenTestApp?.hash;
     if (proven !== undefined && after !== proven) store.setRunTestAppHash(runId, null, false, null);
-    throw testAppRefusal(missingFromServer, snapshotKey?.testAppHash, after);
+    throw testAppRefusal(
+      missingFromServer,
+      snapshotKey?.testAppHash,
+      after,
+      unreadOf(reread) ?? firstUnread,
+    );
   }
 
   const plan = input.select(baseline);
@@ -5810,6 +5877,7 @@ async function runSessionBody(
     testDigestParts,
     testDigestDependencies,
     closedWorld: pendingClosedWorld,
+    openWorldWhy,
   } = await testAppIdentity(
     cfg,
     publishedRead,
@@ -5824,7 +5892,8 @@ async function runSessionBody(
   // R389: the session's closed-world answer, bound into every test-app hash it reads or records.
   const sessionClosedWorld = pendingClosedWorld?.guard.closedWorld ?? OPEN_WORLD;
   // R389: a closed-world run's identity is recorded PENDING (unmatchable) until its
-  // post-execution recheck confirms it; a run killed before that never supplies a verdict.
+  // post-execution recheck confirms it; a run killed before that never supplies a baseline, and
+  // supplies a verdict only through R601's rule (`resumableTestApp`).
   const recordedTestAppHash = (h: string): string =>
     pendingClosedWorld !== undefined ? `${h}${PENDING_SUFFIX}` : h;
   // R495: the identity resume, history and the R192 snapshot may use, `undefined` unless proven.
@@ -5935,6 +6004,7 @@ async function runSessionBody(
     testPageRefusedNames,
     envPublishes !== undefined,
     lendingSession,
+    { resourceKey, openWorldWhy },
   );
 
   const runId = cfg.store.createRun({
@@ -6550,7 +6620,13 @@ async function runSessionBody(
       const reason =
         historyTestApp === undefined
           ? "this session's test app is not proven: a dependency changed while it waited for the lease, or could not be read"
-          : prior?.testAppProven !== true || prior.testAppHash !== historyTestApp.hash
+          : prior?.testAppProven !== true ||
+              !resumableTestApp(
+                prior.testAppHash,
+                historyTestApp.hash,
+                prior.resourceKey,
+                resourceKey,
+              )
             ? `that run's test app was ${TEST_APP_UNPROVEN}, or another one`
             : prior.testAppDeps === null
               ? "it recorded no dependency fingerprint (it ran before R496, or its fingerprint could not be taken)"
@@ -7761,11 +7837,24 @@ async function runSessionBody(
         cfg.store.setTestDigests(runId, pendingClosedWorld.digests, pendingClosedWorld.parts);
       }
     } else {
-      if (historyTestApp !== undefined) cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX);
+      // R601 (review I-A, orchestrator ruling): every flip, fresh or resumed, revokes with itself
+      // the project's runs still pending under this package (either closed tag) on this server.
+      const chained =
+        historyTestApp === undefined
+          ? []
+          : cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX, {
+              projectPath: cfg.projectDir,
+              pendingHashes: pendingIdentitiesOf(historyTestApp.hash),
+            });
+      // R601 (delta review I-1): say which other runs this flip revoked.
+      const alsoRevoked =
+        chained.length === 0
+          ? ""
+          : `; it also revoked ${chained.length} run(s) of this project still pending on this server (${chained.join(", ")}), so they cannot be resumed (R601)`;
       emit({
         type: "warning",
         code: "closed-world-changed",
-        message: `[lethal] the closed-world guard answered differently after execution (${again.why}), so this run records open-world test digests and no later run carries or reuses its verdicts`,
+        message: `[lethal] the closed-world guard answered differently after execution (${again.why}), so this run records open-world test digests and no later run carries or reuses its verdicts${alsoRevoked}`,
       });
     }
   }
@@ -8872,8 +8961,8 @@ type PublishedTestAppRead =
   | { readonly kind: "no-fetch" }
   /** Nothing was requested: no readable test `app.json`, or the backend could not form it. */
   | { readonly kind: "not-requested" }
-  /** The server could not answer (`null`). */
-  | { readonly kind: "failed"; readonly name: string }
+  /** The server could not answer; `cause` says why (R630). */
+  | { readonly kind: "failed"; readonly name: string; readonly cause: string }
   | {
       readonly kind: "bytes";
       readonly bytes: Uint8Array;
@@ -8896,9 +8985,9 @@ async function fetchPublishedTestApp(cfg: SessionConfig): Promise<PublishedTestA
   }
   const bytes = await fetchPackage.call(cfg.backend, { publisher, name });
   // `undefined` means the backend could not form the request at all — nothing was tried, so there
-  // is nothing to report. Only a genuine failed READ (`null`) is worth an operator's attention.
+  // is nothing to report. Only a genuine failed READ (`{ unread }`) is worth an operator's attention.
   if (bytes === undefined) return { kind: "not-requested" };
-  if (bytes === null) return { kind: "failed", name };
+  if (isUnread(bytes)) return { kind: "failed", name, cause: bytes.unread };
   return { kind: "bytes", bytes, name, version };
 }
 
@@ -8980,7 +9069,7 @@ function resolveTestArmEvidence(
     case "not-requested":
       return { evidence: noTestArmEvidence(NO_PUBLISHED_READ, discovery) };
     case "failed":
-      return { evidence: noTestArmEvidence(UNREADABLE, discovery) };
+      return { evidence: noTestArmEvidence(unreadable(read.cause), discovery) };
     case "bytes": {
       const m = compiledMembershipOf(read.bytes);
       if (m.kind === "none") {
@@ -9032,8 +9121,8 @@ async function reportPublishedTestApp(
 }> {
   // R247: this session's test-app identity, from the ONE package read (`testAppHashFor`'s rule:
   // the package's hash when it was read, `undefined` when the read failed, else the test source
-  // tree's hash).
-  const sourceHash = () => testAppHashFor(undefined, cfg.testDir);
+  // tree's hash). With no package reader it can only be a hash or `undefined`.
+  const sourceHash = async () => hashOf(await testAppHashFor(undefined, cfg.testDir));
   const warn: RunEmitter = judge ? emit : () => {};
   if (read.kind === "no-fetch") {
     return { testAppHash: await sourceHash(), sources: { kind: "not-published" } };
@@ -9049,9 +9138,12 @@ async function reportPublishedTestApp(
     warn({
       type: "warning",
       code: "published-test-app-unreadable",
-      message: `[lethal] could not read the published test app "${name}" from the server, so this run did not verify that the container holds the suite this project's source declares. A stale test app is still caught at baseline, one round trip later.`,
+      message: `[lethal] could not read the published test app "${name}" from the server (${read.cause}), so this run did not verify that the container holds the suite this project's source declares. A stale test app is still caught at baseline, one round trip later.`,
     });
-    return { testAppHash: undefined, sources: { kind: "unavailable", why: UNREADABLE } };
+    return {
+      testAppHash: undefined,
+      sources: { kind: "unavailable", why: unreadable(read.cause) },
+    };
   }
   const { bytes, version } = read;
   const testAppHash = `package:${hashPackage(bytes)}`;
@@ -9111,6 +9203,8 @@ const NO_PUBLISHED_READ =
   "the published test app could not be requested from the server (no dev server, no dev-endpoint credentials, or no readable test app.json), and the source on disk is not known to be the body it runs";
 const UNREADABLE =
   "the published test app could not be read (on an env-tool session this is the read before its own publish; the published-test-app-unreadable warning appears only if the read after the publish fails too)";
+/** R630: `UNREADABLE`, with the read's cause. */
+const unreadable = (cause: string): string => `${UNREADABLE}: ${cause}`;
 
 /** R389: a closed-world answer not yet confirmed after execution, and the digests it would give. */
 interface PendingClosedWorld {
@@ -9145,6 +9239,8 @@ async function testAppIdentity(
   closedWorld?: PendingClosedWorld;
   /** R496 F9: the full dependency fingerprint the digests were taken over. */
   testDigestDependencies?: string;
+  /** R601 (review I3): why this session is open-world, when it is (no `closedWorld`). */
+  openWorldWhy?: string;
 }> {
   const { testAppHash, sources } = await reportPublishedTestApp(
     cfg,
@@ -9156,7 +9252,7 @@ async function testAppIdentity(
   );
   const none = (why: string) => {
     warnNoTestDigests(emit, why);
-    return { testAppHash };
+    return { testAppHash, openWorldWhy: why };
   };
   // An env-tool session publishes `envTool.publishApps`, PREBUILT .app files, only after the lease
   // is taken, which is after the read above (`afterLeaseAcquiredFor` in cli.ts calls
@@ -9164,7 +9260,11 @@ async function testAppIdentity(
   // read nor the disk is known to be the body the server runs. R373: when the hook will run, the
   // digests are taken after it (`deferredTestDigests`), which warns if it records none.
   if (cfg.afterLeaseAcquired !== undefined) {
-    if (deferred) return { testAppHash };
+    if (deferred)
+      return {
+        testAppHash,
+        openWorldWhy: "an env-tool session's test app is digested open-world (R389)",
+      };
     return none(
       "this run publishes its test apps itself (envTool.publishApps, prebuilt .app files) after the published test app is read, so neither that read nor the source on disk is known to be the body the server runs",
     );
@@ -9198,7 +9298,7 @@ async function testAppIdentity(
     testDigestDependencies: got.dependencies,
     ...(c !== undefined
       ? { closedWorld: { guard, digests: c.digests, parts: c.parts, recheck: ask } }
-      : {}),
+      : { openWorldWhy: guard.why }),
   };
 }
 
@@ -9440,9 +9540,9 @@ async function proveReadBack(
     );
     for (const app of publishes.apps) {
       const bytes = await fetchPackage({ publisher: app.publisher, name: app.name });
-      if (bytes === null || bytes === undefined) {
+      if (!(bytes instanceof Uint8Array)) {
         throw new DependencyUnreadableError(
-          `the package of "${app.name}" (${app.id}) could not be read back`,
+          `the package of "${app.name}" (${app.id}) could not be read back${isUnread(bytes) ? ` (${bytes.unread})` : ""}`,
         );
       }
       let served: ReturnType<typeof readAppIdentity>;
