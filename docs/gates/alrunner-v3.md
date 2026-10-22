@@ -105,6 +105,25 @@ The legs:
   worktree it prepares first (`bun install --frozen-lockfile`, the native parser, the fixture `.alpackages` from
   the symbol tar pinned by sha256) or refuses by name (`al-runner-v3-gate-worktree-unprepared`,
   `al-runner-v3-gate-symbol-tar-mismatch`). Only a `pass` moves `current`.
+- The fixture `.alpackages` are prepared by ONE function, `prepareFixtureSymbols`
+  (`packages/runner/itest/fixture-symbols.ts`, R614). The gate calls it, and so does the itest itself at start,
+  so a manual `itest:alrunner-v3` in a fresh worktree extracts them too. It extracts only the tar's members
+  under `fixtures/sandbox-tests/.alpackages` and `fixtures/sandbox-data-tests/.alpackages` (no other fixture
+  folder is written), then writes the tar's sha256 to `.fixture-symbols.sha256` at the worktree's root
+  (gitignored). Folders already there are used when both exist and that marker equals the pinned sha
+  (`FIXTURE_SYMBOLS_TAR_SHA256`). Both there with NO marker (extracted before R614): they are compared with the
+  tar, file set and each file's sha256; equal, the marker is written and the run goes on. Anything else (a
+  difference, a symlink, a wrong marker, one folder only) refuses by name, `al-runner-v3-gate-symbols-unverified`,
+  naming the marker found, the sha expected and the one-time fix: delete both folders and the marker, and the
+  next run extracts them from the pinned tar (with no tar there, the fix named is to supply the pinned tar, or
+  to write the marker by hand after checking the folders). In the gate that is an infra-fail, retried next run.
+  Nothing is deleted automatically, because the folders may have been put there by hand. The update log names
+  the outcome on each gate run: `<time> <tag>: fixture .alpackages: extracted|verified|marked`.
+- Every leg selection needs the two fixture folders or the tar, CDO-only legs (`D1`, `D1c`) included: the itest
+  prepares them before any leg.
+- Re-pinning the symbol tar (a new `FIXTURE_SYMBOLS_TAR_SHA256`) refuses the gate worktree once, because its
+  marker names the old pin. Before the `--regate`, delete `/work/lethal-wt/al-runner-v3-gate`'s two folders and
+  its `.fixture-symbols.sha256`; the run then extracts them from the new tar.
 - A leg's outcome comes from its error's TYPE, never its text:
   - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`, or v3's
     coverage paths no longer join LethAL's (`AlRunnerV3CoverageJoinError`, a real behaviour change; in a user
@@ -123,7 +142,6 @@ The legs:
   worktree was dirty (a dirty `pass` is refused), and give its outcome from its legs over the exact leg set.
   Dirty means any tracked change, or any untracked file under `fixtures/` or `packages/` (it would compile into
   a leg); other untracked files are the gate's own outputs. `.gated`'s `lethalCommit` is also the full sha.
-  Existing fixture `.alpackages` are not yet checked against the pinned tar ([[R614]]).
 - `timeout-is-cpu` is GATE-ONLY: its burns are fixed iteration counts calibrated on one machine, so only leg C
   measures it, and a session trusts the gated build's record instead of re-burning (M1). That trust is per v3
   BUILD: a later LethAL change to how a call's timeout is sent (`v3CallArgv`, `stopSecondsOf`) is not covered by
