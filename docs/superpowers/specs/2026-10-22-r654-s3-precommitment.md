@@ -64,3 +64,24 @@ every `.kraken/project.yaml` edit, `scripts/al-runner-update.sh`, `scripts/al-ru
 - Each re-pointed lend/resume fake from the plan's I2 table is red-checked against its own guard.
 - The WrappedRule `al-runner-index` arm and M-3 (the v3 duplicate-name throw) keep their red checks.
 - `bun scripts/verify.ts` is green on the submitted head.
+
+## Addendum 1 (2026-10-22, after the build and its review, before any live run)
+
+**The leg list in §2, from `selectLegs`** (`/coord/handoff/R-654/s3-legs.txt`): bcdev, lease, stale-publish,
+tables, chunked, alrunner-v3, coverage-differential and hang. Each must hold unchanged against its committed baseline.
+- **BC legs** run one at a time on `bc1`, the only server in use (bc2 and bc3 are out).
+- **`alrunner-v3`** runs locally with `LETHAL_ITEST_V3_CDO` and `LETHAL_ITEST_V3_TABLES` set, so D1, D1c and T run, as
+  §2 requires. Agentflow's own leg list omits them.
+- **`coverage-differential`** has no script. It is run by the `coverage-differential` skill's ground-truth procedure,
+  as in S1: `sandbox-app`, fenced against none, on bc1. Expected:
+  - fenced 3 / 12 / 4, equal to `bcdev.baseline.json`;
+  - none 3 / 16 / 0, where only the 4 SandboxPricing mutants move, from no-coverage to survived (the ordinary
+    outcome for code no test reaches);
+  - 0 attribution losses;
+  - compare PASS.
+
+**The report readers, corrected.**
+- §3 named `verify --report`, but no such reader exists.
+- `lethal export` (`exportFromCli`) also reads reports, and now refuses a v2 report with the same text.
+- `--resume` (the "last" form) cannot show the by-name refusal: `findResumableRun` selects by backend, so the generic
+  "found no unfinished run" message applies. `--resume-run <id>` shows it by name.
