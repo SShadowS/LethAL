@@ -665,7 +665,7 @@ that ordering is the priority.
 - **R623** · An in-place same-version publish of a fixture TARGET under an installed dependent is not measured, so bc-linux-setup.ts and bc-republish.ts refuse it by name · [R623.md](docs/roadmap/R623.md) · open
 - **R624** · bc-linux-setup.ts's downloadSymbols and the Continia step's residentVersion read any failed dev/packages answer as "absent" · [R624.md](docs/roadmap/R624.md) · open
 - **R625** · 123 tracked scripts/*.ts files are outside scripts/tsconfig.json, so bun run typecheck never sees them (24 of them tests) · [R625.md](docs/roadmap/R625.md) · open
-- **R626** · corpus-snapshot's heavy-job guard counts a parallel itest:alrunner's al-runner children as separate jobs · [R626.md](docs/roadmap/R626.md) · done (c074299e)
+- **R626** · corpus-snapshot's heavy-job guard counts a parallel itest:alrunner's al-runner children as separate jobs · [R626.md](docs/roadmap/R626.md) · done (bb55c64c)
 - **R627** · contentDigest decodes NavxManifest.xml and navigation.xml as UTF-8 and re-encodes them, so two byte strings that differ only in invalid UTF-8 get one digest · [R627.md](docs/roadmap/R627.md) · open
 - **R630** · bcdev's fetchPublishedAppPackage reads a 5xx, a 404 and a timeout alike as null, so a server error is reported under the wrong cause (every consumer fails closed) · [R630.md](docs/roadmap/R630.md) · open, filed 2026-10-22
 
