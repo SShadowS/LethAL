@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**98 of 627 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**98 of 630 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -282,6 +282,8 @@ that ordering is the priority.
 - **R628** · R572's value path cannot tell a deep global that only addresses a request from one that feeds the loop's exit: Shopify's paging loops are over-refused (87 keys) · [R628.md](docs/roadmap/R628.md) · closed 2026-10-22 — ruling: the deep carry over-refuses 87 keys in one file (Shopify, bch), 0 in dc/do/cdo; a…
 - **R629** · A hang loop in one project calls a procedure whose copy in a nested project is refused nowhere · [R629.md](docs/roadmap/R629.md) · open, filed 2026-10-22
 - **R631** · Bun's recursive readdir follows directory symlinks (Node does not): a link cycle in a walked tree hangs or throws ELOOP, and a link out walks a foreign tree; product code walks user projects this way · [R631.md](docs/roadmap/R631.md) · open, filed 2026-10-22
+- **R633** · al-runner v3 update gate: two wrong-reason verdicts on 2026-10-22 (alpha.3 infra-fail with no D legs run; alpha.4 and edge-7739d8132 gate-fail on #5613's fix read as a contract break), and every receipt deleted · [R633.md](docs/roadmap/R633.md) · done (abac8803)
+- **R634** · When the target app has installed dependents, their hang-capable loops are not in the hang context: a dependent's loop that calls a mutated target procedure can hang a scored run · [R634.md](docs/roadmap/R634.md) · open, filed 2026-10-22
 
 ## Product gaps a real project hits
 
@@ -652,12 +654,12 @@ that ordering is the priority.
 - **R599** · scripts/bc-linux-setup.ts compares app versions, not contents, so a fixture rebuilt without a version bump keeps a stale build resident · [R599.md](docs/roadmap/R599.md) · done (d89d6eb4): decides by normalised content digest; live on bc3 twice (run 2 on this head)
 - **R603** · CI's Windows check job runs the unit suite serially; a parallel run there is unmeasured · [R603.md](docs/roadmap/R603.md) · open, filed 2026-10-21
 - **R605** · The dev endpoint refuses a publish below the installed-version record after an unpublish, so a minted gate version cannot be replaced by the app.json build on the Linux bc servers · [R605.md](docs/roadmap/R605.md) · open
-- **R606** · al-runner v3 serve: resources are in the warm compile key, so a changed resource file forces a full recompile although resources reach the VM only at run time (upstream #5635's first half; local build and measurement only, no PR) · [R606.md](docs/roadmap/R606.md) · open, filed 2026-10-21
+- **R606** · al-runner v3 serve: resources are in the warm compile key, so a changed resource file forces a full recompile although resources reach the VM only at run time (upstream #5635's first half; local build and measurement only, no PR) · [R606.md](docs/roadmap/R606.md) · closed 2026-10-22 — ruling (owner): implemented upstream…
 - **R607** · al-runner-v3: snapshot reuse and --resume drop the [v3-refused-test-nearby] note · [R607.md](docs/roadmap/R607.md) · open
 - **R608** · al-runner-v3: the compile proof does not bind non-.al files, <testDir>/.alpackages or subfolders of <deps> · [R608.md](docs/roadmap/R608.md) · open
 - **R612** · On al-runner v3, the v2-era serve rule "close the daemon after any non-pass/fail row" makes every suite run cold-start, because #5607's Commit tests are always not run · [R612.md](docs/roadmap/R612.md) · open
 - **R609** · al-runner-v3: a no-coverage caused by a refused covering test carries no note · [R609.md](docs/roadmap/R609.md) · open
-- **R613** · al-runner v3: one routine lowering cannot handle (a [RunOnClient] DotNet call) anywhere in a subscriber's static reach makes the reach "not known", so every test is refused although the routine never runs (upstream #5641; local fix only, no PR) · [R613.md](docs/roadmap/R613.md) · open, filed 2026-10-21
+- **R613** · al-runner v3: one routine lowering cannot handle (a [RunOnClient] DotNet call) anywhere in a subscriber's static reach makes the reach "not known", so every test is refused although the routine never runs (upstream #5641; local fix only, no PR) · [R613.md](docs/roadmap/R613.md) · closed 2026-10-22 — ruling (owner): implemented upstream…
 - **R610** · al-runner-v3: unmeasured whether --coverage-json lists files reached only by a dynamic call · [R610.md](docs/roadmap/R610.md) · open
 - **R615** · scripts/bc-linux-setup.ts records every lane's lease token in one shared file per server (TOKEN_DIR fixed to the R-589 folder, lease-<server>.txt), so two lanes overwrite each other's record · [R615.md](docs/roadmap/R615.md) · open, filed 2026-10-21
 - **R611** · R586's T15 backend-identity scanner is blind to case labels, split compares, .includes and src subfolders · [R611.md](docs/roadmap/R611.md) · open
@@ -672,6 +674,7 @@ that ordering is the priority.
 - **R626** · corpus-snapshot's heavy-job guard counts a parallel itest:alrunner's al-runner children as separate jobs · [R626.md](docs/roadmap/R626.md) · done (bb55c64c)
 - **R627** · contentDigest decodes NavxManifest.xml and navigation.xml as UTF-8 and re-encodes them, so two byte strings that differ only in invalid UTF-8 get one digest · [R627.md](docs/roadmap/R627.md) · open
 - **R630** · bcdev's fetchPublishedAppPackage reads a 5xx, a 404 and a timeout alike as null, so a server error is reported under the wrong cause (every consumer fails closed) · [R630.md](docs/roadmap/R630.md) · open, filed 2026-10-22
+- **R635** · al-runner v3 backend: use serve's multi-entry runTests (one compile, a resources override per mutant) for bcdev-like speed · [R635.md](docs/roadmap/R635.md) · open, filed 2026-10-22
 
 ---
 

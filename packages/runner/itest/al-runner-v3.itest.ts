@@ -59,6 +59,7 @@ import {
   V3LegFailure,
   V3LegHeld,
   type V3LegOutcome,
+  V3_DEFECT_FACTS,
   cdoCheckoutRefusal,
   classifyLegC,
   classifyLegT,
@@ -265,19 +266,10 @@ async function legC(scratch: string): Promise<void> {
     cacheDir: CACHE,
     tasksetPath: "/usr/bin/taskset",
   });
-  const DEFECTS = [
-    "upstream-compile-errors",
-    "duplicate-key-insert-raises",
-    "sleep-is-noop",
-    "refusal-cascade",
-    "codeunit-runs-whole",
-    "quoted-name-unselectable",
-    "commit-under-test-isolation",
-  ];
   for (const f of r.facts)
     console.log(`  C: ${f.fact} = ${f.verdict} | ${f.measured.slice(0, 200)}`);
   // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail.
-  const c = classifyLegC(r.facts, DEFECTS, 23);
+  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 23);
   for (const l of c.lines) console.log(`  C: ${l}`);
   if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);
   if (c.outcome === "infra-fail") throw new V3LegEnvironment(`C: ${c.lines.join("; ")}`);

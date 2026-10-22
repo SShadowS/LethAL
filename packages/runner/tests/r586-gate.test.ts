@@ -201,6 +201,25 @@ describe("RC-2 (I-2): leg C, a fixed defect is held, never a blacklisting", () =
     ).toBe("infra-fail");
     expect(classifyLegC(asMeasured.slice(0, 2), DEFECTS, 3).outcome).toBe("gate-fail");
   });
+  test("R633 I1: every non-passing line carries what v3 returned (measured), so the receipt shows it", () => {
+    const m = (fact: string, verdict: string, measured: string) => ({
+      ...f(fact, verdict),
+      measured,
+    });
+    const r = classifyLegC(
+      [
+        m("version", "diverged", "exit 7 HttpGet failed"),
+        m("dup", "gone", "row pass"),
+        m("sleep", "unmeasurable", "no document"),
+      ],
+      DEFECTS,
+      3,
+    );
+    const text = r.lines.join("\n");
+    expect(text).toMatch(/gate-fail: version: diverged.*measured exit 7 HttpGet failed/);
+    expect(text).toMatch(/held: dup: .*measured row pass/);
+    expect(text).toMatch(/infra-fail: sleep: unmeasurable.*measured no document/);
+  });
 });
 
 describe("RC-2 (I-2): X (b) moving with #5602's fix is held", () => {
