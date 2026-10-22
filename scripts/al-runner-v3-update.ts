@@ -37,7 +37,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   type V3LegOutcome,
   V3_GATE_LEGS,
@@ -306,23 +306,38 @@ export async function gateOne(
         LETHAL_V3_GATE_NONCE: nonce,
         LETHAL_V3_GATE_RECEIPT: receipt,
       });
-    } catch {
-      // A failing gate still writes its receipt; the receipt decides.
+    } catch (err) {
+      // A failing gate still writes its receipt; the receipt decides. R633 I1: the error is logged.
+      await deps.log(
+        `${deps.now()} ${tag}: the gate exited with an error: ${String(err).slice(0, 1000)}`,
+      );
     }
     const { outcome, why } = await readReceipt(receipt, nonce, sha, commit);
     const lines = await receiptLines(receipt);
     await deps.log(
       `${deps.now()} ${tag} (${version}, ${sha}) at ${commit}: ${outcome}: ${why}${lines.length > 0 ? `; lines: ${lines.join(" | ")}` : ""}`,
     );
-    // R632 C: the receipt outlives `work`, beside the outcome it gave.
-    const keep = async (dir: string, file = "receipt.json") => {
-      if (!existsSync(receipt)) return;
-      await mkdir(dir, { recursive: true });
-      await cp(receipt, join(dir, file));
+    // R632 C, R633 I1: the receipt and the gate's own output (`gate.log`) outlive `work`, beside the
+    // outcome they gave, each when it exists. R633 M2: a failed copy is logged and never blocks the
+    // verdict, `.gated` or the count.
+    const gateLog = join(work, "gate.log");
+    const keep = async (dir: string, prefix = "") => {
+      for (const [from, file] of [
+        [receipt, "receipt.json"],
+        [gateLog, "gate.log"],
+      ] as const) {
+        if (!existsSync(from)) continue;
+        try {
+          await mkdir(dir, { recursive: true });
+          await cp(from, join(dir, `${prefix}${file}`));
+        } catch (err) {
+          await deps.log(`${deps.now()} ${tag}: ${file} not kept in ${dir}: ${String(err)}`);
+        }
+      }
     };
-    if (opts.regateAt !== undefined) await keep(join(root, "regate"), `${commit}.receipt.json`);
+    if (opts.regateAt !== undefined) await keep(join(root, "regate"), `${commit}.`);
     if (outcome === "infra-fail") {
-      if (opts.regateAt === undefined) await keep(join(root, "infra"), `${name}.receipt.json`);
+      if (opts.regateAt === undefined) await keep(join(root, "infra"), `${name}.`);
       return infra(deps, name);
     }
     await infraCount(root, name, false);
@@ -432,6 +447,18 @@ export interface EdgeDeps {
 
 export type EdgeResult = "skipped" | "no-op" | Outcome;
 
+/**
+ * A heavy job's command line (`/proc/<pid>/cmdline`, NULs as spaces): an itest, `cli.ts run`, verify or
+ * a corpus job. R633 M5: bun may appear by a full path (`/home/dev/.bun/bin/bun ...`).
+ */
+export const HEAVY_JOB =
+  /(^|\/)bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|(^|\/)bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/;
+
+/** R633 I2: a `--regate` that was skipped for the day exits 2, so a `&&` chain stops. */
+export function updateExitCode(regate: boolean, out: readonly string[]): number {
+  return regate && out[0] === "skipped" ? 2 : 0;
+}
+
 /** True, with the reason logged, when 2 or more heavy jobs run or under 10 GB is available. */
 async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean> {
   const heavy = await deps.heavyJobs();
@@ -465,23 +492,41 @@ export async function edgeOnce(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult>
   return outcome;
 }
 
+/**
+ * Runs `argv`; returns its stdout, and throws on a non-zero exit with the tail of its stderr. With
+ * `logPath` (R633 I1), stdout and stderr are written there first, on EVERY exit, so the gate's own
+ * output (leg C's per-fact lines included) survives a failing run.
+ */
+export async function runToLog(
+  argv: string[],
+  env: Record<string, string> = {},
+  cwd?: string,
+  logPath?: string,
+): Promise<string> {
+  const p = Bun.spawn(argv, {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, ...env },
+    ...(cwd !== undefined ? { cwd } : {}),
+  });
+  const [out, err] = await Promise.all([
+    new Response(p.stdout).text(),
+    new Response(p.stderr).text(),
+  ]);
+  const code = await p.exited;
+  if (logPath !== undefined)
+    await writeFile(
+      logPath,
+      `$ ${argv.join(" ")}\n-- exit ${code}\n-- stdout\n${out}\n-- stderr\n${err}\n`,
+    );
+  if (code !== 0) throw new Error(`${argv.join(" ")}: exit ${code}: ${err.slice(-400)}`);
+  return out;
+}
+
 /** Real side effects. */
 export function realDeps(root = ROOT): UpdateDeps {
-  const run = async (argv: string[], env: Record<string, string> = {}, cwd?: string) => {
-    const p = Bun.spawn(argv, {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, ...env },
-      ...(cwd !== undefined ? { cwd } : {}),
-    });
-    const [out, err] = await Promise.all([
-      new Response(p.stdout).text(),
-      new Response(p.stderr).text(),
-    ]);
-    const code = await p.exited;
-    if (code !== 0) throw new Error(`${argv.join(" ")}: exit ${code}: ${err.slice(-400)}`);
-    return out;
-  };
+  const run = (argv: string[], env: Record<string, string> = {}, cwd?: string) =>
+    runToLog(argv, env, cwd);
   return {
     root,
     listReleases: async () =>
@@ -556,7 +601,14 @@ export function realDeps(root = ROOT): UpdateDeps {
       });
       if ("refused" in prep) throw new Error(prep.refused);
       for (const step of prep.steps) await run(step, {}, GATE_WORKTREE);
-      await run(["bun", "run", "itest:alrunner-v3"], { ...env }, GATE_WORKTREE);
+      // R633 I1: the itest's own output goes to `gate.log` beside the receipt; `gateOne` keeps it.
+      const receipt = env.LETHAL_V3_GATE_RECEIPT;
+      await runToLog(
+        ["bun", "run", "itest:alrunner-v3"],
+        { ...env },
+        GATE_WORKTREE,
+        receipt !== undefined ? join(dirname(receipt), "gate.log") : undefined,
+      );
     },
     inUse: async () => {
       for (const pid of await readdir("/proc")) {
@@ -579,12 +631,7 @@ export function realDeps(root = ROOT): UpdateDeps {
           "\0",
           " ",
         );
-        if (
-          /^bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|^bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/.test(
-            cmd,
-          )
-        )
-          n++;
+        if (HEAVY_JOB.test(cmd)) n++;
       }
       return n;
     },
@@ -645,4 +692,5 @@ if (import.meta.main && process.argv.includes("--edge")) {
   }
   const out = await updateOnce(realDeps(), regateAt !== undefined ? { regateAt } : {});
   console.log(`al-runner-v3-update: ${out.join(", ") || "no candidate"}`);
+  process.exitCode = updateExitCode(regateAt !== undefined, out);
 }

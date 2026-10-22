@@ -4,10 +4,11 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { V3_GATE_LEGS } from "../packages/runner/itest/al-runner-v3-gate";
 import {
   FIXTURE_SYMBOLS_TAR_SHA256,
+  HEAVY_JOB,
   type Outcome,
   type UpdateDeps,
   V3_CDO_DEFAULT,
@@ -16,6 +17,8 @@ import {
   expectedSha,
   gatePreparation,
   readReceipt,
+  runToLog,
+  updateExitCode,
   updateOnce,
 } from "./al-runner-v3-update";
 
@@ -69,6 +72,10 @@ function fake(o: {
   lines?: string[];
   heavy?: number;
   free?: number;
+  /** Written as `gate.log` beside the receipt, as `realDeps().runGate` does (R633 I1). */
+  gateLog?: string;
+  /** The gate throws this after writing its files (a non-zero exit). */
+  throwText?: string;
 }) {
   const seen = {
     gates: [] as string[],
@@ -99,7 +106,13 @@ function fake(o: {
     runGate: async (commit, env) => {
       seen.gates.push(commit);
       seen.envs.push(env);
-      if (o.outcome === undefined) return;
+      const receiptPath = env.LETHAL_V3_GATE_RECEIPT ?? "";
+      if (o.gateLog !== undefined)
+        await writeFile(join(dirname(receiptPath), "gate.log"), o.gateLog);
+      if (o.outcome === undefined) {
+        if (o.throwText !== undefined) throw new Error(o.throwText);
+        return;
+      }
       await writeFile(
         env.LETHAL_V3_GATE_RECEIPT ?? "",
         JSON.stringify({
@@ -112,6 +125,7 @@ function fake(o: {
           lines: o.lines ?? [],
         }),
       );
+      if (o.throwText !== undefined) throw new Error(o.throwText);
     },
     inUse: async () => o.inUse === true,
     log: async (l) => {
@@ -292,6 +306,71 @@ linuxOnly("T19: the v3 update gate", () => {
       expect(a.seen.logs.join("\n")).toMatch(/skipped for the day/);
     }
     expect(await updateOnce(fake({ outcome: "pass", heavy: 1, free: 10 }).deps)).toEqual(["pass"]);
+  });
+
+  test("R633 I1: gate.log is kept beside the outcome, even with no receipt, and the gate's error is logged", async () => {
+    await setup();
+    const i = fake({
+      gateLog: "C: refusal-row-shape = diverged | exit 1",
+      throwText: "exit 1: boom",
+    });
+    expect(await updateOnce(i.deps)).toEqual(["infra-fail"]);
+    expect(await readFile(join(root, "infra", "v3.0.0-alpha.3.gate.log"), "utf8")).toContain(
+      "refusal-row-shape = diverged",
+    );
+    expect(existsSync(join(root, "infra", "v3.0.0-alpha.3.receipt.json"))).toBe(false);
+    expect(i.seen.logs.join("\n")).toContain("exit 1: boom");
+
+    await setup();
+    await updateOnce(fake({ outcome: "gate-fail", gateLog: "g" }).deps);
+    expect(existsSync(join(failedAt("v3.0.0-alpha.3"), "gate.log"))).toBe(true);
+
+    await setup();
+    await updateOnce(fake({ outcome: "held", gateLog: "h" }).deps);
+    expect(existsSync(join(root, "held", "v3.0.0-alpha.3", "gate.log"))).toBe(true);
+
+    await setup();
+    const r = fake({ outcome: "pass", receiptSha: sha("alpha2"), gateLog: "r" });
+    await updateOnce(r.deps, { regateAt: REGATE_COMMIT });
+    expect(existsSync(join(root, "regate", `${REGATE_COMMIT}.gate.log`))).toBe(true);
+  });
+
+  test("R633 M2: a failed copy is logged and never blocks the verdict (a regate pass still writes .gated)", async () => {
+    await setup();
+    await writeFile(join(root, "regate"), "a file where the folder should be");
+    const { deps, seen } = fake({ outcome: "pass", receiptSha: sha("alpha2"), gateLog: "r" });
+    expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+    const g = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
+    expect(g.lethalCommit).toBe(REGATE_COMMIT);
+    expect(seen.logs.join("\n")).toMatch(/not kept/);
+  });
+
+  test("R633 I1: runToLog writes stdout and stderr to the log on every exit, and throws on non-zero", async () => {
+    await setup();
+    const log = join(root, "gate.log");
+    await runToLog(["sh", "-c", "echo out-0; echo err-0 >&2"], {}, root, log);
+    expect(await readFile(log, "utf8")).toMatch(/out-0[\s\S]*err-0/);
+    await expect(
+      runToLog(["sh", "-c", "echo out-3; echo err-3 >&2; exit 3"], {}, root, log),
+    ).rejects.toThrow(/exit 3[\s\S]*err-3/);
+    expect(await readFile(log, "utf8")).toMatch(/out-3[\s\S]*err-3/);
+  });
+});
+
+describe("R633 I2 and M5", () => {
+  test("I2: a skipped --regate exits 2; a skipped alpha run, or a regate that ran, exits 0", () => {
+    expect(updateExitCode(true, ["skipped"])).toBe(2);
+    expect(updateExitCode(false, ["skipped"])).toBe(0);
+    expect(updateExitCode(true, ["pass"])).toBe(0);
+  });
+  test("M5: a heavy job is counted with a bare or a full-path bun; the update script is not", () => {
+    for (const cmd of [
+      "bun packages/runner/itest/al-runner-v3.itest.ts",
+      "/home/dev/.bun/bin/bun packages/runner/itest/al-runner-v3.itest.ts",
+      "/usr/local/bin/bun scripts/verify.ts",
+    ])
+      expect(HEAVY_JOB.test(cmd)).toBe(true);
+    expect(HEAVY_JOB.test("bun scripts/al-runner-v3-update.ts --regate x")).toBe(false);
   });
 });
 
