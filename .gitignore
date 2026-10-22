@@ -20,6 +20,10 @@ lethal.config.bc*.json
 launch.bc*.json
 # R663: the talk's bc-demo config (examples/gift-card); it holds credentials
 lethal.config.demo.json
+# R663b laptop mode: the talk laptop's login file and its checkout-local cache (symbols, the
+# pinned control app, bc-dev-mcp)
+/.lethal-demo.env
+/.lethal-cache/
 scripts/r289-probe/sidecar-creds.*.json
 *.app
 # R599: five small real alc builds of the names fixtures, test data for bc-app-content.test.ts

@@ -67,6 +67,8 @@ export interface Conn {
   readonly authorization: string;
   /** Tests only: answers every request made through this Conn. Production never sets it. */
   readonly fetch?: FetchFn;
+  /** R663b laptop mode: the host, e.g. `http://localhost`. Absent means `HOST` (kraken mode). */
+  readonly host?: string;
 }
 
 /** Every dev-endpoint and API call in this module sends through here (R624: a fake Conn never reaches a server). */
@@ -74,8 +76,10 @@ function send(c: Conn): FetchFn {
   return c.fetch ?? bcFetch;
 }
 
+const hostOf = (c: Conn): string => c.host ?? HOST;
+
 function devBase(c: Conn): string {
-  return `${HOST}:${portsOf(c.server).dev}/BC`;
+  return `${hostOf(c)}:${portsOf(c.server).dev}/BC`;
 }
 
 export async function publishBytes(c: Conn, fileName: string, bytes: Uint8Array): Promise<void> {
@@ -193,7 +197,7 @@ export async function residentPackage(
   name: string,
 ): Promise<Buffer | null> {
   const url = devPackagesUrl(
-    { server: HOST, serverInstance: "BC", tenant: "default", port: portsOf(c.server).dev },
+    { server: hostOf(c), serverInstance: "BC", tenant: "default", port: portsOf(c.server).dev },
     { publisher, name },
   );
   if (url === null) throw new Error("unreachable: devPackagesUrl refused a fixed URL");
@@ -245,7 +249,7 @@ export const rowVersion = (r: ExtensionRow) =>
   `${r.versionMajor}.${r.versionMinor}.${r.versionBuild}.${r.versionRevision}`;
 
 export async function extensionsApi(c: Conn): Promise<string> {
-  const api = `${HOST}:${portsOf(c.server).api}/BC/api`;
+  const api = `${hostOf(c)}:${portsOf(c.server).api}/BC/api`;
   const cs = await apiJson(c, `${api}/v2.0/companies?tenant=default`);
   if (!cs.ok) throw new Error(`${c.server}: companies: HTTP ${cs.status}`);
   const company = (cs.body.value as { id: string; name: string }[]).find((x) => x.name === COMPANY);

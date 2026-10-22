@@ -352,16 +352,21 @@ export function buildConfig(
 }
 
 /** `buildConfig`'s `bcdev` section; R663's `bc-demo-setup.ts` builds its config from it too. */
-export function bcdevSection(server: ConnServer, login: BcLogin, paths: ConfigPaths): object {
+export function bcdevSection(
+  server: ConnServer,
+  login: BcLogin,
+  paths: ConfigPaths,
+  host: string = HOST,
+): object {
   const p = portsOf(server);
   return {
     mcpCommand: paths.mcpCommand,
-    server: `${HOST}:${p.dev}`,
+    server: `${host}:${p.dev}`,
     serverInstance: "BC",
     tenant: "default",
     port: p.dev,
-    baseUrl: `${HOST}:${p.odata}/BC`,
-    apiBaseUrl: `${HOST}:${p.api}/BC`,
+    baseUrl: `${host}:${p.odata}/BC`,
+    apiBaseUrl: `${host}:${p.api}/BC`,
     company: "CRONUS International Ltd.",
     username: login.user,
     password: login.password,
@@ -708,14 +713,18 @@ export async function doctor(
   return (await p.exited) === 0;
 }
 
-export function bcDevMcpCommand(): string[] {
-  const pkg = JSON.parse(readFileSync(join(BC_DEV_MCP, "package.json"), "utf8")) as {
+/** `dir` is a bc-dev-mcp checkout; R663b's laptop mode passes its own (`bc-demo-laptop.ts`). */
+export function bcDevMcpCommand(
+  dir: string = BC_DEV_MCP,
+  read: (path: string) => string = (p) => readFileSync(p, "utf8"),
+): string[] {
+  const pkg = JSON.parse(read(join(dir, "package.json"))) as {
     bin?: Record<string, string>;
     main?: string;
   };
   const entry = pkg.bin?.["bc-dev-mcp"] ?? pkg.main;
-  if (entry === undefined) throw new Error(`${BC_DEV_MCP}/package.json: no bin or main`);
-  return ["node", join(BC_DEV_MCP, entry)];
+  if (entry === undefined) throw new Error(`${dir}/package.json: no bin or main`);
+  return ["node", join(dir, entry)];
 }
 
 export function errText(err: unknown): string {
@@ -1070,13 +1079,14 @@ export interface RunDeps {
   readonly doctor: (configPath: string, projectDir: string, testsDir: string) => Promise<boolean>;
 }
 
-export function pinnedControl(): Buffer {
-  const control = readFileSync(CONTROL_APP);
+export function pinnedControl(
+  path: string = CONTROL_APP,
+  read: (p: string) => Buffer = (p) => readFileSync(p),
+): Buffer {
+  const control = read(path);
   const sha = sha256Of(control);
   if (sha !== CONTROL_SHA256) {
-    throw new Error(
-      `${CONTROL_APP}: sha256 ${sha}, expected ${CONTROL_SHA256}; refusing to publish it`,
-    );
+    throw new Error(`${path}: sha256 ${sha}, expected ${CONTROL_SHA256}; refusing to publish it`);
   }
   return control;
 }
@@ -1088,7 +1098,10 @@ export async function realCompile(
   symbols: string,
   log: string[],
   root: string = join(REPO, "fixtures"),
+  /** R663b laptop mode: the alc it resolved; absent, the newest AL extension's. */
+  alc?: string,
 ): Promise<AppItem[]> {
+  if (alc !== undefined) return compileStep(c, alc, step, symbols, log, root);
   const tools = await defaultAlToolPaths();
   if (tools === undefined) throw new Error("no alc found under the AL Language extension");
   return compileStep(c, tools.alcPath, step, symbols, log, root);
