@@ -78,6 +78,10 @@ duplicate entry. The decision, in order:
 | a higher version, a target a gate deploys itself (`gateDeploys`) whose resident build is instrumented | `kept` (setup only; R605 ruling (a)) |
 | a higher version, anything else | `refuse above-build` |
 
+"Nothing" means the dev endpoint answered 404: `residentPackage` in `scripts/bc-app-content.ts` reads only a
+404 as absent, and any other failed answer stops the run (R624; bc3 measured 404 for an app it cannot hold,
+`/coord/handoff/R-624/live/0-absent-status.log`).
+
 A `publish in place` line names the zip entries that differ and both compiler versions, so a stale
 SOURCE (`src/...` differs) is told apart from another compiler (only `NavxManifest.xml`,
 `SymbolReference.json` or `DocComments.xml` differ). LethAL Control goes through the row check and
