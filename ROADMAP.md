@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**94 of 650 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**96 of 652 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -695,6 +695,8 @@ that ordering is the priority.
 - **R652** · al-runner v3 serve-entries: assertBound re-hashes the whole tree on every run(), 527 times on CDO (86 s, 62% of the loop); check once per request sent · [R652.md](docs/roadmap/R652.md) · open, filed 2026-10-22
 - **R653** · al-runner v3 serve-entries: each kill's unmutated confirm is a live NONE request (51 on CDO, about 10 s); answer it from the warm-up's NONE rows · [R653.md](docs/roadmap/R653.md) · open, filed 2026-10-22
 - **R654** · Retire the .NET al-runner backend (v2): the Rust runtime (v3) replaces it · [R654.md](docs/roadmap/R654.md) · open, filed 2026-10-22
+- **R656** · `--dry-run --backend al-runner-v3` reads bcdev's package cache, not `alRunnerV3.packagesDir` · [R656.md](docs/roadmap/R656.md) · open, filed 2026-10-22
+- **R657** · The R553 assertion screen reads an al-runner-v3 kill as bcdev's: v3's failure-message shape is unmeasured · [R657.md](docs/roadmap/R657.md) · open, filed 2026-10-22
 
 ---
 
