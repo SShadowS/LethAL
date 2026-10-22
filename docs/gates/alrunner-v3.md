@@ -105,14 +105,17 @@ The legs:
   worktree it prepares first (`bun install --frozen-lockfile`, the native parser, the fixture `.alpackages` from
   the symbol tar pinned by sha256) or refuses by name (`al-runner-v3-gate-worktree-unprepared`,
   `al-runner-v3-gate-symbol-tar-mismatch`). Only a `pass` moves `current`.
-- After an extraction the gate writes the tar's sha256 to `.fixture-symbols.sha256` at the gate worktree's root
-  (R614). Fixture `.alpackages` already there are used only when both folders exist and that marker equals the
-  pinned sha (`FIXTURE_SYMBOLS_TAR_SHA256`). Otherwise the gate refuses by name,
-  `al-runner-v3-gate-symbols-unverified`, naming the marker it found and the sha it expected: an infra-fail,
-  retried next run. It refuses rather than extracting again, because `tar -x` over old folders keeps their extra
-  files, and the folders may have been put there by hand. The remedy is to delete both folders and the marker;
-  the next run extracts them from the pinned tar. Folders extracted before R614 have no marker, so the first run
-  after R614 refuses until they are deleted.
+- The fixture `.alpackages` are prepared by ONE function, `prepareFixtureSymbols`
+  (`packages/runner/itest/fixture-symbols.ts`, R614). The gate calls it, and so does the itest itself at start,
+  so a manual `itest:alrunner-v3` in a fresh worktree extracts them too. After an extraction it writes the tar's
+  sha256 to `.fixture-symbols.sha256` at the worktree's root. Folders already there are used when both exist and
+  that marker equals the pinned sha (`FIXTURE_SYMBOLS_TAR_SHA256`). Both there with NO marker (extracted before
+  R614): they are compared with the tar, file set and each file's sha256; equal, the marker is written and the
+  run goes on. Anything else (a difference, a wrong marker, one folder only) refuses by name,
+  `al-runner-v3-gate-symbols-unverified`, naming the marker found, the sha expected and the one-time fix: delete
+  both folders and the marker, and the next run extracts them from the pinned tar. In the gate that is an
+  infra-fail, retried next run. Nothing is deleted automatically, because the folders may have been put there by
+  hand.
 - A leg's outcome comes from its error's TYPE, never its text:
   - `gate-fail`: a pre-committed figure differs, a contract fact or a defect fact reads `diverged`, or v3's
     coverage paths no longer join LethAL's (`AlRunnerV3CoverageJoinError`, a real behaviour change; in a user
