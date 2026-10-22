@@ -1318,6 +1318,162 @@ ${getters}
   it("35b. the same global read for real by the wrapper: its writer is refused", () => {
     expect(project(shadow(true))(C, "T35")).toBe(true);
   });
+
+  /** The Shpfy paging shape, abstracted: `Execute` (stateful: it names `IsTest`) builds its request
+   *  from `Shop` through `url`; the loop reads the next cursor from the response and calls
+   *  `SetShop`, which writes `Shop`. `deep`: `Shop` is read two calls below `Execute`. */
+  const paging = (deep: boolean): Files => ({
+    "Buf.Table.al": BUF,
+    [C]: `codeunit 57202 "R572 Comm"
+{
+    var
+        Shop: Record "R572 Buf";
+        IsTest: Boolean;
+
+    procedure Execute(Q: Text): Text
+    var
+        R: Text;
+    begin
+        if IsTest then
+            exit('');
+        R := Send(${deep ? "BuildUrl(Q)" : "UrlOf(Q)"});
+        exit(R);
+    end;
+
+    local procedure BuildUrl(Q: Text): Text
+    var
+        U: Text;
+    begin
+        U := UrlOf(Q);
+        exit(U);
+    end;
+
+    local procedure UrlOf(Q: Text): Text
+    begin
+        exit(Shop.Val + Q);
+    end;
+
+    local procedure Send(U: Text): Text
+    begin
+        exit(U);
+    end;
+
+    procedure SetShop(S: Record "R572 Buf")
+    var
+        Tag: Text;
+    begin
+        Tag := 'T36';
+        Shop := S;
+    end;
+}`,
+    [L]: loop(
+      `        Cm: Codeunit "R572 Comm";
+        Resp: Text;
+        Cursor: Text;`,
+      `        repeat
+            Cm.SetShop(R);
+            Resp := Cm.Execute(Cursor);
+            Cursor := CopyStr(Resp, 2);
+        until Resp = '';`,
+    ),
+  });
+  // KNOWN OVER-REFUSAL, pinned (R628): a by-name slice cannot tell "a deep global only addresses the
+  // request" (Shopify's shop) from "a deep global feeds the exit" (37b). The deep carry is kept so
+  // 37b stays refused; this pin goes the other way the day R628 is fixed without losing 37b.
+  it("36. the Shpfy paging shape (the shop read two calls below the chain): SetShop IS refused (R628)", () => {
+    expect(project(paging(true))(C, "T36")).toBe(true);
+  });
+  it("36b. the shop read ONE call below the chain: SetShop refused", () => {
+    expect(project(paging(false))(C, "T36")).toBe(true);
+  });
+
+  /** The safety probe: the exit reads `Pos` (the chain names it); the body calls `Step`, which calls
+   *  `Inner`, which calls `Bump`, which writes `Pos` (the writer two calls below the body call). */
+  it("37. the exit's state written by a callee two calls below the body call: refused", () => {
+    const at = project({
+      [C]: `codeunit 57202 "R572 Deep2"
+{
+    var
+        Pos: Integer;
+
+    procedure HasMore(): Boolean
+    begin
+        exit(Pos < 3);
+    end;
+
+    procedure Step()
+    begin
+        Inner();
+    end;
+
+    local procedure Inner()
+    begin
+        Bump();
+    end;
+
+    local procedure Bump()
+    var
+        Tag: Text;
+    begin
+        Tag := 'T37';
+        Pos += 1;
+    end;
+}`,
+      [L]: loop(
+        `        It: Codeunit "R572 Deep2";`,
+        `        while It.HasMore() do
+            It.Step();`,
+      ),
+    });
+    expect(at(C, "T37")).toBe(true);
+  });
+
+  /** The READ side two calls deep: the chain computes its result through `Check`, which reads it
+   *  through `Peek`, which reads `Pos`; `Bump` (body-called) writes `Pos`. */
+  it("37b. the exit's state READ two calls below the chain, written from the body: refused", () => {
+    const at = project({
+      [C]: `codeunit 57202 "R572 Read2"
+{
+    var
+        Pos: Integer;
+
+    procedure HasMore(): Boolean
+    var
+        V: Boolean;
+    begin
+        V := Check();
+        exit(V);
+    end;
+
+    local procedure Check(): Boolean
+    var
+        W: Boolean;
+    begin
+        W := Peek();
+        exit(W);
+    end;
+
+    local procedure Peek(): Boolean
+    begin
+        exit(Pos < 3);
+    end;
+
+    procedure Bump()
+    var
+        Tag: Text;
+    begin
+        Tag := 'T37B';
+        Pos += 1;
+    end;
+}`,
+      [L]: loop(
+        `        It: Codeunit "R572 Read2";`,
+        `        while It.HasMore() do
+            It.Bump();`,
+      ),
+    });
+    expect(at(C, "T37B")).toBe(true);
+  });
   it("19b. a named return value: the writer of the global copied into it is refused", () => {
     const at = project({
       [C]: `codeunit 57202 "R572 Named"
