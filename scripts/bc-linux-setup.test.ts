@@ -12,8 +12,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
+import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
-import type { AppManifest, ServerOps } from "./bc-app-content.ts";
+import type { AppManifest, Conn, ServerOps } from "./bc-app-content.ts";
 import {
   GATE_FIXTURES,
   LaneUnknownError,
@@ -22,19 +23,23 @@ import {
   NotIgnoredError,
   PINNED_MICROSOFT_VERSION,
   PUBLISH_PLAN,
+  REAL_DEPS,
   type RunDeps,
   SecretFileError,
   buildConfig,
   buildLaunch,
   configFileName,
   continiaDependencyProblems,
+  decideContinia,
   describeLogin,
+  downloadSymbols,
   gitIgnores,
   krakenLeaseFor,
   launchFileName,
   parseArgs,
   parseSecretEnv,
   readSecretFile,
+  realContiniaOps,
   resolveLane,
   run,
   withLease,
@@ -866,5 +871,84 @@ describe("--write-config-only: configs from the secret file, no server call, no 
   test("--predict and --dry-run exclude each other", () => {
     expect(() => parseArgs(["--server", "bc3", "--predict", "--dry-run"])).toThrow(/exclude/);
     expect(parseArgs(["--server", "bc3", "--predict"])).toMatchObject({ predict: true });
+  });
+});
+
+// R624: every reader goes through the one strict `residentPackage`; a 5xx stops, never "absent".
+describe("R624: a failed dev/packages read stops every reader by its status", () => {
+  /** A Conn answering each read by publisher and app name (never the network). */
+  const connBy = (answer: (publisher: string, name: string) => Response): Conn => ({
+    server: "bc3",
+    authorization: "Basic fake",
+    fetch: (async (input: string | URL | Request) => {
+      const u = new URL(String(input));
+      return answer(u.searchParams.get("publisher") ?? "", u.searchParams.get("appName") ?? "");
+    }) as unknown as FetchFn,
+  });
+  const answering = (status: number) => connBy(() => new Response("x", { status }));
+  const pkgOf = (name: string, publisher: string, version: string) =>
+    buildFakeAppWithEntries({
+      "NavxManifest.xml": `<Package><App Id="${name}-id" Name="${name}" Publisher="${publisher}" Version="${version}" /></Package>`,
+    });
+  const messageOf = async (p: Promise<unknown>) => {
+    try {
+      await p;
+    } catch (err) {
+      return (err as Error).message;
+    }
+    throw new Error("expected a rejection");
+  };
+
+  test("downloadSymbols: a 500 for System names HTTP 500, not a missing package (M2)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "r624-dl-"));
+    writeFileSync(
+      join(dir, "app.json"),
+      JSON.stringify({ name: "x", publisher: "LethAL", version: "1.0.0.0" }),
+    );
+    const msg = await messageOf(downloadSymbols(answering(500), dir, dir));
+    expect(msg).toContain("HTTP 500");
+    expect(msg).not.toContain("holds no");
+  });
+
+  test("the shared cache's real downloadSymbol: a 500 stops the fill by its status, nothing sealed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "r624-cache-"));
+    const c = answering(500);
+    const msg = await messageOf(
+      fillSymbolCache({
+        root,
+        server: "bc3",
+        names: ["System"],
+        download: (name) => REAL_DEPS.downloadSymbol(c, name),
+      }),
+    );
+    expect(msg).toContain("HTTP 500");
+    expect(msg).not.toContain("holds no");
+    expect(readdirSync(join(root, "bc3"))).toEqual([]);
+  });
+
+  test("realContiniaOps: a 500 rejects naming HTTP 500; a 404 resolves null (I4)", async () => {
+    await expect(
+      realContiniaOps(answering(500)).residentVersion("Continia Software", "Continia Core"),
+    ).rejects.toThrow("HTTP 500");
+    expect(
+      await realContiniaOps(answering(404)).residentVersion("Continia Software", "Continia Core"),
+    ).toBeNull();
+  });
+
+  test("decideContinia: Microsoft at the pinned build, a 500 for one Continia app: it throws, never publishes it", async () => {
+    const c = connBy((publisher, name) =>
+      publisher === "Microsoft"
+        ? new Response(pkgOf(name, "Microsoft", PINNED_MICROSOFT_VERSION), { status: 200 })
+        : new Response("server error", { status: 500 }),
+    );
+    const files = [{ bytes: pkgOf("Continia Core", "Continia Software", "28.5.0.1") }];
+    const summary: string[] = [];
+    await expect(decideContinia(realContiniaOps(c), files, summary, undefined)).rejects.toThrow(
+      "HTTP 500",
+    );
+    expect(summary.join("\n")).toContain(
+      "every Continia app's declared dependencies are satisfied",
+    );
+    expect(summary.join("\n")).not.toContain("publish   Continia Core");
   });
 });

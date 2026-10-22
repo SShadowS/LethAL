@@ -60,7 +60,6 @@ import {
   packageStatus,
   realOps,
   refusals,
-  strictResidentPackage,
 } from "./bc-app-content.ts";
 import {
   CONTROL_APP,
@@ -377,7 +376,7 @@ async function control(args: Args): Promise<void> {
   const local = readAppIdentity(bytes);
   const c = connFor(args.server);
   await withLease(args.server, leaseFor(args.lane, args.tokenDir, "control"), async () => {
-    const before = await strictResidentPackage(c, local.publisher, local.name);
+    const before = await residentPackage(c, local.publisher, local.name);
     const resident =
       before === null
         ? null
@@ -390,7 +389,7 @@ async function control(args: Args): Promise<void> {
       return;
     }
     await publishBytes(c, `${local.publisher}_${local.name}_${local.version}.app`, bytes);
-    const after = await strictResidentPackage(c, local.publisher, local.name);
+    const after = await residentPackage(c, local.publisher, local.name);
     const v = after === null ? "nothing" : readAppIdentity(after).version;
     const s = after === null ? "-" : sha256Of(after);
     console.log(`  published: resident ${v} sha256 ${s} ${s === sha ? "=" : "!="} pinned`);

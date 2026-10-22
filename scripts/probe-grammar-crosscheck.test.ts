@@ -112,7 +112,7 @@ describe.skipIf(alcBin === undefined)(
     test("real compiler: an unhealthy file is excluded with a warning and the run finishes", () => {
       const r = runHarness("real", { "A.al": HEALTHY, "B.al": UNHEALTHY }, alcBin ?? "");
       expect(r.report).toBeDefined();
-      expect([0, 1]).toContain(r.status);
+      expect<(number | null)[]>([0, 1]).toContain(r.status);
       expect(r.report?.warnings.some((w) => w.includes("B.al excluded"))).toBe(true);
     }, 60_000);
 
@@ -120,7 +120,7 @@ describe.skipIf(alcBin === undefined)(
       const r = runHarness("dup-excluded", { "A.al": HEALTHY, "B.al": UNHEALTHY }, fakeBin);
       expect(r.out).not.toContain("error:");
       expect(r.report).toBeDefined();
-      expect([0, 1]).toContain(r.status);
+      expect<(number | null)[]>([0, 1]).toContain(r.status);
       const dup = r.report?.warnings.filter((w) => w.includes("duplicate key")) ?? [];
       expect(dup).toHaveLength(1);
       expect(dup[0]).toContain("compiler: duplicate key");

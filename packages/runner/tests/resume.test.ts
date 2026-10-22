@@ -657,8 +657,10 @@ describe("sessionFingerprint (R47)", () => {
   // 9d5d97b3...91ce under scheme 37. It moved again for R-531 (scheme 39, a loop that ends only by
   // consuming its record set is hang-refused); it was 5ee5c7b6...3ec0 under scheme 38. It moved
   // again for R565 (scheme 40, an outside report's preset writers are read from the dependency
-  // packages); it was f1086a61...e634 under scheme 39.
-  const PINNED = "7abca7bc3b8e5c80b8f92b9f4694f4eaccd9d5ea7dd59124331e7c7e61696109";
+  // packages); it was f1086a61...e634 under scheme 39. It moved again for R572 (scheme 41, a guard
+  // refused as a single site renumbers its procedure's same-tuple twins); it was 7abca7bc...6109
+  // under scheme 40.
+  const PINNED = "c49d72bc1d8b52b8c9d4964c21cd080b1e5ed95cfa79933cdb0530705f30773a";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -2363,8 +2365,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // R497 (#if-wrapped objects of the measured shapes are scored on the BC paths). 37 is R340 (trigger header names typed).
     // 38 is R555 (a call to a preset-exit-name writer is hang-refused). 39 is R-531 (a loop that
     // ends only by consuming its record set: its consumers are hang-refused). 40 is R565 (an
-    // outside report's preset writers are read from the dependency packages).
-    expect(IDENTITY_SCHEME).toBe(40);
+    // outside report's preset writers are read from the dependency packages). 41 is R572 (a guard
+    // refused as a single site renumbers its procedure's same-tuple twins).
+    expect(IDENTITY_SCHEME).toBe(41);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

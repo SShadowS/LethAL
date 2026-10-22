@@ -8,6 +8,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import { openItemHangRefuses } from "../src/index";
+import { r572Seam } from "../src/loop-hazard";
 
 /**
  * R570 (coord task R-570): a `while`/`repeat` loop of any object kind whose exit calls a
@@ -40,9 +41,16 @@ function project(files: Record<string, string>) {
     if (hit === undefined) throw new Error(`${text} not found in ${path}`);
     return hit;
   };
-  /** Is the marker literal `'<tag>'` in `path` refused? */
-  return (path: string, tag: string): boolean =>
-    openItemHangRefuses(find(path, `'${tag}'`), ctx, VMC);
+  /** Is the marker literal `'<tag>'` in `path` refused? Read with `r572Seam` off: R572 (a stateful
+   *  callee feeding the exit) refuses some of the same callees, and these tests measure R570 alone. */
+  return (path: string, tag: string): boolean => {
+    r572Seam.on = false;
+    try {
+      return openItemHangRefuses(find(path, `'${tag}'`), ctx, VMC);
+    } finally {
+      r572Seam.on = true;
+    }
+  };
 }
 
 const ITEM = `table 50700 "R570 Item"

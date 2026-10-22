@@ -102,3 +102,39 @@ A guard-writer cost outside its range is a **STOP** on its own. Added keys: **0*
 ## Stop rule
 A delta, a G-off part or a guard-writer cost outside its range, or any broken invariant, is a **STOP**: record
 the evidence, investigate, never re-reason a range after the fact; a re-run needs a new pre-commitment.
+
+## Results (added after the run, 2026-10-22; nothing above was changed)
+Run on lethal/r572 b40c1b9d against the c03d5356 master entries, 01:41 to 04:03 UTC. Evidence:
+`/coord/handoff/R-572/reprice-r2/` (per set: `<set>-analysis.txt`, `<set>-census.jsonl`).
+
+| set | predicted total / G-off / guard-writer | measured total / G-off / guard-writer | |
+|---|---|---|---|
+| dc | 243 / 211 / 32 | 243 / 211 / 32 | exact match |
+| do | 12 / 12 / 0 | 12 / 12 / 0 | exact match |
+| cdo | 12 / 12 / 0 | 12 / 12 / 0 | exact match |
+| fixtures | 0 / 0 / 0 | 0 / 0 / 0 | exact match |
+| bch | 1,939-2,102 / 1,608-1,732 / 331-370 | 2,097 / **1,733** / 364 | **G-off missed by one key** |
+
+bch guard-off 1,733 MISSED the pre-committed 1,608–1,732 by one key. Not re-pre-committed: the code is unchanged
+and a re-run would reproduce it. Accepted by orchestrator ruling 2026-10-22, because all 87 extra keys are
+classified over-broad (shpfy-classification.md), and a one-level carry would admit probe 37b, a real hang.
+
+The 87 extra keys are in Shopify's `Shpfy Communication Mgt.` (`/coord/handoff/R-572/reprice-r2/
+shpfy-classification.md`), refused through the value path's carry of callee globals two or more calls deep, which
+this pre-commitment's derivation did not probe; filed as [[R628]]. The predicted Item Jnl.-Post Line drop
+(-2,247) happened exactly.
+
+**Invariants, every set:** added keys 0; invariant 1 (every removed key in R572's classes) 0 outside; invariant 3
+(G-off a subset of the branch) 0 exceptions; invariant 2: tuples moved 0, ordinals moved 31 in bch (BaseApp),
+**31 of 31 explained by refused lower twins** (same file and tuple), 0 elsewhere; invariant 4: every named hang
+refused (0 kept), the nested FileOperations copy reported out of scope (filed as [[R629]]; this text's "R619"
+was renumbered at the merge, because master had given R619 to another item).
+
+**Census (reported):** guard-writer sites bch 258, dc 50, others 0; RE-OPEN rows bch 1, do 2, cdo 2;
+`h2SplitQueue` 0 everywhere; `m1TouchViaWrapper` bch 9, dc 8; `m2ReachCutOff` bch 220, dc 27; `m3CopyShared`
+bch 10; `m3RecRefByValue` 0; `s3AliasViaVarCallee` bch 16, dc 2; `s4WithGlobal` 0; `backstopCutOffs` 0
+everywhere.
+
+**Run note:** the official `corpus-snapshot.ts diff` refused to start for dc, do and cdo (its heavy-job guard
+counted a parallel itest's process groups); the same `diffDumps` ran on the kept dumps. Per the orchestrator, a
+guard's refusal is reported first in future, never worked around.
