@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**100 of 664 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**99 of 664 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -708,7 +708,7 @@ that ordering is the priority.
 - **R663** · bc-demo: a fourth BC on Linux instance on server1 for the talk, outside every lease pool, with an idempotent setup that is also the offline demo reset · [R663.md](docs/roadmap/R663.md) · done (a9bb3ffe)
 - **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at identity scheme 41, and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · open, filed 2026-10-22
 - **R667** · al-runner v3: nothing live would catch a future build that prefixes failure messages, which would skew the R553 assertion screen · [R667.md](docs/roadmap/R667.md) · open, filed 2026-10-22
-- **R668** · The batch project copies every non-AL file of the target as a resource, so a lethal.config*.json holding a login is copied into every staged batch dir · [R668.md](docs/roadmap/R668.md) · open, filed 2026-10-22
+- **R668** · The batch project copies every non-AL file of the target as a resource, so a lethal.config*.json holding a login is copied into every staged batch dir · [R668.md](docs/roadmap/R668.md) · done (3424c3f0)
 
 ---
 
