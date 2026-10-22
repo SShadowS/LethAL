@@ -61,6 +61,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { outOfUseDir, outOfUseRefusal } from "../packages/runner/itest/out-of-use.ts";
 import { compareAppVersions } from "../packages/runner/src/app-version.ts";
 import { appInputsOfPackage } from "../packages/runner/src/digest-inputs.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
@@ -1077,6 +1078,8 @@ export interface RunDeps {
   ) => Promise<AppItem[]>;
   readonly fixtures: () => ReadonlyMap<string, AppManifest>;
   readonly doctor: (configPath: string, projectDir: string, testsDir: string) => Promise<boolean>;
+  /** R669: where `<server>.md` out-of-use markers live (a test passes its own temp dir). */
+  readonly outOfUseDir: string;
 }
 
 export function pinnedControl(
@@ -1129,6 +1132,7 @@ export const REAL_DEPS: RunDeps = {
   compile: realCompile,
   fixtures: fixtureManifests,
   doctor,
+  outOfUseDir: outOfUseDir(process.env),
 };
 
 function configTargets(repo: string, server: ServerName) {
@@ -1306,6 +1310,22 @@ export async function run(
   print: (s: string) => void = console.log,
 ): Promise<number> {
   const args = parseArgs(argv);
+  // R669: a marked server refuses the WHOLE run, by name, before the secret, a lease or a server
+  // call; with `all`, one marked server stops all three. Every mode is refused, `--dry-run` and
+  // `--write-config-only` too. The clearing run names its server in LETHAL_OUT_OF_USE_CLEARING.
+  const marked = args.servers.flatMap((s) => {
+    const r = outOfUseRefusal(s, {
+      dir: deps.outOfUseDir,
+      env: deps.env,
+      override: "clearing",
+      log: print,
+    });
+    return r === undefined ? [] : [r];
+  });
+  if (marked.length > 0) {
+    print(`\nbc-linux-setup REFUSED:\n${marked.join("\n\n")}`);
+    return 1;
+  }
   if (args.writeConfigOnly === true) {
     const summary: string[] = [];
     let ok: boolean;

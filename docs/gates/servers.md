@@ -22,8 +22,17 @@ endpoint.
 
 `bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` (add `--dry-run` to see the plan). It takes the lease in
 your lane: `--lane <lane>` if given, else your kraken agent identity (`KRAKEN_AGENT`); with neither it refuses
-(R598). For each
-server it:
+(R598).
+
+**An out-of-use marker stops it (R669).** If `<coord>/machine/out-of-use/<server>.md` exists for any server
+the run names, setup refuses the WHOLE run by name, in every mode, before it reads the login, takes a lease or
+calls a server, and prints the marker. The clearing run sets `LETHAL_OUT_OF_USE_CLEARING=<server>` (that exact
+server only). Every BC itest refuses a marked bc1-bc3 the same way, in `printItestTarget`, right after its
+`[itest target]` line; only a marker carrying `owner: <token>`, with the same token in
+`LETHAL_OUT_OF_USE_OWNER`, lets a gate through (a gate wrapper's own "in use" marker). A server other than
+bc1-bc3 has no marker and is never checked.
+
+For each server it:
 
 1. reads the login from `/coord/secrets/bc-linux.env`, which only the owner writes;
 2. takes the coord lease for the server, and releases it at the end;

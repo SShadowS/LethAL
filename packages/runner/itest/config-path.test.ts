@@ -213,7 +213,7 @@ describe("the target line an itest prints first (R589)", () => {
     const log = console.log;
     console.log = (...a: unknown[]) => lines.push(a.join(" "));
     try {
-      printItestTarget(path);
+      printItestTarget(path, undefined, { dir: join(tmp, "no-markers"), env: {} });
     } finally {
       console.log = log;
     }
