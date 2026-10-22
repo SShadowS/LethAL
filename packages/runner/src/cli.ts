@@ -114,7 +114,12 @@ import { assertResourceSelectorRuntime, runtimeBelow14 } from "./resource-select
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
-import { AlRunnerV2RetiredError, RETIRED_V2_BACKEND, V2_RETIRED_BACKEND_FLAG } from "./v2-retired";
+import {
+  AlRunnerV2RetiredError,
+  RETIRED_V2_BACKEND,
+  V2_RETIRED_BACKEND_FLAG,
+  refuseRetiredV2Report,
+} from "./v2-retired";
 import {
   TestProjectNestedError,
   VERIFY_EXIT,
@@ -996,7 +1001,7 @@ RUN — cost and recovery
                              of quarantining the run. OFF by default: it stops a session on your
                              server. LethAL only targets a session its own run recorded, under
                              the lease fence, but that id cannot be independently verified
-  --workers <n>              parallel workers (bcdev is limited to 1)
+  --workers <n>              parallel workers (every backend is limited to 1)
   --compile-concurrency <n>  concurrent alc processes
   --progress-out <path>      stream events to this file as NDJSON, one JSON object per line,
                              flushed as each event arrives — a crash diagnostic and a structured
@@ -2981,7 +2986,7 @@ export async function buildBackend(
     throw new Error(
       "could not locate alc.exe/altool.exe under the AL Language VS Code extension install " +
         "(~/.vscode/extensions/ms-dynamics-smb.al-*); install the extension, set bcdev.alcPath " +
-        "and bcdev.altoolPath, or run with --backend al-runner",
+        "and bcdev.altoolPath",
     );
   }
   // R64: the container publish path spawns altool, so a pinned `alcPath` alone must NOT wave it
@@ -2993,7 +2998,7 @@ export async function buildBackend(
     throw new Error(
       "could not locate altool.exe under the AL Language VS Code extension install " +
         "(~/.vscode/extensions/ms-dynamics-smb.al-*); publishing to a container spawns altool — " +
-        "install the extension, set bcdev.altoolPath, or run with --backend al-runner",
+        "install the extension, or set bcdev.altoolPath",
     );
   }
   // R3/R4: validated here — after alc/altool are confirmed present (so the "could not locate..."
@@ -4933,6 +4938,8 @@ export async function exportFromCli(parsed: ExportCliConfig): Promise<number> {
     );
   }
   const report = JSON.parse(raw) as SessionReport;
+  // R654 F3: a report of the retired .NET al-runner is refused by name.
+  refuseRetiredV2Report(report, parsed.reportPath);
   const { report: projected, losses } = await toMutationElements(report, {
     projectDir: parsed.projectDir,
     thresholds: parsed.thresholds,

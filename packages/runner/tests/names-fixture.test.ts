@@ -136,14 +136,4 @@ describe("assertNamesRun: the names legs' checker (R557)", () => {
       expect(() => run(good)).not.toThrow();
     }
   });
-
-  test("an al-runner-undecided-test-missing warning fails the leg", () => {
-    expect(() =>
-      assertNamesRun(report("exact"), "t", {
-        coverage: "al-runner",
-        transport: "server",
-        seen: { warningCodes: ["al-runner-undecided-test-missing"], contractLines: [] },
-      }),
-    ).toThrow(/undecided/);
-  });
 });

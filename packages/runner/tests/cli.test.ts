@@ -3067,7 +3067,14 @@ const VALUE: Readonly<Record<string, string>> = {
   "table-id": "50102",
   format: "mutation-elements",
   "max-new-tests": "60",
+  // R654: valid on every platform, so the dry-run invocation (no --backend) reads it everywhere.
+  backend: "bcdev",
 };
+
+/** R654: the backends `parseCliConfig` accepts on THIS platform. al-runner-v3 is refused off
+ *  Linux (`refuseV3Platform`), so on Windows bcdev is the only valid value. */
+const VALID_BACKENDS: readonly string[] =
+  process.platform === "linux" ? ["bcdev", "al-runner-v3"] : ["bcdev"];
 
 /** MEASURED exemption: flags `run --dry-run` accepts and ignores. R266 emptied it: `--out` now
  *  writes the listing and every other execution flag is refused. It may not grow. */
@@ -3098,7 +3105,7 @@ type Outcome = "reads" | "ignores" | "refused-by-owner" | "refused-other";
  *  measured by changing its value, and `VALUE[flag]` or `zz-<flag>` can equal the supplied value or
  *  be refused (`--backend zz-backend`). Candidates are tried in order, skipping the supplied one. */
 const OTHER_VALUES: Readonly<Record<string, readonly string[]>> = {
-  backend: ["bcdev", "al-runner-v3"],
+  backend: VALID_BACKENDS,
   artifact: ["fedcba9876543210fedcba9876543210"],
   survivors: ["1/M0002"],
 };

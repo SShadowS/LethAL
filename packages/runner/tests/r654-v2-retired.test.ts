@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { freezeStageTo } from "../src/campaign-freeze";
-import { parseCliConfig } from "../src/cli";
+import { exportFromCli, parseCliConfig } from "../src/cli";
 import { assertExplainableReport } from "../src/explain";
 import { ResultsStore, backendBuildRefusal } from "../src/store";
 import { AlRunnerV2RetiredError } from "../src/v2-retired";
@@ -38,9 +38,14 @@ describe("R654 F1: --backend al-runner is refused by name", () => {
   });
 
   test("al-runner-v3 and bcdev still parse; a typo is still unknown", () => {
-    expect(run("al-runner-v3")).toMatchObject({ mode: "run" });
+    // al-runner-v3 parses on Linux only (`refuseV3Platform`); elsewhere it is refused by its own name.
+    if (process.platform === "linux") {
+      expect(run("al-runner-v3")).toMatchObject({ mode: "run" });
+      expect(dry("al-runner-v3")).toMatchObject({ mode: "dry-run" });
+    } else {
+      expect(() => run("al-runner-v3")).toThrow(/al-runner-v3-(windows|platform)-unsupported/);
+    }
     expect(run("bcdev")).toMatchObject({ mode: "run" });
-    expect(dry("al-runner-v3")).toMatchObject({ mode: "dry-run" });
     expect(() => run("nope")).toThrow('unknown --backend "nope"');
     expect(() => run("nope")).not.toThrow(AlRunnerV2RetiredError);
   });
@@ -153,6 +158,36 @@ describe("R654 F3: a v2 SessionReport is refused by name by its readers", () => 
       );
       await writeFile(path, JSON.stringify({ backend: "bcdev", coverageMode: "none" }));
       await expect(freezeStageTo(path, "s", 0, dir)).rejects.not.toThrow(/al-runner-v2-retired/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("lethal export refuses a v2 report by name, and reads the bcdev one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r654-export-"));
+    try {
+      const path = join(dir, "r.json");
+      const cfg = {
+        mode: "export",
+        reportPath: path,
+        format: "mutation-elements",
+        projectDir: dir,
+        outPath: join(dir, "out.json"),
+        thresholds: { high: 80, low: 60 },
+      } as const;
+      await writeFile(path, JSON.stringify({ ...giftCard, backend: "al-runner" }));
+      await expect(exportFromCli(cfg)).rejects.toThrow(
+        new AlRunnerV2RetiredError(
+          `al-runner-v2-retired: ${path} is a report of the retired .NET al-runner (R654); it is not read`,
+        ),
+      );
+      // The bcdev report passes the check: whatever export says of it, it is not the refusal.
+      await writeFile(path, JSON.stringify(giftCard));
+      const other = await exportFromCli(cfg).then(
+        () => "",
+        (e: Error) => e.message,
+      );
+      expect(other).not.toContain("al-runner-v2-retired");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
