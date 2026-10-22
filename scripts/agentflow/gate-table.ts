@@ -51,6 +51,11 @@ export type Leg = (typeof LEGS)[number];
  * Everything an unmatched path selects. `coverage-differential` is deliberately NOT here: it is a
  * required gate for the coverage rows but has no `package.json` script and no receipt today, so
  * including it in the default would park every unmatched change on a gate nobody can run yet.
+ *
+ * `scripts/agentflow/**` (this selection logic itself) deliberately matches no rule, so a change
+ * here selects this full set (orchestrator ruling, R654 S2). A change to selection logic is rare;
+ * choosing too many gates is the safe way to be wrong; and the orchestrator rules such a change
+ * case by case rather than this table trying to.
  */
 export const FULL_SET: readonly Leg[] = [
   "bcdev",

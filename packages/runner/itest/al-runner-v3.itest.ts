@@ -500,7 +500,12 @@ function assertCleanLeg(r: SessionReport, b: AlRunnerV3Backend, leg: string): vo
   assertReproduced(r, leg);
 }
 
-/** L1 (R349, R353): sandbox-layout at maxGuardsPerBatch 7, two batches, EXPECTED_LAYOUT per ref. */
+/**
+ * L1 (R353's table): multi-batch layout, figures equal v2's. sandbox-layout at maxGuardsPerBatch 7,
+ * two batches, EXPECTED_LAYOUT per ref. NOT R349's stale-layout check on v3: deleting
+ * `resetLayoutState()` leaves it green (measured, R-654 S2 L-R1), because `deploy()` rebuilds the
+ * indexes and proof and `activate(null)` clears the row cache. See docs/gates/alrunner-v3.md.
+ */
 async function legL1(scratch: string): Promise<SessionReport> {
   const b = new AlRunnerV3Backend(
     backendCfg({

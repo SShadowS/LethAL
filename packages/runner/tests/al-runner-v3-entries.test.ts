@@ -2496,3 +2496,43 @@ describe("R652: the bound is checked before each SEND, not at each run()", () =>
     });
   });
 });
+
+/**
+ * R654 S2 (`/coord/handoff/R-654/s2-LR1-finding.md`): the one layout-scoped field a missing
+ * `resetLayoutState()` would carry into the next batch on one-shot is `batchBlind`. Every other
+ * field is rebuilt by `deploy()` or cleared by `activate()`, so no live leg sees the reset go
+ * missing (L-R1 and L-R2 stayed green). This test is the guard: a §6 blind note latched in batch 0
+ * must not refuse batch 1's covering pass.
+ */
+describe("R654 S2: a batch's latched blind note does not cross into the next batch (one-shot)", () => {
+  test("batch 0 latches the note; after the next deploy, a clean covering pass is a pass", async () => {
+    let blindOn = true;
+    const coverage: CoverageFn = (m, cu, a, t) => {
+      const doc = sleepCoverage()(m, cu, a, t) as { coverage: { statements: unknown[] }[] };
+      // The indexed Sleep line 5 missing from the target's statements: §6 case 2, which latches.
+      const target = doc.coverage[1];
+      if (blindOn && target !== undefined) target.statements = [{ line: 6, hits: 0 }];
+      return doc;
+    };
+    const r = await rig({
+      targetAl: SLEEPER_AL,
+      oneShotRows: allPass,
+      oneShotCoverage: coverage,
+      extra: { transport: "one-shot" },
+    });
+    await baseline(r.b, SUITE1);
+    await r.b.activate("M0001");
+    const latched = await r.b.run(ref("A"), OPTS);
+    expect([latched.outcome, latched.failureMessage ?? ""]).toEqual([
+      "error",
+      expect.stringContaining("not in v3's coverage"),
+    ]);
+    // The next batch: a fresh deploy, and v3's coverage is complete again.
+    blindOn = false;
+    await r.b.deploy(r.l.batch);
+    await baseline(r.b, SUITE1);
+    await r.b.activate("M0001");
+    const next = await r.b.run(ref("A"), OPTS);
+    expect([next.outcome, next.failureMessage]).toEqual(["pass", undefined]);
+  });
+});
