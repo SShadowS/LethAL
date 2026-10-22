@@ -97,6 +97,68 @@ export const RUNNER_ONRUN_TIMEOUT_MESSAGE =
  * Matched at the TYPE position only: a user `Error('out-of-scope: ...')` would match and lose a
  * kill (the safe direction); a message that merely contains the phrase does not match.
  */
+/** R612: the two panic wordings v3 uses (a test's own, and the rest of its codeunit's). */
+const V3_PANIC_WORDING = String.raw`runtime panic \(bug\)|panicked \(a runtime bug\)`;
+/** R612 (plan r3 §1): an entry whose tail is free text must not keep a panic. */
+const NO_PANIC = `(?!.*(?:${V3_PANIC_WORDING}))`;
+
+/**
+ * R612: the v3 refusal reasons MEASURED to leave a `serve` daemon correct and warm for the next
+ * request (`/coord/handoff/R-612/measure.md` rows 2, 3, 4, 6, 9). Each is anchored at both ends;
+ * any other text (a reworded reason, an exact entry plus a tail, a panic) closes the daemon. The
+ * list widens only by probe. Pinned by the update gate's `serve-keep-reasons` fact.
+ */
+export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
+  http: /^NotRun: out-of-scope: an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)$/,
+  commit:
+    /^NotRun: out-of-scope: Commit inside a test under TestIsolation = Function: what the runner keeps is not pinned$/,
+  cascade: new RegExp(
+    String.raw`^NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran \(${NO_PANIC}.*$`,
+  ),
+  "onrun-failed": new RegExp(
+    String.raw`^NotRun: out-of-scope: OnRun failed \(runner behaviour not pinned\): ${NO_PANIC}.*$`,
+  ),
+  "no-callee": /^NotRun: out-of-scope: [^:\n]+: call `[^`\n]*` has no callee the checker resolved$/,
+};
+
+/** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns
+ *  the daemon, never from the rows. */
+export type ServeDaemonRule = "v2" | "v3";
+
+/**
+ * R612: true when the daemon may serve another request after this answer's rows.
+ * - v2 (R517 I2 + I-1, unchanged): every row is `pass` or `fail`.
+ * - v3: every row is `pass`/`fail` without `notRun`, or a `notRun` `error` row whose message is
+ *   one of `V3_SERVE_SAFE_REFUSALS`. Anything else (a timeout, a panic, an unknown kind) closes.
+ */
+export function serveDaemonReusable(
+  rows: readonly ServerTestLine[],
+  rule: ServeDaemonRule,
+): boolean {
+  if (rule === "v2") return rows.every((t) => t.status === "pass" || t.status === "fail");
+  return rows.every((t) => {
+    if (t.status === "pass" || t.status === "fail") return t.notRun !== true;
+    const m = t.message;
+    return (
+      t.notRun === true &&
+      t.status === "error" &&
+      m !== undefined &&
+      Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m))
+    );
+  });
+}
+
+/** R612 (v3 rule): one answer named a test twice. Never legitimate (measure.md), so a stale
+ *  writer: the daemon is closed and the run is an error, never a silent overwrite. */
+export class AlRunnerServeDuplicateRowError extends Error {
+  constructor(name: string) {
+    super(
+      `al-runner serve: the answer names test "${name}" more than once, which no measured answer does; the daemon is closed and this run is an error (R612)`,
+    );
+    this.name = "AlRunnerServeDuplicateRowError";
+  }
+}
+
 export const RUNNER_REFUSAL =
   /^(?:The test codeunit's OnRun trigger failed, so none of its test methods ran \(as in BC\): )?[A-Za-z_][\w.]*: out-of-scope: /;
 
@@ -465,6 +527,7 @@ export const defaultServerSpawn: ServerSpawnFn = (argv, opts) => {
     stdout: "pipe",
     stderr: "pipe",
     ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
+    ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
   });
   const handle: ServerProcessHandle = {
     write: (line) => {
@@ -529,6 +592,12 @@ export interface AlRunnerConfig {
    * suite it has.
    */
   readonly serverMode?: boolean;
+  /**
+   * R612 — which rule decides whether the daemon serves another request (`serveDaemonReusable`).
+   * Default `"v2"`. INTERNAL: never a config-file key (`AL_RUNNER_KEYS` refuses it); no product
+   * site sets `"v3"` until R635's v3 serve transport.
+   */
+  readonly serveDaemonRule?: ServeDaemonRule;
   /**
    * R220 — whether this session collects al-runner's own `--coverage`.
    *
@@ -1958,7 +2027,19 @@ export class AlRunnerBackend implements ExecutionBackend {
     );
     for (const d of compileFound.dependency) this.serverDependencyDrops.add(d);
     const hungTest = res.tests.find(isTimeoutRow)?.name;
-    if (res.tests.some((t) => t.status !== "pass" && t.status !== "fail")) await server.close();
+    // R612: the rule is the backend's (`serveDaemonRule`, default v2), never read off the rows.
+    const rule = this.cfg.serveDaemonRule ?? "v2";
+    if (!serveDaemonReusable(res.tests, rule)) await server.close();
+    if (rule === "v3") {
+      const seen = new Set<string>();
+      for (const t of res.tests) {
+        if (seen.has(t.name)) {
+          await server.close();
+          throw new AlRunnerServeDuplicateRowError(t.name);
+        }
+        seen.add(t.name);
+      }
+    }
     await watch();
     const byName = new Map<string, ServerTestLine>();
     for (const t of res.tests) byName.set(t.name, t);

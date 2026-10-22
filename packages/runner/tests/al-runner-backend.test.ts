@@ -10,6 +10,7 @@ import {
   AlRunnerServerStopUnsetError,
   AlRunnerTestNameError,
   parseReportedStopMs,
+  serveDaemonReusable,
   verdictFromRunnerTest,
 } from "../src/al-runner-backend";
 import type { ServerSpawnFn } from "../src/al-runner-server";
@@ -1850,6 +1851,220 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       'al-runner --server stopped the run at "Codeunit79100.BSlow" (timeout); tests after it have no row',
     );
     await backend.close();
+  });
+
+  describe("R612: the v3 serve rule keeps the daemon only after the measured refusal reasons", () => {
+    // The measured texts (`/coord/handoff/R-612/measure.md`, probe `main.stdout`), verbatim.
+    const HTTP =
+      "NotRun: out-of-scope: an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a connection (ADR-027)";
+    const COMMIT =
+      "NotRun: out-of-scope: Commit inside a test under TestIsolation = Function: what the runner keeps is not pinned";
+    const CASCADE =
+      "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HttpGet: did not run (an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a ): it can change session state the analysis does not follow, so the state it would have left is not BC's; this failure is not trusted: after a refusal";
+    const ONRUN =
+      "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): Arithmetic operation resulted in an overflow.";
+    const NO_CALLEE =
+      "NotRun: out-of-scope: R612 Broken.DoesNotCompile: call `NoSuchProcedure(1)` has no callee the checker resolved";
+    const PANIC_TEST =
+      "NotRun: out-of-scope: runtime panic (bug): requested by ALRUNNER_DEBUG_PANIC_IN";
+    const PANIC_CASCADE =
+      "NotRun: out-of-scope: an earlier test of this codeunit panicked (a runtime bug), so the rest of it was not run";
+    const DUP_KEY =
+      "NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Data Key Probe is deferred: whether the test runner raises it at the end of the test is not pinned";
+
+    type Extra = { status: string; message?: string; notRun?: unknown };
+    const refusal = (message: string): Extra => ({ status: "error", notRun: true, message });
+
+    /** Daemon 1's first suite carries `extra` beside A; every suite's A row names its daemon and
+     *  request, so a verdict shows which answer it came from. */
+    function withExtraOnce(extra: Extra, extraName = "Codeunit79100.X") {
+      return daemons((daemon, request, emit) => {
+        emit({
+          type: "test",
+          name: "Codeunit79100.A",
+          status: "fail",
+          message: `daemon ${daemon} request ${request}`,
+        });
+        if (daemon === 1 && request === 1) emit({ type: "test", name: extraName, ...extra });
+        emit(summary(daemon === 1 && request === 1 ? 2 : 1));
+        return undefined;
+      });
+    }
+
+    function serverOnRule(spawn: ServerSpawnFn, rule?: "v2" | "v3"): AlRunnerBackend {
+      const backend = new AlRunnerBackend(
+        {
+          alRunnerPath: "al-runner",
+          instrumentedDir: scratch("lethal-alrunner-r612-"),
+          testDir: "/tests",
+          selectorObjectId: 50000,
+          serverMode: true,
+          ...(rule !== undefined ? { serveDaemonRule: rule } : {}),
+        },
+        okSpawn({ tests: [] }).spawn,
+        spawn,
+      );
+      backend.useMutantBudgetFloor(180_000, 120_000);
+      return backend;
+    }
+
+    /** Two activations; returns the daemon starts and the two A verdicts' messages. */
+    async function twoActivations(
+      extra: Extra,
+      rule?: "v2" | "v3",
+    ): Promise<{ starts: number; messages: (string | undefined)[] }> {
+      const fake = withExtraOnce(extra);
+      const backend = serverOnRule(fake.spawn, rule);
+      await backend.activate("M0001");
+      const one = await backend.run(t("A"), run);
+      await backend.activate("M0002");
+      const two = await backend.run(t("A"), run);
+      await backend.close();
+      return { starts: fake.argvs.length, messages: [one.failureMessage, two.failureMessage] };
+    }
+
+    describe("serveDaemonReusable, the rule alone", () => {
+      const r = (status: string, o: { message?: string; notRun?: boolean } = {}) => ({
+        name: "C.X",
+        status,
+        ...o,
+      });
+      test("v2 is today's condition: every row pass or fail, notRun ignored", () => {
+        expect(serveDaemonReusable([r("pass"), r("fail")], "v2")).toBe(true);
+        expect(serveDaemonReusable([r("pass", { notRun: true })], "v2")).toBe(true);
+        expect(serveDaemonReusable([r("error", { notRun: true, message: COMMIT })], "v2")).toBe(
+          false,
+        );
+        expect(serveDaemonReusable([], "v2")).toBe(true);
+      });
+      test("v3 keeps on each of the five entries, and on pass/fail without notRun", () => {
+        for (const m of [HTTP, COMMIT, CASCADE, ONRUN, NO_CALLEE]) {
+          expect([
+            m,
+            serveDaemonReusable([r("pass"), r("error", { notRun: true, message: m })], "v3"),
+          ]).toEqual([m, true]);
+        }
+        expect(serveDaemonReusable([r("pass"), r("fail", { notRun: false })], "v3")).toBe(true);
+      });
+      test("v3 closes on a timeout row and both panic wordings", () => {
+        for (const m of ["Test exceeded 3s timeout.", PANIC_TEST, PANIC_CASCADE]) {
+          expect([
+            m,
+            serveDaemonReusable([r("error", { notRun: true, message: m })], "v3"),
+          ]).toEqual([m, false]);
+        }
+      });
+      for (const [c, m] of [
+        [
+          "c",
+          "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): runtime panic (bug): boom",
+        ],
+        [
+          "d",
+          "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): the OnRun panicked (a runtime bug) at x",
+        ],
+        [
+          "e",
+          "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (Y: runtime panic (bug): z)",
+        ],
+      ] as const) {
+        test(`T3 (${c}): no entry with a tail keeps a panic`, () => {
+          expect(serveDaemonReusable([r("error", { notRun: true, message: m })], "v3")).toBe(false);
+        });
+      }
+      test("v3 closes on every unknown kind", () => {
+        const unknown = [
+          r("error", { notRun: true, message: DUP_KEY }),
+          r("error", { notRun: true, message: `${HTTP} and more` }),
+          r("error", { notRun: true, message: `${COMMIT}.` }),
+          r("error", { notRun: true, message: `${NO_CALLEE} too` }),
+          r("error", { notRun: true }),
+          r("error", { message: COMMIT }),
+          r("error", { notRun: false, message: COMMIT }),
+          r("fail", { notRun: true, message: COMMIT }),
+          r("pass", { notRun: true }),
+          r("skipped", { notRun: true, message: COMMIT }),
+        ];
+        for (const row of unknown) {
+          expect([row, serveDaemonReusable([r("pass"), row], "v3")]).toEqual([row, false]);
+        }
+      });
+    });
+
+    test("T1: v2 (the default) still closes on a refusal row: 2 activations, 2 starts", async () => {
+      expect((await twoActivations(refusal(COMMIT))).starts).toBe(2);
+      expect((await twoActivations(refusal(COMMIT), "v2")).starts).toBe(2);
+    });
+
+    for (const [entry, m] of [
+      ["http", HTTP],
+      ["commit", COMMIT],
+      ["cascade", CASCADE],
+      ["onrun-failed", ONRUN],
+      ["no-callee", NO_CALLEE],
+    ] as const) {
+      test(`T2: v3 keeps the daemon after a ${entry} refusal; the 2nd verdict is the 2nd answer's`, async () => {
+        const got = await twoActivations(refusal(m), "v3");
+        expect(got).toEqual({
+          starts: 1,
+          messages: ["daemon 1 request 1", "daemon 1 request 2"],
+        });
+      });
+    }
+
+    for (const m of ["Test exceeded 3s timeout.", PANIC_TEST, PANIC_CASCADE]) {
+      test(`T3: v3 closes on ${m.slice(0, 40)}`, async () => {
+        const got = await twoActivations(refusal(m), "v3");
+        expect(got).toEqual({
+          starts: 2,
+          messages: ["daemon 1 request 1", "daemon 2 request 1"],
+        });
+      });
+    }
+
+    for (const extra of [
+      refusal(DUP_KEY),
+      refusal(`${HTTP} (extra)`),
+      { status: "error", message: COMMIT },
+      { status: "fail", notRun: true, message: COMMIT },
+      { status: "skipped" },
+    ] as Extra[]) {
+      test(`T4: v3 closes on an unknown kind ${JSON.stringify(extra).slice(0, 60)}`, async () => {
+        expect((await twoActivations(extra, "v3")).starts).toBe(2);
+      });
+    }
+
+    test("T5: a non-boolean notRun throws in the read, so the daemon is closed (C1)", async () => {
+      const got = await twoActivations({ status: "error", notRun: null, message: COMMIT }, "v3");
+      expect(got.starts).toBe(2);
+      expect(got.messages[0]).toContain("notRun that is not a boolean");
+      expect(got.messages[1]).toBe("daemon 2 request 1");
+    });
+
+    test("T6 (v3): a duplicate test name in one answer throws and closes the daemon", async () => {
+      const fake = withExtraOnce({ status: "pass" }, "Codeunit79100.A");
+      const backend = serverOnRule(fake.spawn, "v3");
+      await backend.activate("M0001");
+      const v = await backend.run(t("A"), run);
+      expect(v.outcome).toBe("error");
+      expect(v.failureMessage).toContain("Codeunit79100.A");
+      expect(v.failureMessage).toContain("more than once");
+      // Closed: the same activation's retry is answered by a fresh daemon.
+      expect((await backend.run(t("A"), run)).failureMessage).toBe("daemon 2 request 1");
+      expect(fake.argvs.length).toBe(2);
+      await backend.close();
+    });
+
+    test("T6 (v2): a duplicate test name keeps today's last-row-wins, on one daemon", async () => {
+      const fake = withExtraOnce({ status: "pass" }, "Codeunit79100.A");
+      const backend = serverOnRule(fake.spawn, "v2");
+      await backend.activate("M0001");
+      expect((await backend.run(t("A"), run)).outcome).toBe("pass");
+      await backend.activate("M0002");
+      expect((await backend.run(t("A"), run)).failureMessage).toBe("daemon 1 request 2");
+      expect(fake.argvs.length).toBe(1);
+      await backend.close();
+    });
   });
 
   describe("an answered row never aborts (R534)", () => {
