@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -13,6 +13,7 @@ import {
 } from "../src/baseline-snapshot";
 import type { BaselineSnapshot } from "../src/baseline-snapshot";
 import { ResultsStore } from "../src/store";
+import { ProjectSymlinkRefusedError } from "../src/walk";
 import { scratchDirs } from "./helpers/scratch";
 import { HTTP_500 } from "./helpers/unread";
 
@@ -67,6 +68,26 @@ describe("hashAlTree (R192)", () => {
     const a = await hashAlTree(tree(BATCH));
     const b = await hashAlTree(tree({ ...BATCH, "app.json": '{"version":"1.0.20692.9"}' }));
     expect(b).toBe(a);
+  });
+
+  // R655: the snapshot key (orchestrator `batchHash`) and v3's proof hash LethAL-built trees, which
+  // hold no link; a skipped link would leave AL out of the key, so one refuses by name.
+  test("R655: a linked folder holding an .al refuses by name (never a quiet skip)", async () => {
+    const dir = tree(BATCH);
+    const outside = tree({ "H.Codeunit.al": "codeunit 9 H { }" });
+    symlinkSync(outside, join(dir, "helpers"), "junction");
+    const err = await hashAlTree(dir).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((err as ProjectSymlinkRefusedError).linkPath).toBe(join(dir, "helpers"));
+  });
+
+  test("R655: a linked .al file refuses by name", async () => {
+    const dir = tree(BATCH);
+    const outside = tree({ "H.Codeunit.al": "codeunit 9 H { }" });
+    symlinkSync(join(outside, "H.Codeunit.al"), join(dir, "H.Codeunit.al"));
+    const err = await hashAlTree(dir).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((err as ProjectSymlinkRefusedError).linkPath).toBe(join(dir, "H.Codeunit.al"));
   });
 });
 /**
