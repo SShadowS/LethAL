@@ -969,6 +969,9 @@ describe("runSession", () => {
       });
       expect(resumed.resumedFrom?.runId).toBe(runId);
       expect(resumed.resumedFrom?.carriedMutants).toBeGreaterThan(0);
+      // itest:lend's assertIdentity rests on this: a resumed closed-world run confirms its own row.
+      const again = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      expect(store.getRun(again)?.testAppHash).toBe(row?.testAppHash ?? "");
       store.close();
     });
 
