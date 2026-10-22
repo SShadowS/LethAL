@@ -4,11 +4,11 @@ import { join } from "node:path";
 import type { AppManifest } from "./bc-linux-setup.ts";
 import {
   controlAction,
-  downgradeRefusal,
-  leftOffNote,
   packageStatus,
   parseArgs,
+  publishOrder,
   republishPlan,
+  roleOf,
 } from "./bc-republish.ts";
 
 describe("packageStatus (control: only a 404 means nothing resident)", () => {
@@ -21,16 +21,6 @@ describe("packageStatus (control: only a 404 means nothing resident)", () => {
     for (const s of [500, 502, 503, 400, 401, 403]) {
       expect(() => packageStatus(s)).toThrow(`HTTP ${s}`);
     }
-  });
-});
-
-describe("leftOffNote", () => {
-  test("names removed apps as removed, and never-present apps as never removed", () => {
-    const n = leftOffNote(["a", "b"], new Set(["a"]));
-    expect(n).toContain("removed and NOT republished: a");
-    expect(n).toContain("not on the server before this run, and not published: b");
-    expect(n).not.toContain("removed and NOT republished: a, b");
-    expect(leftOffNote([], new Set(["a"]))).toBe("");
   });
 });
 
@@ -99,35 +89,28 @@ describe("republishPlan", () => {
   });
 });
 
-describe("downgradeRefusal (before anything is removed, R605)", () => {
-  const base = { dir: "sandbox-app", publishVersion: "1.0.0.2", minted: false };
+describe("publishOrder and roleOf (R599: nothing is removed, so no dependent is added)", () => {
+  const all = new Map<string, AppManifest>([
+    ["tt", app("tt", ["t"])],
+    ["t", app("t")],
+    ["u", app("u")],
+  ]);
 
-  test("refuses when the server holds the app above the version to publish, naming --mint", () => {
-    const r = downgradeRefusal([{ ...base, resident: ["1.0.20747.27757"] }]);
-    expect(r).toContain("refused before removing anything");
-    expect(r).toContain("sandbox-app: the server holds 1.0.20747.27757, above 1.0.0.2");
-    expect(r).toContain("--mint sandbox-app");
+  test("only the requested apps, each after the requested apps it depends on", () => {
+    expect(publishOrder(["t"], all)).toEqual(["t"]);
+    expect(publishOrder(["tt", "t"], all)).toEqual(["t", "tt"]);
   });
 
-  test("passes when the version to publish is the same, higher, or nothing is resident", () => {
-    expect(downgradeRefusal([{ ...base, resident: ["1.0.0.2"] }])).toBeNull();
-    expect(downgradeRefusal([{ ...base, resident: ["1.0.0.1"] }])).toBeNull();
-    expect(downgradeRefusal([{ ...base, resident: [] }])).toBeNull();
-    expect(
-      downgradeRefusal([
-        { ...base, publishVersion: "1.0.20747.36583", minted: true, resident: ["1.0.20747.27757"] },
-      ]),
-    ).toBeNull();
+  test("a fixture some fixture depends on is a target; the rest are dependents", () => {
+    expect(roleOf("t", all)).toBe("target");
+    expect(roleOf("tt", all)).toBe("dependent");
+    expect(roleOf("u", all)).toBe("dependent");
+    expect(() => roleOf("nope", all)).toThrow(/unknown fixture/);
   });
 
-  test("compares numerically, not as strings", () => {
-    // "1.0.0.10" > "1.0.0.9" numerically, but not lexically
-    expect(
-      downgradeRefusal([{ ...base, publishVersion: "1.0.0.9", resident: ["1.0.0.10"] }]),
-    ).not.toBeNull();
-    expect(
-      downgradeRefusal([{ ...base, publishVersion: "1.0.0.10", resident: ["1.0.0.9"] }]),
-    ).toBeNull();
+  test("a PUBLISH_PLAN target with no dependent (sandbox-probes) is a target, so it is told --mint (M4)", () => {
+    const probes = new Map<string, AppManifest>([["sandbox-probes", app("p")]]);
+    expect(roleOf("sandbox-probes", probes)).toBe("target");
   });
 });
 

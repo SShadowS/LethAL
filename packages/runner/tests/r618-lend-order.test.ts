@@ -1,6 +1,7 @@
 // R618 plan r2: the history site's lend order, offline. `itest:lend` cannot reach these on bcdev:
 // N1o (a run that is wrong in THREE fields) and the R557 mark (a v2 run lent to bcdev) are cut from
-// the live gate and pinned here instead, at the inline copy `priorSurvivorKeys` holds (R-I3).
+// the live gate and pinned here instead, at `priorSurvivorKeys` (since R619 it decides through
+// `ResultsStore.runMayLend`, with its own checks in the `siteChecks` slot).
 import { describe, expect, test } from "bun:test";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { PENDING_SUFFIX, REVOKED_SUFFIX } from "../src/closed-world";
