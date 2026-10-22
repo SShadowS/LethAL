@@ -18,6 +18,13 @@ case "${1:-}" in
   --server)
     shift
     log "serve" "$*"
+    # R-606 measurement-only tap (scratch worktree only): requests in, summary/error lines out,
+    # beside the shim log (<tag>.serve-in.ndjson, <tag>.serve-out.ndjson). exec keeps the pid.
+    if [ -n "${R586_SHIM_LOG:-}" ]; then
+      T="${R586_SHIM_LOG%.shim.tsv}"
+      exec "$R" serve "$@" < <(tee -a "$T.serve-in.ndjson") \
+        > >(tee >(grep --line-buffered -E '"type": ?"summary"|^\{"error"' >> "$T.serve-out.ndjson"))
+    fi
     exec "$R" serve "$@" ;;
 esac
 # Optional (measurement only): R586_ISOLATION replaces the mode LethAL sends after `--isolation`.
