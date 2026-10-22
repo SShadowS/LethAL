@@ -540,8 +540,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...(gatedWarnFacts !== undefined ? { gatedWarnFacts } : {}),
       spawn: this.spawn,
     });
-    for (const line of v3DefectWarnings(this.contract)) console.warn(line);
-    const refusals = v3ContractRefusals(this.contract);
+    // R639 r9 §2: `unlike-bc` refuses a normal session; a candidate (update-gate) session warns.
+    const kind = { candidate: this.cfg.candidate === true };
+    for (const line of v3DefectWarnings(this.contract, kind)) console.warn(line);
+    const refusals = v3ContractRefusals(this.contract, kind);
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return { ok: true, details: `${reported}; ${v3ContractSummary(this.contract)}` };
   }

@@ -240,8 +240,8 @@ export function knownDifferencesRefusal(
 }
 
 /**
- * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632).
- * Every other fact of the 25 (R612's warn fact, then r8's for R637) is a contract fact and must read
+ * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632;
+ * `refusal-row-shape` since r9, R639). Every other fact of the 26 is a contract fact and must read
  * `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
@@ -253,7 +253,19 @@ export const V3_DEFECT_FACTS = [
   "quoted-name-unselectable",
   "commit-under-test-isolation",
   "none-selected-exit",
+  // r9 (R639): #5608, as r7 did for #5613.
+  "refusal-row-shape",
 ] as const;
+
+/** r9 (R639): leg C's pre-committed fact count: 9 defect, 16 contract, 1 warn. */
+export const V3_LEG_C_FACTS = 26;
+
+/** F4 (R639): leg C's per-fact log line, with `measured` whole. */
+export const legCFactLine = (f: {
+  readonly fact: string;
+  readonly verdict: string;
+  readonly measured: string;
+}): string => `  C: ${f.fact} = ${f.verdict} | ${f.measured}`;
 
 /**
  * R612 (plan r3 §2): leg C's warn facts, a third kind. Anything but `matches` prints
@@ -265,7 +277,9 @@ export const V3_WARN_FACTS: readonly string[] = ["serve-keep-reasons"];
  * RC-2 (I-2): leg C's verdict. A contract fact must read `matches` and a defect fact (`defects`)
  * `defect-present`. A defect fact reading `gone` (upstream fixed it) is `held`, for the orchestrator
  * to re-pre-commit, never a blacklisting. Any `diverged`, or another fact count, is `gate-fail`. An
- * `unmeasurable` fact is `infra-fail`. Precedence: gate-fail, infra-fail, held, pass.
+ * `unmeasurable` fact is `infra-fail`. r9 (R639): `refused` is `held` on a defect fact and
+ * `gate-fail` on any other; `unlike-bc` is always `gate-fail`. Precedence: gate-fail, infra-fail,
+ * held, pass.
  */
 export function classifyLegC(
   facts: ReadonlyArray<{
@@ -287,7 +301,24 @@ export function classifyLegC(
     if (f.verdict === want) continue;
     // R633 I1: what v3 returned, so the receipt itself carries the evidence.
     const m = f.measured !== undefined ? ` (measured ${f.measured.slice(0, 300)})` : "";
-    if (warns.includes(f.fact)) {
+    if (f.verdict === "unlike-bc") {
+      // r9 §2: never admitted, whatever the fact's kind.
+      fail = true;
+      lines.push(
+        `gate-fail: ${f.fact}: unlike-bc (v3 fails as BC does, with another text; #5700)${m}`,
+      );
+    } else if (f.verdict === "refused") {
+      // r9 §6: held for a defect fact; on a contract or a warn fact, gate-fail (M-g).
+      if (want === "defect-present") {
+        held = true;
+        lines.push(
+          `held: ${f.fact}: defect-present -> refused (v3 declines; not BC's reading; re-pre-commit)${m}`,
+        );
+      } else {
+        fail = true;
+        lines.push(`gate-fail: ${f.fact}: refused, pre-committed ${want}${m}`);
+      }
+    } else if (warns.includes(f.fact)) {
       // R612 (plan r3 §2): costs only speed (the rule then closes), so it never blocks.
       lines.push(`al-runner-v3-serve-keep-reason-moved: ${f.fact}: ${f.verdict}${m}`);
     } else if (f.verdict === "unmeasurable") {
