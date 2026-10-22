@@ -34,18 +34,20 @@ jobs:
         # key: the addon's platform key. arch: the RUNNER's arch, checked before building.
         # llvm: which pinned LLVM 23.1.2 build install-llvm.sh fetches. cross: the addon is for
         # another arch than the runner, so it cannot be loaded here and is checked by
-        # native-darwin-x64 instead. parse_expect: the same on every target (the parse does not
-        # depend on the platform), taken from a local Windows run; a target that needs another
-        # value is a finding, not a paste.
+        # native-darwin-x64 instead. The parse expectation is NOT here: it is the committed
+        # `scripts/native-parse-expect.txt`, the same on every target (the parse does not depend
+        # on the platform), and a unit test runs the same count on every CI push, so a fixture
+        # change fails ordinary CI rather than the release (R662: a stale inline value here broke
+        # the 22 Oct trial).
         #
         # darwin-x64 is CROSS-BUILT on the arm64 macOS runner (owner ruling, RUST-03 S2): LLVM
         # 23.1.2 ships no macOS x64 build, and every release addon is built by that one clang.
         include:
-          - { key: win32-x64, runner: windows-latest, arch: x64, llvm: win32-x64, cross: false, triple: x86_64-pc-windows-msvc, parse_expect: "files 32 nodes 7382 errors 0" }
-          - { key: linux-x64, runner: ubuntu-22.04, arch: x64, llvm: linux-x64, cross: false, triple: x86_64-unknown-linux-gnu, parse_expect: "files 32 nodes 7382 errors 0" }
-          - { key: linux-arm64, runner: ubuntu-22.04-arm, arch: arm64, llvm: linux-arm64, cross: false, triple: aarch64-unknown-linux-gnu, parse_expect: "files 32 nodes 7382 errors 0" }
-          - { key: darwin-x64, runner: macos-14, arch: arm64, llvm: darwin-arm64, cross: true, triple: x86_64-apple-darwin, parse_expect: "files 32 nodes 7382 errors 0" }
-          - { key: darwin-arm64, runner: macos-14, arch: arm64, llvm: darwin-arm64, cross: false, triple: aarch64-apple-darwin, parse_expect: "files 32 nodes 7382 errors 0" }
+          - { key: win32-x64, runner: windows-latest, arch: x64, llvm: win32-x64, cross: false, triple: x86_64-pc-windows-msvc }
+          - { key: linux-x64, runner: ubuntu-22.04, arch: x64, llvm: linux-x64, cross: false, triple: x86_64-unknown-linux-gnu }
+          - { key: linux-arm64, runner: ubuntu-22.04-arm, arch: arm64, llvm: linux-arm64, cross: false, triple: aarch64-unknown-linux-gnu }
+          - { key: darwin-x64, runner: macos-14, arch: arm64, llvm: darwin-arm64, cross: true, triple: x86_64-apple-darwin }
+          - { key: darwin-arm64, runner: macos-14, arch: arm64, llvm: darwin-arm64, cross: false, triple: aarch64-apple-darwin }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -96,7 +98,7 @@ jobs:
       - name: The addon parses a fixture (the product parser since the RUST-03 switch)
         if: ${{ !matrix.cross }}
         shell: bash
-        run: bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "${{ matrix.parse_expect }}"
+        run: bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "$(cat scripts/native-parse-expect.txt)"
 
       - name: Native Rust tests on this platform
         if: ${{ !matrix.cross }}
@@ -158,7 +160,7 @@ jobs:
 
       - name: The addon parses a fixture
         shell: bash
-        run: bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "files 32 nodes 7382 errors 0"
+        run: bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "$(cat scripts/native-parse-expect.txt)"
 
       - name: Provenance, written where the addon loads
         shell: bash
@@ -367,12 +369,14 @@ jobs:
             || { echo "expected: native ${{ matrix.triple }} clang version 23.1.2 ... nodes ${{ matrix.native_nodes }}"; exit 1; }
           "$exe" run --project "$fixture" --dry-run | tr -d '\r' > dry-run-bin.txt
           # The two count lines of a local `lethal run --project fixtures/sandbox-data --dry-run`,
-          # each required as a whole line on its own.
-          for want in \
-            'dry run: 29 file(s), 407 mutant site(s), 387 deployed mutant(s), 1 batch(es)' \
-            'batch 0 (407 mutant site(s), 387 deployed):'; do
+          # each required as a whole line on its own. They are the committed
+          # `scripts/release-dry-run-expect.txt`, which a unit test checks on every CI push (R662).
+          n=0
+          while IFS= read -r want; do
+            n=$((n + 1))
             grep -qxF "$want" dry-run-bin.txt || { echo "missing count line: $want"; exit 1; }
-          done
+          done < "$GITHUB_WORKSPACE/scripts/release-dry-run-expect.txt"
+          test "$n" = 2 || { echo "release-dry-run-expect.txt has $n lines, expected 2"; exit 1; }
 
   publish:
     # needs: smoke, so all five compiled-binary smoke jobs (and through them build and all five

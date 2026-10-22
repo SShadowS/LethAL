@@ -122,6 +122,36 @@ Draft, not published, because two things still need a human:
 2. **Read the generated notes.** They come from commit subjects, which were written for this
    repository's own record rather than for a stranger.
 
+### Talk cut: the scripted cut (R662)
+
+`bun scripts/talk-cut.ts <sha> [--version <v>] [--notes <file>] [--package-cache <dir>] [--dry-run]`
+does steps 1, 2 and 7 for one chosen commit, and the hand-attach above. Run it inside the kraken
+container (it compiles the control app with `$LETHAL_ALC_DIR/alc`, against the symbols in the main
+checkout's `extensions/lethal-control/.alpackages` unless `--package-cache` names others). In order:
+
+1. Refuses unless the latest `ci.yml` run on `<sha>` succeeded, with jobs `check` and `unit-linux`.
+2. Refuses if tag `v<version>` exists (local or origin) or a release for it exists. `--version`
+   defaults to the next prerelease of `<sha>`'s package.json version.
+3. Runs a `release.yml` workflow_dispatch trial on exactly `<sha>`: it pushes a throwaway branch
+   `release-trial/<sha12>`, dispatches on it, waits (60 min at most), refuses unless the run is
+   green, and deletes the branch. A dispatch never creates a release. The trial uses the workflow
+   file at `<sha>`.
+4. Builds the bump commit in a temporary worktree: package.json `version` (a one-line diff) and
+   CHANGELOG.md's `[Unreleased]` cut into `[<version>] — <date>`. An empty Unreleased is refused
+   unless `--notes <file>` gives the section. The commit's only parent is `<sha>`.
+5. Pushes it to a NEW branch `release/v<version>`, never to master. The owner merges it.
+6. Tags it `v<version>` (annotated) and pushes the tag, which starts `release.yml`.
+7. Waits for that run, then requires a DRAFT release for the tag.
+8. Builds `lethal-control.app`, requires its manifest version to equal its `app.json` and to be at
+   least the script's `MIN_CONTROL`, uploads it, and appends one line with its version and sha256
+   to the draft's body.
+9. Prints the draft URL.
+
+What it does NOT do: publish the release (that is the owner's click), touch any release that is
+not a draft or not its own tag, push to master, or wait for CI on the bump commit. `--dry-run` runs
+every read-only check and the local builds for real, and prints each mutating call (commit, tag,
+push, dispatch, upload, edit) instead of making it.
+
 `.github/workflows/ci.yml` runs the same typecheck-and-test gate on every push, on every branch,
 and on every pull request. It does NOT run `biome check .` repo-wide (pre-existing format debt in
 `engine`/`builtin-tier1` would fail every build) and it does NOT run the live integration gates,
@@ -181,16 +211,19 @@ Apple `cc -arch x86_64`, as it does on every macOS build; no LLVM 23.1.2 linker 
 
 ### Checks per target
 
-- `native-parser`: `bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "files 32
-  nodes 7382 errors 0"` parses every fixture file through the addon directly. `--expect` is
-  required, and all five targets expect the same line (the parse does not depend on the platform).
-  This checks the addon on its own, before any binary is compiled.
+- `native-parser`: `bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect
+  "$(cat scripts/native-parse-expect.txt)"` parses every fixture file through the addon directly.
+  `--expect` is required, and all five targets expect the same line (the parse does not depend on
+  the platform). This checks the addon on its own, before any binary is compiled. The expected
+  line lives in that committed file, and `scripts/native-parse-smoke.test.ts` checks it on every CI
+  push, so a fixture change fails ordinary CI instead of the release (R662: the 22 Oct trial failed
+  on an inline value nobody updated after R-463 added fixtures).
 - `smoke`: runs each compiled binary from a directory with no `packages/` tree, so it cannot load a
   `.node` from disk. `--version` must not say DIRTY; the hidden `lethal native-check` must print
   `native <triple> clang version 23.1.2 ... nodes 56` (a missing embedded addon exits non-zero with
   `NativeParserMissingError`); and `run --project fixtures/sandbox-data --dry-run` must print the
-  two count lines `dry run: 29 file(s), 407 mutant site(s), 387 deployed mutant(s), 1 batch(es)` and
-  `batch 0 (407 mutant site(s), 387 deployed):`.
+  two count lines in the committed `scripts/release-dry-run-expect.txt`, which the same unit test
+  checks against a local dry run.
 
 ### Building from source
 
