@@ -78,6 +78,7 @@ import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { IDLE_STATUS, leaseRouter } from "./helpers/lease-wire";
 import type { WireAnswer } from "./helpers/lease-wire";
 import { scratchDirs } from "./helpers/scratch";
+import { testDbPath } from "./helpers/test-db";
 
 const scratch = scratchDirs();
 import {
@@ -3840,8 +3841,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
 
 describe("runSession — I7 second consecutive transport error aborts the session", () => {
   test("stub backend erroring on every active-mutant run throws, persists partial results", async () => {
-    const root = scratch("lethal-orch-i7-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "error"), [
       "IsOverBudget",
@@ -4375,8 +4375,7 @@ describe("runSession — parallel workers", () => {
   });
 
   test("a shard's transport-error abort drains sibling shards before rethrowing", async () => {
-    const root = scratch("lethal-orch-parallel-i7-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(dbPath);
@@ -6813,8 +6812,7 @@ describe("runSession — bisection on compile failure", () => {
   // error, and get silently downgraded into a per-mutant "error" note instead of aborting the
   // run.
   test("a worker's DeploymentError aborts the whole session instead of being bisected", async () => {
-    const root = scratch("lethal-orch-parallel-deployerr-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(dbPath);
@@ -7156,8 +7154,7 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
   // if this outer one were missing — `calls === 1` is what only the outer guard delivers (zero
   // wasted bisection compiles, not merely "eventually aborts correctly").
   test("a worker's ArtifactPrepareError aborts the whole session instead of being bisected", async () => {
-    const root = scratch("lethal-orch-parallel-prepareerr-");
-    const dbPath = join(root, "results.sqlite");
+    const dbPath = testDbPath("results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     const store = new ResultsStore(dbPath);

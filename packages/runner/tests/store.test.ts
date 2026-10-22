@@ -1,8 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
+import { dirname } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { CARRYABLE_VERDICTS } from "../src/resume";
 import {
@@ -13,6 +12,7 @@ import {
   runLendsAlRunnerNames,
 } from "../src/store";
 import { tinyBundle } from "./helpers/bundle";
+import { testDbPath } from "./helpers/test-db";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 const APP = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
@@ -373,7 +373,7 @@ describe("ResultsStore", () => {
   });
 
   test("a batch_artifacts row written before the column exists reads back manifestSha256 null", () => {
-    const path = join(tmpdir(), `lethal-store-manifest-sha-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-manifest-sha.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -437,7 +437,7 @@ describe("ResultsStore", () => {
   });
 
   test("migrates a pre-5A runs table that lacks the provenance columns", () => {
-    const path = join(tmpdir(), `lethal-store-5a-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-5a.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -483,7 +483,7 @@ describe("ResultsStore", () => {
   // R354: a runs table from before R354 gains coverage_mode, its rows read NULL (unknown), and a
   // NULL never equals a mode: history skips nothing from it. A new row records its mode.
   test("migrates a pre-R354 runs table: coverage_mode is added and existing rows are NULL", () => {
-    const path = join(tmpdir(), `lethal-store-r354-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-r354.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -541,7 +541,7 @@ describe("ResultsStore", () => {
   // R247: a runs table from before R247 gains test_app_hash and its rows read NULL (unknown). NULL
   // never matches, NULL against NULL included: history skips nothing from it.
   test("migrates a pre-R247 runs table: test_app_hash is added and existing rows are NULL", () => {
-    const path = join(tmpdir(), `lethal-store-r247-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-r247.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -602,7 +602,7 @@ describe("ResultsStore", () => {
   // R-278: a runs table from before R-278 gains test_digests and its rows read NULL, which
   // lethal verify refuses as a run that predates it.
   test("migrates a pre-R-278 runs table: test_digests is added, old rows are NULL, new ones round-trip", () => {
-    const path = join(tmpdir(), `lethal-store-r278-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-r278.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -651,7 +651,7 @@ describe("ResultsStore", () => {
   // R495: a runs table from before R495 gains test_app_proven, and its rows read NULL (not proven):
   // a recorded hash, even with digests, lends nothing until a run proves it again.
   test("migrates a pre-R495 runs table: test_app_proven is added and an existing row lends nothing", () => {
-    const path = join(tmpdir(), `lethal-store-r495-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-r495.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -707,7 +707,7 @@ describe("ResultsStore", () => {
   // al-runner row without the mark lends no survivor; a bcdev row without it lends as before; the
   // mark, once set, lends again.
   test("R557: migrates al_runner_names; an unmarked al-runner run lends no survivor, an unmarked bcdev run does", () => {
-    const path = join(tmpdir(), `lethal-store-r557-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-r557.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -909,7 +909,7 @@ describe("ResultsStore", () => {
   // baseline_snapshots before it) SCHEMA's CREATE TABLE IF NOT EXISTS must be enough on its own,
   // with no migrate() step, even on a database that predates this table entirely.
   test("a database created before batch_artifacts is migrated on open and accepts recordArtifact", () => {
-    const path = join(tmpdir(), `lethal-store-batch-artifacts-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-batch-artifacts.sqlite");
     const legacy = new Database(path);
     legacy.exec(`CREATE TABLE runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1005,8 +1005,7 @@ CREATE TABLE IF NOT EXISTS mutants (
      * change cannot quietly reintroduce the ordering bug.
      */
     test("a pre-R166 database opens, gains procedure_name, and gets an identity index covering it", () => {
-      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
-      const dbPath = join(dir, "lethal.sqlite");
+      const dbPath = testDbPath("lethal.sqlite");
       try {
         const old = new Database(dbPath, { create: true });
         old.exec(PRE_43_SCHEMA);
@@ -1046,13 +1045,12 @@ CREATE TABLE IF NOT EXISTS mutants (
         check.close();
         expect(idx.sql ?? "").toContain("procedure_name");
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dirname(dbPath), { recursive: true, force: true });
       }
     });
 
     test("a pre-4.3 database is migrated on open and then accepts a failure_note write", () => {
-      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
-      const dbPath = join(dir, "lethal.sqlite");
+      const dbPath = testDbPath("lethal.sqlite");
       try {
         // Create the database as a pre-4.3 LethAL would have left it.
         const old = new Database(dbPath, { create: true });
@@ -1086,13 +1084,12 @@ CREATE TABLE IF NOT EXISTS mutants (
         check.close();
         expect(row.failure_note).toBe("compile failed; bisected to mutant M0001");
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dirname(dbPath), { recursive: true, force: true });
       }
     });
 
     test("R577: a pre-R577 database gains kill_reproduced and reproduced_failure; an old kill reads back unmarked, a new one round-trips", () => {
-      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
-      const dbPath = join(dir, "lethal.sqlite");
+      const dbPath = testDbPath("lethal.sqlite");
       try {
         const old = new Database(dbPath, { create: true });
         old.exec(PRE_43_SCHEMA);
@@ -1140,15 +1137,14 @@ CREATE TABLE IF NOT EXISTS mutants (
           reproducedFailure: "failed again",
         });
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dirname(dbPath), { recursive: true, force: true });
       }
     });
 
     test("recordMutant persists failure_note at the column level, NULL when absent", () => {
       // Direct column-level coverage (Task 6 Minor): read the value back out
       // of the column itself, not just through the absence of a throw.
-      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
-      const dbPath = join(dir, "lethal.sqlite");
+      const dbPath = testDbPath("lethal.sqlite");
       try {
         const store = new ResultsStore(dbPath);
         const runId = store.createRun({
@@ -1182,13 +1178,12 @@ CREATE TABLE IF NOT EXISTS mutants (
           { id: withoutNote, failure_note: null },
         ]);
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dirname(dbPath), { recursive: true, force: true });
       }
     });
 
     test("opening an already-migrated database is a no-op (idempotent)", () => {
-      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
-      const dbPath = join(dir, "lethal.sqlite");
+      const dbPath = testDbPath("lethal.sqlite");
       try {
         new ResultsStore(dbPath).close();
         const store = new ResultsStore(dbPath); // second open must not throw on ALTER
@@ -1206,7 +1201,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         store.recordMutant(runId, mutantRow("killed"));
         store.close();
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dirname(dbPath), { recursive: true, force: true });
       }
     });
   });
@@ -1390,7 +1385,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   });
 
   test("a database from before C02-06 gains the five columns, and old rows read back null", () => {
-    const path = join(tmpdir(), `lethal-store-c0206-${Date.now()}.sqlite`);
+    const path = testDbPath("lethal-store-c0206.sqlite");
     const before = new ResultsStore(path);
     const runId = before.createRun({
       coverageMode: "procedure",
@@ -1657,20 +1652,17 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
   });
 
   test("R449: a file store commits without an fsync per commit (WAL, synchronous NORMAL)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r449-"));
-    const store = new ResultsStore(join(dir, "s.sqlite"));
+    const store = new ResultsStore(testDbPath("s.sqlite"));
     try {
       expect(store.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(store.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 1 });
     } finally {
       store.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test("review r1 #4: a checkpoint a reader keeps busy warns once, naming the WAL size", () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r360-wal-"));
-    const path = join(dir, "r.sqlite");
+    const path = testDbPath("r.sqlite");
     const store = new ResultsStore(path);
     const reader = new Database(path);
     const warn = spyOn(console, "warn").mockImplementation(() => {});
@@ -1694,7 +1686,6 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
       warn.mockRestore();
       reader.close();
       store.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -1763,8 +1754,7 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
   });
 
   test("review r1 #2: reverse finish order keeps the most recently PUBLISHED bundle, on two connections", () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r360-order-"));
-    const path = join(dir, "r.sqlite");
+    const path = testDbPath("r.sqlite");
     const connA = new ResultsStore(path);
     const connB = new ResultsStore(path);
     try {
@@ -1781,7 +1771,6 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     } finally {
       connA.close();
       connB.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -1880,8 +1869,7 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
   });
 
   test("an older database gains payload_sha256, bundle_pruned_by and runs.resource_key on open", () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r360-"));
-    const path = join(dir, "old.sqlite");
+    const path = testDbPath("old.sqlite");
     const legacy = new Database(path, { create: true });
     legacy.exec(
       "CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finished_at TEXT, project_path TEXT NOT NULL, backend TEXT NOT NULL, app_version TEXT NOT NULL, batch_count INTEGER, baseline_green INTEGER);" +
@@ -1900,6 +1888,5 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     publish(store, r, 0);
     expect(has(store, r, 0)).toBe(true);
     store.close();
-    rmSync(dir, { recursive: true, force: true });
   });
 });
