@@ -240,13 +240,32 @@ export function knownDifferencesRefusal(
 }
 
 /**
+ * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632).
+ * Every other fact of the 23 is a contract fact and must read `matches`.
+ */
+export const V3_DEFECT_FACTS = [
+  "upstream-compile-errors",
+  "duplicate-key-insert-raises",
+  "sleep-is-noop",
+  "refusal-cascade",
+  "codeunit-runs-whole",
+  "quoted-name-unselectable",
+  "commit-under-test-isolation",
+  "none-selected-exit",
+] as const;
+
+/**
  * RC-2 (I-2): leg C's verdict. A contract fact must read `matches` and a defect fact (`defects`)
  * `defect-present`. A defect fact reading `gone` (upstream fixed it) is `held`, for the orchestrator
  * to re-pre-commit, never a blacklisting. Any `diverged`, or another fact count, is `gate-fail`. An
  * `unmeasurable` fact is `infra-fail`. Precedence: gate-fail, infra-fail, held, pass.
  */
 export function classifyLegC(
-  facts: ReadonlyArray<{ readonly fact: string; readonly verdict: string }>,
+  facts: ReadonlyArray<{
+    readonly fact: string;
+    readonly verdict: string;
+    readonly measured?: string;
+  }>,
   defects: readonly string[],
   count: number,
 ): { readonly outcome: "pass" | "held" | "gate-fail" | "infra-fail"; readonly lines: string[] } {
@@ -258,15 +277,17 @@ export function classifyLegC(
   for (const f of facts) {
     const want = defects.includes(f.fact) ? "defect-present" : "matches";
     if (f.verdict === want) continue;
+    // R633 I1: what v3 returned, so the receipt itself carries the evidence.
+    const m = f.measured !== undefined ? ` (measured ${f.measured.slice(0, 300)})` : "";
     if (f.verdict === "unmeasurable") {
       infra = true;
-      lines.push(`infra-fail: ${f.fact}: unmeasurable`);
+      lines.push(`infra-fail: ${f.fact}: unmeasurable${m}`);
     } else if (want === "defect-present" && f.verdict === "gone") {
       held = true;
-      lines.push(`held: ${f.fact}: defect-present -> gone (an upstream fix; re-pre-commit)`);
+      lines.push(`held: ${f.fact}: defect-present -> gone (an upstream fix; re-pre-commit)${m}`);
     } else {
       fail = true;
-      lines.push(`gate-fail: ${f.fact}: ${f.verdict}, pre-committed ${want}`);
+      lines.push(`gate-fail: ${f.fact}: ${f.verdict}, pre-committed ${want}${m}`);
     }
   }
   return {
