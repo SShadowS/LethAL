@@ -70,6 +70,7 @@ function fake(o: {
   receiptCommit?: string;
   receiptSha?: string;
   lines?: string[];
+  warnFacts?: Record<string, string>;
   heavy?: number;
   free?: number;
   /** Written as `gate.log` beside the receipt, as `realDeps().runGate` does (R633 I1). */
@@ -123,6 +124,7 @@ function fake(o: {
           outcome: o.outcome,
           legs: o.legs ?? legsFor(o.outcome),
           lines: o.lines ?? [],
+          ...(o.warnFacts !== undefined ? { warnFacts: o.warnFacts } : {}),
         }),
       );
       if (o.throwText !== undefined) throw new Error(o.throwText);
@@ -160,6 +162,21 @@ linuxOnly("T19: the v3 update gate", () => {
       lethalCommit: GATED_COMMIT,
       tarballSha256: sha("tarball"),
     });
+  });
+
+  test("R612 M-2: a pass writes the receipt's warn-fact readings into .gated, the diverged one included; none, none written", async () => {
+    await setup();
+    const { deps } = fake({
+      outcome: "pass",
+      warnFacts: { "serve-keep-reasons": "diverged" },
+    });
+    expect(await updateOnce(deps)).toEqual(["pass"]);
+    const g = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
+    expect(g.warnFacts).toEqual({ "serve-keep-reasons": "diverged" });
+    await setup();
+    expect(await updateOnce(fake({ outcome: "pass" }).deps)).toEqual(["pass"]);
+    const g2 = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
+    expect("warnFacts" in g2).toBe(false);
   });
 
   test("pass while a v3 process runs: installed, current NOT moved (deferred: in use)", async () => {

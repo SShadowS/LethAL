@@ -89,10 +89,11 @@ export interface ServerProcessHandle {
   wait?(): Promise<unknown>;
 }
 
-/** `cwd` is used by R407's frame probe only; the session's daemon inherits LethAL's cwd. */
+/** `cwd` is used by R407's frame probe only; the session's daemon inherits LethAL's cwd. `env`
+ *  (added to the inherited one) by R612's `serve-keep-reasons` only, for `ALRUNNER_CACHE`. */
 export type ServerSpawnFn = (
   argv: readonly string[],
-  opts?: { readonly cwd?: string },
+  opts?: { readonly cwd?: string; readonly env?: Readonly<Record<string, string>> },
 ) => ServerProcessHandle;
 
 /** One test as the server streams it. */
@@ -101,6 +102,9 @@ export interface ServerTestLine {
   readonly status: string;
   readonly durationMs?: number;
   readonly message?: string;
+  /** R612: v3's `notRun`, carried only when a boolean (v2's wire never sends it). A present
+   *  non-boolean throws in `runTests`: the protocol moved. */
+  readonly notRun?: boolean;
 }
 
 /** One statement's coverage, as `perTestCoverage` reports it. */
@@ -244,6 +248,8 @@ export class AlRunnerServer {
      * one-shot argv uses (R101 (c)).
      */
     private readonly preprocessorSymbols: readonly string[] = [],
+    /** R612: v2's daemon is `--server`; v3's is `serve` (the update gate's `serve-keep-reasons`). */
+    private readonly subcommand: "--server" | "serve" = "--server",
   ) {}
 
   /**
@@ -267,7 +273,7 @@ export class AlRunnerServer {
     if (this.proc !== undefined) return;
     const argv = [
       this.alRunnerPath,
-      "--server",
+      this.subcommand,
       ...packagePaths.flatMap((p) => ["--package-cache", p]),
       ...this.preprocessorSymbols.flatMap((sym) => ["--define", sym]),
       ...(testTimeoutSeconds !== undefined ? ["--test-timeout", String(testTimeoutSeconds)] : []),
@@ -389,11 +395,17 @@ export class AlRunnerServer {
         );
       }
       if (msg.type === "test") {
+        if (msg.notRun !== undefined && typeof msg.notRun !== "boolean") {
+          throw new Error(
+            `al-runner --server: a test line carries a notRun that is not a boolean (${JSON.stringify(msg.notRun)}), so the protocol moved: ${line.slice(0, 200)}`,
+          );
+        }
         tests.push({
           name: String(msg.name ?? ""),
           status: String(msg.status ?? ""),
           ...(typeof msg.durationMs === "number" ? { durationMs: msg.durationMs } : {}),
           ...(typeof msg.message === "string" ? { message: msg.message } : {}),
+          ...(typeof msg.notRun === "boolean" ? { notRun: msg.notRun } : {}),
         });
         continue;
       }

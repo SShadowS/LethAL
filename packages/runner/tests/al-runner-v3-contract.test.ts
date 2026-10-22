@@ -4,7 +4,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { V3_DEFECT_FACTS, classifyLegC } from "../itest/al-runner-v3-gate";
+import { V3_DEFECT_FACTS, V3_WARN_FACTS, classifyLegC } from "../itest/al-runner-v3-gate";
+import type { ServerSpawnFn } from "../src/al-runner-server";
 import type { V3Row } from "../src/al-runner-v3-backend";
 import {
   type V3ContractResult,
@@ -233,7 +234,98 @@ const fakeAlcIo: ArtifactIo = {
   },
 };
 
-const probe = (over: Over = {}): Promise<V3ContractResult> =>
+/** R612: the serve rows as measured on alpha.2 (`/coord/handoff/R-612/measure.md`), by name. */
+const SERVE_ROWS: Record<string, { status: string; notRun?: boolean; message?: string }> = {
+  "Codeunit50670.HttpGet": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a connection (ADR-027)",
+  },
+  "Codeunit50671.CommitCall": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: Commit inside a test under TestIsolation = Function: what the runner keeps is not pinned",
+  },
+  "Codeunit50672.HttpGet": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a connection (ADR-027)",
+  },
+  "Codeunit50672.LaterFails": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HttpGet: did not run (an outbound HTTP request ...): this failure is not trusted: after a refusal",
+  },
+  "Codeunit50673.Never": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): Arithmetic operation resulted in an overflow.",
+  },
+  "Codeunit50674.DoesNotCompile": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: Serve NoCallee.DoesNotCompile: call `NoSuchProcedure(1)` has no callee the checker resolved",
+  },
+};
+
+/** A fake `alrunner serve`: answers every runTests with `rows`; records each argv and request. */
+function fakeServe(
+  rows: Record<string, { status: string; notRun?: boolean; message?: string }> = SERVE_ROWS,
+  o: { ready?: boolean } = {},
+): { spawn: ServerSpawnFn; argvs: string[][]; requests: Record<string, unknown>[] } {
+  const argvs: string[][] = [];
+  const requests: Record<string, unknown>[] = [];
+  const spawn: ServerSpawnFn = (argv) => {
+    argvs.push([...argv]);
+    const queue: Array<Uint8Array | null> = [];
+    let waiter: (() => void) | undefined;
+    const push = (c: Uint8Array | null): void => {
+      queue.push(c);
+      waiter?.();
+      waiter = undefined;
+    };
+    const emit = (l: string): void => push(new TextEncoder().encode(`${l}\n`));
+    queueMicrotask(() => (o.ready === false ? push(null) : emit('{"ready":true}')));
+    return {
+      write: (line: string) => {
+        const req = JSON.parse(line) as Record<string, unknown>;
+        requests.push(req);
+        if (req.command === "runTests") {
+          for (const [name, r] of Object.entries(rows))
+            emit(JSON.stringify({ type: "test", name, ...r }));
+          emit(JSON.stringify({ type: "summary", exitCode: 7 }));
+        }
+        if (req.command === "shutdown") emit('{"status":"shutting down"}');
+      },
+      stdout: {
+        async *[Symbol.asyncIterator]() {
+          for (;;) {
+            if (queue.length === 0) {
+              await new Promise<void>((r) => {
+                waiter = r;
+              });
+              continue;
+            }
+            const next = queue.shift();
+            if (next === null || next === undefined) return;
+            yield next;
+          }
+        },
+      },
+      stderr: { async *[Symbol.asyncIterator]() {} },
+      kill: () => push(null),
+    };
+  };
+  return { spawn, argvs, requests };
+}
+
+const probe = (over: Over = {}, serveSpawn = fakeServe().spawn): Promise<V3ContractResult> =>
   runV3ContractProbe({
     alRunnerPath: "/fake/alrunner",
     expectedVersion: VERSION,
@@ -244,7 +336,127 @@ const probe = (over: Over = {}): Promise<V3ContractResult> =>
     tasksetPath: "/usr/bin/taskset",
     startBurner: () => ({ kill: () => {} }),
     spawn: fakeV3(over),
+    serveSpawn,
   });
+
+describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS on serve rows", () => {
+  test("alpha.2 as measured: matches, kind warn; one serve daemon with --test-timeout, isolation test", async () => {
+    const s = fakeServe();
+    const r = await probe({}, s.spawn);
+    const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+    expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
+    expect(s.argvs).toEqual([["/fake/alrunner", "serve", "--test-timeout", "3"]]);
+    const run = s.requests.filter((q) => q.command === "runTests");
+    expect(run.length).toBe(1);
+    expect(run[0]?.testIsolation).toBe("test");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24)).toEqual({ outcome: "pass", lines: [] });
+  });
+
+  for (const [entry, name] of [
+    ["http", "Codeunit50670.HttpGet"],
+    ["commit", "Codeunit50671.CommitCall"],
+    ["cascade", "Codeunit50672.LaterFails"],
+    ["onrun-failed", "Codeunit50673.Never"],
+    ["no-callee", "Codeunit50674.DoesNotCompile"],
+  ] as const) {
+    test(`a reworded ${entry} reason is diverged, names the entry, never refuses, and leg C still passes with the warning`, async () => {
+      const rows = {
+        ...SERVE_ROWS,
+        [name]: { ...SERVE_ROWS[name], message: "NotRun: out-of-scope: reworded" },
+      };
+      const r = await probe({}, fakeServe(rows as typeof SERVE_ROWS).spawn);
+      const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+      expect(f?.verdict).toBe("diverged");
+      expect(f?.measured).toContain(`${entry}: MOVED`);
+      expect(f?.measured).toContain("reworded");
+      expect(v3ContractRefusals(r)).toEqual([]);
+      const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 24);
+      expect(c.outcome).toBe("pass");
+      expect(c.lines.join("\n")).toMatch(
+        new RegExp(
+          `al-runner-v3-serve-keep-reason-moved: serve-keep-reasons: diverged.*${entry}: MOVED`,
+        ),
+      );
+    });
+  }
+
+  test("a missing row or a row without notRun is diverged", async () => {
+    const { "Codeunit50673.Never": _gone, ...rest } = SERVE_ROWS;
+    expect(
+      (await probe({}, fakeServe(rest).spawn)).facts.find((x) => x.fact === "serve-keep-reasons")
+        ?.verdict,
+    ).toBe("diverged");
+    const noFlag = {
+      ...SERVE_ROWS,
+      "Codeunit50671.CommitCall": { ...SERVE_ROWS["Codeunit50671.CommitCall"], notRun: false },
+    } as typeof SERVE_ROWS;
+    expect(
+      (await probe({}, fakeServe(noFlag).spawn)).facts.find((x) => x.fact === "serve-keep-reasons")
+        ?.verdict,
+    ).toBe("diverged");
+  });
+
+  test("serve does not start: unmeasurable, which only warns (leg C passes)", async () => {
+    const r = await probe({}, fakeServe(SERVE_ROWS, { ready: false }).spawn);
+    expect(r.facts.find((x) => x.fact === "serve-keep-reasons")?.verdict).toBe("unmeasurable");
+    expect(v3ContractRefusals(r)).toEqual([]);
+    const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 24);
+    expect(c.outcome).toBe("pass");
+    expect(c.lines.join("\n")).toMatch(
+      /al-runner-v3-serve-keep-reason-moved: serve-keep-reasons: unmeasurable/,
+    );
+  });
+
+  test("V3_WARN_FACTS is exactly serve-keep-reasons, and the same divergence on a CONTRACT fact list would gate-fail", async () => {
+    expect([...V3_WARN_FACTS]).toEqual(["serve-keep-reasons"]);
+    const rows = {
+      ...SERVE_ROWS,
+      "Codeunit50671.CommitCall": { ...SERVE_ROWS["Codeunit50671.CommitCall"], message: "x" },
+    } as typeof SERVE_ROWS;
+    const r = await probe({}, fakeServe(rows).spawn);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24, []).outcome).toBe("gate-fail");
+  });
+
+  const session = (s: ReturnType<typeof fakeServe>, gated?: Record<string, string>) =>
+    runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: fakeV3(),
+      serveSpawn: s.spawn,
+      gateOnlyTrusted: "the gated build's leg C at 5eb544ef",
+      ...(gated !== undefined ? { gatedWarnFacts: gated } : {}),
+    });
+
+  test("M-2: a session never starts serve and shows the GATE's reading, not a claimed matches", async () => {
+    for (const v of ["matches", "diverged"]) {
+      const s = fakeServe();
+      const r = await session(s, { "serve-keep-reasons": v });
+      expect(s.argvs).toEqual([]);
+      const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+      expect(f).toMatchObject({ kind: "warn", verdict: v });
+      expect(f?.measured).toBe(
+        `not re-measured in a session (gate-only); the gate read ${v} (the gated build's leg C at 5eb544ef)`,
+      );
+      expect(v3ContractRefusals(r)).toEqual([]);
+    }
+  });
+
+  test("M-2: a .gated without the reading (gated before R612) is unmeasurable, never matches", async () => {
+    const s = fakeServe();
+    const r = await session(s);
+    expect(s.argvs).toEqual([]);
+    const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+    expect(f).toMatchObject({ kind: "warn", verdict: "unmeasurable" });
+    expect(f?.measured).toMatch(/\.gated records no reading/);
+    expect(v3ContractRefusals(r)).toEqual([]);
+  });
+});
 
 describe("§8 the contract probe", () => {
   test("alpha.2 as measured: every contract fact matches and every defect is present", async () => {
@@ -277,6 +489,7 @@ describe("§8 the contract probe", () => {
         "compile-failure-not-scorable",
         "upstream-compile-errors",
         "positional-target-wins",
+        "serve-keep-reasons",
       ].sort(),
     );
   });
@@ -379,13 +592,13 @@ describe("§8 the contract probe", () => {
     const before = await probe();
     const f0 = before.facts.find((f) => f.fact === "none-selected-exit");
     expect(f0).toMatchObject({ kind: "defect", verdict: "defect-present" });
-    expect(classifyLegC(before.facts, V3_DEFECT_FACTS, 23).outcome).toBe("pass");
+    expect(classifyLegC(before.facts, V3_DEFECT_FACTS, 24).outcome).toBe("pass");
     // alpha.4 (#5622): exit 6 with a document of 0 rows.
     const r = await probe({ cu0: () => ({ exitCode: 6, stdout: doc([]) }) });
     expect(r.facts.find((f) => f.fact === "none-selected-exit")?.verdict).toBe("gone");
     expect(v3ContractRefusals(r)).toEqual([]);
     expect(v3DefectsGone(r).join("\n")).toMatch(/defect-gone: none-selected-exit/);
-    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 23).outcome).toBe("held");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("held");
   });
 
   test("R632 B (r7): none-selected-exit diverges (refuses, gate-fail) on unparseable output, rows, or another exit", async () => {
@@ -398,7 +611,7 @@ describe("§8 the contract probe", () => {
       const r = await probe({ cu0: () => answer });
       expect(r.facts.find((f) => f.fact === "none-selected-exit")?.verdict).toBe("diverged");
       expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — none-selected-exit/);
-      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 23).outcome).toBe("gate-fail");
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("gate-fail");
     }
   });
 
@@ -599,5 +812,18 @@ describe("T18: the .gated pin", () => {
     expect(() =>
       parseGated(`{"version":"v","binarySha256":"zz","lethalCommit":"${COMMIT}"}`, "x"),
     ).toThrow(/binarySha256/);
+  });
+
+  test("R612 M-2: .gated carries the gate's warn-fact readings; anything but a verdict is dropped", () => {
+    const base = { version: "v", binarySha256: "a".repeat(64), lethalCommit: COMMIT };
+    expect(
+      parseGated(JSON.stringify({ ...base, warnFacts: { "serve-keep-reasons": "diverged" } }), "x")
+        .warnFacts,
+    ).toEqual({ "serve-keep-reasons": "diverged" });
+    expect(
+      parseGated(JSON.stringify({ ...base, warnFacts: { a: "matches", b: "pass", c: 1 } }), "x")
+        .warnFacts,
+    ).toEqual({ a: "matches" });
+    expect("warnFacts" in parseGated(JSON.stringify(base), "x")).toBe(false);
   });
 });
