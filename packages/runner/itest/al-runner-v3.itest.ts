@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_UPGRADE_FILENAME,
+  IDENTITY_SCHEME,
   emitStaticSelector,
 } from "@lethal/schemata";
 import {
@@ -53,8 +54,9 @@ import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contra
 import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
+import type { EventSubscriber } from "../src/events";
 import { formatFailure } from "../src/format-failure";
-import { type SessionConfig, runSession } from "../src/orchestrator";
+import { BASELINE_TIMEOUT_DEFAULT, type SessionConfig, runSession } from "../src/orchestrator";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
@@ -67,6 +69,7 @@ import {
   V3_DEFECT_FACTS,
   V3_LEG_C_FACTS,
   V3_WARN_FACTS,
+  type XdBaselineVerdict,
   cdoCheckoutRefusal,
   classifyLegC,
   classifyLegT,
@@ -74,11 +77,15 @@ import {
   dirtyFromStatus,
   failsClosedRefusal,
   gateOutcome,
+  judgeLegT,
   knownDifferencesRefusal,
   legCFactLine,
   legOutcomeOfError,
   v3ItestTransport,
   writeV3Receipt,
+  xbHeldFirst,
+  xdBaselineLine,
+  xdFailure,
 } from "./al-runner-v3-gate";
 import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
@@ -89,7 +96,7 @@ import {
   recordRequested,
 } from "./baseline-guard";
 import { prepareFixtureSymbols } from "./fixture-symbols";
-import { compareMutants, normalizeForComparison } from "./mutant-equality";
+import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER_V3) {
   console.log("al-runner-v3 itest: skipped (set LETHAL_ITEST_ALRUNNER_V3=1)");
@@ -112,6 +119,8 @@ const CONTROL_DIR = process.env.LETHAL_ITEST_V3_CONTROL_DIR;
 const SANDBOX_BC = "28.0.46665.47126";
 const CDO_BC = "28.4.53241.53758";
 const fixture = (n: string) => join(REPO, "fixtures", n);
+/** r10 (c): X (d)'s baseline stop. The leg sets no `baselineTimeoutMs`, so the default applies. */
+const BASELINE_STOP_S = Math.ceil(BASELINE_TIMEOUT_DEFAULT / 1000);
 const PROBE = join(REPO, "scripts", "r586-probe");
 
 const configured = [
@@ -178,6 +187,7 @@ async function session(
   scratch: string,
   backend: AlRunnerV3Backend,
   cfg: Pick<SessionConfig, "projectDir" | "testDir" | "selectorIds"> & Partial<SessionConfig>,
+  onEvent?: EventSubscriber,
 ): Promise<SessionReport> {
   const store = new ResultsStore(join(scratch, "lethal.sqlite"));
   let r: SessionReport;
@@ -191,6 +201,7 @@ async function session(
         (e) => {
           if (e.type === "warning") console.log(`  warn ${e.code}: ${e.message.slice(0, 300)}`);
         },
+        ...(onEvent !== undefined ? [onEvent] : []),
       ],
     });
   } finally {
@@ -457,7 +468,7 @@ async function sandboxBatch(scratch: string): Promise<string> {
   throw new V3LegEnvironment("X: no instrumented sandbox-app batch was written");
 }
 
-async function legX(scratch: string): Promise<void> {
+async function legX(scratch: string, push: (line: string) => void): Promise<void> {
   await mkdir(join(scratch, "s1"), { recursive: true });
   const batch = await sandboxBatch(scratch);
   const sb = fixture("sandbox-tests");
@@ -558,6 +569,16 @@ async function legX(scratch: string): Promise<void> {
   must(xbOutcome !== "gate-fail", `X (b): ${b7}`);
   const xHeld: string[] =
     xbOutcome === "held" ? [`X (b): ${b7}: v3 now refuses the broken target (#5602 fixed)`] : [];
+  for (const l of xHeld) console.log(`  ${l}`);
+  // r10 M5: the held line is in the receipt before (c)-(f) run, so a later gate-fail cannot hide it.
+  await xbHeldFirst(xHeld, push, () => legXRest(scratch, batch, man.artifactId));
+}
+
+/** X (c)-(f), after X (b). */
+async function legXRest(scratch: string, batch: string, artifactId: string): Promise<void> {
+  const sb = fixture("sandbox-tests");
+  const deps = join(sb, ".alpackages");
+  const man = { artifactId };
   // (c1-c5) after a good deploy and activate("M0002").
   const tamper: [string, (active: string, tests: string, d: string) => Promise<void>][] = [
     ["c1", (a) => appendFile(join(a, "SandboxLogic.Codeunit.al"), " ")],
@@ -637,7 +658,6 @@ async function legX(scratch: string): Promise<void> {
     must(err instanceof AlRunnerV3UnprovenBatchError && b.spawnCount === before, `X (${name})`);
   }
   await legXSleep(scratch);
-  if (xHeld.length > 0) throw new V3LegHeld(xHeld);
 }
 
 /**
@@ -713,19 +733,34 @@ async function legXSleep(scratch: string): Promise<void> {
       }),
     );
     if (tamper !== undefined) b.coverageTamper = tamper;
-    const r = await session(dir, b, {
-      projectDir: app,
-      testDir: tests,
-      selectorIds: { selectorId: 50649, controlId: 50648, tableId: 50647 },
-      only: ["src/ProbeSleeper.Codeunit.al"],
-      testsOnly: ["src/ProbeSleep.Codeunit.al"],
-    });
+    // r10 (c): SleeperDoubles's baseline verdict, from the session's event stream.
+    let sleeper: XdBaselineVerdict | undefined;
+    const r = await session(
+      dir,
+      b,
+      {
+        projectDir: app,
+        testDir: tests,
+        selectorIds: { selectorId: 50649, controlId: 50648, tableId: 50647 },
+        only: ["src/ProbeSleeper.Codeunit.al"],
+        testsOnly: ["src/ProbeSleep.Codeunit.al"],
+      },
+      (e) => {
+        if (e.type !== "baseline-batch-finished") return;
+        const v = e.verdicts.find((t) => t.name.endsWith(".SleeperDoubles"));
+        if (v !== undefined)
+          sleeper = {
+            outcome: v.outcome,
+            ...(v.failureMessage !== undefined ? { failureMessage: v.failureMessage } : {}),
+          };
+      },
+    );
     for (const m of r.mutants) {
       console.log(
         `  X (${tag}): ${m.mutantCode} ${m.operatorName} ${m.verdict} ${m.killingTest ?? "-"} ${(m.failureNote ?? "").slice(0, 120)}`,
       );
     }
-    return { r, b };
+    return { r, b, sleeper };
   };
   // r5 (precommitment-r5-xd): per mutant call, SleeperDoubles' raw per-test hits on the instrumented
   // ProbeSleeper's Sleep lines, read from the very --coverage-json the backend then reads.
@@ -752,7 +787,16 @@ async function legXSleep(scratch: string): Promise<void> {
     hitsByMutant.set(id, m);
   };
   const SLEEP_LINES = [25, 31, 37, 43];
-  const { r, b } = await run("d", recordHits);
+  const { r, b, sleeper } = await run("d", recordHits);
+  // r10 (c), I4/M7: the baseline facts, printed before any (d) check. No verdict rule changes.
+  console.log(`  ${xdBaselineLine(sleeper)}`);
+  console.log(`  X (d): baselineGreen ${r.baselineGreen}`);
+  for (const m of r.mutants)
+    console.log(`  X (d): ${m.mutantCode} coveringTests ${JSON.stringify(m.coveringTests ?? [])}`);
+  console.log(
+    `  X (d): stop ${BASELINE_STOP_S} s (computed from \`BASELINE_TIMEOUT_DEFAULT\`, not read from the call)`,
+  );
+  const mustD = (cond: boolean, what: string): void => must(cond, xdFailure(what, sleeper));
   const idx = b.sleepIndexSize();
   console.log(`  X (d): Sleep index ${idx?.target} + ${idx?.test}`);
   must(idx?.target === 4 && idx?.test === 5, `X (d): Sleep index ${JSON.stringify(idx)}, r5 4 + 5`);
@@ -770,12 +814,12 @@ async function legXSleep(scratch: string): Promise<void> {
     "lethal.shift-integer": { code: "M0004", verdict: "error", line: 37 },
     "lethal.return-value": { code: "M0005", verdict: "killed" },
   };
-  must(r.mutants.length === 5, `X (d): ${r.mutants.length} mutants, r5 5`);
+  mustD(r.mutants.length === 5, `X (d): ${r.mutants.length} mutants, r5 5`);
   for (const m of r.mutants) {
     const want = R5[m.operatorName];
     const hits = hitsByMutant.get(m.mutantCode);
     console.log(`  X (d): ${m.mutantCode} hits ${JSON.stringify([...(hits ?? new Map())])}`);
-    must(
+    mustD(
       want !== undefined && want.code === m.mutantCode && want.verdict === m.verdict,
       `X (d): ${m.mutantCode} ${m.operatorName} ${m.verdict}`,
     );
@@ -961,7 +1005,16 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   assertReproduced(r, leg);
 }
 
-async function legT(scratch: string): Promise<SessionReport> {
+/**
+ * r10 (a) (R647): leg T runs its session, prints, and throws; `judgeLegT` judges. Outside record
+ * mode the rows are classified, compared and printed (each its own receipt line) BEFORE any check.
+ * The record branch keeps the counts first: a baseline is recorded only from a run matching them.
+ * `main` then runs `assertGateBaseline` on a `pass` (R332's wiring test reads that call in main).
+ */
+async function legT(
+  scratch: string,
+  push: (line: string) => void,
+): Promise<{ readonly outcome: "pass" | "held"; readonly r: SessionReport }> {
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -976,16 +1029,53 @@ async function legT(scratch: string): Promise<SessionReport> {
     testDir: fixture("sandbox-data-tests"),
     selectorIds: { selectorId: 79399, controlId: 79398, tableId: 79397 },
   });
-  assertCounts(r, "T", 290, 57, 59, 406);
-  must(
-    r.unsupportedTests.length === 3,
-    `T: ${r.unsupportedTests.length} refused tests, pre-committed 3`,
-  );
-  assertIndex(b, "T", 0, 0);
-  console.log(
-    `  T: notes state ${tagged(r, V3_STATE_NOTE_TAG).length}, refused-nearby ${tagged(r, V3_REFUSED_NEARBY_TAG).length}, §6 ${tagged(r, SLEEP_NOTE_TAG).length} (recorded, not predicted)`,
-  );
-  return r;
+  const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
+  const now = normalizeForComparison(r);
+  const notes = () =>
+    console.log(
+      `  T: notes state ${tagged(r, V3_STATE_NOTE_TAG).length}, refused-nearby ${tagged(r, V3_REFUSED_NEARBY_TAG).length}, §6 ${tagged(r, SLEEP_NOTE_TAG).length} (recorded, not predicted)`,
+    );
+  if (recordRequested(TABLES_BASELINE_PATH)) {
+    assertCounts(r, "T", 290, 57, 59, 406);
+    must(
+      r.unsupportedTests.length === 3,
+      `T: ${r.unsupportedTests.length} refused tests, pre-committed 3`,
+    );
+    assertIndex(b, "T", 0, 0);
+    notes();
+    // I-3 and M5 before anything is written: this run's rows differ from BC's on exactly
+    // the pinned 52, by key and transition (41 Commit, 7 duplicate key, 4 TestPage).
+    const why = knownDifferencesRefusal(bc, now, TABLES_KNOWN_DIFFERENCES);
+    console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 52"}`);
+    must(why === undefined, `T: ${why}`);
+    return { outcome: "pass", r };
+  }
+  const ownBase = await readGateBaseline(TABLES_BASELINE_PATH);
+  const own = ownBase.entries;
+  console.log(`  T: ${counts(r)} over ${r.mutants.length} (judged after the rows)`);
+  const idx = b.sleepIndexSize();
+  console.log(`  T: Sleep index ${idx?.target} + ${idx?.test}`);
+  const j = judgeLegT({
+    classification: classifyLegT(own, now, bc),
+    // As `assertGateBaseline` computes it (baseline-guard's `throwOnRowDiff`).
+    compare: compareMutants(own, now, {
+      sameScheme:
+        ownBase.identityScheme !== undefined && ownBase.identityScheme === IDENTITY_SCHEME,
+    }),
+    counts: r.counts,
+    total: r.mutants.length,
+    unsupportedTests: r.unsupportedTests.length,
+    sleepIndex: idx,
+    knownRefusal: knownDifferencesRefusal(bc, own, TABLES_KNOWN_DIFFERENCES),
+    codes: new Map(r.mutants.map((m) => [keyOf(m), m.mutantCode])),
+  });
+  for (const l of j.lines) {
+    console.log(`  ${l}`);
+    push(l);
+  }
+  notes();
+  if (j.outcome === "gate-fail") throw new LegFailure(j.failure ?? "T: gate-fail");
+  return { outcome: j.outcome, r };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1026,46 +1116,22 @@ async function main(): Promise<void> {
         else if (leg === "S1") await legS1(scratch);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
-        else if (leg === "X") await legX(scratch);
+        else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
         else if (leg === "T") {
-          const r = await legT(scratch);
-          const record = recordRequested(TABLES_BASELINE_PATH);
-          const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
+          const t = await legT(scratch, (l) => lines.push(l));
+          if (t.outcome === "held") {
+            legs[leg] = "held";
+            console.log(`leg ${leg}: HELD (${Math.round((Date.now() - t0) / 1000)} s)`);
+            continue;
+          }
+          // r10: after the judge's pass (or the record branch's checks), the own-baseline compare.
           // A baseline row difference is a figure that differs (gate-fail), never infra (M2).
-          const compare = async (): Promise<void> => {
-            try {
-              await assertGateBaseline(r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
-            } catch (e) {
-              if (e instanceof BaselineRecordedError) throw e;
-              throw new LegFailure(`T: ${e instanceof Error ? e.message : String(e)}`);
-            }
-          };
-          if (record) {
-            // I-3 and M5 before anything is written: this run's rows differ from BC's on exactly
-            // the pinned 52, by key and transition (41 Commit, 7 duplicate key, 4 TestPage).
-            const why = knownDifferencesRefusal(
-              bc,
-              normalizeForComparison(r),
-              TABLES_KNOWN_DIFFERENCES,
-            );
-            console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 52"}`);
-            must(why === undefined, `T: ${why}`);
-            await compare();
-          } else {
-            const own = (await readGateBaseline(TABLES_BASELINE_PATH)).entries;
-            // I-3 and M5: the committed own baseline differs from BC's on exactly the pinned 52.
-            const why = knownDifferencesRefusal(bc, own, TABLES_KNOWN_DIFFERENCES);
-            must(why === undefined, `T: v3's own baseline: ${why}`);
-            const t = classifyLegT(own, normalizeForComparison(r), bc);
-            for (const l of t.lines) console.log(`  T: ${l}`);
-            lines.push(...t.lines);
-            if (t.outcome === "held") {
-              legs[leg] = "held";
-              continue;
-            }
-            must(t.outcome === "pass", `T: ${t.lines.join("; ")}`);
-            await compare();
+          try {
+            await assertGateBaseline(t.r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`T: ${e instanceof Error ? e.message : String(e)}`);
           }
         } else throw new V3LegEnvironment(`unknown leg ${leg}`);
         legs[leg] = "pass";
