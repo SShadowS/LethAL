@@ -248,7 +248,7 @@ chunked 42 / 62 on bc3, hang 46 / 40 / 6 on bc2. Logs are `/coord/handoff/R-582/
 |---|---|
 | `bc1` | `itest:verify-scale`, `itest:bcdev`, `itest:bcdev-names`, `itest:verify`, `itest:testapp` |
 | `bc2` | `itest:hang`, `itest:harden` (second run; the first was BLOCKED on a pre-commitment counting error, r3a), `itest:agreement`, `itest:bcdev-wrapped`, `itest:stale-publish`, `itest:lease` |
-| `bc3` | `itest:tables`, `itest:chunked`, `itest:bcdev-names` (R-599's live check, run 1, build 42c7dc7b, after the in-place publish of Sandbox Names Tests and back: 36 / 0 / 0, every kill reproduced with 2 killer rows; `/coord/handoff/R-599/live/6-gate.log`) |
+| `bc3` | `itest:tables`, `itest:chunked`, `itest:bcdev-names` (R-599's live check, after the in-place publish of Sandbox Names Tests and back: run 1 on build 42c7dc7b and run 2 on d89d6eb4, each 36 / 0 / 0 with every kill reproduced by 2 killer rows; `/coord/handoff/R-599/live/6-gate.log`, `live/run2/6-gate.log`) |
 
 `itest:stale-publish` and `itest:lease` have no per-mutant figures; they passed their own checks.
 `itest:envtool` is host-only and not proven on any bc server. `itest:alrunner` and
