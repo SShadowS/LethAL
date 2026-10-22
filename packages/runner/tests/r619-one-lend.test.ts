@@ -452,6 +452,33 @@ describe("R619 --resume (resolveResume, last): T14's cases", () => {
     expect(r.error?.message).toMatch(/--resume found an unfinished run .* \(R354\)/);
     expect(warned(r.events, "resume-al-runner-test-names")).toEqual([]);
   });
+  // Build review M-a: R354 above is `findResumableRun`'s, before the lend call, so it cannot pin
+  // this branch's order. A test-app change is a site check inside the call: it must win over step 2.
+  test("order: an unmarked v2 run with another test app throws R247, with no R557 warning (site check before step 2)", async () => {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    await runSession({ ...base(store, dirs), backend: new Stub("al-runner", ABORT_AFTER) });
+    const runId = lastRun(store);
+    reshape(store, runId, { marked: false });
+    store.db.run("UPDATE runs SET test_app_hash = 'package:other' WHERE id = ?", [runId]);
+    const { events, emit } = collect(store, false);
+    let error: Error | undefined;
+    try {
+      await runSession({
+        ...base(store, dirs),
+        backend: new Stub("al-runner"),
+        resume: "last",
+        retryStranded: true,
+        emit: [emit],
+      });
+    } catch (err) {
+      error = err as Error;
+    } finally {
+      store.close();
+    }
+    expect(error?.message).toMatch(/none of its verdicts is carried \(R247, R495\)/);
+    expect(warned(events, "resume-al-runner-test-names")).toEqual([]);
+  });
 });
 
 describe("R619 --resume-run (resolveResume, a run id): T14's cases", () => {
