@@ -26,9 +26,9 @@
  * follow this machine's clock (a share whose clock runs behind can settle a file too early).
  */
 import { readFile, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import { isProjectResource, outputPathKey } from "./orchestrator";
-import { isLinkIgnored, walkFiles } from "./walk";
+import { ProjectSymlinkRefusedError, walkFiles } from "./walk";
 
 /** Thrown, never turned into a verdict: the session stops, and `--resume` continues it. */
 export class ProjectChangedDuringRunError extends Error {
@@ -93,10 +93,19 @@ export function watchProjectInputs(
   /** The stat at which an input was last seen equal to `expected`. */
   const seen = new Map<string, Seen>();
 
-  /** R631 r3 B: `"skip"`, so a link that appears mid-run is reported as drift, not a new error. */
-  const inputs = async (): Promise<{ files: string[]; links: string[] }> => {
-    // `quiet`: a new link here is drift, not the tripwire caveat (R631 review L2).
-    const walk = await walkFiles(projectDir, { links: "skip", quiet: true });
+  /**
+   * R631 review r2 N1/N2: the SAME `"refuse"` walk the run's snapshot came from, so a layout that
+   * passed at the start lists the same files here (no phantom `removed`), and any link it would
+   * now refuse (a new link, or an excused or cache link that now reaches a `.al`) is drift (r3 B),
+   * not a new error. A refuse walk never calls `onSkippedLinks`, so drift is never the tripwire (L2).
+   */
+  const inputs = async (): Promise<string[]> => {
+    const walk = await walkFiles(projectDir, { links: "refuse" }).catch((err: unknown) => {
+      if (!(err instanceof ProjectSymlinkRefusedError)) throw err;
+      throw new ProjectChangedDuringRunError(projectDir, [
+        `added link ${relative(projectDir, err.linkPath)}`,
+      ]);
+    });
     const out: string[] = [];
     for (const rel of walk.files) {
       const isAl = rel.toLowerCase().endsWith(".al");
@@ -106,16 +115,13 @@ export function watchProjectInputs(
       if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
       out.push(rel);
     }
-    return {
-      files: out.sort(),
-      links: walk.skippedLinks.filter((l) => !isLinkIgnored(projectDir, l)),
-    };
+    return out.sort();
   };
 
   return {
     async check() {
       const checkedAt = Date.now();
-      const { files: current, links } = await inputs();
+      const current = await inputs();
       if (!resourcesKnown) {
         for (const rel of current) {
           if (expected.has(rel) || rel.toLowerCase().endsWith(".al") || rel === "app.json")
@@ -124,7 +130,7 @@ export function watchProjectInputs(
         }
         resourcesKnown = true;
       }
-      const changes: string[] = links.map((l) => `added link ${l}`);
+      const changes: string[] = [];
       const present = new Set(current);
       for (const rel of current) {
         const want = expected.get(rel);

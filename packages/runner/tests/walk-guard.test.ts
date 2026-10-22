@@ -95,11 +95,24 @@ function statWalkers(text: string): string[] {
   return lists && statDir ? ["stat feeds isDirectory() beside a readdir"] : [];
 }
 
-/** Files allowed to hold a pattern, each with why. */
-const PATTERN_ALLOWED: Record<string, string> = {
+/** The ONE function per file allowed to hold a stat walker pattern (review r2: not the whole
+ *  file), each with why. The rest of the file is still checked. */
+const PATTERN_ALLOWED: Record<string, { readonly fn: string; readonly why: string }> = {
   // readAlRunnerCache lists ONE level of build folders by name; directoryBytes walks with walk.ts.
-  "packages/runner/src/al-runner-cache.ts": "one-level stat of named build folders",
+  "packages/runner/src/al-runner-cache.ts": {
+    fn: "readAlRunnerCache",
+    why: "one-level stat of named build folders",
+  },
 };
+
+/** `text` without the top-level function `fn` (from its declaration to the next column-0 `}`).
+ *  A missing function is a stale exemption: it throws. */
+function withoutFunction(text: string, fn: string): string {
+  const start = text.search(new RegExp(`\\bfunction ${fn}\\s*\\(`));
+  const end = start < 0 ? -1 : text.indexOf("\n}\n", start);
+  if (start < 0 || end < 0) throw new Error(`walk-guard exemption names a missing function ${fn}`);
+  return text.slice(0, start) + text.slice(end + 3);
+}
 
 describe("R631 walk guard: the detectors", () => {
   test("(a) flags recursive, options-variable and spread calls; passes one-level literal calls", () => {
@@ -165,8 +178,9 @@ describe("R631 walk guard: the product and the maintained scripts", () => {
       const text = code(readFileSync(join(REPO, f), "utf8"));
       for (const h of recursiveReaddirs(text)) hits.push(`${f}: ${h}`);
       for (const h of linkFollowers(text)) hits.push(`${f}: ${h}`);
-      if (PATTERN_ALLOWED[f] === undefined)
-        for (const h of statWalkers(text)) hits.push(`${f}: ${h}`);
+      const allowed = PATTERN_ALLOWED[f];
+      const checked = allowed === undefined ? text : withoutFunction(text, allowed.fn);
+      for (const h of statWalkers(checked)) hits.push(`${f}: ${h}`);
     }
     expect(hits).toEqual([]);
   });

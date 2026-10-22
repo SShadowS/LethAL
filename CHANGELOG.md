@@ -841,7 +841,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
     as drift (`added link <path>`).
   - **An excused link that reaches a `.al` file still refuses.** alc compiles `.al` under
     `node_modules`, `.git` and `.vscode` (measured), so skipping such a link would hide source alc
-    reads.
+    reads. The same holds for a link in a package cache (and for any link named `.alpackages`). A
+    link whose folder tree is too deep to check (over 32 levels) refuses too. During a run, such a
+    link is reported as drift.
   - **Package caches:** the package cache folder (by default `<project>/.alpackages`, or the
     configured `packageCachePath`) is not part of the project refusal, so a linked `.app` or a
     junctioned `.alpackages` runs. A linked `.app` is copied from its real path (a relative one

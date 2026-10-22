@@ -13,12 +13,19 @@ import {
   testAppHashFor,
 } from "../src/baseline-snapshot";
 import { danglingPackageWarning } from "../src/bcdev-backend";
-import { configuredPackageCaches } from "../src/cli";
+import { configuredPackageCaches, loadDryRunConfig } from "../src/cli";
 import { discoverTests } from "../src/discovery";
 import { generateMutationSet, prepareBatchProject } from "../src/orchestrator";
 import { ProjectChangedDuringRunError, watchProjectInputs } from "../src/source-drift";
 import { readTestAppSources } from "../src/testpage-scan";
-import { ProjectSymlinkRefusedError, onSkippedLinks } from "../src/walk";
+import {
+  ProjectSymlinkRefusedError,
+  REACH_DEPTH_CAP,
+  onSkippedLinks,
+  reachStats,
+  refuseProjectLinks,
+  setPackageCacheDirs,
+} from "../src/walk";
 import { scratchDirs } from "./helpers/scratch";
 
 /**
@@ -344,5 +351,165 @@ describe("R631 review H1: configured package caches", () => {
       }),
     ).toEqual(["a", "b", "c"]);
     expect(configuredPackageCaches({})).toEqual([]);
+  });
+
+  test("the CLI config loader registers them: a junctioned configured cache runs only after the load", async () => {
+    const base = scratch("lethal-r631-");
+    const dir = join(base, "app");
+    put(dir, "app.json", "{}");
+    put(dir, "src/A.al", CODEUNIT);
+    put(base, "store/Sys.app", "s");
+    symlinkSync(join(base, "store"), join(dir, "symbols"), "junction");
+    const configPath = join(base, "lethal.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({ bcdev: { packageCachePath: join(dir, "symbols") } }),
+    );
+    try {
+      setPackageCacheDirs([]);
+      expect(await refusalOf(refuseProjectLinks([dir]))).toBeInstanceOf(ProjectSymlinkRefusedError);
+      await loadDryRunConfig(configPath, true);
+      expect(await refusalOf(refuseProjectLinks([dir]))).toBeUndefined();
+    } finally {
+      setPackageCacheDirs([]);
+    }
+  });
+});
+
+/** Review r2 N1/N2: a cache link follows M1's rule; the drift watch uses the up-front rule. */
+describe("R631 review r2: a cache link that reaches a .al refuses; the watch agrees with the start", () => {
+  async function changesOf(watch: { check(): Promise<void> }): Promise<unknown> {
+    return watch.check().then(
+      () => null,
+      (e: unknown) => e,
+    );
+  }
+
+  test("a junctioned .alpackages holding a .al refuses up front, at the root and nested", async () => {
+    for (const at of [".alpackages", join("src", "x", ".alpackages")]) {
+      const base = scratch("lethal-r631-");
+      const dir = join(base, "app");
+      put(dir, "app.json", "{}");
+      put(dir, "src/A.al", CODEUNIT);
+      put(base, "foreign/B.al", CODEUNIT.replace("50100", "50101"));
+      mkdirSync(join(dir, at, ".."), { recursive: true });
+      symlinkSync(join(base, "foreign"), join(dir, at), "junction");
+      const e = await refusalOf(readTargetSource(dir));
+      expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+      expect((e as Error).message).toContain(join(dir, at));
+      expect((e as Error).message).toContain("reaches a .al file");
+    }
+  });
+
+  test("a configured cache of src with a linked .al file refuses up front", async () => {
+    const base = scratch("lethal-r631-");
+    const dir = join(base, "app");
+    put(dir, "app.json", "{}");
+    put(dir, "src/A.al", CODEUNIT);
+    put(base, "L.al", CODEUNIT.replace("50100", "50101"));
+    if (!fileLink(join(base, "L.al"), join(dir, "src", "L.al"))) {
+      console.log("SKIPPED (EPERM): configured cache linked .al");
+      return;
+    }
+    try {
+      setPackageCacheDirs([join(dir, "src")]);
+      const e = await refusalOf(readTargetSource(dir));
+      expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+      expect((e as Error).message).toContain(join(dir, "src", "L.al"));
+      expect((e as Error).message).toContain("package cache");
+    } finally {
+      setPackageCacheDirs([]);
+    }
+  });
+
+  test("a junctioned .alpackages holding only .app files runs, and the watch stays quiet", async () => {
+    const base = scratch("lethal-r631-");
+    const dir = join(base, "app");
+    put(dir, "app.json", "{}");
+    put(dir, "src/A.al", CODEUNIT);
+    put(base, "symbols/Sys.app", "s");
+    put(base, "symbols/deeper/Base.app", "b");
+    symlinkSync(join(base, "symbols"), join(dir, ".alpackages"), "junction");
+    const watch = watchProjectInputs(dir, await readTargetSource(dir));
+    expect(await changesOf(watch)).toBeNull();
+    expect(await changesOf(watch)).toBeNull();
+  });
+
+  test("PHANTOM REMOVED: a .al the start took through a cache link is never reported as removed", async () => {
+    // The r1 up-front walk admitted `.alpackages/B.al` through a junctioned cache; the r1 watch
+    // (a "skip" walk) did not see it and stopped the run with `removed .alpackages/B.al`. The
+    // snapshot is built by hand as r1 built it; the watch must name the LINK, never a removal.
+    const base = scratch("lethal-r631-");
+    const dir = join(base, "app");
+    put(dir, "app.json", "{}");
+    put(dir, "src/A.al", CODEUNIT);
+    put(base, "foreign/B.al", CODEUNIT);
+    symlinkSync(join(base, "foreign"), join(dir, ".alpackages"), "junction");
+    const snapshot = new Map<string, Buffer>([
+      ["app.json", Buffer.from("{}")],
+      [join("src", "A.al"), Buffer.from(CODEUNIT)],
+      [join(".alpackages", "B.al"), Buffer.from(CODEUNIT)],
+    ]);
+    const e = await changesOf(watchProjectInputs(dir, snapshot));
+    expect(e).toBeInstanceOf(ProjectChangedDuringRunError);
+    expect((e as ProjectChangedDuringRunError).changes).toEqual(["added link .alpackages"]);
+  });
+
+  test("mid-run, an excused or cache link that reaches a .al is drift", async () => {
+    for (const at of [join("node_modules", "lib"), ".alpackages"]) {
+      const base = scratch("lethal-r631-");
+      const dir = join(base, "app");
+      put(dir, "app.json", "{}");
+      put(dir, "src/A.al", CODEUNIT);
+      put(base, "shared/S.al", CODEUNIT);
+      mkdirSync(join(dir, at, ".."), { recursive: true });
+      const watch = watchProjectInputs(dir, await readTargetSource(dir));
+      expect(await changesOf(watch)).toBeNull();
+      symlinkSync(join(base, "shared"), join(dir, at), "junction");
+      const e = await changesOf(watch);
+      expect(e).toBeInstanceOf(ProjectChangedDuringRunError);
+      expect((e as ProjectChangedDuringRunError).changes).toEqual([`added link ${at}`]);
+    }
+  });
+});
+
+/** Review r2 N3: one visited set per walk, and a depth cut-off that refuses. */
+describe("R631 review r2 N3: the reaches-a-.al scan", () => {
+  function chain(root: string, depth: number): void {
+    const parts = Array.from({ length: depth }, (_, i) => `d${i}`);
+    mkdirSync(join(root, ...parts), { recursive: true });
+    writeFileSync(join(root, ...parts, "x.app"), "x");
+  }
+
+  test("a link deeper than the cap refuses (the cut-off never admits); one within it passes", async () => {
+    for (const [depth, refuses] of [
+      [REACH_DEPTH_CAP + 2, true],
+      [REACH_DEPTH_CAP - 2, false],
+    ] as const) {
+      const base = scratch("lethal-r631-");
+      const dir = join(base, "app");
+      put(dir, "src/A.al", CODEUNIT);
+      chain(join(base, "deep"), depth);
+      mkdirSync(join(dir, "node_modules"));
+      symlinkSync(join(base, "deep"), join(dir, "node_modules", "deep"), "junction");
+      const e = await refusalOf(refuseProjectLinks([dir]));
+      if (refuses) {
+        expect(e).toBeInstanceOf(ProjectSymlinkRefusedError);
+        expect((e as Error).message).toContain("could not prove it reaches no .al file");
+      } else expect(e).toBeUndefined();
+    }
+  });
+
+  test("many links to one store scan each store folder once per walk", async () => {
+    const base = scratch("lethal-r631-");
+    const dir = join(base, "app");
+    put(dir, "src/A.al", CODEUNIT);
+    chain(join(base, "store"), 4); // store, d0..d3: 5 real folders
+    mkdirSync(join(dir, "node_modules"));
+    for (let i = 0; i < 10; i++)
+      symlinkSync(join(base, "store"), join(dir, "node_modules", `p${i}`), "junction");
+    const before = reachStats.foldersScanned;
+    expect(await refusalOf(refuseProjectLinks([dir]))).toBeUndefined();
+    expect(reachStats.foldersScanned - before).toBe(5);
   });
 });

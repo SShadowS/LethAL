@@ -19,11 +19,12 @@
  *   - inside a `LINK_EXCUSED_DIRS` folder a link is listed in `skippedLinks` and never descended,
  *     UNLESS it reaches a `.al` file: alc compiles `.al` under `node_modules`, `.git` and `.vscode`
  *     (measured, same file), so such a link refuses. Real files there are yielded as anywhere else.
- *   - a PACKAGE-CACHE folder (`.alpackages` by name, or one `setPackageCacheDirs` registered) is
- *     walked under `"yield-files"`, and may itself be a link (a shared symbols folder).
+ *   - a PACKAGE-CACHE folder (`.alpackages` by name at any depth, or one `setPackageCacheDirs`
+ *     registered) is walked under `"yield-files"`, and may itself be a link (a shared symbols
+ *     folder). There too, a link that reaches a `.al` file refuses (review r2 N1/N2).
+ *   Whether a link "reaches a .al" is `linkReachesAl`: a cut-off at `REACH_DEPTH_CAP` refuses.
  * - `"skip"`: LethAL-built and cache trees. Every link goes to `skippedLinks`; unexcused ones are
- *   announced to `onSkippedLinks` listeners (a session turns them into a caveat) unless the walk
- *   says `quiet` (the drift watch, which reports a new link as drift instead).
+ *   announced to `onSkippedLinks` listeners (a session turns them into a caveat).
  * - `"yield-files"`: package caches. A linked FILE is yielded at its own path, its real path in
  *   `resolved`; a dangling link is skipped; a linked FOLDER refuses.
  */
@@ -41,8 +42,6 @@ export type LinkPolicy = "refuse" | "skip" | "yield-files";
 
 export interface WalkOptions {
   readonly links: LinkPolicy;
-  /** `"skip"` only: do not announce skipped links to `onSkippedLinks` listeners. */
-  readonly quiet?: boolean;
 }
 
 export interface WalkResult {
@@ -132,19 +131,30 @@ function statOrUndefined(full: string): EntryKind | undefined {
   }
 }
 
+/** How many folders below a link `linkReachesAl` looks before it gives up, and refuses. */
+export const REACH_DEPTH_CAP = 32;
+
+/** Exported only so the tests can count the folders `linkReachesAl` reads (review r2 N3). */
+export const reachStats = { foldersScanned: 0 };
+
+const REACHES_AL = ", and it reaches a .al file, which alc compiles even there";
+const TOO_DEEP = `, and LethAL could not prove it reaches no .al file (more than ${REACH_DEPTH_CAP} folders deep)`;
+
 /**
- * M1: whether a link (by its own path) reaches any `.al` file: it is one, or it is a folder that
- * holds one at any depth, through further links too (each real folder visited once).
- * ponytail: walks the whole linked tree; a pnpm `node_modules` is mostly links, so this can be slow
- * there. Add a size cap if it is ever measured to matter.
+ * M1 (and review r2 N1/N2 for cache links): why a link (by its own path) must refuse: it is a `.al`
+ * file, or a folder that holds one at any depth, through further links too, or a folder tree deeper
+ * than `REACH_DEPTH_CAP` (a cut-off refuses, never admits). `undefined`: it reaches no `.al`.
+ * `seen` is the walk's (review r2 N3): a real folder scanned once found no `.al` (a find throws the
+ * walk), so no later link in the same walk re-scans it.
+ * ponytail: unreadable folders count as "no .al" (alc cannot read them either).
  */
-function linkReachesAl(full: string): boolean {
+function linkReachesAl(full: string, seen: Set<string>): string | undefined {
   const target = statOrUndefined(full);
-  if (target?.isFile() === true) return full.toLowerCase().endsWith(".al");
-  if (target?.isDirectory() !== true) return false;
-  const seen = new Set<string>();
-  const dirs = [full];
-  for (let d = dirs.pop(); d !== undefined; d = dirs.pop()) {
+  if (target?.isFile() === true) return full.toLowerCase().endsWith(".al") ? REACHES_AL : undefined;
+  if (target?.isDirectory() !== true) return undefined;
+  const dirs: Array<readonly [string, number]> = [[full, 0]];
+  for (let next = dirs.pop(); next !== undefined; next = dirs.pop()) {
+    const [d, depth] = next;
     let real: string;
     try {
       real = realpathSync(d);
@@ -152,7 +162,9 @@ function linkReachesAl(full: string): boolean {
       continue;
     }
     if (seen.has(real)) continue;
+    if (depth > REACH_DEPTH_CAP) return TOO_DEEP;
     seen.add(real);
+    reachStats.foldersScanned++;
     let names: string[];
     try {
       names = readdirSync(d);
@@ -162,11 +174,11 @@ function linkReachesAl(full: string): boolean {
     for (const name of names) {
       const p = join(d, name);
       const st = statOrUndefined(p); // follows links on purpose: alc does
-      if (st?.isDirectory() === true) dirs.push(p);
-      else if (st?.isFile() === true && name.toLowerCase().endsWith(".al")) return true;
+      if (st?.isDirectory() === true) dirs.push([p, depth + 1]);
+      else if (st?.isFile() === true && name.toLowerCase().endsWith(".al")) return REACHES_AL;
     }
   }
-  return false;
+  return undefined;
 }
 
 type SkipListener = (root: string, links: readonly string[]) => void;
@@ -182,41 +194,56 @@ export function onSkippedLinks(listener: SkipListener): () => void {
   return () => skipListeners.delete(listener);
 }
 
+/**
+ * The policies a walk descends under. `"project-cache"` is a package-cache folder INSIDE a refused
+ * root: `"yield-files"`, except that a link reaching a `.al` refuses (review r2 N1/N2: alc compiles
+ * it, and a cache link must not readmit a foreign `.al` tree).
+ */
+type Policy = LinkPolicy | "project-cache";
+
 /** What one link becomes. Throws a refusal; otherwise skip it, yield it, or descend it. */
 type LinkOutcome =
   | { readonly kind: "skip" }
   | { readonly kind: "file"; readonly real: string }
-  | { readonly kind: "descend"; readonly policy: LinkPolicy };
+  | { readonly kind: "descend"; readonly policy: Policy };
 
-function onLink(root: string, rel: string, full: string, policy: LinkPolicy): LinkOutcome {
+function onLink(
+  root: string,
+  rel: string,
+  full: string,
+  policy: Policy,
+  seen: Set<string>,
+): LinkOutcome {
   if (policy === "skip") return { kind: "skip" };
+  const refuseIfReachesAl = (what: string): void => {
+    const why = linkReachesAl(full, seen);
+    if (why !== undefined) throw new ProjectSymlinkRefusedError(full, root, what, why);
+  };
   if (policy === "refuse") {
     if (isCacheDir(full)) {
-      // A shared symbols folder: entered once under the cache policy.
+      // A shared symbols folder: entered once under the cache policy, unless it reaches a `.al`.
+      refuseIfReachesAl("project folder");
       return statOrUndefined(full)?.isDirectory() === true
-        ? { kind: "descend", policy: "yield-files" }
+        ? { kind: "descend", policy: "project-cache" }
         : { kind: "skip" };
     }
     if (!isLinkExcused(rel)) throw new ProjectSymlinkRefusedError(full, root);
-    if (linkReachesAl(full))
-      throw new ProjectSymlinkRefusedError(
-        full,
-        root,
-        "project folder",
-        ", and it reaches a .al file, which alc compiles even there",
-      );
+    refuseIfReachesAl("project folder");
     return { kind: "skip" };
   }
   const target = statOrUndefined(full);
   if (target?.isDirectory() === true)
     throw new ProjectSymlinkRefusedError(full, root, "package cache");
-  if (target?.isFile() === true) return { kind: "file", real: realpathSync(full) };
+  if (target?.isFile() === true) {
+    if (policy === "project-cache") refuseIfReachesAl("package cache");
+    return { kind: "file", real: realpathSync(full) };
+  }
   return { kind: "skip" };
 }
 
 /** The policy a real directory's children are walked under. */
-const childPolicy = (full: string, policy: LinkPolicy): LinkPolicy =>
-  policy === "refuse" && isCacheDir(full) ? "yield-files" : policy;
+const childPolicy = (full: string, policy: Policy): Policy =>
+  policy === "refuse" && isCacheDir(full) ? "project-cache" : policy;
 
 /** An entry deleted between its parent's listing and its own read: it is simply not there now.
  *  The ROOT is never excused, so a missing root still throws. */
@@ -229,12 +256,14 @@ class Collector {
   readonly files: string[] = [];
   readonly skippedLinks: string[] = [];
   readonly resolved = new Map<string, string>();
+  /** Real folders `linkReachesAl` already scanned in this walk (review r2 N3). */
+  private readonly reachSeen = new Set<string>();
 
   /** Returns the policy to descend `rel` under, or `undefined` for no descent. */
-  entry(root: string, rel: string, st: EntryKind, policy: LinkPolicy): LinkPolicy | undefined {
+  entry(root: string, rel: string, st: EntryKind, policy: Policy): Policy | undefined {
     const full = join(root, rel);
     if (st.isSymbolicLink()) {
-      const out = onLink(root, rel, full, policy);
+      const out = onLink(root, rel, full, policy, this.reachSeen);
       if (out.kind === "descend") return out.policy;
       if (out.kind === "file") {
         this.files.push(rel);
@@ -250,7 +279,7 @@ class Collector {
   finish(root: string, opts: WalkOptions): WalkResult {
     this.files.sort();
     this.skippedLinks.sort();
-    if (opts.links === "skip" && opts.quiet !== true) {
+    if (opts.links === "skip") {
       const unexcused = this.skippedLinks.filter((l) => !isLinkExcused(l));
       if (unexcused.length > 0) for (const l of skipListeners) l(root, unexcused);
     }
@@ -264,7 +293,7 @@ export async function walkFiles(
   fs: WalkFs = nodeFs,
 ): Promise<WalkResult> {
   const c = new Collector();
-  const visit = async (relDir: string, policy: LinkPolicy): Promise<void> => {
+  const visit = async (relDir: string, policy: Policy): Promise<void> => {
     let names: string[];
     try {
       names = await fs.readdir(join(root, relDir));
@@ -295,7 +324,7 @@ export function walkFilesSync(
   fs: WalkFsSync = nodeFsSync,
 ): WalkResult {
   const c = new Collector();
-  const visit = (relDir: string, policy: LinkPolicy): void => {
+  const visit = (relDir: string, policy: Policy): void => {
     let names: string[];
     try {
       names = fs.readdir(join(root, relDir));
