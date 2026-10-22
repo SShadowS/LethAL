@@ -164,6 +164,8 @@
     "export-mutation-elements.ts",
     "fixtures/r393/late-write.fixture.ts",
     "generate-schemas.ts",
+    "gift-card-refreeze.ts",
+    "gift-card-refreeze.test.ts",
     "importable-scripts.test.ts",
     "itest-timeline.test.ts",
     "itest-timeline.ts",
