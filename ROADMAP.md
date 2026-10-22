@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**95 of 642 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**96 of 644 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -668,7 +668,7 @@ that ordering is the priority.
 - **R610** · al-runner-v3: unmeasured whether --coverage-json lists files reached only by a dynamic call · [R610.md](docs/roadmap/R610.md) · open
 - **R615** · scripts/bc-linux-setup.ts records every lane's lease token in one shared file per server (TOKEN_DIR fixed to the R-589 folder, lease-<server>.txt), so two lanes overwrite each other's record · [R615.md](docs/roadmap/R615.md) · open, filed 2026-10-21
 - **R611** · R586's T15 backend-identity scanner is blind to case labels, split compares, .includes and src subfolders · [R611.md](docs/roadmap/R611.md) · open
-- **R614** · al-runner-v3 update gate: existing fixture .alpackages are not checked against the pinned symbol tar · [R614.md](docs/roadmap/R614.md) · open
+- **R614** · al-runner-v3 update gate: existing fixture .alpackages are not checked against the pinned symbol tar · [R614.md](docs/roadmap/R614.md) · done (72203cfc)
 - **R616** · A parallel full verify times out under real load (two tests at 5000 ms); its worker count does not adapt · [R616.md](docs/roadmap/R616.md) · open, filed 2026-10-21
 - **R617** · bc-linux-setup --held-lease has no test: nothing checks it never takes or releases a lease · [R617.md](docs/roadmap/R617.md) · done (8daecd3f)
 - **R621** · --resume carries a stored no-coverage verdict without checking it against this session's coverage: always in a wholly carried batch (replayCarriedBatch), and in a partly carried one (scoreBatch) whenever this session covers the mutant · [R621.md](docs/roadmap/R621.md) · done (91683742)
@@ -687,6 +687,8 @@ that ordering is the priority.
 - **R642** · corpus-snapshot's heavy-job guard still allows two heavy jobs; the 32 GB container allows three, with BaseApp corpus jobs still capped at two · [R642.md](docs/roadmap/R642.md) · done (1e6d3b8a)
 - **R643** · After R621's fix, --resume deploys every fully scored batch that holds a no-coverage row; a snapshot-confirmed whole carry could skip that deploy · [R643.md](docs/roadmap/R643.md) · open, filed 2026-10-22
 - **R645** · The al-runner v3 backend leaves coverage.cobertura.xml in the caller's working directory · [R645.md](docs/roadmap/R645.md) · open, filed 2026-10-22
+- **R648** · two unit test files fail as "(unnamed)" just over 5 s when another verify overlaps: the default hook/test timeout under parallel load · [R648.md](docs/roadmap/R648.md) · open, filed 2026-10-22
+- **R649** · measure BC's real Sleep behaviour (does Sleep(600000) wait, and hit the test timeout?), then re-cast the v3 gate's X (d) from it · [R649.md](docs/roadmap/R649.md) · open, filed 2026-10-22
 
 ---
 

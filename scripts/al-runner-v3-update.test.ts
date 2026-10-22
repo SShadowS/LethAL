@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { V3_GATE_LEGS } from "../packages/runner/itest/al-runner-v3-gate";
 import { parseGated } from "../packages/runner/src/al-runner-v3-pin";
 import {
-  FIXTURE_SYMBOLS_TAR_SHA256,
+  GATE_STEPS,
   HEAVY_JOB,
   type Outcome,
   type UpdateDeps,
@@ -18,7 +18,6 @@ import {
   edgeRejudge,
   expectedSha,
   gateOne,
-  gatePreparation,
   readReceipt,
   runToLog,
   updateExitCode,
@@ -87,6 +86,8 @@ function fake(o: {
   version?: string;
   /** R639 L6: runs inside the gate, before the receipt is written. */
   onGate?: () => Promise<void>;
+  /** R614 I2: the gate's preparation line, sent through runGate's `log`. */
+  prepLine?: string;
 }) {
   const seen = {
     gates: [] as string[],
@@ -118,9 +119,10 @@ function fake(o: {
       return join(dir, "al-runner");
     },
     versionOf: async () => o.version ?? "al-runner 3.0.0-alpha.3 (c893e3633)",
-    runGate: async (commit, env) => {
+    runGate: async (commit, env, log) => {
       seen.gates.push(commit);
       seen.envs.push(env);
+      if (o.prepLine !== undefined) await log(o.prepLine);
       await o.onGate?.();
       const receiptPath = env.LETHAL_V3_GATE_RECEIPT ?? "";
       if (o.gateLog !== undefined)
@@ -192,6 +194,17 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(await updateOnce(fake({ outcome: "pass" }).deps)).toEqual(["pass"]);
     const g2 = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
     expect("warnFacts" in g2).toBe(false);
+  });
+
+  test("R614 I2: the gate's preparation line reaches the update log, tagged, on a pass and on a gate-fail", async () => {
+    for (const outcome of ["pass", "gate-fail"] as const) {
+      await setup();
+      const { deps, seen } = fake({ outcome, prepLine: "fixture .alpackages: marked" });
+      await updateOnce(deps);
+      expect(seen.logs).toContain(
+        "2026-10-21T00:00:00Z v3.0.0-alpha.3: fixture .alpackages: marked",
+      );
+    }
   });
 
   test("pass while a v3 process runs: installed, current NOT moved (deferred: in use)", async () => {
@@ -496,37 +509,14 @@ describe("RC-3 (M3): the receipt must prove what it claims", () => {
   });
 });
 
-describe("M4: the gate worktree is prepared, or refused by name", () => {
+// The fixture .alpackages half (R614) is `prepareFixtureSymbols`, tested in
+// packages/runner/tests/fixture-symbols.test.ts.
+describe("M4: the gate worktree is prepared", () => {
   test("bun install (F5: --frozen-lockfile) and the native parser build always run", () => {
-    const p = gatePreparation({ worktree: "/w", alpackagesPresent: true, symbolTar: undefined });
-    expect("steps" in p && p.steps).toEqual([
+    expect(GATE_STEPS).toEqual([
       ["bun", "install", "--frozen-lockfile"],
       ["bun", "scripts/build-native-parser.ts"],
     ]);
-  });
-  test("missing fixture .alpackages are extracted from the PINNED symbol tar", () => {
-    const p = gatePreparation({
-      worktree: "/w",
-      alpackagesPresent: false,
-      symbolTar: "/t.tar",
-      symbolTarSha256: FIXTURE_SYMBOLS_TAR_SHA256,
-    });
-    expect("steps" in p && p.steps.at(-1)).toEqual(["tar", "-xf", "/t.tar", "-C", "/w"]);
-  });
-  test("F5: a symbol tar with another sha256 (or none computed) is refused by name", () => {
-    for (const symbolTarSha256 of ["0".repeat(64), undefined]) {
-      const p = gatePreparation({
-        worktree: "/w",
-        alpackagesPresent: false,
-        symbolTar: "/t.tar",
-        ...(symbolTarSha256 !== undefined ? { symbolTarSha256 } : {}),
-      });
-      expect("refused" in p && p.refused).toMatch(/al-runner-v3-gate-symbol-tar-mismatch/);
-    }
-  });
-  test("missing .alpackages and no tar: refused by name", () => {
-    const p = gatePreparation({ worktree: "/w", alpackagesPresent: false, symbolTar: undefined });
-    expect("refused" in p && p.refused).toMatch(/al-runner-v3-gate-worktree-unprepared/);
   });
 });
 
