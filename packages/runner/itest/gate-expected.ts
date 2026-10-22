@@ -216,8 +216,11 @@ export const LEND_FIGURES = {
   fresh: { killed: 3, survived: 12, noCoverage: 4, groupedCalls: 15 },
   /** L1 and N0: the 12 survivors carried as known survivors; 3 kills scored. */
   history: { killed: 3, survived: 0, noCoverage: 4, knownSurvivors: 12, groupedCalls: 3 },
-  /** R1: `--resume-run` of an unfinished full clone; the one batch is carried whole. */
-  resumeWhole: { carryable: 19, carried: 19, groupedCalls: 0 },
+  /** R1: `--resume-run` of an unfinished full clone. Since R621 (pre-commitment
+   *  docs/superpowers/specs/2026-10-22-r585-lend-precommitment.md) a stored no-coverage is never
+   *  carried, so the batch is not carried whole: it deploys, reuses B's snapshot, re-derives the 4
+   *  no-coverage and carries the other 15. Was 19. */
+  resumeWhole: { carryable: 19, carried: 15, groupedCalls: 0 },
   /**
    * R2: `--resume` of K (KEPT carried, M0003's error row and the rest re-run), snapshot reused.
    * Live run 1 (BLOCKED, pre-commitment addendum): in a PARTLY carried batch `scoreBatch` re-derives

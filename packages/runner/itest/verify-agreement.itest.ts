@@ -837,6 +837,7 @@ async function main(): Promise<void> {
       );
       const compiled = await backend.compileTestApp(TEST_DIR, artifact);
       const runId = store.createRun({
+        testScope: [],
         coverageMode: backend.capabilities().coverage,
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],

@@ -536,6 +536,7 @@ ${guard}        ${S}
     ).toBe("carried");
     const store = new ResultsStore(":memory:");
     const run = store.createRun({
+      testScope: [],
       projectPath: "p",
       backend: "b",
       appVersion: "1",

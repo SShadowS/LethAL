@@ -25,6 +25,7 @@ type Row = {
 /** Records `rows` as one run of `store`; returns that run's id. */
 function recordRun(store: ResultsStore, rows: readonly Row[]): number {
   const runId = store.createRun({
+    testScope: [],
     coverageMode: "al-runner",
     identityScheme: 1,
     buildSymbols: [],

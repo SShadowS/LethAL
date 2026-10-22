@@ -14,6 +14,7 @@ import { PENDING_SUFFIX, REVOKED_SUFFIX, rowKey, seedRunFrom, storedMutants } fr
 const H = `package:${"a".repeat(64)}|closed-world:public`;
 const D = "deps:r618";
 const FP = "fp:r618";
+const SCOPE = ["79100::ClampPercentRuns", "79100::Other"];
 const CODES = Object.keys(LEND_MUTANTS) as LendCode[];
 const keyOf = (c: LendCode): string => LEND_MUTANTS[c].key;
 const keys = (cs: readonly string[]): Set<string> => new Set(cs.map((c) => keyOf(c as LendCode)));
@@ -22,6 +23,8 @@ const keys = (cs: readonly string[]): Set<string> => new Set(cs.map((c) => keyOf
 function source(): { store: ResultsStore; a: number } {
   const store = new ResultsStore(":memory:");
   const a = store.createRun({
+    // R585: the scope the clones copy; the history session below sends a subset of it.
+    testScope: SCOPE,
     projectPath: "/fixtures/sandbox-app",
     backend: "bcdev",
     appVersion: "1.0.0.0",
@@ -96,6 +99,7 @@ const survivorKeys = (store: ResultsStore) => {
     { hash: H, deps: D },
     ["CLEAN24"],
     [],
+    ["79100::ClampPercentRuns"],
     {
       session: { backend: "bcdev", runnerBuild: undefined },
       backendBuildRefused: hit("backendBuildRefused"),
@@ -106,6 +110,7 @@ const survivorKeys = (store: ResultsStore) => {
       carryUntrusted: hit("carryUntrusted"),
       hiddenFilesChanged: hit("hiddenFilesChanged"),
       alRunnerUnmarked: hit("alRunnerUnmarked"),
+      testScopeChanged: hit("testScopeChanged"),
     },
   ).keys;
   return { keys: k, fired };
@@ -225,6 +230,15 @@ describe("R618 seedRunFrom: K is permuted by code, keyed intact, with a sentinel
   test("a key asked for that the source lacks is refused", () => {
     const { store, a } = source();
     expect(() => seedRunFrom(store, a, { keepKeys: new Set(["nope"]) })).toThrow(/1 keys asked/);
+    store.close();
+  });
+
+  test("R585: the clone copies the source's test scope, and a NULL-scope source is refused", () => {
+    const { store, a } = source();
+    const c = seedRunFrom(store, a, { finished: true });
+    expect(store.getRun(c)?.testScope).toEqual(SCOPE);
+    store.db.run("UPDATE runs SET test_scope = NULL WHERE id = ?", [a]);
+    expect(() => seedRunFrom(store, a)).toThrow(/records no test scope; it is not a clone source/);
     store.close();
   });
 });
