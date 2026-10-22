@@ -11,7 +11,8 @@ loaded.
 - Leg B uses the answer key, `fixtures/sandbox-harden-answers`. S1 to S4 must be killed by name,
   and S5 must still survive.
 - Since R582 both legs re-run every kill once under the mutant (R577's rule): leg A's 16 and leg
-  B's 20 must each carry `killReproduced` and exactly 2 mutated rows for the killing test.
+  B's 18 must each carry `killReproduced` and exactly 2 mutated rows for the killing test
+  (pre-commitment 39eaf536, corrected for leg B in r3a, 8cbae6d1).
 
 The baseline is written only after both legs pass. The connection comes from the gitignored
 config in `fixtures/sandbox-harden/` that `LETHAL_ITEST_CONFIG` names (see
