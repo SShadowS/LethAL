@@ -151,6 +151,20 @@ describe("R631 walker: never descends a link", () => {
     expect((err as Error).message).toContain(join(root, "src", "Linked.al"));
   });
 
+  test("refuse: ANY file link refuses, a linked README too (no allowlist of AL-relevant files)", async () => {
+    const base = scratch("lethal-walk-");
+    const root = join(base, "root");
+    put(root, "src/A.al");
+    put(base, "README.md");
+    if (!fileLink(join(base, "README.md"), join(root, "README.md"))) {
+      console.log("SKIPPED (EPERM): linked README refuses");
+      return;
+    }
+    const err = await walkFiles(root, { links: "refuse" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProjectSymlinkRefusedError);
+    expect((err as Error).message).toContain(join(root, "README.md"));
+  });
+
   test("refuse: a link-free tree yields every real file", async () => {
     const base = scratch("lethal-walk-");
     put(base, "src/A.al");
