@@ -642,9 +642,16 @@ describe("4: the encoder throws on a caller-contract violation", () => {
     ).toThrow(/more than one echo/);
   });
   test("a mutant whose entries sit in two groups of one request", () => {
+    // M1 comes back AFTER M2's group, starting with an echo of its own: only the group rule sees it.
     expect(() =>
-      assertEntriesWellFormed([echoOf("M1"), echoOf("M2"), e("M1|79100", "M1")]),
-    ).toThrow(/group/);
+      assertEntriesWellFormed([
+        echoOf("M1"),
+        e("M1|79100", "M1"),
+        echoOf("M2"),
+        { ...echoOf("M1"), id: "M1|echo2" },
+        e("M1|79101", "M1"),
+      ]),
+    ).toThrow(/two groups/);
   });
   test("a group is never split across chunks: 257 entries go alone, other groups are cut between", () => {
     const big = { mutantId: "MBIG", codeunits: Array.from({ length: 256 }, (_, i) => 1000 + i) };
