@@ -562,4 +562,13 @@ export interface ExecutionBackend {
   prefetchMutants?(
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
   ): Promise<void>;
+
+  /**
+   * R653, OPTIONAL: called right before a cold fail kill's unmutated confirm, under the killing
+   * mutant. al-runner v3's serve-entries transport sends the confirm (NONE) and the reproduction
+   * (the mutant) as ONE request, confirm first, and keeps each answer for the next `activate(null)`
+   * and `activate(mutantId)`. A no-op when it cannot; the confirm and the reproduction then run as
+   * before.
+   */
+  sendKillPair?(mutantId: string, ref: TestMethodRef): Promise<void>;
 }

@@ -18,11 +18,15 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { V3_SERVE_SAFE_REFUSALS, defaultServerSpawn } from "./al-runner-backend";
-import { baseAppJson } from "./al-runner-canary";
-import { AlRunnerServer, type ServerSpawnFn, type ServerTestLine } from "./al-runner-server";
+import {
+  AlRunnerServer,
+  type ServerSpawnFn,
+  type ServerTestLine,
+  V3_SERVE_SAFE_REFUSALS,
+  defaultServerSpawn,
+} from "./al-runner-server";
 import { type V3Row, V3_REFUSAL_PREFIX, decodeV3Rows } from "./al-runner-v3-backend";
-import { probeV3PredefinedSymbols } from "./al-runner-v3-probe";
+import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
 import { type SpawnFn, defaultSpawn } from "./publisher";
 

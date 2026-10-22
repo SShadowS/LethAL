@@ -69,6 +69,7 @@ import {
   type AppItem,
   type AppManifest,
   type Conn,
+  type ConnServer,
   type Decided,
   HOST,
   SERVERS,
@@ -80,6 +81,7 @@ import {
   fixtureManifests,
   headerPackageId,
   manifest,
+  portsOf,
   publishBytes,
   realOps,
   refusals,
@@ -226,7 +228,7 @@ export interface BcLogin {
  * password ending in `!` (or holding `=`) arrives intact. Every refusal names a key or a line
  * number, never a value.
  */
-export function parseSecretEnv(text: string): BcLogin {
+export function parseSecretEnv(text: string, path: string = SECRET_PATH): BcLogin {
   const seen = new Map<string, string>();
   const lines = text.split("\n");
   for (const [i, raw] of lines.entries()) {
@@ -234,26 +236,29 @@ export function parseSecretEnv(text: string): BcLogin {
     if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
     const eq = line.indexOf("=");
     // The line itself is not quoted: a line with no `=` may be a bare password.
-    if (eq < 0) throw new SecretFileError(`${SECRET_PATH}: line ${i + 1} is not KEY=value`);
+    if (eq < 0) throw new SecretFileError(`${path}: line ${i + 1} is not KEY=value`);
     const key = line.slice(0, eq).trim();
     if (!(EXPECTED_KEYS as readonly string[]).includes(key)) {
       // Named only when it looks like an env key: a bare password holding `=` would otherwise
       // have its first half printed as the "key".
       const named = /^[A-Z_][A-Z0-9_]*$/.test(key) ? ` ${JSON.stringify(key)}` : "";
       throw new SecretFileError(
-        `${SECRET_PATH}: unexpected key${named} on line ${i + 1}; only ${EXPECTED_KEYS.join(" and ")} are allowed`,
+        `${path}: unexpected key${named} on line ${i + 1}; only ${EXPECTED_KEYS.join(" and ")} are allowed`,
       );
     }
-    if (seen.has(key)) throw new SecretFileError(`${SECRET_PATH}: ${key} is set twice`);
+    if (seen.has(key)) throw new SecretFileError(`${path}: ${key} is set twice`);
     seen.set(key, line.slice(eq + 1));
   }
-  return { user: required(seen, "BC_DEV_USER"), password: required(seen, "BC_DEV_PASSWORD") };
+  return {
+    user: required(seen, "BC_DEV_USER", path),
+    password: required(seen, "BC_DEV_PASSWORD", path),
+  };
 }
 
-function required(seen: ReadonlyMap<string, string>, key: string): string {
+function required(seen: ReadonlyMap<string, string>, key: string, path: string): string {
   const value = seen.get(key);
-  if (value === undefined) throw new SecretFileError(`${SECRET_PATH}: ${key} is missing`);
-  if (value === "") throw new SecretFileError(`${SECRET_PATH}: ${key} is empty`);
+  if (value === undefined) throw new SecretFileError(`${path}: ${key} is missing`);
+  if (value === "") throw new SecretFileError(`${path}: ${key} is empty`);
   return value;
 }
 
@@ -263,7 +268,7 @@ export function readSecretFile(path: string = SECRET_PATH): BcLogin {
       `${path} does not exist. The owner writes it, holding exactly BC_DEV_USER=... and BC_DEV_PASSWORD=...`,
     );
   }
-  return parseSecretEnv(readFileSync(path, "utf8"));
+  return parseSecretEnv(readFileSync(path, "utf8"), path);
 }
 
 /** What may be printed about the login: key names and lengths. */
@@ -339,28 +344,38 @@ export function buildConfig(
   paths: ConfigPaths,
   configDir: GateConfigDir,
 ): object {
-  const p = SERVERS[server];
   const selectorIds = FIXTURE_SELECTOR_IDS[configDir];
   return {
     ...(selectorIds !== undefined ? { selectorIds } : {}),
-    bcdev: {
-      mcpCommand: paths.mcpCommand,
-      server: `${HOST}:${p.dev}`,
-      serverInstance: "BC",
-      tenant: "default",
-      port: p.dev,
-      baseUrl: `${HOST}:${p.odata}/BC`,
-      apiBaseUrl: `${HOST}:${p.api}/BC`,
-      company: "CRONUS International Ltd.",
-      username: login.user,
-      password: login.password,
-      packageCachePath: paths.packageCachePath,
-      controlSymbolPath: paths.controlSymbolPath,
-      env: {
-        BC_DEV_USER: login.user,
-        BC_DEV_PASSWORD: login.password,
-        BC_DEV_API_PORT: String(p.api),
-      },
+    bcdev: bcdevSection(server, login, paths),
+  };
+}
+
+/** `buildConfig`'s `bcdev` section; R663's `bc-demo-setup.ts` builds its config from it too. */
+export function bcdevSection(
+  server: ConnServer,
+  login: BcLogin,
+  paths: ConfigPaths,
+  host: string = HOST,
+): object {
+  const p = portsOf(server);
+  return {
+    mcpCommand: paths.mcpCommand,
+    server: `${host}:${p.dev}`,
+    serverInstance: "BC",
+    tenant: "default",
+    port: p.dev,
+    baseUrl: `${host}:${p.odata}/BC`,
+    apiBaseUrl: `${host}:${p.api}/BC`,
+    company: "CRONUS International Ltd.",
+    username: login.user,
+    password: login.password,
+    packageCachePath: paths.packageCachePath,
+    controlSymbolPath: paths.controlSymbolPath,
+    env: {
+      BC_DEV_USER: login.user,
+      BC_DEV_PASSWORD: login.password,
+      BC_DEV_API_PORT: String(p.api),
     },
   };
 }
@@ -638,8 +653,9 @@ async function compileStep(
   step: PublishStep,
   symbols: string,
   log: string[],
+  root: string,
 ): Promise<AppItem[]> {
-  const targetDir = join(REPO, "fixtures", step.target);
+  const targetDir = join(root, step.target);
   const build = join(STATE_ROOT, c.server, "build", step.target);
   rmSync(build, { recursive: true, force: true });
   mkdirSync(build, { recursive: true });
@@ -652,7 +668,7 @@ async function compileStep(
     { dir: step.target, local: target, role: "target", gateDeploys: step.gateDeploys === true },
   ];
   for (const dependent of step.dependents) {
-    const depDir = join(REPO, "fixtures", dependent);
+    const depDir = join(root, dependent);
     const cache = join(build, `${dependent}-symbols`);
     mkdirSync(cache, { recursive: true });
     await downloadSymbols(c, depDir, cache);
@@ -675,7 +691,11 @@ async function compileStep(
 // ---------------------------------------------------------------------------------------------
 // (e) doctor, and the driver
 
-async function doctor(configPath: string, projectDir: string, testsDir: string): Promise<boolean> {
+export async function doctor(
+  configPath: string,
+  projectDir: string,
+  testsDir: string,
+): Promise<boolean> {
   const p = Bun.spawn(
     [
       "bun",
@@ -693,14 +713,18 @@ async function doctor(configPath: string, projectDir: string, testsDir: string):
   return (await p.exited) === 0;
 }
 
-function bcDevMcpCommand(): string[] {
-  const pkg = JSON.parse(readFileSync(join(BC_DEV_MCP, "package.json"), "utf8")) as {
+/** `dir` is a bc-dev-mcp checkout; R663b's laptop mode passes its own (`bc-demo-laptop.ts`). */
+export function bcDevMcpCommand(
+  dir: string = BC_DEV_MCP,
+  read: (path: string) => string = (p) => readFileSync(p, "utf8"),
+): string[] {
+  const pkg = JSON.parse(read(join(dir, "package.json"))) as {
     bin?: Record<string, string>;
     main?: string;
   };
   const entry = pkg.bin?.["bc-dev-mcp"] ?? pkg.main;
-  if (entry === undefined) throw new Error(`${BC_DEV_MCP}/package.json: no bin or main`);
-  return ["node", join(BC_DEV_MCP, entry)];
+  if (entry === undefined) throw new Error(`${dir}/package.json: no bin or main`);
+  return ["node", join(dir, entry)];
 }
 
 export function errText(err: unknown): string {
@@ -1055,26 +1079,32 @@ export interface RunDeps {
   readonly doctor: (configPath: string, projectDir: string, testsDir: string) => Promise<boolean>;
 }
 
-function pinnedControl(): Buffer {
-  const control = readFileSync(CONTROL_APP);
+export function pinnedControl(
+  path: string = CONTROL_APP,
+  read: (p: string) => Buffer = (p) => readFileSync(p),
+): Buffer {
+  const control = read(path);
   const sha = sha256Of(control);
   if (sha !== CONTROL_SHA256) {
-    throw new Error(
-      `${CONTROL_APP}: sha256 ${sha}, expected ${CONTROL_SHA256}; refusing to publish it`,
-    );
+    throw new Error(`${path}: sha256 ${sha}, expected ${CONTROL_SHA256}; refusing to publish it`);
   }
   return control;
 }
 
-async function realCompile(
+/** `root` holds the step's app dirs: `fixtures/` for the gates, `examples/` for R663's demo. */
+export async function realCompile(
   c: Conn,
   step: PublishStep,
   symbols: string,
   log: string[],
+  root: string = join(REPO, "fixtures"),
+  /** R663b laptop mode: the alc it resolved; absent, the newest AL extension's. */
+  alc?: string,
 ): Promise<AppItem[]> {
+  if (alc !== undefined) return compileStep(c, alc, step, symbols, log, root);
   const tools = await defaultAlToolPaths();
   if (tools === undefined) throw new Error("no alc found under the AL Language extension");
-  return compileStep(c, tools.alcPath, step, symbols, log);
+  return compileStep(c, tools.alcPath, step, symbols, log, root);
 }
 
 export const REAL_DEPS: RunDeps = {

@@ -33,26 +33,22 @@ import {
   emitStaticSelector,
 } from "@lethal/schemata";
 import {
-  V3_SERVE_SAFE_REFUSALS,
-  assertResourceSelectorRuntime,
-  defaultServerSpawn,
-  installResourceSelector,
-  serveDaemonReusable,
-  verdictFromRunnerTest,
-} from "./al-runner-backend";
-import {
   AlRunnerCoverageFrameError,
   type AlRunnerCoverageIndex,
   alRunnerCoverageFromServer,
   buildAlRunnerCoverageIndex,
   normalizeFileKey,
 } from "./al-runner-coverage";
+import { verdictFromRunnerTest } from "./al-runner-rows";
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
   MAX_TIMER_MS,
   type ServerSpawnFn,
   type ServerTestLine,
+  V3_SERVE_SAFE_REFUSALS,
+  defaultServerSpawn,
+  serveDaemonReusable,
 } from "./al-runner-server";
 import { assertBcVersionMatchesPackages } from "./al-runner-v3-config";
 import {
@@ -99,6 +95,7 @@ import type {
 import { hashAlTree, hashTestDir } from "./baseline-snapshot";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, defaultSpawn } from "./publisher";
+import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
 import { TestAppError, symbolPackageId } from "./test-app-publish";
 import { ProjectSymlinkRefusedError } from "./walk";
 
@@ -466,6 +463,19 @@ export interface V3EntriesStats {
    *  coverageRequests` in serve-entries. */
   boundChecks: number;
   boundMs: number;
+  /** R653: kill pairs whose confirm PASSED (counted when the reproduction consumes the pair):
+   *  each saves one live request and one bound check. */
+  pairRequests: number;
+  /** R653: pairs whose NONE entry stood but whose M entry did not (R612 cut): +1 live request. */
+  pairFallbacks1: number;
+  /** R653: pairs whose NONE entry did not stand (R612 cut at or before it): +2 live requests. */
+  pairFallbacks2: number;
+  /** R653: the `pairFallbacks1` whose reproduction was asked for (their confirm passed). */
+  pairFallbacks1Passed: number;
+  /** R653: the `pairFallbacks2` whose reproduction was asked for (their confirm passed). Per fail
+   *  kill, `liveRequests = old − pairRequests + pairFallbacks1Passed + pairFallbacks2 +
+   *  pairFallbacks2Passed`, where old is 1 + (1 if the confirm passed). */
+  pairFallbacks2Passed: number;
 }
 
 /** R651: the phase timers of `V3EntriesStats`. */
@@ -603,6 +613,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     echoMs: 0,
     boundChecks: 0,
     boundMs: 0,
+    pairRequests: 0,
+    pairFallbacks1: 0,
+    pairFallbacks2: 0,
+    pairFallbacks1Passed: 0,
+    pairFallbacks2Passed: 0,
   };
 
   private deployedDir: string | undefined;
@@ -634,6 +649,31 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   coverageTamper?: (path: string) => Promise<void>;
   /** How many v3 processes this backend started (legs X (a), (c)). */
   spawnCount = 0;
+  /**
+   * R653: a fail kill's answers from `sendKillPair`, for the next `activate(null)` (the confirm:
+   * its rows `none`, or the verdict a server error maps to) and then `activate(mutantId)` (the
+   * reproduction's rows `m`). No rows at all when the NONE entry did not stand. Every public method
+   * that works drops it, except the consuming `activate` and the confirm's own `run`.
+   */
+  private pair:
+    | {
+        readonly mutantId: string;
+        readonly ref: TestMethodRef;
+        readonly none?: CallRows;
+        readonly noneVerdict?: TestVerdict;
+        readonly m?: CallRows;
+        /** Which R612 fallback this pair was: 1 (M cut), 2 (NONE cut). */
+        readonly fallback?: 1 | 2;
+        readonly next: "null" | "mutant";
+      }
+    | undefined;
+  /** R653: the confirm's verdict from the pair, for ONE `run`. */
+  private pairVerdict: TestVerdict | undefined;
+
+  private dropPair(): void {
+    this.pair = undefined;
+    this.pairVerdict = undefined;
+  }
 
   constructor(
     private readonly cfg: AlRunnerV3Config,
@@ -674,6 +714,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** `--version` must be a v3 build and, when pinned, the binary must be the pinned bytes. */
   async status(): Promise<BackendStatus> {
+    this.dropPair();
     const res = await this.spawn([this.cfg.alRunnerPath, "--version"]).catch((e) => ({
       exitCode: -1,
       stdout: "",
@@ -757,16 +798,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   useBuildSymbols(symbols: readonly string[]): void {
+    this.dropPair();
     this.buildSymbols = [...symbols];
   }
 
   useDiscoveredTests(tests: readonly TestMethodRef[]): void {
+    this.dropPair();
     const m = new Map<number, number>();
     for (const t of tests) m.set(t.codeunitId, (m.get(t.codeunitId) ?? 0) + 1);
     this.testsPerCodeunit = m;
   }
 
   useSessionTests(suite: readonly TestMethodRef[]): void {
+    this.dropPair();
     const m = new Map<number, TestMethodRef[]>();
     for (const t of suite) m.set(t.codeunitId, [...(m.get(t.codeunitId) ?? []), t]);
     this.suitePerCodeunit = m;
@@ -777,6 +821,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     mutantId: string,
     budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
   ): void {
+    this.dropPair();
     this.plan = {
       mutantId,
       budgets: new Map(budgets.map((b) => [refKey(b.ref), b.budgetMs])),
@@ -789,6 +834,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R635 §3 (R517): the daemon's stop, `S = max(1, ceil(max(floor, baseline) / 1000))`. */
   useMutantBudgetFloor(floorMs: number, baselineTimeoutMs: number): void {
+    this.dropPair();
     this.budgetFloor = { floorMs, baselineTimeoutMs };
   }
 
@@ -799,6 +845,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R635 §4: the orchestrator's bracket around its baseline step. The ONLY source of `inBaseline`. */
   baselinePhase(on: boolean): void {
+    this.dropPair();
     this.inBaseline = on;
   }
 
@@ -1000,6 +1047,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** §3 step 4: alc alone on a copy of `dir` (bisection's question). Never starts v3. */
   async compileCheck(instrumentedDir: string): Promise<void> {
+    this.dropPair();
     const dir = join(this.cfg.instrumentedDir, "compile-check");
     try {
       await this.stage(instrumentedDir, dir);
@@ -1012,6 +1060,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** §3 step 5 (R461): alc on the plain copy of the target. */
   async compilePlainCheck(dir: string): Promise<void> {
+    this.dropPair();
     const out = await this.compileTarget(dir);
     await rm(out.appPath, { force: true }).catch(() => {});
   }
@@ -1019,6 +1068,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   async activate(mutantId: string | null): Promise<void> {
     // C2: the rows describe the selector as it was; dropped BEFORE the write.
     this.rowsByCodeunit = new Map();
+    // R653: the pair is taken out here; only the expected next activation puts anything back.
+    const pair = this.pair;
+    this.dropPair();
     const proof = this.proof;
     const dir = this.deployedDir;
     if (proof === undefined || dir === undefined) {
@@ -1042,6 +1094,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         this.prefetched.delete(mutantId);
         this.rowsByCodeunit = pre;
       }
+      if (pair?.next === "null" && mutantId === null) {
+        // The kill's confirm: its rows, or the verdict its server error maps to.
+        if (pair.none !== undefined) this.rowsByCodeunit.set(pair.ref.codeunitId, pair.none);
+        else if (pair.noneVerdict !== undefined) this.pairVerdict = pair.noneVerdict;
+        this.pair = { ...pair, next: "mutant" };
+      } else if (pair?.next === "mutant" && mutantId === pair.mutantId) {
+        // The reproduction, asked for only after the confirm passed (R577).
+        this.stats.pairRequests += 1;
+        if (pair.fallback === 1) this.stats.pairFallbacks1Passed += 1;
+        if (pair.fallback === 2) this.stats.pairFallbacks2Passed += 1;
+        if (pair.m !== undefined) this.rowsByCodeunit.set(pair.ref.codeunitId, pair.m);
+      }
       this.lastActivated = mutantId;
       return;
     }
@@ -1059,9 +1123,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * R652: §3 step 3 immediately before each SEND (`send`, `callCodeunit`'s spawn, a §5 window), never
    * on a `run()` served from memory: every row comes from a send that was checked just before it
    * left. A change in the gap between that check and al-runner's read cannot make a kill, because
-   * R577 (`killsMustReproduce`) sends every kill's confirm and reproduction fresh, each checked;
-   * turning that off for v3 would reopen the gap. A lasting change in the LAST send's gap goes
-   * unreported (build review L1). R651's timer outside the bracket.
+   * R577 (`killsMustReproduce`) sends every kill's confirm and reproduction fresh, after the kill's
+   * own send; R653 sends the two in ONE checked request (`sendKillPair`), confirm first. Turning
+   * R577 off for v3 would reopen the gap. A lasting change in the LAST send's gap (now the pair)
+   * goes unreported (build review L1). R651's timer outside the bracket.
    */
   private async checkBound(): Promise<void> {
     if (this.inBaseline) return this.assertBound();
@@ -1150,6 +1215,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R652: no bound check here; each send checks (`checkBound`).
     if (this.proof === undefined || this.deployedDir === undefined) {
       throw new AlRunnerV3UnprovenBatchError("no batch was deployed and proved");
+    }
+    // R653: only the pair's own confirm (after its activate(null)) keeps the pair for the
+    // reproduction; any other run drops it. A stored confirm verdict is returned once.
+    const pair = this.pair;
+    if (!(pair?.next === "mutant" && refKey(pair.ref) === refKey(ref))) this.dropPair();
+    const served = this.pairVerdict;
+    if (served !== undefined) {
+      this.pairVerdict = undefined;
+      return { ...served, ref };
     }
     let call = this.rowsByCodeunit.get(ref.codeunitId);
     if (call === undefined) {
@@ -1575,6 +1649,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   private async closeDaemon(): Promise<void> {
+    // R653 C5: at most a lost saving; a pair is stored only after its request() returned.
+    this.dropPair();
     const d = this.daemon;
     this.daemon = undefined;
     await d?.server.close();
@@ -1630,10 +1706,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `the entries answer is invalid: ${decoded.why}`,
       );
     }
-    // Build review r1 L2: only the warm-up or a request of 2+ groups speaks for the batch; a lone
+    // Build review r1 L2: only the warm-up or a PREFETCH of 2+ groups speaks for the batch; a lone
     // group's refused rows are that mutant's `error` (its echo did not run), never a batch stop.
+    // R653: a live kill pair (NONE and M) speaks for one kill, like a lone live group.
     const refused =
-      kind === "warmup" || groups.length >= 2
+      kind === "warmup" || (kind === "prefetch" && groups.length >= 2)
         ? batchRefusalReason(
             decoded.rows,
             (m) => Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m)),
@@ -1751,6 +1828,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   async prefetchMutants(
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
   ): Promise<void> {
+    this.dropPair();
     if (!this.entries) return;
     this.prefetched = new Map();
     const groups: EntryGroup[] = plans.map((p) => ({
@@ -1784,6 +1862,67 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       for (const g of again) resent.add(g.mutantId);
       queue.push(...chunkGroups(again));
     }
+  }
+
+  /**
+   * R653: a cold fail kill's confirm (NONE) and R577 reproduction (`mutantId`) as ONE live request,
+   * confirm FIRST, so the three runs stay kill, NONE, M (a change of the killer's outcome over time
+   * cannot make a kill). Stores the answers for the next `activate(null)` and `activate(mutantId)`;
+   * sends and stores nothing (today's two live calls) unless serve-entries is live and unlatched,
+   * outside the baseline, right after the kill under `mutantId`. An R612 cut keeps what stood: the
+   * NONE answer alone (`pairFallbacks1`), or nothing (`pairFallbacks2`).
+   */
+  async sendKillPair(mutantId: string, ref: TestMethodRef): Promise<void> {
+    this.dropPair();
+    if (
+      !this.entries ||
+      this.entriesRefused !== undefined ||
+      this.inBaseline ||
+      this.lastActivated !== mutantId
+    ) {
+      return;
+    }
+    const cu = ref.codeunitId;
+    this.union.add(cu);
+    const started = Date.now();
+    let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
+    try {
+      out = await this.request(
+        [
+          { mutantId: SELECTOR_RESOURCE_NONE, codeunits: [cu] },
+          { mutantId, codeunits: [cu] },
+        ],
+        "liveMs",
+      );
+    } catch (err) {
+      if (
+        err instanceof AlRunnerV3EntriesRefusedError ||
+        err instanceof AlRunnerServerRequestError
+      ) {
+        // As `liveCall` maps the same throw (a refusal latches).
+        const noneVerdict = this.liveFailure(ref, err, Date.now() - started);
+        this.pair = { mutantId, ref, noneVerdict, next: "null" };
+        return;
+      }
+      console.warn(
+        `[lethal] al-runner-v3-pair-skipped: the kill pair for ${mutantId} was not sent (${err instanceof Error ? `${err.name}: ${err.message.slice(0, 300)}` : String(err)}); the confirm and the reproduction run as live requests (R653).`,
+      );
+      return;
+    }
+    // Stored only now: request() may itself close the daemon (an R612 cut, a dirty daemon).
+    const none = out.results.get(SELECTOR_RESOURCE_NONE)?.get(cu);
+    const m = out.results.get(mutantId)?.get(cu);
+    const fallback = none === undefined ? 2 : m === undefined ? 1 : undefined;
+    if (fallback === 2) this.stats.pairFallbacks2 += 1;
+    if (fallback === 1) this.stats.pairFallbacks1 += 1;
+    this.pair = {
+      mutantId,
+      ref,
+      ...(none !== undefined ? { none } : {}),
+      ...(none !== undefined && m !== undefined ? { m } : {}),
+      ...(fallback !== undefined ? { fallback } : {}),
+      next: "null",
+    };
   }
 
   /** R635 §4: one group (the echo + `ref`'s codeunit) under `lastActivated ?? NONE`. */
@@ -1973,7 +2112,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await this.closeDaemon();
       const s = this.stats;
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(

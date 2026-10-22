@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,7 +7,6 @@ import {
   SELECTOR_RESOURCE_FOLDER,
   SELECTOR_RESOURCE_NAME,
   SELECTOR_RESOURCE_NONE,
-  emitResourceSelector,
   emitStaticSelector,
 } from "@lethal/schemata";
 import {
@@ -19,11 +18,14 @@ import {
   parseCobertura,
 } from "./al-runner-coverage";
 import { probeAlRunnerPredefinedSymbols } from "./al-runner-predefined-probe";
+import { isTimeoutRow, verdictFromRunnerTest } from "./al-runner-rows";
 import {
   AlRunnerServer,
-  type ServerProcessHandle,
+  type ServeDaemonRule,
   type ServerSpawnFn,
   type ServerTestLine,
+  defaultServerSpawn,
+  serveDaemonReusable,
 } from "./al-runner-server";
 import {
   OneShotTransport,
@@ -58,172 +60,7 @@ import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-ma
 import type { AlRunnerPredefinedProbe } from "./preprocessor-symbols";
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
-
-/**
- * al-runner's own per-test timeout message — BOTH wordings it has used, because the wording is not
- * stable and we have watched it move.
- *
- * Measured, all on this machine: v1.0.31 said `status: "fail"` with `Test exceeded <n>s timeout`.
- * al-runner **2.0.0.0** said `status: "error"` with `TIMEOUT after <n>s`. al-runner **2.0.1.0**,
- * published the same day and installed hours later, went back to `Test exceeded <n>s timeout.` while
- * KEEPING `status: "error"`. So neither the status nor the text is a stable key on its own, and the
- * union of two literals is a stopgap rather than a design — see `AL_RUNNER_UNCLASSIFIED_ERROR` for
- * the part that does not depend on guessing the wording right.
- *
- * Exported for the R123 wire-contract probe (`al-runner-contract.ts`), which times a real test out
- * on purpose and checks the wording it gets back against THIS regex rather than against a copy of
- * it. A probe with its own spelling could pass while the decode below failed — the two would be
- * measuring different things, which is the one outcome that makes the probe worse than nothing.
- *
- * R534 (M1): ANCHORED to the whole message. `TestExecutor.RaiseAfterTestMethodRun` (43f7617) builds
- * `... (test result before it: <msg>)`, so an unanchored match could read user text that merely
- * contains "Test exceeded 5s timeout" as a timeout.
- */
-export const RUNNER_TIMEOUT_MESSAGE = /^(?:Test exceeded \d+s timeout\.|TIMEOUT after \d+s\.?)$/;
-
-/**
- * R534: al-runner's timeout of the test codeunit's OnRun trigger, measured on 2.12.0-main.43f76177
- * on both transports. The OnRun runs under the SAME `TestTimeout()` as a test body, so N is the
- * same stop. Anchored, so user text cannot match it.
- */
-export const RUNNER_ONRUN_TIMEOUT_MESSAGE =
-  /^The test codeunit's OnRun trigger exceeded the (\d+)s timeout, so none of its test methods ran\.$/;
-
-/**
- * R534 (D3): al-runner REFUSED a surface it does not support. It writes `{Type.Name}: {Message}`
- * and every refusal message starts `out-of-scope: ` (`OutOfScopeMessage.Prefix`), whatever the
- * exception type (`RunnerOutOfScopeException`, and the Cecil-injected `NavNCLDialogException` and
- * `InvalidOperationException` throws); in an OnRun it arrives inside the OnRun-failure sentence.
- * Matched at the TYPE position only: a user `Error('out-of-scope: ...')` would match and lose a
- * kill (the safe direction); a message that merely contains the phrase does not match.
- */
-/**
- * R612 (plan r3 §1; build review r1 I-1): words a free-text tail must not contain, matched without
- * regard to case. "panic" covers both v3 panic wordings and Rust's "panicked at"; the rest cover a
- * timeout or wall-time stop, which an upstream #5698 fix would put inside the onrun-failed tail.
- * "time limit": a cascade row caused by a timeout ("did not run (the test used more than the time
- * limit ..."), which must close even with no timeout row in the same answer.
- */
-const V3_TAIL_UNSAFE_WORDS = [
-  "panic",
-  "timeout",
-  "timed out",
-  "exceeded",
-  "wall",
-  "deadline",
-  "time limit",
-];
-/** Case-insensitive for these words only, so each entry's fixed prefix stays exact. */
-const anyCase = (w: string): string =>
-  [...w].map((ch) => (/[a-z]/.test(ch) ? `[${ch}${ch.toUpperCase()}]` : ch)).join("");
-/** R612: the one tail check both tailed entries share, so they cannot drift apart. */
-const SAFE_TAIL = `(?!.*(?:${V3_TAIL_UNSAFE_WORDS.map(anyCase).join("|")}))`;
-
-/**
- * R612: the v3 refusal reasons MEASURED to leave a `serve` daemon correct and warm for the next
- * request (`/coord/handoff/R-612/measure.md` rows 2, 3, 4, 6, 9). Each is anchored at both ends;
- * any other text (a reworded reason, an exact entry plus a tail, a panic) closes the daemon. The
- * list widens only by probe. Pinned by the update gate's `serve-keep-reasons` fact.
- * R635: `commit` also takes the EDGE build's wording (al-runner 3.0.0-alpha.4+edge.20261022,
- * 57f1e4f98), measured clean by R-612's probe re-run (`/coord/handoff/R-635/edge-reasons.md`); each
- * wording is anchored at both ends. On edge, http is a plain fail and cascade / no-callee rows are
- * not produced, so nothing else is widened.
- */
-export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
-  http: /^NotRun: out-of-scope: an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)$/,
-  commit:
-    /^NotRun: out-of-scope: Commit inside a test under TestIsolation = Function(?:: what the runner keeps is not pinned| is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test \(corpus issue 645\)\. Run this codeunit with TestIsolation = Codeunit \(al-runner: --isolation codeunit, the default\))$/,
-  cascade: new RegExp(
-    String.raw`^NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran \(${SAFE_TAIL}.*$`,
-  ),
-  "onrun-failed": new RegExp(
-    String.raw`^NotRun: out-of-scope: OnRun failed \(runner behaviour not pinned\): ${SAFE_TAIL}.*$`,
-  ),
-  "no-callee": /^NotRun: out-of-scope: [^:\n]+: call `[^`\n]*` has no callee the checker resolved$/,
-};
-
-/** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns
- *  the daemon, never from the rows. */
-export type ServeDaemonRule = "v2" | "v3";
-
-/**
- * R612: true when the daemon may serve another request after this answer's rows.
- * - v2 (R517 I2 + I-1, unchanged): every row is `pass` or `fail`.
- * - v3: every row is `pass`/`fail` without `notRun`, or a `notRun` `error` row whose message is
- *   one of `V3_SERVE_SAFE_REFUSALS`. Anything else (a timeout, a panic, an unknown kind) closes.
- *   A test name seen twice THROWS `AlRunnerServeDuplicateRowError` (build review r1 M-3: in the
- *   rule, so every serve path that applies it gets the check). The caller closes the daemon on a
- *   throw, as for any `runTests` throw (R517 C1).
- */
-export function serveDaemonReusable(
-  rows: readonly ServerTestLine[],
-  rule: ServeDaemonRule,
-): boolean {
-  if (rule === "v2") return rows.every((t) => t.status === "pass" || t.status === "fail");
-  const seen = new Set<string>();
-  for (const t of rows) {
-    if (seen.has(t.name)) throw new AlRunnerServeDuplicateRowError(t.name);
-    seen.add(t.name);
-  }
-  return rows.every((t) => {
-    if (t.status === "pass" || t.status === "fail") return t.notRun !== true;
-    const m = t.message;
-    return (
-      t.notRun === true &&
-      t.status === "error" &&
-      m !== undefined &&
-      Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m))
-    );
-  });
-}
-
-/** R612 (v3 rule): one answer named a test twice. Never legitimate (measure.md), so a stale
- *  writer: the daemon is closed and the run is an error, never a silent overwrite. */
-export class AlRunnerServeDuplicateRowError extends Error {
-  constructor(name: string) {
-    super(
-      `al-runner serve: the answer names test "${name}" more than once, which no measured answer does; the daemon is closed and this run is an error (R612)`,
-    );
-    this.name = "AlRunnerServeDuplicateRowError";
-  }
-}
-
-export const RUNNER_REFUSAL =
-  /^(?:The test codeunit's OnRun trigger failed, so none of its test methods ran \(as in BC\): )?[A-Za-z_][\w.]*: out-of-scope: /;
-
-/**
- * R517: the stop al-runner says it ENFORCED, from a timeout row's whole message
- * (`Test exceeded {N}s timeout.`, built in `TestExecutor.RunOne` from the timeout it used, or
- * R534's OnRun-trigger wording, built from the same timeout), in ms.
- * Anchored and N > 0, so a wording that moved gives `undefined`, never a guessed figure: on
- * `--server` that leaves the timeout unconfirmed (a lost kill, never a false one).
- */
-export function parseReportedStopMs(message: string | undefined): number | undefined {
-  const m =
-    message === undefined
-      ? null
-      : (/^Test exceeded (\d+)s timeout\.$/.exec(message) ??
-        RUNNER_ONRUN_TIMEOUT_MESSAGE.exec(message));
-  const n = m?.[1] === undefined ? 0 : Number(m[1]);
-  return n > 0 ? n * 1000 : undefined;
-}
-
-/** R534: where a timeout row's stop fired, or `undefined` when the row is not a timeout. */
-function timeoutLocation(t: {
-  readonly status: string;
-  readonly message?: string;
-}): "body" | "onrun" | undefined {
-  if (t.status === "pass" || t.status === "fail" || t.message === undefined) return undefined;
-  if (RUNNER_TIMEOUT_MESSAGE.test(t.message)) return "body";
-  if (RUNNER_ONRUN_TIMEOUT_MESSAGE.test(t.message)) return "onrun";
-  return undefined;
-}
-
-/** A row al-runner reported as a timeout: the `timeout` case of `verdictFromRunnerTest`. Exported
- *  for the R123 contract probe's `timeout-exit-readable` fact (R518), so the rule is spelled once. */
-export function isTimeoutRow(t: { readonly status: string; readonly message?: string }): boolean {
-  return timeoutLocation(t) !== undefined;
-}
+import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
 
 /**
  * R517: `--server` was asked to start its daemon before `useMutantBudgetFloor` gave it a stop.
@@ -247,14 +84,6 @@ export class AlRunnerTargetCompileError extends Error {
   constructor(detail: string) {
     super(`AlRunnerBackend: baseline refused: ${detail}`);
     this.name = "AlRunnerTargetCompileError";
-  }
-}
-
-/** R583: the target's `app.json` `runtime` cannot carry the resource selector (below 14.0). */
-export class ResourceSelectorRuntimeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ResourceSelectorRuntimeError";
   }
 }
 
@@ -293,90 +122,12 @@ export class AlRunnerTestNameError extends Error {
 }
 
 /**
- * R583: `true` when `runtime` is a readable major.minor below 14.0, or unreadable; `false` at 14.0
- * or above, and when absent (al-runner then compiles at its newest runtime, measured on 069cbf32
- * only). Compared as numbers: as strings "9.0" sorts above "14.0".
- */
-export function runtimeBelow14(runtime: unknown): boolean {
-  if (runtime === undefined) return false;
-  const m = typeof runtime === "string" ? /^(\d+)\.(\d+)$/.exec(runtime.trim()) : null;
-  if (m === null) return true;
-  return Number(m[1]) < 14;
-}
-
-/**
- * R583: refuses the resource selector on a target whose `runtime` is below 14.0. Its selector
- * calls `NavApp.GetResourceAsText`, which alc refuses there (AL0666), and so does al-runner from
- * f23b9b5f on, which compiles at the app's own runtime. No fallback before LethAL's release (R584).
- * Called by the CLI before anything is instrumented, and by `deploy()` on `active/app.json`.
- */
-export function assertResourceSelectorRuntime(
-  appJson: Readonly<Record<string, unknown>>,
-  selectorMode: "static" | "resource",
-): void {
-  if (selectorMode !== "resource" || !runtimeBelow14(appJson.runtime)) return;
-  const shown =
-    typeof appJson.runtime === "string" ? appJson.runtime : JSON.stringify(appJson.runtime);
-  throw new ResourceSelectorRuntimeError(
-    `runtime ${shown} is below 14.0, which the resource selector needs (NavApp.GetResourceAsText, AL0666); set app.json runtime ≥ 17.0 or alRunner.selectorMode static`,
-  );
-}
-
-/**
- * R222's resource selector install, shared by v2 (`selectorMode: "resource"`) and R635's v3
- * serve-entries transport: declare `LethALResources` in `active/app.json`, seed
- * `active-mutant.txt` with `NONE`, and write the resource-reading selector. v2's bytes unchanged.
- */
-export async function installResourceSelector(
-  activeDir: string,
-  selectorObjectId: number,
-  artifactId: string,
-): Promise<void> {
-  const manifestPath = join(activeDir, "app.json");
-  const raw = await readFile(manifestPath, "utf8");
-  const manifest = JSON.parse(raw) as { resourceFolders?: string[] };
-  const folders = Array.isArray(manifest.resourceFolders) ? manifest.resourceFolders : [];
-  if (!folders.includes(SELECTOR_RESOURCE_FOLDER)) {
-    manifest.resourceFolders = [...folders, SELECTOR_RESOURCE_FOLDER];
-    await writeFile(
-      manifestPath,
-      `${JSON.stringify(manifest, null, 2)}
-`,
-      "utf8",
-    );
-  }
-  await mkdir(join(activeDir, SELECTOR_RESOURCE_FOLDER), { recursive: true });
-  // Seeded with the baseline value: the first compile reads the resource, and a missing file
-  // would fail that read rather than the run starting at "no mutant active".
-  await writeFile(
-    join(activeDir, SELECTOR_RESOURCE_FOLDER, SELECTOR_RESOURCE_NAME),
-    SELECTOR_RESOURCE_NONE,
-    "utf8",
-  );
-  await writeFile(
-    join(activeDir, "MutationSelector.Codeunit.al"),
-    emitResourceSelector({ objectId: selectorObjectId, artifactId, targetAppId: "" }),
-    "utf8",
-  );
-}
-
-/**
  * R557 (I3): prefix on the `error` of a test kept in an `#if` arm LethAL could not decide (R403,
  * `preproc-undecided-kept`) when al-runner has no row for it: al-runner may simply have compiled it
  * out, so it is not a stop. The orchestrator names every such test in one warning per batch.
  */
 export const AL_RUNNER_UNDECIDED_ARM_MISSING =
   "al-runner has no row for this test, which sits in an #if arm LethAL could not decide (R403, R557)";
-
-/**
- * Prefix on the `failureMessage` of an al-runner `status: "error"` this build could not classify.
- *
- * Exported so a test can pin the behaviour by NAME rather than by quoting the sentence, and so a
- * reader meeting one in a report can grep for where it came from. The verdict such a run produces is
- * `error` — not measured — never `fail`; see `run()` for why that asymmetry is the whole design.
- */
-export const AL_RUNNER_UNCLASSIFIED_ERROR =
-  "al-runner reported an error this build cannot classify";
 
 /**
  * v2 answers `--version` with `al-runner v2.0.0.0` and exit 0 (measured 2026-08-07). v1.0.31
@@ -585,28 +336,6 @@ const SERVER_READY_DEADLINE_MS = 10 * 60 * 1000;
  * cost one test's budget should have to cover.
  */
 const SERVER_SUITE_MIN_DEADLINE_MS = 10 * 60 * 1000;
-
-/** The real daemon, adapted to the handle `AlRunnerServer` consumes. Exported for R387's gate leg,
- *  which wraps it to record the argv. */
-export const defaultServerSpawn: ServerSpawnFn = (argv, opts) => {
-  const proc = Bun.spawn([...argv], {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
-    ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
-  });
-  const handle: ServerProcessHandle = {
-    write: (line) => {
-      proc.stdin.write(line);
-    },
-    stdout: proc.stdout as unknown as AsyncIterable<Uint8Array>,
-    stderr: proc.stderr as unknown as AsyncIterable<Uint8Array>,
-    kill: () => proc.kill(),
-    wait: () => proc.exited,
-  };
-  return handle;
-};
 
 export interface AlRunnerConfig {
   readonly alRunnerPath: string; // path to the al-runner executable
@@ -2112,120 +1841,4 @@ class ServerCoverageRefusal extends Error {
   constructor(override readonly cause: unknown) {
     super("al-runner --server: the coverage index refused");
   }
-}
-
-/**
- * One al-runner test row becomes one verdict, and the rule is FAIL-CLOSED on purpose.
- *
- * SHARED by the one-shot CLI path and the `--server` path deliberately. The classification below
- * is the part of this backend that has already been wrong once in a way that inverted a verdict
- * ([[R94]]), so having two copies of it -- one per transport -- is how the two would drift until a
- * timeout scored as a kill on one and not the other.
- *
- * `fail` is al-runner's word for "the test's own assertion went red", so it is a kill. `error` is
- * its word for several different things: a timeout it enforced, and (per its own
- * `RunnerOutOfScopeException`) a test that reached SMTP, outbound HTTP, printing, external file
- * I/O or web-service publishing, which v2 raises on instead of faking a return value.
- *
- * Only ONE of those is a verdict about the mutant. So an `error` positively classified as a
- * timeout scores `timeout` (the orchestrator reads that as `timeout-killed`), and an `error` that
- * CANNOT be classified scores `error` -- not measured -- rather than falling through to `fail` and
- * crediting the suite with a kill it did not earn.
- *
- * That asymmetry is what makes this survive the next release. al-runner ships several times a day:
- * within one session the timeout wording was measured as `TIMEOUT after <n>s` on 2.0.0.0 and back
- * to `Test exceeded <n>s timeout.` on 2.0.1.0, hours apart. Under the old rule -- anything not
- * `pass` and not matching the regex is `fail` -- that single string change silently turned every
- * hung mutant into a KILL. Under this one the same change costs a mutant its verdict and says so
- * out loud, which is the direction this project is willing to be wrong in. R93's argument that a
- * measured contract beats a version-branched decode matrix.
- *
- * R534: a row is an ANSWER (al-runner ran the test, reported and exited), so an `error` from here
- * is `completed-accepted` with a `runnerRow` cause: never re-sent, never a spec §11 abort. A
- * timeout records where it fired (`timeoutIn`); a refusal (`RUNNER_REFUSAL`, `fail` or `error`) is
- * `runner-refused`; any other non-verdict row, `skipped` included, is `runner-test-error`.
- */
-export function verdictFromRunnerTest(
-  ref: TestMethodRef,
-  wanted: string,
-  t: {
-    readonly status: string;
-    readonly message?: string;
-    readonly durationMs?: number;
-    /** R534 (D1b): an exit-3 TEST-TIMEOUT-ABORT line names this row (one-shot only). */
-    readonly abortProven?: boolean;
-  },
-  durationMs: number,
-  coverage: CoverageMap | undefined,
-): TestVerdict {
-  if (t.status === "pass") {
-    // R272: the runner's OWN per-test figure, for the report and (R517) the figure a position-1
-    // timeout confirm is judged on, being timed on the same clock as the in-run stop. `durationMs`
-    // stays wall clock for the timeout budget; under `--server` it is the whole suite's.
-    const own = t.durationMs;
-    return {
-      ref,
-      outcome: "pass",
-      durationMs,
-      ...(typeof own === "number" && Number.isFinite(own) && own >= 0
-        ? { measuredDurationMs: own }
-        : {}),
-      ...(coverage !== undefined ? { coverage } : {}),
-    };
-  }
-  // Wall-clock `durationMs`, NOT the runner's in-VM figure: the orchestrator derives each mutant's
-  // timeout budget from it and must include round-trip cost.
-  const timeoutIn = timeoutLocation(t);
-  if (timeoutIn !== undefined) {
-    // R517: the stop al-runner says it enforced. Absent when the wording does not parse.
-    const reportedStopMs = parseReportedStopMs(t.message);
-    return {
-      ref,
-      outcome: "timeout",
-      durationMs,
-      ...(reportedStopMs !== undefined ? { reportedStopMs } : {}),
-      timeoutIn,
-      ...(t.message !== undefined ? { failureMessage: t.message } : {}),
-    };
-  }
-  // R534 (D1b): al-runner proved it stopped this row at its timeout, in wording neither regex
-  // knows. Still never a kill; the flag makes the orchestrator say so once per session.
-  const unknownTimeout = t.status !== "pass" && t.status !== "fail" && t.abortProven === true;
-  // R534 (D3): a refusal, in a test body (`fail`) or an OnRun (`error`), is not a kill.
-  if (
-    !unknownTimeout &&
-    (t.status === "fail" || t.status === "error") &&
-    t.message !== undefined &&
-    RUNNER_REFUSAL.test(t.message)
-  ) {
-    return {
-      ref,
-      outcome: "error",
-      durationMs,
-      failureMessage: `${t.message} [al-runner refused this surface (out-of-scope), so whether the mutant changes this test's outcome on BC is unknown: NOT scored as a kill; measure this test on bcdev (R534)]`,
-      operation: "completed-accepted",
-      runnerRow: "runner-refused",
-    };
-  }
-  if (t.status === "fail") {
-    return {
-      ref,
-      outcome: "fail",
-      durationMs,
-      ...(t.message !== undefined ? { failureMessage: t.message } : {}),
-    };
-  }
-  return {
-    ref,
-    outcome: "error",
-    durationMs,
-    failureMessage: `${AL_RUNNER_UNCLASSIFIED_ERROR}: al-runner reported status ${JSON.stringify(
-      t.status,
-    )} for ${wanted} with message ${JSON.stringify(t.message ?? "<none>")}. That is not an assertion failure, so it is NOT scored as a kill. al-runner answered, so it is not re-sent and does not stop the session (R534); if this is a timeout whose wording changed again, add it to RUNNER_TIMEOUT_MESSAGE.`,
-    // R534: the test RAN and al-runner answered, so this is not pre-dispatch: re-sending it is
-    // no recovery (option (c)), and a §11 abort would throw away an answer (option (b)).
-    operation: "completed-accepted",
-    runnerRow: "runner-test-error",
-    ...(unknownTimeout ? { timeoutWordingUnknown: true } : {}),
-  };
 }

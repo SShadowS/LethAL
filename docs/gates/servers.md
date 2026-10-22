@@ -287,6 +287,28 @@ testapp, lease), in `/coord/handoff/R-604/bc2-<gate>.log`. Every one of them pas
 `p2-master-agreement-bc2.log`), and the orchestrator accepted the R-583-code PASS in its place
 (`/coord/handoff/R-583/gates.md`).
 
+## bc-demo: not a gate server (R663)
+
+`bc-demo` is a fourth BC on Linux instance on server1 that belongs to the Directions EMEA talk. It
+uses the next port block after bc3: OData 7348, dev 7349, API 7352. It is in no lease pool and no
+allocation, no gate runs on it, and `bc-linux-setup.ts` refuses `--server bc-demo` (`all` means bc1-bc3
+only). `scripts/bc-demo-setup.test.ts` fails if it ever enters `SERVERS`, the lease path or an itest.
+
+`bun scripts/bc-demo-setup.ts [--dry-run]` sets it up, and is also the demo reset after a server1
+reboot. It takes no lease. It refuses if `/coord/machine/allocation.json` lists bc-demo, probes the
+dev port once without a login, and when nothing answers prints the owner steps (start the instance,
+open the ports) and exits 2. Otherwise it reads the login from `/coord/secrets/bc-demo.env` if that
+exists, else from `/coord/secrets/bc-linux.env`; fills or reuses the symbol cache
+`/coord/cache/bc-symbols/bc-demo/` from bc-demo itself; writes the gitignored
+`examples/gift-card/lethal.config.demo.json`; publishes LethAL Control (`CONTROL_APP`), gift-card
+and gift-card-tests, decided by content as above; and runs `lethal doctor`. Nothing comes from the
+internet, so it works with the network off. Measured on 2026-10-22 it was not up
+(`/coord/handoff/R-663/measure.md`).
+
+With `--laptop` (R663b) it runs on server1 itself with no `/coord`: localhost (or
+`LETHAL_DEMO_HOST`), the login from `.lethal-demo.env` or the environment, and the cache, control
+app and bc-dev-mcp under the checkout's `.lethal-cache/`. See [talk-laptop.md](../talk-laptop.md).
+
 ## Other servers
 
 - **Cronus28 is parked** (owner, 2026-10-21). It became unreachable from the kraken container that
