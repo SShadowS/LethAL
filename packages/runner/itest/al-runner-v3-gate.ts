@@ -7,7 +7,9 @@
  * from the known differences alone: the rows where v3's own baseline differs from BC's
  * `tables.baseline.json` (pre-committed as the 52 of `precommitment-tables-52.txt`: 41 Commit #5607,
  * 7 duplicate key #5603, 4 TestPage). A leg-T difference is `held` only when its row is one of those
- * AND it now equals the BC row (verdict and killing test). Anything else is `gate-fail`.
+ * AND it now equals the BC row (verdict and killing test). r9 §7 (R639) adds one narrow case: a
+ * known row whose verdict disagreed with BC's, now `error` through a named refusal
+ * (`runner-refused`, no killing test). Anything else is `gate-fail`.
  */
 import { writeFile } from "node:fs/promises";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
@@ -193,10 +195,27 @@ export function classifyLegT(
       ns.length === 1 &&
       (b.get(k)?.length ?? 0) === 1 &&
       sameRow(ns[0], b.get(k)?.[0]);
+    // r9 §7 (R639): a known row whose VERDICT disagreed with BC's, now a named refusal (v3 notRun,
+    // or LethAL §6, which cannot fire on leg T: its Sleep index is pre-committed at 0 + 0).
+    const bk = b.get(k);
+    const refusal =
+      known.has(k) &&
+      os.length === 1 &&
+      ns.length === 1 &&
+      bk?.length === 1 &&
+      os[0]?.verdict !== bk[0]?.verdict &&
+      ns[0]?.verdict === "error" &&
+      ns[0].errorClass === "runner-refused" &&
+      ns[0].killingTest === null;
     if (toward) {
       anyHeld = true;
       lines.push(
         `held: ${k}: ${os[0]?.verdict} -> ${ns[0]?.verdict} (the BC verdict, a known difference)`,
+      );
+    } else if (refusal) {
+      anyHeld = true;
+      lines.push(
+        `held: ${k}: ${os[0]?.verdict} -> error (a named refusal: v3 notRun or LethAL §6; not BC's verdict; re-pre-commit)`,
       );
     } else {
       anyFail = true;
@@ -240,8 +259,8 @@ export function knownDifferencesRefusal(
 }
 
 /**
- * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632).
- * Every other fact of the 25 (R612's warn fact, then r8's for R637) is a contract fact and must read
+ * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632;
+ * `refusal-row-shape` since r9, R639). Every other fact of the 26 is a contract fact and must read
  * `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
@@ -253,7 +272,19 @@ export const V3_DEFECT_FACTS = [
   "quoted-name-unselectable",
   "commit-under-test-isolation",
   "none-selected-exit",
+  // r9 (R639): #5608, as r7 did for #5613.
+  "refusal-row-shape",
 ] as const;
+
+/** r9 (R639): leg C's pre-committed fact count: 9 defect, 16 contract, 1 warn. */
+export const V3_LEG_C_FACTS = 26;
+
+/** F4 (R639): leg C's per-fact log line, with `measured` whole. */
+export const legCFactLine = (f: {
+  readonly fact: string;
+  readonly verdict: string;
+  readonly measured: string;
+}): string => `  C: ${f.fact} = ${f.verdict} | ${f.measured}`;
 
 /**
  * R612 (plan r3 §2): leg C's warn facts, a third kind. Anything but `matches` prints
@@ -265,7 +296,9 @@ export const V3_WARN_FACTS: readonly string[] = ["serve-keep-reasons"];
  * RC-2 (I-2): leg C's verdict. A contract fact must read `matches` and a defect fact (`defects`)
  * `defect-present`. A defect fact reading `gone` (upstream fixed it) is `held`, for the orchestrator
  * to re-pre-commit, never a blacklisting. Any `diverged`, or another fact count, is `gate-fail`. An
- * `unmeasurable` fact is `infra-fail`. Precedence: gate-fail, infra-fail, held, pass.
+ * `unmeasurable` fact is `infra-fail`. r9 (R639): `refused` is `held` on a defect fact and
+ * `gate-fail` on any other; `unlike-bc` is always `gate-fail`. Precedence: gate-fail, infra-fail,
+ * held, pass.
  */
 export function classifyLegC(
   facts: ReadonlyArray<{
@@ -287,7 +320,24 @@ export function classifyLegC(
     if (f.verdict === want) continue;
     // R633 I1: what v3 returned, so the receipt itself carries the evidence.
     const m = f.measured !== undefined ? ` (measured ${f.measured.slice(0, 300)})` : "";
-    if (warns.includes(f.fact)) {
+    if (f.verdict === "unlike-bc") {
+      // r9 §2: never admitted, whatever the fact's kind.
+      fail = true;
+      lines.push(
+        `gate-fail: ${f.fact}: unlike-bc (v3 fails as BC does, with another text; #5700)${m}`,
+      );
+    } else if (f.verdict === "refused") {
+      // r9 §6: held for a defect fact; on a contract or a warn fact, gate-fail (M-g).
+      if (want === "defect-present") {
+        held = true;
+        lines.push(
+          `held: ${f.fact}: defect-present -> refused (v3 declines; not BC's reading; re-pre-commit)${m}`,
+        );
+      } else {
+        fail = true;
+        lines.push(`gate-fail: ${f.fact}: refused, pre-committed ${want}${m}`);
+      }
+    } else if (warns.includes(f.fact)) {
       // R612 (plan r3 §2): costs only speed (the rule then closes), so it never blocks.
       lines.push(`al-runner-v3-serve-keep-reason-moved: ${f.fact}: ${f.verdict}${m}`);
     } else if (f.verdict === "unmeasurable") {
@@ -376,7 +426,10 @@ export class V3LegEnvironment extends Error {
   }
 }
 
-/** I-2: every difference is a move toward BC: `held`. */
+/**
+ * I-2, as worded by r9 §8: every difference is a move toward BC or a named refusal; read the
+ * receipt's lines: `held`.
+ */
 export class V3LegHeld extends Error {
   readonly lines: readonly string[];
   constructor(lines: readonly string[]) {
