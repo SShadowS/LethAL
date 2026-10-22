@@ -1687,6 +1687,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     ref: TestMethodRef,
     call: CallRows,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
+    if (this.entriesRefused !== undefined) {
+      return { verdict: transportFailure(ref, this.entriesRefused, 0) };
+    }
     const m = this.lastActivated ?? SELECTOR_RESOURCE_NONE;
     const echoId = this.requireEchoId();
     const started = Date.now();

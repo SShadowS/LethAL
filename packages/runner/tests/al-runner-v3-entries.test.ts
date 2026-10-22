@@ -34,6 +34,7 @@ import {
 } from "../src/al-runner-v3-entries";
 import type { ArtifactIo } from "../src/artifact";
 import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
+import { buildBackend } from "../src/cli";
 import type { SpawnFn } from "../src/publisher";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
@@ -1271,6 +1272,23 @@ describe("17, 18, 21: the warm-up", () => {
     );
   });
 
+  test("17: a warm-up echo that is notRun refuses warmup-disagrees, even with the exact text", async () => {
+    const r = await rig({
+      serve: {
+        echo: () => ({
+          method: "Echo",
+          status: "error",
+          notRun: true,
+          message: "LETHAL-ECHO:NONE:true",
+        }),
+      },
+    });
+    await baseline(r.b, SUITE1);
+    expect(String(await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e))).toContain(
+      "al-runner-v3-entries-warmup-disagrees",
+    );
+  });
+
   test("18 (N1): a baseline that ran over [] (a reused snapshot) refuses no-baseline-rows, and no request is sent", async () => {
     const r = await rig();
     await baseline(r.b, []);
@@ -1369,5 +1387,61 @@ describe("19 (N2): a restarted daemon whose warm-up disagrees mid-batch stops th
     await r.b.activate(null);
     expect(outcome(await r.b.run(ref("B"), OPTS))).toEqual(["error", "pre-dispatch-rejected"]);
     expect(r.serve.daemons).toHaveLength(2);
+  });
+});
+
+describe("the CLI threads the option through (wiring)", () => {
+  // M9: v3 is refused off Linux, so the Windows CI job asserts that refusal instead.
+  const LINUX = process.platform === "linux";
+  const build = async (extra: Record<string, unknown>) => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-v3e-cli-"));
+    roots.push(dir);
+    await writeFile(
+      join(dir, "app.json"),
+      JSON.stringify({ id: TARGET_ID, idRanges: [{ from: 79000, to: 79199 }], runtime: "17.0" }),
+    );
+    const deps = join(dir, "deps");
+    await mkdir(deps);
+    await writeFile(
+      join(deps, "Microsoft_System Application.app"),
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
+      }),
+    );
+    return buildBackend(
+      {
+        mode: "run",
+        projectDir: dir,
+        testDir: dir,
+        backendKind: "al-runner-v3",
+        dbPath: "db",
+        configPath: "cfg",
+        skipKnownSurvivors: false,
+        workers: 1,
+        keepEnv: false,
+        allowExpiringEnv: false,
+      } as Parameters<typeof buildBackend>[0],
+      {
+        alRunnerV3: {
+          packagesDir: deps,
+          bcVersion: "28.0.46665.47126",
+          alcPath: "/fake/alc",
+          coverage: "none",
+          ...extra,
+        },
+      },
+      dir,
+      undefined,
+      {},
+      { selectorId: SELECTOR_ID, controlId: ECHO, tableId: 79197 },
+    );
+  };
+  test("no transport builds the one-shot backend; transport serve-entries builds serve-entries", async () => {
+    if (!LINUX) {
+      await expect(build({})).rejects.toThrow(/al-runner-v3-(windows|platform)-unsupported/);
+      return;
+    }
+    expect((await build({})).inRunStopIsBudget).toBe(true);
+    expect((await build({ transport: "serve-entries" })).inRunStopIsBudget).toBe(false);
   });
 });
