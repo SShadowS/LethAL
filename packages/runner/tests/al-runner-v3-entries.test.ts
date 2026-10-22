@@ -27,6 +27,7 @@ import {
   AlRunnerV3EntriesEncodeError,
   AlRunnerV3EntriesRefusedError,
   SELECTOR_ECHO_FILENAME,
+  batchRefusalReason,
   chunkGroups,
   emitSelectorEcho,
   encodeGroups,
@@ -1146,6 +1147,31 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
     const err = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
     expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
     expect(String(err)).not.toContain("warmup-disagrees");
+  });
+});
+
+describe("11: what counts as a refusal of the WHOLE request", () => {
+  const row = (message: string, notRun = true) => ({
+    codeunit: CU,
+    method: "A",
+    name: `Codeunit${CU}.A`,
+    status: "error" as const,
+    message,
+    notRun,
+  });
+  const isSafe = (m: string) => m === COMMIT;
+  const isTimeout = (m: string) => m === TIMEOUT_1S;
+  const reason = (rows: Record<string, ReturnType<typeof row>[]>) =>
+    batchRefusalReason(new Map(Object.entries(rows)), isSafe, isTimeout);
+  test("one unlisted reason on every row of every entry is the reason", () => {
+    expect(reason({ a: [row(UNLISTED)], b: [row(UNLISTED), row(UNLISTED)] })).toBe(UNLISTED);
+  });
+  test("a listed (kept) reason, a timeout, two reasons, a row that ran, or an empty entry is not", () => {
+    expect(reason({ a: [row(COMMIT)], b: [row(COMMIT)] })).toBeUndefined();
+    expect(reason({ a: [row(TIMEOUT_1S)], b: [row(TIMEOUT_1S)] })).toBeUndefined();
+    expect(reason({ a: [row(UNLISTED)], b: [row(`${UNLISTED}x`)] })).toBeUndefined();
+    expect(reason({ a: [row(UNLISTED)], b: [row(UNLISTED, false)] })).toBeUndefined();
+    expect(reason({ a: [row(UNLISTED)], b: [] })).toBeUndefined();
   });
 });
 
