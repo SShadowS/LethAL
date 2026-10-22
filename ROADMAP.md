@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**96 of 653 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**97 of 654 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -291,6 +291,7 @@ that ordering is the priority.
 - **R646** · --resume carries a survivor scored against fewer tests than now cover it: a test green in the resumed run's baseline but not when it was scored never faced it · [R646.md](docs/roadmap/R646.md) · done (4e2dd6da)
 - **R647** · al-runner v3 gate: leg T checks its counts before it classifies, so r9 §7's held can never be reached, and X (d) cannot tell a timed-out baseline from a broken Sleep rule · [R647.md](docs/roadmap/R647.md) · done (80491bb9)
 - **R650** · al-runner v3 gate: on leg T's held path the text check runs without R556's bare-hash refusal, so a run whose mutated-text hashes are missing can hide a text change · [R650.md](docs/roadmap/R650.md) · done (dd7215d0)
+- **R658** · a baseline test that outlives LethAL's 120 s client budget keeps running on the BC server: no stop is wired for a baseline, so the op stays in flight and the control-app lease cannot be released · [R658.md](docs/roadmap/R658.md) · open, filed 2026-10-22
 
 ## Product gaps a real project hits
 
