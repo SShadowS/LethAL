@@ -331,7 +331,13 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
   "hang.itest.ts": { SINGLE_BASELINE_PATH: "hang.single.baseline.json" },
   "tables.itest.ts": { BASELINE_PATH: "tables.baseline.json" },
   // R586: leg T, preflighted only when the leg runs (inside an `if` before the first await).
-  "al-runner-v3.itest.ts": { TABLES_BASELINE_PATH: "al-runner-v3.tables.baseline.json" },
+  // R654 S2: legs L1, Y-A and Y-B, the same way.
+  "al-runner-v3.itest.ts": {
+    TABLES_BASELINE_PATH: "al-runner-v3.tables.baseline.json",
+    LAYOUT_BASELINE_PATH: "al-runner-v3.layout.baseline.json",
+    SYMBOLS_A_BASELINE_PATH: "al-runner-v3.symbols-lethala.baseline.json",
+    SYMBOLS_B_BASELINE_PATH: "al-runner-v3.symbols-lethalb.baseline.json",
+  },
 };
 const READERS: Record<string, string> = {
   "verify.itest.ts": "bcdev.baseline.json",

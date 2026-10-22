@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { V3_AGENTFLOW_LEGS } from "../../packages/runner/itest/alrunner-v3-legs.ts";
 import {
+  EXPECTED_SUBLEGS,
   FULL_SET,
   GateSelectionError,
   LEG_CONTAINER,
@@ -8,6 +10,50 @@ import {
   selectLegs,
   widenWithDelta,
 } from "./gate-table.ts";
+
+// R654 S2 (plan docs/superpowers/plans/2026-10-22-r654-retire-dotnet-alrunner.md §S2a): the v3
+// gate is a leg of its own, selected wherever the .NET al-runner leg is, until S3 removes v2.
+describe("R654 S2: the alrunner-v3 leg", () => {
+  test("a change to al-runner-v3-backend.ts selects alrunner-v3", () => {
+    expect(selectLegs(["packages/runner/src/al-runner-v3-backend.ts"]).legs).toContain(
+      "alrunner-v3",
+    );
+  });
+
+  test("a change to the v3 gate's own itest files selects alrunner-v3", () => {
+    for (const p of [
+      "packages/runner/itest/al-runner-v3.itest.ts",
+      "packages/runner/itest/al-runner-v3-gate.ts",
+      "packages/runner/itest/alrunner-v3-legs.ts",
+    ]) {
+      expect([p, selectLegs([p]).legs.includes("alrunner-v3")]).toEqual([p, true]);
+    }
+  });
+
+  test("every selection holding alrunner also holds alrunner-v3, and v2's leg stays", () => {
+    for (const p of [
+      "packages/engine/src/x.ts",
+      "packages/schemata/src/x.ts",
+      "packages/runner/src/store.ts",
+      "fixtures/sandbox-app/src/x.al",
+      "extensions/lethal-control/src/x.al",
+      "packages/somewhere-new/x.ts",
+    ]) {
+      const legs = selectLegs([p]).legs;
+      expect([p, legs.includes("alrunner"), legs.includes("alrunner-v3")]).toEqual([p, true, true]);
+    }
+  });
+
+  test("docs still select no live leg", () => {
+    expect(selectLegs(["docs/gates/alrunner-v3.md"]).legs).toEqual([]);
+  });
+
+  test("its receipt is checked against the exact default leg list, on agent-app, right after alrunner", () => {
+    expect(EXPECTED_SUBLEGS["alrunner-v3" as Leg]).toEqual(V3_AGENTFLOW_LEGS);
+    expect(LEG_CONTAINER["alrunner-v3" as Leg]).toBe("agent-app");
+    expect(LEG_ORDER.indexOf("alrunner-v3" as Leg)).toBe(LEG_ORDER.indexOf("alrunner") + 1);
+  });
+});
 
 describe("default-deny", () => {
   test("a path matching no rule selects the FULL SET, never nothing", () => {
