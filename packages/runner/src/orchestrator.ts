@@ -241,12 +241,7 @@ import {
   isRunMutantLineCountMessage,
   testAppRefusal,
 } from "./stale-test-app";
-import {
-  type LendingSession,
-  backendBuildRefusal,
-  runLendsAlRunnerNames,
-  sameHiddenFiles,
-} from "./store";
+import { type LendingSession, sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
 import type { CarryHidden, MutantVerdict, RunRow, RunnerKind, TestAppIdentity } from "./store";
 import { TestAppError } from "./test-app-publish";
@@ -3957,27 +3952,52 @@ function resolveResume(
   | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
   | undefined {
   if (cfg.resume === undefined) return undefined;
-  // R586: step 1 on the resumed row, first among the trust checks below.
-  const assertLends = (row: RunRow, flag: string): void => {
-    const why = backendBuildRefusal(row, lendingSession);
-    if (why !== undefined) {
-      throw new Error(
-        `${flag}: ${why}; none of its verdicts is carried. Drop the resume flag to run from scratch.`,
-      );
-    }
-  };
-  const sameTestApp = (row: RunRow | null, flag: string): void => {
+  const sameTestApp = (row: RunRow, flag: string): void => {
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash);
-    else if (row === null)
-      throw new Error(`${flag}: the run it found is no longer in this database`);
+  };
+  // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
+  // a throw), then the branch's own checks (each throws), then R557's mark and renamed baseline
+  // errors. Those two do not throw: the resume goes on with an EMPTY carry, so every mutant is
+  // executed (a warning, by ruling; still a resume, so the report says which run it came from,
+  // R89). Returns why the carry is refused, or `undefined`.
+  const lend = (
+    row: RunRow,
+    flag: string,
+    site: "resume" | "resume-run",
+    siteChecks: () => void,
+  ): string | undefined => {
+    const r = cfg.store.runMayLend(row, lendingSession, {
+      site,
+      siteChecks: () => {
+        siteChecks();
+        return false;
+      },
+      baselineErrorMethods: () => cfg.store.baselineErrorMethods(row.id),
+      renamed: alRunnerRenamed,
+    });
+    if (r === undefined) return undefined;
+    switch (r.step) {
+      case "backend-build":
+        throw new Error(
+          `${flag}: ${r.why}; none of its verdicts is carried. Drop the resume flag to run from scratch.`,
+        );
+      case "site":
+        throw new Error(
+          `${flag}: a resume site check returned a refusal instead of throwing (R619)`,
+        );
+      case "al-runner-unmarked":
+        return `run ${row.id} ${AL_RUNNER_UNMARKED_WHY}`;
+      case "al-runner-renamed":
+        return alRunnerRefusal(row.id, r.tests);
+    }
   };
 
   let priorRunId: number;
   // R391: the resumed run's generation hash and `twin_tuples`, never its `source_sha256`.
   let recorded: RecordedCarrySide;
   let priorHidden: CarryHidden | null;
-  // R557 (I1): the resumed run's row, for `runLendsAlRunnerNames`.
-  let priorRow: RunRow | null;
+  // R557: why the resumed run's carry is refused (`lend`), or `undefined`.
+  let carryRefused: string | undefined;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -4033,18 +4053,25 @@ function resolveResume(
     }
     priorRunId = found;
     const foundRow = cfg.store.getRun(found);
-    priorRow = foundRow;
-    if (foundRow !== null) assertLends(foundRow, `--resume: run ${found}`);
-    // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL) must
-    // still never be read as a match.
-    sameTestApp(foundRow, "--resume");
-    assertSameBuildSymbols(foundRow, `--resume: run ${found}`, buildSymbols);
-    priorHidden = foundRow?.carryHidden ?? null;
-    if (priorHidden === null) {
-      throw new Error(
-        `--resume found run ${found}, but it ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume to run from scratch.`,
-      );
-    }
+    if (foundRow === null)
+      throw new Error("--resume: the run it found is no longer in this database");
+    // Review M4: step 1 cannot refuse here in production (`findResumableRun` selects the backend
+    // and, on v3, the build); it stays as the guard.
+    carryRefused = lend(foundRow, `--resume: run ${found}`, "resume", () => {
+      sameTestApp(foundRow, "--resume");
+      // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL)
+      // must still never be read as a match.
+      assertSameBuildSymbols(foundRow, `--resume: run ${found}`, buildSymbols);
+      if (foundRow.carryHidden === null) {
+        throw new Error(
+          `--resume found run ${found}, but it ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume to run from scratch.`,
+        );
+      }
+    });
+    // Review M5: the site checks lent only with a `carry_hidden`.
+    priorHidden = foundRow.carryHidden;
+    if (priorHidden === null)
+      throw new Error(`--resume: run ${found} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(foundRow);
   } else {
     const row = cfg.store.getRun(cfg.resume);
@@ -4054,48 +4081,60 @@ function resolveResume(
         `--resume-run ${cfg.resume} recorded project ${row.projectPath}, but this session targets ${cfg.projectDir}`,
       );
     }
+    // R618: a FINISHED run has nothing left to score; resuming it would only copy its verdicts
+    // into a new run row. Refused by name, as `--resume`'s search already does (unfinished only).
+    if (row.finished) {
+      throw new Error(
+        `--resume-run ${cfg.resume}: run ${cfg.resume} already finished; nothing to resume. Its report is the file that run wrote with --out, if it was given --out (\`lethal explain <report.json>\` re-reads it; no command re-renders a report from the results store). Drop --resume-run to measure again (R618).`,
+      );
+    }
     if (row.backend !== backendName) {
       throw new Error(
         `--resume-run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName} — verdicts are not interchangeable across backends (neither local runner, al-runner or al-runner-v3, is authoritative)`,
       );
     }
-    assertLends(row, `--resume-run ${cfg.resume}`);
-    // R325: checked BEFORE the fingerprint, so the refusal names the real reason. The fingerprint
-    // carries the scheme too and would refuse this run anyway, as "scoped differently".
-    if (row.identityScheme !== IDENTITY_SCHEME) {
-      throw new Error(
-        `--resume-run ${cfg.resume} was keyed under identity scheme ${row.identityScheme}, but this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so none of its verdicts is carried (R325). Drop --resume-run to run from scratch.`,
-      );
-    }
-    // R354: after the scheme, before the fingerprint (which carries the mode too and would refuse
-    // this run anyway, as "scoped differently"). NULL is unknown and never equals a mode.
-    if (row.coverageMode !== coverageMode) {
-      throw new Error(
-        `--resume-run ${cfg.resume} was measured under ${describeCoverageMode(row.coverageMode)}, but this session measures under coverage mode ${coverageMode}. ${COVERAGE_MODE_WHY} (R354). Drop --resume-run to run from scratch.`,
-      );
-    }
-    sameTestApp(row, `--resume-run ${cfg.resume}`);
-    // R214: before the fingerprint (which carries the symbols too and would refuse this run
-    // anyway, as "scoped differently"). NULL is unknown and matches no build.
-    assertSameBuildSymbols(row, `--resume-run ${cfg.resume}`, buildSymbols);
-    if (row.configFingerprint !== configFingerprint) {
-      throw new Error(
-        `--resume-run ${cfg.resume} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
-          row.configFingerprint === null
-            ? " — that run predates configuration fingerprinting and cannot prove its scope at all"
-            : ""
-        }`,
-      );
-    }
+    const id = cfg.resume;
+    carryRefused = lend(row, `--resume-run ${id}`, "resume-run", () => {
+      // R325: checked BEFORE the fingerprint, so the refusal names the real reason. The
+      // fingerprint carries the scheme too and would refuse this run anyway, as "scoped
+      // differently".
+      if (row.identityScheme !== IDENTITY_SCHEME) {
+        throw new Error(
+          `--resume-run ${id} was keyed under identity scheme ${row.identityScheme}, but this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so none of its verdicts is carried (R325). Drop --resume-run to run from scratch.`,
+        );
+      }
+      // R354: after the scheme, before the fingerprint (which carries the mode too and would
+      // refuse this run anyway, as "scoped differently"). NULL is unknown and never equals a mode.
+      if (row.coverageMode !== coverageMode) {
+        throw new Error(
+          `--resume-run ${id} was measured under ${describeCoverageMode(row.coverageMode)}, but this session measures under coverage mode ${coverageMode}. ${COVERAGE_MODE_WHY} (R354). Drop --resume-run to run from scratch.`,
+        );
+      }
+      sameTestApp(row, `--resume-run ${id}`);
+      // R214: before the fingerprint (which carries the symbols too and would refuse this run
+      // anyway, as "scoped differently"). NULL is unknown and matches no build.
+      assertSameBuildSymbols(row, `--resume-run ${id}`, buildSymbols);
+      if (row.configFingerprint !== configFingerprint) {
+        throw new Error(
+          `--resume-run ${id} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
+            row.configFingerprint === null
+              ? " — that run predates configuration fingerprinting and cannot prove its scope at all"
+              : ""
+          }`,
+        );
+      }
+      if (row.carryHidden === null) {
+        throw new Error(
+          `--resume-run ${id} ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume-run to run from scratch.`,
+        );
+      }
+    });
+    // Review M5: the site checks lent only with a `carry_hidden`.
     priorHidden = row.carryHidden;
-    if (priorHidden === null) {
-      throw new Error(
-        `--resume-run ${cfg.resume} ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume-run to run from scratch.`,
-      );
-    }
+    if (priorHidden === null)
+      throw new Error(`--resume-run ${id} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(row);
-    priorRunId = cfg.resume;
-    priorRow = row;
+    priorRunId = id;
   }
 
   // R360 (review r1 #3): no pruned-bundle check here. Nothing on the resume path reads the prior
@@ -4105,21 +4144,9 @@ function resolveResume(
   // work left is rebuilt and republished. `lethal verify` keeps its refusal.
 
   // R557 C1: a pre-fix al-runner run sent a renamed test under its AL name, al-runner ran nothing,
-  // and its only-kills read survived. Such a run's verdicts are not carried: the resume goes on
-  // with an EMPTY carry, so every mutant is executed (a warning, by ruling; still a resume, so the
-  // report says which run it came from, R89).
-  // (I1): first the run-level mark (`runLendsAlRunnerNames`): a run without it may have CARRIED
-  // such verdicts (a resume of a resume, `known-survivor` rows) and hold no baseline row showing
-  // it. Then, second, the run's own renamed baseline errors.
-  const carryRefused =
-    priorRow === null || !runLendsAlRunnerNames(priorRow)
-      ? `run ${priorRunId} ${AL_RUNNER_UNMARKED_WHY}`
-      : alRunnerRefusal(
-          priorRunId,
-          backendName === "al-runner"
-            ? alRunnerRenamed(cfg.store.baselineErrorMethods(priorRunId))
-            : [],
-        );
+  // and its only-kills read survived. (I1): a run without the R557 mark may have CARRIED such
+  // verdicts (a resume of a resume, `known-survivor` rows) and hold no baseline row showing it.
+  // `lend` decided both, above.
   if (carryRefused !== undefined) {
     emit({
       type: "warning",
@@ -4966,43 +4993,54 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
-    // R557 C1: checked on the snapshot itself, since `findBaselineSnapshot` can lend one from ANY
-    // run. A pre-fix al-runner snapshot holds a renamed test as an `error` al-runner never ran; it
-    // is not reused, and this batch re-runs its baseline under the name al-runner has.
-    // (I1): first the snapshot run's R557 mark (`runLendsAlRunnerNames`), then its own errors.
-    const snapshotRun = reused !== undefined ? store.getRun(reused.runId) : null;
-    // R586: `runMayLend` step 1 first: `findBaselineSnapshot` selects by hash and coverage mode,
-    // not by backend, and v3 shares coverage mode "al-runner" with v2.
-    const lendWhy =
-      snapshotRun !== null
-        ? backendBuildRefusal(snapshotRun, input.snapshot.lendingSession)
-        : undefined;
-    if (reused !== undefined && lendWhy !== undefined) {
-      emit({
-        type: "warning",
-        code: "snapshot-backend-build-changed",
-        message: `[lethal] run ${reused.runId}'s batch ${reused.batchIndex} baseline snapshot is not reused: ${lendWhy}. Batch ${batchIdx}'s baseline is re-run.`,
+    // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
+    // `findBaselineSnapshot` can lend one from ANY run. Step 1 (R586): it selects by hash and
+    // coverage mode, not by backend, and v3 shares coverage mode "al-runner" with v2. Steps 2 and
+    // 3 (R557, I1 and C1): the run's mark, then the snapshot's own `error` rows: a pre-fix
+    // al-runner snapshot holds a renamed test as an `error` al-runner never ran. A refused snapshot
+    // is not reused, and this batch re-runs its baseline.
+    if (reused !== undefined) {
+      const snap = reused;
+      const snapshotRun = store.getRun(snap.runId);
+      // Ruling (b): `findBaselineSnapshot` returns only a snapshot whose run row exists.
+      if (snapshotRun === null) {
+        throw new Error(
+          `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot names run ${snap.runId}, which this database does not hold (R619)`,
+        );
+      }
+      const refused = store.runMayLend(snapshotRun, input.snapshot.lendingSession, {
+        site: "snapshot",
+        baselineErrorMethods: () =>
+          snap.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
+        renamed: alRunnerRenamed,
       });
-      reused = undefined;
-    }
-    if (reused !== undefined && snapshotRun !== null && !runLendsAlRunnerNames(snapshotRun)) {
-      emit({
-        type: "warning",
-        code: "resume-al-runner-test-names",
-        message: `[lethal] --resume: run ${reused.runId}'s batch ${reused.batchIndex} baseline snapshot is not reused: run ${reused.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
-      });
-      reused = undefined;
-    }
-    if (reused !== undefined && snapshotRun?.backend === "al-runner") {
-      const tainted = alRunnerRenamed(
-        reused.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
-      );
-      if (tainted.length > 0) {
-        emit({
-          type: "warning",
-          code: "resume-al-runner-test-names",
-          message: `[lethal] --resume: run ${reused.runId}'s batch ${reused.batchIndex} baseline snapshot ran on al-runner before R557 and recorded ${tainted.length} test(s) as errors that al-runner never ran (${namesSample(tainted)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
-        });
+      if (refused !== undefined) {
+        const notReused = `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot`;
+        switch (refused.step) {
+          case "backend-build":
+            emit({
+              type: "warning",
+              code: "snapshot-backend-build-changed",
+              message: `[lethal] ${notReused} is not reused: ${refused.why}. Batch ${batchIdx}'s baseline is re-run.`,
+            });
+            break;
+          case "al-runner-unmarked":
+            emit({
+              type: "warning",
+              code: "resume-al-runner-test-names",
+              message: `[lethal] --resume: ${notReused} is not reused: run ${snap.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
+            });
+            break;
+          case "al-runner-renamed":
+            emit({
+              type: "warning",
+              code: "resume-al-runner-test-names",
+              message: `[lethal] --resume: ${notReused} ran on al-runner before R557 and recorded ${refused.tests.length} test(s) as errors that al-runner never ran (${namesSample(refused.tests)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
+            });
+            break;
+          case "site":
+            throw new Error(`${notReused}: refused by a site check this site does not pass (R619)`);
+        }
         reused = undefined;
       }
     }

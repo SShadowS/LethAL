@@ -1,29 +1,34 @@
 /**
- * R-604 (R599): replace fixture apps on a bc server with the CURRENT local fixture builds, even when
- * the server already holds the same or a higher version; move LethAL Control to master's pinned
- * build; fill a tests fixture's `.alpackages`. Every mode talks to the server only under a coord
- * lease taken in `--lane`'s name (R598: never a default lane), with the token written to
- * `--token-dir`.
+ * R-604, R599: publish the CURRENT local fixture builds to a bc server, deciding each app by its
+ * normalised CONTENT digest (`bc-app-content.ts`), not its version; move LethAL Control to
+ * master's pinned build; fill a tests fixture's `.alpackages`. Every mode talks to the server only
+ * under a coord lease taken in `--lane`'s name (R598: never a default lane), with the token
+ * written to `--token-dir`.
  *
- *   bun scripts/bc-republish.ts republish  --server bcN --lane <lane> --token-dir <dir> [--mint <fixture>]... <fixture>...
+ *   bun scripts/bc-republish.ts republish  --server bcN --lane <lane> --token-dir <dir> [--predict] [--mint <fixture>]... <fixture>...
  *   bun scripts/bc-republish.ts control    --server bcN --lane <lane> --token-dir <dir>
  *   bun scripts/bc-republish.ts alpackages --server bcN --lane <lane> --token-dir <dir> <tests fixture>...
  *
  * `republish`:
- *   1. compiles every app with alc. Microsoft symbols come from the server; a LethAL dependency in
- *      the plan is compiled against its new local build, one outside the plan against the server's
- *      resident package. `--mint` builds a copy whose app.json version is minted by LethAL's own
- *      `reserveAppVersion`, as a gate's deploy does;
- *   2. REFUSES, before anything is removed, when the server holds any planned app above the version
- *      about to be published. BC keeps an installed-version record after unpublish and refuses a
- *      lower publish (R605), so going ahead would leave the apps off the server;
- *   3. per app, dependents first: uninstall, then the automation API's bound
- *      `Microsoft.NAV.unpublish` action (the path R-389 measured on bc3), then checks the app is gone;
- *   4. per app, targets first: publishes over the dev endpoint, then reads the resident package back
- *      and requires its version AND its sha256 to equal the local build's. A publish failure or a
- *      read-back mismatch STOPS the run, and the error lists every app left off the server.
- * A fixture that depends on a listed app is ADDED to the plan, and the tool says so: BC cannot
- * unpublish an app another installed app depends on, and the dependent must come back afterwards.
+ *   1. compiles every named app with alc. Microsoft symbols come from the server; a LethAL
+ *      dependency that is also named is compiled against its new local build, one that is not
+ *      against the server's resident package (whose rows are printed). `--mint` builds a copy
+ *      whose app.json version is minted by LethAL's own `reserveAppVersion`, as a gate's deploy
+ *      does. Each compile line prints the build's header id, which becomes its `packageId`;
+ *   2. DECIDES every app (`decideApp`, mode `republish`) and prints each decision with its rows:
+ *      same content skips; a lower resident version is an upgrade; the same version with other
+ *      content is published IN PLACE, naming the entries that differ, except a target with an
+ *      installed fixture dependent (any fixture, named or not), which is refused (not measured);
+ *      a resident version above the build is refused, naming `--mint <fixture>` for a target;
+ *   3. if anything was refused, publishes NOTHING and fails. `--predict` stops here;
+ *   4. publishes each `publish` decision over the dev endpoint, in order, and reads it back: the
+ *      version, the raw sha256 and the digest must equal the local build's, with exactly one
+ *      installed row. Nothing is ever uninstalled or unpublished;
+ *   5. prints the rows again, after.
+ * Changed by R599 (they were): (1) an app whose content is unchanged is skipped (it was always
+ * removed and re-published); (2) `--mint` is an upgrade with nothing removed (it removed first,
+ * and a dependent was added to the plan and cycled); (3) the refusal before publishing is the
+ * decision table (it was a version check over a removal plan).
  *
  * `control` publishes the pinned LethAL Control build (`CONTROL_APP`, checked against
  * `CONTROL_SHA256` in bc-linux-setup.ts) over the dev endpoint as an UPGRADE: it never removes
@@ -37,28 +42,37 @@
  * process and leaves it only as a Basic auth header. It is never printed, logged or put on a
  * command line; errors name the key, never the value.
  */
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compareAppVersions, reserveAppVersion } from "../packages/runner/src/app-version.ts";
-import { bcFetch } from "../packages/runner/src/bc-fetch.ts";
-import { devPackagesUrl } from "../packages/runner/src/bcdev-backend.ts";
+import { reserveAppVersion } from "../packages/runner/src/app-version.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
 import {
+  type AppItem,
   type AppManifest,
+  type ServerOps,
+  actAll,
+  controlAction,
+  decideAll,
+  dependsOn,
+  describeRows,
+  fixtureManifests,
+  packageStatus,
+  realOps,
+  refusals,
+} from "./bc-app-content.ts";
+import {
   CONTROL_APP,
   CONTROL_SHA256,
   type Conn,
-  HOST,
   type LeaseDeps,
   PUBLISH_PLAN,
-  SERVERS,
   type ServerName,
   alcCompile,
+  compiledLine,
   downloadSymbols,
   errText,
   kraken,
-  manifest,
   publishBytes,
   readSecretFile,
   residentPackage,
@@ -66,9 +80,11 @@ import {
   withLease,
 } from "./bc-linux-setup.ts";
 
+// Moved down into bc-app-content.ts (R599); re-exported so the test's import line stays.
+export { controlAction, packageStatus };
+
 const REPO = join(import.meta.dir, "..");
 const FIXTURES = join(REPO, "fixtures");
-const COMPANY = "CRONUS International Ltd.";
 
 // ---------------------------------------------------------------------------------------------
 // pure parts
@@ -81,10 +97,12 @@ export interface Args {
   readonly apps: string[];
   /** Fixtures published at a freshly minted version (LethAL's `reserveAppVersion`), not app.json's. */
   readonly mint: string[];
+  /** R599: `republish` decides and prints every app, and publishes nothing. */
+  readonly predict?: boolean;
 }
 
 const USAGE =
-  "usage: bun scripts/bc-republish.ts republish  --server bc1|bc2|bc3 --lane <lane> --token-dir <dir> [--mint <fixture>]... <fixture>...\n" +
+  "usage: bun scripts/bc-republish.ts republish  --server bc1|bc2|bc3 --lane <lane> --token-dir <dir> [--predict] [--mint <fixture>]... <fixture>...\n" +
   "       bun scripts/bc-republish.ts control    --server bc1|bc2|bc3 --lane <lane> --token-dir <dir>\n" +
   "       bun scripts/bc-republish.ts alpackages --server bc1|bc2|bc3 --lane <lane> --token-dir <dir> <tests fixture>...";
 
@@ -94,6 +112,7 @@ export function parseArgs(argv: readonly string[]): Args {
   let server: string | undefined;
   let lane: string | undefined;
   let tokenDir: string | undefined;
+  let predict = false;
   const apps: string[] = [];
   const mint: string[] = [];
   for (let i = 0; i < rest.length; i++) {
@@ -109,6 +128,7 @@ export function parseArgs(argv: readonly string[]): Args {
     if (a === "--server") server = value();
     else if (a === "--lane") lane = value();
     else if (a === "--token-dir") tokenDir = value();
+    else if (a === "--predict") predict = true;
     else if (a === "--mint") {
       const m = value();
       mint.push(m);
@@ -125,11 +145,12 @@ export function parseArgs(argv: readonly string[]): Args {
   if (tokenDir === undefined)
     throw new Error(`--token-dir is required (the lease token is written there)\n${USAGE}`);
   if (mode !== "republish" && mint.length > 0) throw new Error(`${mode} takes no --mint`);
+  if (mode !== "republish" && predict) throw new Error(`${mode} takes no --predict`);
   if (mode === "control" && apps.length > 0)
     throw new Error("control publishes the pinned LethAL Control build and takes no fixture");
   if (mode !== "control" && apps.length === 0)
     throw new Error(`name at least one fixture directory\n${USAGE}`);
-  return { mode, server, lane, tokenDir, apps, mint };
+  return { mode, server, lane, tokenDir, apps, mint, ...(predict ? { predict } : {}) };
 }
 
 export interface Plan {
@@ -141,18 +162,13 @@ export interface Plan {
   readonly unpublish: readonly string[];
 }
 
-function dependsOn(app: AppManifest, target: AppManifest): boolean {
-  return (app.dependencies ?? []).some((d) =>
-    d.id !== undefined && target.id !== undefined
-      ? d.id.toLowerCase() === target.id.toLowerCase()
-      : d.name === target.name && d.publisher === target.publisher,
-  );
-}
-
 /**
  * Closes `requested` over every fixture in `all` that depends on a member (repeatedly), then
  * orders it so each app follows the apps it depends on. Ties keep requested order, then added
  * order. Refuses an unknown fixture and a dependency cycle.
+ *
+ * R599: `republish` uses only the ORDER of the requested apps (`publishOrder`); nothing is removed
+ * any more, so a dependent no longer has to be added and cycled.
  */
 export function republishPlan(
   requested: readonly string[],
@@ -187,100 +203,28 @@ export function republishPlan(
   return { added, publish, unpublish: [...publish].reverse() };
 }
 
-export interface PrePublishCheck {
-  readonly dir: string;
-  /** The version this run would publish. */
-  readonly publishVersion: string;
-  /** Every version the server lists for the app (the automation API's extension rows). */
-  readonly resident: readonly string[];
-  readonly minted: boolean;
+/** The requested apps alone, each after the requested apps it depends on. */
+export function publishOrder(
+  requested: readonly string[],
+  all: ReadonlyMap<string, AppManifest>,
+): string[] {
+  return republishPlan(requested, all).publish.filter((d) => requested.includes(d));
 }
 
 /**
- * The refusal the run must give BEFORE it removes anything, or null. BC refuses a publish below
- * the installed-version record an unpublish leaves (R605), so an app resident above the version
- * about to be published would end up OFF the server.
+ * A fixture is a target when it is a `PUBLISH_PLAN` target or any fixture depends on it (row 6 then
+ * looks for its dependents, and a refusal above its build names `--mint`; review M4: sandbox-probes
+ * has no dependent but is a target).
  */
-export function downgradeRefusal(checks: readonly PrePublishCheck[]): string | null {
-  const bad = checks.flatMap((c) => {
-    const above = c.resident.filter((r) => compareAppVersions(r, c.publishVersion) > 0);
-    if (above.length === 0) return [];
-    const fix = c.minted
-      ? "the minted version is still below it"
-      : `publish it at a minted version instead (--mint ${c.dir})`;
-    return [`${c.dir}: the server holds ${above.join(", ")}, above ${c.publishVersion}; ${fix}`];
-  });
-  return bad.length === 0
-    ? null
-    : `refused before removing anything: BC would refuse the lower publish after the unpublish (R605), leaving the app off the server.\n  ${bad.join("\n  ")}`;
-}
-
-export type ControlAction = "publish" | "already-pinned";
-
-/**
- * What `control` does given what the server holds. It only ever publishes UP (an upgrade over the
- * dev endpoint never removes the app); a higher version, or the same version with other contents,
- * is refused rather than removed.
- */
-export function controlAction(
-  resident: { readonly version: string; readonly sha256: string } | null,
-  pinned: { readonly version: string; readonly sha256: string },
-): ControlAction {
-  if (resident === null) return "publish";
-  const cmp = compareAppVersions(resident.version, pinned.version);
-  if (cmp < 0) return "publish";
-  if (cmp > 0)
-    throw new Error(
-      `the server holds LethAL Control ${resident.version}, above the pinned ${pinned.version}; refused (no downgrade)`,
-    );
-  if (resident.sha256 !== pinned.sha256)
-    throw new Error(
-      `the server holds LethAL Control ${resident.version} with sha256 ${resident.sha256}, not the pinned build ${pinned.sha256}; refused (replacing it would need a removal)`,
-    );
-  return "already-pinned";
-}
-
-/**
- * How `control` reads the dev endpoint's answer for the resident package. ONLY a 404 means the
- * server holds none: any other failure (a 500, a timeout page, a refused login) is an error that
- * stops the run, so a server that could not be read is never taken for one without the control app.
- */
-export function packageStatus(status: number): "present" | "absent" {
-  if (status >= 200 && status < 300) return "present";
-  if (status === 404) return "absent";
-  throw new Error(`the dev endpoint answered HTTP ${status} for the resident package; stopped`);
+export function roleOf(dir: string, all: ReadonlyMap<string, AppManifest>): "target" | "dependent" {
+  const me = all.get(dir);
+  if (me === undefined) throw new Error(`unknown fixture ${JSON.stringify(dir)}`);
+  if (PUBLISH_PLAN.some((s) => s.target === dir)) return "target";
+  return [...all].some(([d, m]) => d !== dir && dependsOn(m, me)) ? "target" : "dependent";
 }
 
 // ---------------------------------------------------------------------------------------------
 // the server
-
-/** `residentPackage`, but strict about what counts as "nothing resident" (`packageStatus`). */
-async function strictResidentPackage(
-  c: Conn,
-  publisher: string,
-  name: string,
-): Promise<Buffer | null> {
-  const url = devPackagesUrl(
-    { server: HOST, serverInstance: "BC", tenant: "default", port: SERVERS[c.server].dev },
-    { publisher, name },
-  );
-  if (url === null) throw new Error("unreachable: devPackagesUrl refused a fixed URL");
-  const res = await bcFetch(url, { headers: { authorization: c.authorization } });
-  if (packageStatus(res.status) === "absent") return null;
-  return Buffer.from(await res.arrayBuffer());
-}
-
-function fixtureManifests(): Map<string, AppManifest> {
-  const out = new Map<string, AppManifest>();
-  for (const e of readdirSync(FIXTURES)) {
-    try {
-      out.set(e, manifest(join(FIXTURES, e)));
-    } catch {
-      // not an AL project
-    }
-  }
-  return out;
-}
 
 function connFor(server: ServerName): Conn {
   const login = readSecretFile();
@@ -288,107 +232,6 @@ function connFor(server: ServerName): Conn {
     server,
     authorization: `Basic ${Buffer.from(`${login.user}:${login.password}`).toString("base64")}`,
   };
-}
-
-async function apiJson(c: Conn, url: string, method = "GET") {
-  const res = await bcFetch(url, {
-    method,
-    headers: {
-      authorization: c.authorization,
-      accept: "application/json",
-      "content-type": "application/json",
-    },
-  });
-  const text = await res.text();
-  if (res.status === 401 || res.status === 403)
-    throw new Error(`${c.server}: the API refused the login (HTTP ${res.status})`);
-  return {
-    status: res.status,
-    ok: res.ok,
-    text,
-    body: text ? (JSON.parse(text) as Record<string, unknown>) : {},
-  };
-}
-
-interface ExtensionRow {
-  readonly packageId: string;
-  readonly displayName: string;
-  readonly isInstalled: boolean;
-  readonly versionMajor: number;
-  readonly versionMinor: number;
-  readonly versionBuild: number;
-  readonly versionRevision: number;
-}
-
-const rowVersion = (r: ExtensionRow) =>
-  `${r.versionMajor}.${r.versionMinor}.${r.versionBuild}.${r.versionRevision}`;
-
-async function extensionsApi(c: Conn): Promise<string> {
-  const api = `${HOST}:${SERVERS[c.server].api}/BC/api`;
-  const cs = await apiJson(c, `${api}/v2.0/companies?tenant=default`);
-  if (!cs.ok) throw new Error(`${c.server}: companies: HTTP ${cs.status}`);
-  const company = (cs.body.value as { id: string; name: string }[]).find((x) => x.name === COMPANY);
-  if (company === undefined) throw new Error(`${c.server}: company ${COMPANY} not found`);
-  return `${api}/microsoft/automation/v2.0/companies(${company.id})/extensions`;
-}
-
-async function rows(c: Conn, ext: string, appId: string): Promise<ExtensionRow[]> {
-  const r = await apiJson(
-    c,
-    `${ext}?tenant=default&$filter=${encodeURIComponent(`id eq ${appId}`)}`,
-  );
-  if (!r.ok) throw new Error(`${c.server}: extensions filter: HTTP ${r.status}`);
-  return r.body.value as ExtensionRow[];
-}
-
-/** Uninstall (when installed), then the bound unpublish action, for every row of the app's id. */
-async function removeApp(
-  c: Conn,
-  ext: string,
-  m: AppManifest,
-  log: (s: string) => void,
-): Promise<boolean> {
-  if (m.id === undefined) throw new Error(`${m.name}: app.json has no id`);
-  const found = await rows(c, ext, m.id);
-  if (found.length === 0) log(`  absent      ${m.name}: nothing to remove`);
-  for (const r of found) {
-    const key = `${ext}(${r.packageId})`;
-    if (r.isInstalled) {
-      const u = await apiJson(c, `${key}/Microsoft.NAV.uninstall?tenant=default`, "POST");
-      if (!u.ok)
-        throw new Error(
-          `${m.name} ${rowVersion(r)}: uninstall HTTP ${u.status}: ${u.text.slice(0, 500)}`,
-        );
-      log(`  uninstalled ${m.name} ${rowVersion(r)} (HTTP ${u.status})`);
-    }
-    const p = await apiJson(c, `${key}/Microsoft.NAV.unpublish?tenant=default`, "POST");
-    if (!p.ok)
-      throw new Error(
-        `${m.name} ${rowVersion(r)}: unpublish HTTP ${p.status}: ${p.text.slice(0, 500)}`,
-      );
-    log(`  unpublished ${m.name} ${rowVersion(r)} (HTTP ${p.status})`);
-  }
-  const after = await rows(c, ext, m.id);
-  if (after.length > 0)
-    throw new Error(
-      `${m.name}: still on the server after unpublish (${after.map(rowVersion).join(", ")})`,
-    );
-  return found.length > 0;
-}
-
-/**
- * What a stopped run left behind, for its error: apps this run REMOVED and did not put back, and
- * apps that were not on the server before the run and were not published either.
- */
-export function leftOffNote(notPublished: readonly string[], removed: ReadonlySet<string>): string {
-  const off = notPublished.filter((d) => removed.has(d));
-  const never = notPublished.filter((d) => !removed.has(d));
-  return [
-    ...(off.length > 0 ? [`\n  removed and NOT republished: ${off.join(", ")}`] : []),
-    ...(never.length > 0
-      ? [`\n  not on the server before this run, and not published: ${never.join(", ")}`]
-      : []),
-  ].join("");
 }
 
 function leaseFor(lane: string, tokenDir: string, label: string): LeaseDeps {
@@ -413,14 +256,34 @@ function leaseFor(lane: string, tokenDir: string, label: string): LeaseDeps {
   };
 }
 
+/** Each item's rows, and its installed fixture dependents' rows: the chain a live check reads. */
+async function printRows(
+  label: string,
+  items: readonly AppItem[],
+  ops: ServerOps,
+  all: ReadonlyMap<string, AppManifest>,
+  log: (s: string) => void,
+): Promise<void> {
+  for (const item of items) {
+    const id = readAppIdentity(item.local);
+    log(`  ${label.padEnd(9)} ${id.name}: ${describeRows(await ops.rows(id.id))}`);
+    const me = all.get(item.dir);
+    if (me === undefined) continue;
+    for (const [dir, m] of [...all].sort(([a], [b]) => a.localeCompare(b))) {
+      if (dir === item.dir || m.id === undefined || !dependsOn(m, me)) continue;
+      log(`  ${label.padEnd(9)} ${m.name} (dependent): ${describeRows(await ops.rows(m.id))}`);
+    }
+  }
+}
+
 async function republish(args: Args): Promise<void> {
   const { server, apps, mint } = args;
   const all = fixtureManifests();
-  const plan = republishPlan(apps, all);
+  const order = publishOrder(apps, all);
   const log = (s: string) => console.log(s);
-  log(`republish on ${server} (lane ${args.lane}): publish order ${plan.publish.join(", ")}`);
-  if (plan.added.length > 0)
-    log(`  added as dependents of a requested app: ${plan.added.join(", ")}`);
+  log(
+    `republish on ${server} (lane ${args.lane})${args.predict === true ? " --predict" : ""}: order ${order.join(", ")}`,
+  );
   const c = connFor(server);
   const tools = await defaultAlToolPaths();
   if (tools === undefined) throw new Error("no alc found under the AL Language extension");
@@ -428,21 +291,30 @@ async function republish(args: Args): Promise<void> {
   rmSync(build, { recursive: true, force: true });
 
   await withLease(server, leaseFor(args.lane, args.tokenDir, "republish"), async () => {
-    // 1. compile everything before removing anything
-    const built = new Map<string, Buffer>();
-    for (const dir of plan.publish) {
+    const ops = realOps(c);
+    // 1. compile everything before deciding anything
+    const items: AppItem[] = [];
+    for (const dir of order) {
       const m = all.get(dir) as AppManifest;
       const symbols = join(build, `${dir}-symbols`);
       mkdirSync(symbols, { recursive: true });
       await downloadSymbols(c, join(FIXTURES, dir), symbols);
       for (const d of (m.dependencies ?? []).filter((x) => x.publisher !== "Microsoft")) {
-        const local = plan.publish.find(
+        const local = order.find(
           (p) => all.get(p)?.name === d.name && all.get(p)?.publisher === d.publisher,
         );
         const pkg =
-          local !== undefined ? built.get(local) : await residentPackage(c, d.publisher, d.name);
+          local !== undefined
+            ? items.find((i) => i.dir === local)?.local
+            : await residentPackage(c, d.publisher, d.name);
         if (pkg === undefined || pkg === null)
           throw new Error(`${dir}: dependency ${d.name} is neither built nor on ${server}`);
+        if (local === undefined) {
+          const rid = readAppIdentity(pkg);
+          log(
+            `  against   resident ${rid.name} ${rid.version}: ${describeRows(await ops.rows(rid.id))}`,
+          );
+        }
         writeFileSync(join(symbols, `${d.publisher}_${d.name}.app`), pkg);
       }
       const out = join(build, `${dir}.app`);
@@ -466,51 +338,31 @@ async function republish(args: Args): Promise<void> {
         );
       }
       await alcCompile(tools.alcPath, project, symbols, out, defines);
-      built.set(dir, readFileSync(out));
-      log(
-        `  compiled    ${m.name} ${version}${version !== m.version ? ` (minted; app.json ${m.version})` : ""} sha256 ${sha256Of(readFileSync(out))}`,
-      );
+      const bytes = readFileSync(out);
+      log(compiledLine(bytes, version !== m.version ? ` (minted; app.json ${m.version})` : ""));
+      items.push({ dir, local: bytes, role: roleOf(dir, all), gateDeploys: false });
     }
-    // 2. refuse before removing anything when a publish would go below what the server holds
-    const ext = await extensionsApi(c);
-    const checks: PrePublishCheck[] = [];
-    for (const dir of plan.publish) {
-      const m = all.get(dir) as AppManifest;
-      if (m.id === undefined) throw new Error(`${m.name}: app.json has no id`);
-      checks.push({
-        dir,
-        publishVersion: readAppIdentity(built.get(dir) as Buffer).version,
-        resident: (await rows(c, ext, m.id)).map(rowVersion),
-        minted: mint.includes(dir),
-      });
-    }
-    const refusal = downgradeRefusal(checks);
-    if (refusal !== null) throw new Error(refusal);
-    // 3. remove, dependents first
-    const removed = new Set<string>();
-    for (const dir of plan.unpublish)
-      if (await removeApp(c, ext, all.get(dir) as AppManifest, log)) removed.add(dir);
-    // 4. publish, targets first, and read back; stop at the first failure
-    for (const [i, dir] of plan.publish.entries()) {
-      const bytes = built.get(dir) as Buffer;
-      const local = readAppIdentity(bytes);
-      try {
-        await publishBytes(c, `${local.publisher}_${local.name}_${local.version}.app`, bytes);
-      } catch (err) {
-        throw new Error(`${errText(err)}${leftOffNote(plan.publish.slice(i), removed)}`);
-      }
-      const resident = await residentPackage(c, local.publisher, local.name);
-      const version = resident === null ? "nothing" : readAppIdentity(resident).version;
-      const sameHash = resident !== null && sha256Of(resident) === sha256Of(bytes);
-      const pass = version === local.version && sameHash;
-      log(
-        `  ${pass ? "published  " : "MISMATCH   "} ${local.name}: resident ${version} (local ${local.version}); ` +
-          `resident sha256 ${resident === null ? "-" : sha256Of(resident)} ${sameHash ? "=" : "!="} local`,
-      );
-      if (!pass) {
+    try {
+      // 2. decide every app; 3. refuse before publishing anything
+      const decided = await decideAll(items, ops, "republish", all, log);
+      const refused = refusals(decided);
+      if (refused.length > 0)
         throw new Error(
-          `read-back of ${local.name} (${dir}) does not match the local build: the server holds ${version}${resident === null ? "" : ` sha256 ${sha256Of(resident)}`}, the local build is ${local.version} sha256 ${sha256Of(bytes)}; stopped${leftOffNote(plan.publish.slice(i + 1), removed)}`,
+          `${refused.length} app(s) refused, so NOTHING was published:\n  ${refused.map((d) => d.decision.line).join("\n  ")}`,
         );
+      if (args.predict === true) {
+        log("  predicted: nothing published");
+        return;
+      }
+      // 4. publish in order, reading each back
+      await actAll(decided, ops, log);
+    } finally {
+      // 5. the rows after, whatever happened; a failed read here never replaces the run's own
+      // refusal or read-back error (review M3)
+      try {
+        await printRows("after", items, ops, all, log);
+      } catch (err) {
+        log(`  after     the rows could not be read: ${errText(err)}`);
       }
     }
   });
@@ -524,7 +376,7 @@ async function control(args: Args): Promise<void> {
   const local = readAppIdentity(bytes);
   const c = connFor(args.server);
   await withLease(args.server, leaseFor(args.lane, args.tokenDir, "control"), async () => {
-    const before = await strictResidentPackage(c, local.publisher, local.name);
+    const before = await residentPackage(c, local.publisher, local.name);
     const resident =
       before === null
         ? null
@@ -537,7 +389,7 @@ async function control(args: Args): Promise<void> {
       return;
     }
     await publishBytes(c, `${local.publisher}_${local.name}_${local.version}.app`, bytes);
-    const after = await strictResidentPackage(c, local.publisher, local.name);
+    const after = await residentPackage(c, local.publisher, local.name);
     const v = after === null ? "nothing" : readAppIdentity(after).version;
     const s = after === null ? "-" : sha256Of(after);
     console.log(`  published: resident ${v} sha256 ${s} ${s === sha ? "=" : "!="} pinned`);

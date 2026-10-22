@@ -8,7 +8,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import { openItemHangRefuses } from "../src/index";
-import { r531Analyze, r571Seam, r571TempSkip } from "../src/loop-hazard";
+import { r531Analyze, r571Seam, r571TempSkip, r572Seam } from "../src/loop-hazard";
 
 /**
  * R571: R531's HOP into a record consumer in ANOTHER project object, and its caller-side temp-flag
@@ -45,15 +45,18 @@ function refusedIn(files: Files, path: string, text: string, op = VMC): boolean 
   return openItemHangRefuses(hit, ctx, op);
 }
 
-/** [seam off, seam on] */
+/** [seam off, seam on]. R572 (a stateful callee feeding the exit) refuses some of the same sites,
+ *  so both legs run with `r572Seam` off: they measure R571 alone. */
 function bothWays(files: Files, path: string, text: string, op = VMC): [boolean, boolean] {
   r571Seam.on = false;
+  r572Seam.on = false;
   try {
     const off = refusedIn(files, path, text, op);
     r571Seam.on = true;
     return [off, refusedIn(files, path, text, op)];
   } finally {
     r571Seam.on = true;
+    r572Seam.on = true;
   }
 }
 

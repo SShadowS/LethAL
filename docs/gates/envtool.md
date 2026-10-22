@@ -6,6 +6,11 @@ external environment tool"), instead of a container configured directly. It need
 `fixtures/sandbox-app/lethal.config.envtool.json` that names a reachable environment. The
 environment tool (`continia.exe`) runs only on the host.
 
+Since R582 the rule "a kill must reproduce" (R577) applies here too: the gate checks that its 3
+kills carry `killReproduced` and exactly 2 mutated rows for the killing test. That is UNMEASURED
+until the owner runs this gate. On a hosted environment a re-run can come back `session-reused`,
+which scores `error`, never a kill.
+
 ## Frozen figures
 
 ```json gate-figures

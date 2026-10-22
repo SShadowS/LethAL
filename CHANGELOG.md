@@ -64,7 +64,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   v16 is kept), because `kill-not-reproduced` is a new value of `notMeasured[].cause` (R233).
   **`--resume` on al-runner re-runs a kill recorded before this rule** (no `killReproduced`) instead
   of carrying it, and its warning counts such kills in their own words, apart from prior `error`
-  verdicts. bcdev is unchanged; its switch is R582.
+  verdicts. bcdev has the same rule since R582 (see Changed).
 
 - **The report records which al-runner test selector produced its verdicts** (R558). R551 picks the
   selector once per session by a probe: `--test-exact` when the build accepts it, otherwise R488's
@@ -203,6 +203,23 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A loop fed by another object's stateful procedure is hang-refused; identity scheme 41, the number
+  confirmed at merge** (R572). A loop whose exit reads a flag, a `var` argument or a call fed by a stateful
+  procedure in another project object refuses that procedure's chain, the writers of its value path, and the
+  guards in the loop body that decide whether such a writer runs (`r572-guard-writer`). A guard is refused as a
+  single site, so its procedure's same-tuple twins renumber (measured on BaseApp: 34 ordinals moved, 0 tuples
+  moved). History, `--resume` and marks recorded under scheme 40 are not carried.
+- **On bcdev, a kill must reproduce too** (R582). R577's rule is now on for the BC backend: after a
+  kill's unmutated confirm passes, LethAL runs the killing test once more UNDER THE MUTANT, and only
+  a second failure (for a timeout kill, a second timeout at the budget the first run was sent) keeps
+  the kill. Anything else is `error` / `kill-not-reproduced`, never `survived`. A kill at position 1
+  re-runs as one single `RunMutant` call; a warm kill (R206) re-runs its call's prefix in one more
+  `RunMutantMany`. **Cost, per kill:** about half a second for a failing test, and one more whole
+  budget for a timeout kill, with a second `StopHungRunAt` stop whose outcome may not be confirmed
+  (that scores `error` / `stop-outcome-unconfirmed`, not `timeout-killed`). Nothing for survivors.
+  **Resuming a run recorded on bcdev before R582 re-executes every kill** (none carries
+  `killReproduced`), which republishes and re-baselines nearly every batch: it is close to a full
+  rerun, so start a fresh run instead.
 - **al-runner coverage is ON by default** (R394). With no `alRunner.coverage` key, `lethal run
   --backend al-runner` now reads al-runner's own `--coverage` (R220): a mutant no green test
   reaches reads `no-coverage` instead of `survived`, and each mutant runs only its covering tests.

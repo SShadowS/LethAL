@@ -61,6 +61,7 @@ import type { VerifyOutput } from "../src/verify";
 import { preflightReadOnlyBaseline, readGateBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath, printItestTarget } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { assertKillsReproduced } from "./kill-reproduction";
 import { keyOf } from "./mutant-equality";
 import { assertFreshFullRun } from "./verify-agreement";
 import {
@@ -331,6 +332,8 @@ async function main(): Promise<void> {
         resourceServerInstance: bcdev.serverInstance,
         quarantineDir,
       });
+      // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
+      assertKillsReproduced(`verify-scale/${leg.toUpperCase()}`, report, store);
     } finally {
       store.close();
       await backend.close();

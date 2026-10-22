@@ -1,32 +1,51 @@
-import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
+import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
+import type { AppManifest, Conn, ServerOps } from "./bc-app-content.ts";
 import {
   GATE_FIXTURES,
   LaneUnknownError,
   type LeaseDeps,
   LeaseLostError,
   NotIgnoredError,
+  PINNED_MICROSOFT_VERSION,
   PUBLISH_PLAN,
+  REAL_DEPS,
+  type RunDeps,
   SecretFileError,
   buildConfig,
   buildLaunch,
   configFileName,
   continiaDependencyProblems,
+  decideContinia,
   describeLogin,
+  downloadSymbols,
   gitIgnores,
   krakenLeaseFor,
   launchFileName,
   parseArgs,
   parseSecretEnv,
   readSecretFile,
+  realContiniaOps,
   resolveLane,
+  run,
   withLease,
   writeConfig,
 } from "./bc-linux-setup.ts";
+import { fillSymbolCache, lookupSymbolCache } from "./bc-symbol-cache.ts";
 
 // R594: a Continia app the server would refuse is caught before anything is published.
 describe("continiaDependencyProblems", () => {
@@ -437,5 +456,499 @@ describe("R598: the coord lease is taken in the caller's lane, never a fixed one
       /--lane needs a lane name/,
     );
     expect(() => parseArgs(["--server", "bc1", "--lane"])).toThrow(/--lane needs a lane name/);
+  });
+});
+
+describe("--write-config-only: configs from the secret file, no server call, no lease", () => {
+  const FIXTURE_DIRS = ["sandbox-app", "sandbox-data", "sandbox-hang", "sandbox-harden"];
+
+  function harness(
+    secretText: string | null,
+    over: (h: { repo: string; cacheRoot: string }) => Partial<RunDeps> = () => ({}),
+  ) {
+    const repo = mkdtempSync(join(tmpdir(), "bc-wco-repo-"));
+    for (const d of FIXTURE_DIRS) mkdirSync(join(repo, "fixtures", d), { recursive: true });
+    // `symbolNames` reads each PUBLISH_PLAN target's app.json under deps.repo, not the real repo.
+    for (const s of PUBLISH_PLAN) {
+      mkdirSync(join(repo, "fixtures", s.target), { recursive: true });
+      writeFileSync(
+        join(repo, "fixtures", s.target, "app.json"),
+        JSON.stringify({ name: s.target, publisher: "LethAL", version: "1.0.0.0" }),
+      );
+    }
+    const cacheRoot = mkdtempSync(join(tmpdir(), "bc-wco-cache-"));
+    const secretPath = join(mkdtempSync(join(tmpdir(), "bc-wco-secret-")), "bc-linux.env");
+    if (secretText !== null) writeFileSync(secretPath, secretText);
+    const counts = { connect: 0, lease: 0, fetch: 0, writes: 0 };
+    const printed: string[] = [];
+    const noServer = (what: string) => () => {
+      counts.connect++;
+      throw new Error(`the config-only mode must not reach a server (${what})`);
+    };
+    const deps: RunDeps = {
+      readSecret: () => readSecretFile(secretPath),
+      connect: noServer("connect"),
+      lease: () => {
+        counts.lease++;
+        throw new Error("the config-only mode must not take a lease");
+      },
+      isIgnored: () => true,
+      repo,
+      cacheRoot,
+      mcpCommand: () => ["node", "/x/bc-dev-mcp/dist/index.js"],
+      env: {},
+      writeConfig: (path, config) => {
+        counts.writes++;
+        writeConfig(path, config, () => true);
+      },
+      downloadSymbol: noServer("downloadSymbol"),
+      serverOps: noServer("serverOps"),
+      continiaOps: noServer("continiaOps"),
+      continiaFiles: () => [],
+      controlBytes: noServer("controlBytes"),
+      compile: noServer("compile"),
+      fixtures: () => new Map(),
+      doctor: noServer("doctor"),
+      ...over({ repo, cacheRoot }),
+    };
+    // stdout AND stderr are both captured, so a login printed by any path is seen.
+    const go = async (argv: string[]) => {
+      const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+        printed.push(a.join(" "));
+      });
+      const err = spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+        printed.push(a.join(" "));
+      });
+      // Any fetch resolved at call time is counted and answered 500. (`bcFetch` binds `fetch` when
+      // it is imported, so the module's own server paths are counted by `connect` instead: every
+      // one of them takes a `Conn`, and `connect` is the only way to get one.)
+      const net = spyOn(globalThis, "fetch").mockImplementation((async () => {
+        counts.fetch++;
+        return new Response("no network in this test", { status: 500 });
+      }) as unknown as typeof fetch);
+      try {
+        return await run(argv, deps, (s) => printed.push(s));
+      } finally {
+        log.mockRestore();
+        err.mockRestore();
+        net.mockRestore();
+        // a filled build dir is sealed 0555: reopen it so the temp root can be removed
+        for (const s of readdirSync(cacheRoot))
+          for (const b of readdirSync(join(cacheRoot, s))) chmodSync(join(cacheRoot, s, b), 0o755);
+      }
+    };
+    const written = () =>
+      FIXTURE_DIRS.flatMap((d) =>
+        [
+          join("fixtures", d, "lethal.config.bc3.json"),
+          join("fixtures", d, ".vscode", "launch.bc3.json"),
+        ].filter((p) => existsSync(join(repo, p))),
+      );
+    return { repo, cacheRoot, counts, printed, go, written };
+  }
+
+  const ALL_FILES = FIXTURE_DIRS.flatMap((d) => [
+    join("fixtures", d, "lethal.config.bc3.json"),
+    join("fixtures", d, ".vscode", "launch.bc3.json"),
+  ]);
+
+  test("an empty cache: every file written, 0 server and 0 lease calls, named empty, never gate-ready", async () => {
+    const h = harness(GOOD);
+    const code = await h.go(["--server", "bc3", "--write-config-only"]);
+    expect(h.counts).toMatchObject({ connect: 0, lease: 0, fetch: 0 });
+    expect(h.written()).toEqual(ALL_FILES);
+    const out = h.printed.join("\n");
+    expect(out).toContain("symbol cache empty for bc3: run setup --server bc3 once");
+    expect(out).toContain("NOT gate-ready");
+    expect(out).not.toContain("ok:");
+    expect(code).toBe(1);
+    const cfg = JSON.parse(
+      readFileSync(join(h.repo, "fixtures", "sandbox-app", "lethal.config.bc3.json"), "utf8"),
+    ) as { bcdev: Record<string, unknown> };
+    expect(cfg.bcdev).toMatchObject({
+      server: "http://192.168.2.157:7249",
+      port: 7249,
+      baseUrl: "http://192.168.2.157:7248/BC",
+      apiBaseUrl: "http://192.168.2.157:7252/BC",
+      company: "CRONUS International Ltd.",
+      packageCachePath: join(h.cacheRoot, "bc3", "unfilled-run-setup-first"),
+      username: "BCRUNNER",
+    });
+    const launch = JSON.parse(
+      readFileSync(join(h.repo, "fixtures", "sandbox-app", ".vscode", "launch.bc3.json"), "utf8"),
+    ) as { configurations: { port: number }[] };
+    expect(launch.configurations[0]?.port).toBe(7249);
+  });
+
+  test("a filled cache: the configs name its build dir, read from its marker, and the run is gate-ready", async () => {
+    const h = harness(GOOD);
+    const sys = buildFakeAppWithEntries({
+      "NavxManifest.xml":
+        '<Package><App Id="i" Name="System" Publisher="Microsoft" Version="28.4.53241.56646" /></Package>',
+    });
+    const filled = await fillSymbolCache({
+      root: h.cacheRoot,
+      server: "bc3",
+      names: ["System"],
+      download: async () => sys,
+    });
+    try {
+      const code = await h.go(["--server", "bc3", "--write-config-only"]);
+      expect(h.counts).toMatchObject({ connect: 0, lease: 0, fetch: 0 });
+      const out = h.printed.join("\n");
+      expect(out).toContain(
+        `symbol cache for bc3: ${filled.dir} (build 28.4.53241.56646, 1 files: System; verified`,
+      );
+      expect(out).not.toContain("symbol cache empty");
+      // it never asks the server, and says so on the cache line AND on the ok line
+      expect(out).toContain("verified; server build not checked (config-only)");
+      expect(out).toContain(
+        "ok: configs written, symbol cache verified; server build not checked (config-only)",
+      );
+      expect(code).toBe(0);
+      for (const d of FIXTURE_DIRS) {
+        const cfg = JSON.parse(
+          readFileSync(join(h.repo, "fixtures", d, "lethal.config.bc3.json"), "utf8"),
+        ) as { bcdev: { packageCachePath: string } };
+        expect(cfg.bcdev.packageCachePath).toBe(filled.dir);
+      }
+    } finally {
+      // the sealed dir is 0555; reopen it so the temp root can be removed
+      chmodSync(filled.dir, 0o755);
+    }
+  });
+
+  test("the required names come from deps.repo's fixtures: a cache lacking one is reported empty", async () => {
+    const h = harness(GOOD);
+    // one target in THIS repo needs a Microsoft package the cache does not hold
+    writeFileSync(
+      join(h.repo, "fixtures", "sandbox-names", "app.json"),
+      JSON.stringify({
+        name: "sandbox-names",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        dependencies: [{ name: "Base Application", publisher: "Microsoft" }],
+      }),
+    );
+    const sys = buildFakeAppWithEntries({
+      "NavxManifest.xml":
+        '<Package><App Id="i" Name="System" Publisher="Microsoft" Version="28.4.53241.56646" /></Package>',
+    });
+    const filled = await fillSymbolCache({
+      root: h.cacheRoot,
+      server: "bc3",
+      names: ["System"],
+      download: async () => sys,
+    });
+    try {
+      expect(await h.go(["--server", "bc3", "--write-config-only"])).toBe(1);
+      const out = h.printed.join("\n");
+      expect(out).toContain("lacks Base Application");
+      expect(out).toContain("symbol cache empty for bc3: run setup --server bc3 once");
+    } finally {
+      chmodSync(filled.dir, 0o755);
+    }
+  });
+
+  test("no secret file: refused by name, nothing written, no call", async () => {
+    const h = harness(null);
+    const code = await h.go(["--server", "bc3", "--write-config-only"]);
+    expect(code).toBe(1);
+    expect(h.printed.join("\n")).toContain("bc-linux.env does not exist");
+    expect(h.written()).toEqual([]);
+    expect(h.counts).toMatchObject({ connect: 0, lease: 0, fetch: 0 });
+  });
+
+  test("a missing key: refused by name, nothing written", async () => {
+    const h = harness("BC_DEV_USER=BCRUNNER\n");
+    expect(await h.go(["--server", "bc3", "--write-config-only"])).toBe(1);
+    expect(h.printed.join("\n")).toContain("BC_DEV_PASSWORD is missing");
+    expect(h.written()).toEqual([]);
+  });
+
+  test("the login never reaches stdout or stderr (it is only in the gitignored configs)", async () => {
+    const h = harness(GOOD);
+    await h.go(["--server", "all", "--write-config-only"]);
+    const out = h.printed.join("\n");
+    expect(out).toContain(`BC_DEV_PASSWORD (${SECRET.length} chars)`);
+    expect(out).not.toContain(SECRET);
+    expect(out).not.toContain(Buffer.from(`BCRUNNER:${SECRET}`).toString("base64"));
+  });
+
+  test("takes only --server: a lane, a held lease, --dry-run or --with-continia is refused", () => {
+    expect(parseArgs(["--server", "bc2", "--write-config-only"])).toEqual({
+      servers: ["bc2"],
+      dryRun: false,
+      withContinia: false,
+      writeConfigOnly: true,
+    });
+    for (const extra of [
+      ["--lane", "bugs"],
+      ["--held-lease", "t"],
+      ["--dry-run"],
+      ["--with-continia"],
+    ]) {
+      expect(() => parseArgs(["--server", "bc2", "--write-config-only", ...extra])).toThrow(
+        /--write-config-only takes only --server/,
+      );
+    }
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // R599: the setup driver decides every app, then acts only if nothing was refused.
+
+  const appPkg = (name: string, id: string, version = "1.0.0.0", publisher = "LethAL") =>
+    buildFakeAppWithEntries({
+      "NavxManifest.xml": `<Package><App Id="${id}" Name="${name}" Publisher="${publisher}" Version="${version}" /><Build Timestamp="t" CompilerVersion="18.0.43.1464" /></Package>`,
+      "src/a.al": name,
+    });
+  const rowAt = (version: string) => {
+    const [a, b, c, d] = version.split(".").map(Number);
+    return {
+      packageId: `pkg-${version}`,
+      displayName: "x",
+      isInstalled: true,
+      versionMajor: a ?? 0,
+      versionMinor: b ?? 0,
+      versionBuild: c ?? 0,
+      versionRevision: d ?? 0,
+    };
+  };
+
+  /**
+   * A fake server holding every PUBLISH_PLAN app at the local build's content (each a skip),
+   * except `sandbox-probes` (absent: a publish) and, with `refuseLast`, the LAST step's
+   * dependent (above its build: a refusal). LethAL Control is absent (a publish).
+   */
+  function fleet(refuseLast: boolean) {
+    const calls = { publish: [] as string[], continiaReads: 0, doctor: 0, take: 0 };
+    const local = new Map<string, Buffer>();
+    const resident = new Map<string, { pkg: Buffer; version: string }>();
+    const fixtures = new Map<string, AppManifest>();
+    const last = PUBLISH_PLAN.at(-1)?.dependents.at(-1);
+    for (const step of PUBLISH_PLAN) {
+      for (const dir of [step.target, ...step.dependents]) {
+        const b = appPkg(dir, `${dir}-id`);
+        local.set(dir, b);
+        fixtures.set(dir, {
+          id: `${dir}-id`,
+          name: dir,
+          publisher: "LethAL",
+          version: "1.0.0.0",
+          ...(dir === step.target
+            ? {}
+            : {
+                dependencies: [{ id: `${step.target}-id`, name: step.target, publisher: "LethAL" }],
+              }),
+        });
+        if (dir === "sandbox-probes") continue;
+        resident.set(
+          dir,
+          refuseLast && dir === last
+            ? { pkg: appPkg(dir, `${dir}-id`, "1.0.0.9"), version: "1.0.0.9" }
+            : { pkg: b, version: "1.0.0.0" },
+        );
+      }
+    }
+    const names = new Map<string, string>([["lethal-control-id", "LethAL Control"]]);
+    const byId = (id: string) => names.get(id) ?? id.replace(/-id$/, "");
+    const ops: ServerOps = {
+      resident: async (_p, name) => resident.get(name)?.pkg ?? null,
+      rows: async (id) => {
+        const r = resident.get(byId(id));
+        return r === undefined ? [] : [rowAt(r.version)];
+      },
+      publish: async (fileName, bytes) => {
+        calls.publish.push(fileName);
+        const m = /_(.*)_(\d+\.\d+\.\d+\.\d+)\.app$/.exec(fileName);
+        resident.set(m?.[1] ?? fileName, { pkg: bytes, version: m?.[2] ?? "?" });
+      },
+    };
+    const continia = appPkg("Continia Core", "cc-id", "28.5.0.1", "Continia Software");
+    const over = (): Partial<RunDeps> => ({
+      connect: (server) => ({ server, authorization: "Basic test" }),
+      lease: () => ({
+        take: async () => {
+          calls.take++;
+          return "tok";
+        },
+        recordToken: () => {},
+        heartbeat: async () => {},
+        release: async () => {},
+      }),
+      downloadSymbol: async () => appPkg("System", "sys", "28.4.1.1", "Microsoft"),
+      controlBytes: () => appPkg("LethAL Control", "lethal-control-id", "1.0.0.23"),
+      compile: async (_c, step) =>
+        [step.target, ...step.dependents].map((dir) => ({
+          dir,
+          local: local.get(dir) as Buffer,
+          role: dir === step.target ? ("target" as const) : ("dependent" as const),
+          gateDeploys: dir === step.target && step.gateDeploys === true,
+          ...(dir === step.target ? {} : { targetDir: step.target }),
+        })),
+      serverOps: () => ops,
+      continiaOps: () => ({
+        residentVersion: async (publisher, name) => {
+          calls.continiaReads++;
+          if (publisher === "Microsoft")
+            return name === "System" ? "28.4.1.1" : PINNED_MICROSOFT_VERSION;
+          return calls.publish.some((p) => p.includes(name)) ? "28.5.0.1" : null;
+        },
+        publish: async (fileName) => {
+          calls.publish.push(fileName);
+        },
+      }),
+      continiaFiles: () => [{ bytes: continia }],
+      fixtures: () => fixtures,
+      doctor: async () => {
+        calls.doctor++;
+        return true;
+      },
+    });
+    return { calls, over };
+  }
+
+  test("one refusal in the LAST step: NOTHING is published in any step, Continia included", async () => {
+    const f = fleet(true);
+    const h = harness(GOOD, f.over);
+    const code = await h.go(["--server", "bc3", "--lane", "bugs", "--with-continia"]);
+    const out = h.printed.join("\n");
+    // first: nothing published (Control first in the act order, so it would be the first one)
+    expect(f.calls.publish).toEqual([]);
+    expect(f.calls.doctor).toBe(0);
+    expect(code).toBe(1);
+    expect(out).toContain("refuse    above-build sandbox-names-tests");
+    expect(out).toContain("publish   new sandbox-probes"); // decided, never done
+    expect(out).toContain("STOPPED   1 app(s) refused: NOTHING was published");
+  });
+
+  test("--predict on an EMPTY cache fills it (write-once), publishes nothing, writes no config", async () => {
+    const f = fleet(false);
+    const h = harness(GOOD, f.over);
+    expect(lookupSymbolCache(h.cacheRoot, "bc3").chosen).toBeUndefined();
+    const code = await h.go(["--server", "bc3", "--lane", "bugs", "--predict"]);
+    const out = h.printed.join("\n");
+    expect(out).toContain("predicted: nothing published, no config or launch file written");
+    expect(out).toContain("downloaded and sealed");
+    const found = lookupSymbolCache(h.cacheRoot, "bc3", ["System"]);
+    expect(found.chosen?.marker.build).toBe("28.4.1.1");
+    expect(f.calls.publish).toEqual([]);
+    expect(h.counts.writes).toBe(0);
+    expect(f.calls.doctor).toBe(0);
+    expect(f.calls.take).toBe(1);
+    expect(code).toBe(0);
+    if (found.chosen !== undefined) chmodSync(found.chosen.dir, 0o755);
+  });
+
+  test("--predict --with-continia reads the Continia state and publishes nothing", async () => {
+    const f = fleet(false);
+    const h = harness(GOOD, f.over);
+    const code = await h.go(["--server", "bc3", "--lane", "bugs", "--predict", "--with-continia"]);
+    const out = h.printed.join("\n");
+    expect(out).toContain("P1        Microsoft System: 28.4.1.1");
+    expect(out).toContain("publish   Continia Core 28.5.0.1"); // decided, never done
+    expect(f.calls.continiaReads).toBeGreaterThan(0);
+    expect(f.calls.publish).toEqual([]);
+    expect(h.counts.writes).toBe(0);
+    expect(code).toBe(0);
+  });
+
+  test("no refusal: it acts, control first, then Continia, then the fixtures, then doctor", async () => {
+    const f = fleet(false);
+    const h = harness(GOOD, f.over);
+    const code = await h.go(["--server", "bc3", "--lane", "bugs", "--with-continia"]);
+    expect(h.printed.join("\n")).not.toContain("FAILED");
+    expect(f.calls.publish).toEqual([
+      "LethAL_LethAL Control_1.0.0.23.app",
+      "Continia Software_Continia Core_28.5.0.1.app",
+      "LethAL_sandbox-probes_1.0.0.0.app",
+    ]);
+    expect(h.counts.writes).toBe(8);
+    expect(f.calls.doctor).toBe(4);
+    expect(code).toBe(0);
+  });
+
+  test("--predict and --dry-run exclude each other", () => {
+    expect(() => parseArgs(["--server", "bc3", "--predict", "--dry-run"])).toThrow(/exclude/);
+    expect(parseArgs(["--server", "bc3", "--predict"])).toMatchObject({ predict: true });
+  });
+});
+
+// R624: every reader goes through the one strict `residentPackage`; a 5xx stops, never "absent".
+describe("R624: a failed dev/packages read stops every reader by its status", () => {
+  /** A Conn answering each read by publisher and app name (never the network). */
+  const connBy = (answer: (publisher: string, name: string) => Response): Conn => ({
+    server: "bc3",
+    authorization: "Basic fake",
+    fetch: (async (input: string | URL | Request) => {
+      const u = new URL(String(input));
+      return answer(u.searchParams.get("publisher") ?? "", u.searchParams.get("appName") ?? "");
+    }) as unknown as FetchFn,
+  });
+  const answering = (status: number) => connBy(() => new Response("x", { status }));
+  const pkgOf = (name: string, publisher: string, version: string) =>
+    buildFakeAppWithEntries({
+      "NavxManifest.xml": `<Package><App Id="${name}-id" Name="${name}" Publisher="${publisher}" Version="${version}" /></Package>`,
+    });
+  const messageOf = async (p: Promise<unknown>) => {
+    try {
+      await p;
+    } catch (err) {
+      return (err as Error).message;
+    }
+    throw new Error("expected a rejection");
+  };
+
+  test("downloadSymbols: a 500 for System names HTTP 500, not a missing package (M2)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "r624-dl-"));
+    writeFileSync(
+      join(dir, "app.json"),
+      JSON.stringify({ name: "x", publisher: "LethAL", version: "1.0.0.0" }),
+    );
+    const msg = await messageOf(downloadSymbols(answering(500), dir, dir));
+    expect(msg).toContain("HTTP 500");
+    expect(msg).not.toContain("holds no");
+  });
+
+  test("the shared cache's real downloadSymbol: a 500 stops the fill by its status, nothing sealed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "r624-cache-"));
+    const c = answering(500);
+    const msg = await messageOf(
+      fillSymbolCache({
+        root,
+        server: "bc3",
+        names: ["System"],
+        download: (name) => REAL_DEPS.downloadSymbol(c, name),
+      }),
+    );
+    expect(msg).toContain("HTTP 500");
+    expect(msg).not.toContain("holds no");
+    expect(readdirSync(join(root, "bc3"))).toEqual([]);
+  });
+
+  test("realContiniaOps: a 500 rejects naming HTTP 500; a 404 resolves null (I4)", async () => {
+    await expect(
+      realContiniaOps(answering(500)).residentVersion("Continia Software", "Continia Core"),
+    ).rejects.toThrow("HTTP 500");
+    expect(
+      await realContiniaOps(answering(404)).residentVersion("Continia Software", "Continia Core"),
+    ).toBeNull();
+  });
+
+  test("decideContinia: Microsoft at the pinned build, a 500 for one Continia app: it throws, never publishes it", async () => {
+    const c = connBy((publisher, name) =>
+      publisher === "Microsoft"
+        ? new Response(pkgOf(name, "Microsoft", PINNED_MICROSOFT_VERSION), { status: 200 })
+        : new Response("server error", { status: 500 }),
+    );
+    const files = [{ bytes: pkgOf("Continia Core", "Continia Software", "28.5.0.1") }];
+    const summary: string[] = [];
+    await expect(decideContinia(realContiniaOps(c), files, summary, undefined)).rejects.toThrow(
+      "HTTP 500",
+    );
+    expect(summary.join("\n")).toContain(
+      "every Continia app's declared dependencies are satisfied",
+    );
+    expect(summary.join("\n")).not.toContain("publish   Continia Core");
   });
 });

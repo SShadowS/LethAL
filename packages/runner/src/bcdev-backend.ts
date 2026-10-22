@@ -336,6 +336,9 @@ export function devPackagesUrl(
 }
 
 export class BcDevMcpBackend implements ExecutionBackend {
+  /** R582: R577's "a kill must reproduce" rule, on for bcdev too (the re-run is one more fenced
+   *  call under the mutant: a single `RunMutant` at position 1, the call's prefix at k > 1). */
+  readonly killsMustReproduce = true;
   private client: Client | undefined;
   // Populated by deploy() from the just-compiled .app so run() can resolve coverage
   // methodIds to procedure names — see app-package.ts for why this needs the compiled

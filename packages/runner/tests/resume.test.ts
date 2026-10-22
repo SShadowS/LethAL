@@ -22,6 +22,8 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { BcDevMcpBackend } from "../src/bcdev-backend";
+import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
@@ -436,6 +438,69 @@ describe("buildResumeIndex — a kill without killReproduced under the reproduct
   });
 });
 
+/**
+ * R582 (U4): a run recorded on bcdev BEFORE R582 has `kill_reproduced` NULL on every kill. With the
+ * flag read from `BcDevMcpBackend` itself, those kills are re-executed rather than carried; a
+ * marked kill and a survivor still carry.
+ */
+describe("buildResumeIndex — a pre-R582 bcdev run under BcDevMcpBackend's flag (R582)", () => {
+  test("its unmarked kills are re-executed, a marked kill and a survivor carry", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      coverageMode: "fenced",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+    });
+    const base = {
+      codeunitName: "Sandbox Logic",
+      procedureName: "Post",
+      operatorName: "lethal.negate-conditional",
+      operatorMajor: 1,
+      file: "src/SandboxLogic.Codeunit.al",
+      line: 1,
+      durationMs: 1,
+      batchIndex: 0,
+    };
+    store.recordMutant(runId, {
+      ...base,
+      mutantCode: "M0001",
+      astHash: "k1",
+      verdict: "killed",
+      killingTest: "T",
+    });
+    store.recordMutant(runId, {
+      ...base,
+      mutantCode: "M0002",
+      astHash: "k2",
+      verdict: "killed",
+      killingTest: "T",
+    });
+    store.recordMutant(runId, { ...base, mutantCode: "M0003", astHash: "s", verdict: "survived" });
+    store.recordMutant(runId, {
+      ...base,
+      mutantCode: "M0004",
+      astHash: "k4",
+      verdict: "killed",
+      killingTest: "T",
+      killReproduced: true,
+    });
+    const flag = new BcDevMcpBackend({} as unknown as BcDevConfig).killsMustReproduce === true;
+    const index = buildResumeIndex(store.mutantVerdicts(runId), false, flag);
+    expect(index.unreproducedKills).toBe(2);
+    expect([...index.carryable.values()].map((c) => c.verdict).sort()).toEqual([
+      "killed",
+      "survived",
+    ]);
+    expect([...index.carryable.values()].find((c) => c.verdict === "killed")?.killReproduced).toBe(
+      true,
+    );
+    store.close();
+  });
+});
+
 describe("buildResumeIndex (R47)", () => {
   test("carries a scored verdict with its killing test and duration", () => {
     const index = buildResumeIndex([
@@ -592,8 +657,10 @@ describe("sessionFingerprint (R47)", () => {
   // 9d5d97b3...91ce under scheme 37. It moved again for R-531 (scheme 39, a loop that ends only by
   // consuming its record set is hang-refused); it was 5ee5c7b6...3ec0 under scheme 38. It moved
   // again for R565 (scheme 40, an outside report's preset writers are read from the dependency
-  // packages); it was f1086a61...e634 under scheme 39.
-  const PINNED = "7abca7bc3b8e5c80b8f92b9f4694f4eaccd9d5ea7dd59124331e7c7e61696109";
+  // packages); it was f1086a61...e634 under scheme 39. It moved again for R572 (scheme 41, a guard
+  // refused as a single site renumbers its procedure's same-tuple twins); it was 7abca7bc...6109
+  // under scheme 40.
+  const PINNED = "c49d72bc1d8b52b8c9d4964c21cd080b1e5ed95cfa79933cdb0530705f30773a";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1960,6 +2027,25 @@ describe("runSession --resume (R47)", () => {
     ).rejects.toThrow(/no such run/);
   });
 
+  // R618 (orchestrator ruling 2): a finished run has nothing left to score, so `--resume-run` of
+  // one is refused by name before any run row or lease; the same run, unfinished, resumes.
+  test("--resume-run of a FINISHED run is refused by name; the same run unfinished resumes", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds });
+    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    expect(store.getRun(runId)?.finished).toBe(true);
+    const resume = () =>
+      runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds, resume: runId });
+    await expect(resume()).rejects.toThrow(
+      `--resume-run ${runId}: run ${runId} already finished; nothing to resume.`,
+    );
+    const after = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    expect(after).toBe(runId);
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [runId]);
+    expect((await resume()).resumedFrom?.runId).toBe(runId);
+  });
+
   test("C02-02: report.artifacts carries the COMPILED appVersion, not the reserved one", async () => {
     // CountingBackend's opt-in artifact always reports "1.0.0.0" (a fixed stand-in for what a
     // real backend compiled), while this project's own app.json is ALSO "1.0.0.0", so the
@@ -2279,8 +2365,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // R497 (#if-wrapped objects of the measured shapes are scored on the BC paths). 37 is R340 (trigger header names typed).
     // 38 is R555 (a call to a preset-exit-name writer is hang-refused). 39 is R-531 (a loop that
     // ends only by consuming its record set: its consumers are hang-refused). 40 is R565 (an
-    // outside report's preset writers are read from the dependency packages).
-    expect(IDENTITY_SCHEME).toBe(40);
+    // outside report's preset writers are read from the dependency packages). 41 is R572 (a guard
+    // refused as a single site renumbers its procedure's same-tuple twins).
+    expect(IDENTITY_SCHEME).toBe(41);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

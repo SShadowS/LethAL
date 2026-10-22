@@ -48,6 +48,7 @@ import {
 } from "./config-path";
 import { BCDEV_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { killReproductionFailures, latestRunId } from "./kill-reproduction";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
 import { assertDirectTransportReach, assertReachEvidence } from "./reach-evidence";
 
@@ -173,6 +174,8 @@ interface RunOnceResult {
   /** R206: `ResultsStore.sessionIdLiveness` for this run, read before the store closes. */
   readonly sessionLiveness: ReturnType<ResultsStore["sessionIdLiveness"]>;
   readonly instrumentedDir: string;
+  /** R582: `killReproductionFailures` for this run, read before the store closes. */
+  readonly repro: readonly string[];
 }
 
 async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
@@ -281,9 +284,11 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
       // constructed from this path and nothing else — so do not "simplify" this back out.
       quarantineDir: join(scratchRoot, "quarantine"),
     });
-    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const runId = latestRunId(store);
     const sessionLiveness = store.sessionIdLiveness(runId);
-    return { report, odataCfg, instrumentedDir, sessionLiveness };
+    // R582: the fixture's store is persistent, so the run id scopes the killer rows.
+    const repro = killReproductionFailures("bcdev", report, store, runId);
+    return { report, odataCfg, instrumentedDir, sessionLiveness, repro };
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and
@@ -608,7 +613,7 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(
     report.groupedCalls,
     EXPECTED.groupedCalls,
-    `R198: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant); got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more means a chunk, a lost-ack retry or an unexpected replay happened on a container gate, which must be explained`,
+    `R198/R582: expected exactly ${EXPECTED.groupedCalls} RunMutantMany calls (one per scored mutant; the 3 kills are at position 1, so their re-runs under the mutant are single calls); got ${report.groupedCalls}. Fewer means the grouped path silently stopped being used; more means a chunk, a lost-ack retry or an unexpected replay happened on a container gate, which must be explained`,
   );
   // R206: no kill here is warm (every killer is first in its call), every kill carries a
   // position, and the session guard fired on nothing.
@@ -708,9 +713,11 @@ async function main(): Promise<void> {
     // verdict counts assertVerdictTable already checked. A per-mutant difference fails the
     // itest even when killed/survived/no-coverage totals still match (Task 15, design spec §14).
     await assertGateBaseline(first.report, BASELINE_PATH, "bcdev itest");
+    assert.deepEqual(first.repro, [], first.repro.join("; "));
 
     const second = await runOnce(scratchB);
     assertVerdictTable(second.report);
+    assert.deepEqual(second.repro, [], second.repro.join("; "));
 
     const shape = (r: SessionReport) =>
       [...r.mutants]

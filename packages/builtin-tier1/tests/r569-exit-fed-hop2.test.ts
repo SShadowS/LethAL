@@ -8,7 +8,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import { openItemHangRefuses, tier1Operators } from "../src/index";
-import { r569HopTargets, r569Seam } from "../src/loop-hazard";
+import { r569HopTargets, r569Seam, r572Seam } from "../src/loop-hazard";
 
 /**
  * R569 (coord task R-569): the exit-fed second hop. A procedure in a THIRD object whose value
@@ -27,6 +27,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   r569Seam.on = true;
+  r572Seam.on = true;
 });
 
 const RA = "lethal.remove-assignment";
@@ -37,6 +38,9 @@ const parse = (files: Record<string, string>) =>
 /** Is the remove-assignment mutant at the assignment with exactly `text` in `path` emitted? */
 function emits(on: boolean, files: Record<string, string>, path: string, text: string): boolean {
   r569Seam.on = on;
+  // R572 refuses every exit call of a stateful chain (T6's inner `Period.NextDate` too); these
+  // tests measure R569 alone
+  r572Seam.on = false;
   const parsed = parse(files);
   const ctx = buildSemanticContext(parsed);
   const f = parsed.find((p) => p.path === path);

@@ -439,6 +439,58 @@ describe("B5 the heavy-job guard", () => {
     const v = heavyVerdict(parsePs(ps([...base, job(200, 200, "/work/src/DOX/a")])), SELF, [], 0);
     expect(v.foreign).toEqual([]);
   });
+  // R626: a parallel itest's workers spawn al-runner children, each in its own process group.
+  const itest = (root: number, kids: number): string[] => [
+    `${root} 1 ${root} bun run itest:alrunner -- --parallel=3`,
+    ...[1, 2, 3].flatMap((i) => {
+      const w = root + i * 10;
+      return [
+        `${w} ${root} ${root} bun al-runner.itest.ts --worker ${i}`,
+        `${w + 1} ${w} ${w + 1} /work/tools/al-runner/current/al-runner --output-json ${kids}`,
+      ];
+    }),
+  ];
+  test("R626: a parallel itest root with three workers and three al-runner children is ONE job", () => {
+    const v = heavyVerdict(parsePs(ps([...base, ...itest(700, 1)])), SELF, [], 0);
+    expect(v.foreign.map((p) => p.pid)).toEqual([700]);
+  });
+  test("R626: a standalone al-runner with no itest ancestor is ONE job", () => {
+    const v = heavyVerdict(
+      parsePs(ps([...base, "800 1 800 /work/tools/al-runner/current/al-runner --server"])),
+      SELF,
+      [],
+      0,
+    );
+    expect(v.foreign.map((p) => p.pid)).toEqual([800]);
+  });
+  test("R626: two separate itest roots are TWO jobs", () => {
+    const v = heavyVerdict(parsePs(ps([...base, ...itest(700, 1), ...itest(900, 2)])), SELF, [], 0);
+    expect(v.foreign.map((p) => p.pid)).toEqual([700, 900]);
+    expect(v.refuse).toBe(true);
+  });
+  test("R626: a corpus job whose argv merely contains itest:alrunner is NOT an itest root", () => {
+    const rows = [
+      "950 1 950 bun census.ts /work/src/BC.History/x --note itest:alrunner",
+      "951 950 951 bun census.ts /work/src/BC.History/y",
+      "952 950 952 bun census.ts /work/src/BC.History/z",
+    ];
+    const v = heavyVerdict(parsePs(ps([...base, ...rows])), SELF, [], 0);
+    expect(v.foreign.map((p) => p.pid)).toEqual([950, 951, 952]);
+  });
+  test("R626: an itest plus an unrelated corpus job, or a lone al-runner, is TWO jobs -> refuse", () => {
+    const withCorpus = heavyVerdict(
+      parsePs(ps([...base, ...itest(700, 1), job(600, 600)])),
+      SELF,
+      [],
+      0,
+    );
+    expect(withCorpus.foreign.length).toBe(2);
+    expect(withCorpus.refuse).toBe(true);
+    const lone = "800 1 800 /work/tools/al-runner/current/al-runner --server";
+    const withRunner = heavyVerdict(parsePs(ps([...base, ...itest(700, 1), lone])), SELF, [], 0);
+    expect(withRunner.foreign.length).toBe(2);
+    expect(withRunner.refuse).toBe(true);
+  });
   test("local runners are heavy by executable or script, never by an argument naming them", () => {
     expect(isHeavy("/work/tools/al-runner/current/al-runner --output-json --test X /tmp/a")).toBe(
       true,

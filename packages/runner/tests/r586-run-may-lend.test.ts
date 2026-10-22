@@ -1,9 +1,13 @@
 // R586 T14 (plan r2 §10): `runMayLend`, remove-only, fixed order, and step 1 at the store sites.
+// R619: on the method every lend site calls; `r619-one-lend.test.ts` pins the sites' calls.
 import { describe, expect, test } from "bun:test";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { freezeStageTo } from "../src/campaign-freeze";
 import { CARRYABLE_VERDICTS } from "../src/resume";
-import { type MutantVerdict, ResultsStore, backendBuildRefusal, runMayLend } from "../src/store";
+import { type MutantVerdict, ResultsStore, backendBuildRefusal } from "../src/store";
+
+/** The decision reads no row: one empty store serves every bare case. */
+const lender = new ResultsStore(":memory:");
 
 const B1 = `alrunner 3.0.0-alpha.2 (91253f2d6) ${"b".repeat(64)}`;
 const B2 = `alrunner 3.0.0-alpha.3 (c893e3633) ${"c".repeat(64)}`;
@@ -13,34 +17,44 @@ const run = (backend: string, runnerBuild: string | null, alRunnerNames = true) 
   runnerBuild,
   alRunnerNames,
 });
-const ctx = { baselineErrorMethods: () => [] };
+const ctx = { site: "history", baselineErrorMethods: () => [] } as const;
 
 describe("T14: runMayLend", () => {
   test("v3 never lends to v2 or bcdev, and v2 / bcdev never lend to v3", () => {
     expect(
-      runMayLend(run("al-runner-v3", B1), { backend: "al-runner", runnerBuild: undefined }, ctx)
+      lender.runMayLend(
+        run("al-runner-v3", B1),
+        { backend: "al-runner", runnerBuild: undefined },
+        ctx,
+      )?.step,
+    ).toBe("backend-build");
+    expect(
+      lender.runMayLend(run("al-runner-v3", B1), { backend: "bcdev", runnerBuild: undefined }, ctx)
         ?.step,
     ).toBe("backend-build");
     expect(
-      runMayLend(run("al-runner-v3", B1), { backend: "bcdev", runnerBuild: undefined }, ctx)?.step,
+      lender.runMayLend(run("al-runner", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)
+        ?.step,
     ).toBe("backend-build");
     expect(
-      runMayLend(run("al-runner", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step,
-    ).toBe("backend-build");
-    expect(
-      runMayLend(run("bcdev", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step,
+      lender.runMayLend(run("bcdev", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)
+        ?.step,
     ).toBe("backend-build");
   });
   test("v3 lends to the same build only; another build or an unrecorded one refuses", () => {
     expect(
-      runMayLend(run("al-runner-v3", B1), { backend: "al-runner-v3", runnerBuild: B1 }, ctx),
+      lender.runMayLend(run("al-runner-v3", B1), { backend: "al-runner-v3", runnerBuild: B1 }, ctx),
     ).toBeUndefined();
     expect(
-      runMayLend(run("al-runner-v3", B2), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step,
+      lender.runMayLend(run("al-runner-v3", B2), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)
+        ?.step,
     ).toBe("backend-build");
     expect(
-      runMayLend(run("al-runner-v3", null), { backend: "al-runner-v3", runnerBuild: B1 }, ctx)
-        ?.step,
+      lender.runMayLend(
+        run("al-runner-v3", null),
+        { backend: "al-runner-v3", runnerBuild: B1 },
+        ctx,
+      )?.step,
     ).toBe("backend-build");
   });
   test("v2 <-> bcdev are unchanged by step 1 (R592 is filed separately)", () => {
@@ -51,7 +65,11 @@ describe("T14: runMayLend", () => {
       backendBuildRefusal(run("al-runner", null), { backend: "bcdev", runnerBuild: undefined }),
     ).toBeUndefined();
     expect(
-      runMayLend(run("al-runner", null), { backend: "al-runner", runnerBuild: undefined }, ctx),
+      lender.runMayLend(
+        run("al-runner", null),
+        { backend: "al-runner", runnerBuild: undefined },
+        ctx,
+      ),
     ).toBeUndefined();
   });
   test("no session named: a v3 run lends nothing, any other run is unchanged", () => {
@@ -60,20 +78,45 @@ describe("T14: runMayLend", () => {
   });
   test("order: step 1 names the reason before R557's mark, and the mark before the renamed tests", () => {
     const unmarkedV3 = run("al-runner-v3", B2, false);
-    expect(runMayLend(unmarkedV3, { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step).toBe(
-      "backend-build",
-    );
-    const unmarkedV2 = run("al-runner", null, false);
-    const renamed = { baselineErrorMethods: () => ["X"], renamed: () => ["X"] };
     expect(
-      runMayLend(unmarkedV2, { backend: "al-runner", runnerBuild: undefined }, renamed)?.step,
+      lender.runMayLend(unmarkedV3, { backend: "al-runner-v3", runnerBuild: B1 }, ctx)?.step,
+    ).toBe("backend-build");
+    const unmarkedV2 = run("al-runner", null, false);
+    const renamed = {
+      site: "history",
+      baselineErrorMethods: () => ["X"],
+      renamed: () => ["X"],
+    } as const;
+    expect(
+      lender.runMayLend(unmarkedV2, { backend: "al-runner", runnerBuild: undefined }, renamed)
+        ?.step,
     ).toBe("al-runner-unmarked");
     expect(
-      runMayLend(run("al-runner", null), { backend: "al-runner", runnerBuild: undefined }, renamed),
+      lender.runMayLend(
+        run("al-runner", null),
+        { backend: "al-runner", runnerBuild: undefined },
+        renamed,
+      ),
     ).toEqual({
       step: "al-runner-renamed",
       tests: ["X"],
     });
+  });
+  test("R619 order: the site's checks run after step 1 and before step 2", () => {
+    const calls: string[] = [];
+    const refuse = { ...ctx, siteChecks: () => calls.push("site") > 0 };
+    const v2 = { backend: "al-runner", runnerBuild: undefined };
+    // Step 1 refuses first: the site checks never run.
+    expect(lender.runMayLend(run("al-runner-v3", B1), v2, refuse)?.step).toBe("backend-build");
+    expect(calls).toEqual([]);
+    // An unmarked run the site refuses is named by the site, not by step 2.
+    expect(lender.runMayLend(run("al-runner", null, false), v2, refuse)).toEqual({ step: "site" });
+    expect(calls).toEqual(["site"]);
+    // The site lends: step 2 decides.
+    const lendSite = { ...ctx, siteChecks: () => false };
+    expect(lender.runMayLend(run("al-runner", null, false), v2, lendSite)?.step).toBe(
+      "al-runner-unmarked",
+    );
   });
 });
 
