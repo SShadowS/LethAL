@@ -13,7 +13,7 @@ see [servers.md](servers.md)). It uses a SCRATCH results store, never the fixtur
 with `bcdev.baseline.json` by identity key and records no baseline of its own. The plan is
 `docs/superpowers/plans/2026-10-22-r618-bc-lend-gate.md` (r2).
 
-It is not yet proven on any server (see [servers.md](servers.md)).
+It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and History below).
 
 ## Frozen figures
 
@@ -40,7 +40,6 @@ It is not yet proven on any server (see [servers.md](servers.md)).
     "LEND_FIGURES.resumeSnapshot.carried": 7,
     "LEND_FIGURES.resumeSnapshot.nonCarryableRows": 1,
     "LEND_FIGURES.resumeSnapshot.groupedCalls": 8,
-    "LEND_FIGURES.resumeRefusedSnapshot.carryable": 18,
     "LEND_FIGURES.resumeRefusedSnapshot.carried": 15,
     "LEND_FIGURES.resumeRefusedSnapshot.groupedCalls": 0,
     "LEND_FIGURES.sentinel.code": "M0004",
@@ -61,23 +60,26 @@ It is not yet proven on any server (see [servers.md](servers.md)).
 - L1 and N0 score 3 / 0 / 4, with the 12 survivors recorded as known survivors and not run.
   `knownSurvivors` is 12. `groupedCalls` is 3.
 - R1 carries all 19 mutants of the one batch whole. `carried` is 19, and nothing is deployed.
-- R2 has 9 KEPT rows. It carries 7 of them, every one that is not no-coverage; its two no-coverage KEPT rows come back as fresh
-  no-coverage (see "No-coverage is not carried in a partly carried batch" below). It re-runs the other 10, one of them
-  from an `error` row. `carried` is 7, `nonCarryableRows` 1, `groupedCalls` 8.
-- R3 has 18 carryable rows. It carries 15 of them, every one that is not no-coverage, re-derives the three no-coverage ones, and
-  scores M0019 as no-coverage. `carried` is 15.
+- R2 has 9 KEPT rows. It carries 7 of them, every one this session covers; its two KEPT rows that this session
+  leaves uncovered come back as fresh no-coverage (see "In a partly carried batch, uncovered mutants are re-derived"
+  below). It re-runs the other 10, one of them from an `error` row. `carried` is 7, `nonCarryableRows` 1,
+  `groupedCalls` 8.
+- R3's K2 has 18 rows (not asserted). It carries 15 of them, every one this session covers, re-derives the three uncovered
+  ones, and scores M0019 as no-coverage. `carried` is 15.
+- The sentinel row (M0004 in K) has `durationMs` 987654.
 
-### No-coverage is not carried in a partly carried batch
+### In a partly carried batch, uncovered mutants are re-derived
 
-- **Partly carried batch:** `scoreBatch` records uncovered mutants from this session's own coverage selection, before
-  any carry lookup. A no-coverage verdict is therefore re-derived, never carried.
+- **Partly carried batch:** `scoreBatch` records the mutants this session's own coverage selection leaves uncovered
+  as fresh no-coverage, before any carry lookup. Every other mutant is looked up, and a stored no-coverage for a
+  mutant covered now IS carried. So carried = carryable rows minus rows uncovered in this session.
 - **Wholly carried batch:** `replayCarriedBatch` (R1) carries every verdict, no-coverage included.
-- **Which is safe:** re-deriving is the safe direction, since nothing is lent where fresh coverage is at hand.
-- **Status:** the asymmetry between the two paths is undocumented as a design choice and is filed as its own roadmap
-  item.
+- **On this fixture** the two rules give the same sets: `assertFrozen` pins every verdict, so "frozen no-coverage" and
+  "uncovered now" are the same mutants, and the gate's `carriedInPartBatch` filters on the frozen verdict.
+- **Status:** the case where a stored no-coverage is carried against this session's coverage is filed as
+  [R621](../roadmap/R621.md). No gate exercises it.
 - **How it was found:** live run 1 on bc1 was BLOCKED at R2 (7 carried against 9 pre-committed;
   `/coord/handoff/R-618/live-run-1.md`), and the pre-commitment got an addendum before the re-run.
-- The sentinel row's `durationMs` is 987654.
 
 ## The legs
 
@@ -90,7 +92,7 @@ A's run row and rows, with only the named field changed.
 | L0 | none | no flag | frozen; H contains `\|closed-world:public` (refused by name otherwise); one unsuffixed snapshot |
 | L1 | none | `--skip-known-survivors` | the 12 survivors known, by key; no lend warning |
 | R1 | F: unfinished full clone | `--resume-run F` | `resume-reusing-run` (19), `resume-batch-carried`; all carried; no deploy |
-| R2 | SP1 to SP4 (snapshot owners), then K | `--resume` | resolves to K; `resume-baseline-reused` names L1's run B; KEPT carried by key; the sentinel's `priorDurationMs`; no baseline test ran here |
+| R2 | SP1 to SP4 (snapshot owners), then K | `--resume` | resolves to K; `resume-baseline-reused` names L1's run B; KEPT minus its two uncovered rows carried by key; the sentinel's `priorDurationMs`; no baseline test ran here |
 | R3 | SV3 (a v3 snapshot owner), K2 | `--resume-run K2` | `snapshot-backend-build-changed`, exact; the baseline re-ran (as many tests as L0's) |
 | N0 | finished clone | `--skip-known-survivors` | as L1: the clone lends |
 | N1 | finished v3 clone | `--skip-known-survivors` | `history-backend-build-changed`, exact; nothing lent |
@@ -119,10 +121,10 @@ runs live (Q3).
   session cannot hold an al-runner snapshot of the same coverage mode. The al-runner legs and unit
   tests cover it.
 - **The history site's R557 check and its order against coverage mode and test app.** These are
-  pinned offline in `tests/r618-lend-order.test.ts` (the N1o and RC4a cases), not live.
+  pinned offline in `tests/r618-lend-order.test.ts` (the N1o unit test and the RC4a case), not live.
 - **Another `runner_build`.** Only v3 compares builds.
 - **`runMayLend` itself.** It has no production caller; each site copies its steps inline. That
-  is filed as its own roadmap item.
+  is filed as [R619](../roadmap/R619.md).
 
 ## Clone fidelity
 
@@ -145,16 +147,20 @@ between legs.
 
 ## Red checks
 
-Offline red checks and the live ones still to run are in R618's handoff
-(`/coord/handoff/R-618/redcheck-live.md`). Per site:
+The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the offline ones in
+`/coord/handoff/R-618/redcheck.md`. Per site:
 
 - RC1a: delete the history site's `backendBuildRefusal` call: N1 goes red (live), and
-  `r618-lend-order.test.ts` (offline).
+  `r618-lend-order.test.ts` and `lend-seed.test.ts` (offline).
 - RC1b: delete the snapshot site's `backendBuildRefusal` call: R3 goes red (live).
 - RC4a: delete the history site's R557 mark check: `r618-lend-order.test.ts` goes red (offline).
-- RC7: make `assertSameTestApp` return early: RN1 and RN2 still throw, later, from the R496 recheck
-  under the lease (`TestAppRepublishedError`), after a run row exists, so the no-new-row check goes
-  red. RC7b breaks both checks: only then is a pending or revoked run carried.
+- N5: delete the history site's test-app hash comparison: `r618-lend-order.test.ts`'s N5 test goes
+  red (offline only; RC6 and RC7 break other sites).
+- RC7: make `assertSameTestApp` return early: RN1 still throws, later, from the R496 recheck under
+  the lease (`TestAppRepublishedError`), so the refusal-head check goes red. RC7b breaks both
+  checks: only then is a pending run carried.
+- **No red check:** RN2 (the gate stops at RN1 under RC7 and RC7b, so RN2's own route is never
+  shown red) and RN3 (old code, not broken here).
 
 ## History
 

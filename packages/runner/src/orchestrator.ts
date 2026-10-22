@@ -4058,7 +4058,7 @@ function resolveResume(
     // into a new run row. Refused by name, as `--resume`'s search already does (unfinished only).
     if (row.finished) {
       throw new Error(
-        `--resume-run ${cfg.resume}: run ${cfg.resume} already finished; nothing to resume. Its report is the file that run wrote with --out (\`lethal explain <report.json>\` re-reads it; no command re-renders a report from the results store). Drop --resume-run to measure again (R618).`,
+        `--resume-run ${cfg.resume}: run ${cfg.resume} already finished; nothing to resume. Its report is the file that run wrote with --out, if it was given --out (\`lethal explain <report.json>\` re-reads it; no command re-renders a report from the results store). Drop --resume-run to measure again (R618).`,
       );
     }
     if (row.backend !== backendName) {

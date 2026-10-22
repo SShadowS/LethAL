@@ -216,9 +216,10 @@ export const LEND_FIGURES = {
    * not carried: 9 carryable, 7 carried.
    */
   resumeSnapshot: { carryable: 9, carried: 7, nonCarryableRows: 1, groupedCalls: 8 },
-  /** R3: K2 (all but M0019); the v3 snapshot refused, the baseline re-run. Partly carried too: 18
-   *  carryable, 15 carried (M0016-M0018 re-derived, as in R2). */
-  resumeRefusedSnapshot: { carryable: 18, carried: 15, groupedCalls: 0 },
+  /** R3: K2 (all but M0019, so 18 rows); the v3 snapshot refused, the baseline re-run. Partly
+   *  carried too: 15 carried (M0016-M0018 uncovered here, re-derived, as in R2). The 18 is not a
+   *  constant because the gate does not assert it (review M-3). */
+  resumeRefusedSnapshot: { carried: 15, groupedCalls: 0 },
   /** I2: the KEPT row in K whose `durationMs` R2 must read back from `mutant-carried`. */
   sentinel: { code: "M0004", durationMs: 987654 },
   /** K's rows: 2 killed, 5 survived, 2 no-coverage, carried by key. */

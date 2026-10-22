@@ -276,7 +276,7 @@ that ordering is the priority.
 - **R582** · Switch R577's kill-reproduction rule on for the BC backend (bcdev): a flaky test is a false kill there too, and the switch moves every BC gate's pinned call counters · [R582.md](docs/roadmap/R582.md) · open, filed 2026-10-18
 - **R585** · --skip-known-survivors reads a --tests-only run's survivors as survivors under the full suite · [R585.md](docs/roadmap/R585.md) · open, filed 2026-10-20
 - **R592** · History has no backend check: a bcdev run and an al-runner run that both ran coverage `none` are kept apart only incidentally · [R592.md](docs/roadmap/R592.md) · open
-- **R618** · No BC gate exercises the lend order with an actual lend: every BC itest starts from an empty store, and none uses --resume, --resume-run or --skip-known-survivors · [R618.md](docs/roadmap/R618.md) · done (9065c745)
+- **R618** · No BC gate exercises the lend order with an actual lend: every BC itest starts from an empty store, and none uses --resume, --resume-run or --skip-known-survivors · [R618.md](docs/roadmap/R618.md) · done (7084eece)
 - **R619** · HIGH: runMayLend governs nothing in production: four inline copies of the lend order, already in different orders, while R586's tests pin the unused function (a test passing for the wrong reason) · [R619.md](docs/roadmap/R619.md) · open
 
 ## Product gaps a real project hits
@@ -660,7 +660,7 @@ that ordering is the priority.
 - **R614** · al-runner-v3 update gate: existing fixture .alpackages are not checked against the pinned symbol tar · [R614.md](docs/roadmap/R614.md) · open
 - **R616** · A parallel full verify times out under real load (two tests at 5000 ms); its worker count does not adapt · [R616.md](docs/roadmap/R616.md) · open, filed 2026-10-21
 - **R617** · bc-linux-setup --held-lease has no test: nothing checks it never takes or releases a lease · [R617.md](docs/roadmap/R617.md) · open
-- **R621** · A no-coverage verdict is carried when a batch is carried whole (replayCarriedBatch) but re-derived when it is carried in part (scoreBatch): an undocumented asymmetry in --resume · [R621.md](docs/roadmap/R621.md) · open, filed 2026-10-22
+- **R621** · --resume carries a stored no-coverage verdict without checking it against this session's coverage: always in a wholly carried batch (replayCarriedBatch), and in a partly carried one (scoreBatch) whenever this session covers the mutant · [R621.md](docs/roadmap/R621.md) · open, filed 2026-10-22
 
 ---
 

@@ -3,7 +3,7 @@
 // the live gate and pinned here instead, at the inline copy `priorSurvivorKeys` holds (R-I3).
 import { describe, expect, test } from "bun:test";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
-import { PENDING_SUFFIX } from "../src/closed-world";
+import { PENDING_SUFFIX, REVOKED_SUFFIX } from "../src/closed-world";
 import { ResultsStore } from "../src/store";
 
 const H = "package:aa|closed-world:public";
@@ -113,6 +113,13 @@ describe("R618: priorSurvivorKeys refuses in its stated order (history site)", (
       keys: 0,
       fired: ["testAppChanged"],
     });
+  });
+
+  test("N5: a finished run whose identity was revoked (R389) lends nothing, at the test-app step", () => {
+    const store = new ResultsStore(":memory:");
+    seed(store, { testAppHash: `${H}${REVOKED_SUFFIX}` });
+    expect(ask(store)).toEqual({ keys: 0, fired: ["testAppChanged"] });
+    store.close();
   });
 });
 
