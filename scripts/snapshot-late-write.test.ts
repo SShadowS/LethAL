@@ -22,6 +22,15 @@ import { join } from "node:path";
 const FIXTURE = join(import.meta.dir, "fixtures", "r393", "late-write.fixture.ts");
 const KEY = "B has no snapshot 1";
 const roots: string[] = [];
+/**
+ * R648: each test runs a child `bun test` that sleeps 1 s by design, and the afterAll deletes the
+ * children's folders on disk. Both wait on the disk, so a slow disk, not CPU, sets their time.
+ * Measured (R-648): a test takes 1.0 s alone and beside a second full verify, and up to 3.5 s with
+ * 3 disk writers added; the afterAll takes 1 ms, and up to 133 ms under the writers. On 2026-10-22
+ * a hook in this file ("(unnamed)") hit bun's 5 s default at 5.07 s. 30 s is over 8x the worst
+ * measured test and well under verify's 180 s per-file watchdog, so a real hang still fails.
+ */
+const DISK_BOUND_MS = 30_000;
 
 function runLate(opts: { ci: boolean; seed?: string }) {
   const dir = mkdtempSync(join(tmpdir(), "r393-late-"));
@@ -63,34 +72,46 @@ afterAll(() => {
   // Windows can hold a just-exited child's files briefly (EBUSY, R375): retry before giving up.
   for (const d of roots)
     rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-});
+}, DISK_BOUND_MS);
 
 describe("R393 late snapshot write", () => {
-  test("(a) CI=true: A's late call is refused, naming B's key, and nothing is written", () => {
-    const r = runLate({ ci: true });
-    expect(r.marker).toContain("A late call reached; CI=true");
-    expect(r.marker).toContain(
-      "Snapshot creation is disabled in CI environments unless --update-snapshots is used",
-    );
-    expect(r.marker).toContain(`Snapshot name: "${KEY}"`);
-    expect(r.out).toMatch(/timed out/i);
-    expect(r.code).not.toBe(0);
-    expect(r.snap).not.toContain(KEY);
-  });
+  test(
+    "(a) CI=true: A's late call is refused, naming B's key, and nothing is written",
+    () => {
+      const r = runLate({ ci: true });
+      expect(r.marker).toContain("A late call reached; CI=true");
+      expect(r.marker).toContain(
+        "Snapshot creation is disabled in CI environments unless --update-snapshots is used",
+      );
+      expect(r.marker).toContain(`Snapshot name: "${KEY}"`);
+      expect(r.out).toMatch(/timed out/i);
+      expect(r.code).not.toBe(0);
+      expect(r.snap).not.toContain(KEY);
+    },
+    DISK_BOUND_MS,
+  );
 
-  test("(b) control, CI unset: the wrong entry IS written under B's key", () => {
-    const r = runLate({ ci: false });
-    expect(r.marker).toContain("A late toMatchSnapshot returned OK");
-    expect(r.snap).toContain(KEY);
-    expect(r.snap).toContain('"from": "A"');
-  });
+  test(
+    "(b) control, CI unset: the wrong entry IS written under B's key",
+    () => {
+      const r = runLate({ ci: false });
+      expect(r.marker).toContain("A late toMatchSnapshot returned OK");
+      expect(r.snap).toContain(KEY);
+      expect(r.snap).toContain('"from": "A"');
+    },
+    DISK_BOUND_MS,
+  );
 
-  test("(c) control, existing entry: a different late value fails as a mismatch", () => {
-    const r = runLate({ ci: true, seed: "seed" });
-    expect(r.marker).toContain("A late toMatchSnapshot THREW");
-    expect(r.marker).not.toContain("Snapshot creation is disabled");
-    expect(r.code).not.toBe(0);
-    expect(r.snap).toContain('"from": "seed"');
-    expect(r.snap).not.toContain('"from": "A"');
-  });
+  test(
+    "(c) control, existing entry: a different late value fails as a mismatch",
+    () => {
+      const r = runLate({ ci: true, seed: "seed" });
+      expect(r.marker).toContain("A late toMatchSnapshot THREW");
+      expect(r.marker).not.toContain("Snapshot creation is disabled");
+      expect(r.code).not.toBe(0);
+      expect(r.snap).toContain('"from": "seed"');
+      expect(r.snap).not.toContain('"from": "A"');
+    },
+    DISK_BOUND_MS,
+  );
 });
