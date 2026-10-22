@@ -89,7 +89,9 @@ next free id right before writing).
   - **Small tasks: ONE build review, no plan review (owner, 2026-10-22).** A task is small when its
     diff can move no verdict, kill, survive, refusal, lend or publish: docs-only, roadmap-only,
     test-only (new or tightened tests, no product change), a pure message or wording change, or a
-    script that no gate, verify, merge chain, setup or campaign path runs. For those: build
+    script that no gate, verify, merge chain, setup or campaign path runs, or a new fail-closed
+    refusal in an operational path that can only BLOCK (never admit a build or change a verdict).
+    For those: build
     test-first, red-check as usual, then one opus BUILD review of the final diff; no plan, no plan
     review, no delta rounds unless the build review finds a blocker. Anything that changes a
     verdict rule, a guard, a gate figure, what is deployed or what lends keeps the full process
