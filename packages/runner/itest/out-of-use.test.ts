@@ -1,19 +1,34 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { printItestTarget } from "./config-path";
-import { ServerOutOfUseError, markedServerFor, outOfUseDir, outOfUseRefusal } from "./out-of-use";
+import {
+  OutOfUseRootError,
+  ServerOutOfUseError,
+  markedServerFor,
+  outOfUseDir,
+  outOfUseRefusal,
+} from "./out-of-use";
 
 // R669. Every test plants its markers in its own temp dir: none reads the real /coord.
 const MARKER =
   "# bc2 is OUT OF USE\n\n- **Reason:** SYNTH-REASON stranded op\n\n## How to clear it\n1. SYNTH-CLEAR restart\n";
-const TOKEN = "r658-hang-abcdef12";
+/** The shape `openssl rand -hex 16` prints. */
+const TOKEN = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+const OTHER = "fedcba9876543210fedcba9876543210";
 
+/** `<tmp>/machine/out-of-use`, holding `files`: the layout of a real coord root. */
 function dirWith(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), "out-of-use-"));
+  const dir = join(mkdtempSync(join(tmpdir(), "out-of-use-")), "machine", "out-of-use");
+  mkdirSync(dir, { recursive: true });
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
   return dir;
+}
+
+/** A marker dir whose `<root>/machine` does not exist: a wrong coord root. */
+function wrongRoot(): string {
+  return join(mkdtempSync(join(tmpdir(), "out-of-use-root-")), "x", "machine", "out-of-use");
 }
 
 function refusal(
@@ -42,6 +57,20 @@ describe("outOfUseRefusal", () => {
     expect(r).toContain("bc2.md exists, so this run refuses before any lease or server call");
     expect(r).toContain("SYNTH-REASON stranded op");
     expect(r).toContain("SYNTH-CLEAR restart");
+  });
+
+  test("a missing <root>/machine throws by name; a missing out-of-use dir under it is no marker", () => {
+    const root = mkdtempSync(join(tmpdir(), "out-of-use-root-"));
+    const wrong = join(root, "not-coord", "machine", "out-of-use");
+    expect(() => outOfUseRefusal("bc2", { dir: wrong, env: {}, override: "clearing" })).toThrow(
+      OutOfUseRootError,
+    );
+    expect(() => outOfUseRefusal("bc2", { dir: wrong, env: {}, override: "owner" })).toThrow(
+      `${join(root, "not-coord", "machine")} does not exist`,
+    );
+    mkdirSync(join(root, "coord", "machine"), { recursive: true });
+    const empty = join(root, "coord", "machine", "out-of-use");
+    expect(outOfUseRefusal("bc2", { dir: empty, env: {}, override: "owner" })).toBeUndefined();
   });
 
   test("clearing: the exact server passes, with the loud line naming the marker's reason", () => {
@@ -79,14 +108,29 @@ describe("outOfUseRefusal", () => {
     expect(logged).toContain("owned by this run");
   });
 
-  test("owner: a missing owner line, another token, a short token, or the clearing var refuses", () => {
+  test("owner: a constant or non-hex-128 token refuses, even when the marker carries it", () => {
+    for (const t of [
+      "r658-hang-bc3",
+      "r658-hang-abcdef12",
+      TOKEN.toUpperCase(),
+      TOKEN.slice(1),
+      `${TOKEN}0`,
+      `${TOKEN.slice(1)}g`,
+    ]) {
+      const { r, logged } = refusal(
+        { "bc2.md": `${MARKER}owner: ${t}\n` },
+        { LETHAL_OUT_OF_USE_OWNER: t },
+        "owner",
+      );
+      expect({ t, refused: r?.includes("bc2 is OUT OF USE") }).toEqual({ t, refused: true });
+      expect(logged).toBe("");
+    }
+  });
+
+  test("owner: a missing owner line, another token, or the clearing var refuses", () => {
     const cases: [Record<string, string>, Record<string, string>][] = [
       [{ "bc2.md": MARKER }, { LETHAL_OUT_OF_USE_OWNER: TOKEN }],
-      [
-        { "bc2.md": `${MARKER}owner: ${TOKEN}\n` },
-        { LETHAL_OUT_OF_USE_OWNER: "r658-hang-00000000" },
-      ],
-      [{ "bc2.md": `${MARKER}owner: abc\n` }, { LETHAL_OUT_OF_USE_OWNER: "abc" }],
+      [{ "bc2.md": `${MARKER}owner: ${TOKEN}\n` }, { LETHAL_OUT_OF_USE_OWNER: OTHER }],
       [{ "bc2.md": `${MARKER}owner: \n` }, { LETHAL_OUT_OF_USE_OWNER: "" }],
       [{ "bc2.md": `${MARKER}owner: ${TOKEN}\n` }, { LETHAL_OUT_OF_USE_CLEARING: "bc2" }],
     ];
@@ -98,7 +142,7 @@ describe("outOfUseRefusal", () => {
   });
 
   test("owner: two or more owner lines refuse, even when one matches", () => {
-    for (const extra of [`owner: ${TOKEN}\n`, "owner: r658-hang-00000000\n", "owner:\n"]) {
+    for (const extra of [`owner: ${TOKEN}\n`, `owner: ${OTHER}\n`, "owner:\n"]) {
       const { r, logged } = refusal(
         { "bc2.md": `${MARKER}owner: ${TOKEN}\n${extra}` },
         { LETHAL_OUT_OF_USE_OWNER: TOKEN },
@@ -163,13 +207,25 @@ describe("outOfUseDir", () => {
     expect(outOfUseDir({ KRAKEN_PROJECT: "lethal", CG_COORD_ROOT: "/k" })).toBe(
       join("/k", "machine", "out-of-use"),
     );
+    expect(
+      outOfUseDir({ KRAKEN_PROJECT: "lethal", CG_COORD_ROOT: "/k", LETHAL_COORD_ROOT: "/k" }),
+    ).toBe(join("/k", "machine", "out-of-use"));
     expect(outOfUseDir({ CG_COORD_ROOT: "/k" })).toBe(
       join(process.platform === "win32" ? "H:\\lethal-coord" : "/coord", "machine", "out-of-use"),
     );
   });
+
+  test("inside kraken, a LETHAL_COORD_ROOT that differs from CG_COORD_ROOT throws, naming both", () => {
+    expect(() =>
+      outOfUseDir({ KRAKEN_PROJECT: "lethal", CG_COORD_ROOT: "/k", LETHAL_COORD_ROOT: "/r" }),
+    ).toThrow("LETHAL_COORD_ROOT=/r differs from CG_COORD_ROOT=/k");
+    expect(() => outOfUseDir({ KRAKEN_PROJECT: "lethal", LETHAL_COORD_ROOT: "/r" })).toThrow(
+      OutOfUseRootError,
+    );
+  });
 });
 
-describe("printItestTarget refuses a marked server after printing its target line", () => {
+describe("printItestTarget refuses a marked server BEFORE it prints its target line", () => {
   function print(bcdev: object, dir: string, env: Record<string, string> = {}) {
     const cfg = join(mkdtempSync(join(tmpdir(), "out-of-use-cfg-")), "lethal.config.bc2.json");
     writeFileSync(cfg, JSON.stringify({ bcdev: { serverInstance: "BC", ...bcdev } }));
@@ -189,37 +245,54 @@ describe("printItestTarget refuses a marked server after printing its target lin
     }
   }
   const BC2 = { server: "http://192.168.2.157:7149", port: 7149 };
+  const targetLines = (lines: string[]) => lines.filter((l) => l.includes("[itest target]"));
 
-  test("no marker: no throw", () => {
-    expect(print(BC2, dirWith({ "bc3.md": MARKER })).thrown).toBeUndefined();
+  test("no marker: no throw, and the target line is printed", () => {
+    const { thrown, lines } = print(BC2, dirWith({ "bc3.md": MARKER }));
+    expect(thrown).toBeUndefined();
+    expect(targetLines(lines)).toHaveLength(1);
   });
 
-  test("bc2 marked: ServerOutOfUseError by name, after the target line", () => {
+  test("bc2 marked: ServerOutOfUseError by name, and NO target line to grep", () => {
     const { thrown, lines } = print(BC2, dirWith({ "bc2.md": MARKER }));
     expect(thrown).toBeInstanceOf(ServerOutOfUseError);
     expect((thrown as Error).message).toContain("bc2 is OUT OF USE");
     expect((thrown as Error).message).toContain("SYNTH-REASON stranded op");
-    expect(lines[0]).toContain("server=192.168.2.157:7149");
+    expect(targetLines(lines)).toEqual([]);
   });
 
   test("a config with no port at all is the default 7049, so bc1's marker refuses it", () => {
-    const { thrown } = print({ server: "http://192.168.2.157" }, dirWith({ "bc1.md": MARKER }));
+    const { thrown, lines } = print(
+      { server: "http://192.168.2.157" },
+      dirWith({ "bc1.md": MARKER }),
+    );
     expect(thrown).toBeInstanceOf(ServerOutOfUseError);
+    expect(targetLines(lines)).toEqual([]);
   });
 
-  test("a Cronus28 config is never checked, even with every bc marker present", () => {
+  test("a wrong coord root (no <root>/machine) throws by name, with no target line", () => {
+    const { thrown, lines } = print(BC2, wrongRoot());
+    expect(thrown).toBeInstanceOf(OutOfUseRootError);
+    expect(targetLines(lines)).toEqual([]);
+  });
+
+  test("a Cronus28 config is never checked, even with every bc marker or a wrong root", () => {
     const dir = dirWith({ "bc1.md": MARKER, "bc2.md": MARKER, "bc3.md": MARKER });
     expect(print({ server: "http://Cronus28" }, dir).thrown).toBeUndefined();
+    expect(print({ server: "http://Cronus28" }, wrongRoot()).thrown).toBeUndefined();
   });
 
-  test("the owner override lets the wrapper's own marker through, loudly; the clearing one does not", () => {
+  test("the owner override: the loud line, THEN the target line; the clearing one does not pass", () => {
     const dir = dirWith({ "bc2.md": `${MARKER}owner: ${TOKEN}\n` });
     const ok = print(BC2, dir, { LETHAL_OUT_OF_USE_OWNER: TOKEN });
     expect(ok.thrown).toBeUndefined();
-    expect(ok.lines.join("\n")).toContain("owned by this run");
-    expect(print(BC2, dir, { LETHAL_OUT_OF_USE_CLEARING: "bc2" }).thrown).toBeInstanceOf(
-      ServerOutOfUseError,
-    );
+    const loud = ok.lines.findIndex((l) => l.includes("owned by this run"));
+    const target = ok.lines.findIndex((l) => l.includes("[itest target]"));
+    expect(loud).toBeGreaterThanOrEqual(0);
+    expect(target).toBeGreaterThan(loud);
+    const blocked = print(BC2, dir, { LETHAL_OUT_OF_USE_CLEARING: "bc2" });
+    expect(blocked.thrown).toBeInstanceOf(ServerOutOfUseError);
+    expect(targetLines(blocked.lines)).toEqual([]);
   });
 });
 

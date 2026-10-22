@@ -44,6 +44,11 @@
  */
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  ServerOutOfUseError,
+  outOfUseDir,
+  outOfUseRefusal,
+} from "../packages/runner/itest/out-of-use.ts";
 import { reserveAppVersion } from "../packages/runner/src/app-version.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher.ts";
@@ -425,9 +430,24 @@ async function alpackages(args: Args): Promise<void> {
   });
 }
 
+/**
+ * R669: every mode leases and talks to the server, so a marked server is refused first, by name.
+ * Only the clearing override (`LETHAL_OUT_OF_USE_CLEARING=<server>`) lets it through.
+ */
+export function refuseIfOutOfUse(
+  server: ServerName,
+  dir: string,
+  env: Readonly<Record<string, string | undefined>>,
+  log: (line: string) => void = console.log,
+): void {
+  const refusal = outOfUseRefusal(server, { dir, env, override: "clearing", log });
+  if (refusal !== undefined) throw new ServerOutOfUseError(refusal);
+}
+
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   try {
+    refuseIfOutOfUse(args.server, outOfUseDir(process.env), process.env);
     if (args.mode === "alpackages") await alpackages(args);
     else if (args.mode === "control") await control(args);
     else await republish(args);

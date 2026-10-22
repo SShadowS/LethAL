@@ -64,10 +64,12 @@ function withoutUserinfo(url: string): string {
 }
 
 /**
- * Prints `itestTargetLine` for a config file, reading only its `bcdev` target fields. R669: then
- * throws `ServerOutOfUseError` when that server (bc1-bc3 only) has an out-of-use marker. Every BC
- * itest calls this right after it picks its config, so the refusal comes before any lease or server
- * call. `outOfUse` is a test seam; a unit test passes its own temp dir and never reads `/coord`.
+ * Prints `itestTargetLine` for a config file, reading only its `bcdev` target fields. R669: it
+ * first throws `ServerOutOfUseError` when that server (bc1-bc3 only) has an out-of-use marker,
+ * BEFORE the line is printed, so a script that greps for the line fails closed even if it ignores
+ * the exit status. Every BC itest calls this right after it picks its config, so the refusal comes
+ * before any lease or server call. `outOfUse` is a test seam; a unit test passes its own temp dir
+ * and never reads `/coord`.
  */
 export function printItestTarget(
   configPath: string,
@@ -90,6 +92,14 @@ export function printItestTarget(
     return;
   }
   const { port, baseUrl, apiBaseUrl } = bcdev ?? {};
+  const u = new URL(server);
+  const devPort = port ?? (u.port !== "" ? Number(u.port) : DEFAULT_DEV_PORT);
+  const name = markedServerFor(u.hostname, devPort);
+  // Not bc1-bc3: such a server has no marker (Cronus28, envtool), so it is not checked.
+  if (name !== undefined) {
+    const refusal = outOfUseRefusal(name, { ...outOfUse, override: "owner" });
+    if (refusal !== undefined) throw new ServerOutOfUseError(refusal);
+  }
   console.log(
     itestTargetLine(basename(configPath), {
       server,
@@ -99,12 +109,6 @@ export function printItestTarget(
       ...(apiBaseUrl !== undefined ? { apiBaseUrl } : {}),
     }),
   );
-  const u = new URL(server);
-  const devPort = port ?? (u.port !== "" ? Number(u.port) : DEFAULT_DEV_PORT);
-  const name = markedServerFor(u.hostname, devPort);
-  if (name === undefined) return; // not bc1-bc3: such a server has no marker (Cronus28, envtool)
-  const refusal = outOfUseRefusal(name, { ...outOfUse, override: "owner" });
-  if (refusal !== undefined) throw new ServerOutOfUseError(refusal);
 }
 
 /** Thrown for a malformed `LETHAL_ITEST_CONFIG`. Never falls back to the default silently. */

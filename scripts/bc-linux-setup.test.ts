@@ -1050,8 +1050,9 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     });
 
     test("the owner override is the itests' only: setup ignores it", async () => {
-      const { f, h } = marked({ LETHAL_OUT_OF_USE_OWNER: "r658-hang-abcdef12" });
-      writeFileSync(join(h.outOfUseDir, "bc3.md"), `${MARKER}owner: r658-hang-abcdef12\n`);
+      const t = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+      const { f, h } = marked({ LETHAL_OUT_OF_USE_OWNER: t });
+      writeFileSync(join(h.outOfUseDir, "bc3.md"), `${MARKER}owner: ${t}\n`);
       expectRefused(f, h, await h.go(["--server", "bc3", "--lane", "bugs"]));
     });
   });
