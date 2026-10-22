@@ -1949,6 +1949,22 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
         }
         expect(serveDaemonReusable([r("pass"), r("fail", { notRun: false })], "v3")).toBe(true);
       });
+      // R635: the edge build's Commit wording, measured clean (`/coord/handoff/R-635/edge-reasons.md`).
+      const EDGE_COMMIT =
+        "NotRun: out-of-scope: Commit inside a test under TestIsolation = Function is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test (corpus issue 645). Run this codeunit with TestIsolation = Codeunit (al-runner: --isolation codeunit, the default)";
+      test("R635: v3 keeps on the edge build's Commit wording", () => {
+        expect(
+          serveDaemonReusable([r("error", { notRun: true, message: EDGE_COMMIT })], "v3"),
+        ).toBe(true);
+      });
+      test("R635: the edge Commit wording is anchored at both ends (a tail or a prefix closes)", () => {
+        for (const m of [`${EDGE_COMMIT} after a timeout`, `x${EDGE_COMMIT}`]) {
+          expect([
+            m,
+            serveDaemonReusable([r("error", { notRun: true, message: m })], "v3"),
+          ]).toEqual([m, false]);
+        }
+      });
       test("v3 closes on a timeout row and both panic wordings", () => {
         for (const m of ["Test exceeded 3s timeout.", PANIC_TEST, PANIC_CASCADE]) {
           expect([

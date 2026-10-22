@@ -124,11 +124,15 @@ const SAFE_TAIL = `(?!.*(?:${V3_TAIL_UNSAFE_WORDS.map(anyCase).join("|")}))`;
  * request (`/coord/handoff/R-612/measure.md` rows 2, 3, 4, 6, 9). Each is anchored at both ends;
  * any other text (a reworded reason, an exact entry plus a tail, a panic) closes the daemon. The
  * list widens only by probe. Pinned by the update gate's `serve-keep-reasons` fact.
+ * R635: `commit` also takes the EDGE build's wording (al-runner 3.0.0-alpha.4+edge.20261022,
+ * 57f1e4f98), measured clean by R-612's probe re-run (`/coord/handoff/R-635/edge-reasons.md`); each
+ * wording is anchored at both ends. On edge, http is a plain fail and cascade / no-callee rows are
+ * not produced, so nothing else is widened.
  */
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   http: /^NotRun: out-of-scope: an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)$/,
   commit:
-    /^NotRun: out-of-scope: Commit inside a test under TestIsolation = Function: what the runner keeps is not pinned$/,
+    /^NotRun: out-of-scope: Commit inside a test under TestIsolation = Function(?:: what the runner keeps is not pinned| is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test \(corpus issue 645\)\. Run this codeunit with TestIsolation = Codeunit \(al-runner: --isolation codeunit, the default\))$/,
   cascade: new RegExp(
     String.raw`^NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran \(${SAFE_TAIL}.*$`,
   ),
