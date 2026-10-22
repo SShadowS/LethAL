@@ -69,6 +69,7 @@ import {
   type AppItem,
   type AppManifest,
   type Conn,
+  type ConnServer,
   type Decided,
   HOST,
   SERVERS,
@@ -80,6 +81,7 @@ import {
   fixtureManifests,
   headerPackageId,
   manifest,
+  portsOf,
   publishBytes,
   realOps,
   refusals,
@@ -339,28 +341,33 @@ export function buildConfig(
   paths: ConfigPaths,
   configDir: GateConfigDir,
 ): object {
-  const p = SERVERS[server];
   const selectorIds = FIXTURE_SELECTOR_IDS[configDir];
   return {
     ...(selectorIds !== undefined ? { selectorIds } : {}),
-    bcdev: {
-      mcpCommand: paths.mcpCommand,
-      server: `${HOST}:${p.dev}`,
-      serverInstance: "BC",
-      tenant: "default",
-      port: p.dev,
-      baseUrl: `${HOST}:${p.odata}/BC`,
-      apiBaseUrl: `${HOST}:${p.api}/BC`,
-      company: "CRONUS International Ltd.",
-      username: login.user,
-      password: login.password,
-      packageCachePath: paths.packageCachePath,
-      controlSymbolPath: paths.controlSymbolPath,
-      env: {
-        BC_DEV_USER: login.user,
-        BC_DEV_PASSWORD: login.password,
-        BC_DEV_API_PORT: String(p.api),
-      },
+    bcdev: bcdevSection(server, login, paths),
+  };
+}
+
+/** `buildConfig`'s `bcdev` section; R663's `bc-demo-setup.ts` builds its config from it too. */
+export function bcdevSection(server: ConnServer, login: BcLogin, paths: ConfigPaths): object {
+  const p = portsOf(server);
+  return {
+    mcpCommand: paths.mcpCommand,
+    server: `${HOST}:${p.dev}`,
+    serverInstance: "BC",
+    tenant: "default",
+    port: p.dev,
+    baseUrl: `${HOST}:${p.odata}/BC`,
+    apiBaseUrl: `${HOST}:${p.api}/BC`,
+    company: "CRONUS International Ltd.",
+    username: login.user,
+    password: login.password,
+    packageCachePath: paths.packageCachePath,
+    controlSymbolPath: paths.controlSymbolPath,
+    env: {
+      BC_DEV_USER: login.user,
+      BC_DEV_PASSWORD: login.password,
+      BC_DEV_API_PORT: String(p.api),
     },
   };
 }
@@ -638,8 +645,9 @@ async function compileStep(
   step: PublishStep,
   symbols: string,
   log: string[],
+  root: string,
 ): Promise<AppItem[]> {
-  const targetDir = join(REPO, "fixtures", step.target);
+  const targetDir = join(root, step.target);
   const build = join(STATE_ROOT, c.server, "build", step.target);
   rmSync(build, { recursive: true, force: true });
   mkdirSync(build, { recursive: true });
@@ -652,7 +660,7 @@ async function compileStep(
     { dir: step.target, local: target, role: "target", gateDeploys: step.gateDeploys === true },
   ];
   for (const dependent of step.dependents) {
-    const depDir = join(REPO, "fixtures", dependent);
+    const depDir = join(root, dependent);
     const cache = join(build, `${dependent}-symbols`);
     mkdirSync(cache, { recursive: true });
     await downloadSymbols(c, depDir, cache);
@@ -675,7 +683,11 @@ async function compileStep(
 // ---------------------------------------------------------------------------------------------
 // (e) doctor, and the driver
 
-async function doctor(configPath: string, projectDir: string, testsDir: string): Promise<boolean> {
+export async function doctor(
+  configPath: string,
+  projectDir: string,
+  testsDir: string,
+): Promise<boolean> {
   const p = Bun.spawn(
     [
       "bun",
@@ -693,7 +705,7 @@ async function doctor(configPath: string, projectDir: string, testsDir: string):
   return (await p.exited) === 0;
 }
 
-function bcDevMcpCommand(): string[] {
+export function bcDevMcpCommand(): string[] {
   const pkg = JSON.parse(readFileSync(join(BC_DEV_MCP, "package.json"), "utf8")) as {
     bin?: Record<string, string>;
     main?: string;
@@ -1055,7 +1067,7 @@ export interface RunDeps {
   readonly doctor: (configPath: string, projectDir: string, testsDir: string) => Promise<boolean>;
 }
 
-function pinnedControl(): Buffer {
+export function pinnedControl(): Buffer {
   const control = readFileSync(CONTROL_APP);
   const sha = sha256Of(control);
   if (sha !== CONTROL_SHA256) {
@@ -1066,15 +1078,17 @@ function pinnedControl(): Buffer {
   return control;
 }
 
-async function realCompile(
+/** `root` holds the step's app dirs: `fixtures/` for the gates, `examples/` for R663's demo. */
+export async function realCompile(
   c: Conn,
   step: PublishStep,
   symbols: string,
   log: string[],
+  root: string = join(REPO, "fixtures"),
 ): Promise<AppItem[]> {
   const tools = await defaultAlToolPaths();
   if (tools === undefined) throw new Error("no alc found under the AL Language extension");
-  return compileStep(c, tools.alcPath, step, symbols, log);
+  return compileStep(c, tools.alcPath, step, symbols, log, root);
 }
 
 export const REAL_DEPS: RunDeps = {
