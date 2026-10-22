@@ -999,8 +999,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const selector = await readFile(join(dir, CONTROL_SELECTOR_FILENAME), "utf8");
     if (this.entries) {
-      // R635 §2: the resource selector and the echo as emitted; the file NONE outside §5's window.
-      const echoId = this.echoId ?? -1;
+      // R635 §2: the resource selector as emitted; the file NONE outside §5's window. The echo
+      // needs no check of its own: it is an .al file of the tree the proof hashed (above).
       const want = emitResourceSelector({
         objectId: this.cfg.selectorObjectId,
         artifactId: proof.artifactId,
@@ -1010,10 +1010,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         throw new AlRunnerV3UnprovenBatchError(
           "the selector is not the resource selector for this artifact",
         );
-      }
-      const echo = await readFile(join(dir, SELECTOR_ECHO_FILENAME), "utf8").catch(() => "");
-      if (echo !== emitSelectorEcho(echoId)) {
-        throw new AlRunnerV3UnprovenBatchError(`${SELECTOR_ECHO_FILENAME} is not the emitted echo`);
       }
       const onDisk = await readFile(this.resourcePath(), "utf8").catch(() => "<missing>");
       if (!this.inWindow && onDisk !== SELECTOR_RESOURCE_NONE) {
