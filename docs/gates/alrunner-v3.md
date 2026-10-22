@@ -87,6 +87,47 @@ The legs:
     on edge the leg reads `held` only through X (b). The three 600 s sibling tests stay; on edge they are
     baseline `timeout` rows, not refusals.
 
+### Legs L1, Y-A, Y-B and K (R654 S2)
+
+These legs were ported from `itest:alrunner` before the .NET al-runner is retired. They are pre-committed in `docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md` (43115c78). Each runs one-shot, with coverage `"al-runner"` and a packages folder that holds only the Microsoft apps of `fixtures/sandbox-tests/.alpackages`.
+
+Each leg first checks its pre-committed table. A difference is `gate-fail`, and no baseline is written. Only then does it compare against its own baseline.
+
+- **L1** (R353's table): multi-batch layout, with figures equal to v2's. `fixtures/sandbox-layout` runs at `maxGuardsPerBatch` 7, which gives two batches.
+  - It checks `EXPECTED_LAYOUT` (`layout-fixture.ts`) per `<batch>/<code>`: verdict, killing test, covering tests and attribution.
+  - Predicted 7 / 3 / 0 over 10. Baseline: `al-runner-v3.layout.baseline.json`, identical per mutant to `al-runner.layout.baseline.json`.
+  - It is the v3 gate's only multi-batch leg.
+  - **Its purpose is shape only.** L1 is NOT R349's stale-layout check on v3. Two reverts were measured on 2026-10-22, and both left it green (7 / 3 / 0, with 1/M0006 and 1/M0007 killed by TwiceOfThree):
+    - deleting `resetLayoutState()` from `AlRunnerV3Backend.deploy` (`/coord/handoff/R-654/s2-live-LR1.log`);
+    - keeping batch 0's coverage index across deploys, `this.coverageIndex ??= index` (`s2-live-LR2.log`).
+  - **Why L-R1 stays green:** on v3, `deploy()` rebuilds the coverage index, the Sleep index and the proof for every batch, and `activate(null)` clears the row cache.
+  - **Why L-R2 stays green is not measured.** The leading guess (marked as a guess in `/coord/handoff/R-654/s2-LR1-finding.md`) is that instrumenting `LayoutBeta` does not move its line numbers, so batch 0's index of the file reads batch 1's coverage the same way.
+  - **R349's stale-layout coverage is LOST when the .NET al-runner is retired (R654 S3), because no v3 leg catches it.** On v2, `itest:alrunner`'s one-shot layout leg went red on it.
+  - **The one guard that exists on v3** is offline. It covers `batchBlind`, the only layout-scoped field that `deploy()` does not rebuild on one-shot. The test is "R654 S2: a batch's latched blind note does not cross into the next batch" in `tests/al-runner-v3-entries.test.ts`. Deleting the reset turns it red.
+- **Y-A and Y-B** (R321): `fixtures/sandbox-symbols` under `[LETHALA]` and `[LETHALB]`. The symbols go to the backend, which passes them to v3 as `--define`, and to the session.
+  - Each checks `EXPECTED_BY_SET` (`symbol-fixture.ts`).
+  - Predicted 5 / 4 / 0 over 9 each. Baselines: `al-runner-v3.symbols-lethala.baseline.json` and `-lethalb`.
+- **K** (R387, R394): the backend that `cli.ts`'s `buildBackend` builds from an `alRunnerV3` section with no `coverage` and no `transport` key.
+  - It asserts coverage on by default, a one-shot transport (0 serve spawns), and the `AL_RUNNER_V3_NOT_AUTHORITATIVE` warning.
+  - Its result is 3 / 12 / 4 over 19, equal per mutant to `bcdev.baseline.json`. It records no baseline of its own.
+  - **K is outside `V3_GATE_LEGS`, by the orchestrator's ruling**, because the CLI's config cannot name a candidate build. Two conditions hold it, both pinned in `tests/r654-v3-legs.test.ts`:
+    1. On a candidate (`LETHAL_ALRUNNER_V3_CANDIDATE=1`), K does not run. Its value in the itest's leg summary is `"K":"skipped (candidate build)"`, and its reason goes into the log and the receipt lines. It is never silent.
+    2. On a gated build, a K that is anything but a pass FAILS the itest, a skip included (`v3ItestFailures`). So K can never become an always-skipped leg.
+
+  The update gate's receipt outcome still reads only `V3_GATE_LEGS`.
+
+**Legs ruled out:**
+- **The server and resource variants.** v3 one-shot uses the static selector, and serve-entries (R635) is opt-in. S3 pins that the resource selector is refused on one-shot.
+- **Multi-object and wrapped.** v3 turns coverage off there by design (R602).
+- **Names.** Quoted test names are unselectable on v3 (#5572), and N1 covers the fixture.
+
+**Recording (R332).** Run `LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=L1,Y-A,Y-B LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.layout.baseline.json,al-runner-v3.symbols-lethala.baseline.json,al-runner-v3.symbols-lethalb.baseline.json bun run itest:alrunner-v3`. It exits 3 by design. Then confirm with every leg.
+- **Recorded 2026-10-22** on alpha.2 (91253f2d6), once, by that command (`/coord/handoff/R-654/s2-record.log`, exit 3). The figures are 7 / 3 / 0, 5 / 4 / 0 and 5 / 4 / 0 as pre-committed. Each file is identical per mutant to its .NET al-runner twin (`al-runner.layout`, `-symbols-lethala`, `-symbols-lethalb`; 0 differences).
+- **When a file is missing,** `preflightGateBaseline` refuses the WHOLE run, before any leg starts, and names the record command. This happens whenever the run selects the leg whose baseline is missing (L1, Y-A or Y-B; by default all three are selected). It does not skip just that leg.
+- **A record run never exits 3 when a leg that it did not record failed.** It exits 1 and names the leg (`v3RecordRunFailures`). A table mismatch writes no file.
+
+**agentflow.** `scripts/agentflow/gate-table.ts` selects the `alrunner-v3` leg wherever it selects `alrunner`. A challenged run (the four `LETHAL_GATE_*` variables) writes a receipt whose sublegs must equal the default legs, with no corpus and no tables leg (`V3_AGENTFLOW_LEGS`).
+
 ## The pin and the update gate
 
 - The binary is pinned at `/work/tools/al-runner-v3/3.0.0-alpha.2-91253f2d6/`, and `current` points at it. Its
@@ -177,10 +218,17 @@ The legs:
 {
   "gate": "itest:alrunner-v3",
   "baselines": {
-    "al-runner-v3.tables.baseline.json": { "killed": 290, "survived": 57, "no-coverage": 59 }
+    "al-runner-v3.tables.baseline.json": { "killed": 290, "survived": 57, "no-coverage": 59 },
+    "al-runner-v3.layout.baseline.json": { "killed": 7, "survived": 3 },
+    "al-runner-v3.symbols-lethala.baseline.json": { "killed": 5, "survived": 4 },
+    "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 5, "survived": 4 }
   }
 }
 ```
+
+- Leg L1, `al-runner-v3.layout.baseline.json`: 7 / 3 / 0 over 10, as pre-committed (43115c78).
+- Leg Y-A, `al-runner-v3.symbols-lethala.baseline.json`: 5 / 4 / 0 over 9, as pre-committed.
+- Leg Y-B, `al-runner-v3.symbols-lethalb.baseline.json`: 5 / 4 / 0 over 9, as pre-committed. All three were recorded once under R332 on 2026-10-22, and each is identical per mutant to its .NET al-runner twin.
 
 - Leg T, `al-runner-v3.tables.baseline.json`: 290 / 57 / 59 over 406, as pre-committed. Its rows differ from
   `itest:tables`' baseline on exactly the 52 keys and transitions of the pre-commitment's list (41 Commit, 7

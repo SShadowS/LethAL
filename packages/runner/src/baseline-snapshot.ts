@@ -69,9 +69,14 @@ export interface BaselineSnapshot {
  * SHA-256 over every `.al` file under `dir` (recursively, sorted, path and bytes), skipping the
  * control files. Deterministic across two artifacts of the same batch, different for any change
  * to any instrumented line.
+ *
+ * R655: under the R631 rule (`hashTestDir`), so a link refuses by name. Its callers hash
+ * LethAL-built trees (a batch dir, al-runner v3's `active/`), which hold no link (measured,
+ * `/coord/handoff/R-655/measure.md`); a skipped one would leave AL that alc and al-runner follow
+ * out of the hash.
  */
 export async function hashAlTree(dir: string): Promise<string> {
-  return hashAlFiles(dir, (await walkFiles(dir, { links: "skip" })).files);
+  return hashTestDir(dir);
 }
 
 /**
