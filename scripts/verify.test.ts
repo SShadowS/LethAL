@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +17,7 @@ import {
   LEDGER_STALE_MS,
   type LedgerIo,
   type SnapState,
+  type TestDbReport,
   type TestStepIo,
   VerifyArgsError,
   type VerifyIo,
@@ -27,12 +36,15 @@ import {
   parseSnapState,
   parseTestSummary,
   pidAlive,
+  pressureText,
+  readTestDbReports,
   runVerify,
   sentinelEnv,
   snapChanges,
   stuckWorkers,
   testChildEnv,
   testCommand,
+  testDbsLine,
   testStep,
 } from "./verify.ts";
 
@@ -559,6 +571,7 @@ describe("R622 the per-file watchdog", () => {
     p: number,
     limitS: number,
     opts: Omit<WatchOptions, "print"> = {},
+    extraEnv: Env = {},
   ): Promise<{
     code: number;
     text: string;
@@ -566,6 +579,7 @@ describe("R622 the per-file watchdog", () => {
     output: string;
     junit: string;
     printed: Array<{ line: string; childAlive: boolean | undefined }>;
+    testDbs: readonly TestDbReport[] | undefined;
   }> {
     const root = tempDir("r622");
     const printed: Array<{ line: string; childAlive: boolean | undefined }> = [];
@@ -588,6 +602,7 @@ describe("R622 the per-file watchdog", () => {
       for (const [name, body] of Object.entries(files)) writeFileSync(join(proj, name), body);
       const junitPath = join(root, "junit.xml");
       let output = "";
+      let testDbs: readonly TestDbReport[] | undefined;
       const t0 = Date.now();
       const step = await testStep(
         { mode: { kind: "packages", paths: [] }, p },
@@ -595,10 +610,11 @@ describe("R622 the per-file watchdog", () => {
           exec: async (cmd, env) => {
             const r = await execWatched(cmd, env, proj, limitS, { ...opts, print });
             output = r.output;
+            testDbs = r.testDbs;
             return r;
           },
           snapState: () => new Map(),
-          env: sentinelEnv(process.env, home, tmp),
+          env: { ...sentinelEnv(process.env, home, tmp), ...extraEnv },
           log: () => "log",
           junitPath: () => junitPath,
           readJunit: () => "",
@@ -607,7 +623,15 @@ describe("R622 the per-file watchdog", () => {
       );
       const seconds = (Date.now() - t0) / 1000;
       const junit = existsSync(junitPath) ? readFileSync(junitPath, "utf8") : "";
-      return { code: step.code, text: step.lines.join("\n"), seconds, output, junit, printed };
+      return {
+        code: step.code,
+        text: step.lines.join("\n"),
+        seconds,
+        output,
+        junit,
+        printed,
+        testDbs,
+      };
     } finally {
       // EBUSY on Windows while a just-killed process still holds a handle: retry, cleanup only.
       rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
@@ -694,6 +718,99 @@ describe("R622 the per-file watchdog", () => {
     expect(r.text).toContain("watchdog: ok");
     expect(r.output.length).toBeGreaterThan(20_000_000);
   }, 40_000);
+
+  // R616: the real preload in a child run reports where its DBs went, and removes its tmpfs folder.
+  const SHM = process.platform === "linux" && existsSync("/dev/shm");
+  test.skipIf(!SHM)(
+    "R616: a child run on Linux puts its DBs on /dev/shm, says so, and leaves no folder there",
+    async () => {
+      const r = await watched({ "ok.test.ts": OK }, 1, 30);
+      expect(r.code, r.text).toBe(0);
+      expect(r.text).toContain("test DBs: /dev/shm (tmpfs) in all 1 worker");
+      const pid = r.testDbs?.[0]?.pid;
+      expect(pid, r.text).toBeDefined();
+      const left = readdirSync("/dev/shm").filter((e) => e.startsWith(`lethal-unit-db-${pid}-`));
+      expect(left).toEqual([]);
+    },
+    40_000,
+  );
+  test("R616: with LETHAL_TEST_DB_ON_DISK=1 a child run's DBs stay on disk, named", async () => {
+    const r = await watched({ "ok.test.ts": OK }, 1, 30, {}, { LETHAL_TEST_DB_ON_DISK: "1" });
+    expect(r.code, r.text).toBe(0);
+    expect(r.text).toContain(
+      "test DBs: on disk (fallback: LETHAL_TEST_DB_ON_DISK=1) in all 1 worker",
+    );
+  }, 40_000);
+});
+
+describe("R616 where each worker's test DBs went", () => {
+  const shm = { pid: 11, where: "/dev/shm (tmpfs)" };
+  const disk = { pid: 12, where: "on disk (fallback: /dev/shm has 9 MB free (under 16))" };
+  test("testDbsLine: all workers alike, mixed, and none", () => {
+    expect(testDbsLine([shm, { ...shm, pid: 13 }])).toBe(
+      "test DBs: /dev/shm (tmpfs) in all 2 workers",
+    );
+    expect(testDbsLine([shm, disk])).toBe(
+      "test DBs: /dev/shm (tmpfs) in 1 of 2 workers; on disk (fallback: /dev/shm has 9 MB free (under 16)) in 1 of 2 workers",
+    );
+    expect(testDbsLine([])).toBe("test DBs: no worker reported where its DBs went");
+  });
+  test("testStep names each worker's own choice, not one made at the start", async () => {
+    const step = await testStep(FULL, {
+      exec: () => ({
+        code: 0,
+        output: " 1 pass\n 0 fail\nRan 1 test across 1 file.\n",
+        testDbs: [shm, disk],
+      }),
+      snapState: () => new Map(),
+      env: {},
+      log: () => "log",
+      junitPath: () => "/j.xml",
+      readJunit: () => '<testcase name="a" classname="" file="x.test.ts" />',
+      expectedTestFiles: () => ["x.test.ts"],
+    });
+    expect(step.lines).toContain(
+      "test DBs: /dev/shm (tmpfs) in 1 of 2 workers; on disk (fallback: /dev/shm has 9 MB free (under 16)) in 1 of 2 workers",
+    );
+  });
+  test("readTestDbReports keeps this run's workers (serial child, or children of the bun test process) and drops others", () => {
+    const dir = tempDir("r616-dbs");
+    try {
+      // The bun test child is pid 10, verify itself pid 1.
+      writeFileSync(join(dir, "11"), "10\t/dev/shm (tmpfs)");
+      writeFileSync(join(dir, "10"), "1\ton disk (fallback: /dev/shm missing)");
+      writeFileSync(join(dir, "12"), "11\t/dev/shm (tmpfs)"); // a nested bun test, started by a test
+      writeFileSync(join(dir, "13"), "10"); // half-written
+      const got = readTestDbReports(dir, 10, 1).sort((a, b) => a.pid - b.pid);
+      expect(got).toEqual([
+        { pid: 10, where: "on disk (fallback: /dev/shm missing)" },
+        { pid: 11, where: "/dev/shm (tmpfs)" },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("R616 pressure stats", () => {
+  const IO =
+    "some avg10=1.50 avg60=2.00 avg300=3.25 total=100\nfull avg10=0.10 avg60=0.20 avg300=0.30 total=50\n";
+  const CPU = "some avg10=0.25 avg60=0.50 avg300=0.75 total=10\n";
+  test("both files read: avg10/avg60/avg300 of each line", () => {
+    const read = (p: string): string => (p === "/proc/pressure/io" ? IO : CPU);
+    expect(pressureText(read)).toBe(
+      "io some 1.50/2.00/3.25 full 0.10/0.20/0.30; cpu some 0.25/0.50/0.75",
+    );
+  });
+  test("an absent file is skipped and named; text that does not parse is named too", () => {
+    const read = (p: string): string => {
+      if (p === "/proc/pressure/io") throw new Error("ENOENT: no such file");
+      return "garbage";
+    };
+    expect(pressureText(read)).toBe(
+      "io skipped (cannot read /proc/pressure/io: ENOENT: no such file); cpu skipped (no avg10 line in /proc/pressure/cpu)",
+    );
+  });
 });
 
 describe("R622 the verify ledger", () => {
@@ -774,9 +891,26 @@ describe("R622 the verify ledger", () => {
       expect(Buffer.byteLength(l)).toBeLessThanOrEqual(LEDGER_LINE_MAX);
       expect(l.endsWith("\n")).toBe(true);
       expect(l.slice(0, -1)).not.toContain("\n");
-      expect(l.split("\t")).toHaveLength(9);
+      expect(l.split("\t")).toHaveLength(10);
       expect(parseLedger(l)).toEqual([{ pid: 7, start: T, end: NOW }]);
     }
+  });
+
+  test("R616: a 9-column line from a verify before the pressure column still parses, beside a 10-column one", () => {
+    const nine = `START\t${new Date(T - 5000).toISOString()}\t-\t7\t8\t-\t-\tfull\t/work/old\n`;
+    const ten = ledgerLine(
+      "START",
+      { pid: 8, start: T - 4000, p: 8, scope: "full", worktree: "/work/new" },
+      undefined,
+      "io some 1.00/2.00/3.00 full 0.50/0.60/0.70; cpu some 0.10/0.20/0.30",
+    );
+    expect(ten.split("\t")).toHaveLength(10);
+    expect(parseLedger(nine + ten)).toEqual([
+      { pid: 7, start: T - 5000, end: undefined },
+      { pid: 8, start: T - 4000, end: undefined },
+    ]);
+    // An 11-column line is not one of ours: skipped.
+    expect(parseLedger(`${ten.slice(0, -1)}\textra\n`)).toEqual([]);
   });
 
   function io(
@@ -784,7 +918,9 @@ describe("R622 the verify ledger", () => {
     testOut = " 3 pass\n 0 fail\nRan 3 tests across 2 files.\n",
   ): VerifyIo {
     let t = T;
+    let reads = 0;
     return {
+      pressure: () => `P${++reads}`,
       packages: KNOWN,
       cores: 32,
       env: {},
@@ -823,12 +959,26 @@ describe("R622 the verify ledger", () => {
         .slice(1, -1)
         .map((l) => l.split("\t"));
       const start = new Date(T + 1000).toISOString();
-      expect(rows[0]).toEqual(["START", start, "-", "100", "8", "-", "-", "full", "/work/me"]);
+      // R616: the 10th column is the pressure read at that moment (P1 at start, P2 at end).
+      expect(rows[0]).toEqual([
+        "START",
+        start,
+        "-",
+        "100",
+        "8",
+        "-",
+        "-",
+        "full",
+        "/work/me",
+        "P1",
+      ]);
       const end = rows[1];
       expect(end?.slice(0, 2)).toEqual(["END", start]);
       expect(Date.parse(end?.[2] ?? "")).toBeGreaterThan(T + 1000);
-      expect(end?.slice(3)).toEqual(["100", "8", "pass", "0", "full", "/work/me"]);
+      expect(end?.slice(3)).toEqual(["100", "8", "pass", "0", "full", "/work/me", "P2"]);
       expect(r.lines).toContain(`ledger: 1 other verify running at start (${path})`);
+      expect(r.lines).toContain("pressure at start: P1");
+      expect(r.lines).toContain("pressure at end: P2");
       expect(r.lines.at(-2)).toBe(
         `ledger: 1 other verify running at start, 1 overlapped by end (${path})`,
       );
