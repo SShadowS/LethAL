@@ -893,6 +893,14 @@ given. History skips a survivor only when every test this session sends was in t
 than that it skips nothing and warns `history-test-scope-changed`, naming the missing tests or that
 the run recorded no scope (every run before R585: a third one-time cost on upgrade).
 
+**`--skip-known-survivors` checks each survivor's tests (R644).** A survivor ran only against the
+tests that passed at its run's baseline, and its row records them. After this session's baseline, a
+survivor is skipped only when every test that covers it now is one it ran against then. Otherwise it
+is run, and the batch warns `history-tests-not-faced` (a test failed at that run's baseline, or
+coverage changed). A survivor with no such record is run too, with `history-survivor-no-record`:
+every row skipped before R644 has none, a fourth one-time cost on upgrade. A survivor no test covers
+now is not skipped; it reads `no-coverage`.
+
 **`--resume` re-derives no-coverage (R621).** A stored `no-coverage` is never carried. A mutant this
 session's coverage leaves uncovered reads `no-coverage` again; one it covers is run. A fully scored
 batch holding a `no-coverage` row is therefore deployed on resume (its baseline is reused from the
