@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**101 of 662 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**100 of 662 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -705,7 +705,7 @@ that ordering is the priority.
 - **R657** · The R553 assertion screen reads an al-runner-v3 kill as bcdev's: v3's failure-message shape is unmeasured · [R657.md](docs/roadmap/R657.md) · open, filed 2026-10-22
 - **R660** · ci.yml has no workflow_dispatch trigger: when GitHub drops a push event, a submit head can get no CI run, and nothing can start one by hand · [R660.md](docs/roadmap/R660.md) · done (0ea6960c)
 - **R662** · talk-cut script: tag a given commit and make a DRAFT release with lethal-control.app attached, never publishing it · [R662.md](docs/roadmap/R662.md) · open, filed 2026-10-22
-- **R663** · bc-demo: a fourth BC on Linux instance on server1 for the talk, outside every lease pool, with an idempotent setup that is also the offline demo reset · [R663.md](docs/roadmap/R663.md) · open, filed 2026-10-22
+- **R663** · bc-demo: a fourth BC on Linux instance on server1 for the talk, outside every lease pool, with an idempotent setup that is also the offline demo reset · [R663.md](docs/roadmap/R663.md) · done (a9bb3ffe)
 - **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at identity scheme 41, and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · open, filed 2026-10-22
 
 ---
