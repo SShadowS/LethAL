@@ -906,6 +906,12 @@ session's coverage leaves uncovered reads `no-coverage` again; one it covers is 
 batch holding a `no-coverage` row is therefore deployed on resume (its baseline is reused from the
 saved snapshot when one matches) instead of being carried whole.
 
+**`--resume` checks each survivor's tests too (R646).** The same rule as R644, on the resume path:
+a survivor is carried only when every test covering it in this session is one it ran against in the
+resumed run. Otherwise it is run, and the batch warns `resume-tests-not-faced`. A survivor with no
+record is run with `resume-survivor-no-record`, and a fully scored batch holding one is deployed
+rather than carried whole. A kill is always carried: a test failed under it, whatever covers it now.
+
 ### After verify (guidance)
 
 A verify `killed` proves the test kills that mutant in the installed build. Make it the record

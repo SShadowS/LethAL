@@ -7556,8 +7556,7 @@ async function runSessionBody(
             noRecord.push(m);
             continue;
           }
-          const had = new Set(faced);
-          if (covering.length === 0 || !covering.every((ref) => had.has(qualifiedTestName(ref)))) {
+          if (!facedEveryCoveringTest(faced, covering)) {
             notFaced.push(m);
             continue;
           }
@@ -7598,6 +7597,8 @@ async function runSessionBody(
         let toExecute: MutantManifestEntry[] = remaining;
         if (resumeState !== undefined) {
           toExecute = [];
+          const carryNotFaced: MutantManifestEntry[] = [];
+          const carryNoRecord: MutantManifestEntry[] = [];
           for (const m of remaining) {
             const covering = perMutantTests.get(m.mutantId);
             if (covering === undefined) continue; // step 5 already recorded no-coverage
@@ -7635,6 +7636,23 @@ async function runSessionBody(
             if (carried === undefined) {
               toExecute.push(m);
               continue;
+            }
+            // R646: R644's rule for a carried survivor. A test green in this session's baseline but
+            // red where it was scored covers it now and never ran against it, so it is re-run. A
+            // kill carries as is: a test failed under it, whatever else covers it now.
+            const survivor = carried.verdict === "survived" || carried.verdict === "known-survivor";
+            if (survivor) {
+              const faced = carried.coveringTests;
+              if (faced === undefined || faced.length === 0) {
+                carryNoRecord.push(m);
+                toExecute.push(m);
+                continue;
+              }
+              if (!facedEveryCoveringTest(faced, covering)) {
+                carryNotFaced.push(m);
+                toExecute.push(m);
+                continue;
+              }
             }
             const carriedRowId = record(
               cfg.store,
@@ -7674,10 +7692,23 @@ async function runSessionBody(
             // R644 (build review I2): a carried survivor was not run here, so its STORE row keeps
             // the tests it faced where it was scored, never the tests covering it now; a later
             // history session reads that list as "faced". The report row above is unchanged.
-            // Whether this resume should carry it at all is R646.
-            if (carried.verdict === "survived" || carried.verdict === "known-survivor") {
+            if (survivor) {
               cfg.store.keepCarriedFacedTests(carriedRowId, carried.coveringTests ?? []);
             }
+          }
+          if (carryNoRecord.length > 0) {
+            emit({
+              type: "warning",
+              code: "resume-survivor-no-record",
+              message: `[lethal] --resume: batch ${batchIdx}: ${carryNoRecord.length} survivor(s) of run ${resumeState.runId} have no record of the tests they were run against (a row written before R192, or lent before R644), so they are executed, not carried: ${namesSample(carryNoRecord.map((m) => m.mutantId))} (R646).`,
+            });
+          }
+          if (carryNotFaced.length > 0) {
+            emit({
+              type: "warning",
+              code: "resume-tests-not-faced",
+              message: `[lethal] --resume: batch ${batchIdx}: ${carryNotFaced.length} survivor(s) of run ${resumeState.runId} are covered now by a test they were not run against there (a test red at that run's baseline, or coverage that changed), so they are executed, not carried: ${namesSample(carryNotFaced.map((m) => m.mutantId))} (R646).`,
+            });
           }
         }
         return {
@@ -9018,6 +9049,19 @@ export function unsupportedCoverageNote(
 /** Human-readable `Codeunit.method` identity for report/notes — unambiguous across codeunits sharing a method name. */
 export function qualifiedTestName(ref: TestMethodRef): string {
   return `${ref.codeunitName}.${ref.method}`;
+}
+
+/**
+ * R644/R646: a prior survivor may be reused (lent by history, carried by `--resume`) only when every
+ * test covering it NOW is one it faced in the run that scored it. A test red at that run's baseline
+ * never ran against it. The caller treats NULL or `[]` as "no record" before asking.
+ */
+function facedEveryCoveringTest(
+  faced: readonly string[],
+  covering: readonly TestMethodRef[],
+): boolean {
+  const had = new Set(faced);
+  return covering.length > 0 && covering.every((ref) => had.has(qualifiedTestName(ref)));
 }
 
 /** What the test project's `app.json` has to say for check 2 to have a local expectation at all. */
