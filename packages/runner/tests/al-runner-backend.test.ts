@@ -1990,6 +1990,11 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
         ["f wall", `${ONRUN_TAIL}stopped at 10 times N of WALL time`],
         ["f wall cascade", `${CASCADE_TAIL}X: stopped on wall time)`],
         ["f deadline", `${ONRUN_TAIL}Deadline reached`],
+        // Bugs' finding: a TIMEOUT-caused cascade row, alone in the answer (no timeout row beside it).
+        [
+          "g time limit cascade",
+          `${CASCADE_TAIL}X: did not run (the test used more than the Time Limit): this failure is not trusted`,
+        ],
         ["f panicked at", `${ONRUN_TAIL}thread 'worker' panicked at src/run.rs:10:5`],
         ["f panic case", `${CASCADE_TAIL}X: PANIC in the runtime)`],
       ] as const) {

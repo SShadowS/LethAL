@@ -101,8 +101,18 @@ export const RUNNER_ONRUN_TIMEOUT_MESSAGE =
  * R612 (plan r3 §1; build review r1 I-1): words a free-text tail must not contain, matched without
  * regard to case. "panic" covers both v3 panic wordings and Rust's "panicked at"; the rest cover a
  * timeout or wall-time stop, which an upstream #5698 fix would put inside the onrun-failed tail.
+ * "time limit": a cascade row caused by a timeout ("did not run (the test used more than the time
+ * limit ..."), which must close even with no timeout row in the same answer.
  */
-const V3_TAIL_UNSAFE_WORDS = ["panic", "timeout", "timed out", "exceeded", "wall", "deadline"];
+const V3_TAIL_UNSAFE_WORDS = [
+  "panic",
+  "timeout",
+  "timed out",
+  "exceeded",
+  "wall",
+  "deadline",
+  "time limit",
+];
 /** Case-insensitive for these words only, so each entry's fixed prefix stays exact. */
 const anyCase = (w: string): string =>
   [...w].map((ch) => (/[a-z]/.test(ch) ? `[${ch}${ch.toUpperCase()}]` : ch)).join("");
