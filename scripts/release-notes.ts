@@ -7,7 +7,7 @@
  *
  * The source is `release-notes/<tag>.md` when that file exists on the tagged commit (talk-cut's
  * `--notes` commits it there), and otherwise the CHANGELOG's own section for the version
- * (`changelog-section.ts`). It REFUSES an empty body, and a body that, with what `publish` adds
+ * (`changelog-section.ts`). It REFUSES an empty or thin body (`MIN_BODY_CHARS`), and a body that, with what `publish` adds
  * after it, would not fit GitHub's release-body limit: that `publish` would fail only after the
  * tag is pushed, and a workflow_dispatch trial never runs `publish`, so it cannot see it.
  */
@@ -23,6 +23,12 @@ export const RELEASE_BODY_LIMIT = 125_000;
  * GitHub's generated commit list (about 5,000, a guess).
  */
 export const RELEASE_BODY_MARGIN = 1_500 + 200 + 5_000;
+
+/**
+ * A body this short or shorter is refused: it is a placeholder, not release notes. The same floor
+ * `changelog-section.test.ts` held the changelog to, which the tag's `build` job runs.
+ */
+export const MIN_BODY_CHARS = 80;
 
 export class ReleaseNotesRefusedError extends Error {}
 
@@ -66,6 +72,11 @@ export function releaseNotes(
       );
     }
     body = section;
+  }
+  if (body.length <= MIN_BODY_CHARS) {
+    throw new ReleaseNotesRefusedError(
+      `the release body from ${source} is ${body.length} characters, not more than ${MIN_BODY_CHARS}: too thin to be release notes`,
+    );
   }
   checkReleaseBodySize(body, source);
   return { body, source };

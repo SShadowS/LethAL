@@ -171,11 +171,14 @@ push, dispatch, upload, edit) instead of making it.
 
 `publish` takes the body from `bun scripts/release-notes.ts <tag>`. That prints
 `release-notes/<tag>.md` when the tagged commit has one, and otherwise the CHANGELOG's own section
-for the version. It refuses an empty body, and a body that, with what `publish` adds (release.yml's
+for the version. It refuses an empty body, a body of 80 characters or fewer (`MIN_BODY_CHARS`),
+and a body that, with what `publish` adds (release.yml's
 footer, the control-app line, GitHub's generated commit list: `RELEASE_BODY_MARGIN`), would exceed
 GitHub's 125,000-character limit (`RELEASE_BODY_LIMIT`). talk-cut runs the same check before any
 push. A dispatch trial cannot see this, because `publish` runs only on a tag push, so without the
-check `publish` would fail after the tag is already pushed.
+check `publish` would fail after the tag is already pushed. The unit suite checks the same body
+for the root package.json version (`changelog-section.test.ts`), so the tag's `build` job agrees
+with `publish`: a release cut with `--notes` and an empty `[Unreleased]` passes both.
 
 On 22 Oct, `[Unreleased]` on master is 156,625 characters, over the limit. There are two ways
 through: pass `--notes <file>` with a shorter body, or shorten `[Unreleased]` on master. **If the

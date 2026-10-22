@@ -89,6 +89,9 @@ export class CommandFailedError extends Error {}
 export const MIN_CONTROL = "1.0.0.23";
 export const WAIT_TIMEOUT_MS = 60 * 60_000;
 export const POLL_MS = 30_000;
+/** release.yml's run line for the body, on a line of its own (a mention in a comment does not count). */
+export const NOTES_RUN_LINE =
+  /^\s*bun scripts\/release-notes\.ts "\$\{GITHUB_REF_NAME\}" > release-notes\.md\s*$/m;
 const CI_JOBS = ["check", "unit-linux"] as const;
 const SHA = /^[0-9a-f]{40}$/;
 const SEMVER =
@@ -373,8 +376,8 @@ export async function talkCut(o: Options, d: Deps): Promise<{ url: string | null
     if (notes !== undefined) d.writeText(join(wt, notesFile), notes);
     // What the tag's release.yml will run for the body: release-notes.ts since R662, else the
     // changelog section. An older release.yml would ignore the notes file.
-    const usesNotesScript = git(["show", `${sha}:.github/workflows/release.yml`]).includes(
-      "scripts/release-notes.ts",
+    const usesNotesScript = NOTES_RUN_LINE.test(
+      git(["show", `${sha}:.github/workflows/release.yml`]),
     );
     if (notes !== undefined && !usesNotesScript) {
       refuse(

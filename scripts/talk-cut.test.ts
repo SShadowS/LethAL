@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import { sectionFor } from "./changelog-section.ts";
 import { RELEASE_BODY_LIMIT, releaseNotes } from "./release-notes.ts";
 import {
   type Deps,
+  NOTES_RUN_LINE,
   type Options,
   POLL_MS,
   type RunResult,
@@ -36,6 +39,9 @@ const PKG = `{
   }
 }
 `;
+/** Over release-notes.ts's 80-character floor, as a real entry is. */
+const ENTRY =
+  "- a thing (R1), described at enough length to read as a real changelog entry for it.";
 const CHANGELOG = `# Changelog
 
 intro
@@ -44,13 +50,19 @@ intro
 
 ### Added
 
-- a thing (R1)
+${ENTRY}
 
 ## [0.1.0-alpha.3] — 2026-08-27
 
 old notes
 `;
-const EMPTY_CHANGELOG = CHANGELOG.replace("### Added\n\n- a thing (R1)\n\n", "");
+const EMPTY_CHANGELOG = CHANGELOG.replace(`### Added\n\n${ENTRY}\n\n`, "");
+const NOTES =
+  "### Talk\n\n- the demo build for the talk, with notes long enough to count as notes.\n";
+/** release.yml's body step since R662, and two shapes that predate it. */
+const NEW_YML = `      run: |\n          bun scripts/release-notes.ts "\${GITHUB_REF_NAME}" > release-notes.md\n`;
+const OLD_YML = `          bun scripts/changelog-section.ts "\${GITHUB_REF_NAME}" > release-notes.md\n`;
+const COMMENT_YML = `      # one day: bun scripts/release-notes.ts "\${GITHUB_REF_NAME}" > release-notes.md\n${OLD_YML}`;
 /** CHANGELOG, whole, with only the new version heading added under [Unreleased]. */
 const CUT_CHANGELOG = CHANGELOG.replace(
   "## [Unreleased]\n",
@@ -112,7 +124,7 @@ class World {
   deleteFails = false;
   worktreeAddFails = false;
   /** <sha>'s release.yml calls release-notes.ts (R662's), or is older. */
-  releaseYmlUsesNotes = true;
+  releaseYml = NEW_YML;
   /** Overrides what the new tree's release-notes.ts prints. */
   notesScriptPrints: string | undefined = undefined;
   staged: string[] = [];
@@ -164,7 +176,7 @@ class World {
       if (args[0] === "cat-file") return ok();
       if (args[0] === "show" && args[1] === `${SHA}:package.json`) return ok(PKG);
       if (args[0] === "show" && args[1] === `${SHA}:.github/workflows/release.yml`) {
-        return ok(this.releaseYmlUsesNotes ? "run: bun scripts/release-notes.ts x" : "old");
+        return ok(this.releaseYml);
       }
       if (args[0] === "add" && args[1] === "--") {
         this.staged.push(...args.slice(2));
@@ -379,7 +391,7 @@ describe("talk-cut happy path", () => {
     // CHANGELOG: a fresh empty Unreleased above the new section, in the file's em-dash convention.
     const cl = w.files.get(`${WT}/CHANGELOG.md`) ?? "";
     expect(cl).toContain(
-      "## [Unreleased]\n\n## [0.1.0-alpha.4] — 2026-10-23\n\n### Added\n\n- a thing (R1)",
+      `## [Unreleased]\n\n## [0.1.0-alpha.4] — 2026-10-23\n\n### Added\n\n${ENTRY}`,
     );
     expect(sectionFor(cl, "Unreleased")).toBeNull();
     expect(cl).toBe(CUT_CHANGELOG);
@@ -545,24 +557,40 @@ describe("talk-cut refusals", () => {
 
   test("--notes: the file is committed as release-notes/<tag>.md, CHANGELOG stays whole, the body is the notes", async () => {
     const w = new World();
-    w.files.set("/notes.md", "### Talk\n\n- demo build\n");
+    w.files.set("/notes.md", NOTES);
     await talkCut(opts({ notes: "/notes.md" }), w.deps());
-    expect(w.files.get(`${WT}/release-notes/${TAG}.md`)).toBe("### Talk\n\n- demo build\n");
+    expect(w.files.get(`${WT}/release-notes/${TAG}.md`)).toBe(NOTES);
     expect(w.files.get(`${WT}/CHANGELOG.md`)).toBe(CUT_CHANGELOG);
     expect(w.staged).toEqual(["package.json", "CHANGELOG.md", `release-notes/${TAG}.md`]);
     const body = releaseNotes(TAG, (p) => w.files.get(`${WT}/${p}`) ?? null).body;
-    expect(body).toBe("### Talk\n\n- demo build");
+    expect(body).toBe(NOTES.trim());
     expect(w.logs.some((l) => l.includes(`from release-notes/${TAG}.md`))).toBe(true);
   });
 
-  test("--notes with an empty Unreleased is allowed: the version heading stays empty", async () => {
+  test("--notes with an empty Unreleased is allowed, and the new tree's own release-body check passes", async () => {
     const w = new World();
     w.changelog = EMPTY_CHANGELOG;
-    w.files.set("/notes.md", "### Talk\n");
+    w.files.set("/notes.md", NOTES);
     await talkCut(opts({ notes: "/notes.md" }), w.deps());
     const cl = w.files.get(`${WT}/CHANGELOG.md`) ?? "";
     expect(sectionFor(cl, "0.1.0-alpha.4")).toBeNull();
     expect(sectionFor(cl, "0.1.0-alpha.3")).toBe("old notes");
+    // What changelog-section.test.ts runs in the tag's `build` job, on the bump commit's tree.
+    expect(() => releaseNotes(TAG, (p) => w.files.get(`${WT}/${p}`) ?? null)).not.toThrow();
+  });
+
+  test("a thin --notes file is refused in step 4, before any push", async () => {
+    const w = new World();
+    w.files.set("/notes.md", "### Talk\n");
+    expect(await refusal(w, { notes: "/notes.md" })).toContain("too thin");
+    expect(w.mutating()).toEqual([]);
+  });
+
+  test("a thin changelog section is refused in step 4, before any push", async () => {
+    const w = new World();
+    w.changelog = CHANGELOG.replace(ENTRY, "- a thing");
+    expect(await refusal(w)).toContain("too thin");
+    expect(w.mutating()).toEqual([]);
   });
 
   test("an oversize --notes file is refused before any push", async () => {
@@ -576,15 +604,31 @@ describe("talk-cut refusals", () => {
 
   test("--notes on a <sha> whose release.yml predates release-notes.ts is refused", async () => {
     const w = new World();
-    w.releaseYmlUsesNotes = false;
-    w.files.set("/notes.md", "### Talk\n");
+    w.releaseYml = OLD_YML;
+    w.files.set("/notes.md", NOTES);
     expect(await refusal(w, { notes: "/notes.md" })).toContain("would ignore");
     expect(w.mutating()).toEqual([]);
   });
 
+  test("--notes on a release.yml that only mentions release-notes.ts in a comment is refused", async () => {
+    const w = new World();
+    w.releaseYml = COMMENT_YML;
+    w.files.set("/notes.md", NOTES);
+    expect(await refusal(w, { notes: "/notes.md" })).toContain("would ignore");
+    expect(w.mutating()).toEqual([]);
+  });
+
+  test("the real release.yml has the run line the guard looks for", () => {
+    const yml = readFileSync(
+      join(import.meta.dir, "..", ".github", "workflows", "release.yml"),
+      "utf8",
+    );
+    expect(NOTES_RUN_LINE.test(yml)).toBe(true);
+  });
+
   test("without --notes on an older release.yml, changelog-section.ts is the body check", async () => {
     const w = new World();
-    w.releaseYmlUsesNotes = false;
+    w.releaseYml = OLD_YML;
     await talkCut(opts(), w.deps());
     expect(w.calls).toContain(`bun scripts/changelog-section.ts ${TAG}`);
     expect(w.calls).not.toContain(`bun scripts/release-notes.ts ${TAG}`);
@@ -657,7 +701,7 @@ describe("talk-cut refusals", () => {
   test("a changelog section the size of master's (156,625) is refused before any push", async () => {
     const w = new World();
     const big = `- ${"x".repeat(156_625 - 2)}\n`;
-    w.changelog = CHANGELOG.replace("### Added\n\n- a thing (R1)\n", big);
+    w.changelog = CHANGELOG.replace(`### Added\n\n${ENTRY}\n`, big);
     const m = await refusal(w);
     expect(m).toContain("(156625 + margin");
     expect(m).toContain(`over GitHub's ${RELEASE_BODY_LIMIT} limit`);
