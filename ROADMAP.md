@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**95 of 645 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**96 of 646 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -290,6 +290,7 @@ that ordering is the priority.
 - **R644** · History lends a survivor that was never checked against a test that failed in the SOURCE run's baseline but passes now (a false survive, even with equal suites) · [R644.md](docs/roadmap/R644.md) · done (33f8f92c)
 - **R646** · --resume carries a survivor scored against fewer tests than now cover it: a test green in the resumed run's baseline but not when it was scored never faced it · [R646.md](docs/roadmap/R646.md) · open, filed 2026-10-22
 - **R647** · al-runner v3 gate: leg T checks its counts before it classifies, so r9 §7's held can never be reached, and X (d) cannot tell a timed-out baseline from a broken Sleep rule · [R647.md](docs/roadmap/R647.md) · done (80491bb9)
+- **R650** · al-runner v3 gate: on leg T's held path the text check runs without R556's bare-hash refusal, so a run whose mutated-text hashes are missing can hide a text change · [R650.md](docs/roadmap/R650.md) · open, filed 2026-10-22
 
 ## Product gaps a real project hits
 
