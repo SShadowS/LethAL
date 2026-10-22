@@ -473,6 +473,12 @@ export interface V3EntriesStats {
   pairFallbacks1: number;
   /** R653: pairs whose NONE entry did not stand (R612 cut at or before it): +2 live requests. */
   pairFallbacks2: number;
+  /** R653: the `pairFallbacks1` whose reproduction was asked for (their confirm passed). */
+  pairFallbacks1Passed: number;
+  /** R653: the `pairFallbacks2` whose reproduction was asked for (their confirm passed). Per fail
+   *  kill, `liveRequests = old − pairRequests + pairFallbacks1Passed + pairFallbacks2 +
+   *  pairFallbacks2Passed`, where old is 1 + (1 if the confirm passed). */
+  pairFallbacks2Passed: number;
 }
 
 /** R651: the phase timers of `V3EntriesStats`. */
@@ -613,6 +619,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     pairRequests: 0,
     pairFallbacks1: 0,
     pairFallbacks2: 0,
+    pairFallbacks1Passed: 0,
+    pairFallbacks2Passed: 0,
   };
 
   private deployedDir: string | undefined;
@@ -657,6 +665,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         readonly none?: CallRows;
         readonly noneVerdict?: TestVerdict;
         readonly m?: CallRows;
+        /** Which R612 fallback this pair was: 1 (M cut), 2 (NONE cut). */
+        readonly fallback?: 1 | 2;
         readonly next: "null" | "mutant";
       }
     | undefined;
@@ -868,7 +878,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** C2 and R349: every field derived from the deployed layout or the active mutant. */
   private resetLayoutState(): void {
-    this.dropPair();
     this.rowsByCodeunit = new Map();
     this.coverageIndex = undefined;
     this.sleepIndex = undefined;
@@ -1096,6 +1105,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       } else if (pair?.next === "mutant" && mutantId === pair.mutantId) {
         // The reproduction, asked for only after the confirm passed (R577).
         this.stats.pairRequests += 1;
+        if (pair.fallback === 1) this.stats.pairFallbacks1Passed += 1;
+        if (pair.fallback === 2) this.stats.pairFallbacks2Passed += 1;
         if (pair.m !== undefined) this.rowsByCodeunit.set(pair.ref.codeunitId, pair.m);
       }
       this.lastActivated = mutantId;
@@ -1904,13 +1915,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // Stored only now: request() may itself close the daemon (an R612 cut, a dirty daemon).
     const none = out.results.get(SELECTOR_RESOURCE_NONE)?.get(cu);
     const m = out.results.get(mutantId)?.get(cu);
-    if (none === undefined) this.stats.pairFallbacks2 += 1;
-    else if (m === undefined) this.stats.pairFallbacks1 += 1;
+    const fallback = none === undefined ? 2 : m === undefined ? 1 : undefined;
+    if (fallback === 2) this.stats.pairFallbacks2 += 1;
+    if (fallback === 1) this.stats.pairFallbacks1 += 1;
     this.pair = {
       mutantId,
       ref,
       ...(none !== undefined ? { none } : {}),
       ...(none !== undefined && m !== undefined ? { m } : {}),
+      ...(fallback !== undefined ? { fallback } : {}),
       next: "null",
     };
   }
@@ -2102,7 +2115,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await this.closeDaemon();
       const s = this.stats;
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1} / NONE cut ${s.pairFallbacks2}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(

@@ -2391,14 +2391,18 @@ describe("R653 pair", () => {
     });
   /** Deployed, baseline, M0001 prefetched, and its kill read (A fails under M0001). */
   const killed = async (
-    serve: ServeScript | ((isPair: IsPair) => ServeScript) = { rows: killsM1 },
+    serve: ServeScript | ((isPair: IsPair, isWarmup: (n: number) => boolean) => ServeScript) = {
+      rows: killsM1,
+    },
   ) => {
     let reqs: readonly Req[] = [];
     const isPair: IsPair = (n) => {
       const ids = reqs[n]?.ids ?? [];
       return ids.length === 4 && ids[0] === "NONE|echo" && ids[2] === "M0001|echo";
     };
-    const script = typeof serve === "function" ? serve(isPair) : serve;
+    /** Request `n` is its daemon's first: the warm-up. */
+    const isWarmup = (n: number) => reqs.findIndex((q) => q.daemon === reqs[n]?.daemon) === n;
+    const script = typeof serve === "function" ? serve(isPair, isWarmup) : serve;
     const r = await readyRig({ serve: script, oneShotRows: allPass, mutants: ["M0001"] });
     reqs = r.serve.requests;
     await r.b.activate("M0001");
@@ -2638,6 +2642,136 @@ describe("R653 pair", () => {
     expect(r.serve.requests.length).toBe(n0 + 2);
     const s = r.b.entriesStats();
     expect([s.pairRequests, s.pairFallbacks1, s.pairFallbacks2]).toEqual([1, 1, 0]);
+  });
+
+  describe("P5c, P5d: the pre-committed relation holds for every pair, fallback or not, confirm passed or not", () => {
+    /**
+     * The orchestrator's flow after a cold fail kill: the pair, activate(null), the confirm, and
+     * activate(M) + the reproduction ONLY when the confirm passed (R577). Returns c (1 if it passed)
+     * and every counter's change.
+     */
+    const flow = async (r: Rig) => {
+      const s0 = r.b.entriesStats();
+      await r.b.sendKillPair("M0001", A);
+      await r.b.activate(null);
+      const c = (await r.b.run(A, OPTS)).outcome === "pass" ? 1 : 0;
+      if (c === 1) {
+        await r.b.activate("M0001");
+        await r.b.run(A, OPTS);
+      }
+      const s1 = r.b.entriesStats();
+      const d = (k: keyof typeof s0) => s1[k] - s0[k];
+      const counters = {
+        live: d("liveRequests"),
+        bound: d("boundChecks"),
+        warmups: d("warmups"),
+        P: d("pairRequests"),
+        F1: d("pairFallbacks1"),
+        F1p: d("pairFallbacks1Passed"),
+        F2: d("pairFallbacks2"),
+        F2p: d("pairFallbacks2Passed"),
+      };
+      // Today's cost of one fail kill: the confirm, plus the reproduction when the confirm passed.
+      const old = 1 + c;
+      const want = old - counters.P + counters.F1p + counters.F2 + counters.F2p;
+      expect(counters.live).toBe(want);
+      // boundChecks = warm-ups + prefetch + live + coverage: a restart's warm-up is its own term.
+      expect(counters.bound - counters.warmups).toBe(want);
+      return { c, ...counters };
+    };
+    /** The pair's NONE entry for A: `a`; for B: a timeout R612 does not keep (the cut). */
+    const cutAtNoneCodeunit =
+      (a: FakeRow["status"]) =>
+      (isPair: IsPair): ServeScript => ({
+        rows: (m, cu, d, n) =>
+          m === "NONE" && isPair(n)
+            ? [
+                { method: "A", status: a, ...(a === "fail" ? { message: "flaky" } : {}) },
+                { method: "B", status: "error", notRun: true, message: TIMEOUT_1S },
+              ]
+            : killsM1(m, cu, d, n),
+      });
+
+    test("P5c: a cut at the NONE CODEUNIT entry (it stands: F1), the confirm fails: one request, nothing else", async () => {
+      const r = await killed(cutAtNoneCodeunit("fail"));
+      expect(await flow(r)).toEqual({
+        c: 0,
+        live: 1,
+        bound: 1,
+        warmups: 0,
+        P: 0,
+        F1: 1,
+        F1p: 0,
+        F2: 0,
+        F2p: 0,
+      });
+    });
+
+    test("P5c twin: the same cut, the confirm passes: the reproduction goes live on a new daemon", async () => {
+      const r = await killed(cutAtNoneCodeunit("pass"));
+      expect(await flow(r)).toEqual({
+        c: 1,
+        live: 2,
+        bound: 3,
+        warmups: 1,
+        P: 1,
+        F1: 1,
+        F1p: 1,
+        F2: 0,
+        F2p: 0,
+      });
+    });
+
+    test("P5d: the NONE echo cut (F2), the live confirm fails: two requests", async () => {
+      const r = await killed((isPair, isWarmup) => ({
+        ...cutEcho("NONE")(isPair),
+        rows: (m, cu, d, n) =>
+          m === "NONE" && n > 2 && !isWarmup(n)
+            ? allPass(m, cu, d, n).map((x) =>
+                x.method === "A" ? { ...x, status: "fail" as const, message: "flaky" } : x,
+              )
+            : killsM1(m, cu, d, n),
+      }));
+      expect(await flow(r)).toEqual({
+        c: 0,
+        live: 2,
+        bound: 3,
+        warmups: 1,
+        P: 0,
+        F1: 0,
+        F1p: 0,
+        F2: 1,
+        F2p: 0,
+      });
+    });
+
+    const others: Array<[string, Parameters<typeof killed>[0], number]> = [
+      ["the pair stands, the confirm passes", { rows: killsM1 }, 1],
+      [
+        "the pair stands, the confirm fails",
+        (isPair) => ({
+          rows: (m, cu, d, n) =>
+            m === "NONE" && isPair(n)
+              ? allPass(m, cu, d, n).map((x) =>
+                  x.method === "A" ? { ...x, status: "fail" as const, message: "flaky" } : x,
+                )
+              : killsM1(m, cu, d, n),
+        }),
+        0,
+      ],
+      [
+        "the M echo cut (F1), the confirm passes",
+        (isPair) => ({ ...cutEcho("M0001")(isPair), rows: killsM1 }),
+        1,
+      ],
+      ["the M echo cut (F1), the confirm fails", cutEcho("M0001"), 0],
+      ["the NONE echo cut (F2), the live confirm passes", cutEcho("NONE"), 1],
+    ];
+    for (const [name, serve, c] of others) {
+      test(`the relation: ${name}`, async () => {
+        expect((await flow(await killed(serve))).c).toBe(c);
+      });
+    }
   });
 
   describe("P6: a server error on the pair is the confirm's verdict, exactly as liveCall maps it", () => {
