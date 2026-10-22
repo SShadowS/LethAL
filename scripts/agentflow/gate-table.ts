@@ -26,8 +26,13 @@
  */
 
 import { ALRUNNER_LEG_IDS } from "../../packages/runner/itest/alrunner-legs.ts";
+import { V3_AGENTFLOW_LEGS } from "../../packages/runner/itest/alrunner-v3-legs.ts";
 
-/** Every live leg the repo has. `envtool` is absent on purpose: see `MANUAL_ONLY`. */
+/**
+ * Every live leg the repo has. `envtool` is absent on purpose: see `MANUAL_ONLY`.
+ * R654 S2: `alrunner-v3` (the Rust al-runner's gate) is selected wherever `alrunner` (the .NET
+ * one's) is, until S3 retires v2; it needs no BC server, so it shares `alrunner`'s container.
+ */
 export const LEGS = [
   "bcdev",
   "lease",
@@ -35,6 +40,7 @@ export const LEGS = [
   "tables",
   "chunked",
   "alrunner",
+  "alrunner-v3",
   "hang",
   "coverage-differential",
 ] as const;
@@ -53,6 +59,7 @@ export const FULL_SET: readonly Leg[] = [
   "tables",
   "chunked",
   "alrunner",
+  "alrunner-v3",
   "hang",
 ];
 
@@ -73,6 +80,7 @@ export const LEG_ORDER: readonly Leg[] = [
   "tables",
   "chunked",
   "alrunner",
+  "alrunner-v3",
   "coverage-differential",
   "hang",
 ];
@@ -83,6 +91,9 @@ export const LEG_ORDER: readonly Leg[] = [
  */
 export const EXPECTED_SUBLEGS: Readonly<Partial<Record<Leg, readonly string[]>>> = {
   alrunner: ALRUNNER_LEG_IDS,
+  // R654 S2: the v3 itest's default legs with no corpus and no tables leg (what a challenged run
+  // runs), K included: a gated run must pass K (`v3ItestFailures`).
+  "alrunner-v3": V3_AGENTFLOW_LEGS,
 };
 
 /** Which container each leg runs against. One instrumented target per container is a hard rule. */
@@ -91,6 +102,7 @@ export const LEG_CONTAINER: Readonly<Record<Leg, "agent-app" | "agent-data">> = 
   lease: "agent-app",
   "stale-publish": "agent-app",
   alrunner: "agent-app",
+  "alrunner-v3": "agent-app",
   hang: "agent-app",
   tables: "agent-data",
   chunked: "agent-data",
@@ -134,19 +146,19 @@ const RULES: readonly Rule[] = [
       "packages/builtin-tier1/",
       "packages/builtin-tier2/",
     ),
-    legs: ["bcdev", "tables", "chunked", "alrunner"],
+    legs: ["bcdev", "tables", "chunked", "alrunner", "alrunner-v3"],
     why: "these decide WHICH mutants exist and what their identity is",
   },
   {
     test: startsWith("packages/schemata/"),
     // `hang` is here because the selector schemata emits is what the stop has to interrupt, and no
     // other fixture contains a non-terminating mutant.
-    legs: ["bcdev", "tables", "chunked", "alrunner", "hang"],
+    legs: ["bcdev", "tables", "chunked", "alrunner", "alrunner-v3", "hang"],
     why: "the compiler that instruments a project, including the selector the stop interrupts",
   },
   {
     test: startsWith("packages/runner/"),
-    legs: ["bcdev", "lease", "tables", "chunked", "alrunner"],
+    legs: ["bcdev", "lease", "tables", "chunked", "alrunner", "alrunner-v3"],
     why: "orchestration, backends, store and transport",
   },
   {
@@ -188,7 +200,7 @@ const RULES: readonly Rule[] = [
   },
   {
     test: startsWith("fixtures/sandbox-app/", "fixtures/sandbox-tests/"),
-    legs: ["bcdev", "alrunner"],
+    legs: ["bcdev", "alrunner", "alrunner-v3"],
     why: "the codeunit fixture and its suite",
   },
   {

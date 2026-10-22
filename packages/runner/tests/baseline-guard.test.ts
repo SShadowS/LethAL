@@ -272,8 +272,12 @@ describe("R332: a frozen baseline never records itself", () => {
     }
   });
 
-  test("the registry names fourteen gate baselines and their record commands", () => {
+  // R654 S2: seventeen, with v3's layout and two symbol-set baselines (pre-committed 43115c78).
+  test("the registry names seventeen gate baselines and their record commands", () => {
     expect(Object.keys(GATE_BASELINES).sort()).toEqual([
+      "al-runner-v3.layout.baseline.json",
+      "al-runner-v3.symbols-lethala.baseline.json",
+      "al-runner-v3.symbols-lethalb.baseline.json",
       "al-runner-v3.tables.baseline.json",
       "al-runner.baseline.json",
       "al-runner.cli-default.baseline.json",

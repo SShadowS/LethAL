@@ -42,6 +42,7 @@ import {
   IDENTITY_SCHEME,
   emitStaticSelector,
 } from "@lethal/schemata";
+import { type ServerSpawnFn, defaultServerSpawn } from "../src/al-runner-server";
 import {
   AlRunnerV3Backend,
   type AlRunnerV3Config,
@@ -50,14 +51,17 @@ import {
   V3_REFUSED_NEARBY_TAG,
   V3_STATE_NOTE_TAG,
 } from "../src/al-runner-v3-backend";
+import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
 import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
+import { buildBackend } from "../src/cli";
 import type { EventSubscriber } from "../src/events";
 import { formatFailure } from "../src/format-failure";
 import { BASELINE_TIMEOUT_DEFAULT, type SessionConfig, runSession } from "../src/orchestrator";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
+import { type SpawnFn, defaultSpawn } from "../src/publisher";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import {
@@ -90,6 +94,14 @@ import {
 } from "./al-runner-v3-gate";
 import { TABLES_KNOWN_DIFFERENCES } from "./al-runner-v3-tables-known";
 import {
+  V3_K_CANDIDATE_SKIP,
+  V3_K_LEG,
+  judgeLegK,
+  legKSection,
+  v3DefaultLegs,
+  v3ItestFailures,
+} from "./alrunner-v3-legs";
+import {
   BaselineRecordedError,
   assertGateBaseline,
   preflightGateBaseline,
@@ -97,16 +109,32 @@ import {
   recordRequested,
 } from "./baseline-guard";
 import { prepareFixtureSymbols } from "./fixture-symbols";
+import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import {
+  LAYOUT_MAX_GUARDS,
+  LAYOUT_PROJECT_DIR,
+  LAYOUT_SELECTOR_IDS,
+  LAYOUT_TEST_DIR,
+  assertLayoutRun,
+  printLayoutTable,
+} from "./layout-fixture";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
+import { assertSymbolBuild, printSymbolTable } from "./symbol-fixture";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER_V3) {
   console.log("al-runner-v3 itest: skipped (set LETHAL_ITEST_ALRUNNER_V3=1)");
-  process.exit(0);
+  // R654 S2: an agentflow-challenged skip is a failed receipt, never a pass (R223).
+  const challenged = await emitSkipped("alrunner-v3", "the leg's env var is unset");
+  process.exit(challenged ? 1 : 0);
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const TABLES_BASELINE_PATH = join(HERE, "al-runner-v3.tables.baseline.json");
+// R654 S2: legs L1, Y-A and Y-B (pre-commitment 43115c78), each recorded once under R332.
+const LAYOUT_BASELINE_PATH = join(HERE, "al-runner-v3.layout.baseline.json");
+const SYMBOLS_A_BASELINE_PATH = join(HERE, "al-runner-v3.symbols-lethala.baseline.json");
+const SYMBOLS_B_BASELINE_PATH = join(HERE, "al-runner-v3.symbols-lethalb.baseline.json");
 const BIN = process.env.LETHAL_ALRUNNER_V3_PATH ?? AL_RUNNER_V3_DEFAULT_PATH;
 const CANDIDATE = process.env.LETHAL_ALRUNNER_V3_CANDIDATE === "1";
 const CACHE = process.env.LETHAL_ALRUNNER_V3_CACHE ?? "/work/tools/al-runtime-rs/cache";
@@ -124,15 +152,9 @@ const fixture = (n: string) => join(REPO, "fixtures", n);
 const BASELINE_STOP_S = Math.ceil(BASELINE_TIMEOUT_DEFAULT / 1000);
 const PROBE = join(REPO, "scripts", "r586-probe");
 
-const configured = [
-  "C",
-  "S1",
-  "S3",
-  "N1",
-  "X",
-  ...(CDO !== undefined ? ["D1", "D1c"] : []),
-  ...(TABLES ? ["T"] : []),
-];
+// R654 S2: L1, Y-A, Y-B and K join the default set (`v3DefaultLegs`). On a candidate build K is
+// skipped with its stated summary (`V3_K_CANDIDATE_SKIP`), never silently.
+const configured = v3DefaultLegs({ cdo: CDO !== undefined, tables: TABLES });
 const LEGS = (process.env.LETHAL_ITEST_V3_LEGS ?? configured.join(","))
   .split(",")
   .map((s) => s.trim());
@@ -445,6 +467,168 @@ async function legN1(scratch: string): Promise<void> {
   );
   assertIndex(b, "N1", 0, 0);
   assertReproduced(r, "N1");
+}
+
+// --- R654 S2: L1, Y-A, Y-B and K (pre-commitment docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md, 43115c78)
+
+/** A pre-committed table's own assertion error is a figure that differs (gate-fail), never infra. */
+function asLegFailure(leg: string, check: () => void): void {
+  try {
+    check();
+  } catch (e) {
+    throw new LegFailure(`${leg}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** §1's checks every new leg makes: a clean baseline, no note, no refusal, Sleep index 0 + 0. */
+function assertCleanLeg(r: SessionReport, b: AlRunnerV3Backend, leg: string): void {
+  must(
+    r.baselineGreen && r.unsupportedTests.length === 0,
+    `${leg}: baseline not green or a refused test`,
+  );
+  must(
+    tagged(r, V3_STATE_NOTE_TAG).length === 0 && tagged(r, V3_REFUSED_NEARBY_TAG).length === 0,
+    `${leg}: state or refused-nearby notes`,
+  );
+  must(
+    tagged(r, SLEEP_NOTE_TAG).length === 0 && refusedCause(r).length === 0,
+    `${leg}: a §6 or runner refusal`,
+  );
+  assertIndex(b, leg, 0, 0);
+  assertReproduced(r, leg);
+}
+
+/** L1 (R349, R353): sandbox-layout at maxGuardsPerBatch 7, two batches, EXPECTED_LAYOUT per ref. */
+async function legL1(scratch: string): Promise<SessionReport> {
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir: LAYOUT_TEST_DIR,
+      packagesDir: await microsoftDeps(scratch),
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: LAYOUT_SELECTOR_IDS.selectorId,
+    }),
+  );
+  const r = await session(scratch, b, {
+    projectDir: LAYOUT_PROJECT_DIR,
+    testDir: LAYOUT_TEST_DIR,
+    selectorIds: LAYOUT_SELECTOR_IDS,
+    maxGuardsPerBatch: LAYOUT_MAX_GUARDS,
+  });
+  printLayoutTable(r, "L1");
+  assertCounts(r, "L1", 7, 3, 0, 10);
+  asLegFailure("L1", () => assertLayoutRun(r, "L1"));
+  assertCleanLeg(r, b, "L1");
+  return r;
+}
+
+/** Y-A / Y-B (R321): sandbox-symbols under one set, EXPECTED_BY_SET per mutant. */
+async function legY(scratch: string, leg: "Y-A" | "Y-B"): Promise<SessionReport> {
+  const symbols = leg === "Y-A" ? ["LETHALA"] : ["LETHALB"];
+  const ids = { selectorId: 79649, controlId: 79648, tableId: 79647 };
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir: fixture("sandbox-symbols-tests"),
+      packagesDir: await microsoftDeps(scratch),
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: ids.selectorId,
+      preprocessorSymbols: symbols,
+    }),
+  );
+  const r = await session(scratch, b, {
+    projectDir: fixture("sandbox-symbols"),
+    testDir: fixture("sandbox-symbols-tests"),
+    selectorIds: ids,
+    preprocessorSymbols: symbols,
+  });
+  printSymbolTable(r, symbols, leg);
+  assertCounts(r, leg, 5, 4, 0, 9);
+  asLegFailure(leg, () => assertSymbolBuild(r, symbols, leg));
+  assertCleanLeg(r, b, leg);
+  return r;
+}
+
+/**
+ * K (R387, R394): the backend the CLI builds from an `alRunnerV3` section with no `coverage` and
+ * no `transport` key. Its spawns are wrapped, so the leg sees which transport ran. Never on a
+ * candidate build (main skips it there with `V3_K_CANDIDATE_SKIP`): the CLI's config cannot name
+ * a candidate, and the CLI-built backend refuses an ungated build.
+ */
+async function legK(scratch: string): Promise<void> {
+  let oneShotTestCalls = 0;
+  let serveSpawns = 0;
+  const spawn: SpawnFn = (argv, opts) => {
+    if (argv.includes("test")) oneShotTestCalls += 1;
+    return defaultSpawn(argv, opts);
+  };
+  const serverSpawn: ServerSpawnFn = (argv, opts) => {
+    serveSpawns += 1;
+    return defaultServerSpawn(argv, opts);
+  };
+  const warned: string[] = [];
+  const warn = console.warn;
+  console.warn = (...a: unknown[]) => {
+    warned.push(a.map(String).join(" "));
+    warn(...a);
+  };
+  let built: Awaited<ReturnType<typeof buildBackend>>;
+  try {
+    built = await buildBackend(
+      {
+        mode: "run",
+        projectDir: fixture("sandbox-app"),
+        testDir: fixture("sandbox-tests"),
+        backendKind: "al-runner-v3",
+        dbPath: join(scratch, "cli.sqlite"),
+        configPath: join(scratch, "lethal.config.json"),
+        skipKnownSurvivors: false,
+        workers: 1,
+        keepEnv: false,
+        allowExpiringEnv: false,
+      } as Parameters<typeof buildBackend>[0],
+      {
+        alRunnerV3: legKSection({
+          path: BIN,
+          packagesDir: join(fixture("sandbox-tests"), ".alpackages"),
+          bcVersion: SANDBOX_BC,
+          alcPath: ALC,
+          cacheDir: CACHE,
+        }),
+      },
+      join(scratch, "cli-scratch"),
+      undefined,
+      { alRunnerSpawn: spawn, alRunnerServerSpawn: serverSpawn },
+      { selectorId: 79199, controlId: 79198, tableId: 79197 },
+    );
+  } finally {
+    console.warn = warn;
+  }
+  if (!(built instanceof AlRunnerV3Backend)) {
+    throw new LegFailure("K: buildBackend did not build an AlRunnerV3Backend");
+  }
+  const b = built;
+  const r = await session(scratch, b, {
+    projectDir: fixture("sandbox-app"),
+    testDir: fixture("sandbox-tests"),
+    selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+  });
+  assertCounts(r, "K", 3, 12, 4, 19);
+  await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "K");
+  const facts = {
+    coverage: b.capabilities().coverage,
+    inRunStopIsBudget: b.inRunStopIsBudget,
+    serveSpawns,
+    oneShotTestCalls,
+    warned: warned.includes(AL_RUNNER_V3_NOT_AUTHORITATIVE),
+    noCoverageFiles: r.mutants.filter((m) => m.verdict === "no-coverage").map((m) => m.file),
+  };
+  console.log(
+    `  K: ${JSON.stringify({ ...facts, noCoverageFiles: facts.noCoverageFiles.length })}`,
+  );
+  const problems = judgeLegK(facts);
+  must(problems.length === 0, problems.join("; "));
+  assertCleanLeg(r, b, "K");
 }
 
 /** The sandbox-app batch as runSession built it (S1's instrumented batch folder). */
@@ -1089,6 +1273,12 @@ async function legT(
 
 async function main(): Promise<void> {
   if (LEGS.includes("T")) preflightGateBaseline(TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
+  // R654 S2: refused before any leg runs while a baseline is missing (R332).
+  if (LEGS.includes("L1")) preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner-v3 itest leg L1");
+  if (LEGS.includes("Y-A"))
+    preflightGateBaseline(SYMBOLS_A_BASELINE_PATH, "al-runner-v3 itest leg Y-A");
+  if (LEGS.includes("Y-B"))
+    preflightGateBaseline(SYMBOLS_B_BASELINE_PATH, "al-runner-v3 itest leg Y-B");
   // R614: the fixture .alpackages, from the pinned tar (a fresh worktree extracts them itself).
   // M9: every leg selection needs them, CDO-only legs included (or the tar to extract them from).
   const prepared = await prepareFixtureSymbols({ worktree: REPO });
@@ -1118,6 +1308,14 @@ async function main(): Promise<void> {
       await mkdir(scratch, { recursive: true });
       const t0 = Date.now();
       console.log(`leg ${leg}:`);
+      // R654 S2, ruling condition 1: on a candidate K never runs, and says so in the summary.
+      if (leg === V3_K_LEG && CANDIDATE) {
+        legs[leg] = V3_K_CANDIDATE_SKIP;
+        const why = `${leg}: ${V3_K_CANDIDATE_SKIP}: the CLI's alRunnerV3 config cannot name a candidate, and a CLI-built backend runs gated builds only`;
+        console.log(`leg ${why}`);
+        lines.push(why);
+        continue;
+      }
       try {
         if (leg === "C") lines.push(...(await legC(scratch)).map((l) => `C: ${l}`));
         else if (leg === "S1") await legS1(scratch);
@@ -1125,6 +1323,33 @@ async function main(): Promise<void> {
         else if (leg === "N1") await legN1(scratch);
         else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
+        // R654 S2: each leg checks its pre-committed table FIRST (gate-fail on a difference, and
+        // nothing is written), then the own-baseline compare, which a record run writes (R332).
+        else if (leg === "L1") {
+          const r = await legL1(scratch);
+          try {
+            await assertGateBaseline(r, LAYOUT_BASELINE_PATH, "al-runner-v3 itest leg L1");
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`L1: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else if (leg === "Y-A") {
+          const r = await legY(scratch, leg);
+          try {
+            await assertGateBaseline(r, SYMBOLS_A_BASELINE_PATH, "al-runner-v3 itest leg Y-A");
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`Y-A: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else if (leg === "Y-B") {
+          const r = await legY(scratch, leg);
+          try {
+            await assertGateBaseline(r, SYMBOLS_B_BASELINE_PATH, "al-runner-v3 itest leg Y-B");
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`Y-B: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else if (leg === V3_K_LEG) await legK(scratch);
         else if (leg === "T") {
           const t = await legT(scratch, (l) => lines.push(l));
           if (t.outcome === "held") {
@@ -1190,13 +1415,29 @@ async function main(): Promise<void> {
     });
   }
   if (recorded !== undefined) throw recorded;
-  const bad = Object.entries(legs).filter(([, v]) => v !== "pass");
-  if (bad.length > 0)
-    throw new Error(`al-runner-v3 itest: FAIL: ${bad.map(([l, v]) => `${l}=${v}`).join(", ")}`);
+  // R654 S2, ruling condition 2: every selected leg must pass, K included on a gated build (a
+  // skip there fails); only a candidate's K may read `V3_K_CANDIDATE_SKIP` (`v3ItestFailures`).
+  const bad = v3ItestFailures(legs, CANDIDATE, LEGS);
+  if (bad.length > 0) throw new Error(`al-runner-v3 itest: FAIL: ${bad.join(", ")}`);
   console.log("al-runner-v3 itest: PASS");
+  // R654 S2: agentflow's receipt (only when challenged), naming every leg that ran and passed.
+  await emitPassed("alrunner-v3", {
+    sublegs: Object.entries(legs)
+      .filter(([, v]) => v === "pass")
+      .map(([l]) => l),
+    artifacts: { reported: false },
+  });
 }
 
-main().catch((err: unknown) => {
+main().catch(async (err: unknown) => {
   console.error(formatFailure(err));
+  await emitFailed(
+    "alrunner-v3",
+    err instanceof BaselineRecordedError
+      ? "record mode: baselines recorded, not a pass"
+      : err instanceof Error
+        ? err.message
+        : String(err),
+  );
   process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 });
