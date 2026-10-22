@@ -161,3 +161,8 @@ Offline red checks and the live ones still to run are in R618's handoff
 - 2026-10-22: built offline (R618).
 - 2026-10-22, live run 1 on bc1: BLOCKED at R2. L0, L1 and R1 were as pre-committed. R2 carried 7, not 9 (the
   no-coverage KEPT rows were re-derived). Ruling (a): an addendum, then a re-run of the whole gate.
+- 2026-10-22, at 7084eece, under LethAL Control 1.0.0.23:
+  - **PASS on bc1** (`/coord/handoff/R-618/lend-bc1-run2.log`), **bc2** (`lend-bc2.log`) and **bc3**
+    (`lend-bc3.log`). Every leg and the refusals RN1-RN4 were as pre-committed with the addendum.
+  - **The 10 live red checks went red at their predicted leg**, plus an N0-only form of RC10
+    (`/coord/handoff/R-618/redcheck-live-results.md`). The clean confirm afterwards passed.
