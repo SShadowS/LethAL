@@ -203,6 +203,8 @@ describe("R647 r10 (a): judgeLegT classifies, compares and prints first, then ju
     judgeLegT({
       classification: classifyLegT(before, now, bc),
       compare: compareMutants(before, now, { sameScheme: true }),
+      own: before,
+      now,
       counts: { killed: 290, survived: 57, noCoverage: 59 },
       total: 406,
       unsupportedTests: 3,
@@ -272,6 +274,23 @@ describe("R647 r10 (a): judgeLegT classifies, compares and prints first, then ju
     expect(j.outcome).toBe("gate-fail");
     expect(j.failure).toMatch(/K2/);
   });
+  test("T-a12 (R650): held rows, own baseline has hashes, one run row bare: gate-fail naming R556's refusal", () => {
+    const now = [sha(err("K1", "runner-refused"), "a"), k2, sha(k3, "c")];
+    expect(classifyLegT(ownSha, now, bc).outcome).toBe("held");
+    // The compare alone counts the bare row unverified, not a difference.
+    expect(compareMutants(ownSha, now, { sameScheme: true }).differences.length).toBe(1);
+    const j = judge(now, {}, ownSha);
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.failure).toMatch(/1 mutant\(s\) of this run have no mutated-text hash.*first K2/);
+    expect(j.failure).toMatch(/text check would switch itself off/);
+  });
+  test("T-a13 (R650): the same held rows with every hash present: held", () => {
+    const now = [sha(err("K1", "runner-refused"), "a"), sha(k2, "b"), sha(k3, "c")];
+    expect(judge(now, {}, ownSha).outcome).toBe("held");
+  });
+  test("T-a14 (R650, R556's own rule): no hashes in the own baseline nor the run: held", () => {
+    expect(judge(heldNow).outcome).toBe("held");
+  });
   test("T-a11 (I3): a failing step 2 (unsupportedTests 0) still returns every row line of step 0", () => {
     const j = judge(heldNow, { unsupportedTests: 0 });
     expect(j.outcome).toBe("gate-fail");
@@ -287,6 +306,8 @@ describe("R647 r10 (b): leg T's row lines, one format", () => {
     judgeLegT({
       classification: classifyLegT(before, now, bc),
       compare: compareMutants(before, now, { sameScheme: true }),
+      own: before,
+      now,
       counts: { killed: 290, survived: 57, noCoverage: 59 },
       total: 406,
       unsupportedTests: 3,
@@ -329,6 +350,8 @@ describe("R647 r10 (b): leg T's row lines, one format", () => {
     const j = judgeLegT({
       classification: classifyLegT(o, n, o),
       compare: compareMutants(o, n, { sameScheme: true }),
+      own: o,
+      now: n,
       counts: { killed: 290, survived: 57, noCoverage: 59 },
       total: 406,
       unsupportedTests: 3,
