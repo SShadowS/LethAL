@@ -19,6 +19,12 @@ bun run compile:fixtures                                  # the demo app still c
 bun scripts/demo-reset.ts                                 # known state + doctor green
 ```
 
+**On `bc-demo` (server1, R663)**, run `bun scripts/bc-demo-setup.ts` first. It republishes LethAL
+Control and the gift-card pair (the database is in memory, so a server1 reboot empties it), writes
+`examples/gift-card/lethal.config.demo.json` and runs `doctor`. It needs no internet. If bc-demo does
+not answer, it prints what only the owner can do on server1 and exits 2. Then pass
+`--config examples/gift-card/lethal.config.demo.json` to `demo-reset.ts` and to `run` below.
+
 Then confirm the frozen numbers still hold, which is the one check that would catch a change nobody
 expected:
 

@@ -18,6 +18,8 @@ lethal.config.cronus*.json
 # R589: per-server fixture configs for the BC on Linux servers (bc1, bc2, bc3); they hold credentials
 lethal.config.bc*.json
 launch.bc*.json
+# R663: the talk's bc-demo config (examples/gift-card); it holds credentials
+lethal.config.demo.json
 scripts/r289-probe/sidecar-creds.*.json
 *.app
 # R599: five small real alc builds of the names fixtures, test data for bc-app-content.test.ts

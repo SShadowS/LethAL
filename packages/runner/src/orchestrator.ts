@@ -11002,6 +11002,16 @@ async function runMutantsOnBackend(args: {
         // baseline deadline) it runs at the budget, and a test slower than that today is abandoned
         // at that deadline: `in-flight-unknown`, a strand, the tier quarantined; never a kill.
         const confirmMs = timedOut ? Math.max(budget, args.fallbackTimeoutMs) : budget;
+        // R653: a fail kill's confirm and its R577 reproduction may travel as ONE request (al-runner
+        // v3 serve-entries, confirm first); the two reads below are unchanged.
+        if (
+          !timedOut &&
+          args.backend.killsMustReproduce === true &&
+          args.backend.sendKillPair !== undefined
+        ) {
+          args.safety.assertSafe(`sendKillPair(${m.mutantId})`);
+          await args.backend.sendKillPair(m.mutantId, ref);
+        }
         await activateOnce(args.backend, args.safety, null);
         // Layer 5C-B2: `runFenced` here too — the confirm rerun earns the same single fresh
         // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
