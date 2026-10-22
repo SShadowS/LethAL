@@ -432,6 +432,8 @@ export interface V3EntriesStats {
   coverageRequests: number;
   echoRequests: number;
   echoMismatches: number;
+  /** §5 step 2 only (the echo BEFORE the coverage request); also counted in `echoMismatches`. */
+  secondEchoMismatches: number;
   entriesSent: number;
 }
 
@@ -549,6 +551,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     coverageRequests: 0,
     echoRequests: 0,
     echoMismatches: 0,
+    secondEchoMismatches: 0,
     entriesSent: 0,
   };
 
@@ -1753,6 +1756,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           return why;
         };
         const before = this.cfg.secondEcho === false ? undefined : await echoOk();
+        if (before !== undefined) this.stats.secondEchoMismatches += 1;
         this.stats.coverageRequests += 1;
         const cov = await this.plain(daemon, ref.codeunitId, true);
         const after = await echoOk();

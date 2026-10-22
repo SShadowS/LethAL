@@ -395,6 +395,38 @@ export function failsClosedRefusal(
 }
 
 /**
+ * R635: the transport flags of `itest:alrunner-v3`, `LETHAL_ITEST_V3_TRANSPORT` (`one-shot` or
+ * `serve-entries`) and `LETHAL_ITEST_V3_SECOND_ECHO` (`0` or `1`, serve-entries only). Unset (or
+ * `one-shot` alone) gives `{}`, so the gate's backend config is byte-for-byte what it was. Any other
+ * value refuses by name.
+ */
+export function v3ItestTransport(env: Readonly<Record<string, string | undefined>>): {
+  readonly transport?: "serve-entries";
+  readonly secondEcho?: boolean;
+} {
+  const t = env.LETHAL_ITEST_V3_TRANSPORT;
+  const e = env.LETHAL_ITEST_V3_SECOND_ECHO;
+  if (t !== undefined && t !== "one-shot" && t !== "serve-entries") {
+    throw new Error(
+      `al-runner-v3-itest-transport-refused: LETHAL_ITEST_V3_TRANSPORT=${JSON.stringify(t)}; allowed: one-shot, serve-entries (R635)`,
+    );
+  }
+  if (e !== undefined && e !== "0" && e !== "1") {
+    throw new Error(
+      `al-runner-v3-itest-transport-refused: LETHAL_ITEST_V3_SECOND_ECHO=${JSON.stringify(e)}; allowed: 0, 1 (R635)`,
+    );
+  }
+  if (e !== undefined && t !== "serve-entries") {
+    throw new Error(
+      "al-runner-v3-itest-transport-refused: LETHAL_ITEST_V3_SECOND_ECHO is set without LETHAL_ITEST_V3_TRANSPORT=serve-entries (R635)",
+    );
+  }
+  return t === "serve-entries"
+    ? { transport: "serve-entries", ...(e !== undefined ? { secondEcho: e === "1" } : {}) }
+    : {};
+}
+
+/**
  * G5: the gate worktree is dirty when `git status --porcelain --untracked-files=all` shows any
  * tracked change, or an UNTRACKED file under `fixtures/` or `packages/` (it would compile into a
  * leg). Other untracked files are the gate's own outputs.

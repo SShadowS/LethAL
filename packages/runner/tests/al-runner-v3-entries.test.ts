@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitResourceSelector, emitStaticSelector } from "@lethal/schemata";
+import { v3ItestTransport } from "../itest/al-runner-v3-gate";
 import { installResourceSelector } from "../src/al-runner-backend";
 import {
   AlRunnerServer,
@@ -1323,6 +1324,9 @@ describe("13: §5, the coverage window for a pass under a mutant when the Sleep 
       const v = await r.b.run(ref("A"), OPTS);
       expect(outcome(v)).toEqual(["error", "runner-test-error"]);
       expect(v.failureMessage).toContain("entries-echo-mismatch");
+      // The second echo (before the coverage request) is counted on its own.
+      expect(r.b.entriesStats().secondEchoMismatches).toBe(which === 1 ? 1 : 0);
+      expect(r.b.entriesStats().echoMismatches).toBe(1);
     });
   }
 
@@ -1681,5 +1685,44 @@ describe("the CLI threads the option through (wiring)", () => {
     }
     expect((await build({})).inRunStopIsBudget).toBe(true);
     expect((await build({ transport: "serve-entries" })).inRunStopIsBudget).toBe(false);
+  });
+});
+
+describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
+  const base = { alRunnerPath: "/x", coverage: "al-runner" };
+  test("unset, or one-shot alone, adds nothing: the gate's config is unchanged", () => {
+    expect(v3ItestTransport({})).toEqual({});
+    expect({ ...base, ...v3ItestTransport({}) }).toEqual(base);
+    expect(v3ItestTransport({ LETHAL_ITEST_V3_TRANSPORT: "one-shot" })).toEqual({});
+  });
+  test("serve-entries, with secondEcho 0 or 1 when given", () => {
+    expect(v3ItestTransport({ LETHAL_ITEST_V3_TRANSPORT: "serve-entries" })).toEqual({
+      transport: "serve-entries",
+    });
+    for (const [v, want] of [
+      ["0", false],
+      ["1", true],
+    ] as const) {
+      expect(
+        v3ItestTransport({
+          LETHAL_ITEST_V3_TRANSPORT: "serve-entries",
+          LETHAL_ITEST_V3_SECOND_ECHO: v,
+        }),
+      ).toEqual({ transport: "serve-entries", secondEcho: want });
+    }
+  });
+  test("an unknown value, or secondEcho without serve-entries, refuses by name", () => {
+    expect(() => v3ItestTransport({ LETHAL_ITEST_V3_TRANSPORT: "serve" })).toThrow(
+      /al-runner-v3-itest-transport-refused: LETHAL_ITEST_V3_TRANSPORT/,
+    );
+    expect(() =>
+      v3ItestTransport({
+        LETHAL_ITEST_V3_TRANSPORT: "serve-entries",
+        LETHAL_ITEST_V3_SECOND_ECHO: "on",
+      }),
+    ).toThrow(/al-runner-v3-itest-transport-refused: LETHAL_ITEST_V3_SECOND_ECHO=/);
+    expect(() => v3ItestTransport({ LETHAL_ITEST_V3_SECOND_ECHO: "0" })).toThrow(
+      /SECOND_ECHO is set without/,
+    );
   });
 });
