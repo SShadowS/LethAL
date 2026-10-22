@@ -1,0 +1,12 @@
+{
+  "id": "746d68f0-65f7-4401-af1c-51b65bcb206a",
+  "name": "R629 Probe B2",
+  "publisher": "LethAL Probe",
+  "version": "1.0.0.0",
+  "brief": "R629 co-install probe, case 2 app B",
+  "description": "Throwaway probe. Declares codeunit 91511 \"R629 Probe\": app A's name under another id. No dependency on A.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 91500, "to": 91599 }]
+}
