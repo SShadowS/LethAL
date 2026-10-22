@@ -56,6 +56,7 @@ if (alc === null) {
   );
   process.exit(0);
 }
+const alcBin: string = alc;
 const packageCache = join(import.meta.dir, "..", "fixtures", "sandbox-app", ".alpackages");
 if (!existsSync(packageCache)) {
   console.error("r161-emit-proof: fixtures/sandbox-app/.alpackages missing — SKIPPED, not passed.");
@@ -172,7 +173,7 @@ function compileProject(
   for (const f of files) writeFileSync(join(work, "src", f.name), f.text, "utf8");
   const out = join(scratch, "out.app");
   const r = spawnSync(
-    alc,
+    alcBin,
     [`/project:${work}`, `/packagecachepath:${packageCache}`, `/out:${out}`],
     {
       encoding: "utf8",
