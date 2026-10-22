@@ -68,12 +68,15 @@ next free id right before writing).
   move touches mutant generation. Say in your report which cache entry you used. A cache entry is
   never edited, only replaced whole. The tool is `bun scripts/corpus-snapshot.ts snapshot <set>
   --master` and `diff <set> --branch <worktree> [--projects ...]` (R593); it keys each entry by its
-  dumper (`<sha>/<set>/<dumperKey>/`) and takes one of two heavy slots, `/coord/locks/heavy.1` and
-  `heavy.2`, with `flock`. Known limit: two corpus jobs started from ONE shell (`a & b`) share a
+  dumper (`<sha>/<set>/<dumperKey>/`) and takes one of three heavy slots, `/coord/locks/heavy.1`,
+  `heavy.2` and `heavy.3`, with `flock`. It refuses a fourth heavy job, and a third BaseApp
+  (BC.History) corpus job (R642). Known limit: two corpus jobs started from ONE shell (`a & b`) share a
   process group and count as one, and a job on a corpus COPY is invisible to its `ps` scan; such
   jobs take a slot themselves: `flock -n /coord/locks/heavy.<n> <cmd>`. A slot taken by hand like
   that writes no pid, so the tool counts it twice: once as a held slot and once as a running job.
-  That errs on the safe side.
+  That errs on the safe side. A slot taken by hand (`flock heavy.N <cmd>`) counts toward the
+  BaseApp cap only while one of its processes names /work/src/BC.History; a job over a COPY of the
+  corpus counts toward the total cap only.
 - **A lane commits its own pre-commitment to `master` (owner, 2026-10-08).** Once a pre-commitment
   is written (and plan-reviewed), commit it yourself, specs-only, as
   `docs/superpowers/specs/<date>-<id>-...-precommitment.md` with `[skip ci]`, BEFORE any live run.
