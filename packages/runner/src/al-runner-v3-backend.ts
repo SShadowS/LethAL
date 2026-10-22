@@ -417,7 +417,7 @@ export interface V3EntriesStats {
   entriesSent: number;
 }
 
-/** A started serve daemon; `dirty` closes it after the request in flight (R612 on the warm-up). */
+/** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
   readonly server: AlRunnerServer;
   dirty: boolean;
@@ -1418,9 +1418,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.daemon = daemon;
     try {
       this.stats.warmups += 1;
-      const { sent, rows } = await this.send([
-        { mutantId: SELECTOR_RESOURCE_NONE, codeunits: union },
-      ]);
+      const { sent, rows } = await this.send(
+        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
+        true,
+      );
       const disagree: string[] = [];
       const echo = rows.get(sent[0]?.id ?? "") ?? [];
       const echoWhy = echoMismatch(echo, SELECTOR_RESOURCE_NONE);
@@ -1437,8 +1438,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           `the daemon's NONE rows are not this batch's one-shot baseline (${disagree.join("; ")}), so no entry on it is trusted`,
         );
       }
+      // Build review r1 M1: a warm-up row R612 does not keep (a union test that times out under
+      // NONE) would leave every later request on an untrusted daemon, and every fresh daemon repeats
+      // it, so re-sending cannot help: refused by name before any mutant entry is sent.
       for (const e of sent) {
-        if (!serveDaemonReusable(serveLines(rows.get(e.id) ?? []), "v3")) daemon.dirty = true;
+        const mine = rows.get(e.id) ?? [];
+        if (serveDaemonReusable(serveLines(mine), "v3")) continue;
+        const bad = mine.find((r) => !serveDaemonReusable(serveLines([r]), "v3"));
+        throw new AlRunnerV3EntriesRefusedError(
+          "al-runner-v3-entries-warmup-dirty",
+          `the warm-up row ${bad?.name ?? e.id} (codeunit ${e.codeunit}) is one R612 does not keep (${bad?.message ?? bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
+        );
       }
     } catch (err) {
       await this.closeDaemon();
@@ -1459,7 +1469,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * closes the daemon and throws `AlRunnerServerRequestError`, and a refusal of the whole request
    * throws `al-runner-v3-entries-batch-refused`. `cached:false` is counted before the decode (N4).
    */
-  private async send(groups: readonly EntryGroup[]): Promise<{
+  private async send(
+    groups: readonly EntryGroup[],
+    warmup = false,
+  ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
   }> {
@@ -1493,11 +1506,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `the entries answer is invalid: ${decoded.why}`,
       );
     }
-    const refused = batchRefusalReason(
-      decoded.rows,
-      (m) => Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m)),
-      (m) => V3_TIMEOUT_MESSAGE.test(m),
-    );
+    // Build review r1 L2: only the warm-up or a request of 2+ groups speaks for the batch; a lone
+    // group's refused rows are that mutant's `error` (its echo did not run), never a batch stop.
+    const refused =
+      warmup || groups.length >= 2
+        ? batchRefusalReason(
+            decoded.rows,
+            (m) => Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m)),
+            (m) => V3_TIMEOUT_MESSAGE.test(m),
+          )
+        : undefined;
     if (refused !== undefined) {
       await this.closeDaemon();
       throw new AlRunnerV3EntriesRefusedError(
@@ -1517,6 +1535,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async request(groups: readonly EntryGroup[]): Promise<{
     readonly results: ReadonlyMap<string, Map<number, CallRows>>;
     readonly resend: readonly EntryGroup[];
+    /** The first row R612 did not keep, at the cut. */
+    readonly cutWhy?: string;
   }> {
     const daemon = await this.ensureDaemon();
     const started = Date.now();
@@ -1571,7 +1591,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
       } else resend.push({ mutantId: e.mutantId, codeunits: [e.codeunit] });
     }
-    return { results, resend };
+    const cutRow = (rows.get(sent[cut]?.id ?? "") ?? []).find(
+      (r) => !serveDaemonReusable(serveLines([r]), "v3"),
+    );
+    return {
+      results,
+      resend,
+      ...(cutRow !== undefined
+        ? { cutWhy: `${cutRow.name}: ${cutRow.message ?? cutRow.status}` }
+        : {}),
+    };
   }
 
   /** §6 (#5704): the suite test of `cu` without exactly one row, or `undefined`. */
@@ -1637,11 +1666,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const out = await this.request([{ mutantId: m, codeunits: [ref.codeunitId] }]);
       const call = out.results.get(m)?.get(ref.codeunitId);
       if (call === undefined) {
-        // Its echo was the unkept entry, so nothing of the group stands.
+        // Its echo was the unkept entry, so nothing of the group stands: this mutant's `error`
+        // with the reason (build review r1 L2), never a verdict and never a batch stop.
         return {
-          verdict: transportFailure(
+          verdict: refusalVerdict(
             ref,
-            `${m}'s echo entry was not kept (R612)`,
+            `entries-echo-mismatch: ${m}'s echo did not run, so nothing of its group is trusted (${out.cutWhy ?? "no reason"}); never scored (R635 §6)`,
             Date.now() - started,
           ),
         };

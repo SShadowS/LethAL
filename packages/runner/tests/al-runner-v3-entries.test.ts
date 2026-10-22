@@ -2,7 +2,7 @@
 // `serve` daemon and a fake one-shot v3. Plan
 // docs/superpowers/plans/2026-10-22-r635-v3-serve-entries.md (r3) §9, tests 1-13 and 16-21; the
 // orchestrator's seams (tests 14, 15) are in orchestrator.test.ts. Call counters, no wall clock.
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1101,22 +1101,66 @@ describe("10: R612's keep rule per entry, in entry order", () => {
     expect(r.serve.requests.filter((q) => q.ids[0] === "M0002|echo")).toHaveLength(1);
     expect(r.serve.requests.filter((q) => q.ids.includes("M0002|echo"))).toHaveLength(2);
     await r.b.activate("M0002");
-    expect(outcome(await r.b.run(ref("A"), OPTS))).toEqual(["error", "pre-dispatch-rejected"]);
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(outcome(v)).toEqual(["error", "runner-test-error"]);
+    expect(v.failureMessage).toContain(TIMEOUT_1S);
   });
+});
 
-  test("a warm-up row R612 does not keep (a baseline timeout) lets the daemon serve one request, then closes it", async () => {
-    // B times out under NONE, in the one-shot baseline and in the warm-up alike, so they agree.
-    const rows: RowsFn = (m, cu, d, n) =>
+describe("M1 (build review r1): a warm-up row R612 does not keep refuses by name", () => {
+  // B behaves the same under NONE in the one-shot baseline and in the warm-up, so they agree.
+  const underNone =
+    (message: string): RowsFn =>
+    (m, cu, d, n) =>
       allPass(m, cu, d, n).map((x) =>
         m === "NONE" && x.method === "B"
-          ? { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S }
+          ? { ...x, status: "error" as const, notRun: true, message }
           : x,
       );
-    const r = await readyRig({ serve: { rows }, mutants: ["M0001"] });
-    expect(r.serve.requests.map((q) => q.daemon)).toEqual([0, 0]);
+
+  test("a dirty warm-up (B times out under NONE) refuses warmup-dirty, naming the test and the reason, before any mutant entry", async () => {
+    const r = await rig({ serve: { rows: underNone(TIMEOUT_1S) } });
+    await baseline(r.b, SUITE1);
+    const err = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
+    expect(String(err)).toContain(`Codeunit${CU}.B`);
+    expect(String(err)).toContain(TIMEOUT_1S);
+    expect(r.serve.requests.map((q) => q.ids[0])).toEqual(["NONE|echo"]);
+  });
+
+  test("a clean warm-up whose only notRun rows are kept refusals proceeds on one daemon", async () => {
+    const r = await readyRig({ serve: { rows: underNone(COMMIT) }, mutants: ["M0001"] });
     await r.b.activate(null);
     await r.b.run(ref("A"), OPTS);
-    expect(r.serve.daemons).toHaveLength(2);
+    expect(r.serve.daemons).toHaveLength(1);
+    expect(r.serve.requests.map((q) => q.daemon)).toEqual([0, 0, 0]);
+  });
+});
+
+describe("L2 (build review r1): a lone group never stops the batch", () => {
+  test("one group whose echo and entry are notRun with an unlisted reason is that mutant's error, with the reason", async () => {
+    const r = await rig({
+      serve: {
+        rows: (m, cu, d, n) =>
+          allPass(m, cu, d, n).map((x) =>
+            m === "M0001" ? { ...x, status: "error" as const, notRun: true, message: UNLISTED } : x,
+          ),
+        echo: (m, d, n) =>
+          m === "M0001"
+            ? { method: "Echo", status: "error", notRun: true, message: UNLISTED }
+            : goodEcho(m, d, n),
+      },
+      oneShotRows: allPass,
+    });
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans([]));
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(outcome(v)).toEqual(["error", "runner-test-error"]);
+    expect(v.failureMessage).toContain(UNLISTED);
+    await r.b.activate(null);
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
   });
 });
 
@@ -1529,6 +1573,59 @@ describe("assertBound in serve-entries: the selector and the echo are the emitte
       await expect(r.b.run(ref("A"), OPTS)).rejects.toThrow(/refusing to start v3/);
     });
   }
+});
+
+describe("L1 (build review r1): a deadline is deadline-exceeded, never a kill; plain()'s R612 close", () => {
+  const withDeadline = async (body: () => Promise<TestVerdict>) => {
+    const spy = spyOn(AlRunnerServer.prototype, "runEntries").mockImplementation(async () => {
+      throw new AlRunnerServerRequestError("deadline", "no summary line within 1 ms");
+    });
+    try {
+      return await body();
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  test("a live request whose runEntries passes its deadline", async () => {
+    const r = await readyRig({ mutants: ["M0001"] });
+    await r.b.activate(null);
+    const v = await withDeadline(() => r.b.run(ref("A"), OPTS));
+    expect(v.outcome).toBe("deadline-exceeded");
+  });
+
+  test("a §5 window request that passes its deadline", async () => {
+    const r = await readyRig({
+      targetAl: SLEEPER_AL,
+      serve: { coverage: sleepCoverage() },
+      mutants: ["M0001"],
+    });
+    await r.b.activate("M0001");
+    const v = await withDeadline(() => r.b.run(ref("A"), OPTS));
+    expect(v.outcome).toBe("deadline-exceeded");
+  });
+
+  test("a window request with a row R612 does not keep closes the daemon after the window", async () => {
+    // Requests: 0 warm-up, 1 prefetch, 2 echo, 3 the coverage request (B times out), 4 echo.
+    const rows: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        n === 3 && x.method === "B"
+          ? { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S }
+          : x,
+      );
+    const r = await readyRig({
+      targetAl: SLEEPER_AL,
+      serve: { rows, coverage: sleepCoverage() },
+      oneShotRows: allPass,
+      mutants: ["M0001"],
+    });
+    await r.b.activate("M0001");
+    await r.b.run(ref("A"), OPTS);
+    expect(r.serve.daemons).toHaveLength(1);
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS);
+    expect(r.serve.daemons).toHaveLength(2);
+  });
 });
 
 describe("the CLI threads the option through (wiring)", () => {
