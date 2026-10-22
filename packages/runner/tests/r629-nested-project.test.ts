@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CompiledArtifact } from "../src/artifact";
@@ -48,9 +49,24 @@ describe("R629: nested-project warning", () => {
     const projectDir = join(top, "root", "mod");
     const message = nestedProjectWarning(projectDir, top);
     expect(message).toBeDefined();
-    expect(message).toContain(projectDir);
-    expect(message).toContain(`${join(top, "root")},`);
+    expect(message).toContain(realpathSync(projectDir));
+    expect(message).toContain(`${realpathSync(join(top, "root"))},`);
     expect(message).toContain("R629");
+  });
+
+  test("1c. a symlinked projectDir is searched by its REAL path, which is nested", async () => {
+    const top = await tree(["root/.git/", "root/app.json", "root/mod/app.json", "links/"]);
+    const link = join(top, "links", "mod");
+    // "junction": a Windows directory junction needs no privilege; POSIX ignores the type.
+    await symlink(join(top, "root", "mod"), link, "junction");
+    const message = nestedProjectWarning(link, top);
+    expect(message).toBeDefined();
+    expect(message).toContain(`${realpathSync(join(top, "root"))},`);
+  });
+
+  test("1d. an app.json that is a DIRECTORY does not count", async () => {
+    const top = await tree(["root/.git/", "root/app.json/", "root/mod/app.json"]);
+    expect(nestedProjectWarning(join(top, "root", "mod"), top)).toBeUndefined();
   });
 
   test("1b. a worktree's .git FILE stops the search the same way", async () => {
@@ -128,10 +144,13 @@ describe("R629: runSession emits the warning once per session, not per batch", (
       "root/.git/",
       ...(nested ? ["root/app.json"] : []),
       "root/mod/",
-      "root/tests/",
+      // Beside root, outside its app.json, so only projectDir is nested; top's .git ends a search
+      // from testDir there, so nothing above the temp dir can reach this test.
+      ".git/",
+      "tests/",
     ]);
     const projectDir = join(top, "root", "mod");
-    const testDir = join(top, "root", "tests");
+    const testDir = join(top, "tests");
     await writeFile(
       join(projectDir, "app.json"),
       JSON.stringify({
