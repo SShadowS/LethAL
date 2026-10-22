@@ -62,8 +62,8 @@ export const STRANDED_NOTE_PREFIX = "quarantined: ";
 
 /**
  * R53/R201: what a mutant skipped on `--resume` because a prior run stranded the tier on it is
- * recorded with. One constant for the two sites that write it (step 5b and R192's
- * `replayCarriedBatch`), so the tests that read the prose cannot drift from one of them.
+ * recorded with. One constant for the site that writes it (`runSession`'s step 1b', since R-646c)
+ * and the tests that read the prose, so they cannot drift.
  *
  * It lives HERE, beside the detector, because the detector must recognise it: `resolveResume`
  * reads only the latest run's rows, and the latest row for a stranded mutant is this skip, not
@@ -124,10 +124,10 @@ export interface CarriedVerdict {
    */
   readonly runner?: RunnerKind;
   /**
-   * R192: the coverage facts the prior run measured this verdict under, carried so that a batch
-   * whose every mutant carries can be recorded WITHOUT republishing and re-baselining it (see
-   * `batchCarriesEntirely`). Absent when the source row predates the columns, in which case the
-   * batch is deployed and baselined as before and this run's own coverage is used.
+   * R192: the coverage facts the prior run measured this verdict under. Since R646, step 5b
+   * carries a survivor only when `coveringTests` holds every test covering it in THIS session;
+   * NULL or `[]` is no record, and the survivor is re-run. Absent when the source row predates the
+   * columns.
    */
   readonly coveringTests?: readonly string[];
   readonly coverageAttribution?: CoverageAttribution;
@@ -309,41 +309,6 @@ function carriedOf(row: MutantVerdictRow): CarriedVerdict {
   };
 }
 
-/**
- * R192: can THIS batch be recorded from the prior run alone, with no deploy and no baseline?
- *
- * Yes only when every mutant in it either carries a prior verdict WITH its coverage facts, or is
- * one a prior run stranded the tier on and this run will skip (`--retry-stranded` off). One mutant
- * that must execute, one colliding key, or one carried row that predates the coverage columns is
- * enough to say no, and the batch takes the ordinary path: deploy, baseline, this run's coverage.
- *
- * Why the coverage facts are required and an empty list is not assumed: a carried verdict is
- * recorded with the covering tests it was measured under, and a resumed survivor has to stay
- * actionable (which tests ran it, by which attribution). A row without them would be recorded
- * either with a made-up empty list, which reads as "no test ran this", or by re-baselining, which
- * is the cost this exists to remove. Refusing is the cheap failure.
- *
- * Measured 2026-09-02 on a hosted sandbox: a fully-carried 25-mutant batch cost a 40 s deploy and
- * a 215 s baseline on every one of twelve resumes, for verdicts that were never going to change.
- */
-export function batchCarriesEntirely(
-  index: ResumeIndex,
-  mutants: readonly MutantManifestEntry[],
-  retryStranded: boolean,
-): boolean {
-  if (mutants.length === 0) return false;
-  for (const m of mutants) {
-    if (!retryStranded && wasStranded(index, m)) continue;
-    const carried = carriedVerdictFor(index, m);
-    if (carried === undefined || carried.coveringTests === undefined) return false;
-    // R646: a survivor with no record of the tests it faced is re-run by step 5b, so its batch
-    // takes the ordinary path. A replayed batch has no fresh baseline to compare a record with.
-    const survivor = carried.verdict === "survived" || carried.verdict === "known-survivor";
-    if (survivor && carried.coveringTests.length === 0) return false;
-  }
-  return true;
-}
-
 /** R53: whether THIS run's mutant is one a prior run stranded the tier on — see `strandedKeys`. */
 export function wasStranded(index: ResumeIndex, m: MutantManifestEntry): boolean {
   // R307: deliberately NOT gated by `carryDisabled`. A stranded skip records `error`, which carries
@@ -382,8 +347,7 @@ export function carriedVerdictFor(
   );
   // R621: a stored `no-coverage` is never carried; it is re-derived from THIS session's coverage.
   // A mutant uncovered now reads no-coverage again (step 5 records it, unflagged); one covered now
-  // is run. So a batch holding one never carries whole (`batchCarriesEntirely`), and fresh coverage
-  // is never overruled. This subsumes R318's narrower rule (a renamed split member's pre-R318
+  // is run. So fresh coverage is never overruled. This subsumes R318's narrower rule (a renamed split member's pre-R318
   // no-coverage); R318's snapshot guard is a separate rule and stays.
   if (carried?.verdict === "no-coverage") return undefined;
   return carried;

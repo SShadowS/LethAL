@@ -23,13 +23,18 @@
  * - `LETHAL_ITEST_V3_CDO=<Continia Document Output checkout at 5f2a71d>`: the D legs (a corpus job).
  * - `LETHAL_ITEST_V3_TABLES=1`: leg T (the update gate's tables leg).
  * - `LETHAL_V3_GATE_NONCE` + `LETHAL_V3_GATE_RECEIPT`: write the update gate's receipt.
+ * - R635 (all unset: the gate is unchanged): `LETHAL_ITEST_V3_TRANSPORT=one-shot|serve-entries`,
+ *   `LETHAL_ITEST_V3_SECOND_ECHO=0|1` (serve-entries only), refused by name otherwise
+ *   (`v3ItestTransport`); `LETHAL_ITEST_V3_REPORT_DIR=<dir>` writes each session's report as
+ *   `<dir>/<leg>.report.json` before any assertion; `LETHAL_ITEST_V3_CONTROL_DIR=<dir>` first
+ *   compares each session per mutant with `<dir>/<leg>.report.json` (the edge one-shot control).
  * No leg needs a BC server.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONTROL_REGISTER_FILENAME,
@@ -76,6 +81,7 @@ import {
   knownDifferencesRefusal,
   legCFactLine,
   legOutcomeOfError,
+  v3ItestTransport,
   writeV3Receipt,
   xbHeldFirst,
   xdBaselineLine,
@@ -106,6 +112,10 @@ const CACHE = process.env.LETHAL_ALRUNNER_V3_CACHE ?? "/work/tools/al-runtime-rs
 const ALC = join(process.env.LETHAL_ALC_DIR ?? "", "alc");
 const CDO = process.env.LETHAL_ITEST_V3_CDO;
 const TABLES = process.env.LETHAL_ITEST_V3_TABLES === "1";
+/** R635: `{}` unless the transport flags are set (`v3ItestTransport`). */
+const TRANSPORT = v3ItestTransport(process.env);
+const REPORT_DIR = process.env.LETHAL_ITEST_V3_REPORT_DIR;
+const CONTROL_DIR = process.env.LETHAL_ITEST_V3_CONTROL_DIR;
 const SANDBOX_BC = "28.0.46665.47126";
 const CDO_BC = "28.4.53241.53758";
 const fixture = (n: string) => join(REPO, "fixtures", n);
@@ -165,6 +175,7 @@ function backendCfg(
     cacheDir: CACHE,
     coverage: "al-runner",
     ...(CANDIDATE ? { candidate: true } : {}),
+    ...TRANSPORT,
     ...o,
   };
 }
@@ -179,8 +190,9 @@ async function session(
   onEvent?: EventSubscriber,
 ): Promise<SessionReport> {
   const store = new ResultsStore(join(scratch, "lethal.sqlite"));
+  let r: SessionReport;
   try {
-    return await runSession({
+    r = await runSession({
       backend,
       store,
       instrumentedDir: join(scratch, "instr"),
@@ -205,6 +217,27 @@ async function session(
         ),
       );
   }
+  // R635: all of it only when a flag asks, so the unflagged gate is unchanged.
+  const leg = basename(scratch);
+  if (TRANSPORT.transport !== undefined) {
+    console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);
+  }
+  if (TRANSPORT.transport !== undefined || REPORT_DIR !== undefined) {
+    console.log(`  ${leg}: timings ${JSON.stringify(r.timings)}`);
+  }
+  if (REPORT_DIR !== undefined) {
+    await mkdir(REPORT_DIR, { recursive: true });
+    await writeFile(join(REPORT_DIR, `${leg}.report.json`), `${JSON.stringify(r, null, 2)}\n`);
+  }
+  if (CONTROL_DIR !== undefined) {
+    const control = join(CONTROL_DIR, `${leg}.report.json`);
+    must(
+      existsSync(control),
+      `al-runner-v3-itest-control-missing: ${control} (run the edge one-shot control first)`,
+    );
+    await assertPerMutant(r, control, `${leg} vs the edge one-shot control`);
+  }
+  return r;
 }
 
 const counts = (r: SessionReport) =>

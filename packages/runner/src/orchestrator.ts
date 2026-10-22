@@ -220,7 +220,6 @@ import {
   CARRYABLE_VERDICTS,
   STRANDED_NOTE_PREFIX,
   STRANDED_SKIP_NOTE,
-  batchCarriesEntirely,
   buildResumeIndex,
   carriedVerdictFor,
   sessionFingerprint,
@@ -4192,10 +4191,10 @@ function resolveResume(
   }
 
   // R360 (review r1 #3): no pruned-bundle check here. Nothing on the resume path reads the prior
-  // run's installed .app or stored bundle: `resolveResume` reads its verdict rows,
-  // `replayCarriedBatch` records carried verdicts from them, and snapshot reuse
-  // (`findBaselineSnapshot`) keys on the CURRENT batch dir's hash and the test app. A batch with
-  // work left is rebuilt and republished. `lethal verify` keeps its refusal.
+  // run's installed .app or stored bundle: `resolveResume` reads its verdict rows, step 5b carries
+  // verdicts from them, and snapshot reuse (`findBaselineSnapshot`) keys on the CURRENT batch
+  // dir's hash and the test app. Every batch is rebuilt and republished (R-646c).
+  // `lethal verify` keeps its refusal.
 
   // R557 C1: a pre-fix al-runner run sent a renamed test under its AL name, al-runner ran nothing,
   // and its only-kills read survived. (I1): a run without the R557 mark may have CARRIED such
@@ -4228,7 +4227,7 @@ function resolveResume(
   emit({
     type: "warning",
     code: "resume-reusing-run",
-    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. A batch with any mutant left to run is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused); a batch whose every mutant carries is recorded from run ${priorRunId} without either (R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (its own baseline's, or a reused baseline's), so a batch holding one is deployed (R621).${
+    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. Every batch is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused, R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (R621). A survivor is carried only when it was run against every test that covers it in this session (R646).${
       testAppHash !== undefined && priorTestAppHash === `${testAppHash}${PENDING_SUFFIX}`
         ? ` Run ${priorRunId} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`
         : ""
@@ -5029,7 +5028,6 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     batchIndex: batchIdx,
   });
   const baselineStartedMs = Date.now();
-  await activateOnce(backend, safety, null);
   const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
   // R192 (second half): on `--resume`, a prior run's COMPLETED baseline for this exact
   // instrumented source against this exact test app stands in for re-running it. Both hashes
@@ -5046,124 +5044,134 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   let hashTestApp: (() => Promise<string | PackageUnread | undefined>) | undefined;
   // R630: why the read before the baseline failed, for the refusal below.
   let firstUnread: string | undefined;
-  if (input.snapshot !== undefined) {
-    const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
-    const batchHash = await hashAlTree(batchDir);
-    hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
-    const read = await hashTestApp();
-    // R495: before `select` carries anything or a snapshot is reused.
-    assertNoTestAppDrift(store, runId, provenTestApp?.hash, read, batchIdx);
-    const testAppHash = hashOf(read);
-    firstUnread = unreadOf(read);
-    // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
-    // here that differs from it (or a session with nothing proven) reuses nothing.
-    // R496: and the snapshot's run must have recorded the same dependency fingerprint.
-    const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
-    const reusable =
-      allowReuse && testAppHash !== undefined && runsWhatWasRead
-        ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
-        : null;
-    reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
-    // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
-    // `findBaselineSnapshot` can lend one from ANY run. Step 1 (R586): it selects by hash and
-    // coverage mode, not by backend, and v3 shares coverage mode "al-runner" with v2. Steps 2 and
-    // 3 (R557, I1 and C1): the run's mark, then the snapshot's own `error` rows: a pre-fix
-    // al-runner snapshot holds a renamed test as an `error` al-runner never ran. A refused snapshot
-    // is not reused, and this batch re-runs its baseline.
-    if (reused !== undefined) {
-      const snap = reused;
-      const snapshotRun = store.getRun(snap.runId);
-      // Ruling (b): `findBaselineSnapshot` returns only a snapshot whose run row exists.
-      if (snapshotRun === null) {
-        throw new Error(
-          `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot names run ${snap.runId}, which this database does not hold (R619)`,
-        );
-      }
-      const refused = store.runMayLend(snapshotRun, input.snapshot.lendingSession, {
-        site: "snapshot",
-        baselineErrorMethods: () =>
-          snap.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
-        renamed: alRunnerRenamed,
-      });
-      if (refused !== undefined) {
-        const notReused = `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot`;
-        switch (refused.step) {
-          case "backend-build":
-            emit({
-              type: "warning",
-              code: "snapshot-backend-build-changed",
-              message: `[lethal] ${notReused} is not reused: ${refused.why}. Batch ${batchIdx}'s baseline is re-run.`,
-            });
-            break;
-          case "al-runner-unmarked":
-            emit({
-              type: "warning",
-              code: "resume-al-runner-test-names",
-              message: `[lethal] --resume: ${notReused} is not reused: run ${snap.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
-            });
-            break;
-          case "al-runner-renamed":
-            emit({
-              type: "warning",
-              code: "resume-al-runner-test-names",
-              message: `[lethal] --resume: ${notReused} ran on al-runner before R557 and recorded ${refused.tests.length} test(s) as errors that al-runner never ran (${namesSample(refused.tests)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
-            });
-            break;
-          case "site":
-            throw new Error(`${notReused}: refused by a site check this site does not pass (R619)`);
-        }
-        reused = undefined;
-      }
-    }
-    // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
-    // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
-    // tests, so a saved row for any other test is DROPPED: it must not come back green and be
-    // sent. A snapshot missing one of this session's tests is not reused at all, since that test
-    // would then never be measured.
-    if (reused !== undefined) {
-      const inScope = new Set(tests.map(testKeyOf));
-      const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
-      reused =
-        new Set(kept.map((b) => testKeyOf(b.ref))).size === inScope.size
-          ? { ...reused, baseline: kept }
-          : undefined;
-    }
-    snapshotKey = { batchHash, testAppHash };
-    if (reused !== undefined) {
-      emit({
-        type: "warning",
-        code: "resume-baseline-reused",
-        message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
-      });
-      for (const saved of reused.baseline) {
-        // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
-        // hub-mode run before R-236c, or BC's own refusal) is replaced by the refused skip, and
-        // its stored coverage is dropped with it, so it can never enter a covering set.
-        const refused = testPageRefusedVerdict(scope, saved.ref);
-        const b = refused !== undefined ? { ref: saved.ref, verdict: refused } : saved;
-        baseline.push(b);
-        store.recordTestResult(
-          runId,
-          null,
-          null,
-          b.ref,
-          b.verdict.outcome,
-          b.verdict.durationMs,
-          b.verdict.failureMessage,
-          undefined,
-          b.verdict.sessionId,
-        );
-      }
-    }
-  }
   // R272: the tests whose baseline ran IN THIS SESSION. Only their durations reach the report: a
   // reused snapshot's (R192) may predate R272, and so be al-runner `--server`'s shared suite time.
   const ranHere = new Set<TestMethodRef>();
-  for (const ref of reused !== undefined ? [] : tests) {
-    const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
-    if (stop) break;
-    baseline.push({ ref, verdict: v });
-    ranHere.add(ref);
+  // R635 §4 (Q1): the baseline bracket, from the null activation through the baseline loop (also
+  // when a reused snapshot leaves the loop over []). The only null activation inside it.
+  backend.baselinePhase?.(true);
+  try {
+    await activateOnce(backend, safety, null);
+    if (input.snapshot !== undefined) {
+      const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
+      const batchHash = await hashAlTree(batchDir);
+      hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
+      const read = await hashTestApp();
+      // R495: before `select` carries anything or a snapshot is reused.
+      assertNoTestAppDrift(store, runId, provenTestApp?.hash, read, batchIdx);
+      const testAppHash = hashOf(read);
+      firstUnread = unreadOf(read);
+      // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
+      // here that differs from it (or a session with nothing proven) reuses nothing.
+      // R496: and the snapshot's run must have recorded the same dependency fingerprint.
+      const runsWhatWasRead = provenTestApp !== undefined && testAppHash === provenTestApp.hash;
+      const reusable =
+        allowReuse && testAppHash !== undefined && runsWhatWasRead
+          ? store.findBaselineSnapshot(batchHash, testAppHash, provenTestApp.deps, caps.coverage)
+          : null;
+      reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
+      // R619: the one lend decision (`runMayLend`), on the snapshot's OWN run, since
+      // `findBaselineSnapshot` can lend one from ANY run. Step 1 (R586): it selects by hash and
+      // coverage mode, not by backend, and v3 shares coverage mode "al-runner" with v2. Steps 2 and
+      // 3 (R557, I1 and C1): the run's mark, then the snapshot's own `error` rows: a pre-fix
+      // al-runner snapshot holds a renamed test as an `error` al-runner never ran. A refused snapshot
+      // is not reused, and this batch re-runs its baseline.
+      if (reused !== undefined) {
+        const snap = reused;
+        const snapshotRun = store.getRun(snap.runId);
+        // Ruling (b): `findBaselineSnapshot` returns only a snapshot whose run row exists.
+        if (snapshotRun === null) {
+          throw new Error(
+            `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot names run ${snap.runId}, which this database does not hold (R619)`,
+          );
+        }
+        const refused = store.runMayLend(snapshotRun, input.snapshot.lendingSession, {
+          site: "snapshot",
+          baselineErrorMethods: () =>
+            snap.baseline.filter((b) => b.verdict.outcome === "error").map((b) => b.ref.method),
+          renamed: alRunnerRenamed,
+        });
+        if (refused !== undefined) {
+          const notReused = `run ${snap.runId}'s batch ${snap.batchIndex} baseline snapshot`;
+          switch (refused.step) {
+            case "backend-build":
+              emit({
+                type: "warning",
+                code: "snapshot-backend-build-changed",
+                message: `[lethal] ${notReused} is not reused: ${refused.why}. Batch ${batchIdx}'s baseline is re-run.`,
+              });
+              break;
+            case "al-runner-unmarked":
+              emit({
+                type: "warning",
+                code: "resume-al-runner-test-names",
+                message: `[lethal] --resume: ${notReused} is not reused: run ${snap.runId} ${AL_RUNNER_UNMARKED_WHY}. Batch ${batchIdx}'s baseline is re-run (R557).`,
+              });
+              break;
+            case "al-runner-renamed":
+              emit({
+                type: "warning",
+                code: "resume-al-runner-test-names",
+                message: `[lethal] --resume: ${notReused} ran on al-runner before R557 and recorded ${refused.tests.length} test(s) as errors that al-runner never ran (${namesSample(refused.tests)}); it is not reused: batch ${batchIdx}'s baseline is re-run (R557).`,
+              });
+              break;
+            case "site":
+              throw new Error(
+                `${notReused}: refused by a site check this site does not pass (R619)`,
+              );
+          }
+          reused = undefined;
+        }
+      }
+      // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
+      // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
+      // tests, so a saved row for any other test is DROPPED: it must not come back green and be
+      // sent. A snapshot missing one of this session's tests is not reused at all, since that test
+      // would then never be measured.
+      if (reused !== undefined) {
+        const inScope = new Set(tests.map(testKeyOf));
+        const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
+        reused =
+          new Set(kept.map((b) => testKeyOf(b.ref))).size === inScope.size
+            ? { ...reused, baseline: kept }
+            : undefined;
+      }
+      snapshotKey = { batchHash, testAppHash };
+      if (reused !== undefined) {
+        emit({
+          type: "warning",
+          code: "resume-baseline-reused",
+          message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
+        });
+        for (const saved of reused.baseline) {
+          // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
+          // hub-mode run before R-236c, or BC's own refusal) is replaced by the refused skip, and
+          // its stored coverage is dropped with it, so it can never enter a covering set.
+          const refused = testPageRefusedVerdict(scope, saved.ref);
+          const b = refused !== undefined ? { ref: saved.ref, verdict: refused } : saved;
+          baseline.push(b);
+          store.recordTestResult(
+            runId,
+            null,
+            null,
+            b.ref,
+            b.verdict.outcome,
+            b.verdict.durationMs,
+            b.verdict.failureMessage,
+            undefined,
+            b.verdict.sessionId,
+          );
+        }
+      }
+    }
+    for (const ref of reused !== undefined ? [] : tests) {
+      const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
+      if (stop) break;
+      baseline.push({ ref, verdict: v });
+      ranHere.add(ref);
+    }
+  } finally {
+    backend.baselinePhase?.(false);
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
   // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined
@@ -6753,7 +6761,7 @@ async function runSessionBody(
       // any moment, so it needs the current batch index, not the one the mutant loop last saw.
       if (leaseSession !== undefined) leaseSession.currentBatchIndex = batchIdx;
       // R495: a proven session checks its test app FIRST, before anything this batch records: a
-      // whole-batch carry, history's known survivors, a compile failure's error rows or a baseline.
+      // stranded skip, history's known survivors, a compile failure's error rows or a baseline.
       // (`scoreBatch` reads again before its baseline.)
       if (historyTestApp !== undefined) {
         const now = await (
@@ -6847,26 +6855,50 @@ async function runSessionBody(
         await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
       ) as MutantManifest;
 
-      // 1b'. R192: a batch with nothing left to run is recorded from the prior run and NOT
-      // deployed or baselined. Measured on a hosted sandbox: every `--resume` republished a
-      // fully-scored 25-mutant batch (40 s) and re-ran its 407-test baseline (215 s) to carry 25
-      // verdicts that were never going to change, twelve times in one session. The carried
-      // verdicts keep the coverage facts they were measured under (persisted since R192), so a
-      // resumed survivor stays as actionable as it was in the run that scored it.
+      // 1b'. R53: a mutant a prior run STRANDED the tier on is not retried by default. Measured on
+      // Document Output: M0013 negates `until DOCustSetup.Next() = 0;` into `<> 0`, which never
+      // terminates — so re-running it re-hangs, re-quarantines, and blocks the 125 mutants
+      // queued behind it. No `--mutant-timeout-ms` value fixes that (180 s and 330 s both
+      // aborted; 360 s is the hosting proxy's own ceiling), which makes retrying it not a
+      // slow path but an unreachable one.
       //
-      // Deliberately BEFORE the R90 ceiling check and the deploy: nothing below this line is
-      // needed for a verdict that already exists. A batch with one mutant to execute, one
-      // colliding key, or one carried row from before the coverage columns existed takes the
-      // ordinary path unchanged.
-      // Sol run 002: a batch holding a `carryBarred` mutant deploys, so the index can refuse it.
-      if (
-        resumeState !== undefined &&
-        !manifest.mutants.some(carryBarred) &&
-        batchCarriesEntirely(resumeState.index, manifest.mutants, cfg.retryStranded ?? false)
-      ) {
-        replayCarriedBatch(cfg, runId, manifest.mutants, batchIdx, resumeState, outcomes, emit);
-        continue;
+      // Recorded `error` — score-excluded, never a verdict — and stated loudly, because the
+      // honest answer is "this mutant was not measured", not "this mutant survived".
+      //
+      // R-646c: skipped HERE, before the deploy and coverage, never after them. A stranded mutant
+      // this session's coverage leaves uncovered was recorded `no-coverage` at step 5 and lost its
+      // skip note, so the resume after a later one that covers it again would re-run the hang. A
+      // batch where every mutant is such a skip has nothing to run or measure: it is not deployed.
+      //
+      // R-646c: there is no whole-batch replay any more (R192's `replayCarriedBatch`). Every other
+      // batch is deployed and baselined, or reuses a baseline snapshot, so a carried survivor is
+      // always checked against the tests that cover it in this session (R646, step 5b).
+      const strandedSkips =
+        resumeState !== undefined && !(cfg.retryStranded ?? false)
+          ? new Set(manifest.mutants.filter((m) => wasStranded(resumeState.index, m)))
+          : new Set<MutantManifestEntry>();
+      for (const m of strandedSkips) {
+        record(
+          cfg.store,
+          runId,
+          m,
+          "error",
+          outcomes,
+          batchIdx,
+          emit,
+          undefined,
+          STRANDED_SKIP_NOTE,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          true, // strandedSkip
+        );
       }
+      const runnable = manifest.mutants.filter((m) => !strandedSkips.has(m));
+      if (strandedSkips.size > 0 && runnable.length === 0) continue;
 
       // 1c. R90 pre-flight: refuse a FILE this tier has already MEASURED to be unpublishable,
       // before the cost. This is the earliest point the DEPLOYED per-file guard counts exist
@@ -7056,7 +7088,7 @@ async function runSessionBody(
       // R644: these are CANDIDATES, with the tests each one faced in that run. They stay inside
       // `execute` through the compile bisect, the no-green branch and coverage (review I1), and
       // only those whose covering tests NOW are all ones they faced are lent, just before 5b.
-      const history = filterHistory([...manifest.mutants], prior, {
+      const history = filterHistory([...runnable], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
         ...(carryDisabled !== undefined ? { carryDisabled } : {}),
         current: carryCurrent,
@@ -7072,7 +7104,7 @@ async function runSessionBody(
         }
         candidates.set(m.mutantId, faced);
       }
-      const execute = [...manifest.mutants];
+      const execute = [...runnable];
 
       // 3. deploy — always, even for in-memory backends: they need the
       // per-batch instrumented dir just as much as a publishing backend
@@ -7602,36 +7634,7 @@ async function runSessionBody(
           for (const m of remaining) {
             const covering = perMutantTests.get(m.mutantId);
             if (covering === undefined) continue; // step 5 already recorded no-coverage
-            // R53: a mutant a prior run STRANDED the tier on is not retried by default. Measured on
-            // Document Output: M0013 negates `until DOCustSetup.Next() = 0;` into `<> 0`, which never
-            // terminates — so re-running it re-hangs, re-quarantines, and blocks the 125 mutants
-            // queued behind it. No `--mutant-timeout-ms` value fixes that (180 s and 330 s both
-            // aborted; 360 s is the hosting proxy's own ceiling), which makes retrying it not a
-            // slow path but an unreachable one.
-            //
-            // Recorded `error` — score-excluded, never a verdict — and stated loudly, because the
-            // honest answer is "this mutant was not measured", not "this mutant survived".
-            if (!(cfg.retryStranded ?? false) && wasStranded(resumeState.index, m)) {
-              record(
-                cfg.store,
-                runId,
-                m,
-                "error",
-                outcomes,
-                batchIdx,
-                emit,
-                undefined,
-                STRANDED_SKIP_NOTE,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                true, // strandedSkip
-              );
-              continue;
-            }
+            // R53's stranded skips were recorded at step 1b', before coverage (R-646c).
             const carried = carriedVerdictFor(resumeState.index, m);
             if (carried === undefined) {
               toExecute.push(m);
@@ -10652,6 +10655,13 @@ async function runMutantsOnBackend(args: {
     const prev = measuredToday.get(key);
     if (prev === undefined || ms > prev.ms) measuredToday.set(key, { ms, byMutant });
   };
+  // R635 §4: once per mutant-loop call, every covered mutant of this shard and its covering refs.
+  await args.backend.prefetchMutants?.(
+    args.mutants.flatMap((m) => {
+      const refs = args.perMutantTests.get(m.mutantId);
+      return refs === undefined || refs.length === 0 ? [] : [{ mutantId: m.mutantId, refs }];
+    }),
+  );
   for (const m of args.mutants) {
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
@@ -11907,112 +11917,6 @@ export function noGreenBaselineNote(
     : `${NO_GREEN_BASELINE} — ${baseline.length} failed with ${distinct.length} distinct messages; the first was: ${shown}`;
 }
 
-/**
- * R192: record every mutant of a batch from the prior run, with no deploy and no baseline.
- *
- * Only reachable when `batchCarriesEntirely` said yes, so every mutant here is either a stranded
- * skip (the same recording step 5b makes) or a carried verdict WITH its coverage facts. The
- * `coverage-split` this emits is the prior run's split for these mutants, rebuilt from the
- * persisted rows, so the fold's `untargetedTriggerCount` and R175's `unplaceableCount` stay
- * consistent with the verdicts beside them instead of silently reading lower on a resumed report.
- */
-function replayCarriedBatch(
-  cfg: SessionConfig,
-  runId: number,
-  mutants: readonly MutantManifestEntry[],
-  batchIdx: number,
-  resumeState: { readonly index: ResumeIndex; readonly runId: number },
-  outcomes: SessionOutcome[],
-  emit: RunEmitter,
-): void {
-  let carried = 0;
-  let stranded = 0;
-  let covered = 0;
-  let noCoverage = 0;
-  let untargetedTriggers = 0;
-  const unplaceable: string[] = [];
-  for (const m of mutants) {
-    if (!(cfg.retryStranded ?? false) && wasStranded(resumeState.index, m)) {
-      stranded += 1;
-      record(
-        cfg.store,
-        runId,
-        m,
-        "error",
-        outcomes,
-        batchIdx,
-        emit,
-        undefined,
-        STRANDED_SKIP_NOTE,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        true, // strandedSkip
-      );
-      continue;
-    }
-    const prior = carriedVerdictFor(resumeState.index, m);
-    if (prior === undefined || prior.coveringTests === undefined) {
-      // `batchCarriesEntirely` proved this cannot happen; a caller that skipped it is a bug, and
-      // recording a made-up verdict here would be this project's signature empty-vs-empty match.
-      throw new Error(
-        `replayCarriedBatch: ${m.mutantId} in batch ${batchIdx} has no carried verdict with coverage facts — caller-contract violation`,
-      );
-    }
-    carried += 1;
-    if (prior.coveringTests.length > 0) covered += 1;
-    if (prior.verdict === "no-coverage") noCoverage += 1;
-    if (prior.coverageAttribution === "all-green") untargetedTriggers += 1;
-    if (prior.unplaceable === true) unplaceable.push(m.mutantId);
-    record(
-      cfg.store,
-      runId,
-      m,
-      prior.verdict,
-      outcomes,
-      batchIdx,
-      emit,
-      prior.killingTest,
-      prior.failureNote,
-      undefined,
-      prior.durationMs,
-      prior.coveringTests,
-      prior.coverageAttribution,
-      undefined,
-      true, // carried
-      undefined,
-      prior.runner,
-      undefined,
-      undefined,
-      resumeState.runId,
-      undefined,
-      prior.killingTestFailure,
-      prior.unplaceable,
-      prior.killPosition,
-      undefined, // reach
-      undefined, // killingTestRef
-      carriedReproduction(prior),
-    );
-  }
-  emit({
-    type: "warning",
-    code: "resume-batch-carried",
-    message: `[lethal] --resume: batch ${batchIdx} was neither deployed nor baselined — all ${mutants.length} of its mutants were recorded from run ${resumeState.runId} (${carried} carried, ${stranded} skipped as stranded), with the covering tests and attribution they were measured under there. The baseline and coverage split reported for this batch are that run's.`,
-  });
-  emit({
-    type: "coverage-split",
-    batchIndex: batchIdx,
-    untargetedTriggerCount: untargetedTriggers,
-    coveredCount: covered,
-    noCoverageCount: noCoverage,
-    unplaceableCount: unplaceable.length,
-    unplaceableMutants: unplaceable.sort(),
-  });
-}
-
 /** R577: `record()`'s `reproduction` argument for a carried verdict: its prior row's, unchanged. */
 function carriedReproduction(
   c: CarriedVerdict,
@@ -12134,7 +12038,7 @@ export function record(
     ...reproduced,
     ...(runner !== undefined ? { runner } : {}),
     // R192: always written, `[]` included — an explicit empty list is "no test ran this", while
-    // NULL (a pre-R192 row) is "unknown", and `batchCarriesEntirely` refuses to skip on unknown.
+    // NULL (a pre-R192 row) is "unknown", and step 5b re-runs a survivor with either (R646).
     coveringTests,
     ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
     ...(unplaceable !== undefined ? { unplaceable } : {}),

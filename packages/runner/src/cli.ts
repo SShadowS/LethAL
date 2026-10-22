@@ -3246,6 +3246,8 @@ async function buildAlRunnerV3Backend(
   deps: {
     readonly alToolPaths: typeof defaultAlToolPaths;
     readonly spawn?: SpawnFn;
+    /** R635: the serve-entries daemon's spawn. */
+    readonly serverSpawn?: ServerSpawnFn;
     readonly selectorIds: SelectorConfig;
     readonly source?: ReadonlyMap<string, Buffer>;
     readonly preprocessorSymbols: readonly string[];
@@ -3288,8 +3290,14 @@ async function buildAlRunnerV3Backend(
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
         : {}),
+      // R635: one-shot unless the config opts in.
+      ...(c.transport === "serve-entries"
+        ? { transport: c.transport, secondEcho: c.secondEcho }
+        : {}),
     },
     deps.spawn,
+    undefined,
+    deps.serverSpawn,
   );
 }
 
@@ -3367,6 +3375,7 @@ export async function buildBackend(
     return buildAlRunnerV3Backend(parsed, configFile, scratchDir, {
       alToolPaths: deps.alToolPaths ?? defaultAlToolPaths,
       ...(deps.alRunnerSpawn !== undefined ? { spawn: deps.alRunnerSpawn } : {}),
+      ...(deps.alRunnerServerSpawn !== undefined ? { serverSpawn: deps.alRunnerServerSpawn } : {}),
       selectorIds,
       ...(source !== undefined ? { source } : {}),
       preprocessorSymbols,
