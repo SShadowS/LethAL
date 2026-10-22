@@ -2119,3 +2119,26 @@ the served manifest's version; the control app read in 0.4 s. About 4.3 s added 
 verify. Packages with no `.al` entries (symbols only): `Application` (expected: a wrapper app whose
 dependencies carry the source) and the `LethAL Control` package. Plan and limits:
 `docs/superpowers/plans/2026-10-04-R-385-resident-microsoft-dependencies.md`.
+
+## R629: can two apps declare the same object? The ID blocks co-install; the NAME does not
+
+Measured on `bc1` (BC 28.4.53241.56590), 2026-10-22, with `scripts/r629-probe/`. Two apps with different app
+ids, the same publisher, version 1.0.0.0, and no dependency between them. A is published first; then B is published
+over the dev endpoint, which publishes and installs in one call.
+
+| case | A | B | B's publish |
+|---|---|---|---|
+| 1 | codeunit 91510 "R629 Probe" | codeunit 91510 "R629 Probe" | REFUSED, HTTP 422 |
+| 2 | codeunit 91510 "R629 Probe" | codeunit 91511 "R629 Probe" | ACCEPTED: both installed |
+| 3 | codeunit 91510 "R629 Probe" | codeunit 91510 "R629 Probe Other" | REFUSED, HTTP 422 |
+
+The refusal text names the ID: `The application object of type 'CodeUnit' with the ID '91510' is defined in multiple
+apps. The apps are: <B>; <A>. The original extensions have been restored.` It comes at publish, and A stays
+installed and untouched.
+
+**The BC fact:** two apps may declare an object with the SAME NAME and DIFFERENT ids, and both install. The object
+ID alone decides the conflict.
+
+**What R629 takes from it:** a nested module copy compiles the same source as its parent, so it shares every
+object id with it. So the two cannot be installed together, and the parent's loops never run beside a mutated
+module copy. Evidence and logs: `/coord/handoff/R-629/probe/` (`result.md`, `drive.log`).

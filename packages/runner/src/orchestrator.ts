@@ -170,6 +170,7 @@ import {
   duplicateObjectRefusals,
   fileHoldsWrappedObject,
 } from "./line-map";
+import { nestedProjectWarning } from "./nested-project";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -5813,6 +5814,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // (`SourceSnapshotUnreadableError`): every batch copies its files and `app.json` from this one
   // snapshot, so each compiles exactly the hashed bytes.
   const sourceSnapshot = cfg.source ?? (await readTargetSource(cfg.projectDir));
+  // R629: a warning only, once per session; it changes no deploy decision.
+  const nestedWarning = nestedProjectWarning(cfg.projectDir);
+  if (nestedWarning !== undefined) {
+    emit({ type: "warning", code: "nested-project", message: nestedWarning });
+  }
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
   const {
     testAppHash,
