@@ -319,6 +319,44 @@ export function assertResourceSelectorRuntime(
 }
 
 /**
+ * R222's resource selector install, shared by v2 (`selectorMode: "resource"`) and R635's v3
+ * serve-entries transport: declare `LethALResources` in `active/app.json`, seed
+ * `active-mutant.txt` with `NONE`, and write the resource-reading selector. v2's bytes unchanged.
+ */
+export async function installResourceSelector(
+  activeDir: string,
+  selectorObjectId: number,
+  artifactId: string,
+): Promise<void> {
+  const manifestPath = join(activeDir, "app.json");
+  const raw = await readFile(manifestPath, "utf8");
+  const manifest = JSON.parse(raw) as { resourceFolders?: string[] };
+  const folders = Array.isArray(manifest.resourceFolders) ? manifest.resourceFolders : [];
+  if (!folders.includes(SELECTOR_RESOURCE_FOLDER)) {
+    manifest.resourceFolders = [...folders, SELECTOR_RESOURCE_FOLDER];
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(manifest, null, 2)}
+`,
+      "utf8",
+    );
+  }
+  await mkdir(join(activeDir, SELECTOR_RESOURCE_FOLDER), { recursive: true });
+  // Seeded with the baseline value: the first compile reads the resource, and a missing file
+  // would fail that read rather than the run starting at "no mutant active".
+  await writeFile(
+    join(activeDir, SELECTOR_RESOURCE_FOLDER, SELECTOR_RESOURCE_NAME),
+    SELECTOR_RESOURCE_NONE,
+    "utf8",
+  );
+  await writeFile(
+    join(activeDir, "MutationSelector.Codeunit.al"),
+    emitResourceSelector({ objectId: selectorObjectId, artifactId, targetAppId: "" }),
+    "utf8",
+  );
+}
+
+/**
  * R557 (I3): prefix on the `error` of a test kept in an `#if` arm LethAL could not decide (R403,
  * `preproc-undecided-kept`) when al-runner has no row for it: al-runner may simply have compiled it
  * out, so it is not a stop. The orchestrator names every such test in one warning per batch.
@@ -1547,36 +1585,7 @@ export class AlRunnerBackend implements ExecutionBackend {
    * it has no use for.
    */
   private async installResourceSelector(activeDir: string, artifactId: string): Promise<void> {
-    const manifestPath = join(activeDir, "app.json");
-    const raw = await readFile(manifestPath, "utf8");
-    const manifest = JSON.parse(raw) as { resourceFolders?: string[] };
-    const folders = Array.isArray(manifest.resourceFolders) ? manifest.resourceFolders : [];
-    if (!folders.includes(SELECTOR_RESOURCE_FOLDER)) {
-      manifest.resourceFolders = [...folders, SELECTOR_RESOURCE_FOLDER];
-      await writeFile(
-        manifestPath,
-        `${JSON.stringify(manifest, null, 2)}
-`,
-        "utf8",
-      );
-    }
-    await mkdir(join(activeDir, SELECTOR_RESOURCE_FOLDER), { recursive: true });
-    // Seeded with the baseline value: the first compile reads the resource, and a missing file
-    // would fail that read rather than the run starting at "no mutant active".
-    await writeFile(
-      join(activeDir, SELECTOR_RESOURCE_FOLDER, SELECTOR_RESOURCE_NAME),
-      SELECTOR_RESOURCE_NONE,
-      "utf8",
-    );
-    await writeFile(
-      join(activeDir, "MutationSelector.Codeunit.al"),
-      emitResourceSelector({
-        objectId: this.cfg.selectorObjectId,
-        artifactId,
-        targetAppId: "",
-      }),
-      "utf8",
-    );
+    await installResourceSelector(activeDir, this.cfg.selectorObjectId, artifactId);
   }
 
   /**

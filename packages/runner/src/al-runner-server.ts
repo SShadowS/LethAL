@@ -64,6 +64,21 @@
  */
 
 import { type AlRunnerCompileEntry, compileEntriesOf } from "./al-runner-transport";
+import type { EntriesAnswer } from "./al-runner-v3-entries";
+
+/**
+ * R635 (F4): a v3 `serve` request that gave no complete answer: an untyped `{"error"}` line, EOF,
+ * the deadline, or a line that is not JSON. The daemon is closed by the caller; never a verdict.
+ */
+export class AlRunnerServerRequestError extends Error {
+  constructor(
+    readonly kind: "error" | "eof" | "deadline" | "protocol",
+    why: string,
+  ) {
+    super(`al-runner serve: ${why}`);
+    this.name = "AlRunnerServerRequestError";
+  }
+}
 
 /** The subset of a spawned process this client uses, so tests can supply one without a binary. */
 export interface ServerProcessHandle {
@@ -269,6 +284,8 @@ export class AlRunnerServer {
     readinessDeadlineMs: number,
     packagePaths: readonly string[] = [],
     testTimeoutSeconds?: number,
+    /** R635: v3 `serve`'s `--bc-version <v> --no-download`. */
+    extraArgs: readonly string[] = [],
   ): Promise<void> {
     if (this.proc !== undefined) return;
     const argv = [
@@ -277,6 +294,7 @@ export class AlRunnerServer {
       ...packagePaths.flatMap((p) => ["--package-cache", p]),
       ...this.preprocessorSymbols.flatMap((sym) => ["--define", sym]),
       ...(testTimeoutSeconds !== undefined ? ["--test-timeout", String(testTimeoutSeconds)] : []),
+      ...extraArgs,
     ];
     const proc = this.spawn(argv);
     this.proc = proc;
@@ -418,6 +436,51 @@ export class AlRunnerServer {
         total: typeof msg.total === "number" ? msg.total : tests.length,
         compilationErrors: compileEntriesOf(msg.compilationErrors),
       };
+    }
+  }
+
+  /**
+   * R635 (F4): one v3 `runTests` request (entries or plain), its raw lines grouped by type only:
+   * the caller decodes them against what it sent. Unlike `runTests`, an untyped `{"error": ...}`
+   * line ends the request AT ONCE with `AlRunnerServerRequestError`, as do EOF, the deadline and
+   * an unparseable line; it never reads on to the deadline.
+   */
+  async runEntries(
+    body: Readonly<Record<string, unknown>>,
+    deadlineMs: number,
+  ): Promise<EntriesAnswer> {
+    const proc = this.proc;
+    const stdout = this.stdout;
+    if (proc === undefined || stdout === undefined) {
+      throw new Error("al-runner serve: runEntries called before start()");
+    }
+    proc.write(`${JSON.stringify(body)}\n`);
+    const tests: Record<string, unknown>[] = [];
+    const entrySummaries: Record<string, unknown>[] = [];
+    const deadline = Date.now() + deadlineMs;
+    const fail = (kind: AlRunnerServerRequestError["kind"], why: string) =>
+      new AlRunnerServerRequestError(
+        kind,
+        `${why} (${tests.length} test line(s) seen). stderr tail: ${this.stderrTail(600)}`,
+      );
+    for (;;) {
+      const remaining = deadline - Date.now();
+      const next = remaining <= 0 ? ({ kind: "timeout" } as const) : await stdout.next(remaining);
+      if (next.kind === "timeout")
+        throw fail("deadline", `no summary line within ${deadlineMs} ms`);
+      if (next.kind === "eof") throw fail("eof", "stdout ended before the summary");
+      let msg: Record<string, unknown>;
+      try {
+        msg = JSON.parse(next.line) as Record<string, unknown>;
+      } catch {
+        throw fail("protocol", `unparseable stdout line: ${next.line.slice(0, 200)}`);
+      }
+      if (msg.type === undefined && "error" in msg) {
+        throw fail("error", `the request was refused: ${JSON.stringify(msg.error).slice(0, 400)}`);
+      }
+      if (msg.type === "test") tests.push(msg);
+      else if (msg.type === "entrySummary") entrySummaries.push(msg);
+      else if (msg.type === "summary") return { tests, entrySummaries, summary: msg };
     }
   }
 

@@ -3288,6 +3288,10 @@ async function buildAlRunnerV3Backend(
       ...(deps.preprocessorSymbols.length > 0
         ? { preprocessorSymbols: deps.preprocessorSymbols }
         : {}),
+      // R635: one-shot unless the config opts in.
+      ...(c.transport === "serve-entries"
+        ? { transport: c.transport, secondEcho: c.secondEcho }
+        : {}),
     },
     deps.spawn,
   );
