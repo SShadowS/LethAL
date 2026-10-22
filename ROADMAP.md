@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**95 of 617 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**96 of 618 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -662,6 +662,7 @@ that ordering is the priority.
 - **R617** · bc-linux-setup --held-lease has no test: nothing checks it never takes or releases a lease · [R617.md](docs/roadmap/R617.md) · open
 - **R621** · --resume carries a stored no-coverage verdict without checking it against this session's coverage: always in a wholly carried batch (replayCarriedBatch), and in a partly carried one (scoreBatch) whenever this session covers the mutant · [R621.md](docs/roadmap/R621.md) · open, filed 2026-10-22
 - **R622** · A full verify HUNG for 10 minutes in real-home-guard.test.ts (one worker at 100% CPU, no timeout fired) instead of failing; not reproduced · [R622.md](docs/roadmap/R622.md) · open, filed 2026-10-22
+- **R626** · corpus-snapshot's heavy-job guard counts a parallel itest:alrunner's al-runner children as separate jobs · [R626.md](docs/roadmap/R626.md) · open, filed 2026-10-22
 
 ---
 
