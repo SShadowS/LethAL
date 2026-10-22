@@ -134,7 +134,9 @@ function writeViolations(
     (ts.isStringLiteralLike(n) && FS_MODULES.has(n.text)) ||
     (ts.forEachChild(n, (c) => namesFsModule(c) || undefined) ?? false);
   const tracesToBaseline = (e: ts.Node): boolean =>
-    LOOKS_LIKE_BASELINE.test(e.getText(sf)) || mentions(e, (id) => baselineVars.has(key(id)));
+    LOOKS_LIKE_BASELINE.test(e.getText(sf)) ||
+    // R648: while no baseline variable is known, no identifier can match: skip the checker lookups.
+    (baselineVars.size > 0 && mentions(e, (id) => baselineVars.has(key(id))));
   const collect = (n: ts.Node): void => {
     if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
       const bindings = n.importClause?.namedBindings;
@@ -517,10 +519,20 @@ describe("R332 wiring: real call sites, not text", () => {
       files.push(...seen);
     }
     expect(Object.keys(KNOWN).filter((k) => !roots.map(repoPath).includes(k))).toEqual([]);
-    const { checker, file } = analyse(
-      Object.fromEntries(files.map((f) => [slash(f), readFileSync(f, "utf8")])),
+    // R648: every violation `writeViolations` reports starts from text matching
+    // LOOKS_LIKE_BASELINE in that same file (the self-recording name contains "Baseline", and a
+    // baseline variable is seeded only from such text), so a file without it cannot report one.
+    // Only those files are parsed and checked: about a third of the source, half the time.
+    const sources = Object.fromEntries(
+      files
+        .map((f) => [slash(f), readFileSync(f, "utf8")] as const)
+        .filter(([, text]) => LOOKS_LIKE_BASELINE.test(text)),
     );
-    const found = files.flatMap((f) =>
+    const kept = files.filter((f) => sources[slash(f)] !== undefined);
+    // The known writer must survive the filter, or the filter dropped what the check is for.
+    expect(kept.map(repoPath)).toContain("packages/runner/src/campaign-freeze.ts");
+    const { checker, file } = analyse(sources);
+    const found = kept.flatMap((f) =>
       writeViolations(
         file(slash(f)),
         checker,
@@ -528,7 +540,11 @@ describe("R332 wiring: real call sites, not text", () => {
       ),
     );
     expect(found).toEqual([]);
-  });
+    // R648: it parses and checks the repo's source, so it grows with the repo. Measured (R-648):
+    // 2.2 s alone on Linux before the filter, 3.6 to 5.4 s beside a second full verify, and 6.66 s
+    // on master CI's Windows `check` (run 39778141456); about 1.0 to 1.15 s alone after it. 20 s is
+    // 3x the Windows time and well under verify's 180 s per-file watchdog.
+  }, 20_000);
 });
 
 describe("R332 wiring: the checker catches alternate writers (negative tests)", () => {
