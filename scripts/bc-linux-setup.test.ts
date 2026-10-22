@@ -501,7 +501,9 @@ describe("R617: --held-lease never takes or releases a lease", () => {
 
   test("not held: exactly one lease and one release, with the token coord gave", async () => {
     const k = fakeKraken("t-new");
-    await withLease("bc2", krakenLeaseFor("preproc", k.run), async () => {});
+    // recordToken writes the real token file under /coord: a unit test must never touch it.
+    const deps = { ...krakenLeaseFor("preproc", k.run), recordToken() {} };
+    await withLease("bc2", deps, async () => {});
     expect(k.calls.filter((c) => c[0] === "lease")).toEqual([["lease", "bc2", "preproc"]]);
     expect(k.calls.filter((c) => c[0] === "release")).toEqual([["release", "bc2", "t-new"]]);
   });
