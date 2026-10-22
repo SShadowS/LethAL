@@ -394,8 +394,8 @@ export interface ExecutionBackend {
    * call's prefix replayed at k > 1), at the budget the killing run was sent. Only a second `fail`
    * (any text), or for a timeout kill a second `timeout`, makes it `killed`/`timeout-killed`;
    * anything else is `error` `kill-not-reproduced`, or the reproduction's own non-verdict cause.
-   * Absent counts as false: the rule is off and the confirm is exactly what it was before. al-runner
-   * sets it; bcdev does not yet (R582). Kept off `BackendCapabilities` so the stream schema does not
+   * Absent counts as false: the rule is off and the confirm is exactly what it was before.
+   * al-runner, al-runner-v3 and bcdev set it (bcdev since R582). Kept off `BackendCapabilities` so the stream schema does not
    * change, like `inRunStopIsBudget`.
    */
   readonly killsMustReproduce?: boolean;

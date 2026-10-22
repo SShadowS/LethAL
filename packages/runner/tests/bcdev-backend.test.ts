@@ -744,8 +744,8 @@ codeunit 70000 "Some Codeunit"
 });
 
 describe("BcDevMcpBackend.run", () => {
-  test("R577: the kill-reproduction rule stays OFF on bcdev until R582", () => {
-    expect("killsMustReproduce" in makeBackend(() => ({}))).toBe(false);
+  test("R582: bcdev declares the kill-reproduction rule (R577)", () => {
+    expect(makeBackend(() => ({})).killsMustReproduce).toBe(true);
   });
 
   test("maps a passing result and resolves procedure coverage from the compiled app", async () => {
