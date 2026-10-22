@@ -24,7 +24,7 @@
  *   (c) take the coord lease for the server, record its token at once, heartbeat, release in a
  *       `finally`;
  *   (c2) fill, or reuse when it is complete, the SHARED write-once Microsoft symbol cache
- *       `/coord/cache/bc-symbols/<server>/<build>/` (`bc-symbol-cache.ts`: Microsoft packages
+ *       `/coord/cache/bc-symbols/<server>/<build>-<hash8>/` (`bc-symbol-cache.ts`: Microsoft packages
  *       only), then write one gitignored `lethal.config.<server>.json` per gate fixture, with its
  *       launch file, whose `packageCachePath` names that dir;
  *   (d) publish, in Dev scope over the dev endpoint (`dev/apps`), LethAL Control (`CONTROL_APP`) and then
@@ -1121,7 +1121,11 @@ export function writeConfigOnly(args: SetupArgs, deps: RunDeps, summary: string[
   let ready = true;
   for (const server of args.servers) {
     summary.push(`${server} (config only: no server call, no lease)`);
-    const found = lookupSymbolCache(deps.cacheRoot, server, symbolNames());
+    const found = lookupSymbolCache(
+      deps.cacheRoot,
+      server,
+      symbolNames(join(deps.repo, "fixtures")),
+    );
     for (const u of found.unverified) summary.push(`  unverified ${u}`);
     const cache = found.chosen?.dir ?? join(deps.cacheRoot, server, UNFILLED);
     writeServerConfigs(deps, server, login, cache, summary);
@@ -1132,11 +1136,11 @@ export function writeConfigOnly(args: SetupArgs, deps: RunDeps, summary: string[
     } else {
       const m = found.chosen.marker;
       summary.push(
-        `  symbol cache for ${server}: ${found.chosen.dir} (build ${m.build}, ${m.fileCount} files: ${m.packages.map((p) => p.name).join(", ")}; verified; written ${m.writtenAt})`,
+        `  symbol cache for ${server}: ${found.chosen.dir} (build ${m.build}, ${m.fileCount} files: ${m.packages.map((p) => p.name).join(", ")}; verified; written ${m.writtenAt}); server build not checked (config-only)`,
       );
       if (found.verified.length > 1)
         summary.push(
-          `  note: ${found.verified.length} verified builds for ${server}; the newest is used, and the server's current build is not checked here`,
+          `  note: ${found.verified.length} verified builds for ${server}; the newest by writtenAt is used`,
         );
     }
   }
@@ -1160,7 +1164,7 @@ async function setupServer(
   if (dryRun) {
     for (const { path, launch } of configs) summary.push(`  would write ${path}, ${launch}`);
     summary.push(
-      `  would ${args.heldLease !== undefined ? "use the held lease on" : "lease"} ${server}${args.heldLease !== undefined ? "" : ` in lane ${lane}`}, fill or reuse ${join(deps.cacheRoot, server, "<build>")}, publish LethAL Control,${args.withContinia ? " check P1 and publish the 5 Continia apps," : ""} then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
+      `  would ${args.heldLease !== undefined ? "use the held lease on" : "lease"} ${server}${args.heldLease !== undefined ? "" : ` in lane ${lane}`}, fill or reuse ${join(deps.cacheRoot, server, "<build>-<hash8>")}, publish LethAL Control,${args.withContinia ? " check P1 and publish the 5 Continia apps," : ""} then ${PUBLISH_PLAN.map((s) => s.target).join(", ")} with their dependents, run doctor`,
     );
     return true;
   }
@@ -1174,7 +1178,7 @@ async function setupServer(
     const cache = await fillSymbolCache({
       root: deps.cacheRoot,
       server,
-      names: symbolNames(),
+      names: symbolNames(join(deps.repo, "fixtures")),
       download: (name) => deps.downloadSymbol(conn, name),
     });
     summary.push(
@@ -1248,7 +1252,11 @@ export async function run(
       summary.push(`  FAILED    ${errText(err)}`);
     }
     print(`\nbc-linux-setup (write config only):\n${summary.join("\n")}`);
-    print(ok ? "\nok: configs written, symbol cache verified" : "\nFAILED");
+    print(
+      ok
+        ? "\nok: configs written, symbol cache verified; server build not checked (config-only)"
+        : "\nFAILED",
+    );
     return ok ? 0 : 1;
   }
   const { servers, dryRun, lane: cliLane } = args;

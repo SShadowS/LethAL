@@ -42,17 +42,19 @@ server it:
 bc1|bc2|bc3|all`. It reads the secret file and writes the same configs and launch files, with NO server
 call and NO lease. It refuses by name when the secret file or one of its two keys is missing, and never
 prints the login. It reads the symbol cache's own marker to say, by name, whether the cache is filled for
-that server: `symbol cache for bcN: <dir> (build <b>, <n> files ...; verified)`, or `symbol cache empty
-for bcN: run setup --server bcN once`, in which case the run fails and never claims gate-ready. With more
-than one verified build it takes the newest and says that the server's current build was not checked.
+that server: `symbol cache for bcN: <dir> (build <b>, <n> files ...; verified ...); server build not
+checked (config-only)`, or `symbol cache empty for bcN: run setup --server bcN once`, in which case the
+run fails and never claims gate-ready. It never asks the server which build it runs: with more than one
+verified dir it takes the newest by its marker's `writtenAt`, and every line it prints says so.
 
 ### The shared symbol cache
 
 A gate's instrumented compile reads `bcdev.packageCachePath`, and nothing on the bcdev path downloads
 into it: `BcDevMcpBackend` compiles against R552's private copy of it plus `CONTROL_APP`, and its
 plain-check compile reads it directly. So the configs must name a FILLED cache. It is
-`/coord/cache/bc-symbols/<server>/<build>/`, shared by every worktree, where `<build>` is the version of
-the `Microsoft System` package the server serves. Measured: alc compiles a fixture against a read-only
+`/coord/cache/bc-symbols/<server>/<build>-<hash8>/`, shared by every worktree, where `<build>` is the
+version of the `Microsoft System` package the server serves and `<hash8>` is a short hash of the set of
+package names the dir holds, so a new Microsoft dependency on the same build gets a new dir. Measured: alc compiles a fixture against a read-only
 cache (dir 0555, files 0444) with no error (`/coord/handoff/R-599/symcache/alc-readonly-cache.log`).
 
 - **Microsoft packages only.** The dir is keyed by the BC build alone, so anything else in it would be
@@ -62,12 +64,16 @@ cache (dir 0555, files 0444) with no error (`/coord/handoff/R-599/symcache/alc-r
   `CONTROL_APP` and its pinned sha256 (R552's copy adds it), a test app's target symbol from that
   compile's own private cache, Continia from cdo's own package dir.
 - **Write-once.** A fill downloads into a temp dir beside the build dirs, writes `cache-complete.json`
-  (server, build, time, file count, and per package its id, name, publisher, version and sha256), and
-  renames the temp dir into place. The completed dir is made read-only and is never modified or
-  deleted. A fill that finds the build's dir complete uses it (it downloads `System` only, to learn the
-  build); one that finds it incomplete refuses by name and leaves it alone. Two fills racing: the second
-  rename fails, and the loser verifies the winner's dir.
-- **A new BC build gets a new dir.** Old dirs stay; nothing prunes them yet.
+  (server, build, time, file count, and per package its id, name, publisher, version and sha256),
+  makes it read-only, and only then renames it into place, so a crash can never leave a writable
+  complete dir. The completed dir is never modified or deleted. A fill that finds the dir complete uses
+  it (it downloads `System` only, to learn the build); one that finds it incomplete refuses by name and
+  leaves it alone. Two fills racing: the second rename fails, and the loser verifies the winner's dir.
+  The verifier also checks that `System`'s own version is the marker's build, accepts regular files
+  only (a symlink is refused), and never throws: an unreadable dir is listed as unverified.
+- **A new BC build gets a new dir.** Old dirs stay; nothing prunes them yet. A leftover
+  `/coord/cache/bc-symbols/<server>/.tmp-*` dir is a fill that died part-way; it is never used, and it
+  is safe to delete when no setup is running.
 - What it holds: `System` plus every Microsoft dependency of a `PUBLISH_PLAN` target (today `System`
   alone). A dependent's own symbols are not put there.
 

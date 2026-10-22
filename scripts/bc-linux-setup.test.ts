@@ -457,10 +457,18 @@ describe("--write-config-only: configs from the secret file, no server call, no 
   function harness(secretText: string | null) {
     const repo = mkdtempSync(join(tmpdir(), "bc-wco-repo-"));
     for (const d of FIXTURE_DIRS) mkdirSync(join(repo, "fixtures", d), { recursive: true });
+    // `symbolNames` reads each PUBLISH_PLAN target's app.json under deps.repo, not the real repo.
+    for (const s of PUBLISH_PLAN) {
+      mkdirSync(join(repo, "fixtures", s.target), { recursive: true });
+      writeFileSync(
+        join(repo, "fixtures", s.target, "app.json"),
+        JSON.stringify({ name: s.target, publisher: "LethAL", version: "1.0.0.0" }),
+      );
+    }
     const cacheRoot = mkdtempSync(join(tmpdir(), "bc-wco-cache-"));
     const secretPath = join(mkdtempSync(join(tmpdir(), "bc-wco-secret-")), "bc-linux.env");
     if (secretText !== null) writeFileSync(secretPath, secretText);
-    const counts = { connect: 0, lease: 0 };
+    const counts = { connect: 0, lease: 0, fetch: 0 };
     const printed: string[] = [];
     const deps: RunDeps = {
       readSecret: () => readSecretFile(secretPath),
@@ -486,11 +494,19 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       const err = spyOn(console, "error").mockImplementation((...a: unknown[]) => {
         printed.push(a.join(" "));
       });
+      // Any fetch resolved at call time is counted and answered 500. (`bcFetch` binds `fetch` when
+      // it is imported, so the module's own server paths are counted by `connect` instead: every
+      // one of them takes a `Conn`, and `connect` is the only way to get one.)
+      const net = spyOn(globalThis, "fetch").mockImplementation((async () => {
+        counts.fetch++;
+        return new Response("no network in this test", { status: 500 });
+      }) as unknown as typeof fetch);
       try {
         return await run(argv, deps, (s) => printed.push(s));
       } finally {
         log.mockRestore();
         err.mockRestore();
+        net.mockRestore();
       }
     };
     const written = () =>
@@ -511,7 +527,7 @@ describe("--write-config-only: configs from the secret file, no server call, no 
   test("an empty cache: every file written, 0 server and 0 lease calls, named empty, never gate-ready", async () => {
     const h = harness(GOOD);
     const code = await h.go(["--server", "bc3", "--write-config-only"]);
-    expect(h.counts).toEqual({ connect: 0, lease: 0 });
+    expect(h.counts).toEqual({ connect: 0, lease: 0, fetch: 0 });
     expect(h.written()).toEqual(ALL_FILES);
     const out = h.printed.join("\n");
     expect(out).toContain("symbol cache empty for bc3: run setup --server bc3 once");
@@ -550,12 +566,17 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     });
     try {
       const code = await h.go(["--server", "bc3", "--write-config-only"]);
-      expect(h.counts).toEqual({ connect: 0, lease: 0 });
+      expect(h.counts).toEqual({ connect: 0, lease: 0, fetch: 0 });
       const out = h.printed.join("\n");
       expect(out).toContain(
         `symbol cache for bc3: ${filled.dir} (build 28.4.53241.56646, 1 files: System; verified`,
       );
       expect(out).not.toContain("symbol cache empty");
+      // it never asks the server, and says so on the cache line AND on the ok line
+      expect(out).toContain("verified; server build not checked (config-only)");
+      expect(out).toContain(
+        "ok: configs written, symbol cache verified; server build not checked (config-only)",
+      );
       expect(code).toBe(0);
       for (const d of FIXTURE_DIRS) {
         const cfg = JSON.parse(
@@ -569,13 +590,45 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     }
   });
 
+  test("the required names come from deps.repo's fixtures: a cache lacking one is reported empty", async () => {
+    const h = harness(GOOD);
+    // one target in THIS repo needs a Microsoft package the cache does not hold
+    writeFileSync(
+      join(h.repo, "fixtures", "sandbox-names", "app.json"),
+      JSON.stringify({
+        name: "sandbox-names",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        dependencies: [{ name: "Base Application", publisher: "Microsoft" }],
+      }),
+    );
+    const sys = buildFakeAppWithEntries({
+      "NavxManifest.xml":
+        '<Package><App Id="i" Name="System" Publisher="Microsoft" Version="28.4.53241.56646" /></Package>',
+    });
+    const filled = await fillSymbolCache({
+      root: h.cacheRoot,
+      server: "bc3",
+      names: ["System"],
+      download: async () => sys,
+    });
+    try {
+      expect(await h.go(["--server", "bc3", "--write-config-only"])).toBe(1);
+      const out = h.printed.join("\n");
+      expect(out).toContain("lacks Base Application");
+      expect(out).toContain("symbol cache empty for bc3: run setup --server bc3 once");
+    } finally {
+      chmodSync(filled.dir, 0o755);
+    }
+  });
+
   test("no secret file: refused by name, nothing written, no call", async () => {
     const h = harness(null);
     const code = await h.go(["--server", "bc3", "--write-config-only"]);
     expect(code).toBe(1);
     expect(h.printed.join("\n")).toContain("bc-linux.env does not exist");
     expect(h.written()).toEqual([]);
-    expect(h.counts).toEqual({ connect: 0, lease: 0 });
+    expect(h.counts).toEqual({ connect: 0, lease: 0, fetch: 0 });
   });
 
   test("a missing key: refused by name, nothing written", async () => {
