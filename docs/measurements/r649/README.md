@@ -45,6 +45,27 @@ sha256, so each server has its own build.
 - The two app ids and the artifact id appear nowhere else in the repo.
 - On the server, the driver reads both app ids absent (0 rows) before it publishes, or it stops.
 
+## Results (bc2, 2026-10-22, pre-commitment fcb16407)
+
+BC 28.4 on bc2, LethAL Control 1.0.0.23, lane bugs' coord lease 15:41:26Z-15:53:41Z. The full readings are in
+`bc2-probe.json`; the driver log is `/coord/handoff/R-649/probe/drive.log`.
+
+| # | Test | LethAL's row | BC's own outcome |
+|---|---|---|---|
+| 1 | `Sleep100` | `pass`, 215 ms | `pass` |
+| 2 | `Sleep5000` | `pass`, 5095 ms | `pass`: BC really waits, and a 5 s Sleep is green under the 120 s budget |
+| 3 | `LongSleepThenAssert` (`Sleep(600000)`) | `deadline-exceeded` after 120 060 ms, `in-flight-unknown`: "RunMutant timed out before headers: AbortError: The operation was aborted.; answer readback: the server holds no committed answer for r649-92932-22828/22828 (it holds r649-92931-22827/22827)" | **no answer**: the op stayed `completed: false` at every 10 s poll to 720 s after dispatch |
+| 4 | `SleeperDoubles` | not run (the pre-committed STOP after a case with no answer) | — |
+
+**Decision-table row: B.** LethAL's baseline reading of a `Sleep(600000)` test is "not green at 120 s", as on edge
+v3. "BC waits the full 600 s" is NOT measured. Case 4 (the exact X (d) shape) was not run; it starts with the same
+`Sleep(600000)`, so its baseline reading is inferred to follow case 3's.
+
+**After the run** (read-only, `/coord/handoff/R-649/probe/bc2-status.log`): 11 `GetOperationStatus` polls from
+15:56:34Z to 16:01:37Z still read the op `completed: false`, `state: running` in `LongSleepThenAssert`. That is 20
+minutes after dispatch, about 9 minutes past the end of a 600 s Sleep. `lethal doctor` then reported bc2's control-app
+lease orphaned (held by this probe, expired 15:53:48Z). No reset was run, because the op was still live. Filed as R658.
+
 ## What stays on the server after removal
 
 As with R639: one row in LethAL Control's artifact registry, keyed by target `7937c2a9-…`, which no
