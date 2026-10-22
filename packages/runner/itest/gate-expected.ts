@@ -209,10 +209,16 @@ export const LEND_FIGURES = {
   history: { killed: 3, survived: 0, noCoverage: 4, knownSurvivors: 12, groupedCalls: 3 },
   /** R1: `--resume-run` of an unfinished full clone; the one batch is carried whole. */
   resumeWhole: { carryable: 19, carried: 19, groupedCalls: 0 },
-  /** R2: `--resume` of K (KEPT carried, M0003's error row and the rest re-run), snapshot reused. */
-  resumeSnapshot: { carryable: 9, carried: 9, nonCarryableRows: 1, groupedCalls: 8 },
-  /** R3: K2 (all but M0019); the v3 snapshot refused, the baseline re-run. */
-  resumeRefusedSnapshot: { carryable: 18, carried: 18, groupedCalls: 0 },
+  /**
+   * R2: `--resume` of K (KEPT carried, M0003's error row and the rest re-run), snapshot reused.
+   * Live run 1 (BLOCKED, pre-commitment addendum): in a PARTLY carried batch `scoreBatch` re-derives
+   * no-coverage from this session's coverage before any carry, so K's two no-coverage rows are fresh,
+   * not carried: 9 carryable, 7 carried.
+   */
+  resumeSnapshot: { carryable: 9, carried: 7, nonCarryableRows: 1, groupedCalls: 8 },
+  /** R3: K2 (all but M0019); the v3 snapshot refused, the baseline re-run. Partly carried too: 18
+   *  carryable, 15 carried (M0016-M0018 re-derived, as in R2). */
+  resumeRefusedSnapshot: { carryable: 18, carried: 15, groupedCalls: 0 },
   /** I2: the KEPT row in K whose `durationMs` R2 must read back from `mutant-carried`. */
   sentinel: { code: "M0004", durationMs: 987654 },
   /** K's rows: 2 killed, 5 survived, 2 no-coverage, carried by key. */

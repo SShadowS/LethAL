@@ -91,6 +91,13 @@ const keySet = (codes: readonly string[]): Set<string> =>
   new Set(codes.map((c) => keyOfCode(c as LendCode)));
 const ALL = keySet(CODES);
 const KEPT = keySet(LEND_FIGURES.kept);
+/**
+ * R618 live run 1: in a PARTLY carried batch, no-coverage is re-derived from this session's coverage
+ * (`scoreBatch`), never carried; only a WHOLLY carried batch (`replayCarriedBatch`, R1) carries it.
+ */
+const NO_COVERAGE = keySet(CODES.filter((c) => LEND_MUTANTS[c].verdict === "no-coverage"));
+const carriedInPartBatch = (rows: Set<string>): Set<string> =>
+  new Set([...rows].filter((k) => !NO_COVERAGE.has(k)));
 const SURVIVED = keySet(CODES.filter((c) => LEND_MUTANTS[c].verdict === "survived"));
 
 interface LaunchLocalConfig {
@@ -463,7 +470,11 @@ async function main(): Promise<void> {
       `R2: the reused snapshot must be run B's (${B}), not a seeded one`,
     );
     assert.equal(ranHere(r2.events), 0, "R2: a reused baseline runs no unmutated test here (B1)");
-    assert.deepEqual(carriedKeys(r2.report), KEPT, "R2: exactly KEPT carried, by key");
+    assert.deepEqual(
+      carriedKeys(r2.report),
+      carriedInPartBatch(KEPT),
+      "R2: exactly KEPT minus its no-coverage rows carried, by key (no-coverage re-derived in a partly carried batch)",
+    );
     assertFrozen("R2", baseline, r2.report);
     assert.equal(
       r2.report.groupedCalls,
@@ -514,8 +525,8 @@ async function main(): Promise<void> {
     assert.equal(ranHere(r3.events), l0Ran, "R3: the baseline re-ran here, as L0's did (B1)");
     assert.deepEqual(
       carriedKeys(r3.report),
-      new Set([...ALL].filter((k) => !keySet(LEND_FIGURES.r3Rerun).has(k))),
-      "R3: all but M0019 carried, by key",
+      carriedInPartBatch(new Set([...ALL].filter((k) => !keySet(LEND_FIGURES.r3Rerun).has(k)))),
+      "R3: all but M0019 and the no-coverage rows carried, by key (partly carried batch)",
     );
     assertFrozen("R3", baseline, r3.report);
     assert.equal(

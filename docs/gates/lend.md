@@ -37,11 +37,11 @@ It is not yet proven on any server (see [servers.md](servers.md)).
     "LEND_FIGURES.resumeWhole.carried": 19,
     "LEND_FIGURES.resumeWhole.groupedCalls": 0,
     "LEND_FIGURES.resumeSnapshot.carryable": 9,
-    "LEND_FIGURES.resumeSnapshot.carried": 9,
+    "LEND_FIGURES.resumeSnapshot.carried": 7,
     "LEND_FIGURES.resumeSnapshot.nonCarryableRows": 1,
     "LEND_FIGURES.resumeSnapshot.groupedCalls": 8,
     "LEND_FIGURES.resumeRefusedSnapshot.carryable": 18,
-    "LEND_FIGURES.resumeRefusedSnapshot.carried": 18,
+    "LEND_FIGURES.resumeRefusedSnapshot.carried": 15,
     "LEND_FIGURES.resumeRefusedSnapshot.groupedCalls": 0,
     "LEND_FIGURES.sentinel.code": "M0004",
     "LEND_FIGURES.sentinel.durationMs": 987654,
@@ -61,9 +61,22 @@ It is not yet proven on any server (see [servers.md](servers.md)).
 - L1 and N0 score 3 / 0 / 4, with the 12 survivors recorded as known survivors and not run.
   `knownSurvivors` is 12. `groupedCalls` is 3.
 - R1 carries all 19 mutants of the one batch whole. `carried` is 19, and nothing is deployed.
-- R2 carries the 9 KEPT mutants and re-runs the other 10, one of them from an `error` row.
-  `nonCarryableRows` is 1. `groupedCalls` is 8.
-- R3 carries 18 mutants and scores M0019 as no-coverage. `carried` is 18.
+- R2 has 9 KEPT rows. It carries 7 of them, every one that is not no-coverage; its two no-coverage KEPT rows come back as fresh
+  no-coverage (see "No-coverage is not carried in a partly carried batch" below). It re-runs the other 10, one of them
+  from an `error` row. `carried` is 7, `nonCarryableRows` 1, `groupedCalls` 8.
+- R3 has 18 carryable rows. It carries 15 of them, every one that is not no-coverage, re-derives the three no-coverage ones, and
+  scores M0019 as no-coverage. `carried` is 15.
+
+### No-coverage is not carried in a partly carried batch
+
+- **Partly carried batch:** `scoreBatch` records uncovered mutants from this session's own coverage selection, before
+  any carry lookup. A no-coverage verdict is therefore re-derived, never carried.
+- **Wholly carried batch:** `replayCarriedBatch` (R1) carries every verdict, no-coverage included.
+- **Which is safe:** re-deriving is the safe direction, since nothing is lent where fresh coverage is at hand.
+- **Status:** the asymmetry between the two paths is undocumented as a design choice and is filed as its own roadmap
+  item.
+- **How it was found:** live run 1 on bc1 was BLOCKED at R2 (7 carried against 9 pre-committed;
+  `/coord/handoff/R-618/live-run-1.md`), and the pre-commitment got an addendum before the re-run.
 - The sentinel row's `durationMs` is 987654.
 
 ## The legs
@@ -145,4 +158,6 @@ Offline red checks and the live ones still to run are in R618's handoff
 
 ## History
 
-- 2026-10-22: built offline (R618). Not yet run on any server.
+- 2026-10-22: built offline (R618).
+- 2026-10-22, live run 1 on bc1: BLOCKED at R2. L0, L1 and R1 were as pre-committed. R2 carried 7, not 9 (the
+  no-coverage KEPT rows were re-derived). Ruling (a): an addendum, then a re-run of the whole gate.
