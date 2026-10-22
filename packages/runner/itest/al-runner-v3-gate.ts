@@ -7,7 +7,9 @@
  * from the known differences alone: the rows where v3's own baseline differs from BC's
  * `tables.baseline.json` (pre-committed as the 52 of `precommitment-tables-52.txt`: 41 Commit #5607,
  * 7 duplicate key #5603, 4 TestPage). A leg-T difference is `held` only when its row is one of those
- * AND it now equals the BC row (verdict and killing test). Anything else is `gate-fail`.
+ * AND it now equals the BC row (verdict and killing test). r9 §7 (R639) adds one narrow case: a
+ * known row whose verdict disagreed with BC's, now `error` through a named refusal
+ * (`runner-refused`, no killing test). Anything else is `gate-fail`.
  */
 import { writeFile } from "node:fs/promises";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
@@ -193,10 +195,27 @@ export function classifyLegT(
       ns.length === 1 &&
       (b.get(k)?.length ?? 0) === 1 &&
       sameRow(ns[0], b.get(k)?.[0]);
+    // r9 §7 (R639): a known row whose VERDICT disagreed with BC's, now a named refusal (v3 notRun,
+    // or LethAL §6, which cannot fire on leg T: its Sleep index is pre-committed at 0 + 0).
+    const bk = b.get(k);
+    const refusal =
+      known.has(k) &&
+      os.length === 1 &&
+      ns.length === 1 &&
+      bk?.length === 1 &&
+      os[0]?.verdict !== bk[0]?.verdict &&
+      ns[0]?.verdict === "error" &&
+      ns[0].errorClass === "runner-refused" &&
+      ns[0].killingTest === null;
     if (toward) {
       anyHeld = true;
       lines.push(
         `held: ${k}: ${os[0]?.verdict} -> ${ns[0]?.verdict} (the BC verdict, a known difference)`,
+      );
+    } else if (refusal) {
+      anyHeld = true;
+      lines.push(
+        `held: ${k}: ${os[0]?.verdict} -> error (a named refusal: v3 notRun or LethAL §6; not BC's verdict; re-pre-commit)`,
       );
     } else {
       anyFail = true;
@@ -407,7 +426,10 @@ export class V3LegEnvironment extends Error {
   }
 }
 
-/** I-2: every difference is a move toward BC: `held`. */
+/**
+ * I-2, as worded by r9 §8: every difference is a move toward BC or a named refusal; read the
+ * receipt's lines: `held`.
+ */
 export class V3LegHeld extends Error {
   readonly lines: readonly string[];
   constructor(lines: readonly string[]) {
