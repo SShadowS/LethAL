@@ -135,9 +135,7 @@ describe("R616 testDbPath", () => {
   });
   test("it throws by name when the variable is missing or empty, never falling back", () => {
     expect(() => testDbPath("x.sqlite", {})).toThrow(TestDbDirMissingError);
-    expect(() => testDbPath("x.sqlite", { LETHAL_TEST_DB_DIR: "" })).toThrow(
-      TestDbDirMissingError,
-    );
+    expect(() => testDbPath("x.sqlite", { LETHAL_TEST_DB_DIR: "" })).toThrow(TestDbDirMissingError);
   });
   test("under the preload, the folder is the one its reason names", () => {
     const dir = process.env.LETHAL_TEST_DB_DIR ?? "";

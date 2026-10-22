@@ -30,6 +30,7 @@ import {
   recordPublishOutcome,
 } from "../src/publish-ceiling";
 import { ResultsStore } from "../src/store";
+import { testDbPath } from "./helpers/test-db";
 
 // ————————————————————————————————————————————————————————————————————————
 // Step 1/2 — the pure refusal rule (the brief's own four tests, verbatim).
@@ -256,7 +257,7 @@ describe("knownCeiling — only a demonstrated `failed` publish moves the ceilin
   test("an existing database created before this table gains it on open — no ALTER needed", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-ceiling-migrate-"));
     try {
-      const dbPath = join(dir, "old.sqlite");
+      const dbPath = testDbPath("old.sqlite");
       // An "old" lethal.sqlite: runs table only, no publish_outcomes anywhere.
       const old = new Database(dbPath, { create: true });
       old.exec(
@@ -1080,7 +1081,7 @@ describe("--dry-run reports both counts and the measured bracket (R92/R90)", () 
     const dirs = await makeCeilingProject([
       { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 3) },
     ]);
-    const dbPath = join(dirs.root, "lethal.sqlite");
+    const dbPath = testDbPath("lethal.sqlite");
     const configPath = join(dirs.root, "lethal.config.json");
     try {
       const store = new ResultsStore(dbPath);
@@ -1108,7 +1109,7 @@ describe("--dry-run reports both counts and the measured bracket (R92/R90)", () 
     const dirs = await makeCeilingProject([
       { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 3) },
     ]);
-    const dbPath = join(dirs.root, "lethal.sqlite");
+    const dbPath = testDbPath("lethal.sqlite");
     const configPath = join(dirs.root, "lethal.config.json");
     try {
       const out = await captureDryRun(dirs.projectDir, { dbPath, configPath });
@@ -1125,7 +1126,7 @@ describe("--dry-run reports both counts and the measured bracket (R92/R90)", () 
     const dirs = await makeCeilingProject([
       { name: "Small.Codeunit.al", source: await codeunitWithGuards(79000, "Small", 3) },
     ]);
-    const dbPath = join(dirs.root, "lethal.sqlite");
+    const dbPath = testDbPath("lethal.sqlite");
     const configPath = join(dirs.root, "lethal.config.json");
     try {
       new ResultsStore(dbPath).close();
@@ -1260,7 +1261,7 @@ describe("clear-ceiling reports a no-op AS a no-op (fix round 2)", () => {
 
   async function seededDb(): Promise<{ root: string; dbPath: string }> {
     const root = await mkdtemp(join(tmpdir(), "lethal-clearcli-"));
-    const dbPath = join(root, "lethal.sqlite");
+    const dbPath = testDbPath("lethal.sqlite");
     const store = new ResultsStore(dbPath);
     recordPublishOutcome(store, TIER, 229, "accepted", "Mid.Codeunit.al");
     recordPublishOutcome(store, TIER, 331, "failed", "Big.Codeunit.al");
@@ -1435,7 +1436,7 @@ describe("R112 — the ceiling is reachable on an env-tool project", () => {
     ]);
     const configPath = join(dirs.projectDir, "lethal.config.json");
     await Bun.write(configPath, JSON.stringify(ENVTOOL_CONFIG));
-    const dbPath = join(dirs.projectDir, "lethal.sqlite");
+    const dbPath = testDbPath("lethal.sqlite");
     const store = new ResultsStore(dbPath);
     // A tier that has already paid for its ceiling — the whole question `--dry-run` should be able
     // to answer before anything is published.
