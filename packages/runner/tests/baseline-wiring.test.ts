@@ -519,20 +519,10 @@ describe("R332 wiring: real call sites, not text", () => {
       files.push(...seen);
     }
     expect(Object.keys(KNOWN).filter((k) => !roots.map(repoPath).includes(k))).toEqual([]);
-    // R648: every violation `writeViolations` reports starts from text matching
-    // LOOKS_LIKE_BASELINE in that same file (the self-recording name contains "Baseline", and a
-    // baseline variable is seeded only from such text), so a file without it cannot report one.
-    // Only those files are parsed and checked: about a third of the source, half the time.
-    const sources = Object.fromEntries(
-      files
-        .map((f) => [slash(f), readFileSync(f, "utf8")] as const)
-        .filter(([, text]) => LOOKS_LIKE_BASELINE.test(text)),
+    const { checker, file } = analyse(
+      Object.fromEntries(files.map((f) => [slash(f), readFileSync(f, "utf8")])),
     );
-    const kept = files.filter((f) => sources[slash(f)] !== undefined);
-    // The known writer must survive the filter, or the filter dropped what the check is for.
-    expect(kept.map(repoPath)).toContain("packages/runner/src/campaign-freeze.ts");
-    const { checker, file } = analyse(sources);
-    const found = kept.flatMap((f) =>
+    const found = files.flatMap((f) =>
       writeViolations(
         file(slash(f)),
         checker,
@@ -540,11 +530,12 @@ describe("R332 wiring: real call sites, not text", () => {
       ),
     );
     expect(found).toEqual([]);
-    // R648: it parses and checks the repo's source, so it grows with the repo. Measured (R-648):
-    // 2.2 s alone on Linux before the filter, 3.6 to 5.4 s beside a second full verify, and 6.66 s
-    // on master CI's Windows `check` (run 39778141456); about 1.0 to 1.15 s alone after it. 20 s is
-    // 3x the Windows time and well under verify's 180 s per-file watchdog.
-  }, 20_000);
+    // R648: it parses and checks ALL of the repo's source, so it grows with the repo. Measured
+    // (R-648): 2.2 s alone on Linux, 3.6 to 5.4 s beside a second full verify (it failed once at
+    // 5.4 s), and 6.66 s on master CI's Windows `check` (run 39778141456). A text pre-filter would
+    // halve that but could let the guard stop guarding, so the scan stays whole (orchestrator
+    // ruling) and gets 30 s: about 4.5x the Windows time, well under verify's 180 s watchdog.
+  }, 30_000);
 });
 
 describe("R332 wiring: the checker catches alternate writers (negative tests)", () => {
