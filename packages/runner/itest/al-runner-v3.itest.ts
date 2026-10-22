@@ -1067,6 +1067,8 @@ async function legT(
       sameScheme:
         ownBase.identityScheme !== undefined && ownBase.identityScheme === IDENTITY_SCHEME,
     }),
+    own,
+    now,
     counts: r.counts,
     total: r.mutants.length,
     unsupportedTests: r.unsupportedTests.length,

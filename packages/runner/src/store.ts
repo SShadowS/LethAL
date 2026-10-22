@@ -317,14 +317,23 @@ export interface LendingSession {
  * R586 `runMayLend` step 1 (plan r2 §10, run FIRST so the reason it names is the real one): when
  * EITHER side is `al-runner-v3`, both must be, and the run's recorded build must equal the
  * session's. A v3 verdict carries v3's known differences (#5603's false survivors, #5605), so it
- * is evidence only for that build. Any other backend pair lends here (their behaviour is
- * unchanged; R592 files the gap between bcdev and v2). Remove-only. `undefined` = lends.
+ * is evidence only for that build. R592: any other pair of different backends is refused too (a
+ * survivor is evidence only on the backend that measured it; bcdev and al-runner share coverage
+ * mode `none`). With no session named, only a v3 run is refused. Remove-only. `undefined` = lends.
  */
 export function backendBuildRefusal(
   run: { readonly id: number; readonly backend: string; readonly runnerBuild: string | null },
   session: LendingSession | undefined,
 ): string | undefined {
   const v3 = "al-runner-v3";
+  if (
+    session !== undefined &&
+    run.backend !== session.backend &&
+    run.backend !== v3 &&
+    session.backend !== v3
+  ) {
+    return `run ${run.id} ran on ${run.backend} and this session runs ${session.backend}; a verdict is lent only within one backend (R592)`;
+  }
   if (run.backend !== v3 && session?.backend !== v3) return undefined;
   if (session === undefined) {
     return `run ${run.id} ran on al-runner-v3 and this caller named no session backend, so nothing of it is lent (R586)`;

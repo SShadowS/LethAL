@@ -10,6 +10,7 @@ import { ResultsStore } from "../src/store";
 const H = "package:aa|closed-world:public";
 const D = "deps:1";
 const BCDEV = { backend: "bcdev", runnerBuild: undefined } as const;
+const AL_RUNNER = { backend: "al-runner", runnerBuild: undefined } as const;
 /** R585: the seed's test scope, and the history session's (a subset of it). */
 const SCOPE = ["79100::A", "79100::B"];
 const SESSION_TESTS = ["79100::A"];
@@ -61,12 +62,13 @@ function seed(
   return id;
 }
 
-/** Every refusal callback, recording which fired; a bcdev session with the seed's own identity. */
-function ask(store: ResultsStore) {
+/** Every refusal callback, recording which fired; a session (bcdev unless named) with the seed's
+ *  own identity. */
+function ask(store: ResultsStore, session: typeof BCDEV | typeof AL_RUNNER = BCDEV) {
   const fired: string[] = [];
   const hit = (name: string) => () => fired.push(name);
   const keys = store.priorSurvivorKeys("P", "fenced", { hash: H, deps: D }, [], [], SESSION_TESTS, {
-    session: BCDEV,
+    session,
     testScopeChanged: hit("testScopeChanged"),
     backendBuildRefused: hit("backendBuildRefused"),
     schemeChanged: hit("schemeChanged"),
@@ -154,10 +156,10 @@ describe("R585: the test-scope check, LAST of all, after runMayLend lends (revie
     });
   });
   test("order: a NULL-scope pre-R557 (unmarked) al-runner run is named history-al-runner-test-names", () => {
-    expect(one({ testScope: null, backend: "al-runner" })).toEqual({
-      keys: 0,
-      fired: ["alRunnerUnmarked"],
-    });
+    const store = new ResultsStore(":memory:");
+    seed(store, { testScope: null, backend: "al-runner" });
+    expect(ask(store, AL_RUNNER)).toEqual({ keys: 0, fired: ["alRunnerUnmarked"] });
+    store.close();
   });
   test("order: a NULL-scope run under another test app is named by the test app", () => {
     expect(one({ testScope: null, testAppHash: `${H}${REVOKED_SUFFIX}` })).toEqual({
@@ -167,18 +169,34 @@ describe("R585: the test-scope check, LAST of all, after runMayLend lends (revie
   });
 });
 
-describe("R618 RC4a: the history site's R557 mark, in a bcdev session", () => {
+describe("R618 RC4a: the history site's R557 mark, in an al-runner session", () => {
   test("an unmarked al-runner run (fenced, every other field equal) lends nothing, by name", () => {
     const store = new ResultsStore(":memory:");
     seed(store, { backend: "al-runner" });
-    expect(ask(store)).toEqual({ keys: 0, fired: ["alRunnerUnmarked"] });
+    expect(ask(store, AL_RUNNER)).toEqual({ keys: 0, fired: ["alRunnerUnmarked"] });
     store.close();
   });
 
-  test("control: the same run with the mark lends (R592's known gap, not pinned as correct)", () => {
+  test("control: the same run with the mark lends", () => {
     const store = new ResultsStore(":memory:");
     seed(store, { backend: "al-runner", alRunnerNames: true });
-    expect(ask(store)).toEqual({ keys: 1, fired: [] });
+    expect(ask(store, AL_RUNNER)).toEqual({ keys: 1, fired: [] });
+    store.close();
+  });
+});
+
+describe("R592: a run of another backend lends nothing to history, whatever its mark", () => {
+  test("a marked al-runner run, a bcdev session: step 1 refuses (it lent before R592)", () => {
+    const store = new ResultsStore(":memory:");
+    seed(store, { backend: "al-runner", alRunnerNames: true });
+    expect(ask(store)).toEqual({ keys: 0, fired: ["backendBuildRefused"] });
+    store.close();
+  });
+
+  test("a bcdev run, an al-runner session: step 1 refuses", () => {
+    const store = new ResultsStore(":memory:");
+    seed(store);
+    expect(ask(store, AL_RUNNER)).toEqual({ keys: 0, fired: ["backendBuildRefused"] });
     store.close();
   });
 });

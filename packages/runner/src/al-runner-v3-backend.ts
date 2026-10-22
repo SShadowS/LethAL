@@ -119,6 +119,15 @@ export const V3_TIMEOUT_MESSAGE = /^Test exceeded (\d+)s timeout\.$/;
 /** The four note tags (plan §4, §6), in `failureNote`; the gate and any count read them by tag. */
 export const V3_STATE_NOTE_TAG = "[v3-codeunit-state-possible]";
 export const V3_REFUSED_NEARBY_TAG = "[v3-refused-test-nearby]";
+/**
+ * R652: a §5 window's 2-3 plain sends follow ONE bound check (the window's), so a tree change
+ * after it can reach their rows. Those rows never make a kill, only an error; each such text says
+ * so, so a reader does not blame the wrong cause. Worded to stay true on a LATER mutant's verdict
+ * that carries a latched `batchBlind` note (build review L2).
+ */
+export const WINDOW_BOUND_CAVEAT =
+  "a bound-tree change since a window's bound check (R652) is a possible cause";
+const withWindowCaveat = (s: string): string => `${s}; ${WINDOW_BOUND_CAVEAT}`;
 
 /** §3: the bytes v3 would read are not the bytes alc proved. Stops the session. */
 export class AlRunnerV3UnprovenBatchError extends Error {
@@ -452,7 +461,9 @@ export interface V3EntriesStats {
   windowMs: number;
   coverageMs: number;
   echoMs: number;
-  /** R651: `run()`'s `assertBound` outside the baseline bracket (the mutant loop): count and ms. */
+  /** R651, R652: the bound checks outside the baseline bracket, one per send (a §5 window: one for
+   *  its plain sends): count and ms. `boundChecks = warmups + prefetchRequests + liveRequests +
+   *  coverageRequests` in serve-entries. */
   boundChecks: number;
   boundMs: number;
 }
@@ -1044,7 +1055,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.lastActivated = mutantId;
   }
 
-  /** §3 step 3 at EVERY `run()`: the bytes v3 will read are the bytes alc proved. */
+  /**
+   * R652: §3 step 3 immediately before each SEND (`send`, `callCodeunit`'s spawn, a §5 window), never
+   * on a `run()` served from memory: every row comes from a send that was checked just before it
+   * left. A change in the gap between that check and al-runner's read cannot make a kill, because
+   * R577 (`killsMustReproduce`) sends every kill's confirm and reproduction fresh, each checked;
+   * turning that off for v3 would reopen the gap. A lasting change in the LAST send's gap goes
+   * unreported (build review L1). R651's timer outside the bracket.
+   */
+  private async checkBound(): Promise<void> {
+    if (this.inBaseline) return this.assertBound();
+    this.stats.boundChecks += 1;
+    await this.timed("boundMs", () => this.assertBound());
+  }
+
+  /** §3 step 3: the bytes v3 will read are the bytes alc proved. */
   private async assertBound(): Promise<void> {
     const proof = this.proof;
     const dir = this.deployedDir;
@@ -1122,11 +1147,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
-    // R651: timed outside the baseline bracket only, so the split's `other` sums to the loop.
-    if (this.inBaseline) await this.assertBound();
-    else {
-      this.stats.boundChecks += 1;
-      await this.timed("boundMs", () => this.assertBound());
+    // R652: no bound check here; each send checks (`checkBound`).
+    if (this.proof === undefined || this.deployedDir === undefined) {
+      throw new AlRunnerV3UnprovenBatchError("no batch was deployed and proved");
     }
     let call = this.rowsByCodeunit.get(ref.codeunitId);
     if (call === undefined) {
@@ -1184,11 +1207,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
         }
       }
+      // R652: a window's coverage came after the window's one check, so its notes name that cause.
+      const caveat = call.windowed === true ? withWindowCaveat : (s: string) => s;
       // I-1: an index that joins no path of the document is not "no hit": the session stops.
       const joinWhy = sleepJoinRefusal(call.coverage, index);
-      if (joinWhy !== undefined) throw new AlRunnerV3CoverageJoinError(joinWhy);
-      this.batchBlind ??= blindNote(call.coverage, index);
-      const note = this.batchBlind ?? sleepPassRefusal(call.coverage, index, row.name);
+      if (joinWhy !== undefined) throw new AlRunnerV3CoverageJoinError(caveat(joinWhy));
+      if (this.batchBlind === undefined) {
+        const blind = blindNote(call.coverage, index);
+        if (blind !== undefined) this.batchBlind = caveat(blind);
+      }
+      const passNote = sleepPassRefusal(call.coverage, index, row.name);
+      const note = this.batchBlind ?? (passNote === undefined ? undefined : caveat(passNote));
       if (note !== undefined) {
         return {
           ref,
@@ -1321,6 +1350,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       activeDir: this.realDirs?.active ?? resolve(this.activeDir()),
       testDir: this.realDirs?.test ?? resolve(this.cfg.testDir),
     });
+    // R652: the last await before the spawn; nothing below reads the disk before v3 does.
+    await this.checkBound();
     const deadlineMs = v3CallDeadlineMs(stopSeconds, this.testsPerCodeunit.get(id) ?? 1);
     const controller = new AbortController();
     let timedOut = false;
@@ -1463,10 +1494,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R651: `f`'s wall time into `stats[k]`, thrown or not. TIMING ONLY: no verdict reads it. */
   private async timed<T>(k: V3PhaseTimer, f: () => Promise<T>): Promise<T> {
     const t0 = this.now();
+    const bound0 = this.stats.boundMs;
     try {
       return await f();
     } finally {
-      this.stats[k] += this.now() - t0;
+      // R652: a bound check nested inside this phase (the warm-up's, a request's) is `boundMs`.
+      const nested = k === "boundMs" ? 0 : this.stats.boundMs - bound0;
+      this.stats[k] += this.now() - t0 - nested;
     }
   }
 
@@ -1503,7 +1537,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.stats.warmups += 1;
       const { sent, rows } = await this.send(
         [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
-        true,
+        "warmup",
       );
       const disagree: string[] = [];
       const echo = rows.get(sent[0]?.id ?? "") ?? [];
@@ -1551,10 +1585,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * entry's rows only for a fully valid answer; a request error, a partial or invalid answer
    * closes the daemon and throws `AlRunnerServerRequestError`, and a refusal of the whole request
    * throws `al-runner-v3-entries-batch-refused`. `cached:false` is counted before the decode (N4).
+   * R652: the bound is checked here, the last await before the bytes leave, for every kind.
    */
   private async send(
     groups: readonly EntryGroup[],
-    warmup = false,
+    kind: "warmup" | "prefetch" | "live",
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
@@ -1568,11 +1603,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       (n, e) => n + (e.echo ? 1 : (this.testsPerCodeunit.get(e.codeunit) ?? 1)),
       0,
     );
-    this.stats.entriesSent += sent.length;
     const body = {
       ...this.requestBase(),
       entries: sent.map((e) => ({ id: e.id, resources: e.resources, test: e.test })),
     };
+    await this.checkBound();
+    // R652 (review r1 #2): counted with the check, so `boundChecks = warmups + prefetchRequests +
+    // liveRequests + coverageRequests` holds whatever fails (a daemon start, a request). Build
+    // review L3: a send the check refuses sends no entries.
+    this.stats.entriesSent += sent.length;
+    if (kind === "prefetch") this.stats.prefetchRequests += 1;
+    else if (kind === "live") this.stats.liveRequests += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
     try {
       answer = await daemon.server.runEntries(body, v3CallDeadlineMs(s, tests));
@@ -1592,7 +1633,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // Build review r1 L2: only the warm-up or a request of 2+ groups speaks for the batch; a lone
     // group's refused rows are that mutant's `error` (its echo did not run), never a batch stop.
     const refused =
-      warmup || groups.length >= 2
+      kind === "warmup" || groups.length >= 2
         ? batchRefusalReason(
             decoded.rows,
             (m) => Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m)),
@@ -1626,7 +1667,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }> {
     const daemon = await this.ensureDaemon();
     const started = Date.now();
-    const { sent, rows } = await this.timed(phase, () => this.send(groups));
+    const { sent, rows } = await this.timed(phase, () =>
+      this.send(groups, phase === "prefetchMs" ? "prefetch" : "live"),
+    );
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
     let cut = sent.length;
@@ -1720,7 +1763,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (let chunk = queue.shift(); chunk !== undefined; chunk = queue.shift()) {
       let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
       try {
-        this.stats.prefetchRequests += 1;
         out = await this.request(chunk, "prefetchMs");
       } catch (err) {
         if (err instanceof AlRunnerServerRequestError) {
@@ -1755,7 +1797,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const m = this.lastActivated ?? SELECTOR_RESOURCE_NONE;
     this.union.add(ref.codeunitId);
     try {
-      this.stats.liveRequests += 1;
       const out = await this.request([{ mutantId: m, codeunits: [ref.codeunitId] }], "liveMs");
       const call = out.results.get(m)?.get(ref.codeunitId);
       if (call === undefined) {
@@ -1814,8 +1855,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const echoId = this.requireEchoId();
     const started = Date.now();
     let next: CallRows;
+    let checked = false;
     try {
       const daemon = await this.ensureDaemon();
+      // R652 Rule A: ONE check for the window's 2-3 plain sends, BEFORE `inWindow` (review r1 #1),
+      // so it still requires the resource file to read NONE. Counted with its coverage request.
+      await this.checkBound();
+      this.stats.coverageRequests += 1;
+      checked = true;
       const windowT0 = this.now();
       this.inWindow = true;
       try {
@@ -1831,7 +1878,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
         const before = this.cfg.secondEcho === false ? undefined : await echoOk();
         if (before !== undefined) this.stats.secondEchoMismatches += 1;
-        this.stats.coverageRequests += 1;
         const cov = await this.timed("coverageMs", () => this.plain(daemon, ref.codeunitId, true));
         const after = await echoOk();
         const echoWhy = before ?? after;
@@ -1842,11 +1888,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           windowed: true,
           ...(echoWhy !== undefined
             ? {
-                refusal: `entries-echo-mismatch: the coverage window's echo did not read ${m} (${echoWhy}); never scored (R635 §5)`,
+                refusal: withWindowCaveat(
+                  `entries-echo-mismatch: the coverage window's echo did not read ${m} (${echoWhy}); never scored (R635 §5)`,
+                ),
               }
             : differ
               ? {
-                  refusal: `entries-coverage-disagreement: under ${m} the coverage request's rows [${rowsClass(cov.rows)}] are not the entry's [${rowsClass(call.rows)}]; never scored (R635 §5)`,
+                  refusal: withWindowCaveat(
+                    `entries-coverage-disagreement: under ${m} the coverage request's rows [${rowsClass(cov.rows)}] are not the entry's [${rowsClass(call.rows)}]; never scored (R635 §5)`,
+                  ),
                 }
               : {}),
         };
@@ -1857,7 +1907,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         this.stats.windowMs += this.now() - windowT0;
       }
     } catch (err) {
-      return { verdict: this.liveFailure(ref, err, Date.now() - started) };
+      const v = this.liveFailure(ref, err, Date.now() - started);
+      return {
+        verdict:
+          checked && v.failureMessage !== undefined
+            ? { ...v, failureMessage: withWindowCaveat(v.failureMessage) }
+            : v,
+      };
     }
     this.rowsByCodeunit.set(ref.codeunitId, next);
     return { call: next };

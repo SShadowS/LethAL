@@ -3,7 +3,8 @@
 // docs/superpowers/plans/2026-10-22-r635-v3-serve-entries.md (r3) §9, tests 1-13 and 16-21; the
 // orchestrator's seams (tests 14, 15) are in orchestrator.test.ts. Call counters, no wall clock.
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -23,6 +24,8 @@ import {
   type AlRunnerV3Config,
   AlRunnerV3RowMissingError,
   AlRunnerV3ServeStopUnsetError,
+  AlRunnerV3UnprovenBatchError,
+  WINDOW_BOUND_CAVEAT,
   v3CallDeadlineMs,
 } from "../src/al-runner-v3-backend";
 import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
@@ -1917,6 +1920,35 @@ describe("R651: per-phase wall timers, timing only", () => {
     expect([s.boundChecks, s.boundMs]).toEqual([4, 4]);
   });
 
+  test("R652 T8: a check nested inside a phase (the warm-up, a request) is not counted in that phase", async () => {
+    const { r, clock } = await clockedRig();
+    const b = r.b as unknown as { assertBound: () => Promise<void> };
+    const orig = b.assertBound.bind(r.b);
+    // Each check takes 7 on the fake clock; the requests' amounts are unchanged.
+    spyOn(b, "assertBound").mockImplementation(async () => {
+      clock.t += 7;
+      await orig();
+    });
+    await scenario(r, clock);
+    const s = r.b.entriesStats();
+    expect({
+      warmupMs: s.warmupMs,
+      prefetchMs: s.prefetchMs,
+      liveMs: s.liveMs,
+      windowMs: s.windowMs,
+      boundMs: s.boundMs,
+      boundChecks: s.boundChecks,
+    }).toEqual({
+      warmupMs: 1,
+      prefetchMs: 10,
+      liveMs: 100,
+      windowMs: 12_000,
+      // 4 checks in the loop; the baseline's one-shot check is inside the bracket, not counted.
+      boundMs: 28,
+      boundChecks: 4,
+    });
+  });
+
   test("no verdict reads the timers: the same verdicts under a still clock and a wild one", async () => {
     const still = await clockedRig(() => 0);
     let n = 0;
@@ -1948,5 +1980,382 @@ describe("R651: per-phase wall timers, timing only", () => {
     );
     expect(v3SplitLine({ baseline: 8 }, stats)).toContain("deploy -, baseline 8, mutant loop - (");
     expect(v3SplitLine({ baseline: 8 }, stats)).toContain("other -)");
+  });
+});
+
+describe("R652: the bound is checked before each SEND, not at each run()", () => {
+  const activeOf = (r: Rig) => join(r.l.scratch, "active");
+  const tampers: [string, (r: Rig) => Promise<void>][] = [
+    ["a target .al byte", (r) => appendFile(join(activeOf(r), "Logic.Codeunit.al"), " ")],
+    ["a test .al byte", (r) => appendFile(join(r.l.testDir, `Tests${CU}.Codeunit.al`), " ")],
+    ["a file added to <deps>", (r) => writeFile(join(r.l.deps, "Extra.app"), "x")],
+  ];
+  const identity = (r: Rig) => {
+    const s = r.b.entriesStats();
+    return [s.boundChecks, s.warmups + s.prefetchRequests + s.liveRequests + s.coverageRequests];
+  };
+
+  for (const [name, tamper] of tampers) {
+    test(`T1: ${name} changed BETWEEN TWO REQUESTS is refused before the second is sent`, async () => {
+      const r = await readyRig({ mutants: [] });
+      await r.b.activate(null);
+      expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+      const n0 = r.serve.requests.length;
+      await tamper(r);
+      await r.b.activate(null);
+      await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+      expect(r.serve.requests.length).toBe(n0);
+    });
+  }
+
+  test("T1 (other direction): an untouched tree sends the second request", async () => {
+    const r = await readyRig({ mutants: [] });
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS);
+    const n0 = r.serve.requests.length;
+    await r.b.activate(null);
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    expect(r.serve.requests.length).toBe(n0 + 1);
+  });
+
+  test("T1 (R577 reproduction): a change after the confirm is refused before the reproduction is sent", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 }, mutants: ["M0001"] });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    await r.b.activate(null);
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    const n0 = r.serve.requests.length;
+    await appendFile(join(activeOf(r), "Logic.Codeunit.al"), " ");
+    await r.b.activate("M0001");
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect(r.serve.requests.length).toBe(n0);
+  });
+
+  test("T2: a run served from memory does not check (no send, no hash)", async () => {
+    const r = await readyRig();
+    const c0 = r.b.entriesStats().boundChecks;
+    const n0 = r.serve.requests.length;
+    await r.b.activate("M0001");
+    await r.b.run(ref("A"), OPTS);
+    await r.b.run(ref("B"), OPTS);
+    expect(r.b.entriesStats().boundChecks).toBe(c0);
+    expect(r.serve.requests.length).toBe(n0);
+  });
+
+  test("T3a: the PREFETCH request is checked (on a warm daemon)", async () => {
+    const r = await readyRig({ mutants: [] });
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS); // warms the daemon outside the bracket
+    const n0 = r.serve.requests.length;
+    await appendFile(join(activeOf(r), "Logic.Codeunit.al"), " ");
+    await expect(r.b.prefetchMutants(plans(["M0001"]))).rejects.toBeInstanceOf(
+      AlRunnerV3UnprovenBatchError,
+    );
+    expect(r.serve.requests.length).toBe(n0);
+  });
+
+  test("T3a (other direction): an untouched tree sends the prefetch", async () => {
+    const r = await readyRig({ mutants: [] });
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS);
+    const n0 = r.serve.requests.length;
+    await r.b.prefetchMutants(plans(["M0001"]));
+    expect(r.serve.requests.length).toBe(n0 + 1);
+  });
+
+  test("build review L3: a send the check refuses counts no entries; a sent one counts its entries", async () => {
+    const r = await readyRig({ mutants: [] });
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS);
+    const e0 = r.b.entriesStats().entriesSent;
+    await r.b.prefetchMutants(plans(["M0001"]));
+    // One group: its echo entry and one codeunit entry.
+    expect(r.b.entriesStats().entriesSent).toBe(e0 + 2);
+    await appendFile(join(activeOf(r), "Logic.Codeunit.al"), " ");
+    await expect(r.b.prefetchMutants(plans(["M0002"]))).rejects.toBeInstanceOf(
+      AlRunnerV3UnprovenBatchError,
+    );
+    expect(r.b.entriesStats().entriesSent).toBe(e0 + 2);
+  });
+
+  test("T3b: the WARM-UP is checked: a change after the baseline sends nothing, and the daemon is closed", async () => {
+    const r = await rig();
+    await baseline(r.b, SUITE1);
+    await appendFile(join(activeOf(r), "Logic.Codeunit.al"), " ");
+    await expect(r.b.prefetchMutants(plans(["M0001"]))).rejects.toBeInstanceOf(
+      AlRunnerV3UnprovenBatchError,
+    );
+    expect(r.serve.requests).toHaveLength(0);
+    expect(r.serve.daemons).toHaveLength(1);
+  });
+
+  test("T3b (restart): after an R612 cut, the restarted daemon's warm-up is checked", async () => {
+    const cutOnFirstLive: RowsFn = (m, cu, d, n) =>
+      d === 0 && n === 1
+        ? allPass(m, cu, d, n).map((x) =>
+            x.method === "A"
+              ? { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S }
+              : x,
+          )
+        : allPass(m, cu, d, n);
+    const r = await readyRig({ serve: { rows: cutOnFirstLive }, mutants: [] });
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS); // warm-up (n 0), live (n 1): cut, daemon 0 closed
+    expect(r.serve.daemons).toHaveLength(1);
+    await appendFile(join(activeOf(r), "Logic.Codeunit.al"), " ");
+    await r.b.activate(null);
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect(r.serve.daemons).toHaveLength(2);
+    expect(r.serve.requests.filter((q) => q.daemon === 1)).toHaveLength(0);
+  });
+
+  test("T4: a change AFTER the prefetch send and before its rows are served: the rows stand (they came from the checked send); the next send is refused", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 }, mutants: ["M0001"] });
+    const n0 = r.serve.requests.length;
+    await appendFile(join(activeOf(r), "Logic.Codeunit.al"), " ");
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    await r.b.activate(null);
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect(r.serve.requests.length).toBe(n0);
+  });
+
+  const windowRig = (opts: RigOpts & { mutants?: readonly string[] } = {}) =>
+    readyRig({
+      targetAl: SLEEPER_AL,
+      mutants: ["M0001"],
+      ...opts,
+      serve: { coverage: sleepCoverage(), ...opts.serve },
+    });
+  const onDisk = (r: Rig) => readFile(resourceFile(activeOf(r)), "utf8");
+
+  test("T5(a): a change before the window is refused at the window, with zero plain requests", async () => {
+    const r = await windowRig();
+    const n0 = r.serve.requests.length;
+    await appendFile(join(activeOf(r), "Logic.Codeunit.al"), " ");
+    await r.b.activate("M0001");
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect(r.serve.requests.length).toBe(n0);
+    expect(await onDisk(r)).toBe("NONE");
+  });
+
+  test("T5(b): a resource file that is not NONE before the window is refused, with zero plain requests", async () => {
+    const r = await windowRig();
+    const n0 = r.serve.requests.length;
+    await writeFile(resourceFile(activeOf(r)), "M0002", "utf8");
+    await r.b.activate("M0001");
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toThrow(/not NONE, outside the coverage window/);
+    expect(r.serve.requests.length).toBe(n0);
+  });
+
+  test("T5 (other direction) and T6: an untouched window sends its 3 plain requests under ONE check", async () => {
+    const r = await windowRig();
+    const n0 = r.serve.requests.length;
+    const c0 = r.b.entriesStats().boundChecks;
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    expect(r.serve.requests.length).toBe(n0 + 3);
+    expect(r.b.entriesStats().boundChecks).toBe(c0 + 1);
+    expect(await onDisk(r)).toBe("NONE");
+  });
+
+  test("T9: the identity boundChecks = warm-ups + prefetch + live + coverage holds when a daemon fails to start", async () => {
+    const r = await readyRig({ mutants: [] });
+    const spy = spyOn(AlRunnerServer.prototype, "start").mockImplementation(async () => {
+      throw new AlRunnerServerRequestError("eof", "the daemon exited before it was ready");
+    });
+    try {
+      await r.b.activate(null);
+      expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("error");
+    } finally {
+      spy.mockRestore();
+    }
+    const [checks, sum] = identity(r);
+    expect(checks).toBe(sum);
+    expect(r.b.entriesStats().liveRequests).toBe(0);
+  });
+
+  test("T9: the identity holds when the window's first echo fails", async () => {
+    const r = await windowRig({
+      serve: {
+        coverage: sleepCoverage(),
+        answer: (q) => (q.ids[0] === plainEcho ? { lines: [{ error: "boom" }] } : undefined),
+      },
+    });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("error");
+    const [checks, sum] = identity(r);
+    expect(checks).toBe(sum);
+    expect(r.b.entriesStats().coverageRequests).toBe(1);
+  });
+
+  test("T9: the identity holds on an ordinary loop (prefetch, memory reads, a window, a live run)", async () => {
+    const r = await windowRig({ mutants: ["M0001", "M0002"] });
+    await r.b.activate("M0001");
+    await r.b.run(ref("A"), OPTS);
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS);
+    const [checks, sum] = identity(r);
+    expect(checks).toBe(sum);
+    expect(checks).toBe(4); // warm-up 1, prefetch 1, window 1, live 1
+  });
+
+  test("T10: a change inside a window's gap never yields killed: the window's FAIL rows are an error, and the next send is refused", async () => {
+    let tampered = false;
+    let active = "";
+    const plainFails: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        tampered && m === "M0001"
+          ? { ...x, status: "fail" as const, message: "killed by the change" }
+          : x,
+      );
+    const r = await windowRig({
+      serve: {
+        rows: plainFails,
+        coverage: sleepCoverage(),
+        answer: (q) => {
+          // Inside the gap: after the window's check and its first echo, before the coverage request.
+          if (q.ids[0] === plainEcho && !tampered) {
+            appendFileSync(join(active, "Logic.Codeunit.al"), " ");
+            tampered = true;
+          }
+          return undefined;
+        },
+      },
+      oneShotRows: allPass,
+    });
+    active = activeOf(r);
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(tampered).toBe(true);
+    expect(v.outcome).toBe("error");
+    expect(v.outcome).not.toBe("fail");
+    expect(v.outcome).not.toBe("timeout");
+    expect(v.failureMessage).toContain("entries-coverage-disagreement");
+    const n0 = r.serve.requests.length;
+    await r.b.activate(null);
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    expect(r.serve.requests.length).toBe(n0);
+  });
+
+  describe("T11: every window-derived error names a bound-tree change as a possible cause", () => {
+    test("the coverage disagreement", async () => {
+      const plainFails: RowsFn = (m, cu, d, n) =>
+        allPass(m, cu, d, n).map((x) =>
+          n > 1 && m === "M0001" && x.method === "B" ? { ...x, status: "fail" as const } : x,
+        );
+      const r = await windowRig({ serve: { rows: plainFails }, oneShotRows: allPass });
+      await r.b.activate("M0001");
+      expect((await r.b.run(ref("A"), OPTS)).failureMessage).toContain(WINDOW_BOUND_CAVEAT);
+    });
+
+    test("an echo mismatch inside the window", async () => {
+      const echo: Echo = (m, d, n) =>
+        n > 1
+          ? { method: "Echo", status: "fail", message: "LETHAL-ECHO:NONE:true" }
+          : goodEcho(m, d, n);
+      const r = await windowRig({ serve: { echo } });
+      await r.b.activate("M0001");
+      const v = await r.b.run(ref("A"), OPTS);
+      expect(v.failureMessage).toContain("entries-echo-mismatch");
+      expect(v.failureMessage).toContain(WINDOW_BOUND_CAVEAT);
+    });
+
+    test("a covered Sleep note on a windowed call", async () => {
+      const r = await windowRig({ serve: { coverage: sleepCoverage(true) } });
+      await r.b.activate("M0001");
+      const v = await r.b.run(ref("A"), OPTS);
+      expect(v.failureMessage).toContain("[v3-sleep-noop] covered Sleep");
+      expect(v.failureMessage).toContain(WINDOW_BOUND_CAVEAT);
+    });
+
+    test("a batchBlind note latched in a window, and every later pass that carries it", async () => {
+      const blind: CoverageFn = (m, cu, a, t) => {
+        const doc = sleepCoverage()(m, cu, a, t) as { coverage: { statements: unknown[] }[] };
+        // The indexed Sleep line 5 is missing from the target's statements: case 2.
+        const target = doc.coverage[1];
+        if (target !== undefined) target.statements = [{ line: 6, hits: 0 }];
+        return doc;
+      };
+      const r = await windowRig({ mutants: ["M0001", "M0002"], serve: { coverage: blind } });
+      await r.b.activate("M0001");
+      const v1 = await r.b.run(ref("A"), OPTS);
+      expect(v1.failureMessage).toContain("not in v3's coverage");
+      expect(v1.failureMessage).toContain(WINDOW_BOUND_CAVEAT);
+      await r.b.activate("M0002");
+      const later = (await r.b.run(ref("A"), OPTS)).failureMessage ?? "";
+      expect(later).toContain(WINDOW_BOUND_CAVEAT);
+      // Build review L2: on a LATER mutant's verdict the note must not claim "this" window.
+      expect(later).toContain("a bound-tree change since a window's bound check");
+      expect(later).not.toContain("this window's");
+    });
+
+    test("a transport failure of the window's request", async () => {
+      const r = await windowRig({
+        serve: {
+          coverage: sleepCoverage(),
+          answer: (q) => (q.ids[0] === plainCu ? { lines: [{ error: "boom" }] } : undefined),
+        },
+      });
+      await r.b.activate("M0001");
+      expect((await r.b.run(ref("A"), OPTS)).failureMessage).toContain(WINDOW_BOUND_CAVEAT);
+    });
+
+    test("a failure BEFORE the window's check (its daemon fails to start) does NOT carry it", async () => {
+      // The live entry's B row times out: R612 cuts the daemon, so the window must start one.
+      const cutB: RowsFn = (m, cu, d, n) =>
+        allPass(m, cu, d, n).map((x) =>
+          m === "M0001" && n === 1 && x.method === "B"
+            ? { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S }
+            : x,
+        );
+      const r = await readyRig({
+        targetAl: SLEEPER_AL,
+        mutants: [],
+        serve: { rows: cutB, coverage: sleepCoverage() },
+      });
+      const realStart = AlRunnerServer.prototype.start;
+      let starts = 0;
+      const spy = spyOn(AlRunnerServer.prototype, "start").mockImplementation(function (
+        this: AlRunnerServer,
+        ...args: Parameters<AlRunnerServer["start"]>
+      ) {
+        starts += 1;
+        if (starts > 1) throw new AlRunnerServerRequestError("eof", "the daemon exited at start");
+        return realStart.apply(this, args);
+      });
+      try {
+        await r.b.activate("M0001");
+        const v = await r.b.run(ref("A"), OPTS);
+        expect(starts).toBe(2);
+        expect(v.outcome).toBe("error");
+        expect(v.failureMessage).toContain("the daemon exited at start");
+        expect(v.failureMessage).not.toContain(WINDOW_BOUND_CAVEAT);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    test("a coverage join refusal on a windowed call", async () => {
+      const elsewhere: CoverageFn = () => ({
+        coverage: [{ file: "/elsewhere/Other.Codeunit.al", statements: [{ line: 1, hits: 1 }] }],
+        perTestCoverage: [],
+      });
+      const r = await windowRig({ serve: { coverage: elsewhere } });
+      await r.b.activate("M0001");
+      await expect(r.b.run(ref("A"), OPTS)).rejects.toThrow(WINDOW_BOUND_CAVEAT);
+    });
+
+    test("an ENTRY's echo mismatch (a checked send, no window) does NOT carry it", async () => {
+      const echo: Echo = (m, d, n) =>
+        m === "M0001" && n > 0
+          ? { method: "Echo", status: "fail", message: "LETHAL-ECHO:NONE:true" }
+          : goodEcho(m, d, n);
+      const r = await readyRig({ serve: { echo }, mutants: ["M0001"] });
+      await r.b.activate("M0001");
+      const v = await r.b.run(ref("A"), OPTS);
+      expect(v.failureMessage).toContain("entries-echo-mismatch");
+      expect(v.failureMessage).not.toContain(WINDOW_BOUND_CAVEAT);
+    });
   });
 });
