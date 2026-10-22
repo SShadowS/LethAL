@@ -325,38 +325,13 @@ export function backendBuildRefusal(
   return undefined;
 }
 
-/**
- * R586 (plan r2 §10): the one run-level trust check, remove-only, in a fixed order; the first step
- * that refuses names the reason. 1: backend and build (`backendBuildRefusal`). 2: R557's mark
- * (`runLendsAlRunnerNames`). 3: R557 C1, a v2 run's renamed baseline errors (`renamed` over
- * `baselineErrorMethods`, the caller's OWN inputs: a snapshot passes its own error rows).
- */
-export function runMayLend(
-  run: {
-    readonly id: number;
-    readonly backend: string;
-    readonly runnerBuild: string | null;
-    readonly alRunnerNames: boolean;
-  },
-  session: LendingSession | undefined,
-  ctx: {
-    readonly baselineErrorMethods: () => readonly string[];
-    readonly renamed?: (methods: readonly string[]) => readonly string[];
-  },
-):
+/** R619: why `ResultsStore.runMayLend` lends nothing, by step; `undefined` there = it lends. */
+export type LendRefusal =
   | { readonly step: "backend-build"; readonly why: string }
+  /** The site's own check refused, and has already said why. */
+  | { readonly step: "site" }
   | { readonly step: "al-runner-unmarked" }
-  | { readonly step: "al-runner-renamed"; readonly tests: readonly string[] }
-  | undefined {
-  const why = backendBuildRefusal(run, session);
-  if (why !== undefined) return { step: "backend-build", why };
-  if (!runLendsAlRunnerNames(run)) return { step: "al-runner-unmarked" };
-  if (run.backend === "al-runner" && ctx.renamed !== undefined) {
-    const tests = ctx.renamed(ctx.baselineErrorMethods());
-    if (tests.length > 0) return { step: "al-runner-renamed", tests };
-  }
-  return undefined;
-}
+  | { readonly step: "al-runner-renamed"; readonly tests: readonly string[] };
 
 /**
  * R557 (I1): whether a run may lend history, carry or a baseline snapshot, as far as al-runner test
@@ -2173,6 +2148,44 @@ export class ResultsStore {
     return rows.map((r) => r.method);
   }
 
+  /**
+   * R586, R619: the one run-level lend decision. All four lend sites call it once (history in
+   * `priorSurvivorKeys`; `--resume`, `--resume-run` and baseline-snapshot reuse in the
+   * orchestrator), and nothing else decides. Remove-only, in a fixed order; the first step that
+   * refuses names the reason. 1: backend and build (`backendBuildRefusal`). Then the site's own
+   * checks (`siteChecks`). 2: R557's mark (`runLendsAlRunnerNames`). 3: R557 C1, a v2 run's renamed
+   * baseline errors (`renamed` over `baselineErrorMethods`, the caller's OWN inputs: a snapshot
+   * passes its own error rows).
+   */
+  runMayLend(
+    run: {
+      readonly id: number;
+      readonly backend: string;
+      readonly runnerBuild: string | null;
+      readonly alRunnerNames: boolean;
+    },
+    session: LendingSession | undefined,
+    ctx: {
+      /** Which site calls (read by the R619 tests' call log). */
+      readonly site: "history" | "resume" | "resume-run" | "snapshot";
+      /** The site's own checks, after step 1 and before step 2. `true` = refused (the site has
+       *  already said why). A throw is the site's refusal too, and propagates. */
+      readonly siteChecks?: () => boolean;
+      readonly baselineErrorMethods: () => readonly string[];
+      readonly renamed?: (methods: readonly string[]) => readonly string[];
+    },
+  ): LendRefusal | undefined {
+    const why = backendBuildRefusal(run, session);
+    if (why !== undefined) return { step: "backend-build", why };
+    if (ctx.siteChecks?.() === true) return { step: "site" };
+    if (!runLendsAlRunnerNames(run)) return { step: "al-runner-unmarked" };
+    if (run.backend === "al-runner" && ctx.renamed !== undefined) {
+      const tests = ctx.renamed(ctx.baselineErrorMethods());
+      if (tests.length > 0) return { step: "al-runner-renamed", tests };
+    }
+    return undefined;
+  }
+
   /** A prior "known-survivor" verdict counts exactly like "survived" here (I4) — it means the
    *  identity key was skipped rather than re-tested, so it must remain skippable/filterable in
    *  the run after that, not silently fall out of history after one `--skip-known-survivors` pass.
@@ -2273,74 +2286,88 @@ export class ResultsStore {
       test_app_hash: string | null;
     } | null;
     if (!run) return none;
-    // R586: `runMayLend` step 1 before any other reason, so the reason named is the real one.
-    const lendRefused = backendBuildRefusal(
-      { id: run.id, backend: run.backend, runnerBuild: run.runner_build },
+    // R619: the one lend decision (`runMayLend`): step 1 (R586) before any other reason, so the
+    // reason named is the real one; then this site's own checks; then R557's mark (I1: an unmarked
+    // al-runner run lends nothing, whatever its own rows hold) and its renamed baseline errors (C1:
+    // a pre-fix al-runner run never ran a renamed test; its only-kills read survived).
+    const names = on.alRunnerTestNames;
+    const refused = this.runMayLend(
+      {
+        id: run.id,
+        backend: run.backend,
+        runnerBuild: run.runner_build,
+        alRunnerNames: run.al_runner_names === 1,
+      },
       on.session,
+      {
+        site: "history",
+        siteChecks: () => {
+          if (run.scheme !== IDENTITY_SCHEME) {
+            on.schemeChanged?.({ runId: run.id, identityScheme: run.scheme });
+            return true;
+          }
+          const recorded = parseCoverageMode(run.coverage_mode, run.id);
+          if (recorded !== coverageMode) {
+            on.coverageModeChanged?.({ runId: run.id, coverageMode: recorded });
+            return true;
+          }
+          // R495: only a run that PROVED its test app was the one it measured, for every session
+          // kind: a run served P2 while P1 was installed recorded P2 and measured P1.
+          // R496: and against the same dependency closure; NULL deps never match.
+          if (
+            run.test_app_hash === null ||
+            run.test_app_hash !== testApp?.hash ||
+            run.test_app_proven !== 1 ||
+            run.test_app_deps === null ||
+            run.test_app_deps !== testApp.deps
+          ) {
+            on.testAppChanged?.({
+              runId: run.id,
+              testAppHash: run.test_app_hash,
+              proven: run.test_app_proven === 1,
+              deps: run.test_app_deps,
+            });
+            return true;
+          }
+          const recordedSymbols = parseBuildSymbols(run.build_symbols);
+          if (recordedSymbols === null || !sameBuildSymbols(recordedSymbols, buildSymbols)) {
+            on.symbolsChanged?.({ runId: run.id, buildSymbols: recordedSymbols });
+            return true;
+          }
+          // R442: a key of that run may name another mutant here when it hid a site this run
+          // numbers (or the other way round). NULL is untrusted; other hidden FILES refuse every
+          // key; a hidden TUPLE drops only the rows sharing it (`coarseIdentityTupleOf`, below).
+          const seen = parseCarryHidden(run.carry_hidden, run.id);
+          if (seen === null) {
+            on.carryUntrusted?.({ runId: run.id });
+            return true;
+          }
+          if (!sameHiddenFiles(seen.files, hiddenFiles)) {
+            on.hiddenFilesChanged?.({ runId: run.id, before: seen.files, now: hiddenFiles });
+            return true;
+          }
+          return false;
+        },
+        baselineErrorMethods: () => this.baselineErrorMethods(run.id),
+        ...(names !== undefined ? { renamed: names.renamed } : {}),
+      },
     );
-    if (lendRefused !== undefined) {
-      on.backendBuildRefused?.({ runId: run.id, why: lendRefused });
+    if (refused !== undefined) {
+      if (refused.step === "backend-build") {
+        on.backendBuildRefused?.({ runId: run.id, why: refused.why });
+      } else if (refused.step === "al-runner-unmarked") {
+        on.alRunnerUnmarked?.({ runId: run.id });
+      } else if (refused.step === "al-runner-renamed") {
+        names?.refused({ runId: run.id, tests: refused.tests });
+      }
       return none;
     }
-    if (run.scheme !== IDENTITY_SCHEME) {
-      on.schemeChanged?.({ runId: run.id, identityScheme: run.scheme });
-      return none;
-    }
-    const recorded = parseCoverageMode(run.coverage_mode, run.id);
-    if (recorded !== coverageMode) {
-      on.coverageModeChanged?.({ runId: run.id, coverageMode: recorded });
-      return none;
-    }
-    // R495: only a run that PROVED its test app was the one it measured, for every session kind: a
-    // run served P2 while P1 was installed recorded P2 and measured P1.
-    // R496: and against the same dependency closure; NULL deps never match.
-    if (
-      run.test_app_hash === null ||
-      run.test_app_hash !== testApp?.hash ||
-      run.test_app_proven !== 1 ||
-      run.test_app_deps === null ||
-      run.test_app_deps !== testApp.deps
-    ) {
-      on.testAppChanged?.({
-        runId: run.id,
-        testAppHash: run.test_app_hash,
-        proven: run.test_app_proven === 1,
-        deps: run.test_app_deps,
-      });
-      return none;
-    }
-    const recordedSymbols = parseBuildSymbols(run.build_symbols);
-    if (recordedSymbols === null || !sameBuildSymbols(recordedSymbols, buildSymbols)) {
-      on.symbolsChanged?.({ runId: run.id, buildSymbols: recordedSymbols });
-      return none;
-    }
-    // R442: a key of that run may name another mutant here when it hid a site this run numbers
-    // (or the other way round). NULL is untrusted; other hidden FILES refuse every key; a hidden
-    // TUPLE drops only the rows sharing it (`coarseIdentityTupleOf`, a superset of every twin).
+    // Review M5: `siteChecks` lent only with a parsed `carry_hidden`; read again for the rows.
     const hidden = parseCarryHidden(run.carry_hidden, run.id);
     if (hidden === null) {
-      on.carryUntrusted?.({ runId: run.id });
-      return none;
-    }
-    if (!sameHiddenFiles(hidden.files, hiddenFiles)) {
-      on.hiddenFilesChanged?.({ runId: run.id, before: hidden.files, now: hiddenFiles });
-      return none;
-    }
-    // R557 (I1): an al-runner run without the R557 mark lends nothing, whatever its own rows hold.
-    if (
-      !runLendsAlRunnerNames({ backend: run.backend, alRunnerNames: run.al_runner_names === 1 })
-    ) {
-      on.alRunnerUnmarked?.({ runId: run.id });
-      return none;
-    }
-    // R557 C1: a pre-fix al-runner run never ran a renamed test; its only-kills read survived.
-    const names = on.alRunnerTestNames;
-    if (names !== undefined && run.backend === "al-runner") {
-      const tests = names.renamed(this.baselineErrorMethods(run.id));
-      if (tests.length > 0) {
-        names.refused({ runId: run.id, tests });
-        return none;
-      }
+      throw new Error(
+        `store.ts: priorSurvivorKeys: run ${run.id} lent with no carry_hidden (R619)`,
+      );
     }
     const hiddenTuples = new Set(hidden.tuples);
     const rows = this.db

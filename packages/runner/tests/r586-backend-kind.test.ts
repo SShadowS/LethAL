@@ -69,7 +69,6 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "store.ts": {
     'return run.backend !== "al-runner" || run.alRunnerNames;': "v2",
-    'if (names !== undefined && run.backend === "al-runner") {': "v2",
     'if (run.backend === "al-runner" && ctx.renamed !== undefined) {': "v2",
   },
   // R-300b: bcdev's shape rule with arms; v2's measured admission; v3 takes neither (refused).
@@ -94,8 +93,6 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'return backend === "al-runner" ? m.replace(AL_RUNNER_EXCEPTION_PREFIX, "") : m;': "v2",
   },
   "orchestrator.ts": {
-    'backendName === "al-runner"': "v2",
-    'if (reused !== undefined && snapshotRun?.backend === "al-runner") {': "v2",
     '...(backendName === "al-runner" ? { alRunnerNames: true } : {}),': "v2",
     'backendName === "al-runner" ? alRunnerAdmitsWrappedFile(f.root) : admittedOnBc(f),': "v2",
   },
