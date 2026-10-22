@@ -336,6 +336,10 @@ export function batchCarriesEntirely(
     if (!retryStranded && wasStranded(index, m)) continue;
     const carried = carriedVerdictFor(index, m);
     if (carried === undefined || carried.coveringTests === undefined) return false;
+    // R646: a survivor with no record of the tests it faced is re-run by step 5b, so its batch
+    // takes the ordinary path. A replayed batch has no fresh baseline to compare a record with.
+    const survivor = carried.verdict === "survived" || carried.verdict === "known-survivor";
+    if (survivor && carried.coveringTests.length === 0) return false;
   }
   return true;
 }
