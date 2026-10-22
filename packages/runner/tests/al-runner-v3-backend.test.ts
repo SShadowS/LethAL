@@ -849,6 +849,27 @@ describe("T24 (I1) and I3: the notes", () => {
     ).toBeUndefined();
   });
 
+  test("R637 (S2): the note names a not-run covering sibling as timed out or refused, never just not run", async () => {
+    const l = await layout();
+    const rows = () => [
+      { method: "A", status: "error" as const, notRun: true, message: "Test exceeded 3s timeout." },
+      { method: "C", status: "error" as const, notRun: true, message: "NotRun: out-of-scope: x" },
+      { method: "B", status: "fail" as const, message: "x" },
+    ];
+    const b = backendOf(l, fakeV3(rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate("M0001");
+    b.useCoveringBudgets("M0001", [
+      { ref: ref("A"), budgetMs: 1000 },
+      { ref: ref("B"), budgetMs: 1000 },
+      { ref: ref("C"), budgetMs: 1000 },
+    ]);
+    const note = (await b.run(ref("B"), { coverage: "none", timeoutMs: 1000 })).backendNote;
+    expect(note).toContain("A (timed out)");
+    expect(note).toContain("C (refused)");
+    expect(note).not.toContain("not run");
+  });
+
   test("a first-row kill gets no note", async () => {
     const l = await layout();
     const rowsBA = () => [

@@ -917,7 +917,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const before = rows
       .slice(0, k)
       .filter((r) => plan.budgets.has(refKeyOf(killer.codeunitId, r.method)))
-      .map((r) => `${r.method} (${r.notRun ? "not run" : r.status})`);
+      // R637 (S2): a stop and a refusal mean different things to a reader.
+      .map(
+        (r) =>
+          `${r.method} (${r.notRun ? (V3_TIMEOUT_MESSAGE.test(r.message ?? "") ? "timed out" : "refused") : r.status})`,
+      );
     return before.length === 0
       ? undefined
       : `${V3_STATE_NOTE_TAG} ${killer.method} ran after covering test(s) ${before.join(", ")} in the same v3 codeunit run (#5611), so their state may have reached it`;

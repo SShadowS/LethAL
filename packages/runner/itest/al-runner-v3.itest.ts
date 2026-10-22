@@ -277,9 +277,9 @@ async function legC(scratch: string): Promise<readonly string[]> {
   legCWarnFacts = Object.fromEntries(
     r.facts.filter((f) => V3_WARN_FACTS.includes(f.fact)).map((f) => [f.fact, f.verdict]),
   );
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. R612: 24 facts,
-  // a warn fact (V3_WARN_FACTS) only adds its line.
-  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 24, V3_WARN_FACTS);
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 25 facts (r8:
+  // R612's warn fact, then R637's contract fact); a warn fact (V3_WARN_FACTS) only adds its line.
+  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 25, V3_WARN_FACTS);
   for (const l of c.lines) console.log(`  C: ${l}`);
   if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);
   if (c.outcome === "infra-fail") throw new V3LegEnvironment(`C: ${c.lines.join("; ")}`);
