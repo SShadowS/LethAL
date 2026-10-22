@@ -1,5 +1,22 @@
 # R618 pre-commitment: `itest:lend`, the first live run (2026-10-22, lethal-preproc)
 
+**Addendum (2026-10-22, after live run 1 and before any re-run; orchestrator ruling (a)).**
+- **What run 1 showed.** On bc1 it was BLOCKED at R2 (`/coord/handoff/R-618/live-run-1.md`). L0, L1 and R1 were as
+  below. R2 carried 7 where 9 were predicted: K's two no-coverage KEPT rows came back as fresh no-coverage.
+- **The cause, read from the code.** In a PARTLY carried batch, `scoreBatch` records uncovered mutants from this
+  session's coverage before any carry lookup, so a stored no-coverage is re-derived, not carried. A WHOLLY carried
+  batch (`replayCarriedBatch`, R1) does carry it. This is the safe direction, and the asymmetry is filed as R621.
+- **Corrected predictions for the re-run.** The same rule applies to EVERY partly carried leg. Gate code: lethal/r618
+  at 7084eece.
+  - **R2:** `carried` 7 = the KEPT rows minus M0016 and M0017, which come back as fresh `no-coverage`, not carried.
+    `carryable` stays 9 (the resume warning still says 9 may be carried), `nonCarryableRows` 1, `groupedCalls` 8. In
+    the R2 column of the table below, M0016 and M0017 read `n`, not `n c`.
+  - **R3:** `carried` 15 = K2's 18 carryable rows minus the no-coverage M0016, M0017 and M0018, which are re-derived.
+    `carryable` 18, `groupedCalls` 0. In the R3 column, M0016-M0018 read `n`, not `n c`.
+  - **Unchanged:** every verdict, by key, equals the frozen table in every leg; R1 still carries all 19; every
+    other leg is as below.
+- **The re-run is the WHOLE gate** (all 8 sessions and every refusal), on bc1. Any other difference is a BLOCK.
+
 Written 2026-10-22, before any live run of the gate and before any server call for it.
 Gate code: branch `lethal/r618` at `c75a4da6`, plan
 `docs/superpowers/plans/2026-10-22-r618-bc-lend-gate.md` r2. The expectations are the constants
