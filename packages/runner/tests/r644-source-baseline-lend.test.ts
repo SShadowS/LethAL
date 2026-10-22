@@ -646,10 +646,16 @@ describe("R646: --resume carries a survivor only against tests it faced", () => 
     expect(faceCodes(h.events)).toEqual(["resume-survivor-no-record"]);
   });
 
-  test("control: whole-batch replay with every survivor recorded: replayed, nothing runs", async () => {
+  // R-646c: no batch is replayed whole any more. The fully scored batch takes the ordinary path,
+  // where every recorded survivor is carried by 5b after its check, and nothing runs.
+  test("control: a fully scored batch with every survivor recorded: not replayed, every survivor carried, nothing runs", async () => {
     const h = await replayable(false);
-    expect(batchCarried(h.events)).toBe(true);
+    expect(batchCarried(h.events)).toBe(false);
+    expect(h.events.some((e) => e.type === "batch-published")).toBe(true);
     expect(h.backend.mutantRuns).toBe(0);
+    expect(h.report.mutants.every((m) => m.verdict === "survived" && m.carried === true)).toBe(
+      true,
+    );
     expect(faceCodes(h.events)).toEqual([]);
   });
 });

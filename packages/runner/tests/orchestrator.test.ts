@@ -10200,9 +10200,10 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         drifted(r);
         r.store.close();
       });
-      // The read before a batch carried whole (R192), which never reaches `scoreBatch`: the
-      // top-of-batch read. Reads: 1 the session's, 2 batch 0's (carried), 3 batch 1's.
-      test("I1: a resumed session refuses at a carried batch whose read differs, carrying nothing from it", async () => {
+      // The top-of-batch read on a resume. Since R-646c a fully carried batch is deployed and
+      // reaches `scoreBatch` too, so batch 0 reads twice. Reads: 1 the session's, 2 batch 0's top,
+      // 3 batch 0's `scoreBatch` read (its every mutant carried), 4 batch 1's top.
+      test("I1: a resumed session refuses at a batch whose read differs, carrying nothing from it", async () => {
         const dirs = await twoBatches();
         const r1 = await envRun({
           noHook: true,
@@ -10215,7 +10216,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         const r = await envRun({
           noHook: true,
           ...provenP2,
-          preSequence: [P2, P2, P1],
+          preSequence: [P2, P2, P2, P1],
           dirs,
           store: r1.store,
           extra: { maxGuardsPerBatch: 1, resume: r1.runId },
