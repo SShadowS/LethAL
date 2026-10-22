@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { V3_GATE_LEGS } from "../packages/runner/itest/al-runner-v3-gate";
+import { parseGated } from "../packages/runner/src/al-runner-v3-pin";
 import {
   FIXTURE_SYMBOLS_TAR_SHA256,
   HEAVY_JOB,
@@ -14,7 +15,9 @@ import {
   V3_CDO_DEFAULT,
   candidates,
   edgeOnce,
+  edgeRejudge,
   expectedSha,
+  gateOne,
   gatePreparation,
   readReceipt,
   runToLog,
@@ -77,20 +80,31 @@ function fake(o: {
   gateLog?: string;
   /** The gate throws this after writing its files (a non-zero exit). */
   throwText?: string;
+  /** R639 I3: `/proc/<pid>/cmdline` by pid (absent: no such pid), and the orphan pids. */
+  procs?: Record<number, string>;
+  orphans?: number[];
+  /** R639: `--version` of every binary (default: alpha.3's). */
+  version?: string;
+  /** R639 L6: runs inside the gate, before the receipt is written. */
+  onGate?: () => Promise<void>;
 }) {
   const seen = {
     gates: [] as string[],
     envs: [] as Readonly<Record<string, string>>[],
     extracts: 0,
+    downloads: 0,
     logs: [] as string[],
   };
   const deps: UpdateDeps = {
+    procCmdline: async (pid) => o.procs?.[pid],
+    procsWithCwdUnder: async () => o.orphans ?? [],
     heavyJobs: async () => o.heavy ?? 0,
     freeGb: async () => o.free ?? 20,
     root,
     listReleases: async () =>
       o.tags ?? ["edge", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v3.0.0-alpha.1"],
     download: async (_tag, dir) => {
+      seen.downloads += 1;
       await writeFile(join(dir, "t.tar.xz"), "tarball");
       await writeFile(
         join(dir, "SHA256SUMS"),
@@ -103,10 +117,11 @@ function fake(o: {
       await writeFile(join(dir, "al-runner"), "alpha3");
       return join(dir, "al-runner");
     },
-    versionOf: async () => "al-runner 3.0.0-alpha.3 (c893e3633)",
+    versionOf: async () => o.version ?? "al-runner 3.0.0-alpha.3 (c893e3633)",
     runGate: async (commit, env) => {
       seen.gates.push(commit);
       seen.envs.push(env);
+      await o.onGate?.();
       const receiptPath = env.LETHAL_V3_GATE_RECEIPT ?? "";
       if (o.gateLog !== undefined)
         await writeFile(join(dirname(receiptPath), "gate.log"), o.gateLog);
@@ -312,9 +327,9 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(b.seen.logs.join("\n")).toMatch(/already gate-failed at abcdef1.*--regate/);
   });
 
-  test("R632 D: the alpha path and --regate are skipped with 2 heavy jobs or under 10 GB; 1 and 10 proceed", async () => {
+  test("R632 D: the alpha path and --regate are skipped with 3 other heavy jobs or under 10 GB; 2 and 10 proceed", async () => {
     await setup();
-    for (const o of [{ heavy: 2 }, { free: 9 }]) {
+    for (const o of [{ heavy: 3 }, { free: 9 }]) {
       const a = fake({ outcome: "pass", ...o });
       expect(await updateOnce(a.deps)).toEqual(["skipped"]);
       const r = fake({ outcome: "pass", receiptSha: sha("alpha2"), ...o });
@@ -322,7 +337,7 @@ linuxOnly("T19: the v3 update gate", () => {
       expect(a.seen.gates.length + r.seen.gates.length).toBe(0);
       expect(a.seen.logs.join("\n")).toMatch(/skipped for the day/);
     }
-    expect(await updateOnce(fake({ outcome: "pass", heavy: 1, free: 10 }).deps)).toEqual(["pass"]);
+    expect(await updateOnce(fake({ outcome: "pass", heavy: 2, free: 10 }).deps)).toEqual(["pass"]);
   });
 
   test("R633 I1: gate.log is kept beside the outcome, even with no receipt, and the gate's error is logged", async () => {
@@ -570,16 +585,319 @@ linuxOnly("the daily edge path (edgeOnce)", () => {
     expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
   });
 
-  test("skipped with 2 heavy jobs or under 10 GB; 1 heavy job and 10 GB proceed", async () => {
+  test("skipped with 3 other heavy jobs or under 10 GB; 2 other heavy jobs and 10 GB proceed", async () => {
     await setup();
-    const a = edge({ outcome: "pass" }, { heavy: 2 });
+    const a = edge({ outcome: "pass" }, { heavy: 3 });
     expect(await edgeOnce(a.deps)).toBe("skipped");
-    expect(a.seen.logs.join("\n")).toMatch(/2 heavy jobs/);
+    expect(a.seen.logs.join("\n")).toMatch(/3 heavy jobs are running \(limit: 2 others\)/);
     const b = edge({ outcome: "pass" }, { free: 9 });
     expect(await edgeOnce(b.deps)).toBe("skipped");
     expect(b.seen.logs.join("\n")).toMatch(/9 GB/);
     expect(a.seen.gates.length + b.seen.gates.length).toBe(0);
-    const c = edge({ outcome: "pass" }, { heavy: 1, free: 10 });
+    const c = edge({ outcome: "pass" }, { heavy: 2, free: 10 });
     expect(await edgeOnce(c.deps)).toBe("pass");
+  });
+});
+
+// R639 I3: one lock around every gate path.
+linuxOnly("R639 the gate lock (L1-L6)", () => {
+  const lockPath = () => join(root, ".gate.lock");
+  const holder = (pid: number) =>
+    writeFile(lockPath(), JSON.stringify({ pid, startedAt: "2026-10-20T00:00:00Z", argv: [] }));
+  const regate = (o: Parameters<typeof fake>[0]) => {
+    const f = fake({ outcome: "pass", receiptSha: sha("alpha2"), ...o });
+    f.deps.versionOf = async () => "alrunner 3.0.0-alpha.2 (91253f2d6)";
+    return f;
+  };
+
+  test("L1: a live holder: skipped, exit 2, the gate never runs; the log names the lock, pid and the clear step", async () => {
+    await setup();
+    await holder(4242);
+    const { deps, seen } = regate({ procs: { 4242: "bun scripts/al-runner-v3-update.ts --edge" } });
+    const out = await updateOnce(deps, { regateAt: REGATE_COMMIT });
+    expect(out).toEqual(["skipped"]);
+    expect(updateExitCode(true, out)).toBe(2);
+    expect(seen.gates).toEqual([]);
+    expect(seen.logs.join("\n")).toContain(`${lockPath()} is held by pid 4242`);
+    expect(seen.logs.join("\n")).toContain(`rm ${lockPath()}`);
+  });
+
+  test("L2: a dead holder AND a process with its cwd under the gate worktree: skipped, the orphan named", async () => {
+    await setup();
+    await holder(4242);
+    const { deps, seen } = regate({ orphans: [777] });
+    expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["skipped"]);
+    expect(seen.gates).toEqual([]);
+    expect(seen.logs.join("\n")).toMatch(/pid\(s\) 777 still run under/);
+  });
+
+  test("L3: a dead holder, no orphan: taken over (renamed, then linked), gated, and released", async () => {
+    await setup();
+    await holder(4242);
+    const { deps, seen } = regate({});
+    expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+    expect(seen.gates).toEqual([REGATE_COMMIT]);
+    expect(seen.logs.join("\n")).toMatch(/took over the stale gate lock/);
+    const { readdir } = await import("node:fs/promises");
+    expect((await readdir(root)).filter((n) => n.startsWith(".gate.lock.stale.")).length).toBe(1);
+    expect(existsSync(lockPath())).toBe(false);
+  });
+
+  test("L4: an EMPTY lock file is reported and taken over; it never blocks silently", async () => {
+    await setup();
+    await writeFile(lockPath(), "");
+    const { deps, seen } = regate({});
+    expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+    expect(seen.logs.join("\n")).toMatch(/is empty or unreadable: stale/);
+  });
+
+  test("L5: a live pid running ANOTHER program (pid reuse) is stale: gated", async () => {
+    await setup();
+    await holder(4242);
+    const { deps, seen } = regate({ procs: { 4242: "/usr/bin/vim notes.txt" } });
+    expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+    expect(seen.gates).toEqual([REGATE_COMMIT]);
+  });
+
+  test("L7 (M2): a holder whose pid is THIS process (pid reuse after a restart) is stale: gated", async () => {
+    await setup();
+    await holder(process.pid);
+    const { deps, seen } = regate({
+      procs: { [process.pid]: "bun scripts/al-runner-v3-update.ts --regate" },
+    });
+    expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+    expect(seen.gates).toEqual([REGATE_COMMIT]);
+  });
+
+  test("L6: a lock that is no longer ours is left alone at release; our own is removed", async () => {
+    await setup();
+    const other = JSON.stringify({ pid: 99, startedAt: "x", argv: [] });
+    const { deps } = regate({ onGate: () => writeFile(lockPath(), other) });
+    await updateOnce(deps, { regateAt: REGATE_COMMIT });
+    expect(await readFile(lockPath(), "utf8")).toBe(other);
+    await setup();
+    await updateOnce(regate({}).deps, { regateAt: REGATE_COMMIT });
+    expect(existsSync(lockPath())).toBe(false);
+  });
+});
+
+// R639 `--edge-rejudge <sha>` (plan r2 §6, r3 I4/I5, M4/M5).
+linuxOnly("R639 --edge-rejudge (R1-R9)", () => {
+  const EDGE = "57f1e4f98";
+  const TAG = `edge-${EDGE}`;
+  const OLD = "de8f43e2de8f43e2de8f43e2de8f43e2de8f43e2";
+  const EDGE_VERSION = `al-runner 3.0.0-alpha.4+edge.20261022 (${EDGE})`;
+  const kept = (name = `${TAG}@${OLD}`) => join(root, "failed", name);
+
+  /** `.gated` at GATED_COMMIT (with a tarball, for M5), and the kept edge build at OLD. */
+  async function setupKept(o: { bytes?: string; receiptSha?: string; name?: string } = {}) {
+    await setup();
+    const cur = await current();
+    const g = JSON.parse(await readFile(join(cur, ".gated"), "utf8"));
+    await writeFile(
+      join(cur, ".gated"),
+      JSON.stringify({ ...g, tarballSha256: sha("alpha2-tarball") }),
+    );
+    const d = kept(o.name);
+    await mkdir(d, { recursive: true });
+    await writeFile(join(d, "al-runner"), o.bytes ?? "edge57");
+    await writeFile(
+      join(d, "receipt.json"),
+      JSON.stringify({
+        binarySha256: o.receiptSha ?? sha("edge57"),
+        outcome: "gate-fail",
+        lethalCommit: OLD,
+      }),
+    );
+    await writeFile(join(root, "edge.last-seen"), "0123abc\n");
+  }
+  const rj = (o: Parameters<typeof fake>[0] = {}) =>
+    fake({ outcome: "gate-fail", receiptSha: sha("edge57"), version: EDGE_VERSION, ...o });
+
+  /** Every path under failed/ and held/, with its bytes. */
+  async function tree(): Promise<Record<string, string>> {
+    const { readdir } = await import("node:fs/promises");
+    const out: Record<string, string> = {};
+    for (const top of ["failed", "held"]) {
+      const base = join(root, top);
+      if (!existsSync(base)) continue;
+      for (const e of await readdir(base, { recursive: true, withFileTypes: true }))
+        if (e.isFile()) {
+          const p = join(e.parentPath, e.name);
+          out[p] = await readFile(p, "utf8");
+        }
+    }
+    return out;
+  }
+
+  test("R1: skipped with 3 other heavy jobs, under 10 GB, or a live lock: exit 2 and no gate", async () => {
+    for (const o of [
+      { heavy: 3 },
+      { free: 9 },
+      { procs: { 4242: "bun al-runner-v3-update.ts" } },
+    ]) {
+      await setupKept();
+      await writeFile(join(root, ".gate.lock"), JSON.stringify({ pid: 4242, startedAt: "t" }));
+      const { deps, seen } = rj(o);
+      const out = await edgeRejudge(deps, EDGE);
+      expect(out).toBe("skipped");
+      expect(updateExitCode(true, [out])).toBe(2);
+      expect(seen.gates).toEqual([]);
+    }
+  });
+
+  test("R2 (I5): failed/<tag>@<current commit> with NO receipt refuses by name; the gate never runs", async () => {
+    await setupKept();
+    await mkdir(failedAt(TAG), { recursive: true });
+    const { deps, seen } = rj();
+    await expect(edgeRejudge(deps, EDGE)).rejects.toThrow(
+      `al-runner-v3-edge-rejudge-refused: ${TAG} already judged at ${GATED_COMMIT}; --regate to a new commit first`,
+    );
+    expect(seen.gates).toEqual([]);
+  });
+
+  test("R2 (I5): a rejudge receipt at this commit refuses unless it was an infra-fail", async () => {
+    for (const [outcome, refused] of [
+      ["held", true],
+      ["infra-fail", false],
+    ] as const) {
+      await setupKept();
+      const d = join(root, "rejudge", `${TAG}@${GATED_COMMIT}`);
+      await mkdir(d, { recursive: true });
+      await writeFile(
+        join(d, "receipt.json"),
+        JSON.stringify({ lethalCommit: GATED_COMMIT, outcome }),
+      );
+      const p = edgeRejudge(rj().deps, EDGE);
+      if (refused) await expect(p).rejects.toThrow(/already judged/);
+      else expect(await p).toBe("gate-fail");
+    }
+  });
+
+  test("R3: gateOne with a kept binary and an existing failed/<tag>@<commit> is gate-fail; the gate never runs", async () => {
+    await setupKept();
+    await mkdir(failedAt(TAG), { recursive: true });
+    const { deps, seen } = rj({ outcome: "pass" });
+    const g = parseGated(await readFile(join(await current(), ".gated"), "utf8"), ".gated");
+    const binary = join(kept(), "al-runner");
+    expect(await gateOne(deps, TAG, g, { binary, binarySha256: sha("edge57") })).toBe("gate-fail");
+    expect(seen.gates).toEqual([]);
+  });
+
+  test("R4 (I4): a kept binary whose --version commit is another build is refused", async () => {
+    await setupKept();
+    const { deps, seen } = rj({ version: "al-runner 3.0.0-alpha.4+edge.20261021 (7739d8132)" });
+    await expect(edgeRejudge(deps, EDGE)).rejects.toThrow(
+      /reports commit "7739d8132", not 57f1e4f98/,
+    );
+    expect(seen.gates).toEqual([]);
+  });
+
+  test("R4 (I4): a folder whose tag only starts with the tag is not a kept copy of it", async () => {
+    await setupKept({ name: `${TAG}0@${OLD}` });
+    await expect(edgeRejudge(rj().deps, EDGE)).rejects.toThrow(/no kept binary with a receipt/);
+  });
+
+  test("R4 (M3): a folder with NO @ that is the tag plus one character is not a kept copy of it", async () => {
+    await setupKept({ name: `${TAG}X` });
+    await expect(edgeRejudge(rj().deps, EDGE)).rejects.toThrow(/no kept binary with a receipt/);
+  });
+
+  test("R5: custody: a binary that is not its receipt's bytes is refused", async () => {
+    await setupKept({ receiptSha: sha("other") });
+    const { deps, seen } = rj();
+    await expect(edgeRejudge(deps, EDGE)).rejects.toThrow(/its receipt names/);
+    expect(seen.gates).toEqual([]);
+  });
+
+  test("R5: custody: two kept folders with different builds are refused", async () => {
+    await setupKept();
+    const h = join(root, "held", TAG);
+    await mkdir(h, { recursive: true });
+    await writeFile(join(h, "al-runner"), "edge57-other");
+    await writeFile(
+      join(h, "receipt.json"),
+      JSON.stringify({ binarySha256: sha("edge57-other"), outcome: "held", lethalCommit: OLD }),
+    );
+    await expect(edgeRejudge(rj().deps, EDGE)).rejects.toThrow(/two different kept builds/);
+  });
+
+  test("R5 (M4): gateOne refuses when the binary's sha is not the custody-checked one", async () => {
+    await setupKept();
+    const { deps, seen } = rj();
+    const g = parseGated(await readFile(join(await current(), ".gated"), "utf8"), ".gated");
+    await expect(
+      gateOne(deps, TAG, g, { binary: join(kept(), "al-runner"), binarySha256: sha("x") }),
+    ).rejects.toThrow(/not the custody-checked/);
+    expect(seen.gates).toEqual([]);
+  });
+
+  test("R6: the KEPT binary is gated, as a candidate, never a download", async () => {
+    await setupKept();
+    const { deps, seen } = rj();
+    expect(await edgeRejudge(deps, EDGE)).toBe("gate-fail");
+    expect(seen.downloads).toBe(0);
+    expect(seen.extracts).toBe(0);
+    expect(seen.envs[0]?.LETHAL_ALRUNNER_V3_PATH).toBe(join(kept(), "al-runner"));
+    expect(seen.envs[0]?.LETHAL_ALRUNNER_V3_CANDIDATE).toBe("1");
+    expect(seen.gates).toEqual([GATED_COMMIT]);
+  });
+
+  test("R7: for each outcome, nothing that existed under failed/ or held/ changes its bytes or goes away", async () => {
+    for (const outcome of ["pass", "held", "gate-fail", "infra-fail"] as const) {
+      for (const heldBefore of [false, true]) {
+        await setupKept();
+        if (heldBefore) {
+          // A real earlier held copy (the same bytes, with its receipt), so a rewrite would show.
+          const h = join(root, "held", TAG);
+          await mkdir(h, { recursive: true });
+          await writeFile(join(h, "note.txt"), "an earlier held");
+          await writeFile(join(h, "al-runner"), "edge57");
+          await writeFile(
+            join(h, "receipt.json"),
+            JSON.stringify({ binarySha256: sha("edge57"), outcome: "held", lethalCommit: OLD }),
+          );
+        }
+        const before = await tree();
+        expect(await edgeRejudge(rj({ outcome }).deps, EDGE)).toBe(outcome);
+        const after = await tree();
+        for (const [p, bytes] of Object.entries(before)) expect(after[p]).toBe(bytes);
+        expect(existsSync(failedAt(TAG))).toBe(outcome === "gate-fail");
+      }
+    }
+  });
+
+  test("R8 (M5): a rejudge pass writes .gated with rejudgedFrom and NO inherited tarballSha256", async () => {
+    await setupKept();
+    expect(await edgeRejudge(rj({ outcome: "pass" }).deps, EDGE)).toBe("pass");
+    const g = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
+    expect(g.rejudgedFrom).toBe(kept());
+    expect("tarballSha256" in g).toBe(false);
+    expect(g).toMatchObject({ version: EDGE_VERSION, lethalCommit: GATED_COMMIT });
+  });
+
+  test("R9: rejudge/<tag>@<commit>/ keeps the receipt and gate.log, edge.last-seen is untouched, the line says same or different", async () => {
+    await setupKept();
+    const a = rj({ gateLog: "C: refusal-row-shape = unlike-bc" });
+    expect(await edgeRejudge(a.deps, EDGE)).toBe("gate-fail");
+    const d = join(root, "rejudge", `${TAG}@${GATED_COMMIT}`);
+    expect(existsSync(join(d, "receipt.json"))).toBe(true);
+    expect(await readFile(join(d, "gate.log"), "utf8")).toContain("unlike-bc");
+    expect(await readFile(join(root, "edge.last-seen"), "utf8")).toBe("0123abc\n");
+    expect(a.seen.logs.join("\n")).toContain(
+      `edge-rejudge ${TAG} (${sha("edge57")}) at ${GATED_COMMIT}: gate-fail; before: gate-fail@${OLD}; same`,
+    );
+    await setupKept();
+    const b = rj({ outcome: "held" });
+    await edgeRejudge(b.deps, EDGE);
+    expect(b.seen.logs.join("\n")).toMatch(/: held; before: gate-fail@de8f43e2\w+; different/);
+  });
+
+  test("the argument must be a 7-40 character sha", async () => {
+    await setupKept();
+    for (const bad of ["57f1e4", "edge", "57F1E4F98"])
+      await expect(edgeRejudge(rj().deps, bad)).rejects.toThrow(
+        /al-runner-v3-edge-rejudge-refused/,
+      );
   });
 });

@@ -44,7 +44,7 @@ import {
   V3_REFUSED_NEARBY_TAG,
   V3_STATE_NOTE_TAG,
 } from "../src/al-runner-v3-backend";
-import { runV3ContractProbe } from "../src/al-runner-v3-contract";
+import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
 import { AL_RUNNER_V3_DEFAULT_PATH, sha256OfFile } from "../src/al-runner-v3-pin";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
@@ -60,6 +60,7 @@ import {
   V3LegHeld,
   type V3LegOutcome,
   V3_DEFECT_FACTS,
+  V3_LEG_C_FACTS,
   V3_WARN_FACTS,
   cdoCheckoutRefusal,
   classifyLegC,
@@ -69,6 +70,7 @@ import {
   failsClosedRefusal,
   gateOutcome,
   knownDifferencesRefusal,
+  legCFactLine,
   legOutcomeOfError,
   writeV3Receipt,
 } from "./al-runner-v3-gate";
@@ -157,6 +159,9 @@ function backendCfg(
   };
 }
 
+/** r9 §2: this leg's sessions' `unlike-bc` warnings, drained into the receipt after each leg. */
+const sessionUnlikeBc: string[] = [];
+
 async function session(
   scratch: string,
   backend: AlRunnerV3Backend,
@@ -178,6 +183,15 @@ async function session(
   } finally {
     store.close();
     await backend.close();
+    // r9 §2 (R639): a candidate session warns on `unlike-bc` instead of refusing; the warning goes
+    // into the receipt under EVERY leg that ran under it, so the D figures are read knowing it.
+    const c = backend.contractResult();
+    if (c !== undefined)
+      sessionUnlikeBc.push(
+        ...v3DefectWarnings(c, { candidate: CANDIDATE }).filter((l) =>
+          l.includes("al-runner-v3-defect-unlike-bc"),
+        ),
+      );
   }
 }
 
@@ -271,15 +285,15 @@ async function legC(scratch: string): Promise<readonly string[]> {
     cacheDir: CACHE,
     tasksetPath: "/usr/bin/taskset",
   });
-  for (const f of r.facts)
-    console.log(`  C: ${f.fact} = ${f.verdict} | ${f.measured.slice(0, 200)}`);
+  // F4 (R639): the measured rows whole, so the kept gate.log shows every field.
+  for (const f of r.facts) console.log(legCFactLine(f));
   // R612 M-2: the warn readings go into the receipt, and from there into `.gated`.
   legCWarnFacts = Object.fromEntries(
     r.facts.filter((f) => V3_WARN_FACTS.includes(f.fact)).map((f) => [f.fact, f.verdict]),
   );
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 25 facts (r8:
-  // R612's warn fact, then R637's contract fact); a warn fact (V3_WARN_FACTS) only adds its line.
-  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 25, V3_WARN_FACTS);
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 26 facts (r9,
+  // R639: 9 defect, 16 contract, 1 warn); a warn fact (V3_WARN_FACTS) only adds its line.
+  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS);
   for (const l of c.lines) console.log(`  C: ${l}`);
   if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);
   if (c.outcome === "infra-fail") throw new V3LegEnvironment(`C: ${c.lines.join("; ")}`);
@@ -1031,6 +1045,12 @@ async function main(): Promise<void> {
         if (err instanceof V3LegHeld) lines.push(...err.lines.map((l) => `${leg}: ${l}`));
         else lines.push(`${leg}: ${msg.slice(0, 1000)}`);
         console.log(`leg ${leg}: ${legs[leg]?.toUpperCase()} ${formatFailure(err).slice(0, 2000)}`);
+      } finally {
+        // r9 §2: every leg that ran under an `unlike-bc` warning names it in the receipt.
+        for (const l of new Set(sessionUnlikeBc.splice(0))) {
+          console.log(`  ${leg}: ${l}`);
+          lines.push(`${leg}: ${l}`);
+        }
       }
     }
   } finally {

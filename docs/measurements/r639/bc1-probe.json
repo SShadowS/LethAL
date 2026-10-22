@@ -1,0 +1,656 @@
+{
+  "server": "bc1",
+  "date": "2026-10-22",
+  "harness": "scripts/r639-bc-probe/drive.ts@a76acc4ae114dbc01d7161394b7c5ae881915c8e",
+  "probeSourceSha": "9cc589b46dbeddbe87ebe9701419b45be1512ef8",
+  "appSha256": {
+    "target.app": "7c46f5f75efa2bab59a557394f39008ebe9549b1625a03b4976fccaa0e4d0060",
+    "tests.app": "2b1138ace6bd2e7aa903fc3bd8cba2ed9a57e1ed6bd5e2f3c15222203595cd5a"
+  },
+  "testHttpRequestPolicy": "absent",
+  "runnerPath": "LethAL Control RunMutant (one method per call, mutantId \"\"); 92912 through RunMutantMany (both methods, one call, stopAtFirstFailure false)",
+  "lease": {
+    "holder": {
+      "lane": "bugs",
+      "attempt": "083",
+      "at": 1792660887720
+    },
+    "leasedAt": "2026-10-22T09:21:27Z",
+    "releasedAt": "2026-10-22T09:21:32Z",
+    "heldBy": "kraken coord lease bc1 bugs; holder read back null after release"
+  },
+  "idOverlapCheck": "2026-10-22: no app.json in the repo claims 92900-92919 and no .al file in the repo or in /coord/handoff/R-629/probe/ uses a 929xx id; both probe app ids read back ABSENT (0 rows) on bc1 before publish",
+  "testPermissions": "Disabled on 92912-92915 (run 2); absent on 92910/92911 (run 1, which read no table)",
+  "apps": {
+    "target": {
+      "id": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+      "name": "LethAL R639 BC Probe",
+      "file": "target.app"
+    },
+    "tests": {
+      "id": "a9639c9f-d2c6-4b66-add7-d54a552cbfd2",
+      "name": "LethAL R639 BC Probe Tests",
+      "file": "tests.app"
+    },
+    "artifactId": "d1618dd6c92c4a3982febac2e5339f21"
+  },
+  "bcBuild": {
+    "Base Application": "28.4.53241.56590 isInstalled=true",
+    "System Application": "28.4.53241.56590 isInstalled=true"
+  },
+  "lethalControl": "1.0.0.23",
+  "absentBefore": true,
+  "registeredArtifact": "d1618dd6c92c4a3982febac2e5339f21",
+  "results": [
+    {
+      "run": 1,
+      "codeunit": 92910,
+      "attemptId": "r639-92910-19839",
+      "opSeq": 19839,
+      "answer": {
+        "status": "ran",
+        "targetAppId": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+        "artifactId": "d1618dd6c92c4a3982febac2e5339f21",
+        "attemptId": "r639-92910-19839",
+        "mutantId": "",
+        "codeunitId": 92910,
+        "method": "HttpGet",
+        "codeunitResults": "{\"name\":\"R639 Http Local\",\"codeUnit\":92910,\"codeunitName\":\"R639 Http Local\",\"applicationID\":\"{A9639C9F-D2C6-4B66-ADD7-D54A552CBFD2}\",\"applicationName\":\"LethAL R639 BC Probe Tests\",\"startTime\":\"2026-10-22T09:17:23.1770000Z\",\"finishTime\":\"2026-10-22T09:17:23.2400000Z\",\"result\":1,\"testResults\":[{\"method\":\"HttpGet\",\"startTime\":\"2026-10-22T09:17:23.1800000Z\",\"finishTime\":\"2026-10-22T09:17:23.2370000Z\",\"result\":1,\"message\":\"The request was blocked by the runtime to prevent accidental use of production services.\",\"stackTrace\":\"R639 Http Local(CodeUnit 92910).HttpGet line 5 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;\"}]}",
+        "observedAny": false,
+        "observedActive": false,
+        "identityMismatch": false,
+        "testRunsBefore": 0,
+        "sessionId": 48176
+      },
+      "tests": [
+        {
+          "method": "HttpGet",
+          "outcome": "fail",
+          "resultEnum": 1,
+          "fullFailureText": "The request was blocked by the runtime to prevent accidental use of production services.\nR639 Http Local(CodeUnit 92910).HttpGet line 5 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+          "runnerMessageFirstLine": "The request was blocked by the runtime to prevent accidental use of production services.",
+          "firstFrame": "R639 Http Local(CodeUnit 92910).HttpGet line 5 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0",
+          "message": "The request was blocked by the runtime to prevent accidental use of production services.",
+          "stackTrace": "R639 Http Local(CodeUnit 92910).HttpGet line 5 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;"
+        }
+      ]
+    },
+    {
+      "run": 1,
+      "codeunit": 92911,
+      "attemptId": "r639-92911-19840",
+      "opSeq": 19840,
+      "answer": {
+        "status": "ran",
+        "targetAppId": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+        "artifactId": "d1618dd6c92c4a3982febac2e5339f21",
+        "attemptId": "r639-92911-19840",
+        "mutantId": "",
+        "codeunitId": 92911,
+        "method": "HttpGetRaw",
+        "codeunitResults": "{\"name\":\"R639 Http Local Raw\",\"codeUnit\":92911,\"codeunitName\":\"R639 Http Local Raw\",\"applicationID\":\"{A9639C9F-D2C6-4B66-ADD7-D54A552CBFD2}\",\"applicationName\":\"LethAL R639 BC Probe Tests\",\"startTime\":\"2026-10-22T09:17:23.3900000Z\",\"finishTime\":\"2026-10-22T09:17:23.4000000Z\",\"result\":1,\"testResults\":[{\"method\":\"HttpGetRaw\",\"startTime\":\"2026-10-22T09:17:23.3900000Z\",\"finishTime\":\"2026-10-22T09:17:23.4000000Z\",\"result\":1,\"message\":\"MEASURED [The request was blocked by the runtime to prevent accidental use of production services.] [HttpRequest]\",\"stackTrace\":\"R639 Http Local Raw(CodeUnit 92911).HttpGetRaw line 6 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;\"}]}",
+        "observedAny": false,
+        "observedActive": false,
+        "identityMismatch": false,
+        "testRunsBefore": 0,
+        "sessionId": 48178
+      },
+      "tests": [
+        {
+          "method": "HttpGetRaw",
+          "outcome": "fail",
+          "resultEnum": 1,
+          "fullFailureText": "MEASURED [The request was blocked by the runtime to prevent accidental use of production services.] [HttpRequest]\nR639 Http Local Raw(CodeUnit 92911).HttpGetRaw line 6 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+          "runnerMessageFirstLine": "MEASURED [The request was blocked by the runtime to prevent accidental use of production services.] [HttpRequest]",
+          "firstFrame": "R639 Http Local Raw(CodeUnit 92911).HttpGetRaw line 6 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0",
+          "message": "MEASURED [The request was blocked by the runtime to prevent accidental use of production services.] [HttpRequest]",
+          "stackTrace": "R639 Http Local Raw(CodeUnit 92911).HttpGetRaw line 6 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+          "raw": "The request was blocked by the runtime to prevent accidental use of production services.",
+          "rawCode": "HttpRequest"
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "codeunit": 92912,
+      "attemptId": "r639-92912-19845",
+      "opSeq": 19845,
+      "answer": {
+        "status": "ran",
+        "targetAppId": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+        "artifactId": "d1618dd6c92c4a3982febac2e5339f21",
+        "attemptId": "r639-92912-19845",
+        "mutantId": "",
+        "observedAny": false,
+        "identityMismatch": false,
+        "testRunsBefore": 0,
+        "sessionId": 48280,
+        "endedBy": "complete",
+        "ranCount": 2,
+        "methods": [
+          {
+            "index": 1,
+            "codeunitId": 92912,
+            "method": "DuplicateNamedKey",
+            "lineNo": 20000,
+            "sessionId": 48280,
+            "codeunitResults": {
+              "name": "R639 Dup End",
+              "codeUnit": 92912,
+              "testResults": [
+                {
+                  "method": "DuplicateNamedKey",
+                  "startTime": "2026-10-22T09:21:30.1570000Z",
+                  "finishTime": "2026-10-22T09:21:30.1670000Z",
+                  "result": 1,
+                  "message": "The record in table Probe Row already exists. Identification fields and values: Key='K1'",
+                  "stackTrace": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;"
+                }
+              ]
+            },
+            "durationMs": 25,
+            "observedActive": false
+          },
+          {
+            "index": 2,
+            "codeunitId": 92912,
+            "method": "AfterDupSentinel",
+            "lineNo": 30000,
+            "sessionId": 48280,
+            "codeunitResults": {
+              "name": "R639 Dup End",
+              "codeUnit": 92912,
+              "testResults": [
+                {
+                  "method": "AfterDupSentinel",
+                  "startTime": "2026-10-22T09:21:30.1830000Z",
+                  "finishTime": "2026-10-22T09:21:30.1900000Z",
+                  "result": 1,
+                  "message": "MEASURED sentinel rows=0",
+                  "stackTrace": "R639 Dup End(CodeUnit 92912).AfterDupSentinel line 4 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;"
+                }
+              ]
+            },
+            "durationMs": 19,
+            "observedActive": false
+          }
+        ]
+      },
+      "tests": [
+        {
+          "method": "DuplicateNamedKey",
+          "outcome": "fail",
+          "resultEnum": 1,
+          "fullFailureText": "The record in table Probe Row already exists. Identification fields and values: Key='K1'\nTest Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;",
+          "runnerMessageFirstLine": "The record in table Probe Row already exists. Identification fields and values: Key='K1'",
+          "firstFrame": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590",
+          "message": "The record in table Probe Row already exists. Identification fields and values: Key='K1'",
+          "stackTrace": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;",
+          "sessionId": 48280
+        },
+        {
+          "method": "AfterDupSentinel",
+          "outcome": "fail",
+          "resultEnum": 1,
+          "fullFailureText": "MEASURED sentinel rows=0\nR639 Dup End(CodeUnit 92912).AfterDupSentinel line 4 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;",
+          "runnerMessageFirstLine": "MEASURED sentinel rows=0",
+          "firstFrame": "R639 Dup End(CodeUnit 92912).AfterDupSentinel line 4 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0",
+          "message": "MEASURED sentinel rows=0",
+          "stackTrace": "R639 Dup End(CodeUnit 92912).AfterDupSentinel line 4 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;",
+          "sessionId": 48280
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "codeunit": 92913,
+      "attemptId": "r639-92913-19846",
+      "opSeq": 19846,
+      "answer": {
+        "status": "ran",
+        "targetAppId": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+        "artifactId": "d1618dd6c92c4a3982febac2e5339f21",
+        "attemptId": "r639-92913-19846",
+        "mutantId": "",
+        "codeunitId": 92913,
+        "method": "DuplicateNamedKey",
+        "codeunitResults": "{\"name\":\"R639 Dup End Alone\",\"codeUnit\":92913,\"codeunitName\":\"R639 Dup End Alone\",\"applicationID\":\"{A9639C9F-D2C6-4B66-ADD7-D54A552CBFD2}\",\"applicationName\":\"LethAL R639 BC Probe Tests\",\"startTime\":\"2026-10-22T09:21:30.3630000Z\",\"finishTime\":\"2026-10-22T09:21:30.3730000Z\",\"result\":1,\"testResults\":[{\"method\":\"DuplicateNamedKey\",\"startTime\":\"2026-10-22T09:21:30.3630000Z\",\"finishTime\":\"2026-10-22T09:21:30.3730000Z\",\"result\":1,\"message\":\"The record in table Probe Row already exists. Identification fields and values: Key='K1'\",\"stackTrace\":\"Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;\"}]}",
+        "observedAny": false,
+        "observedActive": false,
+        "identityMismatch": false,
+        "testRunsBefore": 0,
+        "sessionId": 48282
+      },
+      "tests": [
+        {
+          "method": "DuplicateNamedKey",
+          "outcome": "fail",
+          "resultEnum": 1,
+          "fullFailureText": "The record in table Probe Row already exists. Identification fields and values: Key='K1'\nTest Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+          "runnerMessageFirstLine": "The record in table Probe Row already exists. Identification fields and values: Key='K1'",
+          "firstFrame": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590",
+          "message": "The record in table Probe Row already exists. Identification fields and values: Key='K1'",
+          "stackTrace": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;"
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "codeunit": 92914,
+      "attemptId": "r639-92914-19847",
+      "opSeq": 19847,
+      "answer": {
+        "status": "ran",
+        "targetAppId": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+        "artifactId": "d1618dd6c92c4a3982febac2e5339f21",
+        "attemptId": "r639-92914-19847",
+        "mutantId": "",
+        "codeunitId": 92914,
+        "method": "DuplicateNamedKeyThenRead",
+        "codeunitResults": "{\"name\":\"R639 Dup Then Read\",\"codeUnit\":92914,\"codeunitName\":\"R639 Dup Then Read\",\"applicationID\":\"{A9639C9F-D2C6-4B66-ADD7-D54A552CBFD2}\",\"applicationName\":\"LethAL R639 BC Probe Tests\",\"startTime\":\"2026-10-22T09:21:30.5400000Z\",\"finishTime\":\"2026-10-22T09:21:30.5530000Z\",\"result\":1,\"testResults\":[{\"method\":\"DuplicateNamedKeyThenRead\",\"startTime\":\"2026-10-22T09:21:30.5430000Z\",\"finishTime\":\"2026-10-22T09:21:30.5530000Z\",\"result\":1,\"message\":\"The record in table Probe Row already exists. Identification fields and values: Key='K1'\",\"stackTrace\":\"R639 Dup Then Read(CodeUnit 92914).DuplicateNamedKeyThenRead line 11 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;\"}]}",
+        "observedAny": false,
+        "observedActive": false,
+        "identityMismatch": false,
+        "testRunsBefore": 0,
+        "sessionId": 48284
+      },
+      "tests": [
+        {
+          "method": "DuplicateNamedKeyThenRead",
+          "outcome": "fail",
+          "resultEnum": 1,
+          "fullFailureText": "The record in table Probe Row already exists. Identification fields and values: Key='K1'\nR639 Dup Then Read(CodeUnit 92914).DuplicateNamedKeyThenRead line 11 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+          "runnerMessageFirstLine": "The record in table Probe Row already exists. Identification fields and values: Key='K1'",
+          "firstFrame": "R639 Dup Then Read(CodeUnit 92914).DuplicateNamedKeyThenRead line 11 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0",
+          "message": "The record in table Probe Row already exists. Identification fields and values: Key='K1'",
+          "stackTrace": "R639 Dup Then Read(CodeUnit 92914).DuplicateNamedKeyThenRead line 11 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;"
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "codeunit": 92915,
+      "attemptId": "r639-92915-19848",
+      "opSeq": 19848,
+      "answer": {
+        "status": "ran",
+        "targetAppId": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+        "artifactId": "d1618dd6c92c4a3982febac2e5339f21",
+        "attemptId": "r639-92915-19848",
+        "mutantId": "",
+        "codeunitId": 92915,
+        "method": "DuplicateNamedKeyThenReadRaw",
+        "codeunitResults": "{\"name\":\"R639 Dup Then Read Raw\",\"codeUnit\":92915,\"codeunitName\":\"R639 Dup Then Read Raw\",\"applicationID\":\"{A9639C9F-D2C6-4B66-ADD7-D54A552CBFD2}\",\"applicationName\":\"LethAL R639 BC Probe Tests\",\"startTime\":\"2026-10-22T09:21:30.7130000Z\",\"finishTime\":\"2026-10-22T09:21:30.7270000Z\",\"result\":1,\"testResults\":[{\"method\":\"DuplicateNamedKeyThenReadRaw\",\"startTime\":\"2026-10-22T09:21:30.7170000Z\",\"finishTime\":\"2026-10-22T09:21:30.7270000Z\",\"result\":1,\"message\":\"MEASURED [The record in table Probe Row already exists. Identification fields and values: Key='K1'] [DB:RecordExists]\",\"stackTrace\":\"R639 Dup Then Read Raw(CodeUnit 92915).DuplicateNamedKeyThenReadRaw line 14 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;\"}]}",
+        "observedAny": false,
+        "observedActive": false,
+        "identityMismatch": false,
+        "testRunsBefore": 0,
+        "sessionId": 48286
+      },
+      "tests": [
+        {
+          "method": "DuplicateNamedKeyThenReadRaw",
+          "outcome": "fail",
+          "resultEnum": 1,
+          "fullFailureText": "MEASURED [The record in table Probe Row already exists. Identification fields and values: Key='K1'] [DB:RecordExists]\nR639 Dup Then Read Raw(CodeUnit 92915).DuplicateNamedKeyThenReadRaw line 14 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+          "runnerMessageFirstLine": "MEASURED [The record in table Probe Row already exists. Identification fields and values: Key='K1'] [DB:RecordExists]",
+          "firstFrame": "R639 Dup Then Read Raw(CodeUnit 92915).DuplicateNamedKeyThenReadRaw line 14 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0",
+          "message": "MEASURED [The record in table Probe Row already exists. Identification fields and values: Key='K1'] [DB:RecordExists]",
+          "stackTrace": "R639 Dup Then Read Raw(CodeUnit 92915).DuplicateNamedKeyThenReadRaw line 14 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+          "raw": "The record in table Probe Row already exists. Identification fields and values: Key='K1'",
+          "rawCode": "DB:RecordExists"
+        }
+      ]
+    }
+  ],
+  "runnerCodeunit": "Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590",
+  "callstackSample": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;",
+  "removal": {
+    "LethAL R639 BC Probe Tests": {
+      "ok": true,
+      "steps": [
+        "uninstall HTTP 204",
+        "unpublish HTTP 204",
+        "read-back LethAL R639 BC Probe Tests (a9639c9f-d2c6-4b66-add7-d54a552cbfd2): absent (0 rows)"
+      ]
+    },
+    "LethAL R639 BC Probe": {
+      "ok": true,
+      "steps": [
+        "uninstall HTTP 204",
+        "unpublish HTTP 204",
+        "read-back LethAL R639 BC Probe (d371a89d-d1c8-4c83-aca5-49261b816c3b): absent (0 rows)"
+      ]
+    }
+  },
+  "registeredArtifactBefore": "d1618dd6c92c4a3982febac2e5339f21",
+  "runs": [
+    {
+      "run": 1,
+      "server": "bc1",
+      "date": "2026-10-22",
+      "harness": "scripts/r639-bc-probe/drive.ts@a166f32f1bb119d10356f292fac43226fbae26b0",
+      "probeSourceSha": "76f6022f4076f0b02ad10e38dfde59051245374e",
+      "appSha256": {
+        "target.app": "7c46f5f75efa2bab59a557394f39008ebe9549b1625a03b4976fccaa0e4d0060",
+        "tests.app": "9ff79d57a3454fba48e5638ea61525d4a5298a92bff7f176a9bfd0bed5982a9a"
+      },
+      "testHttpRequestPolicy": "absent",
+      "runnerPath": "LethAL Control RunMutant (one method per call, mutantId \"\"); 92912 through RunMutantMany (both methods, one call, stopAtFirstFailure false)",
+      "lease": {
+        "holder": {
+          "lane": "bugs",
+          "attempt": "082",
+          "at": 1792660634120
+        },
+        "leasedAt": "2026-10-22T09:17:14Z",
+        "releasedAt": "2026-10-22T09:17:42Z",
+        "heldBy": "kraken coord lease bc1 bugs; holder read back null after release"
+      },
+      "idOverlapCheck": "2026-10-22: no app.json in the repo claims 92900-92919 and no .al file in the repo or in /coord/handoff/R-629/probe/ uses a 929xx id; both probe app ids read back ABSENT (0 rows) on bc1 before publish",
+      "testPermissions": "absent (the BC default applied; see the README: it made every duplicate-key case fail on permissions)",
+      "apps": {
+        "target": {
+          "id": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+          "name": "LethAL R639 BC Probe",
+          "file": "target.app"
+        },
+        "tests": {
+          "id": "a9639c9f-d2c6-4b66-add7-d54a552cbfd2",
+          "name": "LethAL R639 BC Probe Tests",
+          "file": "tests.app"
+        },
+        "artifactId": "d1618dd6c92c4a3982febac2e5339f21"
+      },
+      "bcBuild": {
+        "Base Application": "28.4.53241.56590 isInstalled=true",
+        "System Application": "28.4.53241.56590 isInstalled=true"
+      },
+      "lethalControl": "1.0.0.23",
+      "absentBefore": true,
+      "registeredArtifact": "d1618dd6c92c4a3982febac2e5339f21",
+      "runnerCodeunit": "Test Runner - Isol. Codeunit (130450), read off every callstack (its frame is 'Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4'); the driver's first pick, the frame above it, was 'Test Runner - Mgt(CodeUnit 130454).RunTests line 26'",
+      "callstackSample": "R639 Http Local(CodeUnit 92910).HttpGet line 5 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+      "removal": {
+        "LethAL R639 BC Probe Tests": {
+          "ok": true,
+          "steps": [
+            "uninstall HTTP 204",
+            "unpublish HTTP 204",
+            "read-back LethAL R639 BC Probe Tests (a9639c9f-d2c6-4b66-add7-d54a552cbfd2): absent (0 rows)"
+          ]
+        },
+        "LethAL R639 BC Probe": {
+          "ok": true,
+          "steps": [
+            "uninstall HTTP 204",
+            "unpublish HTTP 204",
+            "read-back LethAL R639 BC Probe (d371a89d-d1c8-4c83-aca5-49261b816c3b): absent (0 rows)"
+          ]
+        }
+      }
+    },
+    {
+      "run": 2,
+      "server": "bc1",
+      "date": "2026-10-22",
+      "harness": "scripts/r639-bc-probe/drive.ts@a76acc4ae114dbc01d7161394b7c5ae881915c8e",
+      "probeSourceSha": "9cc589b46dbeddbe87ebe9701419b45be1512ef8",
+      "appSha256": {
+        "target.app": "7c46f5f75efa2bab59a557394f39008ebe9549b1625a03b4976fccaa0e4d0060",
+        "tests.app": "2b1138ace6bd2e7aa903fc3bd8cba2ed9a57e1ed6bd5e2f3c15222203595cd5a"
+      },
+      "testHttpRequestPolicy": "absent",
+      "testPermissions": "Disabled on 92912-92915 (run 2); absent on 92910/92911 (run 1, which read no table)",
+      "runnerPath": "LethAL Control RunMutant (one method per call, mutantId \"\"); 92912 through RunMutantMany (both methods, one call, stopAtFirstFailure false)",
+      "lease": {
+        "holder": {
+          "lane": "bugs",
+          "attempt": "083",
+          "at": 1792660887720
+        },
+        "leasedAt": "2026-10-22T09:21:27Z",
+        "releasedAt": "2026-10-22T09:21:32Z",
+        "heldBy": "kraken coord lease bc1 bugs; holder read back null after release"
+      },
+      "apps": {
+        "target": {
+          "id": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+          "name": "LethAL R639 BC Probe",
+          "file": "target.app"
+        },
+        "tests": {
+          "id": "a9639c9f-d2c6-4b66-add7-d54a552cbfd2",
+          "name": "LethAL R639 BC Probe Tests",
+          "file": "tests.app"
+        },
+        "artifactId": "d1618dd6c92c4a3982febac2e5339f21"
+      },
+      "bcBuild": {
+        "Base Application": "28.4.53241.56590 isInstalled=true",
+        "System Application": "28.4.53241.56590 isInstalled=true"
+      },
+      "lethalControl": "1.0.0.23",
+      "absentBefore": true,
+      "registeredArtifactBefore": "d1618dd6c92c4a3982febac2e5339f21",
+      "registeredArtifact": "d1618dd6c92c4a3982febac2e5339f21",
+      "runnerCodeunit": "Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590",
+      "callstackSample": "Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;",
+      "removal": {
+        "LethAL R639 BC Probe Tests": {
+          "ok": true,
+          "steps": [
+            "uninstall HTTP 204",
+            "unpublish HTTP 204",
+            "read-back LethAL R639 BC Probe Tests (a9639c9f-d2c6-4b66-add7-d54a552cbfd2): absent (0 rows)"
+          ]
+        },
+        "LethAL R639 BC Probe": {
+          "ok": true,
+          "steps": [
+            "uninstall HTTP 204",
+            "unpublish HTTP 204",
+            "read-back LethAL R639 BC Probe (d371a89d-d1c8-4c83-aca5-49261b816c3b): absent (0 rows)"
+          ]
+        }
+      }
+    }
+  ],
+  "history": {
+    "note": "run 1's duplicate-key rows: every one failed on the FIRST Insert with a permission refusal (the codeunits had no TestPermissions), so they measured no duplicate key. Superseded by run 2.",
+    "results": [
+      {
+        "run": 1,
+        "codeunit": 92912,
+        "attemptId": "r639-92912-19841",
+        "opSeq": 19841,
+        "answer": {
+          "status": "ran",
+          "targetAppId": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+          "artifactId": "d1618dd6c92c4a3982febac2e5339f21",
+          "attemptId": "r639-92912-19841",
+          "mutantId": "",
+          "observedAny": false,
+          "identityMismatch": false,
+          "testRunsBefore": 0,
+          "sessionId": 48180,
+          "endedBy": "complete",
+          "ranCount": 2,
+          "methods": [
+            {
+              "index": 1,
+              "codeunitId": 92912,
+              "method": "DuplicateNamedKey",
+              "lineNo": 20000,
+              "sessionId": 48180,
+              "codeunitResults": {
+                "name": "R639 Dup End",
+                "codeUnit": 92912,
+                "testResults": [
+                  {
+                    "method": "DuplicateNamedKey",
+                    "startTime": "2026-10-22T09:17:23.5470000Z",
+                    "finishTime": "2026-10-22T09:17:23.7000000Z",
+                    "result": 1,
+                    "message": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)",
+                    "stackTrace": "R639 Dup End(CodeUnit 92912).DuplicateNamedKey line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;"
+                  }
+                ]
+              },
+              "durationMs": 166,
+              "observedActive": false
+            },
+            {
+              "index": 2,
+              "codeunitId": 92912,
+              "method": "AfterDupSentinel",
+              "lineNo": 30000,
+              "sessionId": 48180,
+              "codeunitResults": {
+                "name": "R639 Dup End",
+                "codeUnit": 92912,
+                "testResults": [
+                  {
+                    "method": "AfterDupSentinel",
+                    "startTime": "2026-10-22T09:17:23.7170000Z",
+                    "finishTime": "2026-10-22T09:17:23.7200000Z",
+                    "result": 1,
+                    "message": "MEASURED sentinel rows=0",
+                    "stackTrace": "R639 Dup End(CodeUnit 92912).AfterDupSentinel line 4 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;"
+                  }
+                ]
+              },
+              "durationMs": 18,
+              "observedActive": false
+            }
+          ]
+        },
+        "tests": [
+          {
+            "method": "DuplicateNamedKey",
+            "outcome": "fail",
+            "resultEnum": 1,
+            "fullFailureText": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)\nR639 Dup End(CodeUnit 92912).DuplicateNamedKey line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;",
+            "runnerMessageFirstLine": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)",
+            "firstFrame": "R639 Dup End(CodeUnit 92912).DuplicateNamedKey line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0",
+            "message": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)",
+            "stackTrace": "R639 Dup End(CodeUnit 92912).DuplicateNamedKey line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;",
+            "sessionId": 48180
+          },
+          {
+            "method": "AfterDupSentinel",
+            "outcome": "fail",
+            "resultEnum": 1,
+            "fullFailureText": "MEASURED sentinel rows=0\nR639 Dup End(CodeUnit 92912).AfterDupSentinel line 4 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;",
+            "runnerMessageFirstLine": "MEASURED sentinel rows=0",
+            "firstFrame": "R639 Dup End(CodeUnit 92912).AfterDupSentinel line 4 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0",
+            "message": "MEASURED sentinel rows=0",
+            "stackTrace": "R639 Dup End(CodeUnit 92912).AfterDupSentinel line 4 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.23;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.23;",
+            "sessionId": 48180
+          }
+        ]
+      },
+      {
+        "run": 1,
+        "codeunit": 92913,
+        "attemptId": "r639-92913-19842",
+        "opSeq": 19842,
+        "answer": {
+          "status": "ran",
+          "targetAppId": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+          "artifactId": "d1618dd6c92c4a3982febac2e5339f21",
+          "attemptId": "r639-92913-19842",
+          "mutantId": "",
+          "codeunitId": 92913,
+          "method": "DuplicateNamedKey",
+          "codeunitResults": "{\"name\":\"R639 Dup End Alone\",\"codeUnit\":92913,\"codeunitName\":\"R639 Dup End Alone\",\"applicationID\":\"{A9639C9F-D2C6-4B66-ADD7-D54A552CBFD2}\",\"applicationName\":\"LethAL R639 BC Probe Tests\",\"startTime\":\"2026-10-22T09:17:23.8770000Z\",\"finishTime\":\"2026-10-22T09:17:23.9200000Z\",\"result\":1,\"testResults\":[{\"method\":\"DuplicateNamedKey\",\"startTime\":\"2026-10-22T09:17:23.8770000Z\",\"finishTime\":\"2026-10-22T09:17:23.9170000Z\",\"result\":1,\"message\":\"Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)\",\"stackTrace\":\"R639 Dup End Alone(CodeUnit 92913).DuplicateNamedKey line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;\"}]}",
+          "observedAny": false,
+          "observedActive": false,
+          "identityMismatch": false,
+          "testRunsBefore": 0,
+          "sessionId": 48182
+        },
+        "tests": [
+          {
+            "method": "DuplicateNamedKey",
+            "outcome": "fail",
+            "resultEnum": 1,
+            "fullFailureText": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)\nR639 Dup End Alone(CodeUnit 92913).DuplicateNamedKey line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+            "runnerMessageFirstLine": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)",
+            "firstFrame": "R639 Dup End Alone(CodeUnit 92913).DuplicateNamedKey line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0",
+            "message": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)",
+            "stackTrace": "R639 Dup End Alone(CodeUnit 92913).DuplicateNamedKey line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;"
+          }
+        ]
+      },
+      {
+        "run": 1,
+        "codeunit": 92914,
+        "attemptId": "r639-92914-19843",
+        "opSeq": 19843,
+        "answer": {
+          "status": "ran",
+          "targetAppId": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+          "artifactId": "d1618dd6c92c4a3982febac2e5339f21",
+          "attemptId": "r639-92914-19843",
+          "mutantId": "",
+          "codeunitId": 92914,
+          "method": "DuplicateNamedKeyThenRead",
+          "codeunitResults": "{\"name\":\"R639 Dup Then Read\",\"codeUnit\":92914,\"codeunitName\":\"R639 Dup Then Read\",\"applicationID\":\"{A9639C9F-D2C6-4B66-ADD7-D54A552CBFD2}\",\"applicationName\":\"LethAL R639 BC Probe Tests\",\"startTime\":\"2026-10-22T09:17:24.0870000Z\",\"finishTime\":\"2026-10-22T09:17:24.1070000Z\",\"result\":1,\"testResults\":[{\"method\":\"DuplicateNamedKeyThenRead\",\"startTime\":\"2026-10-22T09:17:24.0870000Z\",\"finishTime\":\"2026-10-22T09:17:24.1070000Z\",\"result\":1,\"message\":\"Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)\",\"stackTrace\":\"R639 Dup Then Read(CodeUnit 92914).DuplicateNamedKeyThenRead line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;\"}]}",
+          "observedAny": false,
+          "observedActive": false,
+          "identityMismatch": false,
+          "testRunsBefore": 0,
+          "sessionId": 48184
+        },
+        "tests": [
+          {
+            "method": "DuplicateNamedKeyThenRead",
+            "outcome": "fail",
+            "resultEnum": 1,
+            "fullFailureText": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)\nR639 Dup Then Read(CodeUnit 92914).DuplicateNamedKeyThenRead line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+            "runnerMessageFirstLine": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)",
+            "firstFrame": "R639 Dup Then Read(CodeUnit 92914).DuplicateNamedKeyThenRead line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0",
+            "message": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)",
+            "stackTrace": "R639 Dup Then Read(CodeUnit 92914).DuplicateNamedKeyThenRead line 7 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;"
+          }
+        ]
+      },
+      {
+        "run": 1,
+        "codeunit": 92915,
+        "attemptId": "r639-92915-19844",
+        "opSeq": 19844,
+        "answer": {
+          "status": "ran",
+          "targetAppId": "d371a89d-d1c8-4c83-aca5-49261b816c3b",
+          "artifactId": "d1618dd6c92c4a3982febac2e5339f21",
+          "attemptId": "r639-92915-19844",
+          "mutantId": "",
+          "codeunitId": 92915,
+          "method": "DuplicateNamedKeyThenReadRaw",
+          "codeunitResults": "{\"name\":\"R639 Dup Then Read Raw\",\"codeUnit\":92915,\"codeunitName\":\"R639 Dup Then Read Raw\",\"applicationID\":\"{A9639C9F-D2C6-4B66-ADD7-D54A552CBFD2}\",\"applicationName\":\"LethAL R639 BC Probe Tests\",\"startTime\":\"2026-10-22T09:17:24.2530000Z\",\"finishTime\":\"2026-10-22T09:17:24.2770000Z\",\"result\":1,\"testResults\":[{\"method\":\"DuplicateNamedKeyThenReadRaw\",\"startTime\":\"2026-10-22T09:17:24.2570000Z\",\"finishTime\":\"2026-10-22T09:17:24.2770000Z\",\"result\":1,\"message\":\"MEASURED [Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)] [DB:ClientInsertDenied]\",\"stackTrace\":\"R639 Dup Then Read Raw(CodeUnit 92915).DuplicateNamedKeyThenReadRaw line 14 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;\"}]}",
+          "observedAny": false,
+          "observedActive": false,
+          "identityMismatch": false,
+          "testRunsBefore": 0,
+          "sessionId": 48186
+        },
+        "tests": [
+          {
+            "method": "DuplicateNamedKeyThenReadRaw",
+            "outcome": "fail",
+            "resultEnum": 1,
+            "fullFailureText": "MEASURED [Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)] [DB:ClientInsertDenied]\nR639 Dup Then Read Raw(CodeUnit 92915).DuplicateNamedKeyThenReadRaw line 14 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+            "runnerMessageFirstLine": "MEASURED [Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)] [DB:ClientInsertDenied]",
+            "firstFrame": "R639 Dup Then Read Raw(CodeUnit 92915).DuplicateNamedKeyThenReadRaw line 14 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0",
+            "message": "MEASURED [Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)] [DB:ClientInsertDenied]",
+            "stackTrace": "R639 Dup Then Read Raw(CodeUnit 92915).DuplicateNamedKeyThenReadRaw line 14 - LethAL R639 BC Probe Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.56590;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.56590;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.56590;LC Run Method(CodeUnit 91007).RunOneMethod line 44 - LethAL Control by LethAL version 1.0.0.23;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 9 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutantCore line 44 - LethAL Control by LethAL version 1.0.0.23;LC Control API(CodeUnit 91003).RunMutant line 4 - LethAL Control by LethAL version 1.0.0.23;",
+            "raw": "Sorry, the current permissions prevented the action. (TableData 92900 Probe Row Insert: LethAL R639 BC Probe Tests)",
+            "rawCode": "DB:ClientInsertDenied"
+          }
+        ]
+      }
+    ]
+  }
+}

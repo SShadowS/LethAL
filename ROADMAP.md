@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**93 of 637 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**95 of 640 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -286,6 +286,8 @@ that ordering is the priority.
 - **R633** · al-runner v3 update gate: two wrong-reason verdicts on 2026-10-22 (alpha.3 infra-fail with no D legs run; alpha.4 and edge-7739d8132 gate-fail on #5613's fix read as a contract break), and every receipt deleted · [R633.md](docs/roadmap/R633.md) · done (abac8803)
 - **R634** · When the target app has installed dependents, their hang-capable loops are not in the hang context: a dependent's loop that calls a mutated target procedure can hang a scored run · [R634.md](docs/roadmap/R634.md) · closed 2026-10-22 — measured price 0: adding each same-corpus dependent's source to the target's hang context…
 - **R637** · al-runner v3: a test that fails after a timed-out test of the same codeunit is scored as a kill, although v3 says such a failure is not trusted · [R637.md](docs/roadmap/R637.md) · closed 2026-10-22 — premise false on alpha.2: v3 marks a failure caused by a stopped sibling notRun…
+- **R641** · al-runner v3: upstream fixes read as contract breaks or as unmeasurable, edge builds fail the version check, and a gated edge build cannot be re-judged · [R641.md](docs/roadmap/R641.md) · done (9c15aadb)
+- **R644** · History lends a survivor that was never checked against a test that failed in the SOURCE run's baseline but passes now (a false survive, even with equal suites) · [R644.md](docs/roadmap/R644.md) · open, filed 2026-10-22
 
 ## Product gaps a real project hits
 
@@ -682,6 +684,7 @@ that ordering is the priority.
 - **R639** · al-runner v3: when LethAL's first covering test is a not-trusted row after a timeout, the mutant ends as error and never reaches the hanging sibling's timeout kill · [R639.md](docs/roadmap/R639.md) · open, filed 2026-10-22
 - **R640** · R636's link-scan cap message blames the LAST link for a folder budget shared across the whole walk · [R640.md](docs/roadmap/R640.md) · done (8daecd3f)
 - **R642** · corpus-snapshot's heavy-job guard still allows two heavy jobs; the 32 GB container allows three, with BaseApp corpus jobs still capped at two · [R642.md](docs/roadmap/R642.md) · done (1e6d3b8a)
+- **R643** · After R621's fix, --resume deploys every fully scored batch that holds a no-coverage row; a snapshot-confirmed whole carry could skip that deploy · [R643.md](docs/roadmap/R643.md) · open, filed 2026-10-22
 
 ---
 

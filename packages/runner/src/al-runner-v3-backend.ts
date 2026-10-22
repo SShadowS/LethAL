@@ -101,10 +101,16 @@ import { type SpawnFn, defaultSpawn } from "./publisher";
 import { TestAppError, symbolPackageId } from "./test-app-publish";
 import { ProjectSymlinkRefusedError } from "./walk";
 
-/** `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`;
- *  R635: an edge build carries a build part, `3.0.0-alpha.4+edge.20261022 (57f1e4f98)`). */
+/**
+ * `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`).
+ * R639 F1: an edge build carries SemVer build metadata, `al-runner 3.0.0-alpha.4+edge.20261022
+ * (57f1e4f98)`; the metadata is one or more of `[0-9A-Za-z.-]`, never empty and never a space.
+ */
 export const AL_RUNNER_V3_VERSION =
-  /^al-?runner 3\.\d+\.\d+(?:-[\w.]+)?(?:\+[\w.]+)? \([0-9a-f]+\)$/;
+  /^al-?runner 3\.\d+\.\d+(?:-[\w.]+)?(?:\+[0-9A-Za-z.-]+)? \([0-9a-f]+\)$/;
+
+/** v3's refusal row prefix (`NotRun: out-of-scope: <reason>`), R586 measure.md row 14. */
+export const V3_REFUSAL_PREFIX = "NotRun: out-of-scope:";
 
 /** v3's timeout row (`notRun: true`), anchored: `Test exceeded <N>s timeout.` */
 export const V3_TIMEOUT_MESSAGE = /^Test exceeded (\d+)s timeout\.$/;
@@ -309,6 +315,18 @@ export function v3RowVerdict(
       failureMessage: `${row.message ?? "<no message>"} [al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]`,
       operation: "completed-accepted",
       runnerRow: "runner-refused",
+    };
+  }
+  // R639 K1(a), r9 §1: a refusal written WITHOUT notRun (a plain `fail` or `pass` whose message
+  // starts with v3's refusal prefix) never scores: no refusal path becomes a kill, survive or pass.
+  if ((row.message ?? "").startsWith(V3_REFUSAL_PREFIX)) {
+    return {
+      ref,
+      outcome: "error",
+      durationMs: wallMs,
+      failureMessage: `${row.message ?? ""} [al-runner v3: a refusal written as a ${row.status}; never scored (R639)]`,
+      operation: "completed-accepted",
+      runnerRow: "runner-test-error",
     };
   }
   return verdictFromRunnerTest(
@@ -653,8 +671,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...(gatedWarnFacts !== undefined ? { gatedWarnFacts } : {}),
       spawn: this.spawn,
     });
-    for (const line of v3DefectWarnings(this.contract)) console.warn(line);
-    const refusals = v3ContractRefusals(this.contract);
+    // R639 r9 §2: `unlike-bc` refuses a normal session; a candidate (update-gate) session warns.
+    const kind = { candidate: this.cfg.candidate === true };
+    for (const line of v3DefectWarnings(this.contract, kind)) console.warn(line);
+    const refusals = v3ContractRefusals(this.contract, kind);
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
       ok: true,
