@@ -1899,7 +1899,7 @@ export interface MutantOutcome {
    * prefix replay when `killPosition` > 1), and it failed again (any text), or timed out again at
    * the same budget for a timeout kill. A marker rather than text, so a reproduced kill whose run
    * carried no message still says so. Set only on a backend with the rule on
-   * (`ExecutionBackend.killsMustReproduce`, al-runner today); absent elsewhere and on a kill
+   * (`ExecutionBackend.killsMustReproduce`: al-runner, al-runner-v3 and bcdev); absent elsewhere and on a kill
    * recorded before the rule existed.
    */
   readonly killReproduced?: true;

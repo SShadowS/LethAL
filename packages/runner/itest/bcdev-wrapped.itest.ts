@@ -38,6 +38,7 @@ import {
   printItestTarget,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { assertKillsReproduced } from "./kill-reproduction";
 import {
   WRAPPED_PROJECT_DIR,
   WRAPPED_SELECTOR_IDS,
@@ -176,6 +177,12 @@ async function runLeg(
       // A scratch quarantine dir, never the real store (see bcdev.itest.ts).
       quarantineDir: join(scratchRoot, "quarantine"),
     });
+    // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
+    assertKillsReproduced(
+      `bcdev-wrapped/${coverageMode === "fenced" ? "fenced" : "hub"}`,
+      report,
+      store,
+    );
     return { report, warnings };
   } finally {
     console.warn = original;

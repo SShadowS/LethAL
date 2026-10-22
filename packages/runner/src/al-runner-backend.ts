@@ -641,7 +641,7 @@ export function classifyTestExactProbe(
 
 export class AlRunnerBackend implements ExecutionBackend {
   /** R577: a kill must reproduce under the mutant (measured: a ~1% flaky Microsoft test became a
-   *  false kill on every transport). bcdev's switch is R582. */
+   *  false kill on every transport). bcdev has it too since R582. */
   readonly killsMustReproduce = true;
   /** R516 I1: one-shot's in-run limit is the budget (`oneShotLimits`); the daemon's is the one stop
    *  it was started with (R517: `inRunStopMs`), never the budget. */

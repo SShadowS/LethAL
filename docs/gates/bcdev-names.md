@@ -11,6 +11,9 @@ the test names: they contain a space, `-`, `()`, `.`, `/`, `&`, a leading digit,
 keyword `Default`, or Danish letters. The other 2 are controls that are not renamed. This leg is
 the first live evidence for non-ASCII and special-character test names in BC's
 `Test Method Line`. The same table runs on al-runner; see [alrunner.md](alrunner.md), "Names legs".
+Since R582 each of the 36 kills is re-run once under the mutant (R577's rule), with the same
+`RunMutant` request shape as its cold confirm, and must carry `killReproduced` and exactly 2
+mutated rows for its killing test.
 
 ## Frozen figures
 

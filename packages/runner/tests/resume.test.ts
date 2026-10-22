@@ -22,6 +22,8 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { BcDevMcpBackend } from "../src/bcdev-backend";
+import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
@@ -433,6 +435,69 @@ describe("buildResumeIndex — a kill without killReproduced under the reproduct
   test("with the rule off (the default), a pre-rule kill still carries", () => {
     expect(buildResumeIndex(preRule, true).carryable.size).toBe(2);
     expect(buildResumeIndex(preRule, true, false).carryableBySite.size).toBe(2);
+  });
+});
+
+/**
+ * R582 (U4): a run recorded on bcdev BEFORE R582 has `kill_reproduced` NULL on every kill. With the
+ * flag read from `BcDevMcpBackend` itself, those kills are re-executed rather than carried; a
+ * marked kill and a survivor still carry.
+ */
+describe("buildResumeIndex — a pre-R582 bcdev run under BcDevMcpBackend's flag (R582)", () => {
+  test("its unmarked kills are re-executed, a marked kill and a survivor carry", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      coverageMode: "fenced",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+    });
+    const base = {
+      codeunitName: "Sandbox Logic",
+      procedureName: "Post",
+      operatorName: "lethal.negate-conditional",
+      operatorMajor: 1,
+      file: "src/SandboxLogic.Codeunit.al",
+      line: 1,
+      durationMs: 1,
+      batchIndex: 0,
+    };
+    store.recordMutant(runId, {
+      ...base,
+      mutantCode: "M0001",
+      astHash: "k1",
+      verdict: "killed",
+      killingTest: "T",
+    });
+    store.recordMutant(runId, {
+      ...base,
+      mutantCode: "M0002",
+      astHash: "k2",
+      verdict: "killed",
+      killingTest: "T",
+    });
+    store.recordMutant(runId, { ...base, mutantCode: "M0003", astHash: "s", verdict: "survived" });
+    store.recordMutant(runId, {
+      ...base,
+      mutantCode: "M0004",
+      astHash: "k4",
+      verdict: "killed",
+      killingTest: "T",
+      killReproduced: true,
+    });
+    const flag = new BcDevMcpBackend({} as unknown as BcDevConfig).killsMustReproduce === true;
+    const index = buildResumeIndex(store.mutantVerdicts(runId), false, flag);
+    expect(index.unreproducedKills).toBe(2);
+    expect([...index.carryable.values()].map((c) => c.verdict).sort()).toEqual([
+      "killed",
+      "survived",
+    ]);
+    expect([...index.carryable.values()].find((c) => c.verdict === "killed")?.killReproduced).toBe(
+      true,
+    );
+    store.close();
   });
 });
 
@@ -1958,6 +2023,25 @@ describe("runSession --resume (R47)", () => {
     await expect(
       runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds, resume: 4242 }),
     ).rejects.toThrow(/no such run/);
+  });
+
+  // R618 (orchestrator ruling 2): a finished run has nothing left to score, so `--resume-run` of
+  // one is refused by name before any run row or lease; the same run, unfinished, resumes.
+  test("--resume-run of a FINISHED run is refused by name; the same run unfinished resumes", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds });
+    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    expect(store.getRun(runId)?.finished).toBe(true);
+    const resume = () =>
+      runSession({ backend: new CountingBackend(), store, ...dirs, selectorIds, resume: runId });
+    await expect(resume()).rejects.toThrow(
+      `--resume-run ${runId}: run ${runId} already finished; nothing to resume.`,
+    );
+    const after = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    expect(after).toBe(runId);
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [runId]);
+    expect((await resume()).resumedFrom?.runId).toBe(runId);
   });
 
   test("C02-02: report.artifacts carries the COMPILED appVersion, not the reserved one", async () => {
