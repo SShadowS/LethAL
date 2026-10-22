@@ -237,9 +237,16 @@ describe("R647 r10 (a): judgeLegT classifies, compares and prints first, then ju
     expect(judge(heldNow, { unsupportedTests: 3 }).outcome).toBe("held");
   });
   test("T-a7: one held row and one gate-fail row: gate-fail", () => {
-    expect(judge([err("K1", "runner-refused"), row("K2", "survived"), k3]).outcome).toBe(
-      "gate-fail",
-    );
+    const j = judge([err("K1", "runner-refused"), row("K2", "survived"), k3]);
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.failure).toMatch(/1 gate-fail row/);
+  });
+  test("I1: a gate-fail classification with an EMPTY compare (a twin group) is gate-fail by the judge's own branch", () => {
+    const twins = [row("K", "survived"), row("K", "survived")];
+    expect(compareMutants(twins, twins, { sameScheme: true }).differences).toEqual([]);
+    const j = judge(twins, {}, twins);
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.failure).toMatch(/gate-fail row/);
   });
   test("T-a8 (M1): held rows with a knownDifferencesRefusal are gate-fail; with undefined held", () => {
     const j = judge(heldNow, { knownRefusal: "not the pinned 52" });
