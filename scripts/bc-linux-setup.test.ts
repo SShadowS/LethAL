@@ -12,11 +12,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
+import { MARKER_HOST, MARKER_SERVERS } from "../packages/runner/itest/out-of-use.ts";
 import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import type { AppManifest, Conn, ServerOps } from "./bc-app-content.ts";
 import {
   GATE_FIXTURES,
+  HOST,
   HeldLeaseUnknownError,
   LaneUnknownError,
   type LeaseDeps,
@@ -26,6 +28,7 @@ import {
   PUBLISH_PLAN,
   REAL_DEPS,
   type RunDeps,
+  SERVERS,
   SecretFileError,
   UnitTestCoordWriteError,
   buildConfig,
@@ -117,7 +120,9 @@ describe("parseSecretEnv", () => {
   });
   test("a refusal names the file it read (R663: bc-demo.env, not bc-linux.env)", () => {
     const demo = "/coord/secrets/bc-demo.env";
-    expect(() => parseSecretEnv("BC_DEV_USER=x\n", demo)).toThrow(`${demo}: BC_DEV_PASSWORD is missing`);
+    expect(() => parseSecretEnv("BC_DEV_USER=x\n", demo)).toThrow(
+      `${demo}: BC_DEV_PASSWORD is missing`,
+    );
     expect(() => parseSecretEnv("nope\n", demo)).toThrow(`${demo}: line 1`);
   });
 
@@ -570,6 +575,7 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     }
     const cacheRoot = mkdtempSync(join(tmpdir(), "bc-wco-cache-"));
     const secretPath = join(mkdtempSync(join(tmpdir(), "bc-wco-secret-")), "bc-linux.env");
+    const outOfUseDir = mkdtempSync(join(tmpdir(), "bc-wco-out-of-use-"));
     if (secretText !== null) writeFileSync(secretPath, secretText);
     const counts = { connect: 0, lease: 0, fetch: 0, writes: 0 };
     const printed: string[] = [];
@@ -601,6 +607,8 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       compile: noServer("compile"),
       fixtures: () => new Map(),
       doctor: noServer("doctor"),
+      // R669: never the real /coord; a test plants markers here.
+      outOfUseDir,
       ...over({ repo, cacheRoot }),
     };
     // stdout AND stderr are both captured, so a login printed by any path is seen.
@@ -636,7 +644,7 @@ describe("--write-config-only: configs from the secret file, no server call, no 
           join("fixtures", d, ".vscode", "launch.bc3.json"),
         ].filter((p) => existsSync(join(repo, p))),
       );
-    return { repo, cacheRoot, counts, printed, go, written };
+    return { repo, cacheRoot, counts, printed, go, written, outOfUseDir };
   }
 
   const ALL_FILES = FIXTURE_DIRS.flatMap((d) => [
@@ -958,6 +966,103 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     expect(h.counts.writes).toBe(8);
     expect(f.calls.doctor).toBe(4);
     expect(code).toBe(0);
+  });
+
+  describe("R669: a server with an out-of-use marker", () => {
+    const MARKER =
+      "# bc3 is OUT OF USE\n\n- **Reason:** SYNTH-REASON a stranded op\n\n## How to clear it\n1. SYNTH-CLEAR restart\n";
+    function marked(env: Record<string, string>, servers: string[] = ["bc3"]) {
+      const f = fleet(false);
+      const h = harness(GOOD, () => ({ ...f.over(), env }));
+      for (const s of servers) writeFileSync(join(h.outOfUseDir, `${s}.md`), MARKER);
+      return { f, h };
+    }
+    function expectRefused(
+      f: ReturnType<typeof fleet>,
+      h: ReturnType<typeof harness>,
+      code: number,
+    ) {
+      const out = h.printed.join("\n");
+      expect(code).toBe(1);
+      expect(out).toContain(`bc3 is OUT OF USE: ${join(h.outOfUseDir, "bc3.md")} exists`);
+      expect(out).toContain("SYNTH-REASON a stranded op");
+      expect(out).toContain("SYNTH-CLEAR restart");
+      expect(f.calls.take).toBe(0);
+      expect(h.counts).toMatchObject({ connect: 0, lease: 0, fetch: 0, writes: 0 });
+      expect(f.calls.publish).toEqual([]);
+    }
+
+    test("no marker: the run goes ahead (the control for every refusal below)", async () => {
+      const { f, h } = marked({}, []);
+      expect(await h.go(["--server", "bc3", "--lane", "bugs"])).toBe(0);
+      expect(f.calls.take).toBe(1);
+      expect(h.printed.join("\n")).not.toContain("OUT OF USE");
+    });
+
+    test("a marker: refused by name with its reason, before the lease or any server call", async () => {
+      const { f, h } = marked({});
+      expectRefused(f, h, await h.go(["--server", "bc3", "--lane", "bugs"]));
+      expect(h.printed.join("\n")).toContain("set LETHAL_OUT_OF_USE_CLEARING=bc3");
+    });
+
+    test("--dry-run and --write-config-only are refused too", async () => {
+      for (const argv of [
+        ["--server", "bc3", "--lane", "bugs", "--dry-run"],
+        ["--server", "bc3", "--write-config-only"],
+      ]) {
+        const { f, h } = marked({});
+        expectRefused(f, h, await h.go(argv));
+      }
+    });
+
+    test("--server all with only bc3 marked: the WHOLE run is refused, naming bc3", async () => {
+      const { f, h } = marked({});
+      const code = await h.go(["--server", "all", "--lane", "bugs"]);
+      expectRefused(f, h, code);
+      expect(h.printed.join("\n")).not.toContain("bc1 is OUT OF USE");
+    });
+
+    test("LETHAL_OUT_OF_USE_CLEARING=bc3 lets bc3 through, loudly", async () => {
+      const { f, h } = marked({ LETHAL_OUT_OF_USE_CLEARING: "bc3" });
+      expect(await h.go(["--server", "bc3", "--lane", "bugs"])).toBe(0);
+      expect(f.calls.take).toBe(1);
+      const out = h.printed.join("\n");
+      expect(out).toContain("!!! bc3 has an out-of-use marker");
+      expect(out).toContain("LETHAL_OUT_OF_USE_CLEARING=bc3 overrides it for the clearing step");
+      expect(out).toContain("SYNTH-REASON a stranded op");
+    });
+
+    test("the clearing override for bc3 does not clear a marked bc2 in an `all` run", async () => {
+      const f = fleet(false);
+      const h = harness(GOOD, () => ({ ...f.over(), env: { LETHAL_OUT_OF_USE_CLEARING: "bc3" } }));
+      writeFileSync(join(h.outOfUseDir, "bc3.md"), MARKER);
+      writeFileSync(join(h.outOfUseDir, "bc2.md"), MARKER.replace("bc3", "bc2"));
+      expect(await h.go(["--server", "all", "--lane", "bugs"])).toBe(1);
+      expect(h.printed.join("\n")).toContain("bc2 is OUT OF USE");
+      expect(f.calls.take).toBe(0);
+    });
+
+    test("a wrong, empty or bogus clearing value refuses", async () => {
+      for (const v of ["bc2", "", "1", "bc3 ", "BC3", "all"]) {
+        const { f, h } = marked({ LETHAL_OUT_OF_USE_CLEARING: v });
+        expectRefused(f, h, await h.go(["--server", "bc3", "--lane", "bugs"]));
+      }
+    });
+
+    test("the owner override is the itests' only: setup ignores it", async () => {
+      const t = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+      const { f, h } = marked({ LETHAL_OUT_OF_USE_OWNER: t });
+      writeFileSync(join(h.outOfUseDir, "bc3.md"), `${MARKER}owner: ${t}\n`);
+      expectRefused(f, h, await h.go(["--server", "bc3", "--lane", "bugs"]));
+    });
+  });
+
+  test("R669: out-of-use.ts's host and dev ports mirror HOST and SERVERS", () => {
+    expect(`http://${MARKER_HOST}`).toBe(HOST);
+    expect(MARKER_SERVERS).toEqual(
+      Object.fromEntries(Object.entries(SERVERS).map(([name, p]) => [p.dev, name])),
+    );
+    expect(REAL_DEPS.outOfUseDir).toMatch(/machine[\\/]out-of-use$/);
   });
 
   test("--predict and --dry-run exclude each other", () => {

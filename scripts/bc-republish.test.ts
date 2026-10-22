@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ServerOutOfUseError } from "../packages/runner/itest/out-of-use.ts";
 import type { AppManifest } from "./bc-linux-setup.ts";
 import {
   controlAction,
   packageStatus,
   parseArgs,
   publishOrder,
+  refuseIfOutOfUse,
   republishPlan,
   roleOf,
 } from "./bc-republish.ts";
@@ -192,5 +195,47 @@ describe("parseArgs", () => {
     );
     expect(parseArgs(["alpackages", "--server", "bc2", ...LT, "a", "b"]).apps).toEqual(["a", "b"]);
     expect(() => parseArgs(["setup"])).toThrow(/usage/);
+  });
+});
+
+describe("R669: a server with an out-of-use marker is refused before any lease", () => {
+  function markerDir(): string {
+    const dir = join(mkdtempSync(join(tmpdir(), "republish-ooo-")), "machine", "out-of-use");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "bc3.md"), "# bc3 is OUT OF USE\n- **Reason:** SYNTH-REASON\n");
+    return dir;
+  }
+
+  test("no marker for the server: no throw", () => {
+    expect(() => refuseIfOutOfUse("bc2", markerDir(), {}, () => {})).not.toThrow();
+  });
+
+  test("a marker: ServerOutOfUseError by name, with its reason", () => {
+    expect(() => refuseIfOutOfUse("bc3", markerDir(), {}, () => {})).toThrow(ServerOutOfUseError);
+    expect(() => refuseIfOutOfUse("bc3", markerDir(), {}, () => {})).toThrow("SYNTH-REASON");
+  });
+
+  test("only the clearing override for that exact server passes, loudly; the owner one does not", () => {
+    const logged: string[] = [];
+    const clearing = { LETHAL_OUT_OF_USE_CLEARING: "bc3" };
+    const log = (l: string) => logged.push(l);
+    expect(() => refuseIfOutOfUse("bc3", markerDir(), clearing, log)).not.toThrow();
+    expect(logged.join("\n")).toContain("overrides it for the clearing step");
+    for (const env of [
+      { LETHAL_OUT_OF_USE_CLEARING: "bc2" },
+      { LETHAL_OUT_OF_USE_OWNER: "0f1e2d3c4b5a69788796a5b4c3d2e1f0" },
+    ])
+      expect(() => refuseIfOutOfUse("bc3", markerDir(), env, () => {})).toThrow(
+        ServerOutOfUseError,
+      );
+  });
+
+  test("main calls the check before it dispatches to any mode (each mode leases)", () => {
+    const src = readFileSync(join(import.meta.dir, "bc-republish.ts"), "utf8");
+    const main = src.slice(src.indexOf("async function main()"));
+    const call = "refuseIfOutOfUse(args.server, outOfUseDir(process.env), process.env);";
+    const check = main.indexOf(call);
+    expect(check).toBeGreaterThan(0);
+    expect(check).toBeLessThan(main.indexOf("await alpackages(args)"));
   });
 });
