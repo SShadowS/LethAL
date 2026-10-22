@@ -50,6 +50,7 @@ import {
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
+  MAX_TIMER_MS,
   type ServerSpawnFn,
   type ServerTestLine,
 } from "./al-runner-server";
@@ -382,9 +383,10 @@ export function stopSecondsOf(ms: number): number {
   return Math.max(1, Math.ceil(ms / 1000));
 }
 
-/** §5: the outer wall bound of one call, `10 x N x tests + 90 s` (v3 stops a waiting test at 10 x N). */
+/** §5: the outer wall bound of one call, `10 x N x tests + 90 s` (v3 stops a waiting test at 10 x N).
+ *  R635: clamped to `MAX_TIMER_MS` (about 24.8 days); a timer above it overflows and fires at once. */
 export function v3CallDeadlineMs(stopSeconds: number, testsInCodeunit: number): number {
-  return 10 * stopSeconds * 1000 * Math.max(1, testsInCodeunit) + 90_000;
+  return Math.min(MAX_TIMER_MS, 10 * stopSeconds * 1000 * Math.max(1, testsInCodeunit) + 90_000);
 }
 
 /** A file of `<deps>`: what `run()` re-lists cheaply, and its sha256 from `deploy()`. */
@@ -431,6 +433,8 @@ export interface V3EntriesStats {
   liveRequests: number;
   coverageRequests: number;
   echoRequests: number;
+  /** Prefetch requests dropped on a request error (each warned by name). */
+  prefetchDropped: number;
   echoMismatches: number;
   /** §5 step 2 only (the echo BEFORE the coverage request); also counted in `echoMismatches`. */
   secondEchoMismatches: number;
@@ -552,6 +556,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     echoRequests: 0,
     echoMismatches: 0,
     secondEchoMismatches: 0,
+    prefetchDropped: 0,
     entriesSent: 0,
   };
 
@@ -1660,7 +1665,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         this.stats.prefetchRequests += 1;
         out = await this.request(chunk);
       } catch (err) {
-        if (err instanceof AlRunnerServerRequestError) continue;
+        if (err instanceof AlRunnerServerRequestError) {
+          // Never silent: its mutants run live, so a cause like a timer overflow shows.
+          this.stats.prefetchDropped += 1;
+          console.warn(
+            `[lethal] al-runner-v3-entries-prefetch-dropped: a prefetch request of ${chunk.length} mutant group(s) gave no usable answer (${err.kind}: ${err.message.slice(0, 300)}); its mutants run as live requests (R635 §6).`,
+          );
+          continue;
+        }
         throw err;
       }
       for (const [m, rows] of out.results) {

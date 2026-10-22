@@ -13,6 +13,7 @@ import { installResourceSelector } from "../src/al-runner-backend";
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
+  LineReader,
   type ServerProcessHandle,
   type ServerSpawnFn,
 } from "../src/al-runner-server";
@@ -22,6 +23,7 @@ import {
   type AlRunnerV3Config,
   AlRunnerV3RowMissingError,
   AlRunnerV3ServeStopUnsetError,
+  v3CallDeadlineMs,
 } from "../src/al-runner-v3-backend";
 import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import {
@@ -1685,6 +1687,65 @@ describe("the CLI threads the option through (wiring)", () => {
     }
     expect((await build({})).inRunStopIsBudget).toBe(true);
     expect((await build({ transport: "serve-entries" })).inRunStopIsBudget).toBe(false);
+  });
+});
+
+describe("timers above 2^31-1 ms (E3a's second daemon, /coord/handoff/R-635/live/run2)", () => {
+  const LONG = 2_494_890_000; // v3CallDeadlineMs(180, 1386) before the clamp
+
+  test("v3CallDeadlineMs is clamped to the largest timer setTimeout honours", () => {
+    expect(v3CallDeadlineMs(180, 1386)).toBeLessThanOrEqual(2 ** 31 - 1);
+    expect(v3CallDeadlineMs(1, 3)).toBe(120_000);
+  });
+
+  test("runEntries with a 2_494_890_000 ms deadline gets an answer that comes after 50 ms, not `deadline`", async () => {
+    const out = new Chan();
+    out.push(JSON.stringify({ ready: true }));
+    const server = new AlRunnerServer(
+      "/fake",
+      () => ({
+        stdout: out,
+        stderr: new Chan(),
+        kill: () => out.end(),
+        write: (line) => {
+          if ((JSON.parse(line) as { command?: string }).command === "shutdown") return out.end();
+          setTimeout(() => out.push(JSON.stringify({ type: "summary", total: 0 })), 50);
+        },
+      }),
+      [],
+      "serve",
+    );
+    await server.start(10_000, [], 1);
+    const ans = await server.runEntries({ command: "runTests" }, LONG);
+    expect(ans.summary.total).toBe(0);
+    await server.close();
+  });
+
+  test("a capped timer that fires before the real deadline waits again, and keeps the pending read", async () => {
+    const ch = new Chan();
+    setTimeout(() => ch.push("late line"), 50);
+    // Cap 5 ms, deadline 10 s: the cap fires several times before the line arrives.
+    expect(await new LineReader(ch).next(10_000, 5)).toEqual({ kind: "line", line: "late line" });
+  });
+
+  test("a prefetch request that is dropped warns by name, never silently", async () => {
+    const warned: string[] = [];
+    const spy = spyOn(console, "warn").mockImplementation((m: unknown) => {
+      warned.push(String(m));
+    });
+    try {
+      const r = await rig({
+        serve: {
+          answer: (q) => (q.ids[0] === "M0001|echo" ? { lines: [{ error: "boom" }] } : undefined),
+        },
+      });
+      await baseline(r.b, SUITE1);
+      await r.b.prefetchMutants(plans(["M0001"]));
+      expect(warned.some((w) => w.includes("al-runner-v3-entries-prefetch-dropped"))).toBe(true);
+      expect(r.b.entriesStats().prefetchDropped).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

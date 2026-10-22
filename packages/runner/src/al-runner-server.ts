@@ -174,12 +174,17 @@ type ReadLineOutcome =
   | { readonly kind: "eof" }
   | { readonly kind: "timeout" };
 
-/** Reading one NDJSON line at a time from a byte stream, with a deadline. */
-class LineReader {
+/** R635: the largest delay `setTimeout` honours (2^31-1 ms); a larger one overflows and fires at once. */
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/** Reading one NDJSON line at a time from a byte stream, with a deadline. Exported for tests. */
+export class LineReader {
   private buf = "";
   private readonly it: AsyncIterator<Uint8Array>;
   private readonly decoder = new TextDecoder();
   private done = false;
+  /** A read still in flight when a (capped) timer fired; reused by the next wait. */
+  private pending: Promise<IteratorResult<Uint8Array>> | undefined;
 
   constructor(stream: AsyncIterable<Uint8Array>) {
     this.it = stream[Symbol.asyncIterator]();
@@ -190,7 +195,8 @@ class LineReader {
    * "the daemon is still thinking" need different diagnoses and the caller cannot tell them apart
    * from an absent value. Conflating them was the first thing the tests here caught.
    */
-  async next(deadlineMs: number): Promise<ReadLineOutcome> {
+  /** `capMs` is the timer cap; only a test lowers it, to reach "capped timer fired early". */
+  async next(deadlineMs: number, capMs: number = MAX_TIMER_MS): Promise<ReadLineOutcome> {
     const deadline = Date.now() + deadlineMs;
     for (;;) {
       const nl = this.buf.indexOf("\n");
@@ -204,17 +210,26 @@ class LineReader {
       const remaining = deadline - Date.now();
       if (remaining <= 0) return { kind: "timeout" };
       let timer: ReturnType<typeof setTimeout> | undefined;
+      // The read stays pending across a capped timer, so no chunk is ever dropped.
+      const read = (this.pending ??= this.it.next());
       const chunk = await Promise.race([
-        this.it.next(),
+        read,
         new Promise<{ value: undefined; done: false }>((resolve) => {
-          timer = setTimeout(() => resolve({ value: undefined, done: false }), remaining);
+          // R635: a timer above 2^31-1 ms fires at once (it overflows); capped, and a capped
+          // timer that fires before the real deadline only waits again (the loop re-checks).
+          timer = setTimeout(
+            () => resolve({ value: undefined, done: false }),
+            Math.min(remaining, capMs),
+          );
         }),
       ]).finally(() => clearTimeout(timer));
       if (chunk.done === true) {
+        this.pending = undefined;
         this.done = true;
         continue;
       }
-      if (chunk.value === undefined) return { kind: "timeout" };
+      if (chunk.value === undefined) continue;
+      this.pending = undefined;
       this.buf += this.decoder.decode(chunk.value, { stream: true });
     }
   }
