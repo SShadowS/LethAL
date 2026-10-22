@@ -372,6 +372,23 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "al-runner-v3.tables.baseline.json",
     "itest:alrunner-v3",
   ),
+  // R654 S2: legs L1, Y-A and Y-B (pre-commitment
+  // docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md, 43115c78).
+  "al-runner-v3.layout.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=L1",
+    "al-runner-v3.layout.baseline.json",
+    "itest:alrunner-v3",
+  ),
+  "al-runner-v3.symbols-lethala.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=Y-A",
+    "al-runner-v3.symbols-lethala.baseline.json",
+    "itest:alrunner-v3",
+  ),
+  "al-runner-v3.symbols-lethalb.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=Y-B",
+    "al-runner-v3.symbols-lethalb.baseline.json",
+    "itest:alrunner-v3",
+  ),
 };
 
 /**
@@ -398,6 +415,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * 3.0.0-alpha.2 (91253f2d6), LethAL 0043dda1: record exit 3 at 290 / 57 / 59 over 406, its 52
  * differences from `tables.baseline.json` equal to `precommitment-tables-52.txt` by key and by
  * transition (pre-commitments dcdd1489, abe76fa6, c7c505e6).
+ * R654 S2's three v3 legs (`al-runner-v3.layout.baseline.json`,
+ * `al-runner-v3.symbols-lethala.baseline.json`, `al-runner-v3.symbols-lethalb.baseline.json`) were
+ * recorded 2026-10-22 on al-runner v3 3.0.0-alpha.2 (91253f2d6) in one record run (exit 3,
+ * `/coord/handoff/R-654/s2-record.log`) at 7 / 3 / 0, 5 / 4 / 0 and 5 / 4 / 0 as pre-committed
+ * (43115c78), each identical per mutant to its .NET al-runner twin.
  */
 export const PENDING_FIRST_RECORD: readonly string[] = [];
 

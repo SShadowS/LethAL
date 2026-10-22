@@ -17,7 +17,15 @@ import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { bareHashRows } from "./mutant-equality";
 import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
-export type V3LegOutcome = "pass" | "held" | "gate-fail" | "infra-fail" | "skipped";
+/** R654 S2: `"skipped (candidate build)"` is K's value on a candidate (`V3_K_CANDIDATE_SKIP` in
+ *  `alrunner-v3-legs.ts`); K is outside `V3_GATE_LEGS`, so `gateOutcome` never reads it. */
+export type V3LegOutcome =
+  | "pass"
+  | "held"
+  | "gate-fail"
+  | "infra-fail"
+  | "skipped"
+  | "skipped (candidate build)";
 export type V3GateOutcome = "pass" | "held" | "gate-fail" | "infra-fail";
 
 /**
@@ -137,8 +145,21 @@ export function cdoCheckoutRefusal(c: {
   return undefined;
 }
 
-/** The exact leg set a `pass` must hold (r3 F6 d). */
-export const V3_GATE_LEGS = ["C", "S1", "S3", "N1", "X", "D1", "D1c", "T"] as const;
+/** The exact leg set a `pass` must hold (r3 F6 d). R654 S2 adds L1, Y-A and Y-B (a candidate is
+ *  judged on layout and symbol sets too); K is outside it by ruling (`alrunner-v3-legs.ts`). */
+export const V3_GATE_LEGS = [
+  "C",
+  "S1",
+  "S3",
+  "N1",
+  "X",
+  "L1",
+  "Y-A",
+  "Y-B",
+  "D1",
+  "D1c",
+  "T",
+] as const;
 
 /** Rows by key; a key repeated (R193 twins) is not classified here, so it is refused upstream. */
 function byKey(rows: readonly NormalizedMutant[]): Map<string, NormalizedMutant[]> {
