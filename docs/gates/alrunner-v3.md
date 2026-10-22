@@ -127,6 +127,6 @@ The legs:
 - 2026-10-22: r8 (848371cb, R637) added the contract fact `dependent-fail-after-timeout-is-notrun`, so leg C has
   24 facts.
   - It costs about 3 s per leg C and per v3 session: one `--test-timeout-secs 3` call.
-  - On alpha.2 it read `matches` in a standalone run of the same AL (`/coord/handoff/R-637/r8-measure/`). It has not
+  - On alpha.2 it read `matches` in a standalone run of the same AL, ids moved (`/coord/handoff/R-637/r8-measure/`). It has not
     yet been run inside leg C.
   - R637 was closed by ruling: v3 already marks such a failure not trusted.

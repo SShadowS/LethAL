@@ -737,6 +737,8 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         "dependent-fail-after-timeout-is-notrun",
         "contract",
         cut.exitCode === 7 &&
+          // Review M3: exactly these two rows, so a duplicate row cannot hide behind `rowOf`.
+          cut.rows?.length === 2 &&
           hd?.notRun === true &&
           hd.message === "Test exceeded 3s timeout." &&
           cc?.notRun === true &&
@@ -747,8 +749,9 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
           (cc.message ?? "").endsWith("this failure is not trusted: dirty")
           ? "matches"
           : "diverged",
-        'N=3: exit 7, HangsDirty "Test exceeded 3s timeout.", ChecksClean notRun error "...refused while it ran (HangsDirty: ...this failure is not trusted: dirty"',
-        `exit ${cut.exitCode} ${JSON.stringify(cc ?? null)}`,
+        'N=3: exit 7, exactly 2 rows, HangsDirty notRun "Test exceeded 3s timeout.", ChecksClean notRun error "...refused while it ran (HangsDirty: ...this failure is not trusted: dirty"',
+        // Review M2: HangsDirty first, so its divergence shows even when ChecksClean's text is long.
+        `exit ${cut.exitCode}, ${cut.rows?.length ?? "no"} rows, HangsDirty=${JSON.stringify(hd === undefined ? null : { notRun: hd.notRun, message: hd.message })} ChecksClean=${JSON.stringify(cc === undefined ? null : { notRun: cc.notRun, status: cc.status, message: cc.message })}`,
       ),
     );
     // timeout-is-cpu (pre-commitment r6; r4's wall-clock spin was invalid: v3's AL clock is virtual):

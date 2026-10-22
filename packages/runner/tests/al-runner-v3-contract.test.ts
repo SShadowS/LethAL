@@ -49,6 +49,8 @@ const row = (
   ...(o.notRun === true ? { notRun: true } : {}),
 });
 const doc = (tests: unknown[]) => JSON.stringify({ tests });
+const NOT_TRUSTED_MESSAGE =
+  "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HangsDirty: did not run (the test used more than the time limit of 3 s of CPU time and was stopped (--test-timeout-secs)): it can change the global variable Probe Cut.Dirty that this test reads, so the state it would have left is not BC's; this failure is not trusted: dirty";
 const CUT_TIMEOUT = row(50652, "HangsDirty", "error", {
   notRun: true,
   message: "Test exceeded 3s timeout.",
@@ -56,8 +58,7 @@ const CUT_TIMEOUT = row(50652, "HangsDirty", "error", {
 });
 const CUT_NOT_TRUSTED = row(50652, "ChecksClean", "error", {
   notRun: true,
-  message:
-    "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HangsDirty: did not run (the test used more than the time limit of 3 s of CPU time and was stopped (--test-timeout-secs)): it can change the global variable Probe Cut.Dirty that this test reads, so the state it would have left is not BC's; this failure is not trusted: dirty",
+  message: NOT_TRUSTED_MESSAGE,
 });
 const cutRows = [CUT_TIMEOUT, CUT_NOT_TRUSTED];
 
@@ -448,6 +449,49 @@ describe("§8 the contract probe", () => {
     });
     expect(r.facts.find((f) => f.fact === DEP)?.verdict).toBe("diverged");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("gate-fail");
+  });
+
+  // Review I1: each condition of the fact has its own red-going test.
+  const depOf = async (exitCode: number, rows: unknown[]) =>
+    (await probe({ "cu50652-n3": () => ({ exitCode, stdout: doc(rows) }) })).facts.find(
+      (f) => f.fact === DEP,
+    )?.verdict;
+
+  test("R637 r8 (d): the measured rows at exit 1 or exit 0 diverge", async () => {
+    expect(await depOf(1, cutRows)).toBe("diverged");
+    expect(await depOf(0, cutRows)).toBe("diverged");
+  });
+
+  test("R637 r8 (e1): a HangsDirty row without notRun diverges", async () => {
+    const { notRun: _, ...plain } = CUT_TIMEOUT;
+    expect(await depOf(7, [plain, CUT_NOT_TRUSTED])).toBe("diverged");
+  });
+
+  test("R637 r8 (e2): a HangsDirty row with another timeout text diverges", async () => {
+    const two = { ...CUT_TIMEOUT, message: "Test exceeded 2s timeout." };
+    expect(await depOf(7, [two, CUT_NOT_TRUSTED])).toBe("diverged");
+  });
+
+  test("R637 r8 (f1): a ChecksClean row with the right suffix but another prefix diverges", async () => {
+    const m = NOT_TRUSTED_MESSAGE.replace("refused while it ran (HangsDirty: ", "x (");
+    expect(await depOf(7, [CUT_TIMEOUT, { ...CUT_NOT_TRUSTED, message: m }])).toBe("diverged");
+  });
+
+  test("R637 r8 (f2): a ChecksClean row with the right prefix but another suffix diverges", async () => {
+    const m = `${NOT_TRUSTED_MESSAGE.slice(0, -"dirty".length)}clean`;
+    expect(await depOf(7, [CUT_TIMEOUT, { ...CUT_NOT_TRUSTED, message: m }])).toBe("diverged");
+  });
+
+  test("R637 r8 (g, review M3): a duplicate ChecksClean row diverges", async () => {
+    const plainFail = row(50652, "ChecksClean", "fail", { message: "dirty" });
+    expect(await depOf(7, [CUT_TIMEOUT, CUT_NOT_TRUSTED, plainFail])).toBe("diverged");
+  });
+
+  test("R637 r8 (review M2): the measured text shows HangsDirty first, then ChecksClean", async () => {
+    const m = (await probe()).facts.find((f) => f.fact === DEP)?.measured ?? "";
+    expect(m.indexOf("HangsDirty=")).toBeGreaterThan(-1);
+    expect(m.indexOf("HangsDirty=")).toBeLessThan(m.indexOf("ChecksClean="));
+    expect(m).toContain('"Test exceeded 3s timeout."');
   });
 
   test("an unmeasurable defect fact does not refuse but is warned BY NAME (r6)", async () => {

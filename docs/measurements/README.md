@@ -1005,7 +1005,7 @@ here as measured and neither was.**
 Measured 2026-10-21 on `alrunner 3.0.0-alpha.2 (91253f2d6)` (binary sha256 `b23f8315…5d45`), Linux,
 in this container. The raw measurements are under `/coord/handoff/R-586/` (`measure.md`,
 `plan-measure/`, `contract-alpha2/`). LethAL re-measures the contract every session
-(`packages/runner/src/al-runner-v3-contract.ts`, 23 facts) and gates the pin with
+(`packages/runner/src/al-runner-v3-contract.ts`, 24 facts since r8) and gates the pin with
 `itest:alrunner-v3`. The plan is `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`;
 the figures are pre-committed in `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment.md`.
 
