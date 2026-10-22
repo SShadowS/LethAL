@@ -295,7 +295,7 @@ interface Req {
   /** Entry ids, or `plain:<test>` for a plain request. */
   readonly ids: string[];
 }
-type Echo = (mutant: string, daemon: number, n: number) => FakeRow | "none";
+type Echo = (mutant: string, daemon: number, n: number) => FakeRow | FakeRow[] | "none";
 interface ServeScript {
   rows?: RowsFn;
   echo?: Echo;
@@ -357,7 +357,7 @@ function fakeServe(script: ServeScript = {}) {
           const rowsOf = (m: string, cu: number): FakeRow[] => {
             if (cu !== ECHO) return rows(m, cu, daemon, n);
             const e = echo(m, daemon, n);
-            return e === "none" ? [] : [e];
+            return e === "none" ? [] : Array.isArray(e) ? e : [e];
           };
           const lines: Record<string, unknown>[] = [];
           const sums = { passed: 0, failed: 0, errors: 0, notRun: 0, total: 0 };
@@ -850,6 +850,13 @@ describe("6: the echo is matched exactly", () => {
       (m) => ({ method: "Echo", status: "fail", message: `LETHAL-ECHO:${m}:false` }),
     ],
     ["missing", () => "none"],
+    [
+      "two rows, the first one exact",
+      (m) => [
+        { method: "Echo", status: "fail", message: `LETHAL-ECHO:${m}:true` },
+        { method: "Echo2", status: "fail", message: "x" },
+      ],
+    ],
     ["pass", (m) => ({ method: "Echo", status: "pass", message: `LETHAL-ECHO:${m}:true` })],
     [
       // A refusal R612 keeps, so the echo stands and is read (an unkept one is test 10's case).
