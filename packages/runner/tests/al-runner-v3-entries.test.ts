@@ -1457,6 +1457,46 @@ describe("19 (N2): a restarted daemon whose warm-up disagrees mid-batch stops th
     expect(outcome(await r.b.run(ref("B"), OPTS))).toEqual(["error", "pre-dispatch-rejected"]);
     expect(r.serve.daemons).toHaveLength(2);
   });
+
+  test("after the latch, a prefetched pass that needs the §5 window starts no daemon either", async () => {
+    // M0002's last entry times out, so daemon 0 closes; the confirm restarts and latches.
+    const rows = laterDisagrees((m, cu, d, n) =>
+      m === "M0002" && d === 0
+        ? allPass(m, cu, d, n).map((x) =>
+            x.method === "B"
+              ? { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S }
+              : x,
+          )
+        : allPass(m, cu, d, n),
+    );
+    const r = await readyRig({
+      targetAl: SLEEPER_AL,
+      serve: { rows, coverage: sleepCoverage() },
+      oneShotRows: allPass,
+      mutants: ["M0001", "M0002"],
+    });
+    await r.b.activate(null);
+    expect(outcome(await r.b.run(ref("A"), OPTS))).toEqual(["error", "pre-dispatch-rejected"]);
+    expect(r.serve.daemons).toHaveLength(2);
+    await r.b.activate("M0001");
+    expect(outcome(await r.b.run(ref("A"), OPTS))).toEqual(["error", "pre-dispatch-rejected"]);
+    expect(r.serve.daemons).toHaveLength(2);
+  });
+});
+
+describe("assertBound in serve-entries: the selector and the echo are the emitted bytes", () => {
+  for (const [name, file] of [
+    ["the selector", "MutationSelector.Codeunit.al"],
+    ["the echo", SELECTOR_ECHO_FILENAME],
+  ] as const) {
+    test(`${name} edited after the proof refuses the run`, async () => {
+      const r = await readyRig({ mutants: [] });
+      const p = join(r.l.scratch, "active", file);
+      await writeFile(p, `${await readFile(p, "utf8")}// edited\n`);
+      await r.b.activate(null);
+      await expect(r.b.run(ref("A"), OPTS)).rejects.toThrow(/refusing to start v3/);
+    });
+  }
 });
 
 describe("the CLI threads the option through (wiring)", () => {
