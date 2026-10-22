@@ -507,7 +507,7 @@ async function updateLocked(
 
 /**
  * The daily EDGE path (owner request, via the orchestrator): upstream's `edge` release by download.
- * - Skipped for the day, with the reason logged, when 2 or more heavy jobs run container-wide or
+ * - Skipped for the day, with the reason logged, when 3 or more other heavy jobs run container-wide or
  *   `free -g` shows under 10 GB available.
  * - A NO-OP when edge's commit equals the one last seen (`<root>/edge.last-seen`).
  * - Otherwise the candidate goes through `gateOne`: the checksum is checked before anything is
@@ -538,12 +538,16 @@ export function updateExitCode(mustRun: boolean, out: readonly string[]): number
   return mustRun && out[0] === "skipped" ? 2 : 0;
 }
 
-/** True, with the reason logged, when 2 or more heavy jobs run or under 10 GB is available. */
+/**
+ * True, with the reason logged, when 3 or more OTHER heavy jobs run or under 10 GB is available:
+ * at most 3 heavy jobs container-wide (2026-10-22, 32 GB), counting the gate itself. The BaseApp
+ * cap of two does not apply to the gate.
+ */
 async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean> {
   const heavy = await deps.heavyJobs();
-  if (heavy >= 2) {
+  if (heavy >= 3) {
     await deps.log(
-      `${deps.now()} ${what}: skipped for the day: ${heavy} heavy jobs are running (limit: 1 other)`,
+      `${deps.now()} ${what}: skipped for the day: ${heavy} heavy jobs are running (limit: 2 others)`,
     );
     return true;
   }

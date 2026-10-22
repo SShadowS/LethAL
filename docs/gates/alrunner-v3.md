@@ -91,7 +91,8 @@ The legs:
   (`/work/lethal-wt/cdo-r396`). Without it the gate runs no D leg, and a receipt that lacks legs is `infra-fail`,
   with `why` naming the missing legs ([[R633]]).
 - The D legs make every gate a corpus job, so the alpha path, `--regate` and `--edge` are all skipped for the day,
-  with the reason logged, when 2 or more heavy jobs run container-wide or `free -g` shows under 10 GB available. A
+  with the reason logged, when 3 or more other heavy jobs run container-wide (at most 3 heavy jobs, the gate
+  included, since 2026-10-22) or `free -g` shows under 10 GB available. A
   skipped `--regate` or `--edge-rejudge` exits 2, so a `&&` chain after it stops.
 - The evidence is kept. The gate's stdout and stderr go to `gate.log` beside the receipt, on every exit. Both are
   copied beside the outcome they gave: `failed/<tag>@<commit>/`, `held/<tag>/`, `infra/<tag>.receipt.json` and

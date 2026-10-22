@@ -327,9 +327,9 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(b.seen.logs.join("\n")).toMatch(/already gate-failed at abcdef1.*--regate/);
   });
 
-  test("R632 D: the alpha path and --regate are skipped with 2 heavy jobs or under 10 GB; 1 and 10 proceed", async () => {
+  test("R632 D: the alpha path and --regate are skipped with 3 other heavy jobs or under 10 GB; 2 and 10 proceed", async () => {
     await setup();
-    for (const o of [{ heavy: 2 }, { free: 9 }]) {
+    for (const o of [{ heavy: 3 }, { free: 9 }]) {
       const a = fake({ outcome: "pass", ...o });
       expect(await updateOnce(a.deps)).toEqual(["skipped"]);
       const r = fake({ outcome: "pass", receiptSha: sha("alpha2"), ...o });
@@ -337,7 +337,7 @@ linuxOnly("T19: the v3 update gate", () => {
       expect(a.seen.gates.length + r.seen.gates.length).toBe(0);
       expect(a.seen.logs.join("\n")).toMatch(/skipped for the day/);
     }
-    expect(await updateOnce(fake({ outcome: "pass", heavy: 1, free: 10 }).deps)).toEqual(["pass"]);
+    expect(await updateOnce(fake({ outcome: "pass", heavy: 2, free: 10 }).deps)).toEqual(["pass"]);
   });
 
   test("R633 I1: gate.log is kept beside the outcome, even with no receipt, and the gate's error is logged", async () => {
@@ -585,16 +585,16 @@ linuxOnly("the daily edge path (edgeOnce)", () => {
     expect(await current()).toBe(join(root, "3.0.0-alpha.2-91253f2d6"));
   });
 
-  test("skipped with 2 heavy jobs or under 10 GB; 1 heavy job and 10 GB proceed", async () => {
+  test("skipped with 3 other heavy jobs or under 10 GB; 2 other heavy jobs and 10 GB proceed", async () => {
     await setup();
-    const a = edge({ outcome: "pass" }, { heavy: 2 });
+    const a = edge({ outcome: "pass" }, { heavy: 3 });
     expect(await edgeOnce(a.deps)).toBe("skipped");
-    expect(a.seen.logs.join("\n")).toMatch(/2 heavy jobs/);
+    expect(a.seen.logs.join("\n")).toMatch(/3 heavy jobs are running \(limit: 2 others\)/);
     const b = edge({ outcome: "pass" }, { free: 9 });
     expect(await edgeOnce(b.deps)).toBe("skipped");
     expect(b.seen.logs.join("\n")).toMatch(/9 GB/);
     expect(a.seen.gates.length + b.seen.gates.length).toBe(0);
-    const c = edge({ outcome: "pass" }, { heavy: 1, free: 10 });
+    const c = edge({ outcome: "pass" }, { heavy: 2, free: 10 });
     expect(await edgeOnce(c.deps)).toBe("pass");
   });
 });
@@ -720,9 +720,9 @@ linuxOnly("R639 --edge-rejudge (R1-R9)", () => {
     return out;
   }
 
-  test("R1: skipped with 2 heavy jobs, under 10 GB, or a live lock: exit 2 and no gate", async () => {
+  test("R1: skipped with 3 other heavy jobs, under 10 GB, or a live lock: exit 2 and no gate", async () => {
     for (const o of [
-      { heavy: 2 },
+      { heavy: 3 },
       { free: 9 },
       { procs: { 4242: "bun al-runner-v3-update.ts" } },
     ]) {
