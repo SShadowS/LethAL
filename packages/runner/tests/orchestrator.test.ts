@@ -6974,6 +6974,12 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
   // candidate subset, so the very first check trivially "compiles" and bisection reports
   // "no-repro" — an admitted, but previously unexplained, dead end. Bisecting
   // `manifest.mutants` (every mutant the artifact actually contains) finds it like any other.
+  //
+  // R644 (build review minor 3): since R644, `execute` holds the history candidates too, so on
+  // the SEQUENTIAL path `execute` and `manifest.mutants` are the same set and this test can no
+  // longer tell a bisect over `execute` from one over the manifest. It now guards R644's I1 rule
+  // (the candidate gets the batch's error row). Task 7 itself stays guarded by the worker-shard
+  // test below, where a shard is a strict subset of the manifest.
   test("bisects the FULL embedded manifest, so a malformed known-survivor is findable", async () => {
     const dirs = await makeProject();
     const scratchDir = join(dirs.instrumentedDir, "seed-scratch");
