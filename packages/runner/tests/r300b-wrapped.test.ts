@@ -129,19 +129,20 @@ describe("R-300b: the admission rule (one predicate)", () => {
   });
 });
 
-describe("R-300b: the backend kind is a required argument", () => {
-  // The `@ts-expect-error` is the assertion: if the kind became optional, the call below would
+describe("R-300b: the wrapped-file rule is a required argument", () => {
+  // The `@ts-expect-error` is the assertion: if the rule became optional, the call below would
   // stop being a type error, the directive would be unused, and `bun run typecheck` fails.
-  test("coverageRefusedObjects without a kind does not compile", async () => {
+  // R654 S1: the argument is the `WrappedRule` now, no longer the backend kind.
+  test("coverageRefusedObjects without a rule does not compile", async () => {
     const files = await roots({ [W1_FILE]: W1 });
-    // @ts-expect-error - backendKind is required (R-300b); a caller that omits it must not compile.
+    // @ts-expect-error - the rule is required (R-300b); a caller that omits it must not compile.
     expect(coverageRefusedObjects(files).size).toBe(1);
   });
 });
 
 describe("R-300b (a): the BC paths keep refusing W1 by name", () => {
   test("bcdev: coverageRefusedObjects names W1, the fenced line map places nothing, selection reads no-coverage with the note", async () => {
-    const refused = coverageRefusedObjects(await roots({ [W1_FILE]: W1 }), "bcdev");
+    const refused = coverageRefusedObjects(await roots({ [W1_FILE]: W1 }), "bc-shape");
     expect([...refused.entries()]).toEqual([
       [
         "codeunit:91900",
@@ -224,7 +225,7 @@ describe("R-300b (b): al-runner scores W1 by its original file lines", () => {
       wrappedObjectFiles: [],
     });
 
-    const refused = coverageRefusedObjects(await roots({ [W1_FILE]: W1 }), "al-runner");
+    const refused = coverageRefusedObjects(await roots({ [W1_FILE]: W1 }), "al-runner-index");
     expect(refused.size).toBe(0);
     const ref = { codeunitId: 91930, codeunitName: "Reach", method: "ReachW1" };
     const cov = buildCoverageIndex([
@@ -259,7 +260,7 @@ describe("R-300b (b): al-runner scores W1 by its original file lines", () => {
       ]);
       const refused = coverageRefusedObjects(
         await roots({ "src/Q.Codeunit.al": TWO_ARM }),
-        "al-runner",
+        "al-runner-index",
       );
       expect([...refused.entries()]).toEqual([["codeunit:91904", sentence]]);
     } finally {

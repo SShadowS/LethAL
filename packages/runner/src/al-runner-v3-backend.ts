@@ -33,26 +33,22 @@ import {
   emitStaticSelector,
 } from "@lethal/schemata";
 import {
-  V3_SERVE_SAFE_REFUSALS,
-  assertResourceSelectorRuntime,
-  defaultServerSpawn,
-  installResourceSelector,
-  serveDaemonReusable,
-  verdictFromRunnerTest,
-} from "./al-runner-backend";
-import {
   AlRunnerCoverageFrameError,
   type AlRunnerCoverageIndex,
   alRunnerCoverageFromServer,
   buildAlRunnerCoverageIndex,
   normalizeFileKey,
 } from "./al-runner-coverage";
+import { verdictFromRunnerTest } from "./al-runner-rows";
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
   MAX_TIMER_MS,
   type ServerSpawnFn,
   type ServerTestLine,
+  V3_SERVE_SAFE_REFUSALS,
+  defaultServerSpawn,
+  serveDaemonReusable,
 } from "./al-runner-server";
 import { assertBcVersionMatchesPackages } from "./al-runner-v3-config";
 import {
@@ -99,6 +95,7 @@ import type {
 import { hashAlTree, hashTestDir } from "./baseline-snapshot";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, defaultSpawn } from "./publisher";
+import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
 import { TestAppError, symbolPackageId } from "./test-app-publish";
 import { ProjectSymlinkRefusedError } from "./walk";
 

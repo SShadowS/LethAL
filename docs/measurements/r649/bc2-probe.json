@@ -1,0 +1,163 @@
+{
+  "server": "bc2",
+  "date": "2026-10-22",
+  "harness": "scripts/r649-bc-probe/drive.ts@d7b0f413c6d9d6f82bf8509c79f3d621042e86bc",
+  "probeSourceSha": "9cff7b43f4193c79b18f6354093037c253ddfbf8",
+  "appSha256": {
+    "target.app": "6a4b4edafb7dbb8e02d6133799bf6e4cefc855b37e35907a358fa4a26fd0b576",
+    "tests.app": "94bf968ac1cc3f8d49345bc7e7bc3afd571281189c94c45607b81524389cf42f"
+  },
+  "runnerPath": "LethAL Control RunMutant through RunMutantTransport.run (mutantId \"\", timeoutMs 120000, no stop hook), one method per call; an unanswered call is followed by GetOperationStatus/GetOpAnswer polls every 10000 ms until 720000 ms after dispatch",
+  "lease": {
+    "holder": {
+      "lane": "bugs",
+      "attempt": "063",
+      "at": 1792683686539
+    },
+    "releasedAt": null
+  },
+  "apps": {
+    "target": {
+      "id": "7937c2a9-5c42-4e98-bd9b-9de8151b55fe",
+      "name": "LethAL R649 BC Sleep Probe",
+      "file": "target.app"
+    },
+    "tests": {
+      "id": "44c7bc28-455d-4ac9-bb27-3c20754c9c23",
+      "name": "LethAL R649 BC Sleep Probe Tests",
+      "file": "tests.app"
+    },
+    "artifactId": "588155e99f794541ac96f1d42821b803"
+  },
+  "cases": [
+    92930,
+    92931,
+    92932,
+    92933
+  ],
+  "bcBuild": {
+    "Base Application": "28.4.53241.56646 isInstalled=true",
+    "System Application": "28.4.53241.56646 isInstalled=true"
+  },
+  "lethalControl": "1.0.0.23",
+  "absentBefore": true,
+  "stop": "codeunit 92932's op had no answer 720000 ms after dispatch; later cases not run",
+  "results": [
+    {
+      "codeunit": 92930,
+      "method": "Sleep100",
+      "attemptId": "r649-92930-22826",
+      "opSeq": 22826,
+      "dispatchedAt": "2026-10-22T15:41:29.415Z",
+      "lethal": {
+        "wallMs": 215,
+        "verdict": {
+          "outcome": "pass",
+          "durationMs": 213,
+          "attestation": {
+            "observedAny": false,
+            "identityMismatch": false
+          },
+          "reachedActive": false,
+          "sessionId": 51954,
+          "testRunsBefore": 0
+        },
+        "fullFailureText": "",
+        "firstLine": "",
+        "callstack": null
+      }
+    },
+    {
+      "codeunit": 92931,
+      "method": "Sleep5000",
+      "attemptId": "r649-92931-22827",
+      "opSeq": 22827,
+      "dispatchedAt": "2026-10-22T15:41:29.630Z",
+      "lethal": {
+        "wallMs": 5095,
+        "verdict": {
+          "outcome": "pass",
+          "durationMs": 5095,
+          "attestation": {
+            "observedAny": false,
+            "identityMismatch": false
+          },
+          "reachedActive": false,
+          "sessionId": 51955,
+          "testRunsBefore": 0
+        },
+        "fullFailureText": "",
+        "firstLine": "",
+        "callstack": null
+      }
+    },
+    {
+      "codeunit": 92932,
+      "method": "LongSleepThenAssert",
+      "attemptId": "r649-92932-22828",
+      "opSeq": 22828,
+      "dispatchedAt": "2026-10-22T15:41:34.725Z",
+      "lethal": {
+        "wallMs": 120060,
+        "verdict": {
+          "outcome": "deadline-exceeded",
+          "durationMs": 119998,
+          "failureMessage": "RunMutant timed out before headers: AbortError: The operation was aborted.; answer readback: the server holds no committed answer for r649-92932-22828/22828 (it holds r649-92931-22827/22827)",
+          "operation": "in-flight-unknown",
+          "fencedOp": {
+            "attemptId": "r649-92932-22828",
+            "opSeq": 22828
+          }
+        },
+        "fullFailureText": "RunMutant timed out before headers: AbortError: The operation was aborted.; answer readback: the server holds no committed answer for r649-92932-22828/22828 (it holds r649-92931-22827/22827)",
+        "firstLine": "RunMutant timed out before headers: AbortError: The operation was aborted.; answer readback: the server holds no committed answer for r649-92932-22828/22828 (it holds r649-92931-22827/22827)",
+        "callstack": null
+      },
+      "followUp": {
+        "snapshots": [
+          {
+            "atMs": 130063,
+            "opKind": "run",
+            "opAttemptId": "r649-92932-22828",
+            "opSeq": 22828,
+            "lastCompletedOpSeq": 22827,
+            "completed": false,
+            "opProgress": {
+              "attemptId": "r649-92932-22828",
+              "opSeq": 22828,
+              "methodIndex": 1,
+              "codeunitId": 92932,
+              "method": "LongSleepThenAssert",
+              "token": "CB9E3384-2129-44AC-9AAE-C1E3BBA188FD",
+              "startedAt": "2026-10-22T15:41:33.7670000Z",
+              "lastCompletedIndex": 0,
+              "state": "running"
+            },
+            "serverNow": "2026-10-22T15:43:43.8290000Z"
+          }
+        ],
+        "bc": "no answer by 720000 ms after dispatch"
+      }
+    }
+  ],
+  "heartbeatProblems": [],
+  "error": "STOP: codeunit 92932's op had no answer 720000 ms after dispatch; later cases not run",
+  "removal": {
+    "LethAL R649 BC Sleep Probe Tests": {
+      "ok": true,
+      "steps": [
+        "uninstall HTTP 204",
+        "unpublish HTTP 204",
+        "read-back LethAL R649 BC Sleep Probe Tests (44c7bc28-455d-4ac9-bb27-3c20754c9c23): absent (0 rows)"
+      ]
+    },
+    "LethAL R649 BC Sleep Probe": {
+      "ok": true,
+      "steps": [
+        "uninstall HTTP 204",
+        "unpublish HTTP 204",
+        "read-back LethAL R649 BC Sleep Probe (7937c2a9-5c42-4e98-bd9b-9de8151b55fe): absent (0 rows)"
+      ]
+    }
+  }
+}

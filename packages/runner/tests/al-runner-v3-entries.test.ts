@@ -10,7 +10,6 @@ import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { emitResourceSelector, emitStaticSelector } from "@lethal/schemata";
 import { v3ItestTransport, v3SplitLine } from "../itest/al-runner-v3-gate";
-import { installResourceSelector } from "../src/al-runner-backend";
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
@@ -43,6 +42,7 @@ import type { ArtifactIo } from "../src/artifact";
 import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
 import { buildBackend } from "../src/cli";
 import type { SpawnFn } from "../src/publisher";
+import { installResourceSelector } from "../src/resource-selector";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const TARGET_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
@@ -1113,6 +1113,143 @@ describe("10: R612's keep rule per entry, in entry order", () => {
     const v = await r.b.run(ref("A"), OPTS);
     expect(outcome(v)).toEqual(["error", "runner-test-error"]);
     expect(v.failureMessage).toContain(TIMEOUT_1S);
+  });
+});
+
+/**
+ * R654 S1 (plan docs/superpowers/plans/2026-10-22-r654-retire-dotnet-alrunner.md): R612's T2-T6,
+ * which ran the v3 serve rule through the .NET backend (`AlRunnerBackend` with
+ * `serveDaemonRule: "v3"`), rewritten on purpose against v3's own serve-entries transport. M0001's
+ * entry carries the extra row on test A; M0002's is clean. A kept reason leaves ONE daemon, and
+ * M0002's verdict comes from it; anything else closes the daemon, so a second one starts.
+ */
+describe("R654 S1: R612 T2-T6 on v3's serve-entries", () => {
+  const HTTP =
+    "NotRun: out-of-scope: an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a connection (ADR-027)";
+  const CASCADE =
+    "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HttpGet: did not run (an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a ): it can change session state the analysis does not follow, so the state it would have left is not BC's; this failure is not trusted: after a refusal";
+  const ONRUN =
+    "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): Arithmetic operation resulted in an overflow.";
+  const NO_CALLEE =
+    "NotRun: out-of-scope: R612 Broken.DoesNotCompile: call `NoSuchProcedure(1)` has no callee the checker resolved";
+  const PANIC_TEST =
+    "NotRun: out-of-scope: runtime panic (bug): requested by ALRUNNER_DEBUG_PANIC_IN";
+  const PANIC_CASCADE =
+    "NotRun: out-of-scope: an earlier test of this codeunit panicked (a runtime bug), so the rest of it was not run";
+  const DUP_KEY =
+    "NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table Data Key Probe is deferred: whether the test runner raises it at the end of the test is not pinned";
+
+  type Extra = { status: string; message?: string; notRun?: boolean };
+  const refusal = (message: string): Extra => ({ status: "error", notRun: true, message });
+  const onM1A =
+    (extra: Extra): RowsFn =>
+    (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "M0001" && x.method === "A" ? ({ ...x, ...extra } as FakeRow) : x,
+      );
+  const ready = (serve: ServeScript) =>
+    readyRig({ serve, oneShotRows: allPass, mutants: ["M0001", "M0002"] });
+  /** M0001's and M0002's verdicts on A, from the prefetched rows. */
+  async function verdicts(r: Rig): Promise<[TestVerdict, TestVerdict]> {
+    await r.b.activate("M0001");
+    const one = await r.b.run(ref("A"), OPTS);
+    await r.b.activate("M0002");
+    const two = await r.b.run(ref("A"), OPTS);
+    return [one, two];
+  }
+
+  for (const [entry, m] of [
+    ["http", HTTP],
+    ["commit", COMMIT],
+    ["cascade", CASCADE],
+    ["onrun-failed", ONRUN],
+    ["no-callee", NO_CALLEE],
+  ] as const) {
+    test(`T2: a ${entry} refusal keeps the daemon; M0002's verdict is that daemon's, and M0001 is no kill`, async () => {
+      const r = await ready({ rows: onM1A(refusal(m)) });
+      expect(r.serve.daemons).toHaveLength(1);
+      const [one, two] = await verdicts(r);
+      expect(one.outcome).toBe("error");
+      expect(two.outcome).toBe("pass");
+      expect(r.serve.daemons).toHaveLength(1);
+    });
+  }
+
+  for (const m of ["Test exceeded 3s timeout.", PANIC_TEST, PANIC_CASCADE]) {
+    test(`T3: ${m.slice(0, 40)} closes the daemon: a second one starts`, async () => {
+      const r = await ready({ rows: onM1A(refusal(m)) });
+      expect(r.serve.daemons).toHaveLength(2);
+      const [one, two] = await verdicts(r);
+      expect(one.outcome).not.toBe("fail");
+      expect(two.outcome).toBe("pass");
+    });
+  }
+
+  for (const extra of [
+    refusal(DUP_KEY),
+    refusal(`${HTTP} (extra)`),
+    { status: "error", message: COMMIT },
+    { status: "fail", notRun: true, message: COMMIT },
+  ] as Extra[]) {
+    test(`T4: an unknown kind closes the daemon ${JSON.stringify(extra).slice(0, 60)}`, async () => {
+      const r = await ready({ rows: onM1A(extra) });
+      expect(r.serve.daemons).toHaveLength(2);
+      const [one] = await verdicts(r);
+      expect(one.outcome).not.toBe("fail");
+    });
+  }
+
+  /**
+   * On serve-entries the decoder (`serveRow`, `decodeEntriesAnswer`) refuses these answers before
+   * the keep rule reads them: the daemon is closed (an `AlRunnerServerRequestError` "protocol") and
+   * nothing of the answer is cached. Daemon 0 gets no request after the bad one, and M0001's
+   * verdict never comes from it.
+   */
+  function closedOnBadAnswer(r: Rig, one: TestVerdict): void {
+    const d0 = r.serve.requests.filter((q) => q.daemon === 0);
+    expect(d0.at(-1)?.ids).toContain(`M0001|${CU}`);
+    expect(r.serve.daemons.length).toBeGreaterThanOrEqual(2);
+    expect(one.outcome).not.toBe("fail");
+  }
+
+  test("T4 (skipped): an unknown status is refused by the decoder, which closes the daemon", async () => {
+    const r = await ready({ rows: onM1A({ status: "skipped" }) });
+    const [one] = await verdicts(r);
+    closedOnBadAnswer(r, one);
+  });
+
+  /** Rewrites M0001's A line in the first daemon's answers. */
+  const onM1ALine =
+    (
+      edit: (line: Record<string, unknown>) => Record<string, unknown>[],
+    ): NonNullable<ServeScript["answer"]> =>
+    (req, _n, lines) =>
+      req.ids.includes(`M0001|${CU}`) && req.daemon === 0
+        ? {
+            lines: lines.flatMap((l) =>
+              l.type === "test" && l.entry === `M0001|${CU}` && l.name === `Codeunit${CU}.A`
+                ? edit(l)
+                : [l],
+            ),
+          }
+        : undefined;
+
+  test("T5: a non-boolean notRun is refused by the decoder, which closes the daemon; M0001 is no kill", async () => {
+    const r = await ready({
+      answer: onM1ALine((l) => [{ ...l, status: "error", notRun: null, message: COMMIT }]),
+    });
+    const [one, two] = await verdicts(r);
+    closedOnBadAnswer(r, one);
+    expect(two.outcome).toBe("pass");
+  });
+
+  test("T6: a test named twice in one entry is refused by the decoder, which closes the daemon; M0001 is no kill", async () => {
+    const r = await ready({
+      answer: onM1ALine((l) => [l, { ...l, status: "fail", message: "boom" }]),
+    });
+    const [one, two] = await verdicts(r);
+    closedOnBadAnswer(r, one);
+    expect(two.outcome).toBe("pass");
   });
 });
 

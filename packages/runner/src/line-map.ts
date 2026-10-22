@@ -1122,6 +1122,31 @@ export function undecidedArmsReason(
 }
 
 /**
+ * R654 S1 (plan r1 I1): which `#if`-wrapped-file rule `refusedObjectsOfFile` applies.
+ * - `"bc-shape"`: R497's BC shape rule, given the build's arms (without them, `"refuse-wrapped"`).
+ * - `"al-runner-index"`: R-300b's measured admission (`alRunnerAdmitsWrappedFile`); every other
+ *   wrapped file's objects get `refusedUnmeasuredShapeReason`. The al-runner coverage index's rule.
+ * - `"refuse-wrapped"`: R298's rule, every object of a wrapped file refused.
+ */
+export type WrappedRule = "bc-shape" | "al-runner-index" | "refuse-wrapped";
+
+/**
+ * R654 S1: the rule a SESSION of each backend applies, exactly the pre-R654 mapping (a v3 session
+ * got neither the bcdev arm nor the al-runner arm, so it refuses every wrapped file). A `switch`
+ * so R586's T15 scanner sees the `"al-runner"` arm (plan r2 D-I2).
+ */
+export function wrappedRuleFor(kind: BuildBackend["kind"]): WrappedRule {
+  switch (kind) {
+    case "bcdev":
+      return "bc-shape";
+    case "al-runner":
+      return "al-runner-index";
+    case "al-runner-v3":
+      return "refuse-wrapped";
+  }
+}
+
+/**
  * R298: the refused objects of the project's parsed files, `type:id` (lower-cased, the same key
  * `selection.ts`'s `objectKeyOf` builds) -> the refusal sentence.
  *
@@ -1144,12 +1169,16 @@ export function undecidedArmsReason(
  *
  * R497: `armsOf`, given on bcdev, applies the BC shape rule (`bcFileEntries`) per file; without
  * it every wrapped file is refused as before.
+ *
+ * R654 S1 (plan r1 I1): the rule is its own parameter (`WrappedRule`), never the backend kind, so
+ * retiring a backend cannot silently change what another one refuses. `wrappedRuleFor` maps a
+ * session's backend to it; the al-runner coverage index passes `"al-runner-index"` itself.
  */
 export function coverageRefusedObjects<
   F extends { readonly path: string; readonly root: ALSyntaxNode },
 >(
   files: readonly F[],
-  backendKind: BuildBackend["kind"],
+  rule: WrappedRule,
   armsOf?: (file: F) => ArmEvaluation,
 ): ReadonlyMap<string, string> {
   const out = new Map<string, string>();
@@ -1157,7 +1186,7 @@ export function coverageRefusedObjects<
     for (const [key, reason] of refusedObjectsOfFile(
       f.root,
       normalizeSlashes(f.path),
-      backendKind,
+      rule,
       armsOf?.(f),
     )) {
       out.set(key, reason);
@@ -1179,18 +1208,18 @@ export function coverageRefusedObjects<
 export function refusedObjectsOfFile(
   root: ALSyntaxNode,
   file: string,
-  backendKind: BuildBackend["kind"],
+  rule: WrappedRule,
   arms?: ArmEvaluation,
 ): Map<string, string> {
   const out = new Map<string, string>();
-  if (backendKind === "bcdev" && arms !== undefined) {
+  if (rule === "bc-shape" && arms !== undefined) {
     if (!fileHoldsWrappedObject(root)) return out;
     for (const e of bcFileEntries(root, objectIdentityOf, file, arms))
       if (e.refused !== undefined) out.set(keyOf(e.objectType, e.objectId), e.refused);
     return out;
   }
   const wholeFile = fileHoldsWrappedObject(root);
-  const alRunner = backendKind === "al-runner";
+  const alRunner = rule === "al-runner-index";
   if (alRunner && alRunnerAdmitsWrappedFile(root)) return out;
   for (const e of fileLineMapEntries(root, objectIdentityOf, file)) {
     const reason =
@@ -1344,7 +1373,7 @@ export async function coverageRefusedFromSources(
   await initParser();
   return coverageRefusedObjects(
     sources.map((s) => ({ path: s.path, text: s.text, root: wrapRoot(parseAL(s.text)) })),
-    "bcdev",
+    "bc-shape",
     symbols === undefined ? undefined : (f) => evaluateArms(f.root, f.text, symbols),
   );
 }

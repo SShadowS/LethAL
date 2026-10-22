@@ -6,7 +6,8 @@ drives the Rust al-runner v3. It needs neither BC nor a lease. Every figure is p
 `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r5-xd.md` (abe76fa6), and leg C's two clock facts
 and X (d)'s baseline by `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r6.md` (c7c505e6).
 X (d)'s scratch setup is amended by `docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment-r5a-xd-setup.md`
-(f32aa92a), and the leg compiles that setup with alc before any session starts
+(f32aa92a), and its Sleeper's Sleep by `docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r11-xd-sleep5000.md`
+(338af789). The leg compiles that setup with alc before any session starts
 (`al-runner-v3-itest-setup-does-not-compile`). A differing verdict, killing test, note set, refusal set or Sleep
 index size in any leg is a BLOCK.
 The leg-by-leg tables live in those pre-commitments and are asserted by the itest, not restated here.
@@ -78,8 +79,13 @@ The legs:
     verdict (or `absent`), `baselineGreen`, each mutant's `coveringTests`, and the 120 s stop (computed from
     `BASELINE_TIMEOUT_DEFAULT`). When a per-mutant check fails and that verdict is present and not `pass`, the
     failure ends "SleeperDoubles is not green at baseline …: the Sleep rule was not exercised; gate-fail". No
-    verdict rule changes: a timed-out baseline is still `gate-fail` ([[R649]] re-casts X (d)). X (b)'s held line
-    goes into the receipt as soon as it is known.
+    verdict rule changes: a timed-out baseline is still `gate-fail`. X (b)'s held line goes into the receipt as
+    soon as it is known.
+  - X (d), since r11 ([[R649]]): `Probe Sleeper` sleeps 5 s, not 600 s. BC waits out a Sleep (bc2, R649 case 2: a
+    5 s Sleep is green in 5095 ms), and a 600 s one never finishes under the 120 s baseline budget on BC or on a
+    v3 build that counts Sleep. r5's table is the one pass on alpha.2 and on edge (edge: predicted by r11 (d3));
+    on edge the leg reads `held` only through X (b). The three 600 s sibling tests stay; on edge they are
+    baseline `timeout` rows, not refusals.
 
 ## The pin and the update gate
 
@@ -222,3 +228,7 @@ The legs:
   ([[R647]]). r10 (7bc0a1a5) moves leg T's judgement into `judgeLegT`, after the rows are printed, and makes X (d)
   print its baseline. No figure or baseline moves. The post-merge `--regate` and `--edge-rejudge` results are
   recorded in R647 after the merge.
+- 2026-10-22: on edge, X (d)'s `SleeperDoubles` timed out at baseline, because edge counts its `Sleep(600000)`.
+  bc2 measured BC's own Sleep under LethAL's baseline call ([[R649]], `docs/measurements/r649/`): 5 s passes,
+  600 s gets no answer within the budget. r11 (338af789) changes that one literal to 5000. No figure, index size
+  or baseline moves.

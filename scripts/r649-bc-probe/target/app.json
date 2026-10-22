@@ -1,0 +1,20 @@
+{
+  "id": "7937c2a9-5c42-4e98-bd9b-9de8151b55fe",
+  "name": "LethAL R649 BC Sleep Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R649 throwaway probe target: the artifact registration RunMutant needs, and the v3 gate's Probe Sleeper shape.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 92920, "to": 92929 }],
+  "dependencies": [
+    {
+      "id": "5e7a1c00-1111-4c00-8c00-1e7a1c000701",
+      "name": "LethAL Control",
+      "publisher": "LethAL",
+      "version": "1.0.0.23"
+    }
+  ],
+  "features": ["NoImplicitWith"]
+}
