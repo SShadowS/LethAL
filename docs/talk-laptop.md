@@ -50,7 +50,7 @@ bc-dev-mcp clone and the extension install all download.
   cp "$B"/lethal-parser.linux-x64.node "$B"/lethal-parser.linux-x64.provenance.json packages/engine/vendor/native/
   ```
 
-  - **LethAL Control 1.0.0.23** (sha256 `c2a95948…`). Setup checks it against `CONTROL_SHA256` and
+  - **LethAL Control**, the build `CONTROL_APP` names (sha256 `c2a95948…`). Setup checks it against `CONTROL_SHA256` and
     refuses any other build. bc-demo's database is in memory, so every setup after a reboot needs it.
   - **The native AL parser.** `lethal run` loads it, and building it needs Rust and LLVM clang 23,
     which the laptop does not have. The bundled one was built from the parser sources as of master
