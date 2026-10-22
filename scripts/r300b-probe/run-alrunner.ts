@@ -9,8 +9,7 @@
 // (R352), and a fresh root removes that confound.
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { defaultServerSpawn } from "../../packages/runner/src/al-runner-backend";
-import { AlRunnerServer } from "../../packages/runner/src/al-runner-server";
+import { AlRunnerServer, defaultServerSpawn } from "../../packages/runner/src/al-runner-server";
 import {
   alRunnerEnv,
   buildAlRunnerArgv,

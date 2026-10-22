@@ -63,8 +63,26 @@
  *   (measured on 2.11.0, R319); the symbols are start-time flags, see the constructor.
  */
 
-import { type AlRunnerCompileEntry, compileEntriesOf } from "./al-runner-transport";
 import type { EntriesAnswer } from "./al-runner-v3-entries";
+
+/** One `compilationErrors` entry, from the one-shot envelope or the `--server` summary. Moved
+ *  here from `al-runner-transport.ts` by R654 S1, because the daemon (which v3 keeps) decodes it. */
+export interface AlRunnerCompileEntry {
+  readonly file: string;
+  readonly errors: readonly string[];
+}
+
+/** `compilationErrors` as entries. A malformed entry is kept with no `file`, so it counts. */
+export function compileEntriesOf(raw: unknown): readonly AlRunnerCompileEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((e) => {
+    const o = typeof e === "object" && e !== null ? (e as Record<string, unknown>) : {};
+    return {
+      file: typeof o.file === "string" ? o.file : "",
+      errors: Array.isArray(o.errors) ? o.errors.map(String) : [JSON.stringify(e)],
+    };
+  });
+}
 
 /**
  * R635 (F4): a v3 `serve` request that gave no complete answer: an untyped `{"error"}` line, EOF,
@@ -538,5 +556,120 @@ export class AlRunnerServer {
       new Promise<void>((r) => setTimeout(r, 1000)),
     ]);
     this.stderrPump = undefined;
+  }
+}
+
+/** The real daemon, adapted to the handle `AlRunnerServer` consumes. Exported for R387's gate leg,
+ *  which wraps it to record the argv. Moved here from `al-runner-backend.ts` by R654 S1. */
+export const defaultServerSpawn: ServerSpawnFn = (argv, opts) => {
+  const proc = Bun.spawn([...argv], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
+    ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
+  });
+  const handle: ServerProcessHandle = {
+    write: (line) => {
+      proc.stdin.write(line);
+    },
+    stdout: proc.stdout as unknown as AsyncIterable<Uint8Array>,
+    stderr: proc.stderr as unknown as AsyncIterable<Uint8Array>,
+    kill: () => proc.kill(),
+    wait: () => proc.exited,
+  };
+  return handle;
+};
+
+// R612's daemon keep rule, moved here from `al-runner-backend.ts` by R654 S1: both daemons'
+// owners apply it (the .NET backend's `--server`, v3's `serve`).
+
+/**
+ * R612 (plan r3 §1; build review r1 I-1): words a free-text tail must not contain, matched without
+ * regard to case. "panic" covers both v3 panic wordings and Rust's "panicked at"; the rest cover a
+ * timeout or wall-time stop, which an upstream #5698 fix would put inside the onrun-failed tail.
+ * "time limit": a cascade row caused by a timeout ("did not run (the test used more than the time
+ * limit ..."), which must close even with no timeout row in the same answer.
+ */
+const V3_TAIL_UNSAFE_WORDS = [
+  "panic",
+  "timeout",
+  "timed out",
+  "exceeded",
+  "wall",
+  "deadline",
+  "time limit",
+];
+/** Case-insensitive for these words only, so each entry's fixed prefix stays exact. */
+const anyCase = (w: string): string =>
+  [...w].map((ch) => (/[a-z]/.test(ch) ? `[${ch}${ch.toUpperCase()}]` : ch)).join("");
+/** R612: the one tail check both tailed entries share, so they cannot drift apart. */
+const SAFE_TAIL = `(?!.*(?:${V3_TAIL_UNSAFE_WORDS.map(anyCase).join("|")}))`;
+
+/**
+ * R612: the v3 refusal reasons MEASURED to leave a `serve` daemon correct and warm for the next
+ * request (`/coord/handoff/R-612/measure.md` rows 2, 3, 4, 6, 9). Each is anchored at both ends;
+ * any other text (a reworded reason, an exact entry plus a tail, a panic) closes the daemon. The
+ * list widens only by probe. Pinned by the update gate's `serve-keep-reasons` fact.
+ * R635: `commit` also takes the EDGE build's wording (al-runner 3.0.0-alpha.4+edge.20261022,
+ * 57f1e4f98), measured clean by R-612's probe re-run (`/coord/handoff/R-635/edge-reasons.md`); each
+ * wording is anchored at both ends. On edge, http is a plain fail and cascade / no-callee rows are
+ * not produced, so nothing else is widened.
+ */
+export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
+  http: /^NotRun: out-of-scope: an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)$/,
+  commit:
+    /^NotRun: out-of-scope: Commit inside a test under TestIsolation = Function(?:: what the runner keeps is not pinned| is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test \(corpus issue 645\)\. Run this codeunit with TestIsolation = Codeunit \(al-runner: --isolation codeunit, the default\))$/,
+  cascade: new RegExp(
+    String.raw`^NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran \(${SAFE_TAIL}.*$`,
+  ),
+  "onrun-failed": new RegExp(
+    String.raw`^NotRun: out-of-scope: OnRun failed \(runner behaviour not pinned\): ${SAFE_TAIL}.*$`,
+  ),
+  "no-callee": /^NotRun: out-of-scope: [^:\n]+: call `[^`\n]*` has no callee the checker resolved$/,
+};
+
+/** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns
+ *  the daemon, never from the rows. */
+export type ServeDaemonRule = "v2" | "v3";
+
+/**
+ * R612: true when the daemon may serve another request after this answer's rows.
+ * - v2 (R517 I2 + I-1, unchanged): every row is `pass` or `fail`.
+ * - v3: every row is `pass`/`fail` without `notRun`, or a `notRun` `error` row whose message is
+ *   one of `V3_SERVE_SAFE_REFUSALS`. Anything else (a timeout, a panic, an unknown kind) closes.
+ *   A test name seen twice THROWS `AlRunnerServeDuplicateRowError` (build review r1 M-3: in the
+ *   rule, so every serve path that applies it gets the check). The caller closes the daemon on a
+ *   throw, as for any `runTests` throw (R517 C1).
+ */
+export function serveDaemonReusable(
+  rows: readonly ServerTestLine[],
+  rule: ServeDaemonRule,
+): boolean {
+  if (rule === "v2") return rows.every((t) => t.status === "pass" || t.status === "fail");
+  const seen = new Set<string>();
+  for (const t of rows) {
+    if (seen.has(t.name)) throw new AlRunnerServeDuplicateRowError(t.name);
+    seen.add(t.name);
+  }
+  return rows.every((t) => {
+    if (t.status === "pass" || t.status === "fail") return t.notRun !== true;    const m = t.message;
+    return (
+      t.notRun === true &&
+      t.status === "error" &&
+      m !== undefined &&
+      Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m))
+    );
+  });
+}
+
+/** R612 (v3 rule): one answer named a test twice. Never legitimate (measure.md), so a stale
+ *  writer: the daemon is closed and the run is an error, never a silent overwrite. */
+export class AlRunnerServeDuplicateRowError extends Error {
+  constructor(name: string) {
+    super(
+      `al-runner serve: the answer names test "${name}" more than once, which no measured answer does; the daemon is closed and this run is an error (R612)`,
+    );
+    this.name = "AlRunnerServeDuplicateRowError";
   }
 }

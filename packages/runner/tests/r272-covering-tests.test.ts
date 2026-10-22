@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { initParser } from "@lethal/engine";
-import { verdictFromRunnerTest } from "../src/al-runner-backend";
+import { verdictFromRunnerTest } from "../src/al-runner-rows";
 import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { testsInAlSource } from "../src/discovery";

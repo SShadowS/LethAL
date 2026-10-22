@@ -12,12 +12,12 @@
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AlRunnerBackend } from "../../packages/runner/src/al-runner-backend";
+import { alRunnerCoverageSupport } from "../../packages/runner/src/al-runner-coverage";
 import {
-  AlRunnerBackend,
   RUNNER_TIMEOUT_MESSAGE,
   parseReportedStopMs,
-} from "../../packages/runner/src/al-runner-backend";
-import { alRunnerCoverageSupport } from "../../packages/runner/src/al-runner-coverage";
+} from "../../packages/runner/src/al-runner-rows";
 import { runSession } from "../../packages/runner/src/orchestrator";
 import { type SpawnFn, defaultSpawn } from "../../packages/runner/src/publisher";
 import { ResultsStore } from "../../packages/runner/src/store";

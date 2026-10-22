@@ -566,7 +566,7 @@ describe("R298 end to end (al-runner): a wrapped table trigger reads no-coverage
       await initParser();
       const refused = coverageRefusedObjects(
         Object.entries(files).map(([path, text]) => ({ path, root: wrapRoot(parseAL(text)) })),
-        "al-runner",
+        "al-runner-index",
       );
       expect([...refused.keys()]).toEqual(["table:50110"]);
       const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
@@ -697,7 +697,7 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
       await initParser();
       const refused = coverageRefusedObjects(
         Object.entries(files).map(([path, text]) => ({ path, root: wrapRoot(parseAL(text)) })),
-        "al-runner",
+        "al-runner-index",
       );
       // R-300b: a bare object beside a wrapper is a shape al-runner is not measured on.
       const sentence =

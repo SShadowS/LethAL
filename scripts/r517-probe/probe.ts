@@ -20,8 +20,8 @@ import { spawn } from "node:child_process";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AlRunnerBackend, defaultServerSpawn } from "../../packages/runner/src/al-runner-backend";
-import { AlRunnerServer } from "../../packages/runner/src/al-runner-server";
+import { AlRunnerBackend } from "../../packages/runner/src/al-runner-backend";
+import { AlRunnerServer, defaultServerSpawn } from "../../packages/runner/src/al-runner-server";
 
 const here = import.meta.dir;
 const alRunner = process.env.LETHAL_ALRUNNER_PATH ?? "/work/tools/al-runner/current/al-runner";

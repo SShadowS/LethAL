@@ -1,12 +1,8 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  AL_RUNNER_V2_VERSION,
-  RUNNER_TIMEOUT_MESSAGE,
-  isTimeoutRow,
-  parseReportedStopMs,
-} from "./al-runner-backend";
+import { AL_RUNNER_V2_VERSION } from "./al-runner-backend";
+import { RUNNER_TIMEOUT_MESSAGE, isTimeoutRow, parseReportedStopMs } from "./al-runner-rows";
 import {
   alRunnerEnv,
   buildAlRunnerArgv,

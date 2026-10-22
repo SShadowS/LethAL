@@ -4,16 +4,12 @@ import { dirname, join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
 import {
-  AL_RUNNER_UNCLASSIFIED_ERROR,
   AL_RUNNER_UNDECIDED_ARM_MISSING,
   AlRunnerBackend,
-  AlRunnerServeDuplicateRowError,
   AlRunnerServerStopUnsetError,
   AlRunnerTestNameError,
-  parseReportedStopMs,
-  serveDaemonReusable,
-  verdictFromRunnerTest,
 } from "../src/al-runner-backend";
+import { AL_RUNNER_UNCLASSIFIED_ERROR } from "../src/al-runner-rows";
 import type { ServerSpawnFn } from "../src/al-runner-server";
 import type { TestVerdict } from "../src/backend";
 import { refusalLine } from "../src/cli";
@@ -1225,35 +1221,6 @@ describe("AlRunnerBackend serverMode (R220)", () => {
   });
 });
 
-describe("parseReportedStopMs (R517)", () => {
-  test("reads N from al-runner's whole timeout message, and nothing else", () => {
-    expect(parseReportedStopMs("Test exceeded 180s timeout.")).toBe(180_000);
-    expect(parseReportedStopMs("Test exceeded 1s timeout.")).toBe(1_000);
-    expect(parseReportedStopMs("Test exceeded 0s timeout.")).toBeUndefined();
-    expect(parseReportedStopMs("TIMEOUT after 5s")).toBeUndefined();
-    expect(parseReportedStopMs("Test exceeded 180s timeout. (and more)")).toBeUndefined();
-    expect(parseReportedStopMs("Error: Test exceeded 180s timeout.")).toBeUndefined();
-    expect(parseReportedStopMs("Assert failed")).toBeUndefined();
-    expect(parseReportedStopMs(undefined)).toBeUndefined();
-  });
-
-  test("a timeout verdict carries it; a timeout in another wording, a fail and an error do not", () => {
-    const r = { codeunitId: 1, codeunitName: "T", method: "M" };
-    const v = (status: string, message: string) =>
-      verdictFromRunnerTest(r, "Codeunit1.M", { status, message }, 10, undefined);
-    expect([
-      v("error", "Test exceeded 60s timeout.").outcome,
-      v("error", "Test exceeded 60s timeout.").reportedStopMs,
-    ]).toEqual(["timeout", 60_000]);
-    expect([
-      v("error", "TIMEOUT after 5s").outcome,
-      v("error", "TIMEOUT after 5s").reportedStopMs,
-    ]).toEqual(["timeout", undefined]);
-    expect(v("fail", "Test exceeded 60s timeout.").reportedStopMs).toBeUndefined();
-    expect(v("error", "SMTP is out of scope").reportedStopMs).toBeUndefined();
-  });
-});
-
 describe("AlRunnerBackend capabilities", () => {
   test("in-memory profile", async () => {
     const { backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
@@ -1924,127 +1891,7 @@ describe("AlRunnerBackend --server: a daemon that overran or timed out is never 
       return { starts: fake.argvs.length, messages: [one.failureMessage, two.failureMessage] };
     }
 
-    describe("serveDaemonReusable, the rule alone", () => {
-      // Each row its own name: under v3 a repeated name throws (M-3).
-      let rowSeq = 0;
-      const r = (status: string, o: { message?: string; notRun?: boolean } = {}) => ({
-        name: `C.X${++rowSeq}`,
-        status,
-        ...o,
-      });
-      test("v2 is today's condition: every row pass or fail, notRun ignored", () => {
-        expect(serveDaemonReusable([r("pass"), r("fail")], "v2")).toBe(true);
-        expect(serveDaemonReusable([r("pass", { notRun: true })], "v2")).toBe(true);
-        expect(serveDaemonReusable([r("error", { notRun: true, message: COMMIT })], "v2")).toBe(
-          false,
-        );
-        expect(serveDaemonReusable([], "v2")).toBe(true);
-      });
-      test("v3 keeps on each of the five entries, and on pass/fail without notRun", () => {
-        for (const m of [HTTP, COMMIT, CASCADE, ONRUN, NO_CALLEE]) {
-          expect([
-            m,
-            serveDaemonReusable([r("pass"), r("error", { notRun: true, message: m })], "v3"),
-          ]).toEqual([m, true]);
-        }
-        expect(serveDaemonReusable([r("pass"), r("fail", { notRun: false })], "v3")).toBe(true);
-      });
-      // R635: the edge build's Commit wording, measured clean (`/coord/handoff/R-635/edge-reasons.md`).
-      const EDGE_COMMIT =
-        "NotRun: out-of-scope: Commit inside a test under TestIsolation = Function is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test (corpus issue 645). Run this codeunit with TestIsolation = Codeunit (al-runner: --isolation codeunit, the default)";
-      test("R635: v3 keeps on the edge build's Commit wording", () => {
-        expect(
-          serveDaemonReusable([r("error", { notRun: true, message: EDGE_COMMIT })], "v3"),
-        ).toBe(true);
-      });
-      test("R635: the edge Commit wording is anchored at both ends (a tail or a prefix closes)", () => {
-        for (const m of [`${EDGE_COMMIT} after a timeout`, `x${EDGE_COMMIT}`]) {
-          expect([
-            m,
-            serveDaemonReusable([r("error", { notRun: true, message: m })], "v3"),
-          ]).toEqual([m, false]);
-        }
-      });
-      test("v3 closes on a timeout row and both panic wordings", () => {
-        for (const m of ["Test exceeded 3s timeout.", PANIC_TEST, PANIC_CASCADE]) {
-          expect([
-            m,
-            serveDaemonReusable([r("error", { notRun: true, message: m })], "v3"),
-          ]).toEqual([m, false]);
-        }
-      });
-      for (const [c, m] of [
-        [
-          "c",
-          "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): runtime panic (bug): boom",
-        ],
-        [
-          "d",
-          "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): the OnRun panicked (a runtime bug) at x",
-        ],
-        [
-          "e",
-          "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (Y: runtime panic (bug): z)",
-        ],
-      ] as const) {
-        test(`T3 (${c}): no entry with a tail keeps a panic`, () => {
-          expect(serveDaemonReusable([r("error", { notRun: true, message: m })], "v3")).toBe(false);
-        });
-      }
-      // Build review r1 I-1: a tail must not keep a timeout, a wall-time stop or ANY panic (an
-      // #5698 fix would put the OnRun timeout inside the onrun-failed tail). One test per word,
-      // and a case variant each, so each word's red check names its own test.
-      const ONRUN_TAIL = "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): ";
-      const CASCADE_TAIL =
-        "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (";
-      for (const [c, m] of [
-        ["f timeout", `${ONRUN_TAIL}Test exceeded 3s timeout.`],
-        ["f timeout case", `${ONRUN_TAIL}TIMEOUT after 3s`],
-        ["f timed out", `${ONRUN_TAIL}the trigger timed out`],
-        ["f timed out case", `${CASCADE_TAIL}X: Timed Out)`],
-        ["f exceeded", `${ONRUN_TAIL}CPU limit Exceeded`],
-        ["f wall", `${ONRUN_TAIL}stopped at 10 times N of WALL time`],
-        ["f wall cascade", `${CASCADE_TAIL}X: stopped on wall time)`],
-        ["f deadline", `${ONRUN_TAIL}Deadline reached`],
-        // Bugs' finding: a TIMEOUT-caused cascade row, alone in the answer (no timeout row beside it).
-        [
-          "g time limit cascade",
-          `${CASCADE_TAIL}X: did not run (the test used more than the Time Limit): this failure is not trusted`,
-        ],
-        ["f panicked at", `${ONRUN_TAIL}thread 'worker' panicked at src/run.rs:10:5`],
-        ["f panic case", `${CASCADE_TAIL}X: PANIC in the runtime)`],
-      ] as const) {
-        test(`T3 (${c}): a tail never keeps a timeout, a wall-time stop or a panic`, () => {
-          expect(serveDaemonReusable([r("error", { notRun: true, message: m })], "v3")).toBe(false);
-        });
-      }
-      test("M-3: the rule itself throws on a duplicate name under v3, never under v2", () => {
-        const dup = [
-          { ...r("pass"), name: "C.D" },
-          { ...r("fail"), name: "C.D" },
-        ];
-        expect(() => serveDaemonReusable(dup, "v3")).toThrow(AlRunnerServeDuplicateRowError);
-        expect(serveDaemonReusable(dup, "v2")).toBe(true);
-        expect(serveDaemonReusable([r("pass"), r("pass")], "v3")).toBe(true);
-      });
-      test("v3 closes on every unknown kind", () => {
-        const unknown = [
-          r("error", { notRun: true, message: DUP_KEY }),
-          r("error", { notRun: true, message: `${HTTP} and more` }),
-          r("error", { notRun: true, message: `${COMMIT}.` }),
-          r("error", { notRun: true, message: `${NO_CALLEE} too` }),
-          r("error", { notRun: true }),
-          r("error", { message: COMMIT }),
-          r("error", { notRun: false, message: COMMIT }),
-          r("fail", { notRun: true, message: COMMIT }),
-          r("pass", { notRun: true }),
-          r("skipped", { notRun: true, message: COMMIT }),
-        ];
-        for (const row of unknown) {
-          expect([row, serveDaemonReusable([r("pass"), row], "v3")]).toEqual([row, false]);
-        }
-      });
-    });
+    // R654 S1: "serveDaemonReusable, the rule alone" moved unchanged to al-runner-serve-rule.test.ts.
 
     test("T1: v2 (the default) still closes on a refusal row: 2 activations, 2 starts", async () => {
       expect((await twoActivations(refusal(COMMIT))).starts).toBe(2);
@@ -2369,12 +2216,8 @@ describe("AlRunnerBackend: an answered row never aborts (R534)", () => {
     expect(calls.length).toBe(1);
   });
 
-  test("T1b: a body timeout row, in either measured wording, records timeoutIn body", () => {
-    for (const message of ["Test exceeded 40s timeout.", "TIMEOUT after 30s"]) {
-      const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "error", message }, 10, undefined);
-      expect([v.outcome, v.timeoutIn], message).toEqual(["timeout", "body"]);
-    }
-  });
+  // R654 S1: T1b, T4 and the T5 near-miss (direct calls of verdictFromRunnerTest) moved
+  // unchanged to al-runner-rows.test.ts.
 
   // measure.md A, rows HandlerUnused (verbatim), plus the two other shapes al-runner's source
   // writes as `error` without a test verdict: an unsupported signature and a `skipped` row.
@@ -2406,28 +2249,6 @@ describe("AlRunnerBackend: an answered row never aborts (R534)", () => {
       expect(v.failureMessage, label).toContain(row.message ?? '"skipped"');
       expect(v.failureMessage, label).toContain("not re-sent and does not stop the session (R534)");
       expect(calls.length, label).toBe(1);
-    }
-  });
-
-  test("T4: near-miss timeout wordings stay runner-test-error, never a timeout", () => {
-    for (const message of [
-      "The test codeunit's OnRun trigger exceeded the timeout, so none of its test methods ran.",
-      `${ONRUN_MESSAGE_20} Later`,
-      `TIMEOUT ${ONRUN_MESSAGE_20}`,
-      "An OnAfterTestMethodRun subscriber (codeunit 50100) failed: boom (test result before it: Test exceeded 5s timeout.)",
-      "Test exceeded 5s timeout. extra",
-      // Final review I-A: a user OnBeforeTestMethodRun subscriber raising the timeout wording.
-      // Only `^` refuses these (`$` matches them), so a lost `^` alone would be a false kill.
-      "An OnBeforeTestMethodRun subscriber (codeunit 50100) failed, so the test did not run: NavNCLDialogException: Test exceeded 5s timeout.",
-      `An OnBeforeTestMethodRun subscriber (codeunit 50100) failed, so the test did not run: NavNCLDialogException: ${ONRUN_MESSAGE_20}`,
-    ]) {
-      const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "error", message }, 10, undefined);
-      expect([v.outcome, v.runnerRow, v.reportedStopMs, v.timeoutIn], message).toEqual([
-        "error",
-        "runner-test-error",
-        undefined,
-        undefined,
-      ]);
     }
   });
 
@@ -2467,17 +2288,6 @@ describe("AlRunnerBackend: an answered row never aborts (R534)", () => {
       // The row's own words lead the note (the pre-commitment's B3 reads its start).
       expect(v.failureMessage?.startsWith(row.message), row.message).toBe(true);
       expect(calls.length, row.message).toBe(1);
-    }
-  });
-
-  test("T5 near-miss: a user message that merely CONTAINS the phrase stays a fail (a kill)", () => {
-    // The second is final review M-b: a type-shaped word later in the message. Only `^` refuses it.
-    for (const message of [
-      "NavNCLDialogException: expected 3, got out-of-scope: x",
-      "NavNCLDialogException: wrapped Foo: out-of-scope: x",
-    ]) {
-      const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "fail", message }, 10, undefined);
-      expect([v.outcome, v.runnerRow], message).toEqual(["fail", undefined]);
     }
   });
 

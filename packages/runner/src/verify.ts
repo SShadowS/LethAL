@@ -2156,7 +2156,7 @@ function refusedObjectsOfSources(
   }));
   return new Map([
     ...backendRefused,
-    ...coverageRefusedObjects(files, "bcdev", (f) => evaluateArms(f.root, f.text, buildSymbols)),
+    ...coverageRefusedObjects(files, "bc-shape", (f) => evaluateArms(f.root, f.text, buildSymbols)),
   ]);
 }
 

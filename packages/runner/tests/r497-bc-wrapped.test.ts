@@ -186,7 +186,7 @@ describe("R497 A1: a compiled-out declaration never refuses its compiled twin in
   test("a compiled-out wrapper's bare neighbour stays refused, the compiled-out key does not", () => {
     const text = `${cu(50101, "P")}#if X\n${cu(50100, "InB")}#endif\n`;
     const root = wrapRoot(parseAL(text));
-    const refused = refusedObjectsOfFile(root, "N.al", "bcdev", evaluateArms(root, text, []));
+    const refused = refusedObjectsOfFile(root, "N.al", "bc-shape", evaluateArms(root, text, []));
     expect([...refused.keys()]).toEqual(["codeunit:50101"]);
     expect(refused.get("codeunit:50101")).toContain("a wrapper whose object is compiled out");
   });
@@ -210,13 +210,13 @@ describe("R497: refusedObjectsOfFile on bcdev with arms", () => {
   test("an admitted file refuses nothing; a refused shape names its shape; no arms: as before", () => {
     const ok = `#if not X\n${cu(50100, "A")}#endif\n`;
     const okRoot = wrapRoot(parseAL(ok));
-    expect(refusedObjectsOfFile(okRoot, "W.al", "bcdev", evaluateArms(okRoot, ok, []))).toEqual(
+    expect(refusedObjectsOfFile(okRoot, "W.al", "bc-shape", evaluateArms(okRoot, ok, []))).toEqual(
       new Map(),
     );
-    expect(refusedObjectsOfFile(okRoot, "W.al", "bcdev").has("codeunit:50100")).toBe(true);
+    expect(refusedObjectsOfFile(okRoot, "W.al", "bc-shape").has("codeunit:50100")).toBe(true);
     const bad = `#if not X\n#if not Y\n${cu(50100, "A")}#endif\n#endif\n`;
     const badRoot = wrapRoot(parseAL(bad));
-    const r = refusedObjectsOfFile(badRoot, "N.al", "bcdev", evaluateArms(badRoot, bad, []));
+    const r = refusedObjectsOfFile(badRoot, "N.al", "bc-shape", evaluateArms(badRoot, bad, []));
     expect(r.get("codeunit:50100")).toContain("a nested #if object wrapper");
   });
 
@@ -225,7 +225,7 @@ describe("R497: refusedObjectsOfFile on bcdev with arms", () => {
     const root = wrapRoot(parseAL(text));
     const arms = evaluateArms(root, text, []);
     expect(arms.kind).toBe("undecided");
-    expect(refusedObjectsOfFile(root, "U.al", "bcdev", arms).get("codeunit:50100")).toContain(
+    expect(refusedObjectsOfFile(root, "U.al", "bc-shape", arms).get("codeunit:50100")).toContain(
       "could not be evaluated",
     );
   });

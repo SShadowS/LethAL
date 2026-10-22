@@ -3,12 +3,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SELECTOR_RESOURCE_FOLDER, SELECTOR_RESOURCE_NAME } from "@lethal/schemata";
 import { resourceLegFailures } from "../itest/cli-default-leg";
-import {
-  AlRunnerBackend,
-  AlRunnerTargetCompileError,
-  ResourceSelectorRuntimeError,
-  assertResourceSelectorRuntime,
-} from "../src/al-runner-backend";
+import { AlRunnerBackend, AlRunnerTargetCompileError } from "../src/al-runner-backend";
 import { AL_RUNNER_PREDEFINED_PROBE_TEST } from "../src/al-runner-predefined-probe";
 import { OneShotTransport, compileFindingsOf, compileOwnerOf } from "../src/al-runner-transport";
 import {
@@ -21,6 +16,10 @@ import {
 import { runSession } from "../src/orchestrator";
 import { AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0 } from "../src/preprocessor-symbols";
 import type { SpawnFn } from "../src/publisher";
+import {
+  ResourceSelectorRuntimeError,
+  assertResourceSelectorRuntime,
+} from "../src/resource-selector";
 import { ResultsStore } from "../src/store";
 import { fakeProbeSpawn, maskFor, probeFailed } from "./helpers/al-runner-predefined";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
