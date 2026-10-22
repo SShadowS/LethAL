@@ -9,6 +9,7 @@ import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
 import { flatNamesFor, withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
+import { type ChunkedRow, foldChunkedRows, rerunMismatches } from "../itest/chunked-rows";
 import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import {
   AlcCompileError,
@@ -118,7 +119,7 @@ import type { QuarantineRecord } from "../src/quarantine-store";
 import { COVERAGE_NOT_MEASURED_INTERPRETATION, renderConsole } from "../src/report";
 import type { SessionOutcome, SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
-import { isStrandedNote } from "../src/resume";
+import { CARRYABLE_VERDICTS, isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import {
@@ -486,6 +487,7 @@ const CAPS_NST: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
+  kind: "bcdev",
   authoritative: true,
 };
 
@@ -501,6 +503,7 @@ const CAPS_NST_WORKERS: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
+  kind: "al-runner",
   authoritative: false,
 };
 
@@ -539,7 +542,13 @@ describe("runSession", () => {
     const dirs = await makeProject();
     await rm(join(dirs.testDir, "app.json"));
     const backend = new StubBackend(
-      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      {
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        kind: "al-runner",
+        authoritative: false,
+      },
       (mutant) => (mutant === null ? "pass" : "fail"),
     );
     const store = new ResultsStore(":memory:");
@@ -568,7 +577,13 @@ describe("runSession", () => {
       'codeunit 50190 "Broken Tests"\n{\n    Subtype = Test;\n    [Test]\n    procedure A(\n    begin\n    end;\n}\n',
     );
     const backend = new StubBackend(
-      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      {
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        kind: "al-runner",
+        authoritative: false,
+      },
       (mutant) => (mutant === null ? "pass" : "fail"),
     );
     const store = new ResultsStore(":memory:");
@@ -880,6 +895,8 @@ describe("runSession", () => {
             dependentCount: async () => later,
           },
         );
+        // R618: --resume-run refuses a finished run, so resume it as an interrupted one.
+        first.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [first.runId]);
         const resumed = runSession({
           backend,
           store: first.store,
@@ -891,6 +908,72 @@ describe("runSession", () => {
         else expect((await resumed).resumedFrom?.runId).toBe(first.runId);
         first.store.close();
       }
+    });
+
+    // R618 Q1: a QUARANTINED closed-world run still reaches `confirmClosedWorld` (the batch loop
+    // breaks before it; only finishing is skipped), so it stays resumable: unfinished, its identity
+    // and its snapshot unsuffixed, and `--resume` finds it. A crash would leave `|pending` (R-filed).
+    test("R618 Q1: a quarantined closed-world run is confirmed, unfinished, and found by --resume", async () => {
+      const dirs = await makeProject(NEW_AL);
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify({ ...TESTS_APP, id: APP_ID }));
+      // Stateful: mutants survive until the second mutant call, which goes in-flight-unknown.
+      let mutantCalls = 0;
+      let guardAsked = 0;
+      const stub = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+      const scripted = stub.run.bind(stub);
+      const backend = Object.assign(stub, {
+        fetchPublishedAppPackage: async () => OLD_PKG,
+        microsoftMode: () => provenMode(),
+        dependentCount: async () => {
+          guardAsked++;
+          return 0;
+        },
+        run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> => {
+          if ((stub.activations.at(-1) ?? null) !== null && ++mutantCalls > 1) {
+            return { ref, outcome: "error", durationMs: 5, operation: "in-flight-unknown" };
+          }
+          return scripted(ref, opts);
+        },
+      });
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.quarantined).toBeDefined();
+      // The guard was asked before execution AND after, which only the confirm block does.
+      expect(guardAsked).toBe(2);
+      const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      const row = store.getRun(runId);
+      expect(row?.finished).toBe(false);
+      expect(row?.testAppHash).toMatch(/\|closed-world:public$/);
+      const snaps = store.db
+        .query("SELECT test_app_hash AS h FROM baseline_snapshots WHERE run_id = ?")
+        .all(runId) as Array<{ h: string }>;
+      expect(snaps.length).toBeGreaterThan(0);
+      for (const s of snaps) expect(s.h).toBe(row?.testAppHash ?? "");
+      expect(
+        store.findResumableRun({
+          projectPath: dirs.projectDir,
+          backend: row?.backend ?? "",
+          configFingerprint: row?.configFingerprint ?? "",
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+        }),
+      ).toBe(runId);
+      const resumed = await runSession({
+        backend: Object.assign(new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]), {
+          fetchPublishedAppPackage: async () => OLD_PKG,
+          microsoftMode: () => provenMode(),
+          dependentCount: async () => 0,
+        }),
+        store,
+        ...dirs,
+        selectorIds,
+        resume: "last",
+      });
+      expect(resumed.resumedFrom?.runId).toBe(runId);
+      expect(resumed.resumedFrom?.carriedMutants).toBeGreaterThan(0);
+      // itest:lend's assertIdentity rests on this: a resumed closed-world run confirms its own row.
+      const again = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      expect(store.getRun(again)?.testAppHash).toBe(row?.testAppHash ?? "");
+      store.close();
     });
 
     test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {
@@ -1256,7 +1339,13 @@ describe("runSession", () => {
   test("coverage:fenced capability selects per mutant, exactly like procedure", async () => {
     const dirs = await makeProject();
     const covering = new StubBackend(
-      { coverage: "fenced", deploy: "publish", isolation: "session", authoritative: false },
+      {
+        coverage: "fenced",
+        deploy: "publish",
+        isolation: "session",
+        kind: "al-runner",
+        authoritative: false,
+      },
       () => "pass",
       ["IsOverBudget"],
     );
@@ -1271,7 +1360,13 @@ describe("runSession", () => {
     // Same backend, same script, covering NOTHING: under a filtering mode the uncovered mutants
     // must be reported `no-coverage` rather than run against all green tests.
     const nothing = new StubBackend(
-      { coverage: "fenced", deploy: "publish", isolation: "session", authoritative: false },
+      {
+        coverage: "fenced",
+        deploy: "publish",
+        isolation: "session",
+        kind: "al-runner",
+        authoritative: false,
+      },
       () => "pass",
       [],
     );
@@ -1288,7 +1383,13 @@ describe("runSession", () => {
   test("coverage:none capability runs all tests per mutant", async () => {
     const dirs = await makeProject();
     const backend = new StubBackend(
-      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      {
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        kind: "al-runner",
+        authoritative: false,
+      },
       (mutant) => (mutant === null ? "pass" : "fail"),
     );
     const store = new ResultsStore(":memory:");
@@ -3035,7 +3136,7 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
 
   test("a non-authoritative backend is unchanged: no scan, the test is sent", async () => {
     const dirs = await project();
-    const backend = new RecordingBackend({ ...FENCED, authoritative: false });
+    const backend = new RecordingBackend({ ...FENCED, kind: "al-runner", authoritative: false });
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
     expect(backend.baselineSent).toContain("UnsupportedTest");
@@ -3334,7 +3435,10 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
       "supported. at Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()";
     const classify = async (failureMessage: string) => {
       const dirs = await project();
-      const backend = new RecordingBackend({ ...FENCED, authoritative: false }, failureMessage);
+      const backend = new RecordingBackend(
+        { ...FENCED, kind: "al-runner", authoritative: false },
+        failureMessage,
+      );
       const store = new ResultsStore(":memory:");
       const events: RunEvent[] = [];
       await runSession({
@@ -3632,7 +3736,13 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
     readonly runs: Array<{ active: string | null; timeoutMs: number }> = [];
     constructor(private readonly baselineDurationMs: number) {}
     capabilities(): BackendCapabilities {
-      return { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false };
+      return {
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        kind: "al-runner",
+        authoritative: false,
+      };
     }
     async status(): Promise<BackendStatus> {
       return { ok: true, details: "budget-probe" };
@@ -3802,6 +3912,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
 
@@ -3864,7 +3975,13 @@ describe("runSession — parallel workers", () => {
     let peak = 0;
     const make = () =>
       new StubBackend(
-        { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+        {
+          coverage: "none",
+          deploy: "none",
+          isolation: "full-reset",
+          kind: "al-runner",
+          authoritative: false,
+        },
         (mutant) => (mutant === null ? "pass" : "fail"),
         [],
         undefined,
@@ -3895,6 +4012,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     // Layer 4.3 collapsed overlap batching to a single artifact, so
@@ -3968,6 +4086,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     // R491: one shared event log across every backend, so ORDER is read from call counters, never
@@ -4023,6 +4142,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     type Probe =
@@ -4249,6 +4369,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     // Worker 0 is slow — 30ms per run(). Worker 1 errors on every
@@ -4305,6 +4426,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     let factoryCalls = 0;
@@ -4358,6 +4480,7 @@ describe("runSession — parallel workers", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     const make = () => new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
@@ -4391,6 +4514,7 @@ describe("runSession — M4 outcome ordering", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     const backend = new StubBackend(caps, (mutant) => (mutant === null ? "pass" : "fail"), []);
@@ -4418,7 +4542,13 @@ describe("mutation score — timeout-killed contribution", () => {
     // Create a scenario: some mutants killed, some timeout-killed, some survived
     // We'll use a fixture where 2 out of 3 mutants are tested, but with different outcomes
     const backend = new StubBackend(
-      { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      {
+        coverage: "procedure",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      },
       (mutant) => {
         // First test run is baseline (green)
         // Mutant activation determines outcome per test run
@@ -4438,7 +4568,13 @@ describe("mutation score — timeout-killed contribution", () => {
 
   test("buildReport: only timeout-killed and survived produces non-null score", async () => {
     const report = legacyBuildReport({
-      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      caps: {
+        coverage: "procedure",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      },
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
@@ -4500,7 +4636,13 @@ describe("mutation score — timeout-killed contribution", () => {
 
   test("buildReport: killed and timeout-killed contribute equally", async () => {
     const report = legacyBuildReport({
-      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      caps: {
+        coverage: "procedure",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      },
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
@@ -4604,7 +4746,13 @@ describe("mutation score — timeout-killed contribution", () => {
 
   test("buildReport: null score when no killable mutants", async () => {
     const report = legacyBuildReport({
-      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      caps: {
+        coverage: "procedure",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      },
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
@@ -5241,6 +5389,7 @@ const PHASE_CAPS: BackendCapabilities = {
   coverage: "none",
   deploy: "publish",
   isolation: "session",
+  kind: "bcdev",
   authoritative: true,
 };
 
@@ -6203,6 +6352,8 @@ describe("runSession — Layer 5A deployment identity", () => {
       preprocessorSymbols: ["CLEAN24", "CLEAN25"],
     });
     const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    // R618: --resume-run refuses a finished run, so resume it as an interrupted one.
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [run.id]);
     const resumed = await runSession({
       backend: backend(),
       store,
@@ -6242,6 +6393,7 @@ describe("runSession — deploy:none (al-runner) app_version", () => {
     coverage: "none",
     deploy: "none",
     isolation: "full-reset",
+    kind: "al-runner",
     authoritative: false,
   };
 
@@ -6592,6 +6744,7 @@ describe("runSession — bisection on compile failure", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     const make = (workerIndex: number) =>
@@ -6654,6 +6807,7 @@ describe("runSession — bisection on compile failure", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     // The exact object worker 0's deploy() throws — asserted below by reference (`.toBe`),
@@ -6866,6 +7020,7 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     // Scoped to one specific mutant (operatorName AND procedureName) so there is exactly one
@@ -6995,6 +7150,7 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      kind: "al-runner",
       authoritative: false,
     };
     const deployErr = new ArtifactPrepareError("boom: worker 0 disk full");
@@ -7111,7 +7267,11 @@ class CompilePublishVerifyBackend implements ExecutionBackend {
   ) {}
 
   capabilities(): BackendCapabilities {
-    return { ...PHASE_CAPS, authoritative: this.authoritative };
+    return {
+      ...PHASE_CAPS,
+      kind: this.authoritative ? "bcdev" : "al-runner",
+      authoritative: this.authoritative,
+    };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "counting-phase" };
@@ -7468,6 +7628,7 @@ function strandsOnBackend(strandMutantId: string): ExecutionBackend {
       coverage: "none",
       deploy: "publish",
       isolation: "session",
+      kind: "bcdev",
       authoritative: true,
     }),
     activate: async (id) => {
@@ -7655,6 +7816,7 @@ describe("runSession — Task 11 quarantine consult + latch-gated finally", () =
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       status: async () => {
@@ -7682,6 +7844,7 @@ describe("runSession — Task 11 quarantine consult + latch-gated finally", () =
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       activate: async (id) => {
@@ -7707,6 +7870,7 @@ describe("runSession — Task 11 quarantine consult + latch-gated finally", () =
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       activate: async (id) => {
@@ -7738,6 +7902,7 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
     });
@@ -7822,6 +7987,7 @@ describe("runSession — Task 13 folded fix: warn when authoritative but no tier
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
+        kind: "al-runner",
         authoritative: false,
       }),
     });
@@ -7850,6 +8016,7 @@ describe("runSession — fix round 1: stream-started carries the run's own id", 
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
+        kind: "al-runner",
         authoritative: false,
       }),
     });
@@ -7909,6 +8076,7 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
         coverage: "none", // every mutant covered by baseline's one passing test — no coverage index needed
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true, // required for the Task 11 quarantine consult/record path to engage
       }),
       activate: async (id) => {
@@ -7945,6 +8113,7 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "al-runner",
         authoritative: false, // al-runner shape: no shared tier, mirrors the brief's "no shared tier" case
       }),
       activate: async (id) => {
@@ -7987,6 +8156,7 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true, // required for the Task 11 quarantine consult/record path to engage
       }),
       run: async (ref) => ({
@@ -8034,6 +8204,7 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
         coverage: "none", // every mutant covered by baseline's one passing test — no coverage index needed
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       activate: async (id) => {
@@ -8089,6 +8260,7 @@ describe("runSession: R236b, a verdict read back after a lost reply", () => {
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       run: async (ref) => ({
@@ -8551,6 +8723,7 @@ function leaseBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBacke
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       ...overrides,
@@ -9161,6 +9334,11 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             }),
       });
       const store = o.store ?? new ResultsStore(":memory:");
+      // R618: --resume-run refuses a finished run; these resume their first run as an interrupted one.
+      const resumed = o.extra?.resume;
+      if (typeof resumed === "number") {
+        store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [resumed]);
+      }
       const events: RunEvent[] = [];
       const outcome = await runSession({
         backend,
@@ -10559,7 +10737,13 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       }) => {
         const backend = Object.assign(
           new StubBackend(
-            { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+            {
+              coverage: "none",
+              deploy: "none",
+              isolation: "full-reset",
+              kind: "al-runner",
+              authoritative: false,
+            },
             (mutant) => (mutant === null ? "pass" : "fail"),
           ),
           { dependencyPackageDirs: () => [o.pkgDir] },
@@ -12557,6 +12741,7 @@ describe("runSession — Layer 5C-B1 fix round 1: no lease is a caller-contract 
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       activate: async (id) => {
@@ -14994,6 +15179,7 @@ describe("runSession — Layer 5C-B1 fix round 1: deploy latch guard + earlier-b
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "al-runner",
         authoritative: false,
       }) as const;
     const workerDeploys = [0, 0];
@@ -15238,6 +15424,7 @@ describe("runSession — R108: a batch whose TOTAL crosses the bracket warns bef
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
     });
@@ -15369,6 +15556,7 @@ describe("runSession propagates al-runner's pinned platform-app directory (R147)
     coverage: "none",
     deploy: "none",
     isolation: "full-reset",
+    kind: "al-runner",
     authoritative: false,
   };
 
@@ -15579,6 +15767,7 @@ describe("runSession surfaces al-runner's NO IMPLEMENTATION warning (R148)", () 
     coverage: "none",
     deploy: "none",
     isolation: "full-reset",
+    kind: "al-runner",
     authoritative: false,
   };
 
@@ -15684,6 +15873,7 @@ describe("runSession re-measures the al-runner contract under its pin (R149)", (
     coverage: "none",
     deploy: "none",
     isolation: "full-reset",
+    kind: "al-runner",
     authoritative: false,
   };
   const PIN = "C:/cache/28.0.46665.53671/platform-apps";
@@ -17086,6 +17276,7 @@ describe("C02-04 characterization", () => {
         coverage: "none",
         deploy: "publish",
         isolation: "session",
+        kind: "bcdev",
         authoritative: true,
       }),
       run: async (ref) => ({
@@ -18653,7 +18844,13 @@ describe("C02-06 Task 5.2: killingTestRef (decision 14)", () => {
       killingTestRef: OVER,
     };
     const report = legacyBuildReport({
-      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      caps: {
+        coverage: "procedure",
+        deploy: "publish",
+        isolation: "session",
+        kind: "bcdev",
+        authoritative: true,
+      },
       baselineGreen: true,
       batches: 1,
       unsupportedTests: [],
@@ -20178,7 +20375,13 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
   async function coverageOffReport(): Promise<Record<string, unknown>> {
     const dirs = await makeProject();
     const backend = new StubBackend(
-      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      {
+        coverage: "none",
+        deploy: "none",
+        isolation: "full-reset",
+        kind: "al-runner",
+        authoritative: false,
+      },
       () => "pass",
     );
     const report = await runSession({
@@ -20202,7 +20405,13 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
     const dirs = await makeProject();
     const fenced = await runSession({
       backend: new StubBackend(
-        { coverage: "fenced", deploy: "publish", isolation: "session", authoritative: false },
+        {
+          coverage: "fenced",
+          deploy: "publish",
+          isolation: "session",
+          kind: "al-runner",
+          authoritative: false,
+        },
         () => "pass",
         ["IsOverBudget"],
       ),
@@ -20522,6 +20731,87 @@ describe("R577: a kill must reproduce under the mutant", () => {
     );
     return backend;
   };
+
+  test("U2c (R582): on the group path a cold kill's reproduction emits NO group-call event, a warm kill's exactly one", async () => {
+    // T5's script: M0001 dies at T1 (position 1, cold); with `warm`, M0002 dies at T2 behind T1
+    // (k = 2). The rule-off backend runs the same script, so the difference is the reproductions'.
+    const groupCalls = async (ruleOn: boolean, warm: boolean) => {
+      const Cls = ruleOn ? ReproWarmStub : WarmStubBackend;
+      const backend: WarmStubBackend = new Cls(
+        CAPS_NST,
+        (mutant, ref) => {
+          if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+          if (
+            warm &&
+            mutant === "M0002" &&
+            ref.method === "T2" &&
+            backend.session.get("cache") !== undefined
+          )
+            return "fail";
+          if (mutant === "M0001" && ref.method === "T1") return "fail";
+          return "pass";
+        },
+        ["IsOverBudget"],
+      );
+      let events = 0;
+      const { report, store } = await run(backend, {
+        testAl: FIVE_TESTS_AL,
+        onEvent: (e) => {
+          if (e.type === "group-call") events += 1;
+        },
+      });
+      store.close();
+      expect(rowOf(report, "M0001")?.killPosition).toBe(1);
+      expect(rowOf(report, "M0001")?.verdict).toBe("killed");
+      expect(rowOf(report, "M0001")?.killReproduced).toBe(ruleOn ? true : undefined);
+      if (warm) expect(rowOf(report, "M0002")?.killPosition).toBe(2);
+      return events;
+    };
+    const coldOff = await groupCalls(false, false);
+    expect(coldOff).toBeGreaterThan(0);
+    expect(await groupCalls(true, false)).toBe(coldOff);
+    expect(await groupCalls(true, true)).toBe((await groupCalls(false, true)) + 1);
+  });
+
+  test("U7 (R582 F2): chunked at 2, a warm kill's re-run replays its CHUNK's prefix, read back through itest:chunked's own fold", async () => {
+    // Cold ledger, so the order is by name: chunks [T1, T2], [T3, T4], [T5]. M0001 dies at T4,
+    // chunk position 2: replay and re-run must both be [T3, T4], never `ordered`'s four.
+    const backend = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T4" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    const dirs = await makeProject(FIVE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      groupRuns: { maxMethodsPerCall: 2 },
+    });
+    const k = rowOf(report, "M0001");
+    expect(k?.verdict).toBe("killed");
+    expect(k?.killPosition).toBe(2);
+    expect(k?.killReproduced).toBe(true);
+    const mutantRows = store.db.query("SELECT id, mutant_code FROM mutants").all() as Array<{
+      id: number;
+      mutant_code: string;
+    }>;
+    const codeOf = new Map(mutantRows.map((r) => [r.id, r.mutant_code]));
+    const fold = foldChunkedRows(
+      store.db
+        .query(
+          "SELECT mutant_row_id, mutant_code, method, session_id FROM test_results WHERE op_kind = 'many' ORDER BY id",
+        )
+        .all() as ChunkedRow[],
+      codeOf,
+    );
+    expect(fold.replays.get("M0001")).toEqual(["T3", "T4"]);
+    expect(rerunMismatches([{ code: "M0001", replay: ["T3", "T4"] }], fold)).toEqual([]);
+    expect(fold.callSizes.get("M0001")).toEqual([2, 2]);
+    store.close();
+  });
 
   test("T5b: a replay under the mutant that passes all k is kill-not-reproduced, with the replay clause", async () => {
     const backend = warmFlaky();

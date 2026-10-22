@@ -51,6 +51,7 @@ const CAPS: BackendCapabilities = {
   coverage: "procedure",
   deploy: "publish",
   isolation: "session",
+  kind: "bcdev",
   authoritative: true,
 };
 

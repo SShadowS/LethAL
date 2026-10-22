@@ -641,7 +641,7 @@ export function classifyTestExactProbe(
 
 export class AlRunnerBackend implements ExecutionBackend {
   /** R577: a kill must reproduce under the mutant (measured: a ~1% flaky Microsoft test became a
-   *  false kill on every transport). bcdev's switch is R582. */
+   *  false kill on every transport). bcdev has it too since R582. */
   readonly killsMustReproduce = true;
   /** R516 I1: one-shot's in-run limit is the budget (`oneShotLimits`); the daemon's is the one stop
    *  it was started with (R517: `inRunStopMs`), never the budget. */
@@ -1257,6 +1257,9 @@ export class AlRunnerBackend implements ExecutionBackend {
    */
   capabilities(): BackendCapabilities {
     return {
+      // R586 (C1) and R553: identity, not inferred from `authoritative`. The assertion screen reads
+      // past al-runner's `{Type}Exception: ` prefix on this kind only.
+      kind: "al-runner",
       // R220: `"al-runner"` sits on the `fenced` side of `CoverageMode`'s routing axis -- ONE
       // runner produces the green set and every verdict -- so it carries no runner-disagreement
       // note and R175's unnamed-member widening stays off, both via `isHubCoverageMode`.

@@ -2185,6 +2185,7 @@ describe("C02-09: gap ids", () => {
           coverage: over.backendCoverage ?? "procedure",
           deploy: "publish",
           isolation: "session",
+          kind: "bcdev",
           authoritative: true,
         }),
         status: async () => boom(),

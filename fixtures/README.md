@@ -101,9 +101,13 @@ The bcdev path requires this order on the container (Cronus281):
    `Codeunit` isolation, and `codeunit` test type; the session verifies this BEFORE any compile/
    publish (a missing or incompatible harness fails the session loudly, never a silent bad verdict).
 2. The **instrumented sandbox target** — the bcdev backend compiles it in a private staging copy
-   with the `LethAL Control` dependency injected into the staged `app.json` and `lethal-control.app`
-   staged into the package cache (bcdev-only — al-runner shares the emit path and strips the two
-   control-registration codeunits, so it stays dependency-free).
+   with the `LethAL Control` dependency injected into the staged `app.json`. alc gets ONE
+   `/packagecachepath:`: a LethAL-owned copy (`<temp>/lethal-pkgcache-<random>`, hard links where
+   possible) of every package in the configured cache plus `lethal-control.app`, made once per
+   backend and removed when it closes (bcdev-only — al-runner shares the emit path and strips the
+   two control-registration codeunits, so it stays dependency-free). Since R552 the configured
+   `packageCachePath` is only read: a `lethal-control.app` an older LethAL left there is left out of
+   the copy, gets one warning, is never touched, and is safe to delete.
 3. **`sandbox-tests`**, then **`sandbox-probes`**.
 
 ### Attestation fence (the correctness guarantee)
@@ -1685,7 +1689,8 @@ authentication.
 | `bc2` | 7148 | 7149 | 7152 |
 | `bc3` | 7248 | 7249 | 7252 |
 
-`bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` prepares them. It writes one gitignored
+`bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|all` prepares them, under a coord lease in the caller's lane
+(`--lane`, else `KRAKEN_AGENT`; R598). It writes one gitignored
 `lethal.config.<server>.json` and `.vscode/launch.<server>.json` in each gate's fixture directory
 (`sandbox-app`, `sandbox-data`, `sandbox-hang`, `sandbox-harden`). It then publishes LethAL Control
 and every app a BC gate needs (`PUBLISH_PLAN`: `sandbox-probes` before `sandbox-app`, each fixture

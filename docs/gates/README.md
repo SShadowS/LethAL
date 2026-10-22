@@ -13,9 +13,11 @@ figures, what they mean, and how they came to be.
 | bcdev-names | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-names` | [bcdev-names.md](bcdev-names.md) | `bcdev.names.baseline.json` |
 | bcdev-wrapped | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-wrapped` | [bcdev-wrapped.md](bcdev-wrapped.md) | `bcdev.wrapped.baseline.json` |
 | alrunner | `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | [alrunner.md](alrunner.md) | the `al-runner.*` baselines |
+| alrunner-v3 | `LETHAL_ITEST_ALRUNNER_V3=1 bun run itest:alrunner-v3` | [alrunner-v3.md](alrunner-v3.md) | `al-runner-v3.tables.baseline.json` |
 | envtool | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | [envtool.md](envtool.md) | `envtool.baseline.json` |
 | tables | `LETHAL_ITEST_TABLES=1 bun run itest:tables` | [tables.md](tables.md) | `tables.baseline.json` |
 | chunked | `LETHAL_ITEST_CHUNKED=1 bun run itest:chunked` | [chunked.md](chunked.md) | none |
+| lend | `LETHAL_ITEST_LEND=1 bun run itest:lend` | [lend.md](lend.md) | none (reads `bcdev.baseline.json`) |
 | hang | `LETHAL_ITEST_HANG=1 bun run itest:hang` | [hang.md](hang.md) | `hang.single.baseline.json` |
 | harden | `LETHAL_ITEST_HARDEN=1 bun run itest:harden` | [harden.md](harden.md) | `harden.baseline.json` |
 
@@ -55,7 +57,7 @@ fields are:
 - A count in `gate-expected.ts` (killed, survived, no-coverage and their total) differs from the
   gate's baseline file.
 - A figure in `gate-expected.ts` is named on no page.
-- One of the six itests it serves does not read its figures from it, or restates one as a literal.
+- One of the seven itests it serves does not read its figures from it, or restates one as a literal.
 - CLAUDE.md names a `docs/...md` path that does not exist.
 
 So a re-recorded baseline, or a changed itest figure, cannot leave its page stale. The commit that

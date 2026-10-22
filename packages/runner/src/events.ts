@@ -21,7 +21,7 @@
  * counts) is learned, not configured.
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
-import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
+import type { BackendCapabilities, BackendKind, TestMethodRef, TestOutcome } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
@@ -38,6 +38,22 @@ import type { CarryHidden, MutantVerdict, RunnerKind } from "./store";
 
 /** Bumped independently of `REPORT_SCHEMA_VERSION`. Consumers ignore unknown event types. */
 export const STREAM_SCHEMA_VERSION = 1;
+
+/**
+ * R586: `BackendCapabilities` as `run-configured` carries it, with `kind` OPTIONAL here only so a
+ * stream recorded before R586 still validates. Every session since emits it. Spelled out because
+ * the schema generator reads plain interfaces; `_streamCapsCover` keeps it assignable.
+ */
+export interface StreamCapabilities {
+  /** Named directly (not `BackendCapabilities["kind"]`) so the schema generator emits its enum. */
+  readonly kind?: BackendKind;
+  readonly coverage: BackendCapabilities["coverage"];
+  readonly deploy: BackendCapabilities["deploy"];
+  readonly isolation: BackendCapabilities["isolation"];
+  readonly authoritative: boolean;
+}
+const _streamCapsCover = (c: BackendCapabilities): StreamCapabilities => c;
+void _streamCapsCover;
 
 export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardown";
 
@@ -97,7 +113,9 @@ export type RunEventInput =
        * two.
        */
       readonly type: "run-configured";
-      readonly caps: BackendCapabilities;
+      /** R586: `kind` is optional HERE only, so a stream recorded before it still validates; every
+       *  session since R586 emits it (`runSession` passes its `BackendCapabilities`). */
+      readonly caps: StreamCapabilities;
       readonly only?: { readonly patterns: readonly string[] };
       /** R221: the `--exclude` narrowing this run was GIVEN, split the same way `only` is. */
       readonly exclude?: { readonly patterns: readonly string[] };

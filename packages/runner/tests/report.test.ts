@@ -102,7 +102,13 @@ describe("renderConsole — al-runner canary reiteration (R7/R8)", () => {
       tableGlobalVar: "defect-confirmed",
       transactionRollback: "defect-not-reproduced",
     };
-    const out = renderConsole({ ...baseReport, authoritative: true, alRunnerCanary: canary });
+    // R586: the reiteration keys on the v2 backend, so a bcdev report is labelled bcdev.
+    const out = renderConsole({
+      ...baseReport,
+      backend: "bcdev",
+      authoritative: true,
+      alRunnerCanary: canary,
+    });
     expect(out).not.toContain("R7");
     expect(out).not.toContain("R8");
   });
@@ -292,7 +298,13 @@ describe("Caveat union", () => {
 // ------------------------------------------------------------------------
 describe("buildReport: hangCapable travels the site property path (R196)", () => {
   const STATICS: FoldStatics = {
-    caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
+    caps: {
+      kind: "bcdev",
+      authoritative: true,
+      coverage: "none",
+      deploy: "publish",
+      isolation: "session",
+    },
     buildSymbols: [],
   };
 
@@ -855,7 +867,13 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
 // R577: the kill-reproduction fields ride both fold sites, and the banner names the new cause.
 describe("R577: killReproduced, reproducedFailure and kill-not-reproduced on the report", () => {
   const STATICS: FoldStatics = {
-    caps: { authoritative: false, coverage: "none", deploy: "publish", isolation: "session" },
+    caps: {
+      kind: "al-runner",
+      authoritative: false,
+      coverage: "none",
+      deploy: "publish",
+      isolation: "session",
+    },
     buildSymbols: [],
   };
   const mutant = (id: string): MutantManifestEntry => ({

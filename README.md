@@ -485,7 +485,7 @@ this build returns.
 |------|---------|-------------|
 | `--project` | *(required)* | AL project directory to mutate |
 | `--tests` | *(required)* | Test project directory (refused with `--dry-run`, which needs no test project) |
-| `--backend` | *(required)* | `bcdev` or `al-runner` |
+| `--backend` | *(required)* | `bcdev`, `al-runner` or `al-runner-v3` |
 | `--only <glob>` | *(all files)* | Only these files contribute mutants. Repeatable. Cannot change a verdict, because every file is still parsed, compiled and published |
 | `--tests-only <glob>` | *(whole suite)* | Only these test files run at baseline. Repeatable. **Can change a verdict**: excluding a killing test manufactures a survivor. Flagged `tests-narrowed` in the report |
 | `--skip-known-survivors` | `false` | Skip mutants a prior finished run recorded as survivors |
@@ -726,6 +726,25 @@ a LethAL feature or a mode.
   `[lethal] al-runner settings:` line naming it. Verdicts are the same per mutant on the fixtures the
   gate measures; under `--server` a hung test becomes an error after one long suite deadline (at least
   10 minutes) rather than a per-test timeout.
+- **`al-runner-v3` (the Rust al-runner, R586) is not authoritative either.** It is pinned
+  (`alrunner 3.0.0-alpha.2`, `/work/tools/al-runner-v3/current`, `.gated`) and configured in an
+  `alRunnerV3` section (`packagesDir` and `bcVersion` required; `coverage`, `path`, `alcPath`,
+  `cacheDir`). Measured on alpha.2, it differs from BC in three ways that change verdicts:
+  - It runs code that does not compile (#5602). LethAL compiles every batch and the test app with
+    alc first, and refuses to run bytes alc did not see.
+  - A statement-form duplicate-key `Insert` does not raise (#5603), so kills through that error
+    read `survived` (7 on the tables fixture).
+  - `Sleep` returns at once and moves v3's virtual AL clock forward by the requested time (#5605):
+    a test that reads the clock after a Sleep behaves as on BC, but a wait costs no time and is
+    never stopped. A covering pass that reaches a `Sleep` in the project reads `error`; one in a
+    dependency is not caught.
+
+  Selecting one test runs its whole codeunit (#5611), so LethAL makes one call per test codeunit
+  and notes a kill made after another covering test of that codeunit. Tests v3 does not run
+  (`notRun`, for example `Commit()` under per-test isolation, #5607) are never killed and never
+  survived. Coverage is turned off for a project holding a multi-object or an `#if`-wrapped object
+  file (R602). One-shot only; `--workers > 1`, Windows, `serverMode`, `selectorMode` and
+  `campaign freeze` are refused by name.
 - **A mutant that never terminates is stepped over, not scored.** AL cannot preempt a running loop,
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
   mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than
@@ -842,5 +861,6 @@ per-mutant baseline**, where a differing verdict is a regression, never "close e
 | `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 299 / 63 / 15 over 377 deployed |
 | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 12 / 4 |
 | `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend, plus `sandbox-symbols` under `[LETHALA]` and `[LETHALB]` (R321), plus the CLI's own defaults (R387) | 3 / 12 / 4; 5 / 8 / 0 per symbol set; 3 / 12 / 4 CLI-default leg, equal per mutant to leg A since R394 (recorded per mutant as pre-committed) |
+| `LETHAL_ITEST_ALRUNNER_V3=1 bun run itest:alrunner-v3` | The al-runner-v3 backend (R586): contract probe, sandbox-app, sandbox-names, the compile proof and its binding, the Sleep rule live; opt-in the R546 CDO slice (`LETHAL_ITEST_V3_CDO`) and the tables fixture (`LETHAL_ITEST_V3_TABLES=1`, the update gate's leg T) | 3 / 12 / 4 and 36 / 0 / 0, per mutant equal to bcdev; CDO 51 / 12 / 0 and 51 / 8 / 4; tables 290 / 57 / 59 against v3's own baseline (`docs/superpowers/specs/2026-10-21-r586-alrunner-v3-precommitment.md`) |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` | Publish serialization and staleness | n/a |

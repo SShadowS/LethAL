@@ -13,6 +13,38 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A new backend, `al-runner-v3`, for the Rust al-runner** (R586). It sits beside the .NET
+  al-runner (`--backend al-runner`), which does not change. Select it with `--backend al-runner-v3`
+  and an `alRunnerV3` section in `lethal.config.json` (`packagesDir` and a four-number `bcVersion` are
+  required). It is pinned to `alrunner 3.0.0-alpha.2 (91253f2d6)` under `/work/tools/al-runner-v3/`,
+  and it runs only a build whose `.gated` file names its sha256. It is NOT authoritative: v3 runs code
+  that does not compile (#5602), a statement-form duplicate-key `Insert` does not raise (#5603), and
+  `Sleep` returns at once on a virtual AL clock (#5605: the clock moves forward by the requested
+  time, but a wait costs nothing and is never stopped). What LethAL does about each:
+  - **Code that does not compile:** before v3 sees a batch, LethAL compiles the batch and the test
+    app with alc. Before every run it checks that the files v3 reads are still the ones alc
+    compiled, and refuses otherwise.
+  - **Selection:** one `--codeunit` call per test codeunit, with rows matched by codeunit and method,
+    so quoted test names work.
+  - **Not-run rows** are never killed and never survived.
+  - **Sleep:** a covering pass that reaches a project `Sleep` reads `error` / `runner-refused`. The
+    Sleep index and v3's argv use the folders' real paths, and an index that joins no path of v3's
+    coverage stops the session by name (`al-runner-v3-coverage-join-refused`).
+  - **Platforms:** Linux only (the only platform measured); every other one is refused by name.
+  - **`timeout-is-cpu`** is measured by the update gate's leg C alone; a session trusts the gated
+    build's record and does not re-burn.
+  - **Notes:** a kill made after another covering test of the same codeunit run carries
+    `[v3-codeunit-state-possible]` in `failureNote`. A survivor beside a test v3 refused at baseline
+    carries `[v3-refused-test-nearby]`.
+  - **Not supported in this version:** one-shot only; `--workers > 1`, Windows, `serverMode`,
+    `selectorMode` and `campaign freeze` are refused by name.
+  - **Never lent across backends:** a v3 run lends history, resume verdicts and baseline snapshots
+    only to a v3 session of the same build (`runs.runner_build`).
+  - **Contract probe:** each session re-measures v3's wire contract (23 facts).
+  - **Update gate:** `scripts/al-runner-v3-update.ts` moves the pin only after
+    `itest:alrunner-v3` passes.
+  - **Report:** `executionContexts[]` gains `runnerBuild` and `binarySha256`.
+
 - **On al-runner, a kill must reproduce** (R577). Measured: a Microsoft test that builds its input
   from a random amount fails about 1 run in 100 on its own, and LethAL scored that chance failure as
   a kill on every al-runner transport, because the only check was a re-run with no mutant, which a
@@ -32,7 +64,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   v16 is kept), because `kill-not-reproduced` is a new value of `notMeasured[].cause` (R233).
   **`--resume` on al-runner re-runs a kill recorded before this rule** (no `killReproduced`) instead
   of carrying it, and its warning counts such kills in their own words, apart from prior `error`
-  verdicts. bcdev is unchanged; its switch is R582.
+  verdicts. bcdev has the same rule since R582 (see Changed).
 
 - **The report records which al-runner test selector produced its verdicts** (R558). R551 picks the
   selector once per session by a probe: `--test-exact` when the build accepts it, otherwise R488's
@@ -177,6 +209,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   guards in the loop body that decide whether such a writer runs (`r572-guard-writer`). A guard is refused as a
   single site, so its procedure's same-tuple twins renumber (measured on BaseApp: 34 ordinals moved, 0 tuples
   moved). History, `--resume` and marks recorded under scheme 40 are not carried.
+- **On bcdev, a kill must reproduce too** (R582). R577's rule is now on for the BC backend: after a
+  kill's unmutated confirm passes, LethAL runs the killing test once more UNDER THE MUTANT, and only
+  a second failure (for a timeout kill, a second timeout at the budget the first run was sent) keeps
+  the kill. Anything else is `error` / `kill-not-reproduced`, never `survived`. A kill at position 1
+  re-runs as one single `RunMutant` call; a warm kill (R206) re-runs its call's prefix in one more
+  `RunMutantMany`. **Cost, per kill:** about half a second for a failing test, and one more whole
+  budget for a timeout kill, with a second `StopHungRunAt` stop whose outcome may not be confirmed
+  (that scores `error` / `stop-outcome-unconfirmed`, not `timeout-killed`). Nothing for survivors.
+  **Resuming a run recorded on bcdev before R582 re-executes every kill** (none carries
+  `killReproduced`), which republishes and re-baselines nearly every batch: it is close to a full
+  rerun, so start a fresh run instead.
 - **al-runner coverage is ON by default** (R394). With no `alRunner.coverage` key, `lethal run
   --backend al-runner` now reads al-runner's own `--coverage` (R220): a mutant no green test
   reaches reads `no-coverage` instead of `survived`, and each mutant runs only its covering tests.
@@ -787,6 +830,27 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The assertion screen reads past al-runner's exception-type prefix** (R553). al-runner writes
+  every failure as `<Type>Exception: <message>`, so the screen found no `Assert.` text on any
+  al-runner kill and reported `vacuous` where bcdev, on the same kills, reported `partial`. On the
+  al-runner backend the screen now reads the message with ONE leading `...Exception: ` removed; bcdev
+  is unchanged, and the stored `killingTestFailure` is never rewritten. The backend is told by a new
+  optional `kind` that each backend declares (stream schema gains it), not by `authoritative`. A
+  `vacuous` al-runner screen whose killed kills include text without that prefix gets a note that
+  names the backend as a possible cause, instead of blaming the suite. `caps` in the stream schema
+  has `additionalProperties: false`, so a validator still holding the previous `stream-v1` rejects
+  a new stream for the `kind` field alone.
+- **bcdev no longer writes `lethal-control.app` into `packageCachePath`** (R552). alc now gets ONE
+  package-cache path: a LethAL-owned directory (`lethal-pkgcache-<random>` under the temp
+  directory), made once per backend, holding a hard link (a copy where linking fails with EXDEV or
+  EPERM, which inside kraken and for a cache off C: on Windows is the usual case) to every `.app` in
+  the user's cache, subfolders included, plus LethAL's own `lethal-control.app`. It is removed when
+  the backend closes. The user's cache is only read. The leftover `lethal-control.app` an older
+  LethAL left there (any case, any depth) is left out of the copy; it gets one warning (safe to
+  delete) and is never touched. Any other link or copy failure is an `ArtifactPrepareError` naming
+  the file. A `;` or `,` in that path is refused before alc runs, because alc splits its
+  package-cache list on both. `scripts/campaign/compile-only.ts` and the `stale-publish` itest do
+  the same.
 - **`lethal verify` sees an edit to a test-app codeunit handed out in a Variant or interface**
   (R389). Code in another app can run a test-app codeunit it receives in a Variant (measured live),
   and a test's digest did not cover it, so an edit there left the test read as unchanged. The digest

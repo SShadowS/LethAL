@@ -15,7 +15,7 @@
 import type { EffectRunner } from "./effects.ts";
 import { decideGateOutcome } from "./gate-outcome.ts";
 import type { MutantDiff, PrecommitEntry } from "./gate-outcome.ts";
-import { LEG_CONTAINER, type Leg, selectLegs } from "./gate-table.ts";
+import { EXPECTED_SUBLEGS, LEG_CONTAINER, type Leg, selectLegs } from "./gate-table.ts";
 import { verifyMergeTree } from "./merge-tree.ts";
 import type { Ports } from "./ports.ts";
 import {
@@ -40,8 +40,27 @@ export interface TickInput {
   readonly burnedShas: readonly string[];
   /** Tests changed in the diff with no accepted red-check receipt. */
   readonly testsWithoutRedCheck: readonly string[];
-  /** Sublegs each leg is required to run. Absent means one. */
+  /**
+   * Sublegs each leg is required to run, as a count. Absent means one. A leg with an exact list in
+   * `EXPECTED_SUBLEGS` (alrunner) uses that list, and a count for it is refused.
+   */
   readonly expectedSublegs?: Readonly<Record<string, number>>;
+}
+
+/** R-587 M1: the registry list first; a numeric override for a leg that has a list throws. */
+export function expectedSublegsFor(
+  leg: Leg,
+  override?: Readonly<Record<string, number>>,
+): number | readonly string[] {
+  const list = EXPECTED_SUBLEGS[leg];
+  const n = override?.[leg];
+  if (list === undefined) return n ?? 1;
+  if (n !== undefined) {
+    throw new Error(
+      `expectedSublegs.${leg}=${n}: leg "${leg}" is checked by its exact list of ${list.length} subleg names, never by a count`,
+    );
+  }
+  return list;
 }
 
 export type TickOutcome =
@@ -171,7 +190,7 @@ export async function runTick(
       nonce: mintNonce(),
       candidateSha: input.head,
       containerGeneration: generations[container] ?? -1,
-      expectedSublegs: input.expectedSublegs?.[leg] ?? 1,
+      expectedSublegs: expectedSublegsFor(leg, input.expectedSublegs),
     };
     const result = await runner.run(ports.gates.runLeg(leg, challenge, input.head));
     // Throws on a stale nonce, a skip, a partial run or the wrong generation. A leg that cannot
@@ -197,7 +216,7 @@ export async function runTick(
         nonce: mintNonce(),
         candidateSha: input.base,
         containerGeneration: generations[container] ?? -1,
-        expectedSublegs: input.expectedSublegs?.[leg] ?? 1,
+        expectedSublegs: expectedSublegsFor(leg, input.expectedSublegs),
       };
       const res = await runner.run(ports.gates.runControl(leg, challenge, input.base));
       validateReceipt(challenge, res.rawReceipt);

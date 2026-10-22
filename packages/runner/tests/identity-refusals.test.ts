@@ -368,7 +368,13 @@ class SurviveBackend implements ExecutionBackend {
   fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
   microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
-    return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
+    return {
+      coverage: "procedure",
+      deploy: "publish",
+      isolation: "session",
+      kind: "bcdev",
+      authoritative: true,
+    };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
@@ -521,6 +527,8 @@ describe("R307 T6 (b): a header-rule refusal fails its loose twins closed", () =
 
   test("resume: no twin is carried; control without Bad carries all three", async () => {
     const { dirs, store, runId } = await survivedRun();
+    // R618: --resume-run refuses a finished run, so resume it as an interrupted one.
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [runId]);
     const resume = () =>
       runSession({
         backend: new SurviveBackend(),
@@ -587,7 +595,13 @@ class LogBackend implements ExecutionBackend {
   fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
   microsoftMode = this.testApp.microsoftMode;
   capabilities(): BackendCapabilities {
-    return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
+    return {
+      coverage: "procedure",
+      deploy: "publish",
+      isolation: "session",
+      kind: "bcdev",
+      authoritative: true,
+    };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
@@ -683,7 +697,10 @@ async function r442World(files: Readonly<Record<string, string>>) {
     return { report, rows, warnings, backend, runId };
   };
   const write = (p: string, text: string) => Bun.write(join(projectDir, p), text);
-  return { store, run, write, projectDir };
+  /** R618: --resume-run refuses a finished run; this makes one look interrupted. */
+  const unfinish = (id: number) =>
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [id]);
+  return { store, run, write, unfinish, projectDir };
 }
 
 /** `rows` of a run where every mutant was executed, re-read with another verdict suffix. */
@@ -826,6 +843,7 @@ describe("R442: a site hidden from numbering in one run poisons no key in the ne
     const third = p.rows("src/Good.al", "Third");
     await w.write("src/BadX.al", obj(REPAIRED_TABLE, X()));
     await w.write("src/BadY.al", obj('namespace X; table 50101 "Other Twin"', Y()));
+    w.unfinish(p.runId);
     const resumed = await w.run({ resume: p.runId });
     expect(resumed.report.resumedFrom?.runId).toBe(p.runId);
     expect(resumed.rows("src/BadX.al")).toEqual(compute);
@@ -839,6 +857,7 @@ describe("R442: a site hidden from numbering in one run poisons no key in the ne
     const w = await r442World({ "src/A.al": COMMENTED, "src/Good.al": obj(GOOD_CU, X()) });
     const p = await w.run();
     await w.write("src/A.al", obj('table 50100 "Twin"', X()));
+    w.unfinish(p.runId);
     await expect(w.run({ resume: p.runId })).rejects.toThrow(
       `--resume: run ${p.runId} hid src/A.al whole from identity numbering, and this run hides no file`,
     );

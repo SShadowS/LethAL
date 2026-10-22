@@ -169,6 +169,12 @@
               },
               "testSelectorReason": {
                 "type": "string"
+              },
+              "runnerBuild": {
+                "type": "string"
+              },
+              "binarySha256": {
+                "type": "string"
               }
             }
           }

@@ -1,26 +1,89 @@
-import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { itestLaunchName } from "../packages/runner/itest/config-path.ts";
+import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import {
   GATE_FIXTURES,
+  LaneUnknownError,
   type LeaseDeps,
   LeaseLostError,
   NotIgnoredError,
   PUBLISH_PLAN,
+  type RunDeps,
   SecretFileError,
   buildConfig,
   buildLaunch,
   configFileName,
+  continiaDependencyProblems,
   describeLogin,
   gitIgnores,
+  krakenLeaseFor,
   launchFileName,
+  parseArgs,
   parseSecretEnv,
   readSecretFile,
+  resolveLane,
+  run,
   withLease,
   writeConfig,
 } from "./bc-linux-setup.ts";
+import { fillSymbolCache } from "./bc-symbol-cache.ts";
+
+// R594: a Continia app the server would refuse is caught before anything is published.
+describe("continiaDependencyProblems", () => {
+  const pkg = buildFakeAppWithEntries({
+    "NavxManifest.xml": `<Package><App Id="1" Name="Core" Publisher="Continia Software" Version="28.5.0.1" Application="28.0.0.0" Platform="28.0.0.0" /><Dependencies><Dependency Id="2" Name="Continia System Application" Publisher="Continia Software" MinVersion="28.4.0.0" /><Dependency Id="3" Name="Base Application" Publisher="Microsoft" MinVersion="28.4.0.0" /></Dependencies></Package>`,
+  });
+  const resident = (base: string | null, system = "28.0.54946.56477") =>
+    new Map<string, string | null>([
+      ["Base Application", base],
+      ["Application", "28.4.53241.56646"],
+      ["System", system],
+    ]);
+  const pinned = new Map([["Continia System Application", "28.5.0.336834"]]);
+
+  test("accepts a server that satisfies every declared minimum", () => {
+    expect(continiaDependencyProblems(pkg, resident("28.4.53241.56646"), pinned)).toEqual([]);
+  });
+  test("names a Microsoft dependency that is absent or below its minimum", () => {
+    expect(continiaDependencyProblems(pkg, resident(null), pinned)).toEqual([
+      "Core: needs Microsoft Base Application >= 28.4.0.0, absent",
+    ]);
+    expect(continiaDependencyProblems(pkg, resident("28.3.0.0"), pinned)).toEqual([
+      "Core: needs Microsoft Base Application >= 28.4.0.0, has 28.3.0.0",
+    ]);
+  });
+  test("names a platform below the app's Platform and a Continia dependency not pinned", () => {
+    expect(continiaDependencyProblems(pkg, resident("28.4.0.0", "27.0.0.0"), new Map())).toEqual([
+      "Core: needs Continia Software Continia System Application >= 28.4.0.0, absent",
+      "Core: needs System (platform) >= 28.0.0.0, has 27.0.0.0",
+    ]);
+  });
+  test("--accept-build needs --with-continia and a four-part version", () => {
+    expect(parseArgs(["--server", "bc3", "--with-continia", "--accept-build", "28.4.1.2"])).toEqual(
+      {
+        servers: ["bc3"],
+        dryRun: false,
+        withContinia: true,
+        acceptBuild: "28.4.1.2",
+      },
+    );
+    expect(() => parseArgs(["--server", "bc3", "--accept-build", "28.4.1.2"])).toThrow();
+    expect(() =>
+      parseArgs(["--server", "bc3", "--with-continia", "--accept-build", "28.4"]),
+    ).toThrow();
+  });
+});
 
 // A made-up value: the tests check it never appears in an error.
 const SECRET = "Tr0ub4dor=&3!";
@@ -303,5 +366,303 @@ describe("withLease", () => {
         throw new Error("publish failed");
       }),
     ).rejects.toThrow("publish failed");
+  });
+});
+
+describe("R598: the coord lease is taken in the caller's lane, never a fixed one", () => {
+  /** The kraken-call seam: records every `kraken coord ...` call, answers a lease with a token. */
+  function fakeKraken(): { calls: string[][]; run: (args: readonly string[]) => Promise<string> } {
+    const calls: string[][] = [];
+    return {
+      calls,
+      run: async (args) => {
+        calls.push([...args]);
+        return args[0] === "lease" ? JSON.stringify({ token: "t-1" }) : "{}";
+      },
+    };
+  }
+
+  test("--lane with an agent name (lane-<x>) is refused and names the lane to pass", () => {
+    expect(() => resolveLane("lane-preproc", { KRAKEN_AGENT: "lane-preproc" })).toThrow(
+      LaneUnknownError,
+    );
+    expect(() => resolveLane("lane-preproc", {})).toThrow(/pass --lane "preproc"/);
+    expect(resolveLane("preproc", {})).toBe("preproc");
+  });
+
+  test("no --lane and no kraken identity: refused by name, before any lease call", () => {
+    expect(() => resolveLane(undefined, {})).toThrow(LaneUnknownError);
+    expect(() => resolveLane(undefined, {})).toThrow(/--lane/);
+    expect(() => resolveLane(undefined, { KRAKEN_AGENT: "" })).toThrow(/KRAKEN_AGENT is not set/);
+    expect(() => resolveLane(undefined, { KRAKEN_AGENT: "someone" })).toThrow(/names no lane/);
+    expect(() => resolveLane(undefined, { KRAKEN_AGENT: "lane-" })).toThrow(LaneUnknownError);
+  });
+
+  test("--lane is passed into the lease call, and wins over the identity", async () => {
+    const k = fakeKraken();
+    const lane = resolveLane("bugs", { KRAKEN_AGENT: "lane-preproc" });
+    expect(lane).toBe("bugs");
+    expect(await krakenLeaseFor(lane, k.run).take("bc2")).toBe("t-1");
+    expect(k.calls).toEqual([["lease", "bc2", "bugs"]]);
+  });
+
+  test("the kraken identity is the fallback: lane-<x> leases as <x>, orchestrator as orchestrator", async () => {
+    const k = fakeKraken();
+    await krakenLeaseFor(resolveLane(undefined, { KRAKEN_AGENT: "lane-preproc" }), k.run).take(
+      "bc1",
+    );
+    await krakenLeaseFor(resolveLane(undefined, { KRAKEN_AGENT: "orchestrator" }), k.run).take(
+      "bc3",
+    );
+    expect(k.calls).toEqual([
+      ["lease", "bc1", "preproc"],
+      ["lease", "bc3", "orchestrator"],
+    ]);
+  });
+
+  test("heartbeat and release go through the same seam with the token", async () => {
+    const k = fakeKraken();
+    const deps = krakenLeaseFor("preproc", k.run);
+    await deps.heartbeat("bc1", "t-1");
+    await deps.release("bc1", "t-1");
+    expect(k.calls).toEqual([
+      ["heartbeat", "bc1", "t-1"],
+      ["release", "bc1", "t-1"],
+    ]);
+  });
+
+  test("the documented command still parses without --lane; --lane takes a name, never a flag", () => {
+    // R594's `withContinia` is always present (false unless --with-continia).
+    expect(parseArgs(["--server", "bc1"])).toEqual({
+      servers: ["bc1"],
+      dryRun: false,
+      withContinia: false,
+    });
+    expect(parseArgs(["--server", "all", "--lane", "code"])).toEqual({
+      servers: ["bc1", "bc2", "bc3"],
+      dryRun: false,
+      lane: "code",
+      withContinia: false,
+    });
+    expect(() => parseArgs(["--server", "bc1", "--lane", "--dry-run"])).toThrow(
+      /--lane needs a lane name/,
+    );
+    expect(() => parseArgs(["--server", "bc1", "--lane"])).toThrow(/--lane needs a lane name/);
+  });
+});
+
+describe("--write-config-only: configs from the secret file, no server call, no lease", () => {
+  const FIXTURE_DIRS = ["sandbox-app", "sandbox-data", "sandbox-hang", "sandbox-harden"];
+
+  function harness(secretText: string | null) {
+    const repo = mkdtempSync(join(tmpdir(), "bc-wco-repo-"));
+    for (const d of FIXTURE_DIRS) mkdirSync(join(repo, "fixtures", d), { recursive: true });
+    // `symbolNames` reads each PUBLISH_PLAN target's app.json under deps.repo, not the real repo.
+    for (const s of PUBLISH_PLAN) {
+      mkdirSync(join(repo, "fixtures", s.target), { recursive: true });
+      writeFileSync(
+        join(repo, "fixtures", s.target, "app.json"),
+        JSON.stringify({ name: s.target, publisher: "LethAL", version: "1.0.0.0" }),
+      );
+    }
+    const cacheRoot = mkdtempSync(join(tmpdir(), "bc-wco-cache-"));
+    const secretPath = join(mkdtempSync(join(tmpdir(), "bc-wco-secret-")), "bc-linux.env");
+    if (secretText !== null) writeFileSync(secretPath, secretText);
+    const counts = { connect: 0, lease: 0, fetch: 0 };
+    const printed: string[] = [];
+    const deps: RunDeps = {
+      readSecret: () => readSecretFile(secretPath),
+      connect: () => {
+        counts.connect++;
+        throw new Error("the config-only mode must not reach a server");
+      },
+      lease: () => {
+        counts.lease++;
+        throw new Error("the config-only mode must not take a lease");
+      },
+      isIgnored: () => true,
+      repo,
+      cacheRoot,
+      mcpCommand: () => ["node", "/x/bc-dev-mcp/dist/index.js"],
+      env: {},
+    };
+    // stdout AND stderr are both captured, so a login printed by any path is seen.
+    const go = async (argv: string[]) => {
+      const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+        printed.push(a.join(" "));
+      });
+      const err = spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+        printed.push(a.join(" "));
+      });
+      // Any fetch resolved at call time is counted and answered 500. (`bcFetch` binds `fetch` when
+      // it is imported, so the module's own server paths are counted by `connect` instead: every
+      // one of them takes a `Conn`, and `connect` is the only way to get one.)
+      const net = spyOn(globalThis, "fetch").mockImplementation((async () => {
+        counts.fetch++;
+        return new Response("no network in this test", { status: 500 });
+      }) as unknown as typeof fetch);
+      try {
+        return await run(argv, deps, (s) => printed.push(s));
+      } finally {
+        log.mockRestore();
+        err.mockRestore();
+        net.mockRestore();
+      }
+    };
+    const written = () =>
+      FIXTURE_DIRS.flatMap((d) =>
+        [
+          join("fixtures", d, "lethal.config.bc3.json"),
+          join("fixtures", d, ".vscode", "launch.bc3.json"),
+        ].filter((p) => existsSync(join(repo, p))),
+      );
+    return { repo, cacheRoot, counts, printed, go, written };
+  }
+
+  const ALL_FILES = FIXTURE_DIRS.flatMap((d) => [
+    join("fixtures", d, "lethal.config.bc3.json"),
+    join("fixtures", d, ".vscode", "launch.bc3.json"),
+  ]);
+
+  test("an empty cache: every file written, 0 server and 0 lease calls, named empty, never gate-ready", async () => {
+    const h = harness(GOOD);
+    const code = await h.go(["--server", "bc3", "--write-config-only"]);
+    expect(h.counts).toEqual({ connect: 0, lease: 0, fetch: 0 });
+    expect(h.written()).toEqual(ALL_FILES);
+    const out = h.printed.join("\n");
+    expect(out).toContain("symbol cache empty for bc3: run setup --server bc3 once");
+    expect(out).toContain("NOT gate-ready");
+    expect(out).not.toContain("ok:");
+    expect(code).toBe(1);
+    const cfg = JSON.parse(
+      readFileSync(join(h.repo, "fixtures", "sandbox-app", "lethal.config.bc3.json"), "utf8"),
+    ) as { bcdev: Record<string, unknown> };
+    expect(cfg.bcdev).toMatchObject({
+      server: "http://192.168.2.157:7249",
+      port: 7249,
+      baseUrl: "http://192.168.2.157:7248/BC",
+      apiBaseUrl: "http://192.168.2.157:7252/BC",
+      company: "CRONUS International Ltd.",
+      packageCachePath: join(h.cacheRoot, "bc3", "unfilled-run-setup-first"),
+      username: "BCRUNNER",
+    });
+    const launch = JSON.parse(
+      readFileSync(join(h.repo, "fixtures", "sandbox-app", ".vscode", "launch.bc3.json"), "utf8"),
+    ) as { configurations: { port: number }[] };
+    expect(launch.configurations[0]?.port).toBe(7249);
+  });
+
+  test("a filled cache: the configs name its build dir, read from its marker, and the run is gate-ready", async () => {
+    const h = harness(GOOD);
+    const sys = buildFakeAppWithEntries({
+      "NavxManifest.xml":
+        '<Package><App Id="i" Name="System" Publisher="Microsoft" Version="28.4.53241.56646" /></Package>',
+    });
+    const filled = await fillSymbolCache({
+      root: h.cacheRoot,
+      server: "bc3",
+      names: ["System"],
+      download: async () => sys,
+    });
+    try {
+      const code = await h.go(["--server", "bc3", "--write-config-only"]);
+      expect(h.counts).toEqual({ connect: 0, lease: 0, fetch: 0 });
+      const out = h.printed.join("\n");
+      expect(out).toContain(
+        `symbol cache for bc3: ${filled.dir} (build 28.4.53241.56646, 1 files: System; verified`,
+      );
+      expect(out).not.toContain("symbol cache empty");
+      // it never asks the server, and says so on the cache line AND on the ok line
+      expect(out).toContain("verified; server build not checked (config-only)");
+      expect(out).toContain(
+        "ok: configs written, symbol cache verified; server build not checked (config-only)",
+      );
+      expect(code).toBe(0);
+      for (const d of FIXTURE_DIRS) {
+        const cfg = JSON.parse(
+          readFileSync(join(h.repo, "fixtures", d, "lethal.config.bc3.json"), "utf8"),
+        ) as { bcdev: { packageCachePath: string } };
+        expect(cfg.bcdev.packageCachePath).toBe(filled.dir);
+      }
+    } finally {
+      // the sealed dir is 0555; reopen it so the temp root can be removed
+      chmodSync(filled.dir, 0o755);
+    }
+  });
+
+  test("the required names come from deps.repo's fixtures: a cache lacking one is reported empty", async () => {
+    const h = harness(GOOD);
+    // one target in THIS repo needs a Microsoft package the cache does not hold
+    writeFileSync(
+      join(h.repo, "fixtures", "sandbox-names", "app.json"),
+      JSON.stringify({
+        name: "sandbox-names",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        dependencies: [{ name: "Base Application", publisher: "Microsoft" }],
+      }),
+    );
+    const sys = buildFakeAppWithEntries({
+      "NavxManifest.xml":
+        '<Package><App Id="i" Name="System" Publisher="Microsoft" Version="28.4.53241.56646" /></Package>',
+    });
+    const filled = await fillSymbolCache({
+      root: h.cacheRoot,
+      server: "bc3",
+      names: ["System"],
+      download: async () => sys,
+    });
+    try {
+      expect(await h.go(["--server", "bc3", "--write-config-only"])).toBe(1);
+      const out = h.printed.join("\n");
+      expect(out).toContain("lacks Base Application");
+      expect(out).toContain("symbol cache empty for bc3: run setup --server bc3 once");
+    } finally {
+      chmodSync(filled.dir, 0o755);
+    }
+  });
+
+  test("no secret file: refused by name, nothing written, no call", async () => {
+    const h = harness(null);
+    const code = await h.go(["--server", "bc3", "--write-config-only"]);
+    expect(code).toBe(1);
+    expect(h.printed.join("\n")).toContain("bc-linux.env does not exist");
+    expect(h.written()).toEqual([]);
+    expect(h.counts).toEqual({ connect: 0, lease: 0, fetch: 0 });
+  });
+
+  test("a missing key: refused by name, nothing written", async () => {
+    const h = harness("BC_DEV_USER=BCRUNNER\n");
+    expect(await h.go(["--server", "bc3", "--write-config-only"])).toBe(1);
+    expect(h.printed.join("\n")).toContain("BC_DEV_PASSWORD is missing");
+    expect(h.written()).toEqual([]);
+  });
+
+  test("the login never reaches stdout or stderr (it is only in the gitignored configs)", async () => {
+    const h = harness(GOOD);
+    await h.go(["--server", "all", "--write-config-only"]);
+    const out = h.printed.join("\n");
+    expect(out).toContain(`BC_DEV_PASSWORD (${SECRET.length} chars)`);
+    expect(out).not.toContain(SECRET);
+    expect(out).not.toContain(Buffer.from(`BCRUNNER:${SECRET}`).toString("base64"));
+  });
+
+  test("takes only --server: a lane, a held lease, --dry-run or --with-continia is refused", () => {
+    expect(parseArgs(["--server", "bc2", "--write-config-only"])).toEqual({
+      servers: ["bc2"],
+      dryRun: false,
+      withContinia: false,
+      writeConfigOnly: true,
+    });
+    for (const extra of [
+      ["--lane", "bugs"],
+      ["--held-lease", "t"],
+      ["--dry-run"],
+      ["--with-continia"],
+    ]) {
+      expect(() => parseArgs(["--server", "bc2", "--write-config-only", ...extra])).toThrow(
+        /--write-config-only takes only --server/,
+      );
+    }
   });
 });

@@ -1,5 +1,5 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
-import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { mkdir, readFile, readdir, rm, stat, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -19,7 +19,11 @@ import {
 import type { ArtifactIo, CompileInput, CompiledArtifact } from "../src/artifact";
 import type { BoundArtifact, TestMethodRef } from "../src/backend";
 import { hashPackage } from "../src/baseline-snapshot";
-import { BcDevMcpBackend, PublishFailedError } from "../src/bcdev-backend";
+import {
+  PublishFailedError,
+  BcDevMcpBackend as RealBcDevMcpBackend,
+  controlLeftoverWarning,
+} from "../src/bcdev-backend";
 import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import {
@@ -40,6 +44,23 @@ import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
+
+/**
+ * R552: a backend owns a package-cache copy from its first compile until `close()`, as `cli.ts`
+ * calls it in a `finally`. Most tests here never close, so every backend this file builds is
+ * closed after each test; the R358 preload then fails the file if a copy outlives that. The
+ * lifecycle itself is pinned by the R552 tests, which close explicitly.
+ */
+const opened: RealBcDevMcpBackend[] = [];
+class BcDevMcpBackend extends RealBcDevMcpBackend {
+  constructor(...args: ConstructorParameters<typeof RealBcDevMcpBackend>) {
+    super(...args);
+    opened.push(this);
+  }
+}
+afterEach(async () => {
+  for (const b of opened.splice(0)) await b.close().catch(() => {});
+});
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 
@@ -723,8 +744,8 @@ codeunit 70000 "Some Codeunit"
 });
 
 describe("BcDevMcpBackend.run", () => {
-  test("R577: the kill-reproduction rule stays OFF on bcdev until R582", () => {
-    expect("killsMustReproduce" in makeBackend(() => ({}))).toBe(false);
+  test("R582: bcdev declares the kill-reproduction rule (R577)", () => {
+    expect(makeBackend(() => ({})).killsMustReproduce).toBe(true);
   });
 
   test("maps a passing result and resolves procedure coverage from the compiled app", async () => {
@@ -1382,9 +1403,14 @@ describe("BcDevMcpBackend.deploy", () => {
       // its staged copy in a `finally` right after compile() settles (Important-1 fix), so by
       // the time this test can inspect anything, `capturedProjectDir` no longer exists on disk.
       let capturedAppJson: { dependencies?: Array<{ id: string }> } | undefined;
+      let capturedSymbol: Buffer | undefined;
       const fakeCompiler = {
         compile: async (input: CompileInput) => {
           capturedProjectDir = input.projectDir;
+          // R552: the symbol is in the backend's package-cache copy, read DURING compile.
+          if (input.packageCacheCopyPath !== undefined) {
+            capturedSymbol = await readFile(join(input.packageCacheCopyPath, "lethal-control.app"));
+          }
           capturedAppJson = JSON.parse(
             await readFile(join(input.projectDir, "app.json"), "utf8"),
           ) as { dependencies?: Array<{ id: string }> };
@@ -1424,6 +1450,7 @@ describe("BcDevMcpBackend.deploy", () => {
         },
       );
       await backend.deploy(dir);
+      await backend.close();
 
       expect(capturedProjectDir).toBeDefined();
       expect(capturedAppJson?.dependencies?.some((d) => d.id === CONTROL_APP_ID)).toBe(true);
@@ -1436,8 +1463,10 @@ describe("BcDevMcpBackend.deploy", () => {
       };
       expect(originalAppJson.dependencies).toBeUndefined();
 
-      const stagedSymbol = await readFile(join(packageCachePath, "lethal-control.app"));
-      expect(stagedSymbol.length).toBeGreaterThan(0);
+      // R552: staged where alc reads it, with the control symbol's own bytes, and NOT in the
+      // user's package cache.
+      expect(capturedSymbol?.equals(await readFile(controlSymbolPath))).toBe(true);
+      expect(await readdir(packageCachePath).catch(() => [])).not.toContain("lethal-control.app");
 
       // Important-1 fix: deploy() reclaims its staged compile copy once compile() settles —
       // each batch has a distinct batchDir, so leaving `${batchDir}-staged` behind would
@@ -2338,6 +2367,10 @@ describe("coverageMode", () => {
     const backend = new BcDevMcpBackend({ ...baseConfig(), coverageMode: "none" });
     expect(backend.capabilities().coverage).toBe("none");
     expect(backend.capabilities().authoritative).toBe(true);
+  });
+
+  test("R553: declares its own identity as bcdev", () => {
+    expect(new BcDevMcpBackend(baseConfig()).capabilities().kind).toBe("bcdev");
   });
 
   test('status() in "none" mode probes the harness, never bc-dev-mcp', async () => {
@@ -3873,6 +3906,221 @@ describe("R499: every transport a backend binds shares its one control state", (
     } finally {
       warn.mockRestore();
       await cleanup();
+    }
+  });
+});
+
+/**
+ * R552: the control symbol is staged in a LethAL-owned directory inside the private staged copy and
+ * handed to alc as a second `/packagecachepath:` entry. The user's configured `packageCachePath` is
+ * never written: compared by name, size, sha256 and mtimeMs, and never empty, so an unchanged
+ * listing cannot be empty-vs-empty.
+ */
+describe("R552: the user's package cache is never written", () => {
+  const PAST = new Date("2020-01-02T03:04:05Z");
+
+  async function listing(dir: string): Promise<string[]> {
+    const rows: string[] = [];
+    for (const name of (await readdir(dir)).sort()) {
+      const path = join(dir, name);
+      const s = await stat(path);
+      const sha = Bun.SHA256.hash(await readFile(path), "hex");
+      rows.push(`${name} ${s.size} ${sha} ${s.mtimeMs}`);
+    }
+    return rows;
+  }
+
+  /** A cache that already holds one unrelated package with a fixed past mtime. */
+  async function seededCache(dir: string) {
+    const staging = await controlStaging(dir);
+    await mkdir(staging.packageCachePath, { recursive: true });
+    const other = join(staging.packageCachePath, "Microsoft_System_1.0.0.0.app");
+    await Bun.write(other, "system-symbol-bytes");
+    await utimes(other, PAST, PAST);
+    return staging;
+  }
+
+  function backendWith(
+    dir: string,
+    staging: Awaited<ReturnType<typeof seededCache>>,
+    spawn?: SpawnFn,
+  ) {
+    return new BcDevMcpBackend(
+      {
+        mcpCommand: ["unused"],
+        project: "/al",
+        server: "http://bc",
+        serverInstance: "BC",
+        ...staging,
+      },
+      undefined,
+      makeDeployment(dir, { Codeunits: [] }, spawn !== undefined ? { spawn } : {}),
+    );
+  }
+
+  test("deploy(), compileCheck() and a failed compile leave the cache listing unchanged", async () => {
+    const dir = scratch("lethal-r552-cache-unchanged-");
+    try {
+      await writeDeployInputs(dir);
+      const staging = await seededCache(dir);
+      const before = await listing(staging.packageCachePath);
+      expect(before).toHaveLength(1);
+
+      await backendWith(dir, staging).deploy(dir);
+      expect(await listing(staging.packageCachePath)).toEqual(before);
+
+      await backendWith(dir, staging).compileCheck(dir);
+      expect(await listing(staging.packageCachePath)).toEqual(before);
+
+      const failSpawn: SpawnFn = async () => ({ exitCode: 1, stdout: "", stderr: "AL0001: boom" });
+      await expect(backendWith(dir, staging, failSpawn).deploy(dir)).rejects.toBeInstanceOf(
+        AlcCompileError,
+      );
+      expect(await listing(staging.packageCachePath)).toEqual(before);
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a pre-existing stale lethal-control.app keeps its bytes and mtime, and is named by ONE warning (I1, I6)", async () => {
+    const dir = scratch("lethal-r552-stale-leftover-");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await writeDeployInputs(dir);
+      const staging = await seededCache(dir);
+      const leftover = join(staging.packageCachePath, "lethal-control.app");
+      await Bun.write(leftover, "stale-older-control-bytes");
+      await utimes(leftover, PAST, PAST);
+      const before = await listing(staging.packageCachePath);
+
+      const backend = backendWith(dir, staging);
+      await backend.deploy(dir);
+      await backend.compileCheck(dir);
+
+      expect(await readFile(leftover, "utf8")).toBe("stale-older-control-bytes");
+      expect((await stat(leftover)).mtimeMs).toBe(PAST.getTime());
+      expect(await listing(staging.packageCachePath)).toEqual(before);
+      const naming = warn.mock.calls.filter((c) => String(c[0]).includes(leftover));
+      expect(naming).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the leftover warning matches the name case-insensitively, as the skip does (F3)", async () => {
+    const dir = scratch("lethal-r552-warn-case-");
+    const cache = join(dir, "cache");
+    await mkdir(cache, { recursive: true });
+    expect(controlLeftoverWarning(cache)).toBeUndefined();
+    await Bun.write(join(cache, "Lethal-Control.app"), "stale");
+    expect(controlLeftoverWarning(cache)).toContain(join(cache, "Lethal-Control.app"));
+  });
+
+  /** A spawn that records each alc call's `/packagecachepath:` args and what the copy held. */
+  function recordingSpawn(exitCode = 0) {
+    const calls: { caches: string[]; held: string[]; symbol: Buffer | undefined }[] = [];
+    const spawn: SpawnFn = async (argv) => {
+      if (argv[0]?.includes("alc")) {
+        const caches = argv.filter((a) => a.startsWith("/packagecachepath:"));
+        const path = caches[0]?.slice("/packagecachepath:".length) ?? "";
+        const held = (await readdir(path).catch(() => [])).sort();
+        const symbol = await readFile(join(path, "lethal-control.app")).catch(() => undefined);
+        calls.push({ caches, held, symbol });
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (exitCode === 0 && out !== undefined) {
+          await Bun.write(out, buildFakeApp({ Codeunits: [] }));
+        }
+      }
+      return exitCode === 0
+        ? { exitCode: 0, stdout: "", stderr: "" }
+        : { exitCode, stdout: "", stderr: "AL0001: boom" };
+    };
+    const copyPath = () => calls[0]?.caches[0]?.slice("/packagecachepath:".length) ?? "";
+    return { calls, spawn, copyPath };
+  }
+
+  test("alc gets EXACTLY ONE package-cache path: the backend's copy of the user's packages plus the symbol, reused by every compile", async () => {
+    const dir = scratch("lethal-r552-argv-");
+    try {
+      await writeDeployInputs(dir);
+      const staging = await seededCache(dir);
+      const want = await readFile(staging.controlSymbolPath);
+      const rec = recordingSpawn();
+      const backend = backendWith(dir, staging, rec.spawn);
+      await backend.deploy(dir);
+      await backend.compileCheck(dir);
+      expect(rec.calls).toHaveLength(2);
+      for (const call of rec.calls) {
+        expect(call.caches).toHaveLength(1);
+        expect(call.caches[0]).toBe(`/packagecachepath:${rec.copyPath()}`);
+        expect(call.held).toEqual(["Microsoft_System_1.0.0.0.app", "lethal-control.app"]);
+        expect(call.symbol?.equals(want)).toBe(true);
+      }
+      expect(rec.copyPath()).not.toContain(";");
+      expect(rec.copyPath()).not.toBe(staging.packageCachePath);
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("close() removes the backend's package-cache copy", async () => {
+    const dir = scratch("lethal-r552-close-");
+    try {
+      await writeDeployInputs(dir);
+      const staging = await seededCache(dir);
+      const rec = recordingSpawn();
+      const backend = backendWith(dir, staging, rec.spawn);
+      await backend.deploy(dir);
+      expect((await stat(rec.copyPath())).isDirectory()).toBe(true);
+      await backend.close();
+      await expect(stat(rec.copyPath())).rejects.toThrow();
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a session that throws: the copy outlives the failed compile, and the session's finally (close()) removes it", async () => {
+    const dir = scratch("lethal-r552-finally-");
+    try {
+      await writeDeployInputs(dir);
+      const staging = await seededCache(dir);
+      const rec = recordingSpawn(1);
+      const backend = backendWith(dir, staging, rec.spawn);
+      let existedAfterThrow = false;
+      // The shape of `cli.ts`'s session: the backend is closed in a `finally`.
+      const session = async () => {
+        try {
+          await backend.deploy(dir);
+        } finally {
+          existedAfterThrow = (await stat(rec.copyPath()).catch(() => undefined)) !== undefined;
+          await backend.close();
+        }
+      };
+      await expect(session()).rejects.toBeInstanceOf(AlcCompileError);
+      expect(existedAfterThrow).toBe(true);
+      await expect(stat(rec.copyPath())).rejects.toThrow();
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a throw inside staging after the copy exists leaves no -staged directory", async () => {
+    const dir = scratch("lethal-r552-stage-throw-");
+    try {
+      await writeDeployInputs(dir);
+      await Bun.write(join(dir, "app.json"), "{ not json");
+      const staging = await seededCache(dir);
+      await expect(backendWith(dir, staging).deploy(dir)).rejects.toThrow();
+      await expect(stat(`${dir}-staged`)).rejects.toThrow();
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

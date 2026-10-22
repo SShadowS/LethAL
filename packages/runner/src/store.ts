@@ -290,6 +290,72 @@ export interface RunRow {
   /** R557 (I1): the run carries the R557 test-name mark (`runs.al_runner_names`). `false` on a row
    *  recorded before the column, and on every run that is not an R557+ al-runner session. */
   readonly alRunnerNames: boolean;
+  /** R586: `runs.runner_build` (an al-runner-v3 run's build), `null` on every other run. */
+  readonly runnerBuild: string | null;
+}
+
+/** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build. */
+export interface LendingSession {
+  readonly backend: string;
+  readonly runnerBuild: string | undefined;
+}
+
+/**
+ * R586 `runMayLend` step 1 (plan r2 §10, run FIRST so the reason it names is the real one): when
+ * EITHER side is `al-runner-v3`, both must be, and the run's recorded build must equal the
+ * session's. A v3 verdict carries v3's known differences (#5603's false survivors, #5605), so it
+ * is evidence only for that build. Any other backend pair lends here (their behaviour is
+ * unchanged; R592 files the gap between bcdev and v2). Remove-only. `undefined` = lends.
+ */
+export function backendBuildRefusal(
+  run: { readonly id: number; readonly backend: string; readonly runnerBuild: string | null },
+  session: LendingSession | undefined,
+): string | undefined {
+  const v3 = "al-runner-v3";
+  if (run.backend !== v3 && session?.backend !== v3) return undefined;
+  if (session === undefined) {
+    return `run ${run.id} ran on al-runner-v3 and this caller named no session backend, so nothing of it is lent (R586)`;
+  }
+  if (run.backend !== session.backend) {
+    return `run ${run.id} ran on ${run.backend} and this session runs ${session.backend}; a verdict is lent only within al-runner-v3 (R586)`;
+  }
+  if (run.runnerBuild === null || run.runnerBuild !== session.runnerBuild) {
+    return `run ${run.id} ran on al-runner-v3 build ${run.runnerBuild ?? "<unrecorded>"}, and this session runs ${session.runnerBuild ?? "<unknown>"}; a v3 verdict is lent only to the same build (R586)`;
+  }
+  return undefined;
+}
+
+/**
+ * R586 (plan r2 §10): the one run-level trust check, remove-only, in a fixed order; the first step
+ * that refuses names the reason. 1: backend and build (`backendBuildRefusal`). 2: R557's mark
+ * (`runLendsAlRunnerNames`). 3: R557 C1, a v2 run's renamed baseline errors (`renamed` over
+ * `baselineErrorMethods`, the caller's OWN inputs: a snapshot passes its own error rows).
+ */
+export function runMayLend(
+  run: {
+    readonly id: number;
+    readonly backend: string;
+    readonly runnerBuild: string | null;
+    readonly alRunnerNames: boolean;
+  },
+  session: LendingSession | undefined,
+  ctx: {
+    readonly baselineErrorMethods: () => readonly string[];
+    readonly renamed?: (methods: readonly string[]) => readonly string[];
+  },
+):
+  | { readonly step: "backend-build"; readonly why: string }
+  | { readonly step: "al-runner-unmarked" }
+  | { readonly step: "al-runner-renamed"; readonly tests: readonly string[] }
+  | undefined {
+  const why = backendBuildRefusal(run, session);
+  if (why !== undefined) return { step: "backend-build", why };
+  if (!runLendsAlRunnerNames(run)) return { step: "al-runner-unmarked" };
+  if (run.backend === "al-runner" && ctx.renamed !== undefined) {
+    const tests = ctx.renamed(ctx.baselineErrorMethods());
+    if (tests.length > 0) return { step: "al-runner-renamed", tests };
+  }
+  return undefined;
 }
 
 /**
@@ -749,6 +815,9 @@ export class ResultsStore {
       // R557 (I1): NULL on an older row, read as untrusted: an al-runner run without it lends no
       // history, carry or baseline snapshot (`runLendsAlRunnerNames`).
       ["runs", "al_runner_names INTEGER", runCols],
+      // R586: `<--version line> <binary sha256>` of an al-runner-v3 run; NULL on every other run
+      // and on older rows. `runMayLend` step 1 lends a v3 run only to a v3 session of that build.
+      ["runs", "runner_build TEXT", runCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
       if (!known.some((c) => c.name === name)) {
@@ -813,6 +882,8 @@ export class ResultsStore {
     /** R557 (I1): the run sends al-runner tests under `alRunnerMethodName`. `true` writes 1;
      *  absent or `false` writes NULL, which an al-runner run reads as untrusted. */
     alRunnerNames?: boolean;
+    /** R586: the al-runner-v3 build (`runnerBuildOf`); absent writes NULL (every other backend). */
+    runnerBuild?: string;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
@@ -823,8 +894,8 @@ export class ResultsStore {
       info.testAppDeps !== undefined;
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -846,6 +917,7 @@ export class ResultsStore {
         info.numberingDigest ?? null,
         info.dependencySourceSha256 ?? null,
         info.alRunnerNames === true ? 1 : null,
+        info.runnerBuild ?? null,
       ) as {
       id: number;
     };
@@ -1019,7 +1091,16 @@ export class ResultsStore {
     /** Verdicts a resume may reuse — `CARRYABLE_VERDICTS` (resume.ts), passed in so the SQL and the
      *  carry rule cannot drift apart. */
     carryableVerdicts: readonly string[];
+    /** R586: on `al-runner-v3`, only a run of this build is resumable (`runMayLend` step 1). */
+    runnerBuild?: string | undefined;
   }): number | null {
+    // R586: a v3 session resumes only its own build; NULL (an unrecorded build) never matches.
+    const v3 = q.backend === "al-runner-v3";
+    if (v3 && q.runnerBuild === undefined) {
+      throw new Error(
+        "findResumableRun: an al-runner-v3 session must name its runner build (R586)",
+      );
+    }
     // R52: "most recent unfinished" is NOT sufficient — it must also HAVE something to carry.
     // Measured 2026-07-27: an attempted resume aborted at lease acquisition before scoring a single
     // mutant, and the next `--resume` dutifully selected that empty run over the one holding 12 real
@@ -1032,13 +1113,14 @@ export class ResultsStore {
     const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        `SELECT id FROM runs WHERE project_path = ? AND backend = ? AND config_fingerprint = ? AND COALESCE(identity_scheme, 1) = ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+        `SELECT id FROM runs WHERE project_path = ? AND backend = ? AND config_fingerprint = ? AND COALESCE(identity_scheme, 1) = ? AND finished_at IS NULL${v3 ? " AND runner_build = ?" : ""} AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
       .get(
         q.projectPath,
         q.backend,
         q.configFingerprint,
         IDENTITY_SCHEME,
+        ...(v3 ? [q.runnerBuild ?? ""] : []),
         ...q.carryableVerdicts,
       ) as {
       id: number;
@@ -1156,11 +1238,12 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, al_runner_names, runner_build FROM runs WHERE id = ?",
       )
       .get(runId) as {
       dependency_source_sha256: string | null;
       al_runner_names: number | null;
+      runner_build: string | null;
       test_app_proven: number | null;
       test_app_deps: string | null;
       carry_hidden: string | null;
@@ -1196,6 +1279,7 @@ export class ResultsStore {
       numberingDigest: row.numbering_digest,
       dependencySourceSha256: row.dependency_source_sha256,
       alRunnerNames: row.al_runner_names === 1,
+      runnerBuild: row.runner_build,
     };
   }
 
@@ -2160,16 +2244,22 @@ export class ResultsStore {
       /** R557 (I1): the latest finished run is an al-runner run without the R557 test-name mark
        *  (`runLendsAlRunnerNames`): no key. Checked always, before `alRunnerTestNames`. */
       readonly alRunnerUnmarked?: (info: { runId: number }) => void;
+      /** R586: this session's backend and build, for `runMayLend` step 1, checked FIRST. Absent: a
+       *  v3 run lends nothing (the safe direction); every other pair is unchanged. */
+      readonly session?: LendingSession;
+      /** R586: step 1 refused the latest finished run (another backend or v3 build): no key. */
+      readonly backendBuildRefused?: (info: { runId: number; why: string }) => void;
     } = {},
   ): PriorSurvivors {
     const none = NO_PRIOR_SURVIVORS;
     const run = this.db
       .query(
-        "SELECT id, backend, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256, al_runner_names FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, backend, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, dependency_source_sha256, al_runner_names, runner_build FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
       backend: string;
       al_runner_names: number | null;
+      runner_build: string | null;
       dependency_source_sha256: string | null;
       test_app_proven: number | null;
       test_app_deps: string | null;
@@ -2183,6 +2273,15 @@ export class ResultsStore {
       test_app_hash: string | null;
     } | null;
     if (!run) return none;
+    // R586: `runMayLend` step 1 before any other reason, so the reason named is the real one.
+    const lendRefused = backendBuildRefusal(
+      { id: run.id, backend: run.backend, runnerBuild: run.runner_build },
+      on.session,
+    );
+    if (lendRefused !== undefined) {
+      on.backendBuildRefused?.({ runId: run.id, why: lendRefused });
+      return none;
+    }
     if (run.scheme !== IDENTITY_SCHEME) {
       on.schemeChanged?.({ runId: run.id, identityScheme: run.scheme });
       return none;

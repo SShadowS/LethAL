@@ -1259,6 +1259,8 @@ describe("AlRunnerBackend capabilities", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      // R586 and R553: the backend declares its own identity; the report's screen keys on it.
+      kind: "al-runner",
       authoritative: false,
     });
   });

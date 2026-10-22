@@ -1,13 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { GATE_BASELINES, SYMBOL_BASELINES, parseGateBaseline } from "../itest/baseline-guard";
+import {
+  GATE_BASELINES,
+  PENDING_FIRST_RECORD,
+  SYMBOL_BASELINES,
+  parseGateBaseline,
+} from "../itest/baseline-guard";
 import {
   ALRUNNER_FIGURES,
   BCDEV_FIGURES,
   CHUNKED_FIGURES,
   ENVTOOL_FIGURES,
   HANG_FIGURES,
+  LEND_FIGURES,
   TABLES_FIGURES,
 } from "../itest/gate-expected";
 import { EXPECTED as HARDEN_EXPECTED } from "../itest/harden-expected";
@@ -43,6 +49,7 @@ const CONSTANTS: Record<string, unknown> = {
   TABLES_FIGURES,
   CHUNKED_FIGURES,
   HANG_FIGURES,
+  LEND_FIGURES,
 };
 
 /** Baselines with an exported pre-committed table: its verdict counts must match the page too. */
@@ -228,6 +235,7 @@ const ITEST_FIGURES: Record<string, string> = {
   "tables.itest.ts": "TABLES_FIGURES",
   "chunked.itest.ts": "CHUNKED_FIGURES",
   "hang.itest.ts": "HANG_FIGURES",
+  "lend.itest.ts": "LEND_FIGURES",
 };
 
 /** A figure an itest restates as a literal instead of reading it from gate-expected.ts. */
@@ -275,6 +283,13 @@ describe("docs/gates pages pin their frozen figures (R-592)", () => {
     for (const [baseline, figures] of Object.entries(block.baselines)) {
       test(`${page}: ${baseline} matches the committed baseline`, () => {
         const path = join(ITEST, baseline);
+        // A baseline awaiting its one-time record (R332's PENDING_FIRST_RECORD) has no file yet:
+        // the page holds its pre-committed figures, and the file must really be absent. Once it
+        // is recorded and leaves the pending list, it is compared like any other.
+        if (PENDING_FIRST_RECORD.includes(baseline)) {
+          expect({ baseline, exists: existsSync(path) }).toEqual({ baseline, exists: false });
+          return;
+        }
         const parsed = parseGateBaseline(readFileSync(path, "utf8"), path, "R-592 pin test");
         expect(figures).toEqual(histogram(parsed.entries));
         const table = TABLES[baseline];
@@ -321,6 +336,7 @@ describe("itest/gate-expected.ts (R-592)", () => {
       TABLES_FIGURES,
       CHUNKED_FIGURES,
       HANG_FIGURES,
+      LEND_FIGURES,
     };
     const unnamed = Object.entries(exports)
       .flatMap(([name, value]) => leaves(value, name))

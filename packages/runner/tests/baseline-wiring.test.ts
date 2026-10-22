@@ -328,10 +328,14 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
   "harden.itest.ts": { BASELINE_PATH: "harden.baseline.json" },
   "hang.itest.ts": { SINGLE_BASELINE_PATH: "hang.single.baseline.json" },
   "tables.itest.ts": { BASELINE_PATH: "tables.baseline.json" },
+  // R586: leg T, preflighted only when the leg runs (inside an `if` before the first await).
+  "al-runner-v3.itest.ts": { TABLES_BASELINE_PATH: "al-runner-v3.tables.baseline.json" },
 };
 const READERS: Record<string, string> = {
   "verify.itest.ts": "bcdev.baseline.json",
   "test-app-publish.itest.ts": "bcdev.baseline.json",
+  // R618: `itest:lend` compares every leg with it, by key, and records nothing.
+  "lend.itest.ts": "bcdev.baseline.json",
   "verify-agreement.itest.ts": "harden.baseline.json",
   "verify-scale.itest.ts": "tables.baseline.json",
 };
