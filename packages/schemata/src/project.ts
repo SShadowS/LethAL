@@ -232,8 +232,9 @@ export function coarseIdentityTupleOf(
  * 38: R555, a call to a procedure that writes a preset exit name (in the report, its extension's base, or through a typed `Report X` receiver in any object) is hang-refused like the write itself; a refused site renumbers its same-tuple twins (measured on BaseApp at 48d5534f: 483 deployed mutants removed, 0 tuples moved, five ordinals moved; every other corpus: none).
  * 39 R-531: 47 ordinals renumber (43 BaseApp, 4 System Application); no tuple moves. A loop whose cursor condition (`Find*`, `IsEmpty`, `Count`, never `Next`) ends only because its body consumes the record set is hang-refused (the consumers, their guards and feeds, a one-hop same-object callee's consumers, the pre-loop filters the ending depends on, and every operator in the condition but swap-find-direction), so a refused site renumbers its same-tuple twins.
  * 40: R565, a call through `Report X` to a preset writer of a report OUTSIDE the project is hang-refused when X's source can be read from the dependency packages, so the refused set depends on dependency bytes and a refused site renumbers its same-tuple twins (measured with al-runner's 28.5 platform apps: Quality Management 7 removed, Application Test Library 15 removed and 2 ordinals moved, 0 tuples moved; ten other projects none).
+ * 41: R572, a loop whose exit is fed by another object's stateful procedure refuses that chain, its value-path writers and (`r572-guard-writer`) the guards that dominate a call into them in the loop body; a guard is refused as a SINGLE site, so it renumbers its procedure's same-tuple twins (measured on BaseApp at 950e69a3: 34 ordinals moved, 0 tuples moved, every move explained by a refused lower twin; /coord/handoff/R-572/reprice/investigation.md). THE NUMBER IS TO BE CONFIRMED AT MERGE: the next free scheme then (master was 40 when this was written).
  */
-export const IDENTITY_SCHEME = 40;
+export const IDENTITY_SCHEME = 41;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

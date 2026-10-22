@@ -4675,8 +4675,8 @@ function r572ValueWriters(
   for (const p of chain) {
     const k = objKey(p);
     if (k === null) continue;
-    // the object's globals on the path; a slice name that a local of `p` shadows is kept too
-    // (over-refusal only), and so is every global a same-object callee's slice added
+    // the object's globals on the path (`r572ValueNames` returns GLOBAL names only: a name a
+    // parameter or local of the procedure shadows is not one), including a same-object callee's
     const o = objectOf(p);
     const names = cached(ctx, p, "r572valuenames", () => r572ValueNames(p, ctx, new Set()));
     const set = path.get(k) ?? new Set<string>();
@@ -4810,6 +4810,7 @@ function r572ValueNames(
   });
   let unknown = false;
   const done = new Set<string>();
+  const fromCallees = new Set<string>();
   for (let changed = true; changed && !unknown; ) {
     changed = false;
     for (let e = exprs.pop(); e !== undefined && !unknown; e = exprs.pop())
@@ -4836,12 +4837,9 @@ function r572ValueNames(
             continue;
           const s = r572ValueNames(t, ctx, seen);
           if (s === null) unknown = true;
-          else
-            for (const x of r572Globals(t, ctx))
-              if (s.has(x) && !path.has(x)) {
-                path.add(x);
-                changed = true;
-              }
+          // the callee's GLOBALS: kept apart from `path`, whose names are `p`'s own (a local of
+          // `p` with the same name is not the callee's global)
+          else for (const x of s) fromCallees.add(x);
         }
       });
     visitAll(body, (n) => {
@@ -4857,7 +4855,12 @@ function r572ValueNames(
       guards(n);
     });
   }
-  return unknown ? null : path;
+  if (unknown) return null;
+  // re-price fix (Item Jnl.-Post Line, BaseApp): a name resolves to the object's GLOBAL only when
+  // no parameter or local of `p` shadows it; a shadowed name is `p`'s own and never on the path
+  const globals = new Set([...path].filter((x) => !r531Declares(p, x, true)));
+  for (const x of fromCallees) globals.add(x);
+  return globals;
 }
 
 const R570_UNKNOWN = "\u0002";

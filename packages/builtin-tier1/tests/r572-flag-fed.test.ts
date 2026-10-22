@@ -1273,6 +1273,51 @@ ${getters}
     expect(at(C, "T19")).toBe(true);
   });
 
+  /** Item Jnl.-Post Line's shape, abstracted: the loop hands its exit flag by `var` to an event
+   *  wrapper in another object (stateful: it raises an integration event), whose OTHER `var`
+   *  parameter is named like a record global of that object (`JnlLine`); the body also calls
+   *  `Post`, which writes that global. `genuine`: the wrapper reads the global itself. */
+  const shadow = (genuine: boolean): Files => ({
+    "Buf.Table.al": BUF,
+    [C]: `codeunit 57202 "R572 Post"
+{
+    var
+        JnlLine: Record "R572 Buf";
+
+    procedure RunOnStep(${genuine ? "" : `var JnlLine: Record "R572 Buf"; `}var Handled: Boolean)
+    begin
+        ${genuine ? "Handled := JnlLine.Val <> '';" : "OnStep(JnlLine, Handled);"}
+    end;
+
+    procedure Post()
+    var
+        Tag: Text;
+    begin
+        Tag := 'T35';
+        JnlLine.Modify();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnStep(var Line: Record "R572 Buf"; var Handled: Boolean)
+    begin
+    end;
+}`,
+    [L]: loop(
+      `        P: Codeunit "R572 Post";
+        Line: Record "R572 Buf";
+        Handled: Boolean;`,
+      `        repeat
+            P.RunOnStep(${genuine ? "" : "Line, "}Handled);
+            P.Post();
+        until Handled;`,
+    ),
+  });
+  it("35. a wrapper's `var` parameter that SHADOWS a record global: the global's writer is not refused", () => {
+    expect(project(shadow(false))(C, "T35")).toBe(false);
+  });
+  it("35b. the same global read for real by the wrapper: its writer is refused", () => {
+    expect(project(shadow(true))(C, "T35")).toBe(true);
+  });
   it("19b. a named return value: the writer of the global copied into it is refused", () => {
     const at = project({
       [C]: `codeunit 57202 "R572 Named"
