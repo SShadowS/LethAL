@@ -11562,18 +11562,33 @@ function isLethalConfigName(rel: string): boolean {
  * letter case, a symlinked parent directory or a hard link all match. The config is stat-ed once,
  * here; without a config (or with none on disk) nothing matches.
  */
-async function sameFileAs(
+export async function sameFileAs(
   configPath: string | undefined,
+  statOf: StatOf = (p) => stat(p, { bigint: true }),
 ): Promise<(p: string) => Promise<boolean>> {
-  const id = configPath === undefined ? undefined : await fileIdentity(configPath);
-  if (id === undefined) return async () => false;
-  return async (p) => (await fileIdentity(p)) === id;
+  const id = configPath === undefined ? undefined : await fileIdentity(configPath, statOf);
+  if (configPath === undefined || id === undefined) return async () => false;
+  // Some SMB and FAT mounts report ino 0 for every file, so identity says nothing: exact path only.
+  if (id.ino === 0n) {
+    const key = outputPathKey(configPath);
+    return async (p) => outputPathKey(p) === key;
+  }
+  return async (p) => {
+    const other = await fileIdentity(p, statOf);
+    return other !== undefined && other.dev === id.dev && other.ino === id.ino;
+  };
 }
 
-async function fileIdentity(p: string): Promise<string | undefined> {
+/** A seam for the ino-0 test; the default is `stat` with bigint fields. */
+type StatOf = (p: string) => Promise<{ readonly dev: bigint; readonly ino: bigint }>;
+
+async function fileIdentity(
+  p: string,
+  statOf: StatOf,
+): Promise<{ readonly dev: bigint; readonly ino: bigint } | undefined> {
   try {
-    const s = await stat(p, { bigint: true });
-    return `${s.dev}:${s.ino}`;
+    const s = await statOf(p);
+    return { dev: s.dev, ino: s.ino };
   } catch (err) {
     if ((err as { code?: unknown }).code === "ENOENT") return undefined;
     throw err;

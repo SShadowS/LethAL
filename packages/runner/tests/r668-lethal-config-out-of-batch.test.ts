@@ -4,7 +4,7 @@ import { link, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readTargetSource } from "../src/baseline-snapshot";
 import { runOutputPaths } from "../src/cli";
-import { prepareBatchProject } from "../src/orchestrator";
+import { prepareBatchProject, sameFileAs } from "../src/orchestrator";
 import { ProjectChangedDuringRunError, watchProjectInputs } from "../src/source-drift";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -143,6 +143,17 @@ describe("R668: the run's --config file is never copied into a batch, by identit
     await write(projectDir, "conn.json", DUMMY);
     await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0");
     expect(inBatch(batchDir, "conn.json")).toBe(true);
+  });
+});
+
+describe("R668: on a filesystem that reports inode 0 for every file", () => {
+  // Some SMB and FAT mounts do. Revert direction: without the ino-0 guard every file "is" the
+  // config, so the different file is dropped too. Other direction: the exact path still matches.
+  it("matches only the exact --config path, never a different file", async () => {
+    const statOf = async () => ({ dev: 7n, ino: 0n });
+    const isConfig = await sameFileAs("/proj/conn.json", statOf);
+    expect(await isConfig("/proj/conn.json")).toBe(true);
+    expect(await isConfig("/proj/other.json")).toBe(false);
   });
 });
 
