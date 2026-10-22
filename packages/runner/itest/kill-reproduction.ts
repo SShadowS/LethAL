@@ -1,6 +1,6 @@
 /**
- * R577: the gate's check that "a kill must reproduce" RAN on an al-runner leg, and the one table of
- * exact figures it is held to.
+ * R577: the gate's check that "a kill must reproduce" RAN on a leg of a backend with the rule
+ * (al-runner since R577, bcdev since R582), and the one table of exact figures it is held to.
  *
  * The verdicts cannot show it: a kill that reproduces is `killed` with or without the rule. So each
  * leg checks, from its own report and store:
@@ -62,7 +62,37 @@ export const REPRODUCTION_EXPECTED: Readonly<Record<string, ReproductionFigures>
   // store's method and `killing_test` both come from LethAL's own test reference.
   "names/one-shot": { killerRowsPerKill: 2 },
   "names/server": { killerRowsPerKill: 2 },
+  // R582: the BC gates, PREDICTED (pre-commitment 39eaf536 §2): the first run and its re-run, a
+  // `many` or `single` row and a `single` (k = 1) or `many` (k > 1) re-run row. A test app is one
+  // codeunit with no repeated method name, so the count cannot pick up a second test.
+  bcdev: { killerRowsPerKill: 2 },
+  "bcdev-names": { killerRowsPerKill: 2 },
+  "bcdev-wrapped/fenced": { killerRowsPerKill: 2 },
+  "bcdev-wrapped/hub": { killerRowsPerKill: 2 },
+  tables: { killerRowsPerKill: 2 },
+  "chunked/control": { killerRowsPerKill: 2 },
+  "chunked/chunked": { killerRowsPerKill: 2 },
+  "hang/on": { killerRowsPerKill: 2 },
+  "hang/single": { killerRowsPerKill: 2 },
+  "hang/off": { killerRowsPerKill: 2 },
+  "harden/A": { killerRowsPerKill: 2 },
+  "harden/B": { killerRowsPerKill: 2 },
+  "agreement/A": { killerRowsPerKill: 2 },
+  "agreement/B": { killerRowsPerKill: 2 },
+  verify: { killerRowsPerKill: 2 },
+  testapp: { killerRowsPerKill: 2 },
+  "verify-scale/A": { killerRowsPerKill: 2 },
+  "verify-scale/B1": { killerRowsPerKill: 2 },
+  "verify-scale/B2": { killerRowsPerKill: 2 },
+  envtool: { killerRowsPerKill: 2 },
 };
+
+/** The newest run in `store`: the one a gate just made, read right after its `runSession`. */
+export function latestRunId(store: ResultsStore): number {
+  const row = store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number | null };
+  if (row.id === null) throw new Error("R582: the store holds no run — caller-contract violation");
+  return row.id;
+}
 
 /** Every figure a run measured against a `null` in the table, for the end-of-gate failure. */
 const unmeasured: string[] = [];
@@ -72,17 +102,21 @@ export function unmeasuredReproductionFigures(): readonly string[] {
   return unmeasured;
 }
 
-/** Per killed mutant (`<batch>/<code>`), its killing test's mutated rows in `store`. */
-export function killerRows(store: ResultsStore): Map<string, number> {
+/**
+ * Per killed mutant (`<batch>/<code>`) of run `runId`, its killing test's mutated rows. The run id
+ * is REQUIRED (R582 I1): a fixture's persistent store holds older runs, whose kills would add keys
+ * or win a key.
+ */
+export function killerRows(store: ResultsStore, runId: number): Map<string, number> {
   const rows = store.db
     .query(
       `SELECT m.batch_index AS batch, m.mutant_code AS code,
          (SELECT COUNT(*) FROM test_results t
             WHERE t.mutant_row_id = m.id AND t.mutant_code IS NOT NULL
               AND t.method = m.killing_test) AS n
-       FROM mutants m WHERE m.verdict IN ('killed', 'timeout-killed')`,
+       FROM mutants m WHERE m.verdict IN ('killed', 'timeout-killed') AND m.run_id = ?`,
     )
-    .all() as Array<{ batch: number | null; code: string; n: number }>;
+    .all(runId) as Array<{ batch: number | null; code: string; n: number }>;
   return new Map(rows.map((r) => [`${r.batch ?? 0}/${r.code}`, r.n]));
 }
 
@@ -94,6 +128,8 @@ export function killReproductionFailures(
   leg: string,
   report: SessionReport,
   store: ResultsStore,
+  /** The run `report` came from (R582 I1). */
+  runId: number,
   extra: { readonly activations?: number; readonly serverSuiteRuns?: number } = {},
   /** Only a unit test passes another table. */
   table: Readonly<Record<string, ReproductionFigures>> = REPRODUCTION_EXPECTED,
@@ -122,7 +158,7 @@ export function killReproductionFailures(
       );
     }
   }
-  const rows = killerRows(store);
+  const rows = killerRows(store, runId);
   if (rows.size !== kills.length) {
     out.push(`R577 ${leg}: the store holds ${rows.size} kill row(s), the report ${kills.length}`);
   }

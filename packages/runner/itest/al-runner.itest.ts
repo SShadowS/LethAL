@@ -141,7 +141,11 @@ import {
   assertNoReachAttestation,
   printReachSummary,
 } from "./reach-evidence";
-import { killReproductionFailures, unmeasuredReproductionFigures } from "./kill-reproduction";
+import {
+  killReproductionFailures,
+  latestRunId,
+  unmeasuredReproductionFigures,
+} from "./kill-reproduction";
 import { SYMBOL_SETS, assertSymbolBuild, printSymbolTable, symbolSetLabel } from "./symbol-fixture";
 import {
   WRAPPED_PROJECT_DIR,
@@ -451,7 +455,12 @@ async function runOnce(
       : selectorMode === "resource"
         ? "resource"
         : "server";
-    const reproFailures = killReproductionFailures(`${fixture.name}/${transport}`, report, store);
+    const reproFailures = killReproductionFailures(
+      `${fixture.name}/${transport}`,
+      report,
+      store,
+      latestRunId(store),
+    );
     assert.deepEqual(reproFailures, [], reproFailures.join("; "));
     observer?.contractLines.push(...contractLines);
     return report;
@@ -1318,7 +1327,7 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
       ),
     );
     check("cli-default kill reproduction (R577)", () => {
-      const reproFailures = killReproductionFailures("cli-default", report, store, {
+      const reproFailures = killReproductionFailures("cli-default", report, store, latestRunId(store), {
         activations: resource.activations,
         serverSuiteRuns: rec.record.serverRunTests,
       });

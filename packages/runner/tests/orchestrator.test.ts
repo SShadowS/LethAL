@@ -20656,6 +20656,47 @@ describe("R577: a kill must reproduce under the mutant", () => {
     return backend;
   };
 
+  test("U2c (R582): on the group path a cold kill's reproduction emits NO group-call event, a warm kill's exactly one", async () => {
+    // T5's script: M0001 dies at T1 (position 1, cold); with `warm`, M0002 dies at T2 behind T1
+    // (k = 2). The rule-off backend runs the same script, so the difference is the reproductions'.
+    const groupCalls = async (ruleOn: boolean, warm: boolean) => {
+      const Cls = ruleOn ? ReproWarmStub : WarmStubBackend;
+      const backend: WarmStubBackend = new Cls(
+        CAPS_NST,
+        (mutant, ref) => {
+          if (ref.method === "T1") backend.session.set("cache", "populated-by-T1");
+          if (
+            warm &&
+            mutant === "M0002" &&
+            ref.method === "T2" &&
+            backend.session.get("cache") !== undefined
+          )
+            return "fail";
+          if (mutant === "M0001" && ref.method === "T1") return "fail";
+          return "pass";
+        },
+        ["IsOverBudget"],
+      );
+      let events = 0;
+      const { report, store } = await run(backend, {
+        testAl: FIVE_TESTS_AL,
+        onEvent: (e) => {
+          if (e.type === "group-call") events += 1;
+        },
+      });
+      store.close();
+      expect(rowOf(report, "M0001")?.killPosition).toBe(1);
+      expect(rowOf(report, "M0001")?.verdict).toBe("killed");
+      expect(rowOf(report, "M0001")?.killReproduced).toBe(ruleOn ? true : undefined);
+      if (warm) expect(rowOf(report, "M0002")?.killPosition).toBe(2);
+      return events;
+    };
+    const coldOff = await groupCalls(false, false);
+    expect(coldOff).toBeGreaterThan(0);
+    expect(await groupCalls(true, false)).toBe(coldOff);
+    expect(await groupCalls(true, true)).toBe((await groupCalls(false, true)) + 1);
+  });
+
   test("T5b: a replay under the mutant that passes all k is kill-not-reproduced, with the replay clause", async () => {
     const backend = warmFlaky();
     const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
