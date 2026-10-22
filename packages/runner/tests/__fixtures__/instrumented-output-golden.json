@@ -168,6 +168,10 @@
       "sha256": "587e4fcdb40c79e45ba7e90fdda1988759373d08e0940b52c77f4d804b245fd4",
       "mutants": 2
     },
+    "fixtures/sandbox-hang-tests/src/HangBaselineTests.Codeunit.al": {
+      "sha256": "d37b28eb68d268aff03d285d40b3b1cdcca0fdfb8c290cbdd6e6798598d6d0b3",
+      "mutants": 8
+    },
     "fixtures/sandbox-hang-tests/src/HangTests.Codeunit.al": {
       "sha256": "214352e32aecf10d31905dccad27eadf245aeb9c7bc650e59d5a14d79ad49d99",
       "mutants": 24

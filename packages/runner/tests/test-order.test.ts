@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { TestMethodRef } from "../src/backend";
 import { testKeyOf } from "../src/selection";
@@ -162,5 +164,78 @@ describe("orderCoveringTests: the name tie-break ignores the host collation (R48
     } finally {
       String.prototype.localeCompare = original;
     }
+  });
+});
+
+/**
+ * R-658 plan test F1 (pre-commitment 00d508c4 §2): with the new codeunit 79451 in the hang tests
+ * app, the existing `DrainQueue` killer still runs first under every `DrainQueue` mutant, so no
+ * new test (and never `SleepsPast…`'s 25 s Sleep) runs under a mutant. Names are read from the
+ * fixture `.al` files, never typed here, so a rename moves this test.
+ */
+describe("R-658 F1: the hang fixture's covering-test order", () => {
+  const SRC = join(import.meta.dir, "..", "..", "..", "fixtures", "sandbox-hang-tests", "src");
+  function testsOf(file: string): TestMethodRef[] {
+    const text = readFileSync(join(SRC, file), "utf8");
+    const head = text.match(/^codeunit (\d+) "([^"]+)"/);
+    if (head?.[1] === undefined || head[2] === undefined)
+      throw new Error(`${file}: no codeunit header`);
+    const codeunitId = Number(head[1]);
+    const codeunitName = head[2];
+    return [...text.matchAll(/\[Test\]\s*procedure (\w+)\(/g)].flatMap((m) =>
+      m[1] !== undefined ? [{ codeunitId, codeunitName, method: m[1] }] : [],
+    );
+  }
+  const old = testsOf("HangTests.Codeunit.al");
+  const added = testsOf("HangBaselineTests.Codeunit.al");
+  const pick = (refs: TestMethodRef[], method: string): TestMethodRef => {
+    const r = refs.find((x) => x.method === method);
+    if (r === undefined) throw new Error(`no test ${method}`);
+    return r;
+  };
+  const killer = pick(old, "DrainQueueEmptiesTheQueue");
+  const sleeps = pick(added, "SleepsPastTheBaselineBudget");
+  const zz = pick(added, "ZZDrainsAfterTheStop");
+  const drain = (line: number, id: string) =>
+    mutant({
+      mutantId: id,
+      startLine: line,
+      codeunitName: "Hang Logic",
+      procedureName: "DrainQueue",
+    });
+  // Each of the three covers one member (DrainQueue) at the 120 s default, so the members key ties.
+  const members = new Map([killer, sleeps, zz].map((r) => [testKeyOf(r), 1]));
+
+  test("the fixture reads as pre-committed: 79450 Hang Tests and 79451 Hang Z Baseline Tests", () => {
+    expect(added.map((r) => `${r.codeunitId}:${r.codeunitName}.${r.method}`)).toEqual([
+      "79451:Hang Z Baseline Tests.SleepsPastTheBaselineBudget",
+      "79451:Hang Z Baseline Tests.ZPassesAfterTheStoppedTest",
+      "79451:Hang Z Baseline Tests.ZZDrainsAfterTheStop",
+    ]);
+    expect(killer.codeunitName).toBe("Hang Tests");
+  });
+
+  test("old legs: the existing killer is first for line 101, then for every later DrainQueue mutant", () => {
+    const ledger = newKillLedger();
+    const covering = [zz, sleeps, killer];
+    const first = orderCoveringTests(covering, drain(101, "M0001"), ledger, members);
+    expect(first[0]).toEqual(killer);
+    recordKill(ledger, drain(101, "M0001"), killer);
+    for (const [line, id] of [
+      [102, "M0002"],
+      [103, "M0003"],
+      [103, "M0004"],
+      [105, "M0005"],
+      [105, "M0006"],
+      [107, "M0007"],
+    ] as const) {
+      expect(orderCoveringTests(covering, drain(line, id), ledger, members)[0]).toEqual(killer);
+    }
+  });
+
+  test("BASELINE leg: were SleepsPast… counted as covering, it would sort before ZZ…", () => {
+    expect(
+      orderCoveringTests([zz, sleeps], drain(103, "M0003"), newKillLedger(), members)[0],
+    ).toEqual(sleeps);
   });
 });

@@ -177,8 +177,9 @@ describe("R577: the gate's kill-reproduction check", () => {
       "has no row in REPRODUCTION_EXPECTED",
     );
     // 20 al-runner legs (measured at 102821df; R557's names legs pre-committed, a40097fc) and,
-    // since R582, 20 BC legs (pre-committed, 39eaf536), envtool's included.
-    expect(Object.keys(REPRODUCTION_EXPECTED)).toHaveLength(40);
+    // since R582, 20 BC legs (pre-committed, 39eaf536), envtool's included; R-658 adds
+    // hang/baseline (pre-committed, 00d508c4).
+    expect(Object.keys(REPRODUCTION_EXPECTED)).toHaveLength(41);
     const blanks = Object.entries(REPRODUCTION_EXPECTED)
       .filter(([, f]) => Object.values(f).some((v) => v === null))
       .map(([leg]) => leg);
@@ -188,7 +189,15 @@ describe("R577: the gate's kill-reproduction check", () => {
       "killerRowsPerKill",
       "serverSuiteRuns",
     ]);
-    for (const leg of ["bcdev", "tables", "hang/on", "hang/single", "chunked/chunked", "envtool"]) {
+    for (const leg of [
+      "bcdev",
+      "tables",
+      "hang/on",
+      "hang/single",
+      "hang/baseline",
+      "chunked/chunked",
+      "envtool",
+    ]) {
       expect(REPRODUCTION_EXPECTED[leg]).toEqual({ killerRowsPerKill: 2 });
     }
   });

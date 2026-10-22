@@ -207,7 +207,7 @@ fixture apps change.
 | `bc1` | `itest:testapp` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-testapp.c23.log` |
 | `bc1` | `itest:lease` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-lease.c23.log` |
 | `bc1` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-chunked.log` |
-| `bc1` | `itest:hang` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-hang.log` |
+| `bc1` | `itest:hang` | 1.0.0.23 | not re-proven at 1.0.0.4; hang does not run on bc1 (R-658). Was R-604, `/coord/handoff/R-604/bc1-hang.log` |
 | `bc1` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-harden.log` |
 | `bc1` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc1-agreement.log` |
 | `bc2` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-bcdev.c23.log` |
@@ -220,10 +220,10 @@ fixture apps change.
 | `bc2` | `itest:testapp` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-testapp.c23.log` |
 | `bc2` | `itest:lease` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-lease.c23.log` |
 | `bc2` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-chunked.c23.log` |
-| `bc2` | `itest:hang` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-hang.c23.log` |
+| `bc2` | `itest:hang` | 1.0.0.23 | unproven (tests app 1.0.0.4, R-658). Was R-604, `/coord/handoff/R-604/bc2-hang.c23.log` |
 | `bc2` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-harden.c23.log` |
 | `bc2` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc2-agreement.c23.log` |
-| `bc3` | `itest:hang` | 1.0.0.23 | R-604 (re-proven after the republish), `/coord/handoff/R-604/bc3-hang.log` |
+| `bc3` | `itest:hang` | 1.0.0.23 | unproven (tests app 1.0.0.4, R-658). Was R-604 (re-proven after the republish), `/coord/handoff/R-604/bc3-hang.log` |
 | `bc3` | `itest:bcdev` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev.log` |
 | `bc3` | `itest:bcdev-wrapped` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev-wrapped.log` |
 | `bc3` | `itest:bcdev-names` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-bcdev-names.log` |

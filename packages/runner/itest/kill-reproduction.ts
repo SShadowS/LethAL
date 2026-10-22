@@ -75,6 +75,9 @@ export const REPRODUCTION_EXPECTED: Readonly<Record<string, ReproductionFigures>
   "hang/on": { killerRowsPerKill: 2 },
   "hang/single": { killerRowsPerKill: 2 },
   "hang/off": { killerRowsPerKill: 2 },
+  // R-658's BASELINE leg (pre-commitment 00d508c4 §4, assertion 6): the DrainQueue kill's group
+  // call and its single re-run, both `ZZDrainsAfterTheStop`.
+  "hang/baseline": { killerRowsPerKill: 2 },
   "harden/A": { killerRowsPerKill: 2 },
   "harden/B": { killerRowsPerKill: 2 },
   "agreement/A": { killerRowsPerKill: 2 },
