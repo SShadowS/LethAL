@@ -300,7 +300,7 @@ import {
 
 import { InstalledBundleError, readBatchBundle } from "./installed-bundle";
 
-const BASELINE_TIMEOUT_DEFAULT = 120_000;
+export const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
 /**
  * Floor for a mutant run's time budget.

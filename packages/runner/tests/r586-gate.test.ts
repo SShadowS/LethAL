@@ -15,13 +15,18 @@ import {
   classifyXb,
   dirtyFromStatus,
   failsClosedRefusal,
+  formatLegTRow,
   gateOutcome,
+  judgeLegT,
   knownDifferenceKeys,
   knownDifferencesRefusal,
   legOutcomeOfError,
+  xbHeldFirst,
+  xdBaselineLine,
+  xdFailure,
 } from "../itest/al-runner-v3-gate";
 import { TABLES_KNOWN_DIFFERENCES } from "../itest/al-runner-v3-tables-known";
-import type { NormalizedMutant } from "../itest/mutant-equality";
+import { type NormalizedMutant, compareMutants } from "../itest/mutant-equality";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 
 describe("the D legs' CDO checkout guard (lane ruling 2026-10-21)", () => {
@@ -138,11 +143,20 @@ describe("R639 r9 §7: leg T's narrow held for a named refusal", () => {
   });
   const k2 = own[1] as NormalizedMutant;
   const k3 = own[2] as NormalizedMutant;
-  test("T1: a known row going survived -> error/runner-refused is held, with the named-refusal line", () => {
+  test("T1: a known row going survived -> error/runner-refused is held, as a structured row and its one line", () => {
     const t = classifyLegT(own, [err("K1", "runner-refused"), k2, k3], bc);
     expect(t.outcome).toBe("held");
-    expect(t.lines).toEqual([
-      "held: K1: survived -> error (a named refusal: v3 notRun or LethAL §6; not BC's verdict; re-pre-commit)",
+    expect(t.rows).toEqual([
+      {
+        key: "K1",
+        kind: "held-refusal",
+        known: true,
+        own: own[0],
+        now: err("K1", "runner-refused"),
+      },
+    ]);
+    expect(t.rows.map((r) => formatLegTRow(r, "M0157"))).toEqual([
+      "T: held: M0157 K1: survived/-/- -> error/runner-refused/- (a named refusal: v3 notRun or LethAL §6; not BC's verdict; re-pre-commit)",
     ]);
   });
   test("T2: an UNKNOWN row going to error/runner-refused is gate-fail", () => {
@@ -165,6 +179,209 @@ describe("R639 r9 §7: leg T's narrow held for a named refusal", () => {
     expect(classifyLegT(own, [err("K1", "runner-test-error"), k2, k3], bc).outcome).toBe(
       "gate-fail",
     );
+  });
+});
+
+describe("R647 r10 (a): judgeLegT classifies, compares and prints first, then judges in order", () => {
+  const err = (key: string, errorClass: string, killingTest: string | null = null) => ({
+    ...row(key, "error", killingTest),
+    errorClass,
+  });
+  const k2 = own[1] as NormalizedMutant;
+  const k3 = own[2] as NormalizedMutant;
+  const heldNow = [err("K1", "runner-refused"), k2, k3];
+  const codes = new Map([
+    ["K1", "M0157"],
+    ["K2", "M0002"],
+    ["K3", "M0003"],
+  ]);
+  const judge = (
+    now: readonly NormalizedMutant[],
+    o: Partial<Parameters<typeof judgeLegT>[0]> = {},
+    before: readonly NormalizedMutant[] = own,
+  ) =>
+    judgeLegT({
+      classification: classifyLegT(before, now, bc),
+      compare: compareMutants(before, now, { sameScheme: true }),
+      counts: { killed: 290, survived: 57, noCoverage: 59 },
+      total: 406,
+      unsupportedTests: 3,
+      sleepIndex: { target: 0, test: 0 },
+      knownRefusal: undefined,
+      codes,
+      ...o,
+    });
+  const heldLine =
+    "T: held: M0157 K1: survived/-/- -> error/runner-refused/- (a named refusal: v3 notRun or LethAL §6; not BC's verdict; re-pre-commit)";
+  test("T-a1: held rows, the compare on that key only, counts 290 / 56 / 59: held (no count check)", () => {
+    const j = judge(heldNow, { counts: { killed: 290, survived: 56, noCoverage: 59 } });
+    expect(j.outcome).toBe("held");
+    expect(j.lines).toEqual([heldLine]);
+  });
+  test("T-a2: pass rows, empty compare, counts 290 / 56 / 59: gate-fail", () => {
+    const j = judge(own, { counts: { killed: 290, survived: 56, noCoverage: 59 } });
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.failure).toMatch(/290 \/ 56 \/ 59.*pre-committed 290 \/ 57 \/ 59 over 406/);
+  });
+  test("T-a3: pass rows, empty compare, counts 290 / 57 / 59 over 406: pass", () => {
+    expect(judge(own).outcome).toBe("pass");
+    expect(judge(own, { total: 405 }).outcome).toBe("gate-fail");
+  });
+  test("T-a5: held rows with Sleep index 1 + 0 are gate-fail; with 0 + 0 held", () => {
+    expect(judge(heldNow, { sleepIndex: { target: 1, test: 0 } }).outcome).toBe("gate-fail");
+    expect(judge(heldNow, { sleepIndex: undefined }).outcome).toBe("gate-fail");
+    expect(judge(heldNow, { sleepIndex: { target: 0, test: 0 } }).outcome).toBe("held");
+  });
+  test("T-a6: held rows with unsupportedTests 2 are gate-fail; with 3 held", () => {
+    expect(judge(heldNow, { unsupportedTests: 2 }).outcome).toBe("gate-fail");
+    expect(judge(heldNow, { unsupportedTests: 3 }).outcome).toBe("held");
+  });
+  test("T-a7: one held row and one gate-fail row: gate-fail", () => {
+    expect(judge([err("K1", "runner-refused"), row("K2", "survived"), k3]).outcome).toBe(
+      "gate-fail",
+    );
+  });
+  test("T-a8 (M1): held rows with a knownDifferencesRefusal are gate-fail; with undefined held", () => {
+    const j = judge(heldNow, { knownRefusal: "not the pinned 52" });
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.failure).toMatch(/not the pinned 52/);
+    expect(judge(heldNow, { knownRefusal: undefined }).outcome).toBe("held");
+  });
+  const sha = (m: NormalizedMutant, h: string): NormalizedMutant => ({
+    ...m,
+    mutatedTextSha256: h,
+  });
+  const ownSha = [sha(own[0] as NormalizedMutant, "a"), sha(k2, "b"), sha(k3, "c")];
+  test("T-a9 (I1): pass rows but one text-only compare difference: gate-fail", () => {
+    const now = [sha(own[0] as NormalizedMutant, "a"), sha(k2, "B"), sha(k3, "c")];
+    const j = judge(now, {}, ownSha);
+    expect(classifyLegT(ownSha, now, bc).outcome).toBe("pass");
+    expect(j.outcome).toBe("gate-fail");
+  });
+  test("T-a10 (I1): held on K1, but the compare differs on K1 and K2: gate-fail", () => {
+    const now = [sha(err("K1", "runner-refused"), "a"), sha(k2, "B"), sha(k3, "c")];
+    expect(classifyLegT(ownSha, now, bc).outcome).toBe("held");
+    const j = judge(now, {}, ownSha);
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.failure).toMatch(/K2/);
+  });
+  test("T-a11 (I3): a failing step 2 (unsupportedTests 0) still returns every row line of step 0", () => {
+    const j = judge(heldNow, { unsupportedTests: 0 });
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines).toEqual([heldLine]);
+  });
+});
+
+describe("R647 r10 (b): leg T's row lines, one format", () => {
+  const err = (key: string, errorClass: string) => ({ ...row(key, "error"), errorClass });
+  const k2 = own[1] as NormalizedMutant;
+  const k3 = own[2] as NormalizedMutant;
+  const lines = (now: readonly NormalizedMutant[], before: readonly NormalizedMutant[] = own) =>
+    judgeLegT({
+      classification: classifyLegT(before, now, bc),
+      compare: compareMutants(before, now, { sameScheme: true }),
+      counts: { killed: 290, survived: 57, noCoverage: 59 },
+      total: 406,
+      unsupportedTests: 3,
+      sleepIndex: { target: 0, test: 0 },
+      knownRefusal: undefined,
+      codes: new Map([
+        ["K1", "M0157"],
+        ["K2", "M0002"],
+      ]),
+    }).lines;
+  test("T-b1: held-bc, held-refusal and a known-key gate-fail each give the exact line", () => {
+    expect(lines([row("K1", "killed", "DoubleInsert"), k2, k3])).toEqual([
+      "T: held: M0157 K1: survived/-/- -> killed/-/DoubleInsert (the BC verdict, a known difference)",
+    ]);
+    expect(lines([err("K1", "runner-refused"), k2, k3])).toEqual([
+      "T: held: M0157 K1: survived/-/- -> error/runner-refused/- (a named refusal: v3 notRun or LethAL §6; not BC's verdict; re-pre-commit)",
+    ]);
+    expect(lines([err("K1", "other"), k2, k3])).toEqual([
+      "T: gate-fail: M0157 K1: survived/-/- -> error/other/- (a known row, but not to its BC verdict)",
+    ]);
+    expect(lines([own[0] as NormalizedMutant, row("K2", "survived"), k3])).toEqual([
+      "T: gate-fail: M0002 K2: killed/-/T2 -> survived/-/-",
+    ]);
+  });
+  test("T-b2: a missing row prints absent (code -), and a text-only compare difference its own line", () => {
+    expect(lines(own.slice(0, 2))).toEqual(["T: gate-fail: - K3: survived/-/- -> absent"]);
+    const before = own.map((m) => ({ ...m, mutatedTextSha256: m.key }));
+    const now = before.map((m) => (m.key === "K2" ? { ...m, mutatedTextSha256: "other" } : m));
+    expect(lines(now, before)).toEqual([
+      "T: gate-fail: M0002 K2: mutant K2: mutated text differs under an unchanged key",
+    ]);
+  });
+  test("T-b3: pass prints no row line", () => {
+    expect(lines(own)).toEqual([]);
+  });
+  test("T-b4: 60 differing rows are 60 receipt lines, none cut", () => {
+    const keys = Array.from({ length: 60 }, (_, i) => `R${i}`);
+    const o = keys.map((k) => row(k, "survived"));
+    const n = keys.map((k) => row(k, "killed", "SomeTest"));
+    const j = judgeLegT({
+      classification: classifyLegT(o, n, o),
+      compare: compareMutants(o, n, { sameScheme: true }),
+      counts: { killed: 290, survived: 57, noCoverage: 59 },
+      total: 406,
+      unsupportedTests: 3,
+      sleepIndex: { target: 0, test: 0 },
+      knownRefusal: undefined,
+      codes: new Map(),
+    });
+    expect(j.lines.length).toBe(60);
+    for (const [i, l] of j.lines.entries())
+      expect(l).toBe(`T: gate-fail: - R${i}: survived/-/- -> killed/-/SomeTest`);
+  });
+});
+
+describe("R647 r10 (c): X (d)'s baseline reason line and X (b)'s early receipt line", () => {
+  const what = "X (d): M0001 lethal.empty-block no-coverage";
+  test("X-c1: present and not pass: the not-green text is added", () => {
+    expect(
+      xdFailure(what, { outcome: "timeout", failureMessage: "Test exceeded 120s timeout." }),
+    ).toBe(
+      `${what}; X (d): SleeperDoubles is not green at baseline (timeout: Test exceeded 120s timeout.): the Sleep rule was not exercised; gate-fail`,
+    );
+  });
+  test("X-c1: SleeperDoubles pass (baselineGreen false from another test): no text", () => {
+    expect(xdFailure(what, { outcome: "pass" })).toBe(what);
+  });
+  test("X-c1: the verdict absent: no text, and the source line prints absent", () => {
+    expect(xdFailure(what, undefined)).toBe(what);
+    expect(xdBaselineLine(undefined)).toBe("X (d): SleeperDoubles baseline-batch-finished: absent");
+    expect(xdBaselineLine({ outcome: "timeout", failureMessage: "m" })).toBe(
+      "X (d): SleeperDoubles baseline-batch-finished: timeout: m",
+    );
+  });
+  test("X-b1 (M5): the X (b) held line is in the receipt even when (d) then gate-fails", async () => {
+    const got: string[] = [];
+    const run = xbHeldFirst(
+      ["X (b): exit 3: v3 now refuses"],
+      (l) => got.push(l),
+      async () => {
+        throw new V3LegFailure("X (d): M0001 no-coverage");
+      },
+    );
+    await expect(run).rejects.toBeInstanceOf(V3LegFailure);
+    expect(got).toEqual(["X: X (b): exit 3: v3 now refuses"]);
+  });
+  test("X-b1: with nothing else failing, a held X (b) still makes the leg held", async () => {
+    const got: string[] = [];
+    await expect(
+      xbHeldFirst(
+        ["X (b): held"],
+        (l) => got.push(l),
+        async () => {},
+      ),
+    ).rejects.toBeInstanceOf(V3LegHeld);
+    await expect(
+      xbHeldFirst(
+        [],
+        (l) => got.push(l),
+        async () => {},
+      ),
+    ).resolves.toBeUndefined();
   });
 });
 
