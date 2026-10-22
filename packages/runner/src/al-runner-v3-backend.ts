@@ -122,10 +122,11 @@ export const V3_REFUSED_NEARBY_TAG = "[v3-refused-test-nearby]";
 /**
  * R652: a §5 window's 2-3 plain sends follow ONE bound check (the window's), so a tree change
  * after it can reach their rows. Those rows never make a kill, only an error; each such text says
- * so, so a reader does not blame the wrong cause.
+ * so, so a reader does not blame the wrong cause. Worded to stay true on a LATER mutant's verdict
+ * that carries a latched `batchBlind` note (build review L2).
  */
 export const WINDOW_BOUND_CAVEAT =
-  "a change to the bound tree after this window's bound check (R652) is a possible cause";
+  "a bound-tree change since a window's bound check (R652) is a possible cause";
 const withWindowCaveat = (s: string): string => `${s}; ${WINDOW_BOUND_CAVEAT}`;
 
 /** §3: the bytes v3 would read are not the bytes alc proved. Stops the session. */
@@ -1057,7 +1058,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /**
    * R652: §3 step 3 immediately before each SEND (`send`, `callCodeunit`'s spawn, a §5 window), never
    * on a `run()` served from memory: every row comes from a send that was checked just before it
-   * left, and al-runner has finished reading when the answer is back. R651's timer outside the bracket.
+   * left. A change in the gap between that check and al-runner's read cannot make a kill, because
+   * R577 (`killsMustReproduce`) sends every kill's confirm and reproduction fresh, each checked;
+   * turning that off for v3 would reopen the gap. A lasting change in the LAST send's gap goes
+   * unreported (build review L1). R651's timer outside the bracket.
    */
   private async checkBound(): Promise<void> {
     if (this.inBaseline) return this.assertBound();
@@ -1599,14 +1603,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       (n, e) => n + (e.echo ? 1 : (this.testsPerCodeunit.get(e.codeunit) ?? 1)),
       0,
     );
-    this.stats.entriesSent += sent.length;
     const body = {
       ...this.requestBase(),
       entries: sent.map((e) => ({ id: e.id, resources: e.resources, test: e.test })),
     };
     await this.checkBound();
     // R652 (review r1 #2): counted with the check, so `boundChecks = warmups + prefetchRequests +
-    // liveRequests + coverageRequests` holds whatever fails (a daemon start, a request).
+    // liveRequests + coverageRequests` holds whatever fails (a daemon start, a request). Build
+    // review L3: a send the check refuses sends no entries.
+    this.stats.entriesSent += sent.length;
     if (kind === "prefetch") this.stats.prefetchRequests += 1;
     else if (kind === "live") this.stats.liveRequests += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;

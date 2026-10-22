@@ -2063,6 +2063,21 @@ describe("R652: the bound is checked before each SEND, not at each run()", () =>
     expect(r.serve.requests.length).toBe(n0 + 1);
   });
 
+  test("build review L3: a send the check refuses counts no entries; a sent one counts its entries", async () => {
+    const r = await readyRig({ mutants: [] });
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS);
+    const e0 = r.b.entriesStats().entriesSent;
+    await r.b.prefetchMutants(plans(["M0001"]));
+    // One group: its echo entry and one codeunit entry.
+    expect(r.b.entriesStats().entriesSent).toBe(e0 + 2);
+    await appendFile(join(activeOf(r), "Logic.Codeunit.al"), " ");
+    await expect(r.b.prefetchMutants(plans(["M0002"]))).rejects.toBeInstanceOf(
+      AlRunnerV3UnprovenBatchError,
+    );
+    expect(r.b.entriesStats().entriesSent).toBe(e0 + 2);
+  });
+
   test("T3b: the WARM-UP is checked: a change after the baseline sends nothing, and the daemon is closed", async () => {
     const r = await rig();
     await baseline(r.b, SUITE1);
@@ -2268,7 +2283,11 @@ describe("R652: the bound is checked before each SEND, not at each run()", () =>
       expect(v1.failureMessage).toContain("not in v3's coverage");
       expect(v1.failureMessage).toContain(WINDOW_BOUND_CAVEAT);
       await r.b.activate("M0002");
-      expect((await r.b.run(ref("A"), OPTS)).failureMessage).toContain(WINDOW_BOUND_CAVEAT);
+      const later = (await r.b.run(ref("A"), OPTS)).failureMessage ?? "";
+      expect(later).toContain(WINDOW_BOUND_CAVEAT);
+      // Build review L2: on a LATER mutant's verdict the note must not claim "this" window.
+      expect(later).toContain("a bound-tree change since a window's bound check");
+      expect(later).not.toContain("this window's");
     });
 
     test("a transport failure of the window's request", async () => {
