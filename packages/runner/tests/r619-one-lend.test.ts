@@ -292,6 +292,9 @@ const RENAMED_TAIL =
 const renamedWhy = (id: number) => `run ${id} ${RENAMED_TAIL}`;
 const otherBackend = (id: number, run: string, session: string) =>
   `run ${id} ran on ${run} and this session runs ${session}; a verdict is lent only within al-runner-v3 (R586)`;
+/** R592: another backend, neither side v3. */
+const otherOne = (id: number, run: string, session: string) =>
+  `run ${id} ran on ${run} and this session runs ${session}; a verdict is lent only within one backend (R592)`;
 const otherBuild = (id: number, build: string) =>
   `run ${id} ran on al-runner-v3 build ${build}, and this session runs ${B1}; a v3 verdict is lent only to the same build (R586)`;
 
@@ -338,8 +341,15 @@ describe("R619 history (priorSurvivorKeys through runSession): T14's cases", () 
     expect(h.survived).toBeGreaterThan(0);
     expect(known(h.report)).toHaveLength(h.survived);
   });
-  test("bcdev run, v2 session: lends (R592's gap, unchanged)", async () => {
-    const h = await history({ session: "al-runner", run: { backend: "bcdev" } });
+  test("R592: bcdev run, v2 session: step 1", async () => {
+    await refusedBy(
+      { session: "al-runner", run: { backend: "bcdev" } },
+      "history-backend-build-changed",
+      (id) => backendBuild(id, otherOne(id, "bcdev", "al-runner")),
+    );
+  });
+  test("v2 run, v2 session (the same backend): lends", async () => {
+    const h = await history({ session: "al-runner", run: {} });
     expect(known(h.report)).toHaveLength(h.survived);
     expect(h.events.filter((e) => e.type === "warning" && e.code.startsWith("history-"))).toEqual(
       [],
@@ -496,6 +506,12 @@ describe("R619 --resume-run (resolveResume, a run id): T14's cases", () => {
     );
     expect(b.error?.message).toMatch(
       /ran on backend al-runner, but this session uses al-runner-v3/,
+    );
+  });
+  test("R592: bcdev run, v2 session: the same throw (it held before R592; pinned here)", async () => {
+    const r = await resumed({ session: "al-runner", run: { backend: "bcdev" } }, "run");
+    expect(r.error?.message).toMatch(
+      /ran on backend bcdev, but this session uses al-runner — verdicts are not interchangeable/,
     );
   });
   test("v3 run of another build, and of an unrecorded one: step 1 throws", async () => {
@@ -687,10 +703,21 @@ describe("R619 baseline-snapshot reuse (scoreBatch through runSession): T14's ca
     expect(s.error).toBeUndefined();
     expect(reusedOf(s.events)).toHaveLength(1);
   });
-  test("bcdev snapshot, v2 session: reused (R592's gap, unchanged)", async () => {
+  test("R592: bcdev snapshot, v2 session: step 1", async () => {
     const s = await snapshotCase({
       session: "al-runner",
       snap: { backend: "bcdev", marked: false },
+    });
+    notReused(
+      s,
+      "snapshot-backend-build-changed",
+      backendBuild(s.other, otherOne(s.other, "bcdev", "al-runner")),
+    );
+  });
+  test("v2 snapshot, v2 session (the same backend): reused", async () => {
+    const s = await snapshotCase({
+      session: "al-runner",
+      snap: { backend: "al-runner", marked: true },
     });
     expect(reusedOf(s.events)).toHaveLength(1);
   });

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**94 of 647 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**93 of 649 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -275,7 +275,7 @@ that ordering is the priority.
 - **R576** · R571's cross-object hop limits: a helper's body is not followed, and the codeunit's set is matched by global name only · [R576.md](docs/roadmap/R576.md) · open, filed 2026-10-10
 - **R582** · Switch R577's kill-reproduction rule on for the BC backend (bcdev): a flaky test is a false kill there too, and the switch moves every BC gate's pinned call counters · [R582.md](docs/roadmap/R582.md) · done (7a8ff82c)
 - **R585** · --skip-known-survivors reads a --tests-only run's survivors as survivors under the full suite · [R585.md](docs/roadmap/R585.md) · done (db38591b)
-- **R592** · History has no backend check: a bcdev run and an al-runner run that both ran coverage `none` are kept apart only incidentally · [R592.md](docs/roadmap/R592.md) · open
+- **R592** · History has no backend check: a bcdev run and an al-runner run that both ran coverage `none` are kept apart only incidentally · [R592.md](docs/roadmap/R592.md) · done (5ef916ec)
 - **R604** · Iterator hangs master already deploys: a split real-table queue, a cursor reset through a wrapper, writers past 4 calls, and aliased state (Copy, RecordRef, var-callee and with aliases) · [R604.md](docs/roadmap/R604.md) · open, filed 2026-10-21
 - **R618** · No BC gate exercises the lend order with an actual lend: every BC itest starts from an empty store, and none uses --resume, --resume-run or --skip-known-survivors · [R618.md](docs/roadmap/R618.md) · done (7084eece)
 - **R619** · HIGH: runMayLend governs nothing in production: four inline copies of the lend order, already in different orders, while R586's tests pin the unused function (a test passing for the wrong reason) · [R619.md](docs/roadmap/R619.md) · done (ebd96cc7)
@@ -290,7 +290,7 @@ that ordering is the priority.
 - **R644** · History lends a survivor that was never checked against a test that failed in the SOURCE run's baseline but passes now (a false survive, even with equal suites) · [R644.md](docs/roadmap/R644.md) · done (33f8f92c)
 - **R646** · --resume carries a survivor scored against fewer tests than now cover it: a test green in the resumed run's baseline but not when it was scored never faced it · [R646.md](docs/roadmap/R646.md) · done (4e2dd6da)
 - **R647** · al-runner v3 gate: leg T checks its counts before it classifies, so r9 §7's held can never be reached, and X (d) cannot tell a timed-out baseline from a broken Sleep rule · [R647.md](docs/roadmap/R647.md) · done (80491bb9)
-- **R650** · al-runner v3 gate: on leg T's held path the text check runs without R556's bare-hash refusal, so a run whose mutated-text hashes are missing can hide a text change · [R650.md](docs/roadmap/R650.md) · open, filed 2026-10-22
+- **R650** · al-runner v3 gate: on leg T's held path the text check runs without R556's bare-hash refusal, so a run whose mutated-text hashes are missing can hide a text change · [R650.md](docs/roadmap/R650.md) · done (dd7215d0)
 
 ## Product gaps a real project hits
 
@@ -691,7 +691,9 @@ that ordering is the priority.
 - **R645** · The al-runner v3 backend leaves coverage.cobertura.xml in the caller's working directory · [R645.md](docs/roadmap/R645.md) · open, filed 2026-10-22
 - **R648** · two unit test files fail as "(unnamed)" just over 5 s when another verify overlaps: the default hook/test timeout under parallel load · [R648.md](docs/roadmap/R648.md) · done (9a372f98)
 - **R649** · measure BC's real Sleep behaviour (does Sleep(600000) wait, and hit the test timeout?), then re-cast the v3 gate's X (d) from it · [R649.md](docs/roadmap/R649.md) · open, filed 2026-10-22
-- **R651** · al-runner v3 serve-entries: the itest has no per-phase timers (warm-up, prefetch, coverage pass, §5 windows), so the next CDO speed step cannot target a phase · [R651.md](docs/roadmap/R651.md) · open, filed 2026-10-22
+- **R651** · al-runner v3 serve-entries: the itest has no per-phase timers (warm-up, prefetch, coverage pass, §5 windows), so the next CDO speed step cannot target a phase · [R651.md](docs/roadmap/R651.md) · done (e1cd0cd8)
+- **R652** · al-runner v3 serve-entries: assertBound re-hashes the whole tree on every run(), 527 times on CDO (86 s, 62% of the loop); check once per request sent · [R652.md](docs/roadmap/R652.md) · open, filed 2026-10-22
+- **R653** · al-runner v3 serve-entries: each kill's unmutated confirm is a live NONE request (51 on CDO, about 10 s); answer it from the warm-up's NONE rows · [R653.md](docs/roadmap/R653.md) · open, filed 2026-10-22
 
 ---
 

@@ -82,6 +82,7 @@ import {
   legCFactLine,
   legOutcomeOfError,
   v3ItestTransport,
+  v3SplitLine,
   writeV3Receipt,
   xbHeldFirst,
   xdBaselineLine,
@@ -191,6 +192,8 @@ async function session(
 ): Promise<SessionReport> {
   const store = new ResultsStore(join(scratch, "lethal.sqlite"));
   let r: SessionReport;
+  // R651: the orchestrator's phase walls, summed per phase, for the split line (timing only).
+  const phases: Record<string, number> = {};
   try {
     r = await runSession({
       backend,
@@ -200,6 +203,7 @@ async function session(
       emit: [
         (e) => {
           if (e.type === "warning") console.log(`  warn ${e.code}: ${e.message.slice(0, 300)}`);
+          if (e.type === "phase-left") phases[e.phase] = (phases[e.phase] ?? 0) + e.elapsedMs;
         },
         ...(onEvent !== undefined ? [onEvent] : []),
       ],
@@ -221,6 +225,7 @@ async function session(
   const leg = basename(scratch);
   if (TRANSPORT.transport !== undefined) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);
+    console.log(`  ${leg}: ${v3SplitLine(phases, backend.entriesStats())}`);
   }
   if (TRANSPORT.transport !== undefined || REPORT_DIR !== undefined) {
     console.log(`  ${leg}: timings ${JSON.stringify(r.timings)}`);
@@ -1062,6 +1067,8 @@ async function legT(
       sameScheme:
         ownBase.identityScheme !== undefined && ownBase.identityScheme === IDENTITY_SCHEME,
     }),
+    own,
+    now,
     counts: r.counts,
     total: r.mutants.length,
     unsupportedTests: r.unsupportedTests.length,

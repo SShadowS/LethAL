@@ -243,10 +243,12 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
 
       // The history warning names the al-runner predefines when they are the whole difference.
       // Put the al-runner source identity back on every row, proven, so the symbols are the only
-      // thing the session can refuse on.
+      // thing the session can refuse on. R592: the latest run (2, bcdev's symbol set) is relabelled
+      // a marked al-runner run, since another backend is refused at step 1, before the symbols.
       db.run(
         `UPDATE runs SET test_app_hash = '${natural.h}', test_app_proven = 1, test_app_deps = '${natural.d}'`,
       );
+      db.run("UPDATE runs SET backend = 'al-runner', al_runner_names = 1 WHERE id = 2");
       const events: RunEvent[] = [];
       await runSession({
         backend: new StubBackend(false),

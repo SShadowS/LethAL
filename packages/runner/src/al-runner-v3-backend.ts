@@ -439,7 +439,33 @@ export interface V3EntriesStats {
   /** §5 step 2 only (the echo BEFORE the coverage request); also counted in `echoMismatches`. */
   secondEchoMismatches: number;
   entriesSent: number;
+  /**
+   * R651: wall ms per phase, summed over the session. TIMING ONLY: no verdict reads them.
+   * `warmupMs` is each daemon's start plus its NONE warm-up request; `prefetchMs` and `liveMs` are
+   * those requests alone (a daemon start inside them is `warmupMs`); `windowMs` is the §5 windows
+   * after their daemon is up, and holds `coverageMs` (the coverage requests) and `echoMs` (the
+   * window echoes).
+   */
+  warmupMs: number;
+  prefetchMs: number;
+  liveMs: number;
+  windowMs: number;
+  coverageMs: number;
+  echoMs: number;
+  /** R651: `run()`'s `assertBound` outside the baseline bracket (the mutant loop): count and ms. */
+  boundChecks: number;
+  boundMs: number;
 }
+
+/** R651: the phase timers of `V3EntriesStats`. */
+type V3PhaseTimer =
+  | "warmupMs"
+  | "prefetchMs"
+  | "liveMs"
+  | "windowMs"
+  | "coverageMs"
+  | "echoMs"
+  | "boundMs";
 
 /** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
@@ -558,6 +584,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     secondEchoMismatches: 0,
     prefetchDropped: 0,
     entriesSent: 0,
+    warmupMs: 0,
+    prefetchMs: 0,
+    liveMs: 0,
+    windowMs: 0,
+    coverageMs: 0,
+    echoMs: 0,
+    boundChecks: 0,
+    boundMs: 0,
   };
 
   private deployedDir: string | undefined;
@@ -596,6 +630,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     alcIo: ArtifactIo = defaultArtifactIo,
     /** R635: the serve daemon's spawn (serve-entries only). */
     private readonly serverSpawn: ServerSpawnFn = defaultServerSpawn,
+    /** R651: the clock of the phase timers only (a test's fake clock). */
+    private readonly now: () => number = Date.now,
   ) {
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
     this.entries = cfg.transport === "serve-entries";
@@ -1086,7 +1122,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
-    await this.assertBound();
+    // R651: timed outside the baseline bracket only, so the split's `other` sums to the loop.
+    if (this.inBaseline) await this.assertBound();
+    else {
+      this.stats.boundChecks += 1;
+      await this.timed("boundMs", () => this.assertBound());
+    }
     let call = this.rowsByCodeunit.get(ref.codeunitId);
     if (call === undefined) {
       // R635 §4: outside the bracket, serve-entries sends a LIVE one-group request.
@@ -1416,6 +1457,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private async ensureDaemon(): Promise<Daemon> {
     if (this.daemon !== undefined) return this.daemon;
+    return this.timed("warmupMs", () => this.startDaemon());
+  }
+
+  /** R651: `f`'s wall time into `stats[k]`, thrown or not. TIMING ONLY: no verdict reads it. */
+  private async timed<T>(k: V3PhaseTimer, f: () => Promise<T>): Promise<T> {
+    const t0 = this.now();
+    try {
+      return await f();
+    } finally {
+      this.stats[k] += this.now() - t0;
+    }
+  }
+
+  private async startDaemon(): Promise<Daemon> {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
     const union = [...this.union].sort((a, b) => a - b);
@@ -1560,7 +1615,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * and the entries before it stand, every later entry is returned in `resend` as groups (an
    * unkept ECHO's whole group too). A group's rows are `refusal`s when its echo is wrong.
    */
-  private async request(groups: readonly EntryGroup[]): Promise<{
+  private async request(
+    groups: readonly EntryGroup[],
+    phase: "prefetchMs" | "liveMs",
+  ): Promise<{
     readonly results: ReadonlyMap<string, Map<number, CallRows>>;
     readonly resend: readonly EntryGroup[];
     /** The first row R612 did not keep, at the cut. */
@@ -1568,7 +1626,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }> {
     const daemon = await this.ensureDaemon();
     const started = Date.now();
-    const { sent, rows } = await this.send(groups);
+    const { sent, rows } = await this.timed(phase, () => this.send(groups));
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
     let cut = sent.length;
@@ -1663,7 +1721,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
       try {
         this.stats.prefetchRequests += 1;
-        out = await this.request(chunk);
+        out = await this.request(chunk, "prefetchMs");
       } catch (err) {
         if (err instanceof AlRunnerServerRequestError) {
           // Never silent: its mutants run live, so a cause like a timer overflow shows.
@@ -1698,7 +1756,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.union.add(ref.codeunitId);
     try {
       this.stats.liveRequests += 1;
-      const out = await this.request([{ mutantId: m, codeunits: [ref.codeunitId] }]);
+      const out = await this.request([{ mutantId: m, codeunits: [ref.codeunitId] }], "liveMs");
       const call = out.results.get(m)?.get(ref.codeunitId);
       if (call === undefined) {
         // Its echo was the unkept entry, so nothing of the group stands: this mutant's `error`
@@ -1758,19 +1816,23 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let next: CallRows;
     try {
       const daemon = await this.ensureDaemon();
+      const windowT0 = this.now();
       this.inWindow = true;
       try {
         await writeFile(this.resourcePath(), m, "utf8");
         const echoOk = async (): Promise<string | undefined> => {
           this.stats.echoRequests += 1;
-          const why = echoMismatch((await this.plain(daemon, echoId, false)).rows, m);
+          const why = echoMismatch(
+            (await this.timed("echoMs", () => this.plain(daemon, echoId, false))).rows,
+            m,
+          );
           if (why !== undefined) this.stats.echoMismatches += 1;
           return why;
         };
         const before = this.cfg.secondEcho === false ? undefined : await echoOk();
         if (before !== undefined) this.stats.secondEchoMismatches += 1;
         this.stats.coverageRequests += 1;
-        const cov = await this.plain(daemon, ref.codeunitId, true);
+        const cov = await this.timed("coverageMs", () => this.plain(daemon, ref.codeunitId, true));
         const after = await echoOk();
         const echoWhy = before ?? after;
         const differ = rowsClass(cov.rows) !== rowsClass(call.rows);
@@ -1792,6 +1854,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         await writeFile(this.resourcePath(), SELECTOR_RESOURCE_NONE, "utf8");
         this.inWindow = false;
         if (daemon.dirty) await this.closeDaemon();
+        this.stats.windowMs += this.now() - windowT0;
       }
     } catch (err) {
       return { verdict: this.liveFailure(ref, err, Date.now() - started) };
@@ -1854,7 +1917,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await this.closeDaemon();
       const s = this.stats;
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(

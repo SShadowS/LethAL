@@ -24,7 +24,7 @@ import { basename } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { CoverageMode } from "../src/backend";
 import type { SessionReport } from "../src/report";
-import { canonical, compareMutants, normalizeForComparison } from "./mutant-equality";
+import { bareHashRows, canonical, compareMutants, normalizeForComparison } from "./mutant-equality";
 import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
 /**
@@ -525,15 +525,13 @@ async function compareWithCommitted(
   const baseline = parseGateBaseline(await readFile(baselinePath, "utf8"), baselinePath, remedy);
   // R556: a baseline that records hashes must be met by a run that has them, or the text check
   // would switch itself off without a word.
-  if (baseline.entries.some((e) => e.mutatedTextSha256 !== undefined)) {
-    const bare = actual.filter((m) => m.mutatedTextSha256 === undefined);
-    if (bare.length > 0) {
-      throw withStack(
-        new Error(
-          `${label}: the committed baseline at ${baselinePath} records a mutated-text hash per mutant, but ${bare.length} mutant(s) of this run have no mutated-text hash (no mutatedText, or a redacted one), first ${bare[0]?.key}. Refusing: the text check would switch itself off.`,
-        ),
-      );
-    }
+  const bare = bareHashRows(baseline.entries, actual);
+  if (bare.length > 0) {
+    throw withStack(
+      new Error(
+        `${label}: the committed baseline at ${baselinePath} records a mutated-text hash per mutant, but ${bare.length} mutant(s) of this run have no mutated-text hash (no mutatedText, or a redacted one), first ${bare[0]?.key}. Refusing: the text check would switch itself off.`,
+      ),
+    );
   }
   const cmp = throwOnRowDiff(actual, baseline, IDENTITY_SCHEME, baselinePath, label, remedy);
   const identity = identityStatement(label, baseline.identityScheme, IDENTITY_SCHEME, cmp);

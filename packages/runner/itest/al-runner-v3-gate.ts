@@ -12,7 +12,9 @@
  * (`runner-refused`, no killing test). Anything else is `gate-fail`.
  */
 import { writeFile } from "node:fs/promises";
+import type { V3EntriesStats } from "../src/al-runner-v3-backend";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
+import { bareHashRows } from "./mutant-equality";
 import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
 export type V3LegOutcome = "pass" | "held" | "gate-fail" | "infra-fail" | "skipped";
@@ -253,13 +255,16 @@ function differenceKey(d: string, keys: ReadonlySet<string>): string | undefined
  * r10 (a): leg T's judgement, pure. Step 0 (always): every classification row and every compare
  * difference that is not a row become `lines`, one receipt line each. Then, first failure wins:
  * 1. Sleep index 0 + 0; 2. `unsupportedTests` 3; 3. the pinned 52 (`knownRefusal`); 4. the
- * classification: `gate-fail`; `held` only when the compare's differing keys EQUAL the held keys
+ * classification: `gate-fail`; `held` only past R556's bare-hash refusal (R650) and when the compare's differing keys EQUAL the held keys
  * (no count check, I2); `pass` only with 0 compare differences, then 290 / 57 / 59 over 406. The
  * caller's `assertGateBaseline` compare follows a `pass`.
  */
 export function judgeLegT(i: {
   readonly classification: ReturnType<typeof classifyLegT>;
   readonly compare: MutantComparison;
+  /** The own baseline's rows and this run's, for R556's bare-hash refusal on `held` (R650). */
+  readonly own: readonly NormalizedMutant[];
+  readonly now: readonly NormalizedMutant[];
   readonly counts: {
     readonly killed: number;
     readonly survived: number;
@@ -302,6 +307,12 @@ export function judgeLegT(i: {
       `T: ${rows.filter((r) => r.kind === "gate-fail").length} gate-fail row(s): ${lines.join("; ")}`,
     );
   if (c === "held") {
+    // R650: R556's bare-hash refusal, which a `pass` meets in `assertGateBaseline`.
+    const bare = bareHashRows(i.own, i.now);
+    if (bare.length > 0)
+      return fail(
+        `T: the own baseline records a mutated-text hash per mutant, but ${bare.length} mutant(s) of this run have no mutated-text hash (no mutatedText, or a redacted one), first ${bare[0]?.key}. Refusing (R556): the text check would switch itself off.`,
+      );
     const extra = [...diffKeys].filter((k) => !rowKeys.has(k));
     const missing = [...rowKeys].filter((k) => !diffKeys.has(k));
     if (extra.length > 0 || missing.length > 0)
@@ -320,6 +331,20 @@ export function judgeLegT(i: {
       `T: ${killed} / ${survived} / ${noCoverage} over ${i.total}, pre-committed 290 / 57 / 59 over 406`,
     );
   return { outcome: "pass", lines };
+}
+
+/**
+ * R651: one leg's wall-clock split, TIMING ONLY. `phases` sums the orchestrator's `phase-left`
+ * events; the mutant loop is its wall (unlike `timings.mutantsMs`, a sum over mutants) and holds
+ * the backend's serve-entries timers in brackets; `other` is the loop less those (windows hold
+ * coverage and echo, so those two are not subtracted again). A phase that never ran prints `-`.
+ */
+export function v3SplitLine(phases: Readonly<Record<string, number>>, s: V3EntriesStats): string {
+  const p = (k: string) => phases[k] ?? "-";
+  const loop = phases.mutants;
+  const named = s.warmupMs + s.prefetchMs + s.liveMs + s.windowMs + s.boundMs;
+  const other = loop === undefined ? "-" : loop - named;
+  return `split ms: deploy ${p("deploy")}, baseline ${p("baseline")}, mutant loop ${p("mutants")} (warm-up ${s.warmupMs}, prefetch ${s.prefetchMs}, live ${s.liveMs}, windows ${s.windowMs} of which coverage ${s.coverageMs} and echo ${s.echoMs}, bound ${s.boundMs} over ${s.boundChecks} checks, other ${other})`;
 }
 
 /** r10 (c): SleeperDoubles's `baseline-batch-finished` verdict, or `undefined` when absent. */
