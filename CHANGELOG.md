@@ -835,11 +835,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   pulled a foreign tree into the run. Every walk now goes through one walker that never descends a
   link. alc and both al-runners DO follow a linked folder and a linked `.al` file (measured), so:
   - **A link in the target or test project now refuses by name** (`ProjectSymlinkRefusedError`),
-    before anything compiles, in `lethal run` and `lethal verify`. Links inside `node_modules` and
-    `.git` are excused (never followed); real files there are read as before. A link that appears
-    during a run is reported as drift (`added link <path>`).
-  - **Package caches:** a linked `.app` is copied from its real path (a relative one used to dangle
-    in LethAL's copy). A linked subfolder there refuses by name.
+    before anything compiles, in `lethal run` and `lethal verify`. This covers file links too (a
+    linked README refuses). Links inside `node_modules`, `.git` and `.vscode` are excused (never
+    followed); real files there are read as before. A link that appears during a run is reported
+    as drift (`added link <path>`).
+  - **An excused link that reaches a `.al` file still refuses.** alc compiles `.al` under
+    `node_modules`, `.git` and `.vscode` (measured), so skipping such a link would hide source alc
+    reads.
+  - **Package caches:** the package cache folder (by default `<project>/.alpackages`, or the
+    configured `packageCachePath`) is not part of the project refusal, so a linked `.app` or a
+    junctioned `.alpackages` runs. A linked `.app` is copied from its real path (a relative one
+    used to dangle in LethAL's copy). A linked subfolder there refuses by name. A link whose
+    target is gone is left out of the copy with a warning that names it.
   - **`lethal doctor`:** the al-runner cache size no longer counts files behind links, and says how
     many links it did not follow.
   - A new caveat, `project-symlink-skipped`, is a tripwire: it is raised if a folder LethAL builds
