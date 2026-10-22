@@ -11,10 +11,47 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { baseAppJson } from "./al-runner-canary";
 import { decodeV3Rows } from "./al-runner-v3-backend";
 import type { AlRunnerPredefinedProbe } from "./preprocessor-symbols";
 import { type SpawnFn, defaultSpawn } from "./publisher";
+
+/** A probe app's `app.json`. Moved here from `al-runner-canary.ts` by R654 S1: the v3 probes use
+ *  it, and the .NET canary and probes import it from here until they are retired. */
+export function baseAppJson(overrides: {
+  id: string;
+  name: string;
+  idFrom: number;
+  idTo: number;
+  dependencies?: readonly { id: string; name: string; publisher: string; version: string }[];
+}): string {
+  return JSON.stringify(
+    {
+      id: overrides.id,
+      name: overrides.name,
+      publisher: "LethAL",
+      version: "1.0.0.0",
+      brief: "",
+      description: "",
+      privacyStatement: "",
+      EULA: "",
+      help: "",
+      url: "",
+      logo: "",
+      dependencies: overrides.dependencies ?? [],
+      screenshots: [],
+      idRanges: [{ from: overrides.idFrom, to: overrides.idTo }],
+      resourceExposurePolicy: {
+        allowDebugging: true,
+        allowDownloadingSource: true,
+        includeSourceInSymbolFile: true,
+      },
+      runtime: "13.0",
+      features: [],
+    },
+    null,
+    2,
+  );
+}
 
 export const V3_PREDEFINED_CANDIDATES: readonly string[] = [
   "CLEAN",

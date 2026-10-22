@@ -164,12 +164,14 @@ import type { ChangedSinceSource, LineRange } from "./line-filter";
 import {
   type AlSource,
   ManifestDeclarationError,
+  type WrappedRule,
   activeObjectKeys,
   alRunnerAdmitsWrappedFile,
   bcWrappedShapeRefusal,
   coverageRefusedObjects,
   duplicateObjectRefusals,
   fileHoldsWrappedObject,
+  wrappedRuleFor,
 } from "./line-map";
 import { nestedProjectWarning } from "./nested-project";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
@@ -767,6 +769,40 @@ export function resolveOperatorNames(
     );
   }
   return resolved;
+}
+
+/**
+ * Sol run 002: on al-runner the index can refuse an ADMITTED wrapped file's objects after deploy
+ * (its instrumented text re-parses undecided), which the source read here cannot see. So no
+ * verdict is carried for such a file's mutants before that (known-survivor, full-batch resume);
+ * the ordinary resume carry runs after the post-deploy split and is safe. R497: the same holds
+ * on bcdev, whose line map applies the shape rule to the instrumented text.
+ *
+ * R654 S1 (plan r1 I1, r2 D-m2): extracted from `runSession` unchanged, and keyed on the session's
+ * `WrappedRule` instead of its backend kind. `bcArms` holds the build's arms per file on bcdev and
+ * is empty otherwise, so a `"refuse-wrapped"` session (v3) bars no file: it admits none.
+ * Returns the barred files' paths, forward slashes.
+ */
+export function carryBarredFiles(
+  files: readonly { readonly path: string; readonly root: ALSyntaxNode }[],
+  rule: WrappedRule,
+  bcArms: ReadonlyMap<ALSyntaxNode, ArmEvaluation>,
+): Set<string> {
+  const admittedOnBc = (f: { readonly root: ALSyntaxNode }): boolean => {
+    const arms = bcArms.get(f.root);
+    return (
+      fileHoldsWrappedObject(f.root) &&
+      arms !== undefined &&
+      bcWrappedShapeRefusal(f.root, arms) === undefined
+    );
+  };
+  return new Set(
+    files
+      .filter((f) =>
+        rule === "al-runner-index" ? alRunnerAdmitsWrappedFile(f.root) : admittedOnBc(f),
+      )
+      .map((f) => f.path.replaceAll("\\", "/")),
+  );
 }
 
 /**
@@ -6194,38 +6230,21 @@ async function runSessionBody(
       ? allFiles.map((f) => [f.root, evaluateArms(f.root, f.source, buildSymbols)] as const)
       : [],
   );
+  // R654 S1 (plan r1 I1): the wrapped-file rule this session's backend gets, never its kind.
+  const wrappedRule = wrappedRuleFor(backendName);
   const coverageRefused: ReadonlyMap<string, string> = new Map([
     ...coverageRefusedObjects(
       allFiles,
-      backendName,
+      wrappedRule,
       isBcdev(backendName)
         ? (f) => bcArms.get(f.root) ?? evaluateArms(f.root, f.source, buildSymbols)
         : undefined,
     ),
     ...duplicateObjects,
   ]);
-  // Sol run 002: on al-runner the index can refuse an ADMITTED wrapped file's objects after deploy
-  // (its instrumented text re-parses undecided), which the source read here cannot see. So no
-  // verdict is carried for such a file's mutants before that (known-survivor, full-batch resume);
-  // the ordinary resume carry runs after the post-deploy split and is safe. R497: the same holds
-  // on bcdev, whose line map applies the shape rule to the instrumented text.
-  const admittedOnBc = (f: (typeof allFiles)[number]): boolean => {
-    const arms = bcArms.get(f.root);
-    return (
-      fileHoldsWrappedObject(f.root) &&
-      arms !== undefined &&
-      bcWrappedShapeRefusal(f.root, arms) === undefined
-    );
-  };
-  const carryBarredFiles = new Set(
-    allFiles
-      .filter((f) =>
-        backendName === "al-runner" ? alRunnerAdmitsWrappedFile(f.root) : admittedOnBc(f),
-      )
-      .map((f) => f.path.replaceAll("\\", "/")),
-  );
+  const barredFiles = carryBarredFiles(allFiles, wrappedRule, bcArms);
   const carryBarred = (m: MutantManifestEntry): boolean =>
-    carryBarredFiles.has(m.file.replaceAll("\\", "/"));
+    barredFiles.has(m.file.replaceAll("\\", "/"));
   // R92: raw site count (every spec that made it into an instrumentable file) vs the DEPLOYED
   // count once per-file dedup (`dedupeSpecs`) collapses same-site operator collisions into one
   // winner — the same collapse `writeInstrumentedProject` runs at compile time, per file (identity

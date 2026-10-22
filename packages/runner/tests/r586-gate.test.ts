@@ -1,5 +1,10 @@
 // R586 T19 (the itest half): leg T's `held` rule (r4 I-3) and the update-gate outcome (r3 F6).
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { cp, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { initParser } from "@lethal/engine";
+import { type MutantManifestEntry, writeInstrumentedProject } from "@lethal/schemata";
 import {
   CDO_ALPACKAGES,
   CDO_COMMIT,
@@ -27,7 +32,19 @@ import {
 } from "../itest/al-runner-v3-gate";
 import { TABLES_KNOWN_DIFFERENCES } from "../itest/al-runner-v3-tables-known";
 import { type NormalizedMutant, compareMutants } from "../itest/mutant-equality";
-import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
+import {
+  AlRunnerV3CoverageJoinError,
+  buildSleepIndex,
+  sleepCallLines,
+} from "../src/al-runner-v3-sleep";
+import {
+  BASELINE_TIMEOUT_DEFAULT,
+  MIN_MUTANT_BUDGET_MS,
+  generateMutationSet,
+  identityOrdinalsOf,
+  operatorTiers,
+} from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 describe("the D legs' CDO checkout guard (lane ruling 2026-10-21)", () => {
   const ok = {
@@ -413,6 +430,84 @@ describe("R647 r10 (c): X (d)'s baseline reason line and X (b)'s early receipt l
       ),
     ).resolves.toBeUndefined();
   });
+});
+
+describe("R649 r11 (e): X (d)'s Sleeper sleeps 5 s and moves no line", () => {
+  const PROBE = join(import.meta.dir, "../../../scripts/r586-probe");
+  const SLEEPER = join(PROBE, "extras", "ProbeSleeper.Codeunit.al");
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) removeScratchDir(d);
+  });
+
+  test("X-r11a: one Sleep, on line 12, of 5000 ms, under both budgets", async () => {
+    await initParser();
+    const src = await readFile(SLEEPER, "utf8");
+    expect(sleepCallLines(src)).toEqual([12]);
+    const ms = Number(/^\s*Sleep\((\d+)\);$/.exec(src.split("\n")[11]?.trimEnd() ?? "")?.[1]);
+    // The budgets first, so a revert to 600000 reaches them too.
+    expect(ms).toBeLessThan(BASELINE_TIMEOUT_DEFAULT);
+    expect(ms).toBeLessThan(MIN_MUTANT_BUDGET_MS);
+    expect(ms).toBe(5000);
+  });
+
+  test("X-r11c: legXSleep's scratch dirs instrument to arms 25/31/37/43 and an index of 4 + 5", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "lethal-r649-xd-"));
+    dirs.push(scratch);
+    // The same scratch dirs `legXSleep` (al-runner-v3.itest.ts) builds.
+    const app = join(scratch, "probe-app");
+    const tests = join(scratch, "probe-tests");
+    await cp(join(PROBE, "probe-app"), app, { recursive: true });
+    await cp(join(PROBE, "probe-tests"), tests, { recursive: true });
+    await cp(SLEEPER, join(app, "src", "ProbeSleeper.Codeunit.al"));
+    await cp(
+      join(PROBE, "extras", "ProbeSleep.Codeunit.al"),
+      join(tests, "src", "ProbeSleep.Codeunit.al"),
+    );
+    await rm(join(app, "src", "ProbePair.Codeunit.al"));
+    await rm(join(tests, "src", "ProbeCoverage.Codeunit.al"));
+    await rm(join(tests, "src", "ProbePermissions.Codeunit.al"));
+    const out = join(scratch, "active");
+    const set = await generateMutationSet(app, { only: ["src/ProbeSleeper.Codeunit.al"] });
+    await writeInstrumentedProject({
+      targetDir: out,
+      files: set.files,
+      identityOrdinals: identityOrdinalsOf(set),
+      selectorIds: { selectorId: 50649, controlId: 50648, tableId: 50647 },
+      artifactId: "0123456789abcdef0123456789abcdef",
+      targetAppId: "00000000-0000-0000-0000-000000000000",
+      operatorTiers,
+    });
+    const manifest = JSON.parse(await readFile(join(out, "mutant-manifest.json"), "utf8")) as
+      | MutantManifestEntry[]
+      | { mutants: MutantManifestEntry[] };
+    const entries = Array.isArray(manifest) ? manifest : manifest.mutants;
+    // r5's operator-to-code map.
+    expect(entries.map((e) => [e.mutantId, e.operatorName])).toEqual([
+      ["M0001", "lethal.empty-block"],
+      ["M0002", "lethal.void-method-call"],
+      ["M0003", "lethal.remove-assignment"],
+      ["M0004", "lethal.shift-integer"],
+      ["M0005", "lethal.return-value"],
+    ]);
+    const files = (await readdir(out, { recursive: true })).filter((f) =>
+      f.endsWith("ProbeSleeper.Codeunit.al"),
+    );
+    expect(files).toHaveLength(1);
+    const inst = (await readFile(join(out, files[0] ?? ""), "utf8")).split("\n");
+    const sleeps = sleepCallLines(inst.join("\n"));
+    expect(sleeps).toEqual([25, 31, 37, 43]);
+    // Each arm opens two lines above its Sleep: `... Active('M000n') then begin`, `begin`, `Sleep`.
+    const armOf = (line: number) =>
+      /Active\('(M\d{4})'\)/.exec(inst[line - 3] ?? "")?.[1] ?? "else";
+    expect(sleeps.map(armOf)).toEqual(["M0003", "M0005", "M0004", "else"]);
+    // The leg's check through `sleepIndexSize()`. Its target side, `active/`, also holds probe-app's
+    // uninstrumented files; none has a Sleep, so `out` alone gives the same count.
+    for (const f of await readdir(join(app, "src")))
+      if (f !== "ProbeSleeper.Codeunit.al")
+        expect(sleepCallLines(await readFile(join(app, "src", f), "utf8")), f).toEqual([]);
+    expect((await buildSleepIndex(out, tests)).sizes).toEqual({ target: 4, test: 5 });
+  }, 60_000);
 });
 
 describe("the update-gate outcome", () => {

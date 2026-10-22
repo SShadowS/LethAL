@@ -1,16 +1,16 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultServerSpawn } from "./al-runner-backend";
-import {
-  type AlRunnerCanaryFsOps,
-  baseAppJson,
-  cleanUpQuietly,
-  defaultFsOps,
-} from "./al-runner-canary";
+import { type AlRunnerCanaryFsOps, cleanUpQuietly, defaultFsOps } from "./al-runner-canary";
 import { labelInsideDir, parseCobertura } from "./al-runner-coverage";
-import { AlRunnerServer, type ServerCoverageFile, type ServerSpawnFn } from "./al-runner-server";
+import {
+  AlRunnerServer,
+  type ServerCoverageFile,
+  type ServerSpawnFn,
+  defaultServerSpawn,
+} from "./al-runner-server";
 import { OneShotTransport, parseAlRunnerBcBuild, qualifiedTestName } from "./al-runner-transport";
+import { baseAppJson } from "./al-runner-v3-probe";
 import { type SpawnFn, defaultSpawn } from "./publisher";
 
 /**

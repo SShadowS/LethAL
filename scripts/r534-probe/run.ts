@@ -16,9 +16,9 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { AlRunnerBackend, defaultServerSpawn } from "../../packages/runner/src/al-runner-backend";
+import { AlRunnerBackend } from "../../packages/runner/src/al-runner-backend";
 import { alRunnerCoverageSupport } from "../../packages/runner/src/al-runner-coverage";
-import type { ServerSpawnFn } from "../../packages/runner/src/al-runner-server";
+import { type ServerSpawnFn, defaultServerSpawn } from "../../packages/runner/src/al-runner-server";
 import type { RunEvent } from "../../packages/runner/src/events";
 import { runSession } from "../../packages/runner/src/orchestrator";
 import { type SpawnFn, defaultSpawn } from "../../packages/runner/src/publisher";

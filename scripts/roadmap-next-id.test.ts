@@ -1,6 +1,32 @@
 import { describe, expect, test } from "bun:test";
 import { RoadmapFormatError } from "./roadmap-index.ts";
-import { idsFromNames, nextId, worktreePaths } from "./roadmap-next-id.ts";
+import {
+  RoadmapFetchError,
+  fetchFirst,
+  idsFromNames,
+  nextId,
+  worktreePaths,
+} from "./roadmap-next-id.ts";
+
+describe("fetchFirst (R659)", () => {
+  test("fetches once by default, with no warning", () => {
+    let calls = 0;
+    expect(fetchFirst([], () => calls++)).toBeUndefined();
+    expect(calls).toBe(1);
+  });
+  test("a failed fetch refuses by name", () => {
+    expect(() =>
+      fetchFirst([], () => {
+        throw new Error("no network");
+      }),
+    ).toThrow(RoadmapFetchError);
+  });
+  test("--no-fetch skips the fetch and says so", () => {
+    let calls = 0;
+    expect(fetchFirst(["--no-fetch"], () => calls++)).toContain("--no-fetch");
+    expect(calls).toBe(0);
+  });
+});
 
 describe("idsFromNames", () => {
   test("reads R<nnn>.md names and paths, ignoring the template and anything else", () => {

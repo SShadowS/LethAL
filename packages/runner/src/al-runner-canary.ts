@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OneShotTransport, qualifiedTestName } from "./al-runner-transport";
+import { baseAppJson } from "./al-runner-v3-probe";
 import type { SpawnFn } from "./publisher";
 import { defaultSpawn } from "./publisher";
 
@@ -119,42 +120,6 @@ const CANARY_TESTS_CODEUNIT_ID = 50001;
 // R183's probe needs a codeunit `Codeunit.Run` can invoke. It lives in the TESTS app, not the data
 // app, purely so the data app's single-id range does not have to widen across the tests app's id.
 const CANARY_WRITER_CODEUNIT_ID = 50002;
-
-export function baseAppJson(overrides: {
-  id: string;
-  name: string;
-  idFrom: number;
-  idTo: number;
-  dependencies?: readonly { id: string; name: string; publisher: string; version: string }[];
-}): string {
-  return JSON.stringify(
-    {
-      id: overrides.id,
-      name: overrides.name,
-      publisher: "LethAL",
-      version: "1.0.0.0",
-      brief: "",
-      description: "",
-      privacyStatement: "",
-      EULA: "",
-      help: "",
-      url: "",
-      logo: "",
-      dependencies: overrides.dependencies ?? [],
-      screenshots: [],
-      idRanges: [{ from: overrides.idFrom, to: overrides.idTo }],
-      resourceExposurePolicy: {
-        allowDebugging: true,
-        allowDownloadingSource: true,
-        includeSourceInSymbolFile: true,
-      },
-      runtime: "13.0",
-      features: [],
-    },
-    null,
-    2,
-  );
-}
 
 const CANARY_TABLE_AL = `table ${CANARY_TABLE_ID} "Lethal Canary Data"
 {

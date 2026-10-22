@@ -805,8 +805,8 @@ async function legXSleep(scratch: string): Promise<void> {
   const idx = b.sleepIndexSize();
   console.log(`  X (d): Sleep index ${idx?.target} + ${idx?.test}`);
   must(idx?.target === 4 && idx?.test === 5, `X (d): Sleep index ${JSON.stringify(idx)}, r5 4 + 5`);
-  // r6 (c): v3's virtual clock makes LongSleepThenAssert PASS, so the baseline is green and no
-  // ProbeSleep test is unsupported.
+  // r6 (c), restated by r11 (b): on alpha.2 every ProbeSleep test passes; on edge the three 600 s
+  // siblings are timeout rows. A timeout is not a refusal, so no ProbeSleep test is unsupported on either.
   must(
     !r.unsupportedTests.some((t) => t.includes("Sleep")),
     `X (d): a Sleep test refused at baseline: ${r.unsupportedTests.join(", ")}`,
