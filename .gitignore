@@ -20,6 +20,8 @@ lethal.config.bc*.json
 launch.bc*.json
 scripts/r289-probe/sidecar-creds.*.json
 *.app
+# R599: five small real alc builds of the names fixtures, test data for bc-app-content.test.ts
+!scripts/testdata/*.app
 
 # Local MCP server config — contains credentials
 .mcp.json
