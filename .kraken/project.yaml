@@ -3,7 +3,7 @@ name: lethal
 repo: https://github.com/SShadowS/LethAL.git
 image: .kraken/Dockerfile
 ssh_port: 2202
-mem_limit: 24g
+mem_limit: 32g
 agents:
   - name: orchestrator
     branch: master
