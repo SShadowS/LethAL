@@ -13,6 +13,7 @@ import {
   CHUNKED_FIGURES,
   ENVTOOL_FIGURES,
   HANG_FIGURES,
+  LEND_FIGURES,
   TABLES_FIGURES,
 } from "../itest/gate-expected";
 import { EXPECTED as HARDEN_EXPECTED } from "../itest/harden-expected";
@@ -48,6 +49,7 @@ const CONSTANTS: Record<string, unknown> = {
   TABLES_FIGURES,
   CHUNKED_FIGURES,
   HANG_FIGURES,
+  LEND_FIGURES,
 };
 
 /** Baselines with an exported pre-committed table: its verdict counts must match the page too. */
@@ -233,6 +235,7 @@ const ITEST_FIGURES: Record<string, string> = {
   "tables.itest.ts": "TABLES_FIGURES",
   "chunked.itest.ts": "CHUNKED_FIGURES",
   "hang.itest.ts": "HANG_FIGURES",
+  "lend.itest.ts": "LEND_FIGURES",
 };
 
 /** A figure an itest restates as a literal instead of reading it from gate-expected.ts. */
@@ -333,6 +336,7 @@ describe("itest/gate-expected.ts (R-592)", () => {
       TABLES_FIGURES,
       CHUNKED_FIGURES,
       HANG_FIGURES,
+      LEND_FIGURES,
     };
     const unnamed = Object.entries(exports)
       .flatMap(([name, value]) => leaves(value, name))

@@ -258,6 +258,8 @@ describe("R403 phase A: the resume fingerprint carries the test app's set (plan 
     expect(first?.buildSymbols).toEqual(["X"]);
     expect(second?.buildSymbols).toEqual(["X"]);
     expect(first?.configFingerprint).not.toBe(second?.configFingerprint);
+    // R618: --resume-run refuses a finished run, so resume it as an interrupted one.
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
 
     await expect(
       session(root, store, new StubBackend(true), { preprocessorSymbols: ["X"], resume: 1 }),
@@ -315,6 +317,8 @@ describe("R403 phase A: the resume fingerprint carries the test app's set (plan 
     const root = await project({ target: ["X"] });
     const store = new ResultsStore(":memory:");
     await session(root, store, new StubBackend(true));
+    // R618: --resume-run refuses a finished run, so resume it as an interrupted one.
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
     await session(root, store, new StubBackend(true), { resume: 1 });
   });
 });

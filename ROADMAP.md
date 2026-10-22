@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**93 of 613 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**95 of 615 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -277,6 +277,7 @@ that ordering is the priority.
 - **R585** · --skip-known-survivors reads a --tests-only run's survivors as survivors under the full suite · [R585.md](docs/roadmap/R585.md) · open, filed 2026-10-20
 - **R592** · History has no backend check: a bcdev run and an al-runner run that both ran coverage `none` are kept apart only incidentally · [R592.md](docs/roadmap/R592.md) · open
 - **R618** · No BC gate exercises the lend order with an actual lend: every BC itest starts from an empty store, and none uses --resume, --resume-run or --skip-known-survivors · [R618.md](docs/roadmap/R618.md) · open
+- **R619** · HIGH: runMayLend governs nothing in production: four inline copies of the lend order, already in different orders, while R586's tests pin the unused function (a test passing for the wrong reason) · [R619.md](docs/roadmap/R619.md) · open
 
 ## Product gaps a real project hits
 
@@ -423,6 +424,7 @@ that ordering is the priority.
 - **R535** · A nested `#if` object wrapper is refused by name on every coverage path: BaseApp has 2 such files (70 sites), unmeasured · [R535.md](docs/roadmap/R535.md) · closed 2026-10-09 — 2 BaseApp files, 70 sites, refused by name on every coverage path; not worth an R-300b…
 - **R600** · lethal verify digests under the server's closed-world answer now, so an open-world source run on a closed server re-runs every test · [R600.md](docs/roadmap/R600.md) · open
 - **R601** · a closed-world run that ends before its post-execution re-ask stays pending forever, so --resume after a crash is off on a closed server · [R601.md](docs/roadmap/R601.md) · open
+- **R620** · A crashed or interrupted closed-world run is never resumable: its test-app identity stays |pending, so --resume refuses the very run it exists for · [R620.md](docs/roadmap/R620.md) · open
 
 ## Backends and tooling
 

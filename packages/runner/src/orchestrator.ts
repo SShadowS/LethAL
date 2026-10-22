@@ -4054,6 +4054,13 @@ function resolveResume(
         `--resume-run ${cfg.resume} recorded project ${row.projectPath}, but this session targets ${cfg.projectDir}`,
       );
     }
+    // R618: a FINISHED run has nothing left to score; resuming it would only copy its verdicts
+    // into a new run row. Refused by name, as `--resume`'s search already does (unfinished only).
+    if (row.finished) {
+      throw new Error(
+        `--resume-run ${cfg.resume}: run ${cfg.resume} already finished; nothing to resume. Its report is the file that run wrote with --out (\`lethal explain <report.json>\` re-reads it; no command re-renders a report from the results store). Drop --resume-run to measure again (R618).`,
+      );
+    }
     if (row.backend !== backendName) {
       throw new Error(
         `--resume-run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName} — verdicts are not interchangeable across backends (neither local runner, al-runner or al-runner-v3, is authoritative)`,

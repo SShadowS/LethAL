@@ -118,7 +118,7 @@ import type { QuarantineRecord } from "../src/quarantine-store";
 import { COVERAGE_NOT_MEASURED_INTERPRETATION, renderConsole } from "../src/report";
 import type { SessionOutcome, SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
-import { isStrandedNote } from "../src/resume";
+import { CARRYABLE_VERDICTS, isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import {
@@ -894,6 +894,8 @@ describe("runSession", () => {
             dependentCount: async () => later,
           },
         );
+        // R618: --resume-run refuses a finished run, so resume it as an interrupted one.
+        first.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [first.runId]);
         const resumed = runSession({
           backend,
           store: first.store,
@@ -905,6 +907,69 @@ describe("runSession", () => {
         else expect((await resumed).resumedFrom?.runId).toBe(first.runId);
         first.store.close();
       }
+    });
+
+    // R618 Q1: a QUARANTINED closed-world run still reaches `confirmClosedWorld` (the batch loop
+    // breaks before it; only finishing is skipped), so it stays resumable: unfinished, its identity
+    // and its snapshot unsuffixed, and `--resume` finds it. A crash would leave `|pending` (R-filed).
+    test("R618 Q1: a quarantined closed-world run is confirmed, unfinished, and found by --resume", async () => {
+      const dirs = await makeProject(NEW_AL);
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify({ ...TESTS_APP, id: APP_ID }));
+      // Stateful: mutants survive until the second mutant call, which goes in-flight-unknown.
+      let mutantCalls = 0;
+      let guardAsked = 0;
+      const stub = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+      const scripted = stub.run.bind(stub);
+      const backend = Object.assign(stub, {
+        fetchPublishedAppPackage: async () => OLD_PKG,
+        microsoftMode: () => provenMode(),
+        dependentCount: async () => {
+          guardAsked++;
+          return 0;
+        },
+        run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> => {
+          if ((stub.activations.at(-1) ?? null) !== null && ++mutantCalls > 1) {
+            return { ref, outcome: "error", durationMs: 5, operation: "in-flight-unknown" };
+          }
+          return scripted(ref, opts);
+        },
+      });
+      const store = new ResultsStore(":memory:");
+      const report = await runSession({ backend, store, ...dirs, selectorIds });
+      expect(report.quarantined).toBeDefined();
+      // The guard was asked before execution AND after, which only the confirm block does.
+      expect(guardAsked).toBe(2);
+      const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      const row = store.getRun(runId);
+      expect(row?.finished).toBe(false);
+      expect(row?.testAppHash).toMatch(/\|closed-world:public$/);
+      const snaps = store.db
+        .query("SELECT test_app_hash AS h FROM baseline_snapshots WHERE run_id = ?")
+        .all(runId) as Array<{ h: string }>;
+      expect(snaps.length).toBeGreaterThan(0);
+      for (const s of snaps) expect(s.h).toBe(row?.testAppHash ?? "");
+      expect(
+        store.findResumableRun({
+          projectPath: dirs.projectDir,
+          backend: row?.backend ?? "",
+          configFingerprint: row?.configFingerprint ?? "",
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+        }),
+      ).toBe(runId);
+      const resumed = await runSession({
+        backend: Object.assign(new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]), {
+          fetchPublishedAppPackage: async () => OLD_PKG,
+          microsoftMode: () => provenMode(),
+          dependentCount: async () => 0,
+        }),
+        store,
+        ...dirs,
+        selectorIds,
+        resume: "last",
+      });
+      expect(resumed.resumedFrom?.runId).toBe(runId);
+      expect(resumed.resumedFrom?.carriedMutants).toBeGreaterThan(0);
+      store.close();
     });
 
     test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {
@@ -6283,6 +6348,8 @@ describe("runSession — Layer 5A deployment identity", () => {
       preprocessorSymbols: ["CLEAN24", "CLEAN25"],
     });
     const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    // R618: --resume-run refuses a finished run, so resume it as an interrupted one.
+    store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [run.id]);
     const resumed = await runSession({
       backend: backend(),
       store,
@@ -9263,6 +9330,11 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             }),
       });
       const store = o.store ?? new ResultsStore(":memory:");
+      // R618: --resume-run refuses a finished run; these resume their first run as an interrupted one.
+      const resumed = o.extra?.resume;
+      if (typeof resumed === "number") {
+        store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [resumed]);
+      }
       const events: RunEvent[] = [];
       const outcome = await runSession({
         backend,

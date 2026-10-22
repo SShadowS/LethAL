@@ -138,6 +138,7 @@ fixture apps change.
 | `bc3` | `itest:chunked` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-chunked.log` |
 | `bc3` | `itest:harden` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-harden.log` |
 | `bc3` | `itest:agreement` | 1.0.0.23 | R-604, `/coord/handoff/R-604/bc3-agreement.log` |
+| none | `itest:lend` | none | R618: not yet proven on any server |
 
 `itest:stale-publish` and `itest:lease` have no per-mutant figures; they passed their own checks.
 `itest:envtool` is host-only and not proven on any bc server. `itest:alrunner` and

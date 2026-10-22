@@ -334,6 +334,8 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
 const READERS: Record<string, string> = {
   "verify.itest.ts": "bcdev.baseline.json",
   "test-app-publish.itest.ts": "bcdev.baseline.json",
+  // R618: `itest:lend` compares every leg with it, by key, and records nothing.
+  "lend.itest.ts": "bcdev.baseline.json",
   "verify-agreement.itest.ts": "harden.baseline.json",
   "verify-scale.itest.ts": "tables.baseline.json",
 };
