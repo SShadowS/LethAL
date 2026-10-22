@@ -136,6 +136,16 @@ export class AlRunnerV3UnprovenBatchError extends Error {
   }
 }
 
+/** R631/R655: a link under a bound root (`ProjectSymlinkRefusedError`) is unproven drift, by path. */
+async function linkIsUnproven(hash: Promise<string>, where: string): Promise<string> {
+  return hash.catch((err: unknown) => {
+    if (err instanceof ProjectSymlinkRefusedError) {
+      throw new AlRunnerV3UnprovenBatchError(`a link is in ${where} (${err.linkPath})`);
+    }
+    throw err;
+  });
+}
+
 /** §5, #5613: exit 6, "the selection matched no test", with no document. Stops the session. */
 export class AlRunnerV3SelectionError extends Error {
   constructor(codeunitId: number, stderr: string) {
@@ -948,7 +958,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const testAppSha256 = await this.compileTestAppAgainst(target.appPath, active);
       // Step 3: the proof, every <deps> file hashed now (m-2), and the per-run checks' baseline.
       this.proof = {
-        activeHashExceptSelector: await hashAlTree(active),
+        // R655: active/ is LethAL's copy and holds no link; one refuses here, by path.
+        activeHashExceptSelector: await linkIsUnproven(hashAlTree(active), "the staged batch"),
         activeAppJsonSha256: await fileSha256(join(active, "app.json")),
         // R631: the test dir is a USER root: a link refuses rather than hashing a partial tree.
         testDirHash: await hashTestDir(this.cfg.testDir),
@@ -1141,7 +1152,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (proof === undefined || dir === undefined) {
       throw new AlRunnerV3UnprovenBatchError("no batch was deployed and proved");
     }
-    if ((await hashAlTree(dir)) !== proof.activeHashExceptSelector) {
+    // R655: a link that appears in active/ mid-run is drift, as in the test dir (R631).
+    const activeHashNow = await linkIsUnproven(hashAlTree(dir), `${dir} after the alc proof`);
+    if (activeHashNow !== proof.activeHashExceptSelector) {
       throw new AlRunnerV3UnprovenBatchError(`an .al file in ${dir} changed after the alc proof`);
     }
     if ((await fileSha256(join(dir, "app.json"))) !== proof.activeAppJsonSha256) {
@@ -1177,14 +1190,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     // R631: a link that appears in the test dir mid-run is drift like any other change.
-    const testDirHashNow = await hashTestDir(this.cfg.testDir).catch((err: unknown) => {
-      if (err instanceof ProjectSymlinkRefusedError) {
-        throw new AlRunnerV3UnprovenBatchError(
-          `a link appeared in the test dir after the alc proof (${err.linkPath})`,
-        );
-      }
-      throw err;
-    });
+    const testDirHashNow = await linkIsUnproven(
+      hashTestDir(this.cfg.testDir),
+      "the test dir after the alc proof",
+    );
     if (testDirHashNow !== proof.testDirHash) {
       throw new AlRunnerV3UnprovenBatchError(
         "an .al file in the test dir changed after the alc proof",

@@ -33,6 +33,7 @@ Classified from plan 3, Appendix B (2026-10-03), plus files added on the branch 
 | scripts/kraken-corpora.sh | inert | runs in the container only; names the host BC.History folder in a comment, as the thing it mirrors at /work/src/BC.History |
 | scripts/coord.sh | operational | Task 11 |
 | scripts/coord-status.ts | operational | Task 11 |
+| packages/runner/itest/out-of-use.ts | operational | R669: the host's default coord root for the out-of-use marker dir, as coord-status.ts |
 | scripts/compile-fixtures.ts | operational | Task 11 |
 | fixtures/README.md | operational | Task 11 |
 | docs/releasing.md | operational | Task 11 |
@@ -50,6 +51,7 @@ Classified from plan 3, Appendix B (2026-10-03), plus files added on the branch 
 | packages/engine/tests/ast/preproc-arms.test.ts | inert | |
 | packages/runner/itest/config-path.test.ts | inert | |
 | packages/runner/itest/envtool.itest.ts | inert | |
+| packages/runner/itest/out-of-use.test.ts | inert | R669: expects out-of-use.ts's host default |
 | packages/runner/src/al-runner-predefined-probe.ts | inert | |
 | packages/runner/src/al-runner-transport.ts | inert | |
 | packages/runner/src/campaign-fence.ts | inert | |
