@@ -3704,7 +3704,7 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
         c: Awaited<ReturnType<typeof crashed>>,
         backend: CountingBackend,
         events: RunEvent[] = [],
-        server = onServer(),
+        server: Partial<Parameters<typeof runSession>[0]> = onServer(),
         prior = c.prior,
       ) =>
         session(c.dirs, c.store, backend, {
@@ -3819,6 +3819,36 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
         c.store.close();
       });
 
+      test("D5c: the same answer, this session's server unknown: refused, an unknown server never matches", async () => {
+        const c = await crashed();
+        const b = new GuardBackend(() => 0);
+        await expect(
+          resume(c, b, [], { quarantineDir: scratch("lethal-r601-q-") }),
+        ).rejects.toThrow(
+          "It ran on server http://bc-r601|BC, and this session runs on server unknown. Such a run is resumed only by a session on the same server whose test app and closed-world answer, asked now, are the same, and an unknown server never matches.",
+        );
+        expect(nothingRan(b)).toBe(0);
+        c.store.close();
+      });
+
+      test("D6: a FRESH session on the same server flips: the older pending run is revoked and a resume of it carries nothing", async () => {
+        const c = await crashed();
+        const fresh = new GuardBackend((call) => (call === 1 ? 0 : 1));
+        const events: RunEvent[] = [];
+        await session(c.dirs, c.store, fresh, { emit: [(e) => events.push(e)], ...onServer() });
+        expect(fresh.asked).toBe(2);
+        expect(warningOf(events, "closed-world-changed")).toHaveLength(1);
+        const revoked = `${c.h}|closed-world:revoked`;
+        expect(hashes(c.store)).toEqual([revoked, revoked]);
+        for (const h of snapHashes(c.store, c.prior)) expect(h).toBe(revoked);
+        const again = new GuardBackend(() => 0);
+        await expect(resume(c, again)).rejects.toThrow(
+          `${flag(c.prior)}: run ${c.prior} was measured against test app ${revoked}`,
+        );
+        expect(nothingRan(again)).toBe(0);
+        c.store.close();
+      });
+
       test("T2: the resumed run crashes too: the next resume carries from it and confirms", async () => {
         const c = await crashed(2);
         await expect(resume(c, new GuardBackend(() => 0))).rejects.toThrow(
@@ -3835,6 +3865,39 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
       });
     });
   }
+
+  /** A copy of run `from` and its snapshots, with `set` applied to the row; snapshots take the
+   *  copy's `test_app_hash`. */
+  const cloneRun = (store: ResultsStore, from: number, set: Record<string, string>) => {
+    const cols = (store.db.query("PRAGMA table_info(runs)").all() as { name: string }[])
+      .map((c) => c.name)
+      .filter((n) => n !== "id")
+      .join(", ");
+    store.db.run(`INSERT INTO runs (${cols}) SELECT ${cols} FROM runs WHERE id = ?`, [from]);
+    const id = newestRun(store);
+    for (const [k, v] of Object.entries(set))
+      store.db.run(`UPDATE runs SET ${k} = ? WHERE id = ?`, [v, id]);
+    store.db.run(
+      "INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload) SELECT ?1, batch_index, batch_hash, (SELECT test_app_hash FROM runs WHERE id = ?1), payload FROM baseline_snapshots WHERE run_id = ?2",
+      [id, from],
+    );
+    return id;
+  };
+
+  test("D4c: a flip leaves a confirmed run, another project's pending run and another server's pending run unchanged", async () => {
+    const c = await crashed();
+    const confirmed = cloneRun(c.store, c.prior, { test_app_hash: c.base });
+    const otherProject = cloneRun(c.store, c.prior, { project_path: `${c.dirs.projectDir}-other` });
+    const otherServer = cloneRun(c.store, c.prior, { resource_key: "http://bc-other|BC" });
+    const kept = [confirmed, otherProject, otherServer];
+    const before = kept.map((id) => [hashes(c.store)[id - 1], snapHashes(c.store, id)]);
+    for (const [, snaps] of before) expect(snaps).not.toEqual([]);
+    await session(c.dirs, c.store, new GuardBackend((call) => (call === 1 ? 0 : 1)), onServer());
+    // Control: the flip did revoke this project's pending run on this server.
+    expect(hashes(c.store)[c.prior - 1]).toBe(`${c.h}|closed-world:revoked`);
+    expect(kept.map((id) => [hashes(c.store)[id - 1], snapHashes(c.store, id)])).toEqual(before);
+    c.store.close();
+  });
 
   test("M2: --resume-run of a resumed-then-revoked run (D4's shape): refused; nothing runs", async () => {
     const c = await crashed();

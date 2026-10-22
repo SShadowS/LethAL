@@ -916,7 +916,8 @@ export class ResultsStore {
    * the closed-world digests replace the open-world ones, and the run's test-app identity and its
    * baseline snapshots lose `pending` (`PENDING_SUFFIX`), which makes them reusable. Until then
    * no key a session computes can match them, so a run killed before this never supplies a
-   * verdict or a baseline.
+   * baseline, and supplies a verdict only through R601's rule (`resumableTestApp`). Throws when
+   * the row holds no pending identity, as when another session's flip revoked it (R601 M-B).
    */
   confirmClosedWorld(
     runId: number,
@@ -947,15 +948,24 @@ export class ResultsStore {
    *  identity and every baseline snapshot it recorded get `suffix`, so no later session carries or
    *  reuses from it. A revoked owner whose snapshot somehow kept the old key is excluded by
    *  `findBaselineSnapshot`'s R496 condition that the run's hash equals the snapshot's.
-   *  R601 (review I2): `chain` is a session that resumed a pending prior. In the same transaction,
-   *  every run of `chain.projectPath` still recorded as exactly `chain.pendingHash` is revoked too,
-   *  with its snapshots, so the run it resumed cannot lend again after the answer was seen to flip. */
+   *  R601 (review I-A, orchestrator ruling): `chain` is what any flipping session passes, fresh or
+   *  resumed. In the same transaction, every run of `chain.projectPath` still recorded as exactly
+   *  `chain.pendingHash` on this run's server (`resource_key`) is revoked too, with its snapshots,
+   *  so no pending run lends after a session on that server saw the answer change. An unknown
+   *  server fails closed: when this run's key is NULL the chain spans every server of the project,
+   *  and a pending run with a NULL key is revoked on any server (it can never resume anyway). */
   revokeTestAppHash(
     runId: number,
     suffix: string,
     chain?: { readonly projectPath: string; readonly pendingHash: string },
   ): void {
     this.db.transaction(() => {
+      // Read before the run's own row changes: the chain's server scope.
+      const server = (
+        this.db.query("SELECT resource_key AS k FROM runs WHERE id = ?").get(runId) as {
+          k: string | null;
+        } | null
+      )?.k;
       const changed = this.db
         .query(
           "UPDATE runs SET test_app_hash = test_app_hash || ? WHERE id = ? AND test_app_hash IS NOT NULL",
@@ -967,16 +977,17 @@ export class ResultsStore {
         .query("UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ? WHERE run_id = ?")
         .run(suffix, runId);
       if (chain === undefined) return;
+      const scope =
+        "project_path = ?2 AND test_app_hash = ?3 AND (?4 IS NULL OR resource_key IS NULL OR resource_key = ?4)";
+      const args = [suffix, chain.projectPath, chain.pendingHash, server ?? null] as const;
       this.db
         .query(
-          "UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ?1 WHERE run_id IN (SELECT id FROM runs WHERE project_path = ?2 AND test_app_hash = ?3)",
+          `UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ?1 WHERE run_id IN (SELECT id FROM runs WHERE ${scope})`,
         )
-        .run(suffix, chain.projectPath, chain.pendingHash);
+        .run(...args);
       this.db
-        .query(
-          "UPDATE runs SET test_app_hash = test_app_hash || ?1 WHERE project_path = ?2 AND test_app_hash = ?3",
-        )
-        .run(suffix, chain.projectPath, chain.pendingHash);
+        .query(`UPDATE runs SET test_app_hash = test_app_hash || ?1 WHERE ${scope}`)
+        .run(...args);
     })();
   }
 

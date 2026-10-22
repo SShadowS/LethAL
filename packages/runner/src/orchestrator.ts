@@ -3918,11 +3918,16 @@ function pendingRefusal(row: RunRow, session: string, p: PendingResumeCheck): st
   if (!isClosedIdentity(session)) {
     return `${head}, and this session's closed-world guard does not answer closed now, because: ${p.openWorldWhy ?? "unknown"}. So that answer cannot be confirmed.`;
   }
-  const server =
-    row.testAppHash === `${session}${PENDING_SUFFIX}`
-      ? ` It ran on server ${row.resourceKey ?? "unknown"}, and this session runs on server ${p.resourceKey ?? "unknown"}.`
-      : "";
-  return `${head}.${server} Such a run is resumed only by a session on the same server whose test app and closed-world answer, asked now, are the same, and this session's differ.`;
+  const sameApp = row.testAppHash === `${session}${PENDING_SUFFIX}`;
+  const server = sameApp
+    ? ` It ran on server ${row.resourceKey ?? "unknown"}, and this session runs on server ${p.resourceKey ?? "unknown"}.`
+    : "";
+  // R601 M-C: with an unknown server nothing visibly differs; say why it still does not match.
+  const why =
+    sameApp && (row.resourceKey === null || p.resourceKey === undefined)
+      ? "and an unknown server never matches."
+      : "and this session's differ.";
+  return `${head}.${server} Such a run is resumed only by a session on the same server whose test app and closed-world answer, asked now, are the same, ${why}`;
 }
 
 /** R495: why an identity lends nothing, said the same way on every path. */
@@ -5825,7 +5830,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R389: the session's closed-world answer, bound into every test-app hash it reads or records.
   const sessionClosedWorld = pendingClosedWorld?.guard.closedWorld ?? OPEN_WORLD;
   // R389: a closed-world run's identity is recorded PENDING (unmatchable) until its
-  // post-execution recheck confirms it; a run killed before that never supplies a verdict.
+  // post-execution recheck confirms it; a run killed before that never supplies a baseline, and
+  // supplies a verdict only through R601's rule (`resumableTestApp`).
   const recordedTestAppHash = (h: string): string =>
     pendingClosedWorld !== undefined ? `${h}${PENDING_SUFFIX}` : h;
   // R495: the identity resume, history and the R192 snapshot may use, `undefined` unless proven.
@@ -7770,16 +7776,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       }
     } else {
       if (historyTestApp !== undefined) {
-        // R601 (review I2): a session that resumed a pending prior revokes that chain with itself.
-        const pendingHash = `${historyTestApp.hash}${PENDING_SUFFIX}`;
-        const resumedPending =
-          resolvedResume !== undefined &&
-          cfg.store.getRun(resolvedResume.runId)?.testAppHash === pendingHash;
-        cfg.store.revokeTestAppHash(
-          runId,
-          REVOKED_SUFFIX,
-          resumedPending ? { projectPath: cfg.projectDir, pendingHash } : undefined,
-        );
+        // R601 (review I-A, orchestrator ruling): every flip, fresh or resumed, revokes with itself
+        // the project's runs still pending under this identity on this server.
+        cfg.store.revokeTestAppHash(runId, REVOKED_SUFFIX, {
+          projectPath: cfg.projectDir,
+          pendingHash: `${historyTestApp.hash}${PENDING_SUFFIX}`,
+        });
       }
       emit({
         type: "warning",

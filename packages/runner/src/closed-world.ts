@@ -154,7 +154,8 @@ export class ClosedWorldChangedError extends Error {
 
 /** R389: the suffix a closed-world run's identity and snapshots carry until the post-execution
  *  recheck confirms them (`ResultsStore.confirmClosedWorld`). No session computes it, so a pending
- *  owner, a run killed before confirmation included, never supplies a verdict or a baseline. */
+ *  owner, a run killed before confirmation included, never supplies a baseline, and supplies a
+ *  verdict only through R601's rule (`resumableTestApp`). */
 export const PENDING_SUFFIX = "|pending";
 
 /** The closed tag `guardedTestAppHash` ends a closed identity with. */
