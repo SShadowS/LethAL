@@ -17,6 +17,7 @@ import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-a
 import type { AppManifest, Conn, ServerOps } from "./bc-app-content.ts";
 import {
   GATE_FIXTURES,
+  HeldLeaseUnknownError,
   LaneUnknownError,
   type LeaseDeps,
   LeaseLostError,
@@ -34,6 +35,7 @@ import {
   describeLogin,
   downloadSymbols,
   gitIgnores,
+  heldLeaseDeps,
   krakenLeaseFor,
   launchFileName,
   parseArgs,
@@ -456,6 +458,74 @@ describe("R598: the coord lease is taken in the caller's lane, never a fixed one
       /--lane needs a lane name/,
     );
     expect(() => parseArgs(["--server", "bc1", "--lane"])).toThrow(/--lane needs a lane name/);
+  });
+});
+
+describe("R617: --held-lease never takes or releases a lease", () => {
+  /** The kraken-call seam, recording every call; a heartbeat for any token but `live` is refused. */
+  function fakeKraken(live = "held-1"): {
+    calls: string[][];
+    run: (args: readonly string[]) => Promise<string>;
+  } {
+    const calls: string[][] = [];
+    return {
+      calls,
+      run: async (args) => {
+        calls.push([...args]);
+        if (args[0] === "lease") return JSON.stringify({ token: "t-new" });
+        if (args[0] === "heartbeat" && args[2] !== live) throw new Error("no such lease");
+        return "{}";
+      },
+    };
+  }
+  const verbs = (calls: string[][]) => calls.map((c) => c[0]);
+
+  test("held: the given token is checked by one heartbeat, then heartbeated; zero lease and zero release calls", async () => {
+    const k = fakeKraken();
+    let ran = false;
+    await withLease(
+      "bc2",
+      heldLeaseDeps("held-1", k.run),
+      async () => {
+        ran = true;
+        await new Promise((r) => setTimeout(r, 35));
+      },
+      10,
+    );
+    expect(ran).toBe(true);
+    expect(verbs(k.calls)).not.toContain("lease");
+    expect(verbs(k.calls)).not.toContain("release");
+    expect(k.calls.length).toBeGreaterThanOrEqual(2);
+    for (const c of k.calls) expect(c).toEqual(["heartbeat", "bc2", "held-1"]);
+  });
+
+  test("not held: exactly one lease and one release, with the token coord gave", async () => {
+    const k = fakeKraken("t-new");
+    await withLease("bc2", krakenLeaseFor("preproc", k.run), async () => {});
+    expect(k.calls.filter((c) => c[0] === "lease")).toEqual([["lease", "bc2", "preproc"]]);
+    expect(k.calls.filter((c) => c[0] === "release")).toEqual([["release", "bc2", "t-new"]]);
+  });
+
+  test("a held token coord does not recognise is refused by name before the body runs", async () => {
+    const k = fakeKraken("held-1");
+    let ran = false;
+    await expect(
+      withLease("bc2", heldLeaseDeps("stale-9", k.run), async () => {
+        ran = true;
+      }),
+    ).rejects.toThrow(HeldLeaseUnknownError);
+    expect(ran).toBe(false);
+    expect(verbs(k.calls)).toEqual(["heartbeat"]);
+  });
+
+  test("parseArgs: one held token leases one server", () => {
+    expect(() => parseArgs(["--server", "all", "--held-lease", "t"])).toThrow();
+    expect(parseArgs(["--server", "bc3", "--held-lease", "t"])).toEqual({
+      servers: ["bc3"],
+      dryRun: false,
+      withContinia: false,
+      heldLease: "t",
+    });
   });
 });
 
