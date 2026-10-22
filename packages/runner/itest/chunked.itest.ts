@@ -33,6 +33,8 @@
  *     61 instead of 57, while THE DIFFERENTIAL STILL PASSED — every verdict and every killer was
  *     unchanged. That is the whole reason this gate exists: the bug is invisible to a verdict
  *     table, and every other live gate is unchunked, where the two prefixes are the same list.
+ *     (Those were the figures before R582. Since R582 each warm kill also re-runs under the
+ *     mutant, so the chunked leg is 62 group calls and that bug would read about 70.)
  *   - Taking only `chunkPrefix` from `ordered` (right length, wrong methods) never reaches these
  *     assertions: `confirmWarm`'s own caller-contract check rejects it first, by name — "mutant
  *     M0015's step names position 2 but its chunk prefix has 2 method(s) ending in
