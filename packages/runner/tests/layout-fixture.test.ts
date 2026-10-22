@@ -1,15 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { buildAlRunnerCoverageIndex, normalizeFileKey } from "../src/al-runner-coverage";
 import {
   generateMutationSet,
+  identityOrdinalsOf,
   operatorTiers,
   planArtifacts,
   prepareBatchProject,
 } from "../src/orchestrator";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * R353, offline guard for `fixtures/sandbox-layout`'s PURPOSE. The live leg in `itest:alrunner`
@@ -65,7 +67,9 @@ interface Built {
 
 /** Instruments both batches once, as `runSession` does, into a scratch directory. */
 async function build(root: string): Promise<Built> {
-  const { files } = await generateMutationSet(PROJECT);
+  const set = await generateMutationSet(PROJECT);
+  const { files } = set;
+  const identityOrdinals = identityOrdinalsOf(set);
   const batches = planArtifacts(files, { maxGuardsPerBatch: 7 });
   const manifest = JSON.parse(await readFile(join(PROJECT, "app.json"), "utf8")) as Record<
     string,
@@ -78,6 +82,7 @@ async function build(root: string): Promise<Built> {
     await writeInstrumentedProject({
       targetDir: dir,
       files: batch,
+      identityOrdinals,
       selectorIds: { selectorId: 79749, controlId: 79748, tableId: 79747 },
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: String(manifest.id),
@@ -108,8 +113,8 @@ describe("R353: sandbox-layout splits at maxGuardsPerBatch 7 across a member bou
     root = await mkdtemp(join(tmpdir(), "lethal-r353-"));
     built = await build(root);
   });
-  afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+  afterAll(() => {
+    removeScratchDir(root);
   });
   const get = (): Built => {
     if (built === undefined) throw new Error("beforeAll did not build the batches");

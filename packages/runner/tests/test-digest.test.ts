@@ -26,7 +26,7 @@ describe("R-278: testDigestsOfSources", () => {
   test("a digest is recorded for every discovered test, keyed by codeunit id and lowercased method", () => {
     const d = digests(unit(A + B));
     expect(Object.keys(d).sort()).toEqual(["50100::a", "50100::b"]);
-    expect(d["50100::a"]).toMatch(/^v2:[0-9a-f]{64}$/);
+    expect(d["50100::a"]).toMatch(/^v3:[0-9a-f]{64}$/);
     expect(testDigestKey({ codeunitId: 50100, method: "MyTest" })).toBe(
       testDigestKey({ codeunitId: 50100, method: "mytest" }),
     );
@@ -163,7 +163,7 @@ ${procs}}
   /** The edit turns A new, and an unreached edit does not (A is not on the fallback). */
   function expectReached(files: Files, path: string, from: string, to: string): void {
     const was = digestA(files);
-    expect(was).toMatch(/^v2:/);
+    expect(was).toMatch(/^v3:/);
     expect(digestA(edit(files, path, from, to))).not.toBe(was);
     expect(digestA(unrelated(files))).toBe(was);
   }
@@ -336,15 +336,19 @@ codeunit 50120 "Sub"
     expect(digestA(unrelated(files))).not.toBe(digestA(files));
   });
 
-  test("EXTERNAL needs one plain name: a codeunit by id or namespace-qualified takes the fallback", () => {
-    for (const type of ["Codeunit 50999", 'Codeunit My.Ns."Dep Lib"']) {
-      const files = base(
+  // R-389 option (a): a namespace-qualified name is read (its last segment is checked against the
+  // test app's objects, as every resolver does); an id still is not.
+  test("EXTERNAL needs a name: a codeunit by id takes the fallback, a namespace-qualified one does not", () => {
+    const files = (type: string) =>
+      base(
         T(
           `    procedure A()\n    var\n        L: ${type};\n    begin\n        L.Foo();\n    end;\n`,
         ),
       );
-      expect(digestA(unrelated(files))).not.toBe(digestA(files));
-    }
+    const byId = files("Codeunit 50999");
+    expect(digestA(unrelated(byId))).not.toBe(digestA(byId));
+    const qualified = files('Codeunit My.Ns."Dep Lib"');
+    expect(digestA(unrelated(qualified))).toBe(digestA(qualified));
   });
 
   test("negative: a classified EXTERNAL edge (a plain name the test app does not declare) takes no fallback", () => {
@@ -478,12 +482,14 @@ codeunit 50120 "Sub"
       const was = digestA(files);
       expect(digestA(mockEdit(files))).not.toBe(was);
       expect(digestA(unrelated(files))).toBe(was);
-      // An implementation the test app does not declare, by one plain name, is EXTERNAL; by a
-      // namespace-qualified name it cannot be checked, so every test falls back.
+      // An implementation the test app does not declare, by one plain name or (R-389 option a) a
+      // namespace-qualified one, is EXTERNAL; by an id it cannot be checked, so every test falls back.
       const dep = edit(files, "X.al", '= "Mock";', '= "Dep Impl";');
       expect(onFallback(dep)).toBe(false);
       const qualified = edit(files, "X.al", '= "Mock";', '= My.Ns."Dep Impl";');
-      expect(onFallback(qualified)).toBe(true);
+      expect(onFallback(qualified)).toBe(false);
+      const byId = edit(files, "X.al", '= "Mock";', "= 50999;");
+      expect(onFallback(byId)).toBe(true);
     });
 
     test("item 4: a page part a pageextension adds to a dependency's page is in every digest", () => {
@@ -747,5 +753,78 @@ codeunit 50120 "Sub"
       },
     );
     expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+  });
+
+  // R466: a TableNo codeunit's implicit `Rec` exists in its OnRun only (alc AL0118 elsewhere).
+  describe("R466: a TableNo codeunit's Rec is its OnRun's alone", () => {
+    const RUNNER = (onRun: string, procs = "") => `codeunit 50140 "Runner"
+{
+    TableNo = "TT";
+
+    trigger OnRun()
+    begin
+${onRun}
+    end;
+${procs}}
+`;
+    const TOUCHED = TABLE(
+      "",
+      "    procedure Touch()\n    begin\n        Marks := 1;\n    end;\n\n    var\n        Marks: Integer;\n",
+    );
+
+    // Over-applied fix (no implicit Rec in a codeunit at all): OnRun's `Rec.Touch()` loses its edge.
+    test("Rec in OnRun is still typed through TableNo", () => {
+      const files = base(
+        T('    procedure A()\n    begin\n        Codeunit.Run(Codeunit::"Runner");\n    end;\n'),
+        { "Runner.al": RUNNER("        Rec.Touch();"), "TT.al": TOUCHED },
+      );
+      expectReached(files, "TT.al", "Marks := 1;", "Marks := 2;");
+    });
+
+    // Missing fix: Go's bare `Rec` resolves to TT through TableNo, so Touch is reached from Go.
+    test("Rec in another procedure is not typed through TableNo", () => {
+      const files = base(
+        T(
+          '    procedure A()\n    var\n        L: Codeunit "Runner";\n    begin\n        L.Go();\n    end;\n',
+        ),
+        {
+          "Runner.al": RUNNER(
+            "",
+            "\n    procedure Go()\n    begin\n        Rec.Touch();\n    end;\n",
+          ),
+          "TT.al": TOUCHED,
+        },
+      );
+      const was = digestA(files);
+      expect(was).toMatch(/^v3:/);
+      expect(digestA(edit(files, "TT.al", "Marks := 1;", "Marks := 2;"))).toBe(was);
+      // Go itself IS reached, so the line above is not passing because Go fell out of the walk.
+      expect(
+        digestA(edit(files, "Runner.al", "Rec.Touch();", "Rec.Touch(); Rec.Touch();")),
+      ).not.toBe(was);
+    });
+
+    // A codeunit's `triggers` holds EVERY trigger it declares (an install codeunit's
+    // `OnInstallAppPerCompany`, for one), not only OnRun. Wrong fix "any trigger": the install
+    // trigger's `Rec.Touch()` reaches TT through the id fold `Codeunit::"Runner"` triggers.
+    test("Rec in a trigger other than OnRun is not typed through TableNo", () => {
+      const files = base(
+        T('    procedure A()\n    begin\n        Codeunit.Run(Codeunit::"Runner");\n    end;\n'),
+        {
+          "Runner.al": RUNNER(
+            "",
+            "\n    trigger OnInstallAppPerCompany()\n    begin\n        Rec.Touch();\n    end;\n",
+          ),
+          "TT.al": TOUCHED,
+        },
+      );
+      const was = digestA(files);
+      expect(was).toMatch(/^v3:/);
+      expect(digestA(edit(files, "TT.al", "Marks := 1;", "Marks := 2;"))).toBe(was);
+      // The install trigger IS walked, so the line above is not passing because it fell out.
+      expect(
+        digestA(edit(files, "Runner.al", "Rec.Touch();", "Rec.Touch(); Rec.Touch();")),
+      ).not.toBe(was);
+    });
   });
 });

@@ -1,7 +1,60 @@
 import { afterAll } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+const errCode = (err: unknown): string => {
+  const code = (err as { code?: unknown }).code;
+  return code !== undefined ? String(code) : errText(err);
+};
+
+/**
+ * R358/R375: remove a test's temp folder, retrying a few times. If it still cannot be removed, it
+ * throws `R358: could not remove <dir>: <error>` as before, and now also names the files still
+ * locked (`still locked: lethal.sqlite-wal (EBUSY)`): it walks what is left and tries each file
+ * on its own, so a Windows lock points at its holder instead of only at the folder. `rm` is a seam
+ * for the test that simulates a lock; callers leave it alone.
+ */
+export function removeScratchDir(dir: string, rm: typeof rmSync = rmSync): void {
+  try {
+    rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch (err) {
+    const locked: string[] = [];
+    try {
+      for (const rel of readdirSync(dir, { recursive: true }) as string[]) {
+        const p = join(dir, rel);
+        try {
+          if (lstatSync(p).isDirectory()) continue;
+          rm(p, { force: true });
+        } catch (fileErr) {
+          // Gone between the listing and the delete: not locked.
+          if (errCode(fileErr) !== "ENOENT") locked.push(`${rel} (${errCode(fileErr)})`);
+        }
+      }
+    } catch {
+      // The folder could not be listed: the original error is all there is to report.
+    }
+    const tail = locked.length > 0 ? `; still locked: ${locked.join(", ")}` : "";
+    throw new Error(`R358: could not remove ${dir}: ${errText(err)}${tail}`);
+  }
+}
+
+/**
+ * R375: `removeScratchDir` for each folder. Every folder is tried even when an earlier one fails;
+ * then ONE error lists every failure, one `R358: could not remove` line each.
+ */
+export function removeScratchDirs(dirs: Iterable<string>, rm: typeof rmSync = rmSync): void {
+  const failed: string[] = [];
+  for (const d of dirs) {
+    try {
+      removeScratchDir(d, rm);
+    } catch (err) {
+      failed.push(errText(err));
+    }
+  }
+  if (failed.length > 0) throw new Error(failed.join("\n"));
+}
 
 /**
  * R358: a fresh temp directory per call, removed after the calling file's last test. Call it ONCE
@@ -12,17 +65,7 @@ import { join } from "node:path";
  */
 export function scratchDirs(): (prefix: string) => string {
   const made: string[] = [];
-  afterAll(() => {
-    const failed: string[] = [];
-    for (const d of made) {
-      try {
-        rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-      } catch (err) {
-        failed.push(`${d}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    if (failed.length > 0) throw new Error(`R358: could not remove\n${failed.join("\n")}`);
-  });
+  afterAll(() => removeScratchDirs(made));
   return (prefix) => {
     const d = mkdtempSync(join(tmpdir(), prefix));
     made.push(d);
@@ -42,7 +85,7 @@ export function removeRunScratchAfterAll(): void {
   afterAll(() => {
     for (const e of readdirSync(tmpdir())) {
       if (/^lethal-[A-Za-z0-9]{6}$/.test(e)) {
-        rmSync(join(tmpdir(), e), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        removeScratchDir(join(tmpdir(), e));
       }
     }
   });

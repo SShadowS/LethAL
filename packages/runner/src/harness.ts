@@ -1,6 +1,6 @@
 import type { ActivationConfig, FetchFn } from "./activation";
 import { compareAppVersions } from "./app-version";
-import { bcFetch } from "./bc-fetch";
+import { BcAnswerUnreadError, bcFetch, readJsonBody, withDeadline } from "./bc-fetch";
 
 /**
  * The `LethAL Control` extension's own app id and the protocol version this client speaks. A
@@ -72,10 +72,16 @@ const MIN_PROTOCOL_VERSION = 2;
  * "clientProtocol is not a valid parameter" 400 for a build older still. Each of those is a
  * different-looking failure for one cause, which is exactly what R28 was filed for.
  *
- * Kept in LOCKSTEP with `extensions/lethal-control/app.json`'s `version`: raising this constant
- * without bumping that file makes a freshly built control app fail its own gate. Pinned by a test.
+ * Never AHEAD of `extensions/lethal-control/app.json`'s `version`: raising this constant without
+ * bumping that file makes a freshly built control app fail its own gate. Pinned by a test. It may
+ * lag behind for an action the client treats as optional: 1.0.0.23 adds R389's `DependentCount`,
+ * which an older control app answers with 404, read as "unknown" (the guard falls back).
+ * Raise it (to app.json's version) whenever a client path REQUIRES a new control action and has
+ * no fallback: that is why the two were once pinned equal.
+ * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
+ * the runtime-16 build is refused before any gate measures against it.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.20";
+export const MIN_CONTROL_VERSION = "1.0.0.22";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is
@@ -104,6 +110,97 @@ export class HarnessVerificationError extends Error {
     super(message);
     this.name = "HarnessVerificationError";
   }
+}
+
+/**
+ * R389: the deployed control app has no `DependentCount` action (it predates 1.0.0.23; BC answers
+ * 404). Not a failure: `MIN_CONTROL_VERSION` stays below 1.0.0.23 on purpose, and the closed-world
+ * guard reads this as "unknown" and falls back. Extends `Error` directly (CLAUDE.md).
+ */
+export class DependentCountUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DependentCountUnavailableError";
+  }
+}
+
+/**
+ * R433: a request for BC's automation `extensions` list that is not filtered by exactly one app id
+ * (a bare GUID). Unfiltered, or filtered by publisher, that list never answered on Cronus28 (BC
+ * 28.4, 2026-10-04: the socket closed after about 166 s, three times) and the service tier then
+ * stopped answering until an owner restart; by id it answered in 39-49 ms. `fetchApiRows` throws
+ * this BEFORE any request is sent. Extends `Error` DIRECTLY, never `HarnessVerificationError`: it is
+ * a caller-contract violation inside LethAL, not a statement about the server, and nothing may
+ * read it as "the control app is missing".
+ */
+export class UnfilteredExtensionsQueryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnfilteredExtensionsQueryError";
+  }
+}
+
+/** A bare GUID, 8-4-4-4-12 hex digits: no braces, no quotes, no surrounding space. */
+const GUID_PATTERN = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+const GUID_RE = new RegExp(`^${GUID_PATTERN}$`);
+/** The ONLY `$filter` an `extensions` request may carry (R433). JS `$` without the `m` flag matches
+ *  only at the very end, so a trailing newline or a second clause does not pass. */
+const EXTENSIONS_FILTER_RE = new RegExp(`^id eq ${GUID_PATTERN}$`);
+
+/** Every `%XX` escape replaced by its character, repeated until nothing changes (so `%2565` ends as
+ *  `e`). Lenient: a malformed escape stays as written and never throws. */
+function decodePercentEscapes(path: string): { text: string; leftover: boolean } {
+  let cur = path;
+  for (let i = 0; i < 16; i++) {
+    const next = cur.replace(/%([0-9a-fA-F]{2})/g, (_m, h: string) =>
+      String.fromCharCode(Number.parseInt(h, 16)),
+    );
+    if (next === cur) return { text: cur, leftover: false };
+    cur = next;
+  }
+  // R438: after the last round, a `%XX` still in the text means it was nested too deep to read.
+  return { text: cur, leftover: /%[0-9a-fA-F]{2}/.test(cur) };
+}
+
+/** R433: throws unless an `extensions` request is filtered by exactly one GUID. Any path naming
+ *  `extensions` in any case counts (an encoded slash included); the path itself may carry no
+ *  query or fragment, and the query must be exactly one `$filter: "id eq <GUID>"` plus at most one
+ *  `tenant` equal to `tenant`, the configured one. `query` is a LIST (R-441 review): a map would
+ *  keep one of two `$filter`s while the URL sends both. */
+export function refuseUnfilteredExtensionsQuery(
+  path: string,
+  query: readonly (readonly [string, string])[],
+  tenant: string | undefined,
+): void {
+  const refuse = (): never => {
+    throw new UnfilteredExtensionsQueryError(
+      `refusing to send an automation extensions query not filtered by exactly one app id: path ${JSON.stringify(path)}, query ${JSON.stringify(query)}. Only \`$filter=id eq <GUID>\` is allowed — an unfiltered or publisher-filtered extensions list hung BC 28.4 and took the service tier down (R433).`,
+    );
+  };
+  const pathDecoded = decodePercentEscapes(path);
+  const decoded = pathDecoded.text;
+  const queryDecoded = query.flatMap(([k, v]) => [
+    decodePercentEscapes(k),
+    decodePercentEscapes(v),
+  ]);
+  // R438: text still encoded after the last round cannot be read, so it is refused.
+  if ([pathDecoded, ...queryDecoded].some((p) => p.leftover)) refuse();
+  if (!/extensions/i.test(decoded)) {
+    // R438: a key or value naming extensions counts on any path, not only on the path itself.
+    if (queryDecoded.some((p) => /extensions/i.test(p.text))) refuse();
+    return;
+  }
+  const tenants = query.filter(([k]) => k === "tenant");
+  const [only, ...more] = query.filter(([k]) => k !== "tenant");
+  const ok =
+    !/[?#&]/.test(decoded) &&
+    only !== undefined &&
+    more.length === 0 &&
+    only[0] === "$filter" &&
+    EXTENSIONS_FILTER_RE.test(only[1]) &&
+    tenants.length <= 1 &&
+    tenants.every(([, v]) => v === tenant);
+  if (!ok) refuse();
 }
 
 /**
@@ -326,6 +423,82 @@ export class HarnessVerifier {
   }
 
   /**
+   * R389: how many PUBLISHED apps declare `appId` as a dependency (control app 1.0.0.23,
+   * `DependentCount`). Refuses a non-GUID before any request. Throws on every answer it cannot
+   * read as that app's count, never a plausible 0; `DependentCountUnavailableError` for a control
+   * app without the action (404).
+   */
+  async fetchDependentCount(appId: string): Promise<number> {
+    if (!GUID_RE.test(appId)) {
+      throw new Error(`DependentCount: app id ${JSON.stringify(appId)} is not a bare GUID`);
+    }
+    const params = new URLSearchParams({ company: this.cfg.company });
+    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
+    const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_DependentCount?${params.toString()}`;
+    // Sol's review: the timeout covers the BODY too. A server that sends headers and then stalls
+    // must time out (the guard then falls back), never hang the run. The race also covers a fetch
+    // whose body ignores the abort signal.
+    const ms = this.cfg.timeoutMs ?? 30_000;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new HarnessVerificationError(`DependentCount timed out after ${ms} ms`));
+      }, ms);
+    });
+    const exchange = async (): Promise<{ status: number; ok: boolean; text: string }> => {
+      const r = await this.fetchFn(url, {
+        method: "POST",
+        headers: {
+          authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ appId }),
+        signal: controller.signal,
+      });
+      return { status: r.status, ok: r.ok, text: await r.text() };
+    };
+    let res: { status: number; ok: boolean; text: string };
+    try {
+      res = await Promise.race([exchange(), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      const what = `DependentCount failed: HTTP ${res.status}${res.text ? `: ${res.text}` : ""}`;
+      if (res.status === 401 || res.status === 403) throw new HarnessAuthError(what);
+      if (res.status === 404) throw new DependentCountUnavailableError(what);
+      throw new HarnessVerificationError(what);
+    }
+    let value: unknown;
+    try {
+      value = (JSON.parse(res.text) as { value?: unknown }).value;
+    } catch {
+      value = undefined;
+    }
+    let parsed: { appId?: unknown; publishedDependents?: unknown };
+    try {
+      parsed = JSON.parse(String(value)) as typeof parsed;
+    } catch {
+      throw new HarnessVerificationError(`DependentCount value is not JSON: ${String(value)}`);
+    }
+    const n = parsed?.publishedDependents;
+    if (
+      typeof parsed?.appId !== "string" ||
+      parsed.appId.toLowerCase() !== appId.toLowerCase() ||
+      typeof n !== "number" ||
+      !Number.isInteger(n) ||
+      n < 0
+    ) {
+      throw new HarnessVerificationError(
+        `DependentCount answered ${String(value)}, not a count for app ${appId}`,
+      );
+    }
+    return n;
+  }
+
+  /**
    * R195: the company names this server reports, from BC's own `api/v2.0/companies`. Read-only,
    * and independent of the control app: it answers on a server where LethAL Control was never
    * published, which is what lets `lethal doctor` say "the company you named does not exist,
@@ -361,30 +534,7 @@ export class HarnessVerifier {
     readonly installed: boolean;
     readonly versions: readonly string[];
   }> {
-    const companies = await this.fetchApiRows("api/v2.0/companies", "companies list");
-    const wanted = this.cfg.company.trim().toLowerCase();
-    const company = companies.find(
-      (r) =>
-        String((r as { name?: unknown }).name)
-          .trim()
-          .toLowerCase() === wanted,
-    ) as { id?: unknown } | undefined;
-    if (typeof company?.id !== "string") {
-      throw new HarnessVerificationError(
-        `company ${JSON.stringify(this.cfg.company)} is not in this server's companies list`,
-      );
-    }
-    const rows = (await this.fetchApiRows(
-      `api/microsoft/automation/v2.0/companies(${company.id})/extensions`,
-      "extensions list",
-      { $filter: `id eq ${appId}` },
-    )) as readonly {
-      isInstalled?: unknown;
-      versionMajor?: unknown;
-      versionMinor?: unknown;
-      versionBuild?: unknown;
-      versionRevision?: unknown;
-    }[];
+    const rows = await this.fetchExtensionRows(appId);
     return {
       installed: rows.some((r) => r.isInstalled === true),
       versions: rows.map(
@@ -394,19 +544,112 @@ export class HarnessVerifier {
     };
   }
 
+  /**
+   * R-385: the versions of `appId`'s INSTALLED rows in the configured company, read by id (R433).
+   * A published-but-not-installed row is left out: tests cannot run from it. Usually one version;
+   * the caller decides what none or two mean. A row whose `isInstalled` is not a boolean, or whose
+   * version parts are not numbers, throws: an unreadable row must not read as "not installed".
+   */
+  async fetchInstalledVersions(appId: string): Promise<readonly string[]> {
+    const out: string[] = [];
+    for (const r of await this.fetchExtensionRows(appId)) {
+      const parts = [r.versionMajor, r.versionMinor, r.versionBuild, r.versionRevision];
+      if (typeof r.isInstalled !== "boolean" || !parts.every((p) => typeof p === "number")) {
+        throw new HarnessVerificationError(
+          `extensions list returned a malformed row for app ${appId}: ${JSON.stringify(r).slice(0, 200)}`,
+        );
+      }
+      if (r.isInstalled) out.push(parts.join("."));
+    }
+    return out;
+  }
+
+  /** The configured company's id, looked up once per verifier (only a found id is kept). */
+  private companyId: string | undefined;
+
+  /**
+   * R433: the ONLY code that builds the automation `extensions` path. It refuses an `appId` that is
+   * not a bare GUID before any request, and always sends `$filter=id eq <guid>`; `fetchApiRows`
+   * refuses anything else again, at run time.
+   */
+  private async fetchExtensionRows(appId: string): Promise<
+    readonly {
+      isInstalled?: unknown;
+      versionMajor?: unknown;
+      versionMinor?: unknown;
+      versionBuild?: unknown;
+      versionRevision?: unknown;
+    }[]
+  > {
+    if (!GUID_RE.test(appId)) {
+      throw new HarnessVerificationError(
+        `app id ${JSON.stringify(appId)} is not a GUID; the extensions list is read only by one app id (R433)`,
+      );
+    }
+    if (this.companyId === undefined) {
+      const companies = await this.fetchApiRows("api/v2.0/companies", "companies list");
+      const wanted = this.cfg.company.trim().toLowerCase();
+      const company = companies.find(
+        (r) =>
+          String((r as { name?: unknown }).name)
+            .trim()
+            .toLowerCase() === wanted,
+      ) as { id?: unknown } | undefined;
+      if (typeof company?.id !== "string") {
+        throw new HarnessVerificationError(
+          `company ${JSON.stringify(this.cfg.company)} is not in this server's companies list`,
+        );
+      }
+      this.companyId = company.id;
+    }
+    return (await this.fetchApiRows(
+      `api/microsoft/automation/v2.0/companies(${this.companyId})/extensions`,
+      "extensions list",
+      { $filter: `id eq ${appId}` },
+    )) as readonly {
+      isInstalled?: unknown;
+      versionMajor?: unknown;
+      versionMinor?: unknown;
+      versionBuild?: unknown;
+      versionRevision?: unknown;
+    }[];
+  }
+
   /** One GET against a BC API list endpoint, returning its `value` rows. The company parameter is
-   *  never sent: these endpoints address the company in the path, or list across companies. */
-  private async fetchApiRows(
+   *  never sent: these endpoints address the company in the path, or list across companies.
+   *  R506: the bound spans the headers AND the body; an unread body throws, never an empty value. */
+  private fetchApiRows(
     path: string,
     what: string,
     extra: Readonly<Record<string, string>> = {},
   ): Promise<readonly unknown[]> {
+    const ms = this.cfg.timeoutMs ?? 30_000;
+    return withDeadline(
+      ms,
+      what,
+      (signal) => this.readApiRows(path, what, extra, signal, ms),
+      (m, kind) => new BcAnswerUnreadError(m, kind),
+    );
+  }
+
+  private async readApiRows(
+    path: string,
+    what: string,
+    extra: Readonly<Record<string, string>>,
+    signal: AbortSignal,
+    ms: number,
+  ): Promise<readonly unknown[]> {
+    // R433: before the URL is built, so a refused query never reaches the network.
+    // `extra` comes from a caller, so no tenant is allowed in it: the configured one is added below.
+    refuseUnfilteredExtensionsQuery(path, Object.entries(extra), undefined);
     const params = new URLSearchParams(extra);
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const query = params.size > 0 ? `?${params.toString()}` : "";
-    const url = `${this.cfg.baseUrl}/${path}${query}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
+    // R441: fetch's URL parser drops tab, CR and LF, so check the parsed URL and send exactly that.
+    // R589: API rows from their own root when the config names one (BC on Linux's API port).
+    const sent = new URL(`${this.cfg.apiBaseUrl ?? this.cfg.baseUrl}/${path}${query}`);
+    refuseUnfilteredExtensionsQuery(sent.pathname, [...sent.searchParams], this.cfg.tenant);
+    const url = sent.href;
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -415,12 +658,32 @@ export class HarnessVerifier {
           authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
           accept: "application/json",
         },
-        signal: controller.signal,
+        // R-496 review: a followed redirect would send a request the guard above never saw.
+        redirect: "manual",
+        signal,
       });
     } catch (err) {
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
+      // R506: our own abort is a timeout, never "unreachable".
+      if (signal.aborted) {
+        throw new BcAnswerUnreadError(
+          `${what} gave no answer within ${ms} ms: ${String(err)}`,
+          "timeout",
+        );
+      }
       throw new HarnessVerificationError(`${what} unreachable: ${String(err)}`);
-    } finally {
-      clearTimeout(timer);
+    }
+    if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
+      // Never followed. A destination the guard refuses throws the guard's own error, so it
+      // propagates like any refused extensions query; any other redirect fails as a transport error.
+      const location = res.headers.get("location");
+      if (location !== null) {
+        const dest = new URL(location, sent);
+        refuseUnfilteredExtensionsQuery(dest.pathname, [...dest.searchParams], this.cfg.tenant);
+      }
+      throw new HarnessVerificationError(
+        `${what} failed: HTTP ${res.status} redirect to ${JSON.stringify(location)} was not followed; BC API lists are read only at the URL the guard checked (R-496)`,
+      );
     }
     if (!res.ok) {
       let bodyText = "";
@@ -438,12 +701,9 @@ export class HarnessVerifier {
         `${what} failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
       );
     }
-    let value: unknown;
-    try {
-      value = ((await res.json()) as { value?: unknown }).value;
-    } catch {
-      value = undefined;
-    }
+    const value = odataValue(
+      await readJsonBody(res, signal, what, ms, (m, kind) => new BcAnswerUnreadError(m, kind)),
+    );
     if (!Array.isArray(value)) {
       throw new HarnessVerificationError(`${what} returned no \`value\` array`);
     }
@@ -590,13 +850,24 @@ export class HarnessVerifier {
     return "enforced";
   }
 
-  private async fetchHarnessInfo(): Promise<HarnessInfo> {
+  /** R506: the bound spans the headers AND the body; an unread body throws, never an empty
+   *  value. A timeout or an unreadable 2xx is `BcAnswerUnreadError`, never
+   *  `HarnessVerificationError`, so it is never read as "the control app is missing". */
+  private fetchHarnessInfo(): Promise<HarnessInfo> {
+    const ms = this.cfg.timeoutMs ?? 30_000;
+    return withDeadline(
+      ms,
+      "HarnessInfo",
+      (signal) => this.readHarnessInfo(signal, ms),
+      (m, kind) => new BcAnswerUnreadError(m, kind),
+    );
+  }
+
+  private async readHarnessInfo(signal: AbortSignal, ms: number): Promise<HarnessInfo> {
     const params = new URLSearchParams({ company: this.cfg.company });
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_HarnessInfo?${params.toString()}`;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -609,12 +880,19 @@ export class HarnessVerifier {
         // refused by the OData layer before HarnessInfo's own check ever runs — that asymmetry
         // is what makes v1↔v2 incompatible by construction, so this key must always be sent.
         body: JSON.stringify({ clientProtocol: CLIENT_PROTOCOL_VERSION }),
-        signal: controller.signal,
+        signal,
       });
     } catch (err) {
+      // R-496: a redirect to an unfiltered extensions list, refused by `bcFetch`, stays itself.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
+      // R506: our own abort is a timeout, never "unreachable" (which would republish).
+      if (signal.aborted) {
+        throw new BcAnswerUnreadError(
+          `HarnessInfo gave no answer within ${ms} ms: ${String(err)}`,
+          "timeout",
+        );
+      }
       throw new HarnessVerificationError(`HarnessInfo unreachable: ${String(err)}`);
-    } finally {
-      clearTimeout(timer);
     }
     if (!res.ok) {
       // R25: read the body BEFORE throwing — BC's own rejection text is the only evidence that
@@ -644,12 +922,15 @@ This is an AUTHENTICATION failure, not a missing or stale control app: the reque
         `HarnessInfo failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`,
       );
     }
-    let value: unknown;
-    try {
-      value = ((await res.json()) as { value?: unknown }).value;
-    } catch {
-      value = undefined;
-    }
+    const value = odataValue(
+      await readJsonBody(
+        res,
+        signal,
+        "HarnessInfo",
+        ms,
+        (m, kind) => new BcAnswerUnreadError(m, kind),
+      ),
+    );
     if (typeof value !== "string") {
       throw new HarnessVerificationError("HarnessInfo returned no string `value`");
     }
@@ -659,6 +940,13 @@ This is an AUTHENTICATION failure, not a missing or stale control app: the reque
       throw new HarnessVerificationError(`HarnessInfo value is not JSON: ${value}`);
     }
   }
+}
+
+/** A parsed body's OData `value`, or `undefined` when the body is not an object. */
+function odataValue(body: unknown): unknown {
+  return typeof body === "object" && body !== null
+    ? (body as { value?: unknown }).value
+    : undefined;
 }
 
 function asStringArray(v: unknown): string[] {

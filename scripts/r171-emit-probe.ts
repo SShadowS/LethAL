@@ -28,7 +28,7 @@ import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-n
 import { buildSemanticContext } from "../packages/engine/src/semantic/context";
 import type { SourceFile } from "../packages/engine/src/semantic/symbol-table";
 import type { MutationSpec } from "../packages/operator-sdk/src/index";
-import { writeInstrumentedProject } from "../packages/schemata/src/index";
+import { withRunIdentityOrdinals, writeInstrumentedProject } from "../packages/schemata/src/index";
 
 const [projectDir, alcPath] = process.argv.slice(2);
 const CONTROL_APP = "U:/git/LethAL/extensions/lethal-control/lethal-control.app";
@@ -109,14 +109,16 @@ if (guardSpecs === 0) {
 
 const outDir = await mkdtemp(join(tmpdir(), "lethal-r171-"));
 try {
-  await writeInstrumentedProject({
-    targetDir: outDir,
-    files: instrumented,
-    selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-    artifactId: "0123456789abcdef0123456789abcdef",
-    targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-    operatorTiers: OPERATOR_TIERS,
-  });
+  await writeInstrumentedProject(
+    withRunIdentityOrdinals({
+      targetDir: outDir,
+      files: instrumented,
+      selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+      artifactId: "0123456789abcdef0123456789abcdef",
+      targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      operatorTiers: OPERATOR_TIERS,
+    }),
+  );
   // The instrumented tree carries only .al files; the manifest and the project metadata come along
   // so alc has an app.json and symbols.
   await cp(join(projectDir, ".alpackages"), join(outDir, ".alpackages"), { recursive: true });

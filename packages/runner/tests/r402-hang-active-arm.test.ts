@@ -7,7 +7,8 @@ import { generateMutationSet } from "../src/orchestrator";
 
 /**
  * R402 (plan `docs/superpowers/plans/2026-10-02-R-402-hang-tag-active-arm-operands.md`, r3):
- * - the hang tag reads loop-condition operands in ACTIVE `#if` arms and skips inactive ones;
+ * - the hang detector reads loop-condition operands in ACTIVE `#if` arms and skips inactive ones
+ *   (R196: what it names is now refused, so a hang-capable site has no `remove-assignment` spec);
  * - a statement-level `#if` that continues an unterminated statement (the misparsed
  *   `repeat ... until ... #if or (...)` tail, whose artifact alc refuses) refuses its file.
  * Every shape's source and instrumented artifact were compiled with alc under every build by
@@ -86,6 +87,9 @@ const SHAPES = {
   // Expression tails beside an assignment and an if condition: not statement-level containers.
   s15: "        A := A\n#if LETHALX\n            + B\n#endif\n        ;",
   s16: "        if (A < 10)\n#if LETHALX\n            and (B < 5)\n#endif\n        then\n            A := A + 1;",
+  // R239: a boolean literal in a loop condition's `#if` tail, and the same tail outside a loop.
+  t1: `        while (A < 10)\n#if LETHALX\n            or false\n#endif\n${LOOP_BODY}`,
+  t2: "        if (A < 10)\n#if LETHALX\n            or false\n#endif\n        then\n            Foo(A);",
 } as const;
 type Shape = keyof typeof SHAPES;
 const BUILDS = {
@@ -97,9 +101,13 @@ const BUILDS = {
 type Build = keyof typeof BUILDS;
 
 type Result = {
-  /** `remove-assignment` sites by assigned variable: true when hang-tagged. */
+  /** `remove-assignment` sites by assigned variable (R196: a hang-capable one is refused). */
   assigns: Map<string, boolean[]>;
   calls: string[];
+  /** `flip-boolean-literal` sites, by literal text. */
+  flips: string[];
+  /** Every spec's original text, whitespace collapsed. */
+  texts: string[];
   undecided: string[];
   /** Every generated spec, to check an admitted shape keeps all its sites. */
   specs: number;
@@ -126,6 +134,10 @@ async function run(shape: Shape, build: Build): Promise<Result> {
       calls: specs
         .filter((x) => x.operatorName === "lethal.void-method-call")
         .map((x) => x.before.text.replace(/\s+/g, " ")),
+      flips: specs
+        .filter((x) => x.operatorName === "lethal.flip-boolean-literal")
+        .map((x) => x.before.text),
+      texts: specs.map((x) => x.before.text.replace(/\s+/g, " ")),
       undecided: set.preprocExcluded
         .filter((e) => e.reason === "preproc-undecided")
         .map((e) => e.detail ?? ""),
@@ -150,45 +162,86 @@ const get = (shape: Shape, build: Build): Result => {
   if (r === undefined) throw new Error(`no result for ${shape}/${build}`);
   return r;
 };
-/** The ONE `remove-assignment` site on `v`, asserted to exist; returns whether it is hang-tagged. */
-const tagged = (shape: Shape, build: Build, v: string): boolean => {
+/** The loop condition's spec text where it is not `A < 10`. */
+const LOOP_CONDITION: Partial<Record<Shape, string>> = {
+  s9: "Check(A #if LETHALX + B #endif , 10)",
+  s10: "Arr[1 #if LETHALX + B #endif ] < 10",
+  s11: "A in [1, 2 #if LETHALX , B #endif ]",
+  s14: "B < 5",
+};
+/**
+ * Is the `remove-assignment` site on `v` REFUSED as hang-capable (R196: zero sites) rather than
+ * claimed (exactly one)? Every statement in these shapes compiles in every build except S14's loop,
+ * which its test checks separately, so an absent site here is the refusal, not a missing statement.
+ */
+const refused = (shape: Shape, build: Build, v: string): boolean => {
   const sites = get(shape, build).assigns.get(v) ?? [];
-  expect(sites, `${shape}/${build}: remove-assignment on ${v}`).toHaveLength(1);
-  return sites[0] === true;
+  expect(sites.length, `${shape}/${build}: remove-assignment on ${v}`).toBeLessThanOrEqual(1);
+  if (sites.length === 0) {
+    // A refusal needs an ADMITTED file that still has the loop: a refused file or a lost site
+    // would also have zero sites.
+    const r = get(shape, build);
+    expect(r.undecided, `${shape}/${build}: file admitted`).toEqual([]);
+    expect(r.texts, `${shape}/${build}: loop condition kept`).toContain(
+      LOOP_CONDITION[shape] ?? "A < 10",
+    );
+  }
+  return sites.length === 0;
 };
 
-describe("R402: the hang tag reads operands in ACTIVE #if arms of a loop condition", () => {
+describe("R402: the hang refusal reads operands in ACTIVE #if arms of a loop condition", () => {
   test("S1: an `and (B < 5)` tail beside a while condition", () => {
-    expect([tagged("s1", "none", "A"), tagged("s1", "none", "B")]).toEqual([true, false]);
-    expect([tagged("s1", "X", "A"), tagged("s1", "X", "B")]).toEqual([true, true]);
+    expect([refused("s1", "none", "A"), refused("s1", "none", "B")]).toEqual([true, false]);
+    expect([refused("s1", "X", "A"), refused("s1", "X", "B")]).toEqual([true, true]);
   });
 
   test("S2: #if / #elif tails, each arm with its own variable", () => {
-    expect([tagged("s2", "X", "B"), tagged("s2", "X", "C")]).toEqual([true, false]);
-    expect([tagged("s2", "Y", "B"), tagged("s2", "Y", "C")]).toEqual([false, true]);
-    expect([tagged("s2", "none", "B"), tagged("s2", "none", "C")]).toEqual([false, false]);
+    expect([refused("s2", "X", "B"), refused("s2", "X", "C")]).toEqual([true, false]);
+    expect([refused("s2", "Y", "B"), refused("s2", "Y", "C")]).toEqual([false, true]);
+    expect([refused("s2", "none", "B"), refused("s2", "none", "C")]).toEqual([false, false]);
   });
 
   test("S3: an `#if not` tail is active in the build WITHOUT the symbol", () => {
-    expect(tagged("s3", "none", "B")).toBe(true);
-    expect(tagged("s3", "X", "B")).toBe(false);
+    expect(refused("s3", "none", "B")).toBe(true);
+    expect(refused("s3", "X", "B")).toBe(false);
   });
 
   test("S3b: a directive condition spelled like a variable is never read as an operand", () => {
-    expect(tagged("s3b", "none", "B")).toBe(false);
-    expect(tagged("s3b", "none", "C")).toBe(false);
+    expect(refused("s3b", "none", "B")).toBe(false);
+    expect(refused("s3b", "none", "C")).toBe(false);
   });
 
   test("S9-S11: tails inside call arguments, subscripts and list elements are read only when active", () => {
     for (const s of ["s9", "s10", "s11"] as const) {
-      expect(tagged(s, "none", "B"), `${s} []`).toBe(false);
-      expect(tagged(s, "X", "B"), `${s} [X]`).toBe(true);
+      expect(refused(s, "none", "B"), `${s} []`).toBe(false);
+      expect(refused(s, "X", "B"), `${s} [X]`).toBe(true);
     }
   });
 
-  test("S14: a whole loop under a statement-level #if is tagged in its own build", () => {
-    expect(tagged("s14", "X", "B")).toBe(true);
+  test("S14: a whole loop under a statement-level #if is refused in its own build", () => {
+    // The loop exists under [X] (its condition draws mutants) and its counter step is refused;
+    // without X the loop is compiled out, so neither appears.
+    expect(get("s14", "X").texts).toContain("B < 5");
+    expect(refused("s14", "X", "B")).toBe(true);
+    expect(get("s14", "none").texts).not.toContain("B < 5");
     expect(get("s14", "none").assigns.get("B")).toBeUndefined();
+  });
+
+  test("R239: a boolean `#if` tail of a loop condition is never flipped; outside a loop it is, when active", () => {
+    // t1's tail literal sits beside a while condition: refused when active, absent when not.
+    // The file is admitted and keeps its other sites, so the empty flips are the refusal, not a
+    // refused file.
+    for (const b of Object.keys(BUILDS) as Build[]) {
+      expect(get("t1", b).flips, `t1/${b}`).toEqual([]);
+      expect(get("t1", b).undecided, `t1/${b}`).toEqual([]);
+      expect(get("t1", b).texts, `t1/${b}`).toContain("A < 10");
+      expect([refused("t1", b, "B"), refused("t1", b, "C")], `t1/${b}`).toEqual([false, false]);
+    }
+    // t2 is the same tail beside an `if` outside any loop: flipped exactly in the builds with X.
+    expect(get("t2", "none").flips).toEqual([]);
+    expect(get("t2", "Y").flips).toEqual([]);
+    expect(get("t2", "X").flips).toEqual(["false"]);
+    expect(get("t2", "XY").flips).toEqual(["false"]);
   });
 });
 
@@ -241,7 +294,7 @@ describe("R402: a statement-level #if that continues an unterminated statement r
     expect(get("c6", "X").calls).toEqual(["Foo(B)"]);
     expect(get("c6", "none").calls).toEqual(["Foo(A)"]);
     // A unterminated statement before an empty or trivia-only #if still has its own site.
-    for (const s of ["c2", "c2b"] as const) expect(tagged(s, "X", "A")).toBe(false);
+    for (const s of ["c2", "c2b"] as const) expect(refused(s, "X", "A")).toBe(false);
   });
 
   test("the admitted shapes keep EVERY site master generated, per build", () => {

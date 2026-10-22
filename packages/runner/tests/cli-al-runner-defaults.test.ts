@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,7 +14,9 @@ import {
 } from "../itest/cli-default-leg";
 import { AL_RUNNER_PROVISION_SENTINEL, type AlRunnerBackend } from "../src/al-runner-backend";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
+import type { AlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import { isPredefinedProbeArgv, predefinedProbeArgv } from "../src/al-runner-predefined-probe";
+import { readTargetSource } from "../src/baseline-snapshot";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
   alRunnerAdvisory,
@@ -24,6 +27,7 @@ import {
   validateAlRunnerConfig,
   withAlRunnerCoverageGuard,
 } from "../src/cli";
+import { prepareBatchProject } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
 import { fakeAlRunnerServer } from "./helpers/fake-al-runner-server";
@@ -107,6 +111,10 @@ async function drive(alRunner: NonNullable<LethalConfigFile["alRunner"]>): Promi
     IDS,
   )) as AlRunnerBackend;
   const ev = watchResourceSelector(backend, join(scratchDir, "al-runner-active", "active"));
+  // R517: as `runSession` does before the first run, at its defaults (no leg sets either).
+  backend.useMutantBudgetFloor(180_000, 120_000);
+  // R394: coverage is on by default, and `runSession` hands the build symbols over before deploy.
+  backend.useBuildSymbols([]);
   await backend.deploy(await batch());
   for (const id of ["M0001", "M0002", null]) {
     await backend.activate(id);
@@ -133,13 +141,33 @@ const kinds = (failures: readonly string[]): string[] =>
   [...new Set(failures.map((f) => f.split(":")[0] ?? ""))].sort();
 
 describe("R387: buildBackend's al-runner defaults", () => {
-  test("no transport key: one --server daemon, no one-shot test spawn, resource selector, coverage off", async () => {
+  // R394: "coverage off" became "coverage on" when the default flipped; the transport checks stand.
+  test("no transport key: one --server daemon, no one-shot test spawn, resource selector, coverage on", async () => {
     const { backend, record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
     expect(cliDefaultMechanismFailures(record, ev, ALLOWED)).toEqual([]);
-    expect(record.serverArgv).toEqual([["al-runner.exe", "--server"]]);
+    expect(record.serverArgv).toEqual([["al-runner.exe", "--server", "--test-timeout", "180"]]);
     expect(ev.activations).toBe(3);
+    // R577: one whole-suite run per activation, counted off the daemon's stdin.
+    expect(record.serverRunTests).toBe(3);
     expect(ev.alHashes.size).toBe(1);
-    expect(backend.capabilities().coverage).toBe("none");
+    expect(backend.capabilities().coverage).toBe("al-runner");
+  });
+
+  test("R517: a daemon argv without --test-timeout 180 exactly once fails the server check", async () => {
+    const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
+    const withArgv = (argv: string[]): SpawnRecord => ({ ...record, serverArgv: [argv] });
+    expect(cliDefaultMechanismFailures(record, ev, ALLOWED)).toEqual([]);
+    for (const argv of [
+      ["al-runner.exe", "--server"],
+      ["al-runner.exe", "--server", "--test-timeout", "60"],
+      ["al-runner.exe", "--server", "--test-timeout", "180", "--test-timeout", "180"],
+    ]) {
+      expect(cliDefaultMechanismFailures(withArgv(argv), ev, ALLOWED)).toEqual([
+        `server: expected --test-timeout 180 exactly once on the daemon argv, saw ${JSON.stringify(
+          argv.flatMap((a, i) => (a === "--test-timeout" ? [argv[i + 1]] : [])),
+        )}`,
+      ]);
+    }
   });
 
   test("the provisioning call (sentinel --test) is not a test spawn; a second one, or a real --test, fails", async () => {
@@ -322,6 +350,198 @@ describe("R387: buildBackend's al-runner defaults", () => {
     )) as AlRunnerBackend;
     expect(backend.capabilities().coverage).toBe("al-runner");
   });
+
+  /** A project with `Helper.Codeunit.al` twice (root and `Sub/`) and its renamed flat batch. */
+  async function renamedBatch(): Promise<{ proj: string; dir: string }> {
+    const proj = await project();
+    const unit = (id: number) => `codeunit ${id} "H${id}"\n{\n}\n`;
+    await writeFile(join(proj, "Helper.Codeunit.al"), unit(79100), "utf8");
+    await mkdir(join(proj, "Sub"));
+    await writeFile(join(proj, "Sub", "Helper.Codeunit.al"), unit(79101), "utf8");
+    const dir = scratch("lethal-r219-batch-");
+    await prepareBatchProject(proj, dir, { id: "x" }, "1.0.0.0");
+    await writeFile(
+      join(dir, "mutant-manifest.json"),
+      JSON.stringify({ artifactId: "b".repeat(32), mutants: [] }),
+      "utf8",
+    );
+    return { proj, dir };
+  }
+
+  // R219 run 003: the coverage index resolves a shared file name against the project al-runner
+  // labels coverage under. Revert: drop `sourceProjectDir` from `buildBackend`'s al-runner config.
+  test("the coverage index of a renamed batch knows the project directory", async () => {
+    const { proj, dir } = await renamedBatch();
+    const backend = (await buildBackend(
+      runConfig(proj),
+      {
+        alRunner: {
+          alRunnerPath: "al-runner.exe",
+          coverage: "al-runner",
+          serverMode: false,
+          selectorMode: "static",
+        },
+      },
+      scratch("lethal-r219-cov-"),
+      undefined,
+      {},
+      IDS,
+    )) as AlRunnerBackend;
+    backend.useBuildSymbols([]);
+    await backend.deploy(dir);
+    await backend.coverageRefusals();
+    const { coverageIndex } = backend as unknown as { coverageIndex?: AlRunnerCoverageIndex };
+    expect(coverageIndex?.exact?.projectDir).toBe(proj.split("\\").join("/").toLowerCase());
+  });
+
+  // R-219c (M2): on --server a coverage refusal stops the session, as it does one-shot, instead of
+  // reading as an `error` verdict per test. Revert: drop the `ServerCoverageRefusal` rethrow in
+  // `runViaServer`.
+  test("a --server coverage refusal propagates out of run()", async () => {
+    const { proj, dir } = await renamedBatch();
+    const server = fakeAlRunnerServer([TEST], {
+      perTestCoverage: [
+        {
+          test: TEST.name,
+          coverage: [{ file: "/x/Helper.Codeunit.al", statements: [{ line: 2, hits: 1 }] }],
+        },
+      ],
+    });
+    const backend = (await buildBackend(
+      runConfig(proj),
+      {
+        alRunner: {
+          alRunnerPath: "al-runner.exe",
+          coverage: "al-runner",
+          serverMode: true,
+          selectorMode: "static",
+        },
+      },
+      scratch("lethal-r219-srv-"),
+      undefined,
+      { alRunnerServerSpawn: server.spawn },
+      IDS,
+    )) as AlRunnerBackend;
+    backend.useBuildSymbols([]);
+    backend.useMutantBudgetFloor(180_000, 120_000);
+    await backend.deploy(dir);
+    try {
+      await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(
+        /neither inside the project .* nor directly in the batch/,
+      );
+    } finally {
+      await backend.close();
+    }
+  });
+});
+
+/**
+ * R505: al-runner c39ad5de labels coverage from the LIVE project, so with coverage on a backend
+ * built from a session snapshot checks the project before and after every coverage-producing
+ * call, on both transports, and a change stops the session (it never becomes a verdict).
+ */
+describe("R505: buildBackend watches the project while coverage is read", () => {
+  const ORIGINAL = "codeunit 79100 Logic\n{\n}\n";
+  const EDITED = "codeunit 79100 Logic\n{\n// x\n}\n";
+  /** `during` runs INSIDE the al-runner call, between the pre-check and the post-check. */
+  async function backendFor(
+    serverMode: boolean,
+    withSnapshot: boolean,
+    during?: (proj: string) => void,
+  ) {
+    const proj = await project();
+    await writeFile(join(proj, "Logic.Codeunit.al"), ORIGINAL, "utf8");
+    const snapshot = await readTargetSource(proj);
+    const inCall = () => during?.(proj);
+    const server = fakeAlRunnerServer([TEST], { onRunTests: inCall });
+    const spawnInCall: SpawnFn = async (...a) => {
+      inCall();
+      return oneShot(...a);
+    };
+    const backend = (await buildBackend(
+      runConfig(proj),
+      {
+        alRunner: {
+          alRunnerPath: "al-runner.exe",
+          coverage: "al-runner",
+          serverMode,
+          selectorMode: "static",
+        },
+      },
+      scratch("lethal-r505-"),
+      undefined,
+      { alRunnerSpawn: spawnInCall, alRunnerServerSpawn: server.spawn },
+      IDS,
+      ...(withSnapshot ? [snapshot] : []),
+    )) as AlRunnerBackend;
+    backend.useBuildSymbols([]);
+    backend.useMutantBudgetFloor(180_000, 120_000);
+    await backend.deploy(await batch());
+    return { backend, proj };
+  }
+  const go = (backend: AlRunnerBackend) => backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+
+  for (const [transport, serverMode] of [
+    ["one-shot", false],
+    ["--server", true],
+  ] as const) {
+    // Revert: drop the `projectWatch` checks from `sendOneShot` / `ensureServerSuite`.
+    test(`${transport}: an edited project stops the run, naming the file`, async () => {
+      const { backend, proj } = await backendFor(serverMode, true);
+      try {
+        await writeFile(join(proj, "Logic.Codeunit.al"), "codeunit 79100 Logic\n{\n// x\n}\n");
+        await expect(go(backend)).rejects.toThrow(/changed Logic\.Codeunit\.al.*--resume/);
+      } finally {
+        await backend.close();
+      }
+    });
+    // Opus build review: each half of the bracket on its own. An edit made DURING the call is seen
+    // only by the post-check (revert: drop the check after the call).
+    test(`${transport}: an edit made during the call is caught after it`, async () => {
+      const { backend } = await backendFor(serverMode, true, (proj) =>
+        writeFileSync(join(proj, "Logic.Codeunit.al"), EDITED),
+      );
+      try {
+        await expect(go(backend)).rejects.toThrow(/changed Logic\.Codeunit\.al/);
+      } finally {
+        await backend.close();
+      }
+    });
+    // An edit made before the call and undone inside it is seen only by the pre-check (revert:
+    // drop the check before the call).
+    test(`${transport}: an edit undone during the call is caught before it`, async () => {
+      const { backend, proj } = await backendFor(serverMode, true, (p) =>
+        writeFileSync(join(p, "Logic.Codeunit.al"), ORIGINAL),
+      );
+      try {
+        await writeFile(join(proj, "Logic.Codeunit.al"), EDITED);
+        await expect(go(backend)).rejects.toThrow(/changed Logic\.Codeunit\.al/);
+      } finally {
+        await backend.close();
+      }
+    });
+    // The control: an unchanged project runs.
+    test(`${transport}: an unchanged project runs`, async () => {
+      const { backend } = await backendFor(serverMode, true);
+      try {
+        expect((await go(backend)).outcome).toBe("pass");
+      } finally {
+        await backend.close();
+      }
+    });
+  }
+
+  // Revert: build the watch without a snapshot. The itests build no snapshot and must not be
+  // watched (their fixtures do not change).
+  test("without a session snapshot nothing is watched", async () => {
+    const { backend, proj } = await backendFor(false, false);
+    try {
+      await writeFile(join(proj, "Logic.Codeunit.al"), "codeunit 79100 Logic\n{\n// x\n}\n");
+      expect((await go(backend)).outcome).toBe("pass");
+    } finally {
+      await backend.close();
+    }
+  });
 });
 
 describe("R387: platformAppsAgreement reports the daemon's directory against leg A's", () => {
@@ -375,6 +595,9 @@ describe("R387: a hung suite under the default --server path", () => {
         { alRunnerSpawn: oneShot, alRunnerServerSpawn: fake.spawn },
         IDS,
       )) as AlRunnerBackend;
+      backend.useMutantBudgetFloor(180_000, 120_000);
+      // R394: coverage is on by default; `runSession` hands the build symbols over before deploy.
+      backend.useBuildSymbols([]);
       await backend.deploy(await batch());
       await backend.activate("M0001");
       const v = await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
@@ -441,23 +664,35 @@ describe("R387: validateAlRunnerConfig refuses unknown keys and bad values by na
 });
 
 describe("R387: effectiveAlRunnerTransport and the advisory line", () => {
-  test("defaults: server on, resource, coverage none; server off gives static", () => {
+  // R394: coverage is "al-runner" by default (it was "none" under R387).
+  test("defaults: server on, resource, coverage al-runner; server off gives static", () => {
     expect(effectiveAlRunnerTransport({})).toEqual({
       serverMode: true,
       selectorMode: "resource",
-      coverage: "none",
+      coverage: "al-runner",
     });
     expect(effectiveAlRunnerTransport({ serverMode: false })).toEqual({
       serverMode: false,
       selectorMode: "static",
-      coverage: "none",
+      coverage: "al-runner",
     });
   });
 
-  test("the default config names only coverage, with the key that changes it", () => {
-    const line = alRunnerAdvisory({});
+  test("R394: an explicit coverage none stays none", () => {
+    expect(effectiveAlRunnerTransport({ coverage: "none" }).coverage).toBe("none");
+  });
+
+  // R394: under R387 the default config printed a coverage note; now the default is the fast setting.
+  test("R394: the default config prints no advisory line at all", () => {
+    expect(alRunnerAdvisory({})).toBeUndefined();
+  });
+
+  test("R394: an explicit coverage none is named, with what it costs", () => {
+    const line = alRunnerAdvisory({ coverage: "none" });
     expect(line).toMatch(/^\[lethal\] al-runner settings: /);
-    expect(line).toContain('"alRunner.coverage": "al-runner"');
+    expect(line).toContain('"alRunner.coverage": "none"');
+    expect(line).toContain("survived");
+    expect(line).toContain("every green test");
     expect(line).not.toContain("serverMode");
     expect(line).not.toContain("selectorMode");
   });
@@ -491,6 +726,15 @@ codeunit 50103 B
 #endif
 `;
 const TWO_OBJECTS = "codeunit 50104 P\n{\n}\ncodeunit 50105 Q\n{\n}\n";
+// R407: a multi-object project runs the frame probe; these pin the REFUSED path, as on c39ad5de.
+const REFUSED_FRAME_PROBE = async () =>
+  ({
+    outcome: "refused",
+    transport: "server",
+    build: "al-runner v2.12.0-main.c39ad5de",
+    refusal: "label-outside-bundle",
+    reason: "labelled src/R407Pair.Table.al",
+  }) as const;
 
 async function alProject(files: Record<string, string>): Promise<string> {
   const dir = scratch("lethal-r387-guard-");
@@ -502,6 +746,7 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
   const cfg = (_dir: string): LethalConfigFile => ({
     alRunner: { alRunnerPath: "a", coverage: "al-runner" },
   });
+  const refused = { frameProbe: REFUSED_FRAME_PROBE };
 
   test("a single #if-wrapped object falls back to none, with one warning naming the file", async () => {
     const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
@@ -516,11 +761,14 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
   test("a multi-object file falls back to none", async () => {
     const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS });
     const warned: string[] = [];
-    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l), refused);
     expect(out.alRunner?.coverage).toBe("none");
     expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
     // R383: the warning names the REAL reason, al-runner's frame for later objects, not #3713.
     expect(warned[0]).toContain("every object after a file's first at the wrong line");
+    // R407: and the probe's own outcome and the build it ran against.
+    expect(warned[0]).toContain("label-outside-bundle: labelled src/R407Pair.Table.al");
+    expect(warned[0]).toContain("al-runner build: al-runner v2.12.0-main.c39ad5de");
     expect(warned[0]).not.toContain("R300");
   });
 
@@ -529,7 +777,7 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
       "codeunit 50104 P\n{\n}\n#if FEATURE\ncodeunit 50105 Q\n#else\ncodeunit 50105 Q\n#endif\n{\n    procedure Q()\n    begin\n    end;\n}\n";
     const dir = await alProject({ "Split.Codeunit.al": split });
     const warned: string[] = [];
-    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l), refused);
     expect(out.alRunner?.coverage).toBe("none");
     expect(warned).toHaveLength(1);
     expect(warned[0]).toContain("Split.Codeunit.al (more than one object)");
@@ -538,7 +786,7 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
   test("R383: a multi-object file beside a wrapped one: ONE warning naming both, with both reasons", async () => {
     const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS, "B.Codeunit.al": TWO_ARM });
     const warned: string[] = [];
-    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l), refused);
     expect(out.alRunner?.coverage).toBe("none");
     expect(warned).toHaveLength(1);
     expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
@@ -559,7 +807,7 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
     const warned: string[] = [];
     const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l));
-    expect(out.alRunner?.coverage).toBe("none");
+    expect(out.config.alRunner?.coverage).toBe("none");
     expect(warned.filter((l) => l.startsWith("[lethal] al-runner settings:"))).toHaveLength(1);
     expect(warned).toHaveLength(2);
   });
@@ -572,6 +820,97 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     expect(advisory).toContain("turned off for this run");
     expect(advisory).toContain("B.Codeunit.al (an #if-wrapped object)");
     expect(advisory).not.toContain('"alRunner.coverage": "al-runner" runs only');
+  });
+
+  // R205: the guard judges the session's snapshot, not a disk that changed after it was taken.
+  test("R205: prepareAlRunnerSession judges the snapshot: multi-object there, single on disk, falls back", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS });
+    const snapshot = await readTargetSource(dir);
+    await writeFile(join(dir, "Two.Codeunit.al"), "codeunit 50104 P\n{\n}\n", "utf8");
+    const warned: string[] = [];
+    const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l), {
+      snapshot,
+      ...refused,
+    });
+    expect(out.config.alRunner?.coverage).toBe("none");
+    expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
+  });
+
+  test("R205: prepareAlRunnerSession judges the snapshot: single there, multi-object on disk, keeps coverage", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": "codeunit 50104 P\n{\n}\n" });
+    const snapshot = await readTargetSource(dir);
+    await writeFile(join(dir, "Two.Codeunit.al"), TWO_OBJECTS, "utf8");
+    const warned: string[] = [];
+    const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l), { snapshot });
+    expect(out.config.alRunner?.coverage).toBe("al-runner");
+    expect(warned.filter((l) => l.includes("al-runner-coverage-unsupported"))).toEqual([]);
+  });
+
+  // R394: the guard acts on the EFFECTIVE coverage, so a config that sets no coverage key (the
+  // default, now "al-runner") still gets the R407 frame probe and the R298 wrapped refusal.
+  const dflt = (): LethalConfigFile => ({ alRunner: { alRunnerPath: "a" } });
+
+  test("R394: under the default, a multi-object file the probe refuses falls back to none", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS });
+    const warned: string[] = [];
+    const out = await withAlRunnerCoverageGuard(dflt(), dir, (l) => warned.push(l), refused);
+    expect(out.alRunner?.coverage).toBe("none");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("al-runner-coverage-unsupported");
+    expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
+  });
+
+  test("R394: under the default, a refused #if-wrapped file falls back to none", async () => {
+    const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    const out = await withAlRunnerCoverageGuard(dflt(), dir, (l) => warned.push(l));
+    expect(out.alRunner?.coverage).toBe("none");
+    expect(warned[0]).toContain("B.Codeunit.al (an #if-wrapped object)");
+  });
+
+  test("R394: the warning under the default says coverage was on by default, never that a key is IGNORED", async () => {
+    const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    await withAlRunnerCoverageGuard(dflt(), dir, (l) => warned.push(l));
+    expect(warned[0]).toContain("al-runner coverage (on by default) is turned OFF for this run");
+    expect(warned[0]).not.toContain("IGNORED");
+  });
+
+  test("R394: the warning under an explicit key says the config set it", async () => {
+    const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    expect(warned[0]).toContain(
+      'al-runner coverage (set by "alRunner.coverage": "al-runner") is turned OFF for this run',
+    );
+  });
+
+  test("R394: an explicit none never runs the guard: no probe, no warning", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS });
+    const warned: string[] = [];
+    let probes = 0;
+    const out = await withAlRunnerCoverageGuard(
+      { alRunner: { alRunnerPath: "a", coverage: "none" } },
+      dir,
+      (l) => warned.push(l),
+      {
+        frameProbe: async () => {
+          probes += 1;
+          return REFUSED_FRAME_PROBE();
+        },
+      },
+    );
+    expect(out.alRunner?.coverage).toBe("none");
+    expect([probes, warned.length]).toEqual([0, 0]);
+  });
+
+  test("R394: prepareAlRunnerSession under the default prints the guard warning and the turned-off line only", async () => {
+    const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    await prepareAlRunnerSession(dflt(), dir, (l) => warned.push(l));
+    expect(warned).toHaveLength(2);
+    expect(warned[1]).toContain("turned off for this run");
+    expect(warned[1]).not.toContain('"alRunner.coverage": "none"');
   });
 
   test("prepareAlRunnerSession refuses a bad section before anything else", async () => {
@@ -593,21 +932,26 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
     transactionRollback: "defect-not-reproduced",
   };
 
-  async function coverageReachingBuild(files: Record<string, string>): Promise<{
+  async function coverageReachingBuild(
+    files: Record<string, string>,
+    /** R205: an edit made after `runFromCli`'s snapshot (inside id validation). */
+    edit?: (projectDir: string) => Promise<void>,
+    /** R394: the config's `alRunner` section; the default sets the coverage key explicitly. */
+    section: Record<string, unknown> = { alRunnerPath: "C:/al-runner.exe", coverage: "al-runner" },
+  ): Promise<{
     readonly coverage: string | undefined;
     readonly warnings: readonly string[];
+    readonly validated: ReadonlyMap<string, Buffer> | undefined;
+    readonly built: ReadonlyMap<string, Buffer> | undefined;
   }> {
     const projectDir = await alProject(files);
     const configPath = join(projectDir, "lethal.config.json");
-    await writeFile(
-      configPath,
-      JSON.stringify({ alRunner: { alRunnerPath: "C:/al-runner.exe", coverage: "al-runner" } }),
-      "utf8",
-    );
+    await writeFile(configPath, JSON.stringify({ alRunner: section }), "utf8");
     const parsed: RunCliConfig = {
       mode: "run",
       projectDir,
-      testDir: projectDir,
+      // R445: a sibling, never the target folder itself (run refuses that layout by name).
+      testDir: scratch("lethal-r387-tests-"),
       backendKind: "al-runner",
       dbPath: ":memory:",
       configPath,
@@ -617,20 +961,27 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
       allowExpiringEnv: false,
     };
     let coverage: string | undefined;
+    let validated: ReadonlyMap<string, Buffer> | undefined;
+    let built: ReadonlyMap<string, Buffer> | undefined;
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     let warnings: string[] = [];
     try {
       await expect(
         runFromCli(parsed, {
-          validateSelectorIdsForProject: async () => {},
+          validateSelectorIdsForProject: async (_dir, _ids, source) => {
+            validated = source;
+            await edit?.(projectDir);
+          },
           runAlRunnerContractProbe: async () => ({
             facts: [],
             measuredProvisioning: "auto-provision",
             bannerOnStdout: true,
           }),
           runAlRunnerCanary: async () => CANARY,
-          buildBackend: async (_p, configFile) => {
+          alRunnerFrameProbe: REFUSED_FRAME_PROBE,
+          buildBackend: async (_p, configFile, _s, _d, _deps, _ids, source) => {
             coverage = configFile.alRunner?.coverage;
+            built = source;
             throw new Error("stop before a real backend build");
           },
         }),
@@ -639,8 +990,20 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
     } finally {
       warnSpy.mockRestore();
     }
-    return { coverage, warnings };
+    return { coverage, warnings, validated, built };
   }
+
+  // R205: the entry point hands its ONE snapshot to the guard, the id check and the backend build.
+  test("R205: an edit after runFromCli's snapshot changes neither the guard's verdict nor what the id check and build read", async () => {
+    const { coverage, warnings, validated, built } = await coverageReachingBuild(
+      { "Two.Codeunit.al": TWO_OBJECTS },
+      async (dir) => writeFile(join(dir, "Two.Codeunit.al"), "codeunit 50104 P\n{\n}\n", "utf8"),
+    );
+    expect(coverage).toBe("none");
+    expect(warnings.some((w) => w.includes("Two.Codeunit.al (more than one object)"))).toBe(true);
+    expect(validated?.get("Two.Codeunit.al")?.toString("utf8")).toBe(TWO_OBJECTS);
+    expect(built?.get("Two.Codeunit.al")?.toString("utf8")).toBe(TWO_OBJECTS);
+  });
 
   test("a multi-object file reaches buildBackend with coverage none, and the named warning prints", async () => {
     const { coverage, warnings } = await coverageReachingBuild({ "Two.Codeunit.al": TWO_OBJECTS });
@@ -648,6 +1011,30 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
     const guard = warnings.filter((w) => w.includes("al-runner-coverage-unsupported"));
     expect(guard).toHaveLength(1);
     expect(guard[0]).toContain("Two.Codeunit.al (more than one object)");
+  });
+
+  test("R394: with NO coverage key, a multi-object file still reaches buildBackend with coverage none", async () => {
+    const { coverage, warnings } = await coverageReachingBuild(
+      { "Two.Codeunit.al": TWO_OBJECTS },
+      undefined,
+      { alRunnerPath: "C:/al-runner.exe" },
+    );
+    expect(coverage).toBe("none");
+    const guard = warnings.filter((w) => w.includes("al-runner-coverage-unsupported"));
+    expect(guard).toHaveLength(1);
+    expect(guard[0]).toContain("(on by default)");
+  });
+
+  test("R394: with NO coverage key, a clean project reaches buildBackend with NO coverage key, so the default (al-runner) applies", async () => {
+    const { coverage, warnings } = await coverageReachingBuild(
+      { "A.Codeunit.al": "codeunit 50100 A\n{\n}\n" },
+      undefined,
+      { alRunnerPath: "C:/al-runner.exe" },
+    );
+    expect(coverage).toBeUndefined();
+    expect(
+      warnings.filter((w) => w.includes("al-runner settings") || w.includes("al-runner-coverage")),
+    ).toEqual([]);
   });
 
   test("an #if-wrapped object reaches buildBackend with coverage none, and the named warning prints", async () => {

@@ -233,7 +233,13 @@ describe("createEmitter", () => {
       { type: "stream-started", streamSchemaVersion: STREAM_SCHEMA_VERSION, runId: 1 },
       {
         type: "run-configured",
-        caps: { coverage: "fenced", deploy: "publish", isolation: "session", authoritative: true },
+        caps: {
+          coverage: "fenced",
+          deploy: "publish",
+          isolation: "session",
+          kind: "bcdev",
+          authoritative: true,
+        },
         only: { patterns: ["Al/Codeunit/**"] },
         testsOnly: ["*Tests"],
         stopHungSessions: true,

@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -43,6 +43,7 @@ import {
   sha256,
 } from "../src/testpage-scan";
 import { buildFakeApp } from "./helpers/fake-app";
+import { removeScratchDirs } from "./helpers/scratch";
 
 /**
  * R424: a procedure whose HEADER is split by `#if` (one header per arm, one shared body) is one
@@ -55,8 +56,8 @@ beforeAll(async () => {
 });
 
 const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((r) => rm(r, { recursive: true, force: true })));
+afterEach(() => {
+  removeScratchDirs(roots.splice(0));
 });
 
 // ————————————————————————————————————————————————————————————————————————
@@ -127,6 +128,7 @@ class StubBackend implements ExecutionBackend {
       coverage: "procedure",
       deploy: "publish",
       isolation: "session",
+      kind: this.authoritative ? "bcdev" : "al-runner",
       authoritative: this.authoritative,
     };
   }
@@ -890,7 +892,7 @@ describe("R424: digests", () => {
   test("the split test's digest moves on either arm's header and on the shared body", () => {
     for (const method of ["T10a", "T10b"]) {
       const before = digestOf(DIGEST, method);
-      expect(before).toStartWith("v2:");
+      expect(before).toStartWith("v3:");
       const edits = [
         DIGEST.replace("    procedure T10a()", "    internal procedure T10a()"),
         DIGEST.replace("    procedure T10b()", "    internal procedure T10b()"),
@@ -901,9 +903,10 @@ describe("R424: digests", () => {
   });
 
   test("a sibling that does not reach the split members keeps its digest from 61ad4d84", () => {
-    // Computed on 61ad4d84 (before R424) with the same inputs.
+    // Computed on 61ad4d84 (before R424) with the same inputs. R-385 moved the scheme tag from v2
+    // to v3; the hash after the tag is unchanged.
     expect(digestOf(DIGEST, "Sibling")).toBe(
-      "v2:f6f51d3e6cbe002b62c4c0c877312b717051ba3d8f864e5328e994a43d181453",
+      "v3:f6f51d3e6cbe002b62c4c0c877312b717051ba3d8f864e5328e994a43d181453",
     );
   });
 
@@ -955,7 +958,8 @@ describe("R424: digests", () => {
     // Keys and digest computed on 61ad4d84, where the split header was not a member.
     expect(reached(files, t)).toEqual(["92492:R424 Over.H", "92492:R424 Over.UsesPlain"]);
     expect(testDigestsOfSources(files, [t], INPUTS)["92492::usesplain"]).toBe(
-      "v2:fe7a88b4b2a85402b3a1e035d386e03fa3ca94f1a2ac3cf979efdb06140b32cc",
+      // R-385: scheme tag v2 -> v3, the hash unchanged.
+      "v3:fe7a88b4b2a85402b3a1e035d386e03fa3ca94f1a2ac3cf979efdb06140b32cc",
     );
     const keys = buildTestAppModel(files)
       .units.flatMap((u) => u.procs)

@@ -6,7 +6,7 @@ import {
   type MutationSpec,
   type SemanticContext,
 } from "@lethal/operator-sdk";
-import { hangCapableForMutatedNode } from "./loop-hazard";
+import { hangCapableForMutatedNode, loopConditionParts } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.shift-integer";
@@ -76,19 +76,22 @@ export const shiftInteger: MutationOperator = {
   tier: 1,
   targetNodeKinds: [ALNodeKind.integer_literal],
   producesNodeKinds: [ALNodeKind.integer_literal],
-  // R196: the tag resolves symbols (`hangCapableForMutatedNode` calls `resolveVarRef`).
+  // R196: the hang refusal resolves symbols (`hangCapableForMutatedNode` calls `resolveVarRef`).
   requiresSemantic: ["symbol-table"],
   // R172: MEASURED equivalent on `sandbox-hang`: `Counter := 0` -> `1` still returns 3, because the loop walks 2,3 instead of 1,2,3.
   equivalenceRisk: "value-rewrite",
 
-  targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {
-    return shifted(node) !== null;
+  targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    return shifted(node, ctx) !== null;
+  },
+
+  refusesHangCapable(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    return shiftedBeforeHang(node) !== null && hangCapableForMutatedNode(node, ctx) !== null;
   },
 
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
-    const after = shifted(node);
+    const after = shifted(node, ctx);
     if (after === null) return [];
-    const hangCapable = hangCapableForMutatedNode(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -97,7 +100,6 @@ export const shiftInteger: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, after),
         parentContext: "statement-position",
-        ...(hangCapable !== null ? { hangCapable } : {}),
       },
     ];
   },
@@ -134,7 +136,7 @@ export const shiftInteger: MutationOperator = {
       expectedSpecs: [],
     },
     {
-      name: "tags an in-loop assigned value (R196), and does NOT tag the preheader assignment above it",
+      name: "REFUSES an in-loop assigned value (R196), and keeps the preheader assignment above it",
       sourceAL: `codeunit 52006 "I" { procedure P() var Remaining: Integer; begin Remaining := 1; while Remaining > 0 do Remaining := 0; end; }`,
       expectedSpecs: [
         {
@@ -143,19 +145,21 @@ export const shiftInteger: MutationOperator = {
           afterText: "2",
           hangCapable: null,
         },
-        {
-          parentContext: "statement-position",
-          beforeText: "0",
-          afterText: "1",
-          hangCapable: "loop-condition-target",
-        },
       ],
     },
   ],
 };
 
 /** The shifted literal text, or `null` where this operator does not claim the site. */
-function shifted(node: ALSyntaxNode): string | null {
+function shifted(node: ALSyntaxNode, ctx: SemanticContext): string | null {
+  const after = shiftedBeforeHang(node);
+  // R196: a value written to a variable an enclosing loop's condition reads is refused, and
+  // counted per file through `refusesHangCapable` (R447).
+  return after !== null && hangCapableForMutatedNode(node, ctx) === null ? after : null;
+}
+
+/** `shifted` without R196's hang check: every other check, in the same order (R447). */
+function shiftedBeforeHang(node: ALSyntaxNode): string | null {
   if (node.rawKind !== ALNodeKind.integer_literal) return null;
   if (!inExecutableBody(node)) return null;
   if (inLoopCondition(node)) return null;
@@ -185,13 +189,13 @@ function inExecutableBody(node: ALSyntaxNode): boolean {
   return inMemberBody(node);
 }
 
-/** In the CONDITION of a `repeat` or `while`, see the doc comment for why those are refused. */
+/** In the CONDITION of a `repeat` or `while`, `#if` tails included (R454), see the doc comment for
+ *  why those are refused. */
 function inLoopCondition(node: ALSyntaxNode): boolean {
   for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
     if (p.rawKind === "repeat_statement" || p.rawKind === "while_statement") {
-      const cond = p.childForFieldName("condition");
-      if (cond !== null && node.startIndex >= cond.startIndex && node.endIndex <= cond.endIndex) {
-        return true;
+      for (const cond of loopConditionParts(p)) {
+        if (node.startIndex >= cond.startIndex && node.endIndex <= cond.endIndex) return true;
       }
     }
     // R302: the member boundary. Nothing encloses a member, so this stop is for consistency.

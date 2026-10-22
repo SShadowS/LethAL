@@ -379,3 +379,62 @@ describe("resolveVarRef: a named return value (R323)", () => {
     expect(resolveVarRef(use, ctx)).toBeNull();
   });
 });
+
+// R294: `isMemberName` compared `parent.namedChildren[0] !== node`, two wrappers the engine builds
+// afresh on every access, so it was always unequal and every RECEIVER was refused as a member name.
+// It now compares the identifier's span with the member_expression's `object` field.
+describe("resolveVarRef: member-expression receivers (R294)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  /** The last identifier or quoted identifier with exactly this text. */
+  const lastOf = (root: ALSyntaxNode, text: string): ALSyntaxNode => {
+    let hit: ALSyntaxNode | null = null;
+    const walk = (n: ALSyntaxNode): void => {
+      const named = n.kind === ALNodeKind.identifier || n.rawKind === "quoted_identifier";
+      if (named && n.text === text) hit = n;
+      for (const c of n.namedChildren) walk(c);
+    };
+    walk(root);
+    if (hit === null) throw new Error(`no ${text}`);
+    return hit;
+  };
+
+  it("resolves the receiver of a method call (`Card.OpenView()`)", () => {
+    const { root, ctx } = load(`codeunit 50210 "R" {
+      procedure P() var Card: TestPage "My Page"; begin Card.OpenView(); end; }`);
+    expect(resolveVarRef(lastOf(root, "Card"), ctx)?.typeText).toBe('TestPage "My Page"');
+  });
+
+  it("resolves the receiver of a field assignment (`Rec.Field := 1`)", () => {
+    const { root, ctx } = load(`codeunit 50211 "R" {
+      procedure P() var Rec: Record Customer; begin Rec.Amount := 1; end; }`);
+    expect(resolveVarRef(lastOf(root, "Rec"), ctx)?.name).toBe("Rec");
+  });
+
+  // WRONG-FIX CONTROLS below: each passes on the unfixed code (everything was refused) and goes
+  // red under an over-broad `isMemberName` that admits members too.
+  it('refuses a quoted member (`R."Field Name"`) though a variable of that name exists', () => {
+    const { root, ctx } = load(`codeunit 50212 "R" {
+      var R: Record Customer; "Field Name": Integer;
+      procedure P() begin R."Field Name" := 1; end; }`);
+    expect(resolveVarRef(lastOf(root, '"Field Name"'), ctx)).toBeNull();
+  });
+
+  it("A.B.C: refuses B and C though variables B and C exist; admits A", () => {
+    const { root, ctx } = load(`codeunit 50213 "R" {
+      var A: Record Customer; B: Integer; C: Integer;
+      procedure P() begin A.B.C := 1; end; }`);
+    expect(resolveVarRef(lastOf(root, "B"), ctx)).toBeNull();
+    expect(resolveVarRef(lastOf(root, "C"), ctx)).toBeNull();
+    expect(resolveVarRef(lastOf(root, "A"), ctx)?.name).toBe("A");
+  });
+
+  it("refuses a method name (`R.Method()`) though a variable of that name exists", () => {
+    const { root, ctx } = load(`codeunit 50214 "R" {
+      var R: Record Customer; Method: Integer;
+      procedure P() begin R.Method(); end; }`);
+    expect(resolveVarRef(lastOf(root, "Method"), ctx)).toBeNull();
+  });
+});

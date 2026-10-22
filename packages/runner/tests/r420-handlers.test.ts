@@ -135,8 +135,9 @@ const PRE = `codeunit 92471 "Pre"
  * computed by that code (099e6231) with `INPUTS` below. A stored digest of this value is what an
  * upgrade compares against, so it must differ once, here.
  */
+// R-385 moved the scheme tag from v2 to v3; the hash after the tag is unchanged.
 const PRE_DIGEST_BEFORE_R420 =
-  "v2:3a1b8110f582d76cc0ebd1bb6ac3febc40780e19a168bdd6cca5088a6761afa8";
+  "v3:3a1b8110f582d76cc0ebd1bb6ac3febc40780e19a168bdd6cca5088a6761afa8";
 
 const INPUTS = { dependencies: "deps", buildInputs: "build" };
 const EMPTY_MSGH = "procedure MsgH(Msg: Text[1024])\n    begin\n    end;";
@@ -235,7 +236,7 @@ describe("R420 part 2: S11, a [Test] outside the #if and one whole procedure per
     const a = analyzeTestPageSources([{ path: "S11.Codeunit.al", text: S11H }], tests);
     expect(a.errors).toEqual([]);
     expect([...a.refused]).toEqual([]);
-    for (const t of tests) expect(digestOf(S11H, t)).toMatch(/^v2:[0-9a-f]{64}$/);
+    for (const t of tests) expect(digestOf(S11H, t)).toMatch(/^v3:[0-9a-f]{64}$/);
   });
 
   test("editing the handler changes both arms' digests; editing one arm leaves the other's", () => {
@@ -296,7 +297,8 @@ const OBS = `codeunit 50200 "Obs"
 /** OBS under 099e6231's code (before part 2), with `INPUTS`: T's digest, the codeunit's parts hash
  *  and Helper's span hash. Reproduced from that commit's tree, not from this file's code. */
 const OBS_BEFORE_R420 = {
-  digest: "v2:e0432f64ad4b2dc3fc0b0a934bc1023d3ebb58f27b2480fa29612eeed6917d61",
+  // R-385: scheme tag v2 -> v3, the hash unchanged.
+  digest: "v3:e0432f64ad4b2dc3fc0b0a934bc1023d3ebb58f27b2480fa29612eeed6917d61",
   parts: "516f3dd855cebc5a",
   helperSpan: "ff25a5070a8e3890",
 };

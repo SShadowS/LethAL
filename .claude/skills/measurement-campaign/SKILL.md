@@ -42,6 +42,12 @@ item that exercises `validateSelectorIdsForProject` — `--dry-run` dispatches t
 returns before the run path that calls it, so a selector id colliding with the target app's own
 objects survives a clean dry run and fails later, live.
 
+**Never list all extensions; read by id.** To learn what a server has installed, read one app at a
+time (`HarnessVerifier.fetchExtensionInstalled` or `fetchInstalledVersions`, by app id). BC's full
+list of installed apps, unfiltered or filtered by publisher, hung BC 28.4 for about 166 s and took
+the service tier down until a host restart (R433). A measurement that needs "every installed app"
+has no safe source today (R434).
+
 ## Rule 1 — pre-commit expectations to a committed file, before the run
 
 This is what made the campaign's two errors visible *as* errors. Half of it is now machine-checked:
@@ -155,6 +161,12 @@ Compare on semantic identity (`astHash` / `codeunitName` / `operatorName` / `ope
 `mutantCode` or `file:line`, which re-batching shifts. `campaign freeze` mints the baseline on the
 first run and `campaign compare` REFUSES a missing one — that difference is the whole reason they
 are separate verbs.
+
+Coverage mode (R355): `freeze` refuses a report without `coverageMode` and records the mode in the
+stage baseline, and `campaign compare` refuses by name when both sides record a mode and they
+differ. A stage frozen before R252 records no mode: it still compares, but never as a bare
+"identical"; the result says "coverage mode UNVERIFIED" (console and JSON) until the stage is
+re-frozen.
 
 Stage 3 red-checks because **R86 is open: `failure_note` is NULL for every killed mutant, so no kill
 records why it died** — a false kill and a real one are indistinguishable in the record. Commit its

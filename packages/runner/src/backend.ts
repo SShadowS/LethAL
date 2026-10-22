@@ -1,4 +1,5 @@
 import type { CompiledArtifact } from "./artifact";
+import type { MicrosoftMode } from "./digest-inputs";
 import type { AlSource, RenamedMemberNames } from "./line-map";
 import type { OperationOutcome } from "./operation-outcome";
 
@@ -16,6 +17,9 @@ export interface TestMethodRef {
    * this every survivor costs a project-wide grep.
    */
   readonly file?: string;
+  /** R272: 1-based line of the method's NAME in `file`, set by `discoverTests` alongside `file`.
+   *  Like `file`, no execution path reads it. */
+  readonly line?: number;
 }
 
 /**
@@ -85,6 +89,45 @@ export interface TestVerdict {
   readonly ref: TestMethodRef;
   readonly outcome: TestOutcome;
   readonly durationMs: number;
+  /**
+   * R272: this test's own duration, on a `pass`. The timeout BUDGET still reads `durationMs`; this
+   * figure is in the report and, since R517, it is what a position-1 timeout confirm is judged on
+   * (`confirm.measuredDurationMs ?? confirm.durationMs`), because it is timed on the same clock as
+   * al-runner's in-run stop. al-runner sets the runner's own per-test figure, since its
+   * `durationMs` includes a compile per call (one-shot) or is the whole suite's (`--server`).
+   * bcdev sets its per-test call's wall clock (`BcDevBackend.run`), equal to its `durationMs`.
+   * Absent: not measured per test.
+   */
+  readonly measuredDurationMs?: number;
+  /**
+   * R517: on a `timeout`, the stop the runner says it ENFORCED, parsed from al-runner's row
+   * (`Test exceeded {N}s timeout.`, or R534's OnRun-trigger wording, N x 1000). The position-1
+   * confirm is judged against `min(budget, reportedStopMs, backend.inRunStopMs)`. Absent: the
+   * runner did not say (bcdev, or a row whose wording did not parse); on a backend that declares
+   * `inRunStopMs` that leaves the timeout unconfirmed.
+   */
+  readonly reportedStopMs?: number;
+  /**
+   * R534: on a `timeout`, where the runner's stop fired. `body`: the test's own figure
+   * (`measuredDurationMs`) is on the stop's clock. `onrun`: the test codeunit's OnRun trigger; no
+   * pass row reports the OnRun's time (measured: 66 ms body beside a 4 s OnRun). Absent (bcdev,
+   * whose measured figure IS its wall time): the confirm uses the wall time, so an unknown
+   * location can only over-state the unmutated run. Internal only; not in the report.
+   */
+  readonly timeoutIn?: "body" | "onrun";
+  /**
+   * R534: al-runner ANSWERED with a row that is not a verdict about the mutant. Lifted into the
+   * covering step's cause, like `stopRefusal`: a per-mutant `error`, never re-sent, never a
+   * spec §11 abort. `runner-refused`: the test reached a surface al-runner refuses
+   * (`<Type>: out-of-scope: ...`). `runner-test-error`: any other such row.
+   */
+  readonly runnerRow?: "runner-test-error" | "runner-refused";
+  /**
+   * R534 (D1b): al-runner proved this row was stopped at its timeout (an exit-3 TEST-TIMEOUT-ABORT
+   * line names it), but its message is neither known timeout wording. Scored `runner-test-error`
+   * (never a kill); the orchestrator warns once per session.
+   */
+  readonly timeoutWordingUnknown?: boolean;
   readonly failureMessage?: string;
   readonly coverage?: CoverageMap;
   /**
@@ -158,6 +201,33 @@ export interface TestVerdict {
    */
   readonly testRunsBefore?: number;
   readonly sessionId?: number;
+  /**
+   * R-204b (R202): what became of the stop LethAL sent for THIS call, settled before the call
+   * returned. Absent: no stop was sent. On a grouped call, `refused` only if EVERY stop attempt in
+   * it was refused. The orchestrator retries a lost answer only when this is absent or `refused`:
+   * any other state means our stop may have ended the run, so a passing retry proves nothing.
+   */
+  readonly stopState?: StopState;
+  /**
+   * R-204b Part A: set on the single path's `error` when BC answered our stop with its 408 but the
+   * op's progress row shows the method had already recorded its completion. Lifted into the step's
+   * cause, exactly like the grouped call's `stopped-after-completion`.
+   */
+  readonly stopRefusal?: "stopped-after-completion";
+  /**
+   * R586 (I1): on a `fail` or `timeout` under a mutant, a tagged note the backend attaches to the
+   * kill (`[v3-codeunit-state-possible] ...`). The orchestrator writes it into the KILLED mutant's
+   * `failureNote`; it never moves a verdict. Internal only; absent on every backend but v3.
+   */
+  readonly backendNote?: string;
+}
+
+/** R-204b: see `TestVerdict.stopState`. */
+export type StopState = "issued" | "pending" | "confirmed" | "refused" | "unknown";
+
+/** R-204b: a lost answer may be retried only when no stop was sent, or every stop was refused. */
+export function stopIsRetrySafe(s: StopState | undefined): boolean {
+  return s === undefined || s === "refused";
 }
 
 /**
@@ -184,7 +254,38 @@ export interface TestVerdict {
  */
 export type CoverageMode = "none" | "procedure" | "line" | "fenced" | "al-runner";
 
+/**
+ * R586 (C1): WHICH backend this is. Before R586 `!authoritative` meant "al-runner" everywhere
+ * (`runSession`'s build backend, the run row's `backend`, resume, R557's stamp, the report), so a
+ * second non-authoritative backend would have read as the frozen .NET al-runner. Every branch about
+ * the backend's identity keys on this, through the predicates below; `authoritative` keeps only
+ * its own meaning (a verdict to act on). `"al-runner-v3"` is the Rust al-runner (`3.0.0-alpha.N`,
+ * plan `docs/superpowers/plans/2026-10-21-r586-alrunner-v3-backend.md`).
+ */
+export type BackendKind = "bcdev" | "al-runner" | "al-runner-v3";
+
+/** R586: the backend publishes to a BC server (leases, attestation, quarantine, TestPage scan). */
+export function isBcdev(kind: BackendKind): boolean {
+  return kind === "bcdev";
+}
+
+/** R586: the frozen .NET al-runner (v2): its predefined-symbol probe, R557 names, R147 pin. */
+export function isAlRunnerV2(kind: BackendKind): boolean {
+  return kind === "al-runner";
+}
+
+/** R586: a backend that publishes nothing and compiles the source it was given (v2 or v3). */
+export function isLocalRunner(kind: BackendKind): boolean {
+  return kind === "al-runner" || kind === "al-runner-v3";
+}
+
 export interface BackendCapabilities {
+  /**
+   * R586 (C1): see `BackendKind`. Required, so no backend can be mistaken for another. R553 keys
+   * the assertion screen on it too: each backend sets it itself, and it is never inferred from
+   * `authoritative` (an al-runner backend made authoritative one day is still al-runner).
+   */
+  readonly kind: BackendKind;
   readonly coverage: CoverageMode;
   readonly deploy: "publish" | "none";
   readonly isolation: "session" | "full-reset";
@@ -224,7 +325,8 @@ export type RunManyEndedBy = "complete" | "failure" | "cap";
 export type RunManyCause =
   | "group-run-error"
   | "group-answer-malformed"
-  | "stopped-after-completion";
+  | "stopped-after-completion"
+  | "stop-outcome-unconfirmed";
 
 export type RunManyResult =
   | {
@@ -270,10 +372,41 @@ export interface BoundArtifact {
   readonly alSources: readonly AlSource[];
   /** R318: the verified manifest's renamed-member coverage names (`renamedMemberNamesOf`). */
   readonly renamedMemberNames: RenamedMemberNames;
+  /** R-307 section 4: the verified manifest's object keys (`manifestObjectKeys`), checked by `attach`. */
+  readonly manifestObjectKeys: ReadonlySet<string>;
 }
 
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
+  /**
+   * R516 I1: true when the run's own in-run stop is the budget it was sent (bcdev; al-runner
+   * one-shot, static or resource selector), so a larger budget really lets the test run longer.
+   * False on al-runner `--server` (and resource with `--server`): the daemon stops a test body at
+   * the one stop it was started with (`inRunStopMs`, R517) whatever the budget, while every
+   * duration is the suite's wall clock, so raising the budget from a confirm (R515) moves no stop.
+   * Read only by R515's re-budget, which is skipped unless this is `true`; absent counts as false,
+   * the safe direction. Kept off `BackendCapabilities` so the stream schema does not change.
+   */
+  readonly inRunStopIsBudget?: boolean;
+  /**
+   * R577: "a kill must reproduce". When `true`, a kill whose unmutated confirmation passed is
+   * re-run UNDER THE MUTANT once more, in the kill's own context (a single run at position 1, the
+   * call's prefix replayed at k > 1), at the budget the killing run was sent. Only a second `fail`
+   * (any text), or for a timeout kill a second `timeout`, makes it `killed`/`timeout-killed`;
+   * anything else is `error` `kill-not-reproduced`, or the reproduction's own non-verdict cause.
+   * Absent counts as false: the rule is off and the confirm is exactly what it was before. al-runner
+   * sets it; bcdev does not yet (R582). Kept off `BackendCapabilities` so the stream schema does not
+   * change, like `inRunStopIsBudget`.
+   */
+  readonly killsMustReproduce?: boolean;
+  /**
+   * R517, OPTIONAL: the in-run stop LethAL configured for the whole session, timed on the test's
+   * own body, enforced whatever budget a run is sent. al-runner `--server` answers it once
+   * `useMutantBudgetFloor` was called; absent elsewhere (the stop is the budget). An upper bound
+   * on the position-1 confirm's threshold only: the stop a run ENFORCED is its verdict's
+   * `reportedStopMs`, which such a backend must give or the timeout stays unconfirmed.
+   */
+  readonly inRunStopMs?: number | undefined;
   status(): Promise<BackendStatus>;
   /**
    * Compile + publish + verify the instrumented project. Publishing backends return the
@@ -290,6 +423,12 @@ export interface ExecutionBackend {
    * Backends with no publish step may implement this as their existing deploy.
    */
   compileCheck(instrumentedDir: string): Promise<void>;
+  /**
+   * R461, OPTIONAL: compile a staged copy of the UNMUTATED target (no selector, no guards, no
+   * Control dependency) with the same compiler, package cache and /define, and throw on a
+   * rejection. No publish. Absent on al-runner, whose compile happens per test.
+   */
+  compilePlainCheck?(dir: string): Promise<void>;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**
@@ -337,4 +476,60 @@ export interface ExecutionBackend {
    * RAN. Absent: none, and such a dependency cannot be read (the run records no test digests).
    */
   dependencyPackageDirs?(): readonly string[];
+
+  /**
+   * R-385, OPTIONAL: how a backend that PUBLISHES reads Microsoft dependencies for the dependency
+   * fingerprint: the bytes the server holds (`System`, every Microsoft app in the closure, the
+   * control app's dependencies) and each one's installed version. A run or verify on the
+   * published path without it records no digests or refuses; it never falls back to declared
+   * versions. Throws `DependencyUnreadableError` when it cannot be built.
+   */
+  microsoftMode?(): MicrosoftMode;
+
+  /**
+   * R389, OPTIONAL: how many published apps on the server declare `appId` as a dependency (the
+   * control app's `DependentCount`). Present on bcdev only; absent means the closed-world guard
+   * is never asked and falls back (`closed-world.ts`).
+   */
+  dependentCount?(appId: string): Promise<number>;
+
+  /**
+   * R488, OPTIONAL: every test the session discovered, every arm read, given before the baseline
+   * and to every worker. A backend whose test selector is a substring match (al-runner one-shot)
+   * excludes the look-alikes up front with it.
+   */
+  useDiscoveredTests?(tests: readonly TestMethodRef[]): void;
+
+  /**
+   * R557, OPTIONAL: the session's test suite (`chooseTestSuite`'s `tests`) and the tests kept in
+   * an `#if` arm discovery could not decide (`preproc-undecided-kept`, R403), given next to
+   * `useDiscoveredTests` and to every worker. al-runner reads them when a test has no row: an
+   * undecided-kept test keeps a per-test `error`, any other session-suite test stops the session
+   * (`AlRunnerTestNameError`), and a `--server` stop lists only missing session-suite tests.
+   */
+  useSessionTests?(suite: readonly TestMethodRef[], undecidedKept: readonly TestMethodRef[]): void;
+
+  /**
+   * R517, OPTIONAL: the session's `--mutant-timeout-ms` floor and baseline timeout, given once
+   * both are known, before the first run, and to every worker. al-runner `--server` starts its
+   * daemon with `--test-timeout ceil(max(floor, baseline) / 1000)` and refuses to start one
+   * without it.
+   */
+  useMutantBudgetFloor?(floorMs: number, baselineTimeoutMs: number): void;
+
+  /**
+   * R586 (F5), OPTIONAL: a mutant's covering tests and the budget the covering loop will send
+   * each, given once per mutant after its activation and before its first run. al-runner v3 runs
+   * a whole test codeunit per call, so it sends the call the LARGEST budget of the refs it serves.
+   */
+  useCoveringBudgets?(
+    mutantId: string,
+    budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
+  ): void;
+
+  /**
+   * R586 (I3), OPTIONAL: a tagged note for a SURVIVOR with these covering tests
+   * (`[v3-refused-test-nearby] ...`), written into its `failureNote`. Never moves a verdict.
+   */
+  survivorNote?(covering: readonly TestMethodRef[]): string | undefined;
 }

@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ALNodeKind, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { ALSyntaxNode } from "@lethal/engine";
-import { writeInstrumentedProject } from "@lethal/schemata";
+import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import {
   LineMap,
+  assertManifestObjectsDeclared,
   buildLineMap,
   fileLineMapEntries,
   lineMapFromSources,
@@ -15,6 +16,7 @@ import {
   refusedAsMultiObject,
   renamedMemberNamesOf,
   resolveFileLine,
+  unmappedCoverageReason,
 } from "../src/line-map";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 
@@ -168,11 +170,38 @@ describe("LineMap — scope and rules", () => {
     expect(m.declares("Codeunit", 9999999)).toBe(false);
   });
 
-  test("an object the artifact DECLARES but the map lacks throws", () => {
-    // The artifact's source is written by LethAL, so this is a LethAL bug and must say so rather
-    // than degrade to a plausible empty answer.
+  test("an object the artifact DECLARES but the map lacks is refused by name; with a mutant it throws before baseline (R-307)", () => {
+    // R-307 section 4: R305's split header made this a whole-run abort at the first coverage row.
+    // Now the map refuses it by name, and an object WITH mutants still fails loudly, earlier, in
+    // `assertManifestObjectsDeclared`'s Direction A rather than at a row.
     const m = mapFor(SINGLE, ["codeunit:50000", "codeunit:50002"]);
-    expect(() => m.lookup("Codeunit", 50002, 3)).toThrow(/declares codeunit:50002 but no line map/);
+    expect(m.lookup("Codeunit", 50002, 3)).toBeUndefined();
+    expect(m.isRefused("Codeunit", 50002)).toBe(true);
+    expect(m.refusalReason("Codeunit", 50002)).toBe(unmappedCoverageReason("codeunit:50002"));
+    expect([...m.mappedKeys()]).toEqual(["codeunit:50000"]);
+    const declared = new Set(["codeunit:50000", "codeunit:50002"]);
+    expect(() =>
+      assertManifestObjectsDeclared(["codeunit:50002"], declared, m.mappedKeys(), new Set()),
+    ).toThrow(
+      "line-map: the compiled artifact declares codeunit:50002 but no line map was built for it — every declared object's source is written by LethAL and must be mappable. This is a LethAL bug, not a problem with the project under test.",
+    );
+    expect(() =>
+      assertManifestObjectsDeclared(["codeunit:50000"], declared, m.mappedKeys(), new Set()),
+    ).not.toThrow();
+  });
+
+  test("an EMPTY declared set fails every manifest key; it never passes them (R-307)", () => {
+    expect(() =>
+      assertManifestObjectsDeclared(["codeunit:50000"], new Set(), new Set(), new Set()),
+    ).toThrow("a mutant is attributed to codeunit:50000, which the compiled app does not declare.");
+    expect(() =>
+      assertManifestObjectsDeclared(
+        ["codeunit:50000"],
+        new Set(),
+        undefined,
+        new Set(["codeunit:50000"]),
+      ),
+    ).not.toThrow();
   });
 
   test("a trigger body is NOT attributed to a procedure name", () => {
@@ -344,9 +373,11 @@ xmlport 79303 "X"
     }
   });
 
-  test("a DECLARED object with no source in the dir throws rather than resolving nothing", async () => {
+  test("a DECLARED object with no source in the dir is refused, and throws before baseline when it has mutants", async () => {
     // Rule 2. Every declared object's source is source LethAL wrote and compiled, so this is a
     // LethAL bug and must say so — the alternative is a confident, quietly incomplete green set.
+    // R-307: said by Direction A before any baseline when the object carries a mutant, and by a
+    // named refusal (it cannot affect a verdict) when it does not.
     const dir = await dirWith({
       "Ours.Codeunit.al": `codeunit 79100 "Ours"
 {
@@ -357,7 +388,12 @@ xmlport 79303 "X"
     });
     try {
       const m = await buildLineMap(dir, new Set(["codeunit:79100", "codeunit:79199"]));
-      expect(() => m.lookup("Codeunit", 79199, 3)).toThrow(/declares codeunit:79199/);
+      expect(m.lookup("Codeunit", 79199, 3)).toBeUndefined();
+      expect(m.refusedByKey().get("codeunit:79199")).toBe(unmappedCoverageReason("codeunit:79199"));
+      const declared = new Set(["codeunit:79100", "codeunit:79199"]);
+      expect(() =>
+        assertManifestObjectsDeclared(["codeunit:79199"], declared, m.mappedKeys(), new Set()),
+      ).toThrow(/declares codeunit:79199 but no line map was built/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -463,14 +499,16 @@ describe("GH-09: measured coverage rows over the namespaced sandbox-app", () => 
     const dir = await mkdtemp(join(tmpdir(), "lethal-gh09-"));
     try {
       // The selector ids the live run used; the guard layout does not depend on the artifact id.
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: set.files,
-        selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-        operatorTiers,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: set.files,
+          selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+          operatorTiers,
+        }),
+      );
       const map = await buildLineMap(dir, new Set(["codeunit:79000", "codeunit:79001"]));
       for (const row of OVER_BUDGET_DETECTED) {
         expect(map.lookup("Codeunit", 79000, row)).toBe("IsOverBudget");

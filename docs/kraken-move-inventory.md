@@ -40,6 +40,7 @@ Classified from plan 3, Appendix B (2026-10-03), plus files added on the branch 
 | fixtures/do-campaign/preflight.ts | operational | host-only |
 | fixtures/do-campaign/settings.json | operational | host-only |
 | scripts/kraken-secrets.ts | operational | host-only by design: it runs on the Windows host, and its defaults name host folders. Not a Task 11 edit |
+| docs/gates/alrunner.md | operational | host-only: the Windows host's pinned al-runner build and fallback tool paths, moved from CLAUDE.md (R-592) |
 
 ## Inert
 

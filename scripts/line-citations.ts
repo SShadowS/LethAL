@@ -145,7 +145,7 @@ export const ALLOWLIST: readonly { file: string; citation: string; reason: strin
   },
   {
     file: "docs/releasing.md",
-    citation: "SandboxLogic.Codeunit.al:4",
+    citation: "SandboxLogic.Codeunit.al:6",
     reason: "sample `lethal run` output from the release smoke test, pasted verbatim",
   },
   {

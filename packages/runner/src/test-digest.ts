@@ -27,8 +27,10 @@
  * inside a procedure is a real edit, and over-normalising is the unsafe direction (an edited test
  * read as unchanged skips verify's new-test checks).
  *
- * The digest is `v2:` + SHA-256. A v1 digest (R-278's, the method span only) has no prefix, and
- * verify refuses a source run that recorded one (`source-predates-verify`).
+ * The digest is `v3:` + SHA-256 (R-385; the tag is outside the hash). A v1 digest (R-278's, the
+ * method span only) has no prefix, a v2 one (R-371's) fingerprints Microsoft dependencies by
+ * declared version, and verify refuses a source run that recorded either, once
+ * (`source-predates-verify`).
  *
  * Memory: the source is parsed ONCE into `TestAppModel` (every span hashed while its file's tree
  * is alive), and a test's reached set is hashed and dropped before the next test is walked.
@@ -36,6 +38,8 @@
 import { initParser, normalizeAlName } from "@lethal/engine";
 import type { TestMethodRef } from "./backend";
 import {
+  type ClosedWorld,
+  OPEN_WORLD,
   type Proc,
   type ReachState,
   Scanner,
@@ -47,12 +51,27 @@ import {
   sha256,
 } from "./testpage-scan";
 
-/** The scheme tag every digest this build records starts with. */
-export const TEST_DIGEST_SCHEME = "v2";
+/**
+ * The scheme tag every digest this build records starts with. v1 (R-278, no tag): the test's own
+ * method only. v2 (R-371): everything the test reaches, Microsoft dependencies by DECLARED version.
+ * v3 (R-385): Microsoft dependencies, `System` and the control app's dependencies by the bytes the
+ * server holds. A digest of another scheme never compares equal, so verify refuses it once.
+ */
+export const TEST_DIGEST_SCHEME = "v3";
 const PREFIX = `${TEST_DIGEST_SCHEME}:`;
 
 /** Whether a recorded digest was made under this build's scheme. */
 export const isCurrentDigest = (d: string): boolean => d.startsWith(PREFIX);
+
+/** The scheme a recorded digest was made under: its tag, or `v1` for R-278's untagged ones. */
+export const digestSchemeOf = (d: string): string => /^(v\d+):/.exec(d)?.[1] ?? "v1";
+
+/** What each scheme covers, for verify's once-per-source-run refusal. */
+export const DIGEST_SCHEME_WORDS: Readonly<Record<string, string>> = {
+  v1: "R-278's scheme, each test's own method only",
+  v2: "R-371's scheme, Microsoft dependencies by declared version only",
+  v3: "R-385's scheme, every helper, handler, subscriber and dependency a test reaches, with Microsoft dependencies, System and the control app's dependencies by the bytes the server holds",
+};
 
 /** The digest key: codeunit id plus method, the method compared case-insensitively as AL does. */
 export const testDigestKey = (ref: { codeunitId: number; method: string }): string =>
@@ -73,6 +92,18 @@ export interface DigestInputs {
   readonly dependencies: string;
   /** `AppInputs.buildInputs`. */
   readonly buildInputs: string;
+  /** R389: the closed-world guard's answer (`closed-world.ts`). Absent is `OPEN_WORLD`. */
+  readonly closedWorld?: ClosedWorld;
+}
+
+/**
+ * R389: the guard's answer as recorded. A digest made under any answer but `none` carries a `W`
+ * line, so a guard flip between a run and its verify moves every digest and nothing carries;
+ * under `none` a digest is byte-identical to one made before the guard existed.
+ */
+export function closedWorldTag(cw: ClosedWorld = OPEN_WORLD): string {
+  const on = [cw.public ? "public" : "", cw.internal ? "internal" : ""].filter((s) => s !== "");
+  return on.length === 0 ? "none" : on.join("+");
 }
 
 /**
@@ -88,6 +119,8 @@ export interface TestDigestParts {
   readonly app: string;
   readonly dependencies: string;
   readonly buildInputs: string;
+  /** R389: `closedWorldTag`. Absent on a run recorded before the guard, which read as `none`. */
+  readonly closedWorld?: string;
 }
 
 const short = (h: string): string => h.slice(0, 16);
@@ -128,7 +161,11 @@ export function subscriberFold(
   for (const u of model.units) {
     if (!u.subscriber) continue;
     lines.push(`C ${key(u)} ${u.textHash}`);
-    for (const p of [...u.procs, ...u.triggers]) scanner.reach(p, st);
+    // R-389: an [EventSubscriber] procedure is called by external code, so what it hands back
+    // through a `var` parameter is read too (`foldEntryProc`).
+    for (const p of [...u.procs, ...u.triggers])
+      if (p.subscriber) scanner.foldEntryProc(p, st);
+      else scanner.reach(p, st);
   }
   for (const u of model.objects) {
     if (!u.kind.endsWith("extension")) continue;
@@ -171,8 +208,8 @@ interface DigestContext {
   readonly app: string;
 }
 
-function contextOf(model: TestAppModel): DigestContext {
-  const scanner = new Scanner(model);
+function contextOf(model: TestAppModel, closedWorld?: ClosedWorld): DigestContext {
+  const scanner = new Scanner(model, closedWorld);
   const keys = unitKeys(model);
   return {
     scanner,
@@ -233,8 +270,9 @@ export function testDigestsOfModel(
   tests: readonly TestMethodRef[],
   inputs: DigestInputs,
 ): { digests: Record<string, string>; parts: TestDigestParts } {
-  const ctx = contextOf(model);
+  const ctx = contextOf(model, inputs.closedWorld);
   const build = sha256(inputs.buildInputs);
+  const tag = closedWorldTag(inputs.closedWorld);
   const digests: Record<string, string> = {};
   let n = 0;
   for (const t of tests) {
@@ -242,6 +280,7 @@ export function testDigestsOfModel(
     const st = walkTest(ctx.scanner, model, t);
     const lines = reachLines(st, ctx.keys);
     lines.push(`S ${ctx.subscribers.hash}`, `D ${inputs.dependencies}`, `B ${build}`);
+    if (tag !== "none") lines.push(`W ${tag}`);
     if (onFallback(ctx, st)) lines.push(`A ${ctx.app}`);
     digests[testDigestKey(t)] = `${PREFIX}${sha256(lines.sort().join("\n"))}`;
   }
@@ -260,6 +299,7 @@ export function testDigestsOfModel(
       app: short(ctx.app),
       dependencies: short(inputs.dependencies),
       buildInputs: short(build),
+      closedWorld: tag,
     },
   };
 }
@@ -292,6 +332,7 @@ export type NewTestCause =
   | "fallback"
   | "dependency"
   | "build"
+  | "closed-world"
   | "reach"
   | "unknown";
 
@@ -308,8 +349,9 @@ export function explainNewTests(
   was: TestDigestParts | null,
 ): { causes: Map<NewTestCause, number>; changedProcs: string[] } {
   const causes = new Map<NewTestCause, number>();
-  const ctx = contextOf(model);
+  const ctx = contextOf(model, inputs.closedWorld);
   const { keys } = ctx;
+  const tag = closedWorldTag(inputs.closedWorld);
   const build = short(sha256(inputs.buildInputs));
   const testKeys = new Set<string>();
   for (const { ref, recorded } of tests) {
@@ -328,6 +370,7 @@ export function explainNewTests(
       if (was.subscribers !== short(ctx.subscribers.hash)) mine.add("subscriber");
       if (was.dependencies !== short(inputs.dependencies)) mine.add("dependency");
       if (was.buildInputs !== build) mine.add("build");
+      if ((was.closedWorld ?? "none") !== tag) mine.add("closed-world");
       if (onFallback(ctx, st) && was.app !== short(ctx.app)) mine.add("fallback");
       if (mine.size === 0) mine.add("reach");
     }
@@ -359,7 +402,8 @@ export function parseDigestParts(v: unknown): TestDigestParts | null {
     typeof v !== "object" ||
     !isMap(o.procs) ||
     !isMap(o.objects) ||
-    ["subscribers", "app", "dependencies", "buildInputs"].some((k) => typeof o[k] !== "string")
+    ["subscribers", "app", "dependencies", "buildInputs"].some((k) => typeof o[k] !== "string") ||
+    (o.closedWorld !== undefined && typeof o.closedWorld !== "string")
   ) {
     throw new Error("test-digest.ts: a recorded test_digest_parts value is not TestDigestParts");
   }

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { type SpawnFn, defaultSpawn } from "./publisher";
 
 export interface AlRunnerRequest {
@@ -34,6 +36,24 @@ export interface AlRunnerRequest {
    * Absent means the flag is not sent at all, which is the pre-R220 argv byte for byte.
    */
   readonly coverageOut?: string;
+  /**
+   * R488 — whole qualified test names sent as `--exclude-test`, one each.
+   *
+   * `--test` is a case-insensitive SUBSTRING match, so `Codeunit78950.GrowPre` also selects
+   * `Codeunit78950.GrowPreTwin`. Whether al-runner has `--test-exact` depends on the build: c39ad5de
+   * and 43f76177 refuse it as an unknown option (exit 2), c5bbaf89 has it (R551, which uses it when
+   * a per-session probe accepts it, and sends no excludes then). Its `--exclude-test` matches a WHOLE
+   * name only, so `--test X` plus one exclude per sibling selects exactly X; that is the path for a
+   * build without the flag. Never put `qualifiedTest` itself here: al-runner then exits 0 with an
+   * EMPTY test list instead of its exit 6 (measured).
+   */
+  readonly excludeTests?: readonly string[];
+  /**
+   * R551 — also send `--test-exact <qualifiedTest>`, right after `--test <qualifiedTest>`.
+   * Set only when this session's probe found that the build accepts the flag. Absent = today's argv
+   * byte for byte.
+   */
+  readonly testExact?: true;
 }
 
 export interface AlRunnerRawTest {
@@ -44,9 +64,29 @@ export interface AlRunnerRawTest {
 }
 
 export type AlRunnerResult =
-  | { readonly kind: "tests"; readonly tests: readonly AlRunnerRawTest[] }
+  | {
+      readonly kind: "tests";
+      readonly tests: readonly AlRunnerRawTest[];
+      /**
+       * R534 (D1b): on an exit 3 read through `timeoutAbortTests`, the names of the rows a
+       * TEST-TIMEOUT-ABORT line names, i.e. rows al-runner PROVED it stopped at its timeout.
+       * Beside the rows rather than on them, so the rows stay exactly what al-runner printed.
+       */
+      readonly abortProven?: readonly string[];
+    }
   | { readonly kind: "deadline" }
-  | { readonly kind: "error"; readonly detail: string };
+  /**
+   * R557: al-runner's own exit 6 with an envelope of `tests: []` and `exitCode: 6`
+   * (`isNoneSelectedExit`): the name sent selected no test. Kept apart from `error`, which is a
+   * runner or compile failure, because the backend refuses this one by name.
+   */
+  | { readonly kind: "none-selected"; readonly detail: string }
+  | {
+      readonly kind: "error";
+      readonly detail: string;
+      /** R583: al-runner said the TARGET bundle did not fully compile (`targetCompileDiagnostics`). */
+      readonly targetCompile?: true;
+    };
 
 export interface AlRunnerTransport {
   send(req: AlRunnerRequest): Promise<AlRunnerResult>;
@@ -62,6 +102,8 @@ export interface AlRunnerTransport {
   observedBcBuild(): AlRunnerBcBuild | undefined;
   /** R148 — the first "NO IMPLEMENTATION" warning any invocation printed, if any. */
   observedMissingImplementation(): AlRunnerMissingImplementation | undefined;
+  /** R583 — every distinct dependency `EMIT-EXCLUDED`/`EMIT-ZERO` an invocation printed. */
+  observedDependencyDrops?(): readonly string[];
 }
 
 /** R129 — the BC runtime an al-runner invocation announced, plus the line it was read from. */
@@ -436,9 +478,121 @@ export function parseAlRunnerPlatformAppsDir(output: string): AlRunnerPlatformAp
  * exactly that one test, and the JSON rows carry the same qualified `name`. This is the ONE
  * place that name is built, so the `--test` filter and the result lookup can never disagree;
  * two independent spellings would mean the runner ran one thing and the caller scored another.
+ *
+ * R557: the method half is al-runner's name for the AL method (`alRunnerMethodName`), not the AL
+ * name: a row is `Codeunit<id>.<CLR method>`, so `"Dash-Step"` is `Codeunit78850.Dasha45Step`.
  */
 export function qualifiedTestName(codeunitId: number, method: string): string {
-  return `Codeunit${codeunitId}.${method}`;
+  return `Codeunit${codeunitId}.${alRunnerMethodName(method)}`;
+}
+
+/** R557: a C# identifier-START unit (Roslyn `SyntaxFacts.IsIdentifierStartCharacter`). */
+const CS_ID_START = /^[\p{L}\p{Nl}_]$/u;
+/** R557: a C# identifier-PART unit (Roslyn `SyntaxFacts.IsIdentifierPartCharacter`). */
+const CS_ID_PART = /^[\p{L}\p{Nl}\p{Nd}\p{Mn}\p{Mc}\p{Pc}\p{Cf}]$/u;
+/** R557: Unicode format characters, deleted from the emitted name (step e). */
+const CS_FORMAT = /\p{Cf}/gu;
+/**
+ * R557: BC's `StringExtensions.ReservedKeywords`, upper case: Roslyn's 77 reserved keyword texts
+ * plus `__arglist`, `__makeref`, `__reftype`, `__refvalue` (`SyntaxFacts.GetReservedKeywordKinds()`),
+ * plus `FINALIZE`. Contextual keywords (`record`, `var`, `async`) are not reserved.
+ */
+const CS_RESERVED = new Set(
+  (
+    "ABSTRACT AS BASE BOOL BREAK BYTE CASE CATCH CHAR CHECKED CLASS CONST CONTINUE DECIMAL DEFAULT " +
+    "DELEGATE DO DOUBLE ELSE ENUM EVENT EXPLICIT EXTERN FALSE FINALLY FIXED FLOAT FOR FOREACH GOTO " +
+    "IF IMPLICIT IN INT INTERFACE INTERNAL IS LOCK LONG NAMESPACE NEW NULL OBJECT OPERATOR OUT " +
+    "OVERRIDE PARAMS PRIVATE PROTECTED PUBLIC READONLY REF RETURN SBYTE SEALED SHORT SIZEOF " +
+    "STACKALLOC STATIC STRING STRUCT SWITCH THIS THROW TRUE TRY TYPEOF UINT ULONG UNCHECKED UNSAFE " +
+    "USHORT USING VIRTUAL VOID VOLATILE WHILE __ARGLIST __MAKEREF __REFTYPE __REFVALUE FINALIZE"
+  ).split(" "),
+);
+
+/**
+ * R557: the C# method name BC's compiler gives an AL test method, which is the name al-runner
+ * reports a row under and selects by. `"Stone Quoted"` -> `Stone_Quoted`, `"Dot.Name"` ->
+ * `Dota46Name`, `"2Lead"` -> `_2Lead`, unquoted `Default` -> `_Default`.
+ *
+ * Ported from al-runner's own port of the rule, `RunnerPageInstance.EmittedIdentifier` in
+ * `AlRunner/Patches/RunnerPageInstance.cs` at `c5bbaf89` (unchanged since `d694c40`), itself
+ * decompiled from BC's `Utilities.StringExtensions.MangleIdentifierName` (`MangleUnquotedIdentifierName`
+ * plus `GetSafeCSharpIdentifierName`). It walks UTF-16 code units, as the C# loop does:
+ * a. a space or `"` becomes `_`;
+ * b. an identifier-PART unit (Unicode L, Nl, Nd, Mn, Mc, Pc, Cf) is kept; when it is the FIRST unit
+ *    and not an identifier START (L, Nl, `_`), a `_` is put before it;
+ * c. any other unit becomes `a` + its decimal code. A lone surrogate is in neither class, so a
+ *    surrogate pair gives two codes (`a55357a56832`);
+ * d. the keyword prefix: replace every `ſ` with `s`; if, and only if, the result is then ASCII,
+ *    upper-case it (ASCII upper-casing is .NET's invariant simple upper-casing on ASCII) and look
+ *    it up in `CS_RESERVED`; on a hit put `_` before the result of a-c. JS `toUpperCase` is NOT
+ *    used: it gives `CLASS` for `Claß`, `FIXED` for `ﬁxed` and `INT` for `ınt`, none of which
+ *    .NET's invariant upper-casing produces, and al-runner prefixes none of them (measured);
+ * e. delete every Cf unit. This step is NOT in al-runner's port; it is what BC's emitter does
+ *    (measured in R557's review, u1 and u2: `"Soft<U+00AD>Hyphen"` -> `SoftHyphen`, a leading
+ *    ZWJ -> `_Lead`, the `_` from b kept).
+ * The measured names, all 58, are pinned in `al-runner-transport.test.ts`.
+ *
+ * Unicode drift (R557 M6): the JS `\p{...}` classes follow the JS engine's Unicode version, and
+ * .NET's `char` categories follow .NET's. A code point added or reclassified in one and not the
+ * other can map differently. The R123 `test-name-mangling` fact sees only the names it probes; a
+ * miss anywhere else selects nothing, and the session refuses at baseline (`AlRunnerTestNameError`)
+ * rather than mis-scoring: always on one-shot, and on `--server` when the answer is clean or the
+ * test's own codeunit ran at least one test. On a `--server` answer that is unclean AND in which
+ * that codeunit ran nothing (it did not compile, or only its `<ctor>`, `OnRun` or `<event>` rows
+ * came back), the miss is that test's per-test `error` instead, and its only-kills can read
+ * survived; the R123 fact and the one-shot legs are what catch a rule drift there.
+ */
+export function alRunnerMethodName(method: string): string {
+  let out = "";
+  for (let i = 0; i < method.length; i++) {
+    const unit = method.charAt(i);
+    if (unit === " " || unit === '"') out += "_";
+    else if (CS_ID_PART.test(unit)) out += (i === 0 && !CS_ID_START.test(unit) ? "_" : "") + unit;
+    else out += `a${method.charCodeAt(i)}`;
+  }
+  const folded = out.replace(/ſ/g, "s");
+  if (isAscii(folded) && CS_RESERVED.has(folded.toUpperCase())) out = `_${out}`;
+  return out.replace(CS_FORMAT, "");
+}
+
+function isAscii(s: string): boolean {
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) > 0x7f) return false;
+  return true;
+}
+
+/**
+ * R557 C1: the distinct methods of `methods` whose al-runner name differs from the AL name, i.e.
+ * the tests a pre-R557 al-runner run sent under a name al-runner never had.
+ */
+export function alRunnerRenamed(methods: readonly string[]): string[] {
+  return [...new Set(methods)].filter((m) => alRunnerMethodName(m) !== m);
+}
+
+/**
+ * R557 (and R551's probe): why an exit is NOT al-runner's own "selected no test" answer, or
+ * `undefined` when it is: the process's own exit 6, with an `--output-json` envelope whose `tests`
+ * is an empty array and whose `exitCode` is 6. A signal exit, another code, no readable envelope,
+ * rows, or another envelope code is not.
+ */
+export function noneSelectedRefusal(exitCode: number, stdout: string): string | undefined {
+  if (!isChildChosenExit(exitCode)) return `signal exit ${exitCode}`;
+  if (exitCode !== 6) return `exit ${exitCode}`;
+  let env: unknown;
+  try {
+    env = readAlRunnerEnvelope(stdout);
+  } catch {
+    return "exit 6 but no readable envelope";
+  }
+  const e = typeof env === "object" && env !== null ? (env as Record<string, unknown>) : {};
+  if (!Array.isArray(e.tests)) return "exit 6 but no readable envelope";
+  if (e.tests.length > 0) return `exit 6 but ${e.tests.length} test row(s)`;
+  if (e.exitCode !== 6) return `exit 6 but envelope exitCode ${String(e.exitCode)}`;
+  return undefined;
+}
+
+/** R557: al-runner's own exit 6 with an empty envelope, `noneSelectedRefusal`'s one acceptance. */
+export function isNoneSelectedExit(exitCode: number, stdout: string): boolean {
+  return noneSelectedRefusal(exitCode, stdout) === undefined;
 }
 
 /** Enough stdout to recognise what the runner actually said, without dumping a whole suite. */
@@ -468,6 +622,33 @@ function stdoutPrefix(stdout: string): string {
  * the reason R97 exists.
  */
 export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[] {
+  const parsed = readAlRunnerEnvelope(stdout);
+  const tests =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { tests?: unknown }).tests
+      : undefined;
+  if (!Array.isArray(tests)) {
+    throw new Error(
+      `al-runner's --output-json envelope has no "tests" array — a project that failed to COMPILE answers with compilationErrors[] and no tests, and must not be read as "no test failed": ${stdoutPrefix(stdout)}`,
+    );
+  }
+  return tests as readonly AlRunnerRawTest[];
+}
+
+/** One top-level field of the envelope, or `undefined` when there is no readable envelope. */
+function envelopeField(stdout: string, key: string): unknown {
+  try {
+    const env = readAlRunnerEnvelope(stdout);
+    return typeof env === "object" && env !== null
+      ? (env as Record<string, unknown>)[key]
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `--output-json` envelope as parsed JSON (see `parseAlRunnerPayload` for the rule). Throws. */
+export function readAlRunnerEnvelope(stdout: string): unknown {
   const lines = stdout.split("\n");
   let start = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -481,24 +662,312 @@ export function parseAlRunnerPayload(stdout: string): readonly AlRunnerRawTest[]
       `al-runner produced no --output-json envelope (no line beginning with "{"): ${stdoutPrefix(stdout)}`,
     );
   }
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(lines.slice(start).join("\n"));
+    return JSON.parse(lines.slice(start).join("\n"));
   } catch (err) {
     throw new Error(
       `al-runner's --output-json envelope is not valid JSON (${err instanceof Error ? err.message : String(err)}): ${stdoutPrefix(stdout)}`,
     );
   }
-  const tests =
-    typeof parsed === "object" && parsed !== null
-      ? (parsed as { tests?: unknown }).tests
-      : undefined;
-  if (!Array.isArray(tests)) {
-    throw new Error(
-      `al-runner's --output-json envelope has no "tests" array — a project that failed to COMPILE answers with compilationErrors[] and no tests, and must not be read as "no test failed": ${stdoutPrefix(stdout)}`,
-    );
+}
+
+/**
+ * al-runner's `BundleFailureStage.MarkerOf` (43f7617): the run of `[A-Z-]` right after the first
+ * `": "`, trailing `-` trimmed. Compared by EQUALITY, so `TEST-TIMEOUT-ABORTED` is not a match.
+ */
+function alRunnerMarkerOf(line: string): string | undefined {
+  const sep = line.indexOf(": ");
+  if (sep < 0) return undefined;
+  const token = (/^[A-Z-]*/.exec(line.slice(sep + 2))?.[0] ?? "").replace(/-+$/, "");
+  return token === "" ? undefined : token;
+}
+
+/** Absent, `null`, or an empty array. */
+function absentOrEmpty(v: unknown): boolean {
+  return v === undefined || v === null || (Array.isArray(v) && v.length === 0);
+}
+
+/** One `compilationErrors` entry, from the one-shot envelope or the `--server` summary. */
+export interface AlRunnerCompileEntry {
+  readonly file: string;
+  readonly errors: readonly string[];
+}
+
+/** `compilationErrors` as entries. A malformed entry is kept with no `file`, so it counts. */
+export function compileEntriesOf(raw: unknown): readonly AlRunnerCompileEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((e) => {
+    const o = typeof e === "object" && e !== null ? (e as Record<string, unknown>) : {};
+    return {
+      file: typeof o.file === "string" ? o.file : "",
+      errors: Array.isArray(o.errors) ? o.errors.map(String) : [JSON.stringify(e)],
+    };
+  });
+}
+
+/** An app as al-runner names its module: `<Publisher>_<Name>` (then ` v<version>`). */
+export interface AlRunnerAppIdentity {
+  readonly publisher: string;
+  readonly name: string;
+}
+
+/** The two projects one al-runner run compiles: the active target bundle and the test app. */
+export interface AlRunnerCompileScope {
+  readonly sourceDir: string;
+  readonly testDir: string;
+  /** From each project's `app.json`; absent when unreadable, which only loses that one clue. */
+  readonly targetApp?: AlRunnerAppIdentity;
+  readonly testApp?: AlRunnerAppIdentity;
+}
+
+/** `scope` with both apps' identities read from their `app.json`, when readable. */
+export function compileScopeOf(sourceDir: string, testDir: string): AlRunnerCompileScope {
+  const app = (dir: string): AlRunnerAppIdentity | undefined => {
+    try {
+      const j = JSON.parse(readFileSync(join(dir, "app.json"), "utf8").replace(/^﻿/, ""));
+      return typeof j.publisher === "string" && typeof j.name === "string"
+        ? { publisher: j.publisher, name: j.name }
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const targetApp = app(sourceDir);
+  const testApp = app(testDir);
+  return {
+    sourceDir,
+    testDir,
+    ...(targetApp !== undefined ? { targetApp } : {}),
+    ...(testApp !== undefined ? { testApp } : {}),
+  };
+}
+
+/** The objects LethAL emits into the target: an entry naming one is the target's, wherever it sits. */
+const LETHAL_EMITTED_OBJECT = /MutationSelector|Mutation Selector/;
+const SOURCE_FILE_PATH = /SourceFile\(([^@)]+)@/g;
+/** A module as al-runner names a dependency: `Microsoft_Tests-TestLibraries v28.5.54151.55132`. */
+const MODULE_NAME = /([^\s:|[\]()]+_[^:|[\]()]+?) v\d+(?:\.\d+)+/g;
+
+function under(path: string, dir: string): boolean {
+  const p = normalisePlatformAppsPath(path);
+  const d = normalisePlatformAppsPath(dir);
+  return p === d || p.startsWith(`${d}/`);
+}
+
+function baseName(dir: string): string {
+  return (normalisePlatformAppsPath(dir).split("/").pop() ?? "").toLowerCase();
+}
+
+/** `V2_<dir>` (the `--server` module name, hyphen kept: measured `V2_sandbox-tests`) names `dir`. */
+function v2Names(owner: string, dir: string, other: string): boolean {
+  const m = /^V\d+_(.+)$/.exec(owner);
+  return (
+    m?.[1] !== undefined &&
+    m[1].toLowerCase() === baseName(dir) &&
+    baseName(dir) !== baseName(other)
+  );
+}
+
+function namesApp(text: string, app: AlRunnerAppIdentity | undefined): boolean {
+  if (app === undefined) return false;
+  return (
+    text.includes(`${app.publisher}_${app.name} v`) ||
+    text.includes(`— ${app.name}:`) ||
+    text.includes(`for ${app.name}:`)
+  );
+}
+
+export type AlRunnerCompileOwner = "target" | "test" | "dependency" | "unattributed";
+
+/**
+ * R583: whose compile diagnostic this is. TARGET only on positive evidence: a LethAL-emitted object
+ * (`MutationSelector`), a `SourceFile(` path under the target bundle, or an owner naming it (its
+ * directory, `V2_<dir>`, or its module `<Publisher>_<Name> v<version>`). TEST likewise. DEPENDENCY
+ * only when it names a module and every module named is another app, with no path inside either
+ * project (measured: `Microsoft_Tests-TestLibraries v28.5...: EMIT-EXCLUDED`, paths under
+ * al-runner's own `/tmp/al-runner-deps`). Anything else is UNATTRIBUTED. Target evidence wins.
+ */
+export function compileOwnerOf(
+  owner: string,
+  texts: readonly string[],
+  scope: AlRunnerCompileScope,
+): AlRunnerCompileOwner {
+  const all = [owner, ...texts].join("\n");
+  const paths = texts.flatMap((t) => [...t.matchAll(SOURCE_FILE_PATH)].map((m) => m[1] ?? ""));
+  const modules = [...all.matchAll(MODULE_NAME)].map((m) => m[1] ?? "");
+  const isModule = (m: string, app: AlRunnerAppIdentity | undefined) =>
+    app !== undefined && m === `${app.publisher}_${app.name}`;
+  if (
+    LETHAL_EMITTED_OBJECT.test(all) ||
+    paths.some((p) => under(p, scope.sourceDir)) ||
+    namesApp(all, scope.targetApp) ||
+    (owner !== "" && under(owner, scope.sourceDir)) ||
+    v2Names(owner, scope.sourceDir, scope.testDir)
+  )
+    return "target";
+  if (
+    (paths.length > 0 && paths.every((p) => under(p, scope.testDir))) ||
+    (paths.length === 0 &&
+      ((owner !== "" && under(owner, scope.testDir)) ||
+        v2Names(owner, scope.testDir, scope.sourceDir) ||
+        namesApp(all, scope.testApp)))
+  )
+    return "test";
+  // DEPENDENCY only on POSITIVE evidence: a foreign module name (review r2). Paths outside both
+  // projects alone are not enough: a target diagnostic spelled through another path (relative, a
+  // short name, a symlinked tmp) would be scored. Such a block is unattributed, which refuses.
+  const outside = (p: string) => !under(p, scope.sourceDir) && !under(p, scope.testDir);
+  if (
+    modules.length > 0 &&
+    modules.every((m) => !isModule(m, scope.targetApp) && !isModule(m, scope.testApp)) &&
+    paths.every(outside)
+  )
+    return "dependency";
+  return "unattributed";
+}
+
+/** The stderr markers al-runner prints when a module lost objects; matched by prefix only. */
+const EMIT_MARKER = /(?:^|: )(EMIT-ZERO|EMIT-EXCLUDED|PARTIAL-EMIT-DROP)\b/;
+
+/** What one invocation's output says about its compile, by owner (`compileOwnerOf`). */
+export interface AlRunnerCompileFindings {
+  /** Target-bundle or unattributable diagnostics: no row of this run is scored. */
+  readonly refuse: readonly string[];
+  /** A dependency's dropped objects: scored anyway, and reported as a named warning. */
+  readonly dependency: readonly string[];
+}
+
+/**
+ * R583: the compile diagnostics in one invocation's own output, sorted by owner. Test-app ones are
+ * dropped here and keep today's behaviour (absent rows are per-test `error`).
+ *
+ * Measured on 069cbf32 (`/coord/handoff/R-583/bisect.md`, `output-shapes.md`): a runtime-gated drop
+ * (AL0666) exits 3, prints `EMIT-ZERO` or `EMIT-EXCLUDED` on stderr and fills `compilationErrors`,
+ * and the tests STILL RUN and can pass. Read from the envelope's `compilationErrors` (or the
+ * `--server` summary's) and, on the one-shot path only, the invocation's own stderr (`stderr`
+ * undefined on `--server`, whose stderr buffer spans the daemon's life). A build that does not
+ * diagnose the drop (f06ee78c ignored `runtime`) prints none of this, so the net is blind there.
+ */
+export function compileFindingsOf(
+  entries: readonly AlRunnerCompileEntry[],
+  stderr: string | undefined,
+  scope: AlRunnerCompileScope,
+): AlRunnerCompileFindings {
+  const refuse: string[] = [];
+  const dependency: string[] = [];
+  const add = (owner: string, texts: readonly string[], shown: string) => {
+    const kind = compileOwnerOf(owner, texts, scope);
+    if (kind === "target") refuse.push(`the target bundle did not fully compile: ${shown}`);
+    if (kind === "unattributed")
+      refuse.push(
+        `a compile diagnostic not attributable to the test app or a dependency (owner ${JSON.stringify(owner)}): ${shown}`,
+      );
+    // al-runner compiles dependencies under a per-process `/tmp/al-runner-deps/p<pid>/` (measured):
+    // masked, so one drop reads the same on every invocation.
+    if (kind === "dependency") dependency.push(shown.replace(/\/p\d+\//g, "/p<pid>/"));
+  };
+  for (const e of entries) add(e.file, e.errors, `${e.file}: ${e.errors.join(" | ")}`);
+  if (stderr === undefined) return { refuse, dependency };
+  // Measured block shape (output-shapes.md): a column-0 marker line, then indented diagnostics and a
+  // column-0 `<lead>: AL diagnostics that identified ...` line. Anything else ends the block: the
+  // `→` summary, the next `[2/2] ...` bundle line, another marker. Indented echoes open nothing.
+  const lines = stderr.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const head = lines[i] ?? "";
+    if (/^\s/.test(head) || !EMIT_MARKER.test(head)) continue;
+    const block = [head];
+    for (let j = i + 1; j < lines.length; j++) {
+      const l = lines[j] ?? "";
+      const indented = /^\s/.test(l) && !/^\s*→/.test(l);
+      if (!indented && !/^\S.*: AL diagnostics that identified/.test(l)) break;
+      block.push(l);
+    }
+    // The owner is what precedes `: <MARKER>` (`<bundled>`, or a dependency module), or the module
+    // after `<MARKER> — ` when the line starts with the marker.
+    const owner =
+      /^(.*?): (?:EMIT-ZERO|EMIT-EXCLUDED|PARTIAL-EMIT-DROP)\b/.exec(head)?.[1] ??
+      /^(?:EMIT-ZERO|EMIT-EXCLUDED|PARTIAL-EMIT-DROP) — ([^:]+):/.exec(head)?.[1] ??
+      "";
+    add(owner, block, block.map((l) => l.trim()).join(" | "));
   }
-  return tests as readonly AlRunnerRawTest[];
+  return { refuse, dependency };
+}
+
+/** The message every row of a refused run carries, and the baseline refusal's text. */
+export function targetCompileMessage(found: readonly string[], exitCode: number): string {
+  return `al-runner did not fully compile this run (exit ${exitCode}), so no test row of it is scored, even one that passed (R583): ${found.join(" || ").slice(0, 1500)}`;
+}
+
+/**
+ * R518: the rows of a one-shot EXIT 3 that al-runner gave because a test hit its in-run stop, or
+ * `undefined` for any other exit 3. Never throws.
+ *
+ * al-runner (measured on 2.12.0-main.43f76177) exits 3 when a bundle that RAN has a suite error,
+ * and a watchdog abort is one (#2415, #2762): the timed-out row is in `tests`, and `suiteErrors`
+ * holds `"<file>: TEST-TIMEOUT-ABORT: <Display> (<cu>).<m>: watchdog timeout aborted the run ..."`.
+ * A real compile failure also exits 3, with `compilationErrors` and no rows. The rows are returned
+ * only when ALL of these hold:
+ * 1. the envelope parses and has a `tests` array;
+ * 2. `compilationErrors` and `executionErrors` are absent, `null` or empty, and the envelope's own
+ *    `exitCode`, when present, is 3;
+ * 3. `suiteErrors` is an array, each entry has an `errors` array of strings, and the flattened
+ *    list is non-empty (an empty list must not pass `every`);
+ * 4. every line's marker is exactly `TEST-TIMEOUT-ABORT`;
+ * 5. every line names a row whose status is neither `pass` nor `fail`, matched from the row side
+ *    as al-runner's `AbortReasonNamesTest` does.
+ * The row itself is NOT classified here: the backend's `verdictFromRunnerTest` decides `timeout`
+ * or a fail-closed `error`, exactly as on exit 1.
+ */
+export function timeoutAbortTests(stdout: string): readonly AlRunnerRawTest[] | undefined {
+  return readTimeoutAbort(stdout)?.tests;
+}
+
+/** `timeoutAbortTests`, plus (R534 D1b) the names of the rows its abort lines name (check 5). */
+function readTimeoutAbort(
+  stdout: string,
+): { readonly tests: readonly AlRunnerRawTest[]; readonly proven: readonly string[] } | undefined {
+  let env: unknown;
+  try {
+    env = readAlRunnerEnvelope(stdout);
+  } catch {
+    return undefined;
+  }
+  if (typeof env !== "object" || env === null) return undefined;
+  const e = env as Record<string, unknown>;
+  const tests = e.tests;
+  if (!Array.isArray(tests)) return undefined;
+  if (!absentOrEmpty(e.compilationErrors) || !absentOrEmpty(e.executionErrors)) return undefined;
+  if (e.exitCode !== undefined && e.exitCode !== null && e.exitCode !== 3) return undefined;
+  const suiteErrors = e.suiteErrors;
+  if (!Array.isArray(suiteErrors)) return undefined;
+  const lines: string[] = [];
+  for (const entry of suiteErrors) {
+    const errors =
+      typeof entry === "object" && entry !== null
+        ? (entry as { errors?: unknown }).errors
+        : undefined;
+    if (!Array.isArray(errors)) return undefined;
+    for (const line of errors) {
+      if (typeof line !== "string") return undefined;
+      lines.push(line);
+    }
+  }
+  // Covers `suiteErrors: []` too. Without it `[].every(...)` passes: empty-vs-empty.
+  if (lines.length === 0) return undefined;
+  if (!lines.every((l) => alRunnerMarkerOf(l) === "TEST-TIMEOUT-ABORT")) return undefined;
+  const needles: { readonly name: string; readonly needle: string }[] = [];
+  for (const row of tests as readonly Partial<AlRunnerRawTest>[]) {
+    if (typeof row?.name !== "string" || row.status === "pass" || row.status === "fail") continue;
+    const dot = row.name.lastIndexOf(".");
+    if (dot < 0) continue;
+    needles.push({
+      name: row.name,
+      needle: ` (${row.name.slice(0, dot)}).${row.name.slice(dot + 1)}: watchdog timeout aborted the run`,
+    });
+  }
+  if (!lines.every((l) => needles.some((n) => l.includes(n.needle)))) return undefined;
+  const proven = needles.filter((n) => lines.some((l) => l.includes(n.needle))).map((n) => n.name);
+  return { tests: tests as readonly AlRunnerRawTest[], proven };
 }
 
 /**
@@ -530,6 +999,8 @@ export function buildAlRunnerArgv(
     | "preprocessorSymbols"
     | "platformAppsDir"
     | "coverageOut"
+    | "excludeTests"
+    | "testExact"
   >,
 ): string[] {
   // R147 — the pin and `--auto-provision` are MUTUALLY EXCLUSIVE, and this is the one place that is
@@ -552,6 +1023,11 @@ export function buildAlRunnerArgv(
     "test",
     "--test",
     req.qualifiedTest,
+    // R551: see `AlRunnerRequest.testExact`. `--test` stays: the two intersect, so a build that
+    // ignored `--test-exact` would still select no more than today's substring set.
+    ...(req.testExact === true ? ["--test-exact", req.qualifiedTest] : []),
+    // R488: see `AlRunnerRequest.excludeTests`. Absent means today's argv byte for byte.
+    ...(req.excludeTests ?? []).flatMap((n) => ["--exclude-test", n]),
     // R125 (measured 2026-08-07 on al-runner 2.1.0.0): with no BC version given, the runner selects
     // the build it was COMPILED against — 28.1.49838.50794 for 2.1.0.0 — and refuses, because a
     // project's `.alpackages` hold SYMBOL-only Microsoft apps and the runtime (R2R) apps for that
@@ -659,6 +1135,13 @@ export class OneShotTransport implements AlRunnerTransport {
     return this.firstMissingImplementation;
   }
 
+  /** R583: distinct dependency drops, in the order first seen. */
+  private readonly dependencyDrops = new Set<string>();
+
+  observedDependencyDrops(): readonly string[] {
+    return [...this.dependencyDrops];
+  }
+
   async send(req: AlRunnerRequest): Promise<AlRunnerResult> {
     const argv = buildAlRunnerArgv(this.alRunnerPath, req);
 
@@ -692,6 +1175,21 @@ export class OneShotTransport implements AlRunnerTransport {
           `${res.stderr}\n${res.stdout}`,
         );
       }
+      // R583: before any row is read. A target bundle al-runner did not fully compile gives no
+      // scorable row on ANY exit code: on 069cbf32 such a run exits 3 with rows that pass.
+      const found = compileFindingsOf(
+        compileEntriesOf(envelopeField(res.stdout, "compilationErrors")),
+        res.stderr,
+        compileScopeOf(req.sourceDir, req.testDir),
+      );
+      for (const d of found.dependency) this.dependencyDrops.add(d);
+      if (found.refuse.length > 0) {
+        return {
+          kind: "error",
+          detail: targetCompileMessage(found.refuse, res.exitCode),
+          targetCompile: true,
+        };
+      }
       // v2 exit codes, from its own --help: 0 = all passed, 1 = at least one test FAILED or
       // ERRORED, 2 = a bundle could not EXECUTE, 3 = a bundle could not COMPILE.
       //
@@ -700,8 +1198,25 @@ export class OneShotTransport implements AlRunnerTransport {
       // into a silently skipped mutant with no verdict and no error anyone would see. 2 and
       // 3 alike mean "we measured nothing", and so does any negative code (spawn failure),
       // so all of them are errors.
+      //
+      // R518: 3 is "a bundle did not compile, OR a bundle that RAN has a suite error". A test that
+      // hit al-runner's in-run stop is the second kind (#2415, #2762): its row is there, beside a
+      // TEST-TIMEOUT-ABORT suite error. Only that kind is read, and only when the envelope proves
+      // it (`timeoutAbortTests`); every other exit 3 stays an error.
       if (res.exitCode === 0 || res.exitCode === 1)
         return { kind: "tests", tests: parseAlRunnerPayload(res.stdout) };
+      // R557: the name sent selected nothing. The backend decides what that means for the test.
+      if (isNoneSelectedExit(res.exitCode, res.stdout)) {
+        return {
+          kind: "none-selected",
+          detail: res.stderr || `al-runner exited 6: --test ${req.qualifiedTest} selected no test`,
+        };
+      }
+      if (res.exitCode === 3) {
+        const abort = readTimeoutAbort(res.stdout);
+        if (abort !== undefined)
+          return { kind: "tests", tests: abort.tests, abortProven: abort.proven };
+      }
       return {
         kind: "error",
         detail: res.stderr || res.stdout || `al-runner exited ${res.exitCode} with no output`,

@@ -105,13 +105,15 @@ const shortOpen = (limit: number): typeof open =>
     });
   }) as typeof open;
 
+// R439: 30 s, not bun's 5 s default. Seven-byte writes of a 2,500-mutant manifest are about
+// 70,000 calls: measured 3.9 to 6.9 s on the kraken container, alone and beside a full verify.
 it("short writes are completed, byte-identically", async () => {
   const d = await mkdtemp(join(tmpdir(), "lethal-manifest-"));
   dirs.push(d);
   const m = { selectorIds, artifactId: "0".repeat(32), mutants: cases.many ?? [] } as never;
   await writeManifestJson(join(d, "m.json"), m, { open: shortOpen(7), rename });
   expect(await readFile(join(d, "m.json"), "utf8")).toBe(`${JSON.stringify(m, null, 2)}\n`);
-});
+}, 30_000);
 
 it("a write that makes no progress throws and leaves nothing", async () => {
   const d = await mkdtemp(join(tmpdir(), "lethal-manifest-"));

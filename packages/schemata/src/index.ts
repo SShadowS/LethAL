@@ -1,4 +1,4 @@
-export { assignMutantIds } from "./ids";
+export { assignMutantIds, compareCodeUnits } from "./ids";
 export type { IdedSpec } from "./ids";
 export {
   emitMutationSelector,
@@ -11,6 +11,13 @@ export {
   SELECTOR_RESOURCE_NONE,
 } from "./selector";
 export type { SelectorConfig } from "./selector";
+export {
+  FLAT_NAMES_FILENAME,
+  displayPathsOf,
+  flatNamesFor,
+  flatNamesSidecar,
+} from "./flat-names";
+export type { FlatNames } from "./flat-names";
 export { wrapStatement } from "./wrap";
 export type { WrapInput } from "./wrap";
 export { liftExpression } from "./lift";
@@ -32,7 +39,16 @@ export {
   MAX_MUTATION_TEXT,
   clipMutationText,
   identityTupleOf,
+  instrumentOneFile,
+  coarseIdentityTupleOf,
   assignIdentityOrdinals,
+  identitySiteKey,
+  identityFieldsOf,
+  identityEntriesOf,
+  numberIdentityOrdinals,
+  runIdentityOrdinals,
+  runIdentityEntries,
+  withRunIdentityOrdinals,
   IDENTITY_SCHEME,
   gapIdOf,
   coverageArmNamesComputed,
@@ -40,12 +56,24 @@ export {
 export type {
   InstrumentedFile,
   WriteInput,
+  IdentityEntry,
   MutantManifest,
   MutantManifestEntry,
 } from "./project";
-export { REACH_MARKER, reachGrainOf, reachLatchRefusedOwner, varSectionUnparsed } from "./dispatch";
+export {
+  REACH_MARKER,
+  planReachGrains,
+  reachGrainOf,
+  reachLatchRefusedOwner,
+  varSectionUnparsed,
+} from "./dispatch";
 export type { ReachGrain } from "./dispatch";
-export { resolveSite, isMutableSite } from "./enclosing";
+export { resolveSite, resolveStatement, isMutableSite } from "./enclosing";
+// R-307 O6: the trial runs PLAN only (`planOneFile`); `emitOneFile` is exported so a test can pin
+// that the trial never calls it.
+export { planOneFile } from "./project-plan";
+export type { FilePlan, PlannedMutant } from "./project-plan";
+export { emitOneFile } from "./project-emit";
 export type { ResolvedSite } from "./enclosing";
 export { parseIdRanges, pickSelectorIds, validateSelectorIds } from "./id-ranges";
 export type { AppIdRange, DeclaredObject } from "./id-ranges";

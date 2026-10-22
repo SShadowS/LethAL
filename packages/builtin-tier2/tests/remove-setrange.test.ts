@@ -133,4 +133,13 @@ describe("removeSetRange", () => {
     expect(specs[0]?.before.text).toBe(`Cust.SetRange("No.", 'A')`);
     expect(specs[0]?.after.text).toBe("");
   });
+
+  // R295: W is the SECOND name of a Codeunit declaration. Read as the global `W: Record`, its
+  // `SetRange` was claimed as a record method.
+  it("R295: does not claim W.SetRange when the later local name W is a Codeunit", () => {
+    const src = `codeunit 50127 "C" {
+      var W: Record Customer;
+      procedure P() var A, W: Codeunit "Helper"; begin W.SetRange(1, 2); end; }`;
+    expect(specsFor(src).map((s) => s.before.text)).toEqual([]);
+  });
 });

@@ -22,7 +22,7 @@
  * function of the run's verdicts and coverage, which the gates already require to be stable, and
  * the last tie-break is the test's name.
  */
-import type { MutantManifestEntry } from "@lethal/schemata";
+import { type MutantManifestEntry, compareCodeUnits } from "@lethal/schemata";
 import type { TestMethodRef } from "./backend";
 import { memberGroupNameOf, testKeyOf } from "./selection";
 
@@ -106,7 +106,9 @@ export function orderCoveringTests(
     .map((ref) => ({ ref, r: rank(ref) }))
     .sort(
       (a, b) =>
-        b.r.kills - a.r.kills || a.r.members - b.r.members || a.r.name.localeCompare(b.r.name),
+        // R481: the last tie by code unit, never `localeCompare` (the host's default collation),
+        // so two hosts run one mutant's covering tests in one order.
+        b.r.kills - a.r.kills || a.r.members - b.r.members || compareCodeUnits(a.r.name, b.r.name),
     )
     .map((x) => x.ref);
 }

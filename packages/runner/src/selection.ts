@@ -1,4 +1,11 @@
-import { type MutantManifestEntry, identityTupleOf } from "@lethal/schemata";
+import { createHash } from "node:crypto";
+import {
+  type IdentityEntry,
+  type MutantManifestEntry,
+  coarseIdentityTupleOf,
+  identitySiteKey,
+  identityTupleOf,
+} from "@lethal/schemata";
 import type { CoverageMap, TestMethodRef } from "./backend";
 import type { Interpretation } from "./interpretation";
 
@@ -82,16 +89,190 @@ export interface HistorySplit {
   readonly knownSurvivors: MutantManifestEntry[];
 }
 
+/**
+ * R307 section 3 (fail closed): whether `m` shares a coarse tuple (R442) with a site this run (or,
+ * on resume, the resumed run) numbered no ordinal for. Such a mutant's key may be one a prior run
+ * gave that site, so history, resume and equivalence marks all treat it as unknown this run.
+ * `carryDisabled` holds `coarseIdentityTupleOf` strings; absent means nothing is disabled.
+ */
+export function isCarryDisabled(
+  m: Pick<MutantManifestEntry, "astHash" | "operatorName" | "operatorVersion">,
+  carryDisabled: ReadonlySet<string> | undefined,
+): boolean {
+  return carryDisabled?.has(coarseIdentityTupleOf(m)) === true;
+}
+
+/**
+ * R391: a (file, tuple) pair: the tuple is `identityTupleOf` (no ordinal), the file is compared
+ * with `/` separators so a row recorded on Windows before R421 still matches.
+ */
+export function twinSiteOf(file: string, tuple: string): string {
+  return `${file.replaceAll("\\", "/")}\0${tuple}`;
+}
+
+/** R474: a rule-2 lookup site: `twinSiteOf` plus the enclosing member's hash
+ *  (`MutantManifestEntry.memberHash`), so a verdict carries only into an unchanged member. Twin
+ *  counting still uses the bare `twinSiteOf`. */
+export function memberSiteOf(site: string, memberHash: string): string {
+  return `${site}\0${memberHash}`;
+}
+
+/** R391: the sorted `twinSiteOf` pairs that occur more than once, i.e. the tuples that have a
+ *  twin in the same FILE. Built from the full numbered set (deployed sites plus reserved ones). */
+export function twinSitesOf(
+  entries: readonly { readonly file: string; readonly tuple: string }[],
+): string[] {
+  const seen = new Set<string>();
+  const twins = new Set<string>();
+  for (const e of entries) {
+    const site = twinSiteOf(e.file, e.tuple);
+    if (seen.has(site)) twins.add(site);
+    else seen.add(site);
+  }
+  return [...twins].sort();
+}
+
+/**
+ * R443: sha256 of a run's numbering OUTPUT: every numbered entry's (file with `/` separators,
+ * startIndex, endIndex, operatorName, tuple, ordinal), in code-unit order (the default string sort,
+ * never `localeCompare`). Equal digests mean the same sites with the same ordinals, so a key names
+ * the same mutant in both runs, whatever caused the numbering (an edit, `--only`, `--lines`, a
+ * header refusal, the host's collation in `numberIdentityOrdinals`, R475).
+ */
+export function numberingDigestOf(
+  entries: readonly IdentityEntry[],
+  ordinals: ReadonlyMap<string, number>,
+): string {
+  const rows = entries.map((e) => {
+    const ordinal = ordinals.get(identitySiteKey(e.file, e.startIndex, e.endIndex, e.operatorName));
+    if (ordinal === undefined) {
+      throw new Error(
+        `numberingDigestOf: ${e.file} @${e.startIndex} ${e.operatorName} has no ordinal; the digest must be taken over the entries the ordinals were numbered from`,
+      );
+    }
+    return JSON.stringify([
+      e.file.replaceAll("\\", "/"),
+      e.startIndex,
+      e.endIndex,
+      e.operatorName,
+      e.tuple,
+      ordinal,
+    ]);
+  });
+  rows.sort();
+  return createHash("sha256").update(rows.join("\n")).digest("hex");
+}
+
+/** R391: what the RECORDED run says about its own generation, read from its run row. */
+export interface RecordedCarrySide {
+  /** `runs.generation_source_sha256`; null when not recorded (a run from before R391). */
+  readonly hash: string | null;
+  /** `runs.twin_tuples` as a set; null when not measured. Never derived from the run's rows: an
+   *  interrupted run holds only the rows it got to, so its rows undercount a twin. */
+  readonly twins: ReadonlySet<string> | null;
+  /** R565: `runs.dependency_source_sha256`; null when not recorded (a run from before R565, or one
+   *  that died before generation finished). */
+  readonly dependencyHash: string | null;
+}
+
+/** R391: the same facts for THIS session, plus the keys whose recorded verdict was refused. */
+export interface CurrentCarrySide {
+  /** `sourceHashAtGeneration`. */
+  readonly hash: string;
+  readonly twins: ReadonlySet<string>;
+  /** R565: `MutationSetResult.dependencySourceSha256`. A session always has one; null is allowed
+   *  only so the rule can be tested on it: null never equals anything, itself included. */
+  readonly dependencyHash: string | null;
+  /** Keys of this session's mutants that matched a record by key and were NOT carried. Counted
+   *  in one warning per session (`carry-refused-renumbered`). */
+  readonly refused: Set<string>;
+}
+
+/**
+ * R391: THE one rule deciding whether a recorded verdict carries to `m`, used by history
+ * (`filterHistory`) and by resume (`carriedVerdictFor`). A key holds no file, and twins are told
+ * apart by their run-wide ordinal alone, so after an edit a key can name another mutant.
+ *
+ * - Rule 1: the recorded run's generation hash is known and equals this session's, and so does its
+ *   dependency source digest (R565: a dependency report's source decides which sites the hang
+ *   refusal removes, so it moves ordinals too). Identical source and dependency reads give
+ *   identical tuples, files and ordinals (every other input has its own gate), so the key names the
+ *   same mutant: look it up by key. A null on either side is never equal, null against null
+ *   included.
+ * - Rule 2: otherwise, when the recorded run measured its twins and `m`'s (file, tuple) is a
+ *   singleton in its file on BOTH sides: look it up by (file, tuple) AND its enclosing member's
+ *   hash (R474). No renumbering can move a verdict onto it: a twin in another file has another
+ *   file, a twin in this file is not a singleton. An edit inside the member (an `exit;` before the
+ *   statement, a retargeted `[EventSubscriber]`) changes the hash, so nothing carries; an entry or
+ *   a row without a hash (before R474) carries nothing here. Edits OUTSIDE the member (callers,
+ *   globals, table definitions, other subscribers, the `#if` context) still do not stop it.
+ * - Otherwise nothing carries and `m` runs.
+ *
+ * A key match that is not carried is added to `current.refused`.
+ */
+export function carryRecord<T>(
+  m: MutantManifestEntry,
+  recorded: RecordedCarrySide,
+  current: CurrentCarrySide,
+  byKey: (key: string) => T | undefined,
+  bySite: (site: string) => T | undefined,
+): T | undefined {
+  const key = serializeKey(identityKeyOf(m));
+  const keyed = byKey(key);
+  let carried: T | undefined;
+  if (
+    sameKnown(recorded.hash, current.hash) &&
+    sameKnown(recorded.dependencyHash, current.dependencyHash)
+  ) {
+    carried = keyed;
+  } else if (recorded.twins !== null) {
+    const site = twinSiteOf(m.file, identityTupleOf(m));
+    if (!recorded.twins.has(site) && !current.twins.has(site) && m.memberHash !== undefined)
+      carried = bySite(memberSiteOf(site, m.memberHash));
+  }
+  if (keyed !== undefined && carried === undefined) current.refused.add(key);
+  return carried;
+}
+
+/** Rule 1's equality: both known and equal. */
+const sameKnown = (a: string | null, b: string | null): boolean =>
+  a !== null && b !== null && a === b;
+
+/** What `priorSurvivorKeys` (store.ts) reads from the latest finished run. */
+export interface PriorSurvivors {
+  /** Every survivor row's identity key. */
+  readonly keys: ReadonlySet<string>;
+  /** Every survivor row's `twinSiteOf(file, tuple)`, for rule 2. */
+  readonly sites: ReadonlySet<string>;
+  readonly recorded: RecordedCarrySide;
+}
+
+/** No history: nothing to carry, and nothing measured. */
+export const NO_PRIOR_SURVIVORS: PriorSurvivors = {
+  keys: new Set(),
+  sites: new Set(),
+  recorded: { hash: null, twins: null, dependencyHash: null },
+};
+
 export function filterHistory(
   mutants: readonly MutantManifestEntry[],
-  priorSurvivorKeys: ReadonlySet<string>,
-  opts: { skipKnownSurvivors: boolean },
+  prior: PriorSurvivors,
+  opts: {
+    skipKnownSurvivors: boolean;
+    carryDisabled?: ReadonlySet<string>;
+    current: CurrentCarrySide;
+  },
 ): HistorySplit {
   if (!opts.skipKnownSurvivors) return { execute: [...mutants], knownSurvivors: [] };
   const execute: MutantManifestEntry[] = [];
   const knownSurvivors: MutantManifestEntry[] = [];
+  const hit = (set: ReadonlySet<string>) => (s: string) => (set.has(s) ? true : undefined);
   for (const m of mutants) {
-    if (priorSurvivorKeys.has(serializeKey(identityKeyOf(m)))) knownSurvivors.push(m);
+    if (
+      !isCarryDisabled(m, opts.carryDisabled) &&
+      carryRecord(m, prior.recorded, opts.current, hit(prior.keys), hit(prior.sites)) === true
+    )
+      knownSurvivors.push(m);
     else execute.push(m);
   }
   return { execute, knownSurvivors };

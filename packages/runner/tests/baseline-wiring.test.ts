@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 import { GATE_BASELINES, PENDING_FIRST_RECORD, SYMBOL_BASELINES } from "../itest/baseline-guard";
 import { SYMBOL_SETS } from "../itest/symbol-fixture";
 
@@ -318,11 +318,18 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
     LAYOUT_BASELINE_PATH: "al-runner.layout.baseline.json",
     MULTIOBJECT_BASELINE_PATH: "al-runner.multiobject.baseline.json",
     CLI_DEFAULT_BASELINE_PATH: "al-runner.cli-default.baseline.json",
+    WRAPPED_BASELINE_PATH: "al-runner.wrapped.baseline.json",
+    NAMES_BASELINE_PATH: "al-runner.names.baseline.json",
   },
   "bcdev.itest.ts": { BASELINE_PATH: "bcdev.baseline.json" },
+  "bcdev-names.itest.ts": { BASELINE_PATH: "bcdev.names.baseline.json" },
+  "bcdev-wrapped.itest.ts": { BASELINE_PATH: "bcdev.wrapped.baseline.json" },
   "envtool.itest.ts": { BASELINE_PATH: "envtool.baseline.json" },
   "harden.itest.ts": { BASELINE_PATH: "harden.baseline.json" },
+  "hang.itest.ts": { SINGLE_BASELINE_PATH: "hang.single.baseline.json" },
   "tables.itest.ts": { BASELINE_PATH: "tables.baseline.json" },
+  // R586: leg T, preflighted only when the leg runs (inside an `if` before the first await).
+  "al-runner-v3.itest.ts": { TABLES_BASELINE_PATH: "al-runner-v3.tables.baseline.json" },
 };
 const READERS: Record<string, string> = {
   "verify.itest.ts": "bcdev.baseline.json",

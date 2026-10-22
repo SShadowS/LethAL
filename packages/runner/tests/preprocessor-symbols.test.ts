@@ -149,6 +149,16 @@ describe("R214: the effective build symbols", () => {
     expect(await appJsonSymbols("/nowhere", snap({ name: "x" }))).toEqual([]);
   });
 
+  test("R205: a snapshot without app.json means none and never reads the disk", async () => {
+    const read: string[] = [];
+    const disk = async (p: string) => {
+      read.push(p);
+      return JSON.stringify({ preprocessorSymbols: ["FROM_DISK"] });
+    };
+    expect(await appJsonSymbols("/p", new Map(), disk)).toEqual([]);
+    expect(read).toEqual([]);
+  });
+
   test("a MISSING app.json means none, and only a missing one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r214-sym-"));
     try {

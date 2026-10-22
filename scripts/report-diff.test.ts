@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionReport } from "../packages/runner/src/report";
-import { ReportDiffRefusal, diffReports, formatDiff } from "./report-diff.ts";
+import { ReportDiffRefusal, compareReports, diffReports, formatDiff } from "./report-diff.ts";
 
 function m(hash: string, verdict: string, extra: Record<string, unknown> = {}) {
   return {
@@ -62,6 +62,39 @@ describe("diffReports (the gates' diffMutants)", () => {
 
   test("empty vs empty is refused, never IDENTICAL", () => {
     expect(() => diffReports(report(), report())).toThrow(ReportDiffRefusal);
+  });
+});
+
+describe("R556: report-diff reads both reports' identity schemes", () => {
+  // Two byte-identical twins: one tuple, ordinals 0 and 1, the same mutated text.
+  const twins = (scheme?: number) =>
+    ({
+      ...(scheme !== undefined ? { identityScheme: scheme } : {}),
+      mutants: [
+        m("h1", "killed", { mutatedText: "x := 0;" }),
+        m("h1", "killed", { mutatedText: "x := 0;", identityOrdinal: 1 }),
+      ],
+    }) as unknown as SessionReport;
+
+  test("the same recorded scheme compares twins' text row by row", () => {
+    const r = compareReports(twins(37), twins(37));
+    expect(r.textVerified).toBe(2);
+    expect(r.textUnverified).toBe(0);
+  });
+
+  test("different or unrecorded schemes leave a shared twin hash UNVERIFIED, and say so", () => {
+    for (const [a, b] of [
+      [twins(36), twins(37)],
+      [twins(), twins(37)],
+      [twins(), twins()],
+    ] as const) {
+      const r = compareReports(a, b);
+      expect(r.textUnverified).toBe(2);
+      expect(formatDiff(r.differences, 2, 2, r.textUnverified)).toContain(
+        "2 mutant(s) text-UNVERIFIED",
+      );
+    }
+    expect(formatDiff([], 2, 2, 0)).not.toContain("UNVERIFIED");
   });
 });
 

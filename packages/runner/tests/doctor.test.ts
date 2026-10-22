@@ -3,7 +3,11 @@ import type { DoctorConfig } from "../src/doctor";
 import { runDoctor } from "../src/doctor";
 // R110: the fixtures track MIN_CONTROL_VERSION rather than pinning a literal, so a version bump
 // cannot silently turn every green fixture red — it did exactly that when 1.0.0.15 landed.
-import { MIN_CONTROL_VERSION } from "../src/harness";
+import {
+  HarnessVerificationError,
+  MIN_CONTROL_VERSION,
+  UnfilteredExtensionsQueryError,
+} from "../src/harness";
 
 /**
  * Task 4 (C3): a minimal, narrow config — `runDoctor` needs only what decides how to INTERPRET a
@@ -405,5 +409,33 @@ describe("lethal doctor — the company check (R195)", () => {
   test("an absent dep means no check, not a vacuous pass", async () => {
     const r = await runDoctor(cfgFixture(), live);
     expect(r.checks.some((c) => c.name === "company")).toBe(false);
+  });
+});
+
+describe("lethal doctor — a refused extensions query is thrown, not swallowed (R-496 review)", () => {
+  test("runDoctor rejects with UnfilteredExtensionsQueryError from the installed-state probe", async () => {
+    await expect(
+      runDoctor(cfgFixture(), {
+        testApp: async () => {
+          throw new UnfilteredExtensionsQueryError("refused");
+        },
+      }),
+    ).rejects.toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("an ordinary transport error from the same probe still becomes a failed check", async () => {
+    const r = await runDoctor(cfgFixture(), {
+      testApp: async () => {
+        throw new HarnessVerificationError("extensions list unreachable: socket closed");
+      },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.checks).toEqual([
+      {
+        name: "test-app-present",
+        ok: false,
+        detail: "extensions list unreachable: socket closed",
+      },
+    ]);
   });
 });

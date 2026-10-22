@@ -107,6 +107,11 @@ Error('MEASURED a=%1 b=%2 c=%3', A, B, C);
 The test shows as `failed`. That is expected and is how the data travels; say so when reporting, so
 a red test is not mistaken for a broken experiment.
 
+**Never list all extensions; read by id.** BC's list of installed apps, asked for every row (or
+filtered by publisher), hung BC 28.4 for about 166 s and the service tier stopped answering until a
+host restart (R433). Read one app at a time with `HarnessVerifier.fetchExtensionInstalled(<app id>)`
+or `fetchInstalledVersions(<app id>)`; never build that API URL yourself (a source guard refuses it).
+
 ## Verifying names before you compile
 
 Virtual tables are easy to get wrong and the compiler error is unhelpful (`AL0118: The name

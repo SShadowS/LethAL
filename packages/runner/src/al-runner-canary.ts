@@ -317,7 +317,10 @@ async function probe(
     deadlineMs: CANARY_DEADLINE_MS,
   });
   if (res.kind === "deadline") return { kind: "inconclusive", note: "canary probe timed out" };
-  if (res.kind === "error") return { kind: "inconclusive", note: res.detail };
+  // R557: selecting nothing is no answer about the canary, as an error is not.
+  if (res.kind === "error" || res.kind === "none-selected") {
+    return { kind: "inconclusive", note: res.detail };
+  }
   const t = res.tests.find((x) => x.name === wanted);
   if (t === undefined) {
     return { kind: "inconclusive", note: "al-runner output did not include the canary test" };

@@ -1,12 +1,24 @@
-import { stat } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
-import { initParser, parseAL, wrapRoot } from "@lethal/engine";
-import type { MutantManifest, MutantManifestEntry, SelectorConfig } from "@lethal/schemata";
+import { realpath, stat } from "node:fs/promises";
+import nodePath, { join, resolve } from "node:path";
+import { evaluateArms, initParser, parseAL, wrapRoot } from "@lethal/engine";
+import {
+  type MutantManifest,
+  type MutantManifestEntry,
+  type SelectorConfig,
+  coarseIdentityTupleOf,
+  identityTupleOf,
+} from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
 import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import type { BcDevMcpBackend } from "./bcdev-backend";
+import {
+  ClosedWorldChangedError,
+  type ClosedWorldResult,
+  closedWorldGuard,
+  sameClosedWorld,
+} from "./closed-world";
 import {
   DependencyUnreadableError,
   dependencyFingerprint,
@@ -18,6 +30,7 @@ import { discoverTests } from "./discovery";
 import {
   type EquivalenceMark,
   EquivalenceMarksError,
+  applyEquivalenceMarks,
   loadEquivalenceMarks,
   marksSchemeWarning,
   marksSymbolsWarning,
@@ -44,8 +57,8 @@ import {
 } from "./orchestrator";
 import { effectiveBuildSymbols, sameBuildSymbols } from "./preprocessor-symbols";
 import { type SessionOutcome, mutantRef } from "./report";
-import { identityKeyOf, serializeKey, testKeyOf } from "./selection";
-import { DuplicateArtifactRecordError, type ResultsStore } from "./store";
+import { identityKeyOf, memberGroupNameOf, serializeKey, testKeyOf } from "./selection";
+import { type CarryHidden, DuplicateArtifactRecordError, type ResultsStore } from "./store";
 import {
   type CompiledTestApp,
   type PublishedTestApp,
@@ -53,15 +66,22 @@ import {
   type TestAppRefusal,
 } from "./test-app-publish";
 import {
+  DIGEST_SCHEME_WORDS,
   type NewTestCause,
   TEST_DIGEST_SCHEME,
+  digestSchemeOf,
   explainNewTests,
   isCurrentDigest,
   parseDigestParts,
   testDigestKey,
   testDigestsOfModel,
 } from "./test-digest";
-import { buildTestAppModel, readTestAppSources, scanTestPageModel } from "./testpage-scan";
+import {
+  type ClosedWorld,
+  buildTestAppModel,
+  readTestAppSources,
+  scanTestPageModel,
+} from "./testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
 import {
   type ReachFilterOffReason,
@@ -86,6 +106,8 @@ export const VERIFY_REFUSALS = [
   "carried",
   "source-predates-verify",
   "source-changed",
+  // R-260: the test project lies inside the target (so the target build compiles it), or contains it.
+  "test-project-nested",
   "covering-test-unmatched",
   "no-tests-to-run",
   "unsupported-config",
@@ -170,7 +192,7 @@ const REFUSAL_HINTS: Partial<Record<VerifyRefusal, string>> = {
   "gap-has-no-survivor":
     "every recorded mutant in this block is killed, not measured or no-coverage; there is nothing to verify as a gap",
   "dependency-unreadable":
-    "check the dev credentials with lethal doctor, and that every non-Microsoft dependency of the test app is installed on the server",
+    "check the dev credentials with lethal doctor; that every dependency of the test app is installed on the server; that the server serves each Microsoft package in the closure (Library Assert, the test libraries, Base and System Application), System, and the LethAL Control app at the version it runs; and that each Microsoft app has exactly one installed version, the one served (an app mid-upgrade is refused by name)",
 };
 
 /**
@@ -274,10 +296,29 @@ export interface VerifySource {
   readonly buildSymbols: readonly string[] | null;
   /** R354: the coverage mode the source run measured under; `null` for a run from before R354. */
   readonly coverageMode: CoverageMode | null;
+  /** R442: the source run's `carry_hidden`, copied verbatim onto verify's run row (NULL stays
+   *  NULL): that row carries the source's keys, so it carries their trust too. */
+  readonly carryHidden: CarryHidden | null;
+  /** R391: the source run's generation hash and `twin_tuples`, copied verbatim for the same
+   *  reason: verify's rows carry the source's keys and files. */
+  readonly generationSourceSha256: string | null;
+  readonly twinTuples: readonly string[] | null;
+  /** R443: the source run's numbering digest, which a mark's proof is checked against, and
+   *  copied onto verify's run row with `twin_tuples`. `null` (before R443): no mark applies. */
+  readonly numberingDigest: string | null;
+  /** R565: the source run's dependency source digest, copied with the generation hash. */
+  readonly dependencySourceSha256: string | null;
   readonly targets: ReadonlyArray<{
     readonly batchIndex: number;
     readonly mutantCode: string;
     readonly coveringTests: readonly string[];
+  }>;
+  /** R259: every row of the installed batch, the candidates for `sameProcedure`. `carried` is
+   *  null on a row recorded before that column existed. */
+  readonly rows: ReadonlyArray<{
+    readonly mutantCode: string;
+    readonly verdict: string;
+    readonly carried: boolean | null;
   }>;
 }
 
@@ -590,7 +631,17 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     identityScheme: run.identityScheme,
     buildSymbols: run.buildSymbols,
     coverageMode: run.coverageMode,
+    carryHidden: run.carryHidden,
+    generationSourceSha256: run.generationSourceSha256,
+    twinTuples: run.twinTuples,
+    numberingDigest: run.numberingDigest,
+    dependencySourceSha256: run.dependencySourceSha256,
     targets,
+    rows: [...rows.values()].map((r) => ({
+      mutantCode: r.mutantCode,
+      verdict: r.verdict,
+      carried: r.carried,
+    })),
   };
 }
 
@@ -615,33 +666,92 @@ export async function assertProjectReadable(projectPath: string): Promise<void> 
 }
 
 /**
+ * R-260: is `inner` the same folder as `outer`, or inside it? A `..`-prefixed child name such as
+ * `..tests` is inside; a sibling such as `target-tests` is not. `path.win32.relative` already
+ * ignores case (drive letters, UNC names), so there is no fold here; a test pins it. Takes the
+ * `path` module so tests can drive `path.win32` anywhere.
+ */
+export function isSameOrInside(
+  outer: string,
+  inner: string,
+  p: typeof nodePath = nodePath,
+): boolean {
+  const rel = p.relative(outer, inner);
+  return rel === "" || (!p.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${p.sep}`));
+}
+
+/**
+ * R-260: the target build compiles every .al under its folder, so a test project inside it is part
+ * of the installed target app, and verify cannot measure it. Refused by name, both ways round, on
+ * real paths (symlinks and junctions resolved). A root that cannot be resolved is refused too:
+ * without its real path, verify cannot show the two are apart.
+ */
+export async function assertTestProjectSeparate(
+  projectPath: string,
+  testDir: string,
+): Promise<void> {
+  const problem = await testProjectNestedProblem(projectPath, testDir, "verify");
+  if (problem !== null) throw new VerifyError("test-project-nested", problem);
+}
+
+/**
+ * R-445: R-260's rule, shared by `lethal verify` and `lethal run`: the message naming why the two
+ * folders are not apart, or `null` when they are. `run` adds this because the target build copies
+ * every .al under the target, so a nested test project is mutated and published as target code.
+ */
+export async function testProjectNestedProblem(
+  projectPath: string,
+  testDir: string,
+  tool: "verify" | "lethal run",
+): Promise<string | null> {
+  const fix =
+    tool === "verify"
+      ? "Move the test project out of the target folder so it sits beside the target, update the --tests you pass to both lethal run and lethal verify to that folder, run lethal run again, then verify with its artifact id."
+      : "Move the test project out of the target folder so it sits beside the target, update the --tests you pass to both lethal run and lethal verify to that folder, then run lethal run again.";
+  let target: string;
+  let tests: string;
+  try {
+    [target, tests] = await Promise.all([realpath(projectPath), realpath(testDir)]);
+  } catch (e) {
+    // `run` needs no refusal here: a folder it cannot resolve fails its own read straight after.
+    if (tool === "lethal run") return null;
+    return `cannot resolve the real path of the target ${projectPath} or the test project ${testDir} (${e instanceof Error ? e.message : String(e)}), so ${tool} cannot show the test project lies outside the target. Check that --tests names an existing folder. ${fix}`;
+  }
+  if (isSameOrInside(target, tests)) {
+    return `the test project ${tests} ${tests === target ? "is" : "lies inside"} the target project ${target}: the target build compiles every .al under its folder, so these tests are part of the ${tool === "verify" ? "installed target app" : "target app this run would build"}. ${fix}`;
+  }
+  if (isSameOrInside(tests, target)) {
+    return `the test project ${tests} contains the target project ${target}, so the target's code is part of the test build. ${fix}`;
+  }
+  return null;
+}
+
+/** R-445: `lethal run` refuses a test project nested in the target (or containing it) by name,
+ *  before anything reads the target. */
+export class TestProjectNestedError extends Error {
+  constructor(message: string) {
+    super(`test-project-nested: ${message} (R445)`);
+    this.name = "TestProjectNestedError";
+  }
+}
+
+/**
  * Decision 8. Recomputes the target's source hash with the SAME function and preprocessor symbols
- * the source run recorded it with. Reads the project's files; never a server.
+ * the source run recorded it with. Reads the project's files; never a server. R-260: a nested test
+ * project is refused first, by name, so a test edit there never reads as `source-changed`.
  */
 export async function assertSourceUnchanged(
   source: VerifySource,
   preprocessorSymbols: readonly string[],
-  /** The test project, only to say so when it lies inside the target (carried item 3). */
-  testDir?: string,
+  testDir: string,
 ): Promise<void> {
   await assertProjectReadable(source.projectPath);
+  await assertTestProjectSeparate(source.projectPath, testDir);
   const now = await hashTargetSource(source.projectPath, preprocessorSymbols);
   if (now !== source.sourceSha256) {
-    // Carried item 3: one whole-source hash cannot say WHICH file changed, so this says the one
-    // thing it can: a nested test project is part of the hash, and a test edit alone refuses.
-    const tests = testDir === undefined ? undefined : resolve(testDir);
-    const rel = tests === undefined ? undefined : relative(source.projectPath, tests);
-    const nested =
-      tests !== undefined &&
-      rel !== undefined &&
-      rel !== "" &&
-      !rel.startsWith("..") &&
-      !isAbsolute(rel)
-        ? ` The test project ${tests} lies inside the target project, so its .al files are part of the target's source hash: editing or adding a test there refuses too, even when no target file changed. Move the test project beside the target, or run lethal run again after editing tests.`
-        : "";
     throw new VerifyError(
       "source-changed",
-      `the installed build was made from other source than ${source.projectPath} holds now (a .al file, app.json or a preprocessor symbol changed; a version-only bump counts too); run lethal run again, then verify with its artifact id.${nested}`,
+      `the installed build was made from other source than ${source.projectPath} holds now (a .al file, app.json or a preprocessor symbol changed; a version-only bump counts too); run lethal run again, then verify with its artifact id.`,
     );
   }
 }
@@ -653,7 +763,8 @@ export interface VerifyPlan {
   readonly newTests: readonly TestMethodRef[];
   readonly skipped: ReadonlyArray<{
     readonly entry: MutantManifestEntry;
-    readonly mark: EquivalenceMark;
+    /** R443: the matched mark, under the entry's CURRENT key. */
+    readonly mark: { readonly key: string; readonly reason: string };
   }>;
   /** Every target's trusted manifest entry, skipped or not, by mutant code. */
   readonly entries: ReadonlyMap<string, MutantManifestEntry>;
@@ -667,6 +778,9 @@ export interface VerifyPlan {
   /** R325: marks made under an identity scheme other than the source run's, and (R214) under other
    *  build symbols than its build. None is applied. */
   readonly marksUnderOtherScheme: readonly EquivalenceMark[];
+  /** R259: the identity keys (`serializeKey`) of the mutants of the batch a mark applied to
+   *  (R443: the mutants' current keys, under the source run's numbering facts). */
+  readonly markedKeys: ReadonlySet<string>;
   /** R-384: per requested mutant code, its source covering tests that run, in request order. The
    *  reach filter never removes one of these. */
   readonly covering: ReadonlyMap<string, readonly TestMethodRef[]>;
@@ -712,6 +826,9 @@ export async function planVerify(a: {
    *  digest-scheme check included), so `source-predates-verify` wins over `dependency-unreadable`
    *  and costs no download. */
   readonly dependencies: string | (() => Promise<string>);
+  /** R389: the closed-world guard (`closedWorldGuard`), asked once with the digest inputs. Absent
+   *  is `OPEN_WORLD`. A source run recorded under another answer has other digests: none carries. */
+  readonly closedWorld?: () => Promise<ClosedWorld>;
   /** R-371: the cap: refuse above `maxNewTests x (S + 2)` extra test runs (R-384 counts runs, not
    *  tests). Default `DEFAULT_MAX_NEW_TESTS`. */
   readonly maxNewTests?: number;
@@ -754,16 +871,38 @@ export async function planVerify(a: {
       source.buildSymbols === null ||
       !sameBuildSymbols(m.preprocessorSymbols ?? [], source.buildSymbols),
   );
-  const markByKey = new Map(
-    marks.filter((m) => !staleMarks.includes(m)).map((m) => [m.key, m] as const),
+  // R443: R-391's rule, as the report applies it (`applyEquivalenceMarks`), against the SOURCE
+  // run's recorded numbering facts: a key alone can name another twin. A source run without them
+  // (before R443) gets no mark applied, and a mutant whose coarse tuple the source run hid from
+  // numbering takes none (R307 section 3), so such survivors run rather than being skipped.
+  const hidden = new Set(source.carryHidden?.tuples ?? []);
+  const applied = applyEquivalenceMarks(
+    marks.filter((m) => !staleMarks.includes(m)),
+    manifest.mutants
+      .filter((e) => source.carryHidden !== null && !hidden.has(coarseIdentityTupleOf(e)))
+      .map((e) => ({
+        batchIndex: 0,
+        mutantCode: e.mutantId,
+        identity: serializeKey(identityKeyOf(e)),
+        file: e.file,
+        tuple: identityTupleOf(e),
+        verdict: "survived",
+      })),
+    source.identityScheme,
+    source.buildSymbols ?? [],
+    source.numberingDigest !== null && source.twinTuples !== null
+      ? { numberingDigest: source.numberingDigest, twinSites: new Set(source.twinTuples) }
+      : undefined,
   );
+  const markByCode = new Map(applied.matched.map((x) => [x.mutantCode, x] as const));
+  const markedKeys = new Set(applied.matched.map((x) => x.key));
   const skipped: Array<VerifyPlan["skipped"][number]> = [];
   const running: Array<VerifySource["targets"][number]> = [];
   for (const t of source.targets) {
     const entry = entries.get(t.mutantCode);
     if (entry === undefined) throw new Error(`verify.ts: ${t.mutantCode} lost its entry`);
-    const mark = markByKey.get(serializeKey(identityKeyOf(entry)));
-    if (mark !== undefined) skipped.push({ entry, mark });
+    const mark = markByCode.get(t.mutantCode);
+    if (mark !== undefined) skipped.push({ entry, mark: { key: mark.key, reason: mark.reason } });
     else running.push(t);
   }
   if (running.length === 0) {
@@ -776,6 +915,7 @@ export async function planVerify(a: {
       notRun: new Map(),
       allRefused: new Set(),
       marksUnderOtherScheme: staleMarks,
+      markedKeys,
       covering: new Map(),
       cap: {
         runId: source.runId,
@@ -833,10 +973,13 @@ export async function planVerify(a: {
 
   // R-371: a digest of another scheme covers other things, so no comparison with it means
   // anything. The test is on the values, not a column: every digest of one run has one scheme.
-  if (Object.values(sourceTestDigests).some((d) => !isCurrentDigest(d))) {
+  const stale = Object.values(sourceTestDigests).find((d) => !isCurrentDigest(d));
+  if (stale !== undefined) {
+    const recorded = digestSchemeOf(stale);
+    const words = (s: string): string => DIGEST_SCHEME_WORDS[s] ?? "an unknown scheme";
     throw new VerifyError(
       "source-predates-verify",
-      `run ${source.runId} recorded its test digests under R-278's scheme, which covers each test's own method only. This build's digests (scheme ${TEST_DIGEST_SCHEME}, R-371) also cover every helper, handler, subscriber and dependency a test reaches, so an unchanged test would not compare equal. This refusal happens once per source run; run lethal run again, then verify`,
+      `run ${source.runId} recorded its test digests under scheme ${recorded}, this build ${TEST_DIGEST_SCHEME}. Scheme ${recorded} is ${words(recorded)}; scheme ${TEST_DIGEST_SCHEME} is ${words(TEST_DIGEST_SCHEME)}, so an unchanged test would not compare equal. This refusal happens once per source run; run lethal run again, then verify`,
     );
   }
 
@@ -864,6 +1007,7 @@ export async function planVerify(a: {
   const inputs = {
     dependencies: typeof a.dependencies === "string" ? a.dependencies : await a.dependencies(),
     buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
+    ...(a.closedWorld !== undefined ? { closedWorld: await a.closedWorld() } : {}),
   };
   const digestsNow = testDigestsOfModel(model, discovered, inputs).digests;
   const recorded = new Map(Object.entries(sourceTestDigests));
@@ -996,6 +1140,7 @@ export async function planVerify(a: {
     notRun,
     allRefused,
     marksUnderOtherScheme: staleMarks,
+    markedKeys,
     covering,
     cap,
   };
@@ -1017,6 +1162,8 @@ const CAUSE_WORDS: Readonly<Record<NewTestCause, string>> = {
     "a test-app edit, for a test whose reach has an edge the walk cannot follow (it covers the whole test-app source)",
   dependency: "a dependency changed",
   build: "an app.json build input changed",
+  "closed-world":
+    "the closed-world guard answered differently (R389: whether another published app depends on the test app)",
   reach: "which procedures it reaches changed",
   unknown: "the source run recorded no parts to compare against",
 };
@@ -1064,16 +1211,21 @@ function capCheckOneDetail(c: CapNumbers): string {
  * E = N + R + P, where R (`rerun`) counts the new tests sent to at least one survivor, the only
  * ones rerun. With R = N the text is R-384's, byte for byte (ruling 4).
  */
+/** R-384: E, the extra test runs with the reach filter on: N baseline, R rerun, the joins. */
+function filteredRunsOf(c: CapNumbers, joins: number, rerun: number): number {
+  if (rerun < 0 || rerun > c.n) {
+    throw new Error(`verify.ts: ${rerun} rerun new test(s) of ${c.n} (a bug)`);
+  }
+  return c.n + rerun + joins;
+}
+
 export function capCheckTwoDetail(
   c: CapNumbers,
   joins: number,
   failClosed: number,
   rerun: number,
 ): string | undefined {
-  if (rerun < 0 || rerun > c.n) {
-    throw new Error(`verify.ts: ${rerun} rerun new test(s) of ${c.n} (a bug)`);
-  }
-  const e = c.n + rerun + joins;
+  const e = filteredRunsOf(c, joins, rerun);
   if (e <= c.max * (c.s + 2)) return undefined;
   const { classes, helpers } = c.editClasses();
   const unmutated =
@@ -1085,19 +1237,29 @@ export function capCheckTwoDetail(
 
 /**
  * R-371: this verify's dependency fingerprint, over the test project's app.json (the test app
- * verify compiles and publishes) and the packages the server holds for its non-Microsoft
- * dependencies, read one at a time through the same /packages read as R-372. Throws
- * `DependencyUnreadableError` (refused as `dependency-unreadable`) when one cannot be read.
+ * verify compiles and publishes) and the packages the server holds for its dependencies, read one
+ * at a time through the same /packages read as R-372. R-385: Microsoft ones too, plus `System` and
+ * the control app's dependencies, each checked against its installed version (the backend's
+ * `microsoftMode`; verify is the published path, so a backend without one is refused, never read
+ * by declared versions). Throws `DependencyUnreadableError` (refused as `dependency-unreadable`)
+ * when one cannot be read.
  */
 export async function verifyDependencyFingerprint(
-  backend: Pick<ExecutionBackend, "fetchPublishedAppPackage">,
+  backend: Pick<ExecutionBackend, "fetchPublishedAppPackage" | "microsoftMode">,
   testDir: string,
   projectPath: string,
 ): Promise<string> {
   const fetchPackage = backend.fetchPublishedAppPackage?.bind(backend);
+  if (backend.microsoftMode === undefined) {
+    throw new DependencyUnreadableError(
+      "this backend cannot read the Microsoft dependencies, System or the control app's dependencies from the server (it has no microsoftMode)",
+    );
+  }
+  const microsoft = backend.microsoftMode();
   return dependencyFingerprint(
     await readAppJsonInputs(testDir),
     fetchPackage === undefined ? async () => null : publishedPackageReader(fetchPackage),
+    microsoft,
     await targetOf(projectPath),
   );
 }
@@ -1109,8 +1271,11 @@ export async function verifyDependencyFingerprint(
  *  not usually bump, but their ABSENCE means "not decided" only from v5 on, while in an older
  *  report it means the report predates the record; the version is the one thing that tells the
  *  two apart, so it bumps. v4 is frozen. 6 since R-427 added the `newTests[].state` value
- *  `not-rerun` (a value domain grew, so it bumps; a v5 reader never sees it). v5 is frozen. */
-export const VERIFY_SCHEMA_VERSION = 6;
+ *  `not-rerun` (a value domain grew, so it bumps; a v5 reader never sees it). v5 is frozen. 7 since
+ *  R-260 added the refusal reason `test-project-nested` (a value domain grew). v6 is frozen. 8 since
+ *  R259 added `results[].sameProcedure`: required on a row killed by a new test, so its absence
+ *  there means "not measured" only from v8 on (the v5 rule). v7 is frozen. */
+export const VERIFY_SCHEMA_VERSION = 8;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = [
@@ -1210,6 +1375,30 @@ export interface VerifyResult {
    *  for this row: skipped, every test TestPage-refused, or the session stopped before the filter
    *  ran. The tests left out are `newTests[].test` minus `testsRun`. */
   readonly reachNarrowed?: boolean;
+  /** R259: on every row killed by a new test, what is known about that test against each other
+   *  source survivor in the same declaration. Absent on every other row: not applicable. */
+  readonly sameProcedure?: SameProcedure;
+}
+
+/**
+ * R259. `alsoKills`: `test` ran first, in a fresh session, against that mutant, failed (verdict
+ * `killed`, never `timeout-killed`) and passed its unmutated confirmation; the only claim about
+ * `test` alone. `notKilled`: that mutant survived a run that included `test` (possibly with other
+ * tests). `unknown`: no accepted answer for the pair (an error, a
+ * timeout, a carried or equivalence-marked mutant, a declaration that cannot be told apart, or
+ * over the cap). Full `<batch>/<code>` ids; the three lists are disjoint.
+ */
+export interface SameProcedure {
+  readonly test: {
+    readonly codeunitId: number;
+    readonly codeunitName: string;
+    readonly method: string;
+  };
+  readonly alsoKills: readonly string[];
+  readonly notKilled: readonly string[];
+  readonly unknown: readonly string[];
+  /** How many of `unknown` were left out because the cap's budget ran out. */
+  readonly overCap: number;
 }
 
 /** R-425: R-384's reach-filter state, as the JSON records it. */
@@ -1440,6 +1629,8 @@ export async function runVerify(
   let published: PublishedTestApp | undefined;
   // R-425: set once, right after the coverage-mode-changed check; undefined means "not decided".
   let decided: ReachState | undefined;
+  // R389: the guard's closed answer the plan used, rechecked after execution.
+  let firstGuard: ClosedWorldResult | undefined;
   const header = () => ({
     verifySchemaVersion: VERIFY_SCHEMA_VERSION,
     ...(decided !== undefined ? { reachFilter: verifyReachFilterOf(decided) } : {}),
@@ -1517,6 +1708,11 @@ export async function runVerify(
       sourceTestDigestParts: store.testDigestParts(source.runId),
       testDir: args.testDir,
       dependencies: () => verifyDependencyFingerprint(backend, args.testDir, projectPath),
+      closedWorld: async () => {
+        const g = await closedWorldGuard(backend, args.testDir);
+        if (g.closedWorld.public || g.closedWorld.internal) firstGuard = g;
+        return g.closedWorld;
+      },
       ...(args.maxNewTests !== undefined ? { maxNewTests: args.maxNewTests } : {}),
       // R-384: the filter state decides which cap check runs before the lease.
       coverage: coverageMode,
@@ -1556,6 +1752,8 @@ export async function runVerify(
     let res: Awaited<ReturnType<typeof runNamedMutants>> | undefined;
     const log = deps.log ?? ((line: string) => process.stderr.write(`${line}\n`));
     let reach: ReachResult | undefined;
+    // R259: the extra test runs R-384's cap already counts; set by `narrow` when the filter is on.
+    let usedRuns = reachState.on ? undefined : plan.cap.s * plan.cap.n + 2 * plan.cap.n;
     const planned = source;
     if (plan.requests.length > 0 && !reachState.on) {
       log(
@@ -1580,7 +1778,11 @@ export async function runVerify(
             coveringKeys: plan.covering,
             newTests: plan.newTests,
             baseline,
-            refusedObjects: refusedObjectsOfSources(ctx.alSources),
+            refusedObjects: refusedObjectsOfSources(
+              ctx.alSources,
+              ctx.buildSymbols,
+              ctx.backendRefused,
+            ),
           });
           // The cap, check 2: no mutant is in flight yet, and runNamedMutants releases the lease
           // on the way out, so the refusal is safe here.
@@ -1592,12 +1794,59 @@ export async function runVerify(
             plan.cap.n - r.unsent.size,
           );
           if (over !== undefined) throw new VerifyError("too-many-new-tests", over);
+          usedRuns = filteredRunsOf(plan.cap, r.joins, plan.cap.n - r.unsent.size);
           reach = r;
           reportReach(r, plan, planned, log, deps.emit);
           // R-427: a new test sent to no survivor is not rerun.
           return { methods: r.methods, unreached: r.unreached, notRerun: r.unsent };
         }
       : undefined;
+    // R259: each requested target's siblings, decided from the trusted manifest before anything runs.
+    const manifestById = new Map(manifest.mutants.map((m) => [m.mutantId, m] as const));
+    const candidates = source.rows
+      .filter((r) => r.verdict === "survived" || r.verdict === "no-coverage")
+      .map((r) => {
+        const entry = manifestById.get(r.mutantCode);
+        if (entry === undefined) {
+          throw new Error(`verify.ts: the store records ${r.mutantCode}, which the manifest lacks`);
+        }
+        const marked = plan.markedKeys.has(serializeKey(identityKeyOf(entry)));
+        return { entry, measurable: r.carried === false && !marked };
+      });
+    const siblingsBy = new Map(
+      plan.requests.map((q) => {
+        const e = plan.entries.get(q.mutantId);
+        if (e === undefined) throw new Error(`verify.ts: ${q.mutantId} has no entry`);
+        return [q.mutantId, siblingsOf(e, candidates)] as const;
+      }),
+    );
+    const newKeys = new Set(plan.newTests.map(testKeyOf));
+    const requestBy = new Map(plan.requests.map((r) => [r.mutantId, r] as const));
+    // R-384: the methods actually sent, after the reach filter when it ran.
+    const sentOf = (code: string) => reach?.methods.get(code) ?? requestBy.get(code)?.methods;
+    const newKillerOf = (o: SessionOutcome) =>
+      o.verdict === "killed" &&
+      o.killingTestRef !== undefined &&
+      newKeys.has(testKeyOf(o.killingTestRef))
+        ? o.killingTestRef
+        : undefined;
+    let overCap: ReadonlySet<string> = new Set();
+    const probe: NamedMutantsConfig["probe"] = (outcomes) => {
+      const byCode = new Map(outcomes.map((o) => [o.mutant.mutantId, o] as const));
+      const rows = outcomes.flatMap((o) => {
+        const test = newKillerOf(o);
+        const s = siblingsBy.get(o.mutant.mutantId);
+        return test === undefined || s === undefined ? [] : [{ test, eligible: s.eligible }];
+      });
+      const budget = usedRuns === undefined ? 0 : plan.cap.max * (plan.cap.s + 2) - usedRuns;
+      const p = pairsToProbe({
+        rows,
+        answered: (code, t) => pairAnswerOf(byCode.get(code), sentOf(code), t),
+        budget,
+      });
+      overCap = p.overCap;
+      return p.probe;
+    };
     if (plan.requests.length > 0) {
       // Before any lease: a compile failure costs no lease, no run row and no server call.
       const tc = now();
@@ -1608,6 +1857,13 @@ export async function runVerify(
         identityScheme: source.identityScheme,
         // R214: the rows carry the SOURCE run's keys, so they carry its build too.
         buildSymbols: source.buildSymbols,
+        // R442: the rows carry the SOURCE run's keys, so they carry what it hid too.
+        carryHidden: source.carryHidden,
+        // R391: and the source's generation facts, which say what those keys name.
+        generationSourceSha256: source.generationSourceSha256,
+        twinTuples: source.twinTuples,
+        numberingDigest: source.numberingDigest,
+        dependencySourceSha256: source.dependencySourceSha256,
         // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
         coverageMode,
         // R247: the test app this run measures against, the one it is about to publish. The
@@ -1639,11 +1895,21 @@ export async function runVerify(
           publishMs = now() - tp;
         },
         ...(narrow !== undefined ? { narrow } : {}),
+        probe,
       });
+    }
+    // R389 (sol's review): the plan read tests as unchanged under a point-in-time answer. Asked
+    // again after execution; any other answer voids the plan, loudly.
+    if (firstGuard !== undefined) {
+      const again = await closedWorldGuard(backend, args.testDir);
+      if (!sameClosedWorld(firstGuard, again)) {
+        throw new ClosedWorldChangedError(
+          `verify planned with the closed-world guard answering "${firstGuard.why}", but after execution it answered "${again.why}"; tests it read as unchanged may not be. Run lethal verify again.`,
+        );
+      }
     }
 
     // Decision 11: every new test's two unmutated runs, from this call's own answers.
-    const newKeys = new Set(plan.newTests.map(testKeyOf));
     const ran = res;
     // R-427: the tests runNamedMutants did not rerun must be exactly the ones the reach filter
     // sent to no survivor, as `unreached` is cross-checked below, so a backend that ignores
@@ -1695,7 +1961,20 @@ export async function runVerify(
           ? { reachNarrowed: reach.narrowed.has(id) }
           : {};
     const outcomeBy = new Map((ran?.outcomes ?? []).map((o) => [o.mutant.mutantId, o] as const));
-    const requestBy = new Map(plan.requests.map((r) => [r.mutantId, r] as const));
+    // R259: a probe's answer by pair, and none at all once the session latched (every pair unknown).
+    const probeAnswers = new Map(
+      (ran?.probes ?? []).flatMap((p) => {
+        const [test] = p.request.methods;
+        if (test === undefined) return [];
+        const t = testKeyOf(test);
+        return [[pairKeyOf(p.request.mutantId, t), pairAnswerOf(p.outcome, p.request.methods, t)]];
+      }),
+    );
+    const answer = (code: string, t: string): PairAnswer =>
+      ran?.quarantined !== undefined
+        ? undefined
+        : (pairAnswerOf(outcomeBy.get(code), sentOf(code), t) ??
+          probeAnswers.get(pairKeyOf(code, t)));
     const results = source.targets.map((t): VerifyResult => {
       const entry = plan.entries.get(t.mutantCode);
       if (entry === undefined) throw new Error(`verify.ts: ${t.mutantCode} has no entry`);
@@ -1753,13 +2032,25 @@ export async function runVerify(
       if (o === undefined || request === undefined) {
         throw new Error(`verify.ts: ${t.mutantCode} was requested but got no outcome`);
       }
-      // R-384: the methods actually sent, after the reach filter when it ran.
-      const sent = reach?.methods.get(t.mutantCode) ?? request.methods;
+      const sent = sentOf(t.mutantCode) ?? request.methods;
+      const test = newKillerOf(o);
+      const siblings = siblingsBy.get(t.mutantCode);
       return {
         ...base,
         ...measuredResultOf(o, sent, newKeys, published),
         ...(notRun !== undefined ? { notRun } : {}),
         ...narrowedOf(t.mutantCode),
+        ...(test !== undefined && siblings !== undefined
+          ? {
+              sameProcedure: sameProcedureOf({
+                test,
+                batchIndex: t.batchIndex,
+                siblings,
+                answer,
+                overCap,
+              }),
+            }
+          : {}),
       };
     });
 
@@ -1839,11 +2130,26 @@ function memberOf(e: MutantManifestEntry): string {
  * parses them. These are the files `attach` built the fenced line map from, so the coverage lines
  * were placed in them; the project on disk may have changed since, the installed build has not.
  * The parser was initialised by `planVerify`.
+ *
+ * R536: read under the source run's build symbols, as the run's selection read them (R497's BC
+ * shape rule: an admitted wrapped object is placeable, every other shape refused by name), joined
+ * with what the attached line map itself refuses (a key two compiled files declare, an unmapped
+ * object), so verify refuses exactly what the run refused.
  */
-function refusedObjectsOfSources(sources: readonly AlSource[]): ReadonlyMap<string, string> {
-  return coverageRefusedObjects(
-    sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
-  );
+function refusedObjectsOfSources(
+  sources: readonly AlSource[],
+  buildSymbols: readonly string[],
+  backendRefused: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  const files = sources.map((s) => ({
+    path: s.path,
+    root: wrapRoot(parseAL(s.text)),
+    text: s.text,
+  }));
+  return new Map([
+    ...backendRefused,
+    ...coverageRefusedObjects(files, "bcdev", (f) => evaluateArms(f.root, f.text, buildSymbols)),
+  ]);
 }
 
 /** R-384 rules 7 and 8: the `verify-reach-fail-closed` warnings and the state lines. */
@@ -1944,4 +2250,138 @@ function measuredResultOf(
     killedBy: killedByOf(o.killingTestFailure, published.name),
     ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
   };
+}
+
+/**
+ * R259: the declaration a mutant sits in, from the trusted manifest: the line span of its enclosing
+ * `procedure`, else `trigger`. Members do not nest, so two declarations share both lines only when
+ * both sit on one line: a one-line member, or one with no lines, cannot be told apart (`undefined`).
+ */
+export function declarationKeyOf(e: MutantManifestEntry): string | undefined {
+  const { procedureStartLine: start, procedureEndLine: end } = e;
+  if (start === undefined || end === undefined || start === end) return undefined;
+  return `${e.objectType}|${e.codeunitId}|${e.file}|${start}|${end}`;
+}
+
+/**
+ * R259: a target's siblings among the batch's survivors. `eligible` can get an answer; `unknown`
+ * never does (carried, reader-marked equivalent, or a target whose declaration cannot be told
+ * apart, when every same-named member of its object is unknown, never "same procedure" by name).
+ */
+export function siblingsOf(
+  target: MutantManifestEntry,
+  candidates: ReadonlyArray<{ readonly entry: MutantManifestEntry; readonly measurable: boolean }>,
+): { readonly eligible: readonly string[]; readonly unknown: readonly string[] } {
+  const key = declarationKeyOf(target);
+  const others = candidates.filter((c) => c.entry.mutantId !== target.mutantId);
+  const codes = (cs: typeof others) => cs.map((c) => c.entry.mutantId);
+  if (key === undefined) {
+    const object = (e: MutantManifestEntry) => `${e.objectType}|${e.codeunitId}|${e.file}`;
+    const named = others.filter(
+      (c) =>
+        object(c.entry) === object(target) &&
+        memberGroupNameOf(c.entry) === memberGroupNameOf(target),
+    );
+    return { eligible: [], unknown: codes(named) };
+  }
+  const same = others.filter((c) => declarationKeyOf(c.entry) === key);
+  return {
+    eligible: codes(same.filter((c) => c.measurable)),
+    unknown: codes(same.filter((c) => !c.measurable)),
+  };
+}
+
+/** R259: what one execution says about the pair (mutant, test key `t`). */
+export type PairAnswer = "kills" | "not" | undefined;
+
+/**
+ * R259: `kills` only for a confirmed `killed` (never `timeout-killed`) whose killer is exactly `t`
+ * at position 1 of its call; `not` only for a survivor `t` was sent to; else no answer.
+ */
+export function pairAnswerOf(
+  o: SessionOutcome | undefined,
+  sent: readonly TestMethodRef[] | undefined,
+  t: string,
+): PairAnswer {
+  if (o === undefined || sent === undefined) return undefined;
+  const killer = o.killingTestRef;
+  if (
+    o.verdict === "killed" &&
+    o.killPosition === 1 &&
+    killer !== undefined &&
+    testKeyOf(killer) === t
+  ) {
+    return "kills";
+  }
+  if (o.verdict === "survived" && sent.some((m) => testKeyOf(m) === t)) return "not";
+  return undefined;
+}
+
+const pairKeyOf = (code: string, t: string) => `${code}|${t}`;
+
+/**
+ * R259: the (sibling, test) pairs to probe, in row then sibling order, each once: every eligible
+ * pair `answered` does not answer. Each probe reserves two of `budget`'s runs (the run, and the
+ * unmutated confirmation a kill needs), so probes never overrun the cap; the rest are over it.
+ */
+export function pairsToProbe(a: {
+  readonly rows: ReadonlyArray<{
+    readonly test: TestMethodRef;
+    readonly eligible: readonly string[];
+  }>;
+  readonly answered: (code: string, t: string) => PairAnswer;
+  readonly budget: number;
+}): { readonly probe: readonly NamedMutantRequest[]; readonly overCap: ReadonlySet<string> } {
+  const seen = new Set<string>();
+  const probe: NamedMutantRequest[] = [];
+  const overCap = new Set<string>();
+  for (const { test, eligible } of a.rows) {
+    const t = testKeyOf(test);
+    for (const code of eligible) {
+      const key = pairKeyOf(code, t);
+      if (seen.has(key) || a.answered(code, t) !== undefined) continue;
+      seen.add(key);
+      if (2 * (probe.length + 1) <= a.budget) probe.push({ mutantId: code, methods: [test] });
+      else overCap.add(key);
+    }
+  }
+  return { probe, overCap };
+}
+
+/** R259: one row's field from its siblings and each pair's answer. Throws unless the three lists
+ *  are disjoint and cover every sibling. */
+export function sameProcedureOf(a: {
+  readonly test: TestMethodRef;
+  readonly batchIndex: number;
+  readonly siblings: { readonly eligible: readonly string[]; readonly unknown: readonly string[] };
+  readonly answer: (code: string, t: string) => PairAnswer;
+  readonly overCap: ReadonlySet<string>;
+}): SameProcedure {
+  const t = testKeyOf(a.test);
+  const id = (code: string) => mutantRef(a.batchIndex, code);
+  const answers = a.siblings.eligible.map((code) => [code, a.answer(code, t)] as const);
+  const unanswered = answers.filter(([, x]) => x === undefined).map(([code]) => code);
+  const out: SameProcedure = {
+    test: {
+      codeunitId: a.test.codeunitId,
+      codeunitName: a.test.codeunitName,
+      method: a.test.method,
+    },
+    alsoKills: answers.filter(([, x]) => x === "kills").map(([code]) => id(code)),
+    notKilled: answers.filter(([, x]) => x === "not").map(([code]) => id(code)),
+    unknown: [...unanswered, ...a.siblings.unknown].map(id),
+    overCap: unanswered.filter((code) => a.overCap.has(pairKeyOf(code, t))).length,
+  };
+  const all = [...out.alsoKills, ...out.notKilled, ...out.unknown];
+  const want = [...a.siblings.eligible, ...a.siblings.unknown].map(id);
+  if (
+    new Set(all).size !== all.length ||
+    all.length !== want.length ||
+    want.some((w) => !all.includes(w))
+  ) {
+    throw new Error(
+      `verify.ts: sameProcedure for ${t} does not split its ${want.length} sibling(s) into three disjoint lists (a bug)`,
+    );
+  }
+  return out;
 }

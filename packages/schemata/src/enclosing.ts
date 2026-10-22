@@ -40,24 +40,37 @@ export function isMutableSite(before: ALSyntaxNode): boolean {
   return findEnclosingStatement(before) !== null;
 }
 
-export function resolveSite(before: ALSyntaxNode, afterText: string): ResolvedSite {
+/**
+ * R-307 O5. The statement a spec's `before` node resolves to, checked by span: E1 (no enclosing
+ * statement) and E2 (`before` not contained in it), both plain `Error`s, a caller bug. This is what
+ * PLAN calls; it builds no text. `resolveSite` adds the mutated text on top for its own callers.
+ */
+export function resolveStatement(before: ALSyntaxNode): ALSyntaxNode {
   const statement = findEnclosingStatement(before);
   if (statement === null) {
     throw new Error(
       `resolveSite: no enclosing statement for node at ${before.startIndex}..${before.endIndex}`,
     );
   }
-  if (statement === before) {
-    return { statement, mutatedText: afterText };
-  }
+  if (statement === before) return statement;
   const relStart = before.startIndex - statement.startIndex;
   const relEnd = before.endIndex - statement.startIndex;
-  const stmtText = statement.text;
-  if (relStart < 0 || relEnd > stmtText.length) {
+  if (relStart < 0 || relEnd > statement.endIndex - statement.startIndex) {
     throw new Error(
       `resolveSite: before span ${before.startIndex}..${before.endIndex} is not contained in statement ${statement.startIndex}..${statement.endIndex}`,
     );
   }
+  return statement;
+}
+
+export function resolveSite(before: ALSyntaxNode, afterText: string): ResolvedSite {
+  const statement = resolveStatement(before);
+  if (statement === before) {
+    return { statement, mutatedText: afterText };
+  }
+  const relStart = before.startIndex - statement.startIndex;
+  const stmtText = statement.text;
+  const relEnd = before.endIndex - statement.startIndex;
   const mutatedText = stmtText.slice(0, relStart) + afterText + stmtText.slice(relEnd);
   return { statement, mutatedText };
 }

@@ -1,5 +1,5 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
-import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { mkdir, readFile, readdir, rm, stat, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
+import { AppMethodIndex } from "../src/app-package";
 import {
   AlcCompileError,
   ArtifactCompiler,
@@ -18,10 +19,18 @@ import {
 import type { ArtifactIo, CompileInput, CompiledArtifact } from "../src/artifact";
 import type { BoundArtifact, TestMethodRef } from "../src/backend";
 import { hashPackage } from "../src/baseline-snapshot";
-import { BcDevMcpBackend, PublishFailedError } from "../src/bcdev-backend";
+import {
+  PublishFailedError,
+  BcDevMcpBackend as RealBcDevMcpBackend,
+  controlLeftoverWarning,
+} from "../src/bcdev-backend";
 import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
-import { CONTROL_APP_ID, HarnessVerificationError } from "../src/harness";
+import {
+  CONTROL_APP_ID,
+  HarnessVerificationError,
+  UnfilteredExtensionsQueryError,
+} from "../src/harness";
 import type { HarnessVerifier } from "../src/harness";
 import type { Lease } from "../src/lease";
 import { type LineMap, type RenamedMemberNames, coverageRefusedObjects } from "../src/line-map";
@@ -29,12 +38,29 @@ import { requiresUnsafeLatch } from "../src/operation-outcome";
 import type { LeaseFence } from "../src/orchestrator";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
-import { RunMutantTransport } from "../src/run-mutant-transport";
+import { type ControlState, RunMutantTransport } from "../src/run-mutant-transport";
 import { buildCoverageIndex, coverageFilter } from "../src/selection";
 import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
+
+/**
+ * R552: a backend owns a package-cache copy from its first compile until `close()`, as `cli.ts`
+ * calls it in a `finally`. Most tests here never close, so every backend this file builds is
+ * closed after each test; the R358 preload then fails the file if a copy outlives that. The
+ * lifecycle itself is pinned by the R552 tests, which close explicitly.
+ */
+const opened: RealBcDevMcpBackend[] = [];
+class BcDevMcpBackend extends RealBcDevMcpBackend {
+  constructor(...args: ConstructorParameters<typeof RealBcDevMcpBackend>) {
+    super(...args);
+    opened.push(this);
+  }
+}
+afterEach(async () => {
+  for (const b of opened.splice(0)) await b.close().catch(() => {});
+});
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 
@@ -365,7 +391,12 @@ async function makeBackendWithDeploy(
   runHandler: (args: unknown) => unknown,
   symbolReference: unknown,
   instrumentedDir?: string,
-  runMutantTransportFactory?: (targetAppId: string, artifactId: string) => RunMutantTransport,
+  runMutantTransportFactory?: (
+    targetAppId: string,
+    artifactId: string,
+    controlState: ControlState,
+  ) => RunMutantTransport,
+  buildSymbols?: readonly string[],
 ): Promise<{
   backend: BcDevMcpBackend;
   artifact: CompiledArtifact;
@@ -396,6 +427,7 @@ async function makeBackendWithDeploy(
     makeDeployment(outputDir, symbolReference),
     runMutantTransportFactory,
   );
+  if (buildSymbols !== undefined) backend.useBuildSymbols(buildSymbols);
   const artifact = await backend.deploy(deployDir);
   return {
     backend,
@@ -477,9 +509,9 @@ describe("BcDevMcpBackend.attach", () => {
       },
       () => clientTransport,
       deployment,
-      (appId, artifactId) => {
+      (appId, artifactId, controlState) => {
         factoryCalls.push([appId, artifactId]);
-        return {} as RunMutantTransport;
+        return { controlState } as unknown as RunMutantTransport;
       },
     );
     const bound = {
@@ -494,6 +526,7 @@ describe("BcDevMcpBackend.attach", () => {
       appJsonText: JSON.stringify({ idRanges: [{ from: 70000, to: 70099 }] }),
       alSources: opts.alSources ?? [],
       renamedMemberNames: opts.renamedMemberNames ?? new Map(),
+      manifestObjectKeys: new Set<string>(),
     };
     return {
       backend,
@@ -557,6 +590,41 @@ codeunit 70000 "Some Codeunit"
       }
     });
   }
+
+  // R497: the installed path hands the build's symbols to the line map too. With them the same
+  // one-arm file (compiled under no symbols) is admitted; without them it is refused as above.
+  test("R497: attach (fenced) with the build's symbols admits the wrapped object, nothing refused", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const s = await attachSetup({
+      coverageMode: "fenced",
+      alSources: [
+        {
+          path: "src/Some.Codeunit.al",
+          text: `namespace X;
+#if not CLEAN27
+codeunit 70000 "Some Codeunit"
+{
+    procedure Post()
+    begin
+    end;
+}
+#endif
+`,
+        },
+      ],
+    });
+    try {
+      s.backend.useBuildSymbols([]);
+      warn.mockClear();
+      await s.backend.attach(s.bound);
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((x) => x.includes("coverage refused"))).toEqual([]);
+      expect(await s.backend.coverageRefusals()).toEqual(new Map());
+    } finally {
+      warn.mockRestore();
+      await s.cleanup();
+    }
+  });
 
   // R318 review I1: the in-memory path names a renamed member from the VERIFIED manifest's
   // coverage names, as `buildLineMap` does from the manifest on disk. The source re-parses with an
@@ -676,6 +744,10 @@ codeunit 70000 "Some Codeunit"
 });
 
 describe("BcDevMcpBackend.run", () => {
+  test("R577: the kill-reproduction rule stays OFF on bcdev until R582", () => {
+    expect("killsMustReproduce" in makeBackend(() => ({}))).toBe(false);
+  });
+
   test("maps a passing result and resolves procedure coverage from the compiled app", async () => {
     const { backend, cleanup } = await makeBackendWithDeploy(
       () => ({
@@ -707,6 +779,62 @@ describe("BcDevMcpBackend.run", () => {
       expect(v.durationMs).toBeGreaterThanOrEqual(0);
       expect(v.coverage?.entries[0]?.procedure).toBe("Post");
       expect(v.coverage?.entries[0]?.objectType).toBe("Codeunit");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // R254, hub direction. MEASURED on Cronus28 (scripts/r254-probe/README.md): a test calling only
+  // the extension's `Classify` reported exactly `22:91601` methodId 1710736425. The base REPORT
+  // shares the id 91601 here on purpose, with a method of the SAME id, so a lookup or a conversion
+  // that drops the kind and keys by id alone resolves the wrong object.
+  test("R254: a 22:<id> row names the REPORTEXTENSION's method, never the same-id report's", async () => {
+    const symbols = {
+      ReportExtensions: [
+        { Id: 91601, Name: "R254 Probe RepExt", Methods: [{ Id: 1710736425, Name: "Classify" }] },
+      ],
+      Reports: [
+        { Id: 91601, Name: "R254 Same Id Report", Methods: [{ Id: 1710736425, Name: "OnReport" }] },
+      ],
+    };
+    for (const sr of [symbols, { Namespaces: [{ Name: "Probe", ...symbols }] }]) {
+      const index = AppMethodIndex.fromSymbolReference(sr);
+      expect(index.lookup(22, 91601, 1710736425)).toBe("Classify");
+      expect(index.declaredObjects().has("reportextension:91601")).toBe(true);
+      expect(index.lookup(3, 91601, 1710736425)).toBe("OnReport");
+      expect(index.lookup(14, 91601, 1710736425)).toBeUndefined();
+      expect(index.lookup(15, 91601, 1710736425)).toBeUndefined();
+    }
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({
+        results: [
+          {
+            codeunitId: 79100,
+            method: "PostingUpdatesTotal",
+            status: "passed",
+            durationMs: 1,
+            output: "",
+          },
+        ],
+        coverage: [
+          {
+            testObjectId: 79100,
+            testMethodId: 111,
+            coveredProcedures: [
+              { objectType: 22, objectId: 91601, methodId: 1710736425 },
+              { objectType: 3, objectId: 91601, methodId: 1710736425 },
+            ],
+          },
+        ],
+      }),
+      symbols,
+    );
+    try {
+      const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "ReportExtension", objectId: 91601, procedure: "Classify" },
+        { objectType: "Report", objectId: 91601, procedure: "OnReport" },
+      ]);
     } finally {
       await cleanup();
     }
@@ -1210,6 +1338,12 @@ describe("BcDevMcpBackend.deploy", () => {
           mutants: [mutantEntry("m1"), mutantEntry("m2"), mutantEntry("m3")],
         }),
       );
+      // R-307 section 4: the manifest's object must be declared and mapped, or deploy() refuses
+      // before it ever reaches the publish this test is about.
+      await Bun.write(
+        join(dir, "Foo.Codeunit.al"),
+        'codeunit 79100 "Foo"\n{\n    procedure P1()\n    begin\n    end;\n}\n',
+      );
       // alc "compiles" normally; altool "runs" but reports exit 1, so
       // ContainerDeployer.publish() THROWS — a genuine, observed publish failure, not merely an
       // identity puzzle. reportedIdentity is pinned to a well-formed but WRONG id regardless of
@@ -1218,7 +1352,7 @@ describe("BcDevMcpBackend.deploy", () => {
       const failingSpawn: SpawnFn = async (argv) => {
         const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
         if (argv[0]?.includes("alc") && out !== undefined) {
-          await Bun.write(out, buildFakeApp({ Codeunits: [] }));
+          await Bun.write(out, buildFakeApp({ Codeunits: [{ Id: 79100, Name: "Foo" }] }));
           return { exitCode: 0, stdout: "", stderr: "" };
         }
         if (argv[1] === "publishapp") {
@@ -1237,7 +1371,7 @@ describe("BcDevMcpBackend.deploy", () => {
         undefined,
         makeDeployment(
           dir,
-          { Codeunits: [] },
+          { Codeunits: [{ Id: 79100, Name: "Foo" }] },
           {
             spawn: failingSpawn,
             reportedIdentity: "f".repeat(32),
@@ -1269,9 +1403,14 @@ describe("BcDevMcpBackend.deploy", () => {
       // its staged copy in a `finally` right after compile() settles (Important-1 fix), so by
       // the time this test can inspect anything, `capturedProjectDir` no longer exists on disk.
       let capturedAppJson: { dependencies?: Array<{ id: string }> } | undefined;
+      let capturedSymbol: Buffer | undefined;
       const fakeCompiler = {
         compile: async (input: CompileInput) => {
           capturedProjectDir = input.projectDir;
+          // R552: the symbol is in the backend's package-cache copy, read DURING compile.
+          if (input.packageCacheCopyPath !== undefined) {
+            capturedSymbol = await readFile(join(input.packageCacheCopyPath, "lethal-control.app"));
+          }
           capturedAppJson = JSON.parse(
             await readFile(join(input.projectDir, "app.json"), "utf8"),
           ) as { dependencies?: Array<{ id: string }> };
@@ -1311,6 +1450,7 @@ describe("BcDevMcpBackend.deploy", () => {
         },
       );
       await backend.deploy(dir);
+      await backend.close();
 
       expect(capturedProjectDir).toBeDefined();
       expect(capturedAppJson?.dependencies?.some((d) => d.id === CONTROL_APP_ID)).toBe(true);
@@ -1323,8 +1463,10 @@ describe("BcDevMcpBackend.deploy", () => {
       };
       expect(originalAppJson.dependencies).toBeUndefined();
 
-      const stagedSymbol = await readFile(join(packageCachePath, "lethal-control.app"));
-      expect(stagedSymbol.length).toBeGreaterThan(0);
+      // R552: staged where alc reads it, with the control symbol's own bytes, and NOT in the
+      // user's package cache.
+      expect(capturedSymbol?.equals(await readFile(controlSymbolPath))).toBe(true);
+      expect(await readdir(packageCachePath).catch(() => [])).not.toContain("lethal-control.app");
 
       // Important-1 fix: deploy() reclaims its staged compile copy once compile() settles —
       // each batch has a distinct batchDir, so leaving `${batchDir}-staged` behind would
@@ -1401,6 +1543,86 @@ describe("BcDevMcpBackend.deploy", () => {
       await expect(backend.deploy(dir)).rejects.toBeInstanceOf(HarnessVerificationError);
       expect(verify).toHaveBeenCalledTimes(1);
       expect(compile).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("BcDevMcpBackend.compilePlainCheck (R461)", () => {
+  test("compiles the dir as given: no Control dependency staged, no altool, no .app left", async () => {
+    const dir = scratch("lethal-bcdev-plaincheck-");
+    try {
+      const plain = join(dir, "plain");
+      await mkdir(plain);
+      const appJson = JSON.stringify({ id: TEST_APP_ID, name: "Fixture", version: "1.0.0.0" });
+      await Bun.write(join(plain, "app.json"), appJson);
+      const calls: string[][] = [];
+      let appJsonSeen = "";
+      const spawn: SpawnFn = async (argv) => {
+        calls.push([...argv]);
+        const project = argv.find((a) => a.startsWith("/project:"))?.slice("/project:".length);
+        if (project !== undefined) appJsonSeen = await readFile(join(project, "app.json"), "utf8");
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (out !== undefined) await Bun.write(out, "plain-app-bytes");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const staging = await controlStaging(dir);
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...staging,
+        },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { spawn }),
+      );
+      await backend.compilePlainCheck(plain);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toBe("C:/fake/alc.exe");
+      expect(calls[0]).toContain(`/project:${plain.replaceAll("\\", "/")}`);
+      expect(calls[0]).toContain(
+        `/packagecachepath:${staging.packageCachePath.replaceAll("\\", "/")}`,
+      );
+      expect(appJsonSeen).toBe(appJson);
+      expect(await readdir(staging.packageCachePath).catch(() => [])).not.toContain(
+        "lethal-control.app",
+      );
+      expect((await readdir(dir)).filter((f) => f.endsWith(".app"))).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed compile leaves no partial plain-check.app, and the error is alc's own", async () => {
+    const dir = scratch("lethal-bcdev-plaincheck-fail-");
+    try {
+      const plain = join(dir, "plain");
+      await mkdir(plain);
+      await Bun.write(join(plain, "app.json"), "{}");
+      // alc writes its output, then exits non-zero: the shape of a crash mid-emit.
+      const spawn: SpawnFn = async (argv) => {
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (out !== undefined) await Bun.write(out, "partial");
+        return { exitCode: 1, stdout: "error AL0001: boom", stderr: "" };
+      };
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { spawn }),
+      );
+      const err = await backend.compilePlainCheck(plain).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlcCompileError);
+      expect((err as Error).message).toContain("error AL0001: boom");
+      expect((await readdir(dir)).filter((f) => f.endsWith(".app"))).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1688,6 +1910,7 @@ describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
       appJsonText: "{}",
       alSources: [],
       renamedMemberNames: new Map(),
+      manifestObjectKeys: new Set(),
     };
   }
 
@@ -1906,7 +2129,7 @@ function capturingRunMutantFactory(
     };
     return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
   }) as typeof fetch;
-  return (targetAppId: string, artifactId: string) =>
+  return (targetAppId: string, artifactId: string, controlState: ControlState) =>
     new RunMutantTransport(
       {
         baseUrl: "http://bc:7048/BC",
@@ -1918,6 +2141,7 @@ function capturingRunMutantFactory(
       targetAppId,
       artifactId,
       captureFetch,
+      { controlState },
     );
 }
 
@@ -2050,7 +2274,7 @@ function leaseInvalidRunMutantFactory(reason?: string) {
     };
     return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
   }) as typeof fetch;
-  return (targetAppId: string, artifactId: string) =>
+  return (targetAppId: string, artifactId: string, controlState: ControlState) =>
     new RunMutantTransport(
       {
         baseUrl: "http://bc:7048/BC",
@@ -2062,6 +2286,7 @@ function leaseInvalidRunMutantFactory(reason?: string) {
       targetAppId,
       artifactId,
       fetchFn,
+      { controlState },
     );
 }
 
@@ -2142,6 +2367,10 @@ describe("coverageMode", () => {
     const backend = new BcDevMcpBackend({ ...baseConfig(), coverageMode: "none" });
     expect(backend.capabilities().coverage).toBe("none");
     expect(backend.capabilities().authoritative).toBe(true);
+  });
+
+  test("R553: declares its own identity as bcdev", () => {
+    expect(new BcDevMcpBackend(baseConfig()).capabilities().kind).toBe("bcdev");
   });
 
   test('status() in "none" mode probes the harness, never bc-dev-mcp', async () => {
@@ -2261,12 +2490,13 @@ describe('coverageMode "fenced" (R58)', () => {
       };
       return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -2379,12 +2609,13 @@ describe('coverageMode "fenced" (R58)', () => {
         };
         return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
       }) as typeof fetch;
-      return (targetAppId: string, artifactId: string) =>
+      return (targetAppId: string, artifactId: string, controlState: ControlState) =>
         new HookSpyTransport(
           { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
           targetAppId,
           artifactId,
           okFetch,
+          { controlState },
         );
     }
 
@@ -2640,12 +2871,13 @@ describe("fenced coverage — the server-side object-id filter", () => {
       };
       return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -2797,12 +3029,13 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
       };
       return new Response(JSON.stringify({ value: JSON.stringify(payload) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -2973,12 +3206,13 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
       };
       return new Response(JSON.stringify({ value: JSON.stringify(payload) }), { status: 200 });
     }) as typeof fetch;
-    return (targetAppId: string, artifactId: string) =>
+    return (targetAppId: string, artifactId: string, controlState: ControlState) =>
       new RunMutantTransport(
         { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
         targetAppId,
         artifactId,
         captureFetch,
+        { controlState },
       );
   }
 
@@ -2986,6 +3220,8 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
     coverage: unknown,
     extraFiles: Record<string, string> = {},
     tables: readonly { Id: number; Name: string }[] = [],
+    codeunits: readonly { Id: number; Name: string }[] = [],
+    symbols?: readonly string[],
   ): Promise<{
     backend: BcDevMcpBackend;
     cleanup: () => Promise<void>;
@@ -3015,14 +3251,12 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
         throw new Error("bc-dev-mcp must not be contacted in fenced mode");
       },
       makeDeployment(outputDir, {
-        Codeunits: [
-          { Id: 50103, Name: "Repro B2" },
-          { Id: 50107, Name: "Other" },
-        ],
+        Codeunits: [{ Id: 50103, Name: "Repro B2" }, { Id: 50107, Name: "Other" }, ...codeunits],
         Tables: tables,
       }),
       factory(coverage),
     );
+    if (symbols !== undefined) backend.useBuildSymbols(symbols);
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
     await backend.activate(null);
@@ -3036,6 +3270,42 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
   }
 
   const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
+
+  // R497: the SAME two-arm file (`#if CLEAN27` / `#else`, the E1 shape) with the build's symbols
+  // handed over: `#else` is compiled, so its rows name `AElse`, at H1a's base (1), and nothing is
+  // refused. Revert direction: without the handover (the test above) the rows yield nothing.
+  test("R497: with the build's symbols the measured two-arm shape is scored, compiled arm only", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const row = (lineNo: number) => ({ objectType: 5, objectId: 50103, lineNo, hits: 1 });
+    // The `#else` arm's `AElse` spans file lines 15-21 of TWO_ARM; base 1, so line 19 is `L := 1`.
+    const { backend, cleanup } = await deployed([row(19)], {}, [], [], []);
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50103, procedure: "AElse" },
+      ]);
+      expect(await backend.coverageRefusals()).toEqual(new Map());
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  // R497 A2: whatever the line map refuses reaches selection through `coverageRefusals()`.
+  test("R497 A2: coverageRefusals() is the line map's whole refused set", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed([]);
+    try {
+      expect([...(await backend.coverageRefusals()).entries()]).toEqual([
+        ["codeunit:50103", REFUSED.replace("[lethal] ", "")],
+      ]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
 
   test("rows for the wrapped object yield NO entry of any grain; the plain object's are named", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
@@ -3102,6 +3372,7 @@ table 50110 "Wrapped T"
         Object.entries({ ...files, "B2.Codeunit.al": TWO_ARM, "Other.Codeunit.al": PLAIN }).map(
           ([path, text]) => ({ path, root: wrapRoot(parseAL(text)) }),
         ),
+        "bcdev",
       );
       const other = { codeunitId: 50140, codeunitName: "Tests", method: "U" };
       const index = buildCoverageIndex([
@@ -3171,8 +3442,186 @@ table 50110 "Wrapped T"
       await cleanup();
     }
   });
+  test("(a) R-307: an R305 split-header object, declared, with no mutant, is refused by name, not thrown", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const SPLIT = `#if not SYM\ncodeunit 50130 "Split" implements IFirst\n#else\ncodeunit 50130 "Split" implements ISecond\n#endif\n${BODY("S")}`;
+    const { backend, cleanup } = await deployed(
+      [
+        { objectType: 5, objectId: 50130, lineNo: 9, hits: 1 },
+        { objectType: 5, objectId: 50107, lineNo: 3, hits: 1 },
+      ],
+      { "Split.Codeunit.al": SPLIT },
+      [],
+      [{ Id: 50130, Name: "Split" }],
+    );
+    try {
+      const unmapped =
+        "[lethal] coverage refused for codeunit:50130: the compiled artifact declares it, but LethAL found no object declaration it can read in the source (an object header split by #if is one such shape, R305). It carries no mutant, so no verdict reads its coverage.";
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((s) => s === unmapped)).toHaveLength(
+        1,
+      );
+      // A row for it is dropped like any refused object's row (before R-307 it threw here).
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R" },
+      ]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
 });
 
+/**
+ * R-307 section 4. One whole-run check per deploy, before publish and so before any baseline: the
+ * manifest's objects against the compiled declarations, both directions. `deployed` stops at the
+ * first throw and reports whether publish was ever reached.
+ */
+describe("manifest objects against declarations, before any baseline (R-307 section 4)", () => {
+  const BODY = "{\n    procedure P()\n    begin\n    end;\n}\n";
+  const PLAIN = `codeunit 50107 Other\n${BODY}`;
+  const mutant = (codeunitId: number) => ({
+    mutantId: `M${codeunitId}`,
+    file: "X.Codeunit.al",
+    startIndex: 0,
+    endIndex: 1,
+    startLine: 1,
+    operatorName: "lethal.void-method-call",
+    operatorVersion: "1",
+    astHash: "h",
+    objectType: "codeunit",
+    codeunitId,
+    codeunitName: "X",
+    procedureName: "P",
+    originalText: "a",
+    mutatedText: "",
+  });
+
+  async function deployed(opts: {
+    coverageMode: "fenced" | "procedure" | "none";
+    files: Record<string, string>;
+    codeunits: readonly { Id: number; Name: string }[];
+    mutantIds: readonly number[];
+  }): Promise<{ err: unknown; published: boolean }> {
+    const dir = scratch("lethal-r307-manifest-");
+    let published = false;
+    try {
+      await writeDeployInputs(dir);
+      await Bun.write(
+        join(dir, "app.json"),
+        JSON.stringify({
+          id: TEST_APP_ID,
+          name: "Fixture",
+          publisher: "LethAL",
+          version: "1.0.20653.100",
+          idRanges: [{ from: 50100, to: 50149 }],
+        }),
+      );
+      await Bun.write(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({
+          selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
+          artifactId: TEST_ARTIFACT_ID,
+          mutants: opts.mutantIds.map(mutant),
+        }),
+      );
+      for (const [rel, text] of Object.entries(opts.files)) await Bun.write(join(dir, rel), text);
+      const symbols = { Codeunits: opts.codeunits };
+      const spawn: SpawnFn = async (argv) => {
+        if (argv[1] === "publishapp") published = true;
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (argv[0]?.includes("alc") && out !== undefined) {
+          await Bun.write(out, buildFakeApp(symbols));
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          coverageMode: opts.coverageMode,
+          ...(await controlStaging(dir)),
+        },
+        undefined,
+        makeDeployment(dir, symbols, { spawn }),
+      );
+      const err = await backend.deploy(dir).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      return { err, published };
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  const A_THROW =
+    "line-map: the compiled artifact declares codeunit:50140 but no line map was built for it — every declared object's source is written by LethAL and must be mappable. This is a LethAL bug, not a problem with the project under test.";
+  const B_THROW =
+    "a mutant is attributed to codeunit:50145, which the compiled app does not declare. It is not named in the run's coverage refusals, so its mutants would read no-coverage with no reason given.";
+
+  test("(b) Direction A: a declared object WITH a mutant and no line-map entry throws, before publish", async () => {
+    const { err, published } = await deployed({
+      coverageMode: "fenced",
+      files: { "Other.Codeunit.al": PLAIN },
+      codeunits: [
+        { Id: 50107, Name: "Other" },
+        { Id: 50140, Name: "No Source" },
+      ],
+      mutantIds: [50107, 50140],
+    });
+    expect((err as Error | undefined)?.message).toBe(A_THROW);
+    expect(published).toBe(false);
+  });
+
+  test("(c) Direction B: a manifest object the compiled app does not declare throws, before publish (fenced and hub)", async () => {
+    for (const coverageMode of ["fenced", "procedure"] as const) {
+      const { err, published } = await deployed({
+        coverageMode,
+        files: { "Other.Codeunit.al": PLAIN, "Gone.Codeunit.al": `codeunit 50145 Gone\n${BODY}` },
+        codeunits: [{ Id: 50107, Name: "Other" }],
+        mutantIds: [50107, 50145],
+      });
+      expect((err as Error | undefined)?.message).toBe(B_THROW);
+      expect(published).toBe(false);
+    }
+  });
+
+  test("coverage none reads no coverage and checks nothing", async () => {
+    const { err, published } = await deployed({
+      coverageMode: "none",
+      files: { "Other.Codeunit.al": PLAIN },
+      codeunits: [{ Id: 50107, Name: "Other" }],
+      mutantIds: [50107, 50145],
+    });
+    expect(err).toBeUndefined();
+    expect(published).toBe(true);
+  });
+
+  test("(d) exempt: mutants in an R298-wrapped object the build compiles out do not throw (fenced and hub)", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const coverageMode of ["fenced", "procedure"] as const) {
+        const { err, published } = await deployed({
+          coverageMode,
+          files: {
+            "Other.Codeunit.al": PLAIN,
+            "Wrapped.Codeunit.al": `#if NEVERDEFINED\ncodeunit 50120 Wrapped\n${BODY}#endif\n`,
+          },
+          codeunits: [{ Id: 50107, Name: "Other" }],
+          mutantIds: [50107, 50120],
+        });
+        expect(err).toBeUndefined();
+        expect(published).toBe(true);
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
 /**
  * R298, review r1 Important 3: the HUB path (`coverageMode: "procedure"`) applies the same
  * refusal. A wrapped object's method ids, named or not, produce no entry, and the refusal is named
@@ -3207,7 +3656,7 @@ table 50110 "Wrapped T"
   };
   const hubRef = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
 
-  async function hub(covered: unknown[]) {
+  async function hub(covered: unknown[], buildSymbols?: readonly string[]) {
     const dir = scratch("lethal-r298-hub-");
     await Bun.write(join(dir, "W.Table.al"), WRAPPED);
     await Bun.write(join(dir, "Other.Codeunit.al"), PLAIN);
@@ -3218,6 +3667,8 @@ table 50110 "Wrapped T"
       }),
       symbols,
       dir,
+      undefined,
+      buildSymbols,
     );
     return {
       ...made,
@@ -3248,6 +3699,32 @@ table 50110 "Wrapped T"
     }
   });
 
+  // R497 (HUB-A, measured): with the build's symbols the one-arm wrapped table (W1's shape) is
+  // attributed by method id like any object. Revert direction: the two tests around this one.
+  test("R497: with the build's symbols the one-arm wrapped table is attributed, nothing refused", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await hub(
+      [
+        { objectType: 1, objectId: 50110, methodId: 777 },
+        { objectType: 5, objectId: 50107, methodId: 888 },
+      ],
+      [],
+    );
+    try {
+      const v = await backend.run(hubRef, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Table", objectId: 50110, procedure: "Touch" },
+        { objectType: "Codeunit", objectId: 50107, procedure: "R" },
+      ]);
+      expect(await backend.coverageRefusals()).toEqual(new Map());
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
   test("with ZERO rows for the wrapped table, it is still named once at deploy", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     const { backend, cleanup } = await hub([{ objectType: 5, objectId: 50107, methodId: 888 }]);
@@ -3258,6 +3735,392 @@ table 50110 "Wrapped T"
     } finally {
       warn.mockRestore();
       await cleanup();
+    }
+  });
+});
+
+/**
+ * R499: real transports, one per deploy, driven directly. "orphan": RunMutant's body is cut short,
+ * so the call reads the answer back, and that readback never answers until the test refuses it:
+ * the call ends `in-flight-unknown` (not scored) and leaves the readback in flight. "pass": a valid
+ * pass, echoed from the request.
+ */
+function scriptedTransportFetch(run: "orphan" | "pass"): {
+  fetchFn: typeof fetch;
+  refuse: (message: string) => void;
+} {
+  let refuseReadback: ((message: string) => void) | undefined;
+  const fetchFn = (async (url: unknown, init?: RequestInit) => {
+    if (String(url).includes("_GetOpAnswer")) {
+      return new Promise<Response>((_resolve, reject) => {
+        refuseReadback = (m) => reject(new UnfilteredExtensionsQueryError(m));
+      });
+    }
+    const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const inner = {
+      status: "ran",
+      testRunsBefore: 0,
+      sessionId: 2037,
+      targetAppId: b.targetAppId,
+      artifactId: b.artifactId,
+      attemptId: b.attemptId,
+      mutantId: b.mutantId,
+      codeunitId: b.testCodeunitId,
+      method: b.testMethod,
+      codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+      observedActive: true,
+    };
+    const body = JSON.stringify({ value: JSON.stringify(inner) });
+    if (run === "pass") return new Response(body, { status: 200 });
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(body.slice(0, -1)));
+        c.error(new Error("The socket connection was closed unexpectedly."));
+      },
+    });
+    return new Response(stream, { status: 200 });
+  }) as typeof fetch;
+  return {
+    fetchFn,
+    refuse: (m) => {
+      if (refuseReadback === undefined) throw new Error("no readback in flight to refuse");
+      refuseReadback(m);
+    },
+  };
+}
+
+describe("R499: every transport a backend binds shares its one control state", () => {
+  const TX_CFG = { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" };
+  const TX_REQ = {
+    ref: { codeunitId: 79100, codeunitName: "Ours Tests", method: "Alpha" },
+    mutantId: "M0001",
+    attemptId: "a1",
+    timeoutMs: 30,
+    lease: { epoch: 2, token: "tok-xyz", serverGeneration: "gen-abc", opSeq: 1 },
+  } as const;
+
+  /** One deploy per script; transport i uses script i. `drainMs` far above the test timeout. */
+  async function deployedTwice(scripts: readonly { fetchFn: typeof fetch }[]) {
+    const made: RunMutantTransport[] = [];
+    const factory = (appId: string, artifactId: string, controlState: ControlState) => {
+      const script = scripts[made.length];
+      if (script === undefined) throw new Error("more deploys than scripts");
+      const t = new RunMutantTransport(TX_CFG, appId, artifactId, script.fetchFn, {
+        controlState,
+        drainMs: 60_000,
+      });
+      made.push(t);
+      return t;
+    };
+    const { backend, deployDir, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [], coverage: [] }),
+      { Codeunits: [] },
+      undefined,
+      factory,
+    );
+    return { backend, deployDir, cleanup, made };
+  }
+
+  const at = (made: readonly RunMutantTransport[], i: number): RunMutantTransport => {
+    const t = made[i];
+    if (t === undefined) throw new Error(`no transport ${i}`);
+    return t;
+  };
+
+  test("B1: an orphan of transport A refused during B's scored exit after a re-deploy rejects B's call", async () => {
+    const a = scriptedTransportFetch("orphan");
+    const b = scriptedTransportFetch("pass");
+    const { deployDir, backend, cleanup, made } = await deployedTwice([a, b]);
+    try {
+      const first = await at(made, 0).run(TX_REQ);
+      expect(first.operation).toBe("in-flight-unknown");
+      await backend.deploy(deployDir); // binds B
+      expect(made).toHaveLength(2);
+      const call = at(made, 1)
+        .run(TX_REQ)
+        .then(
+          (v) => v,
+          (e: unknown) => e,
+        );
+      setTimeout(() => a.refuse("late on A"), 50);
+      const got = await call;
+      expect(got).toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect((got as Error).message).toContain("late on A");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("B2: a factory that ignores controlState makes deploy throw and binds nothing", async () => {
+    const a = scriptedTransportFetch("pass");
+    const b = scriptedTransportFetch("pass");
+    let calls = 0;
+    const factory = (appId: string, artifactId: string, controlState: ControlState) => {
+      calls += 1;
+      return calls === 1
+        ? new RunMutantTransport(TX_CFG, appId, artifactId, a.fetchFn, { controlState })
+        : new RunMutantTransport(TX_CFG, appId, artifactId, b.fetchFn); // its own private state
+    };
+    const { backend, deployDir, cleanup } = await makeBackendWithDeploy(
+      () => ({ results: [], coverage: [] }),
+      { Codeunits: [] },
+      undefined,
+      factory,
+    );
+    try {
+      const err = await backend.deploy(deployDir).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain("ignored the controlState argument");
+      backend.setLease(FAKE_LEASE);
+      await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toThrow(
+        /transport not configured/,
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // R-496's retired-transport case, now against real transports that share the backend's state.
+  test("B3: a refusal landing on a RETIRED transport after the re-deploy is surfaced at teardown; a second one is warned", async () => {
+    const a = scriptedTransportFetch("orphan");
+    const b = scriptedTransportFetch("orphan");
+    const { deployDir, backend, cleanup, made } = await deployedTwice([a, b]);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect((await at(made, 0).run(TX_REQ)).operation).toBe("in-flight-unknown");
+      await backend.deploy(deployDir); // binds transport B; A is replaced
+      expect((await at(made, 1).run(TX_REQ)).operation).toBe("in-flight-unknown");
+      // Only NOW does A record a refusal: after the redeploy, before teardown. Then B.
+      a.refuse("late on A");
+      b.refuse("late on B");
+      await backend.drainControlRequests(1000);
+      const late = backend.takeLateRefusal();
+      expect(late).toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect(late?.message).toContain("late on A");
+      // The second refusal was logged, not dropped.
+      expect(warn.mock.calls.flat().join("\n")).toContain("late on B");
+      expect(backend.takeLateRefusal()).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+});
+
+/**
+ * R552: the control symbol is staged in a LethAL-owned directory inside the private staged copy and
+ * handed to alc as a second `/packagecachepath:` entry. The user's configured `packageCachePath` is
+ * never written: compared by name, size, sha256 and mtimeMs, and never empty, so an unchanged
+ * listing cannot be empty-vs-empty.
+ */
+describe("R552: the user's package cache is never written", () => {
+  const PAST = new Date("2020-01-02T03:04:05Z");
+
+  async function listing(dir: string): Promise<string[]> {
+    const rows: string[] = [];
+    for (const name of (await readdir(dir)).sort()) {
+      const path = join(dir, name);
+      const s = await stat(path);
+      const sha = Bun.SHA256.hash(await readFile(path), "hex");
+      rows.push(`${name} ${s.size} ${sha} ${s.mtimeMs}`);
+    }
+    return rows;
+  }
+
+  /** A cache that already holds one unrelated package with a fixed past mtime. */
+  async function seededCache(dir: string) {
+    const staging = await controlStaging(dir);
+    await mkdir(staging.packageCachePath, { recursive: true });
+    const other = join(staging.packageCachePath, "Microsoft_System_1.0.0.0.app");
+    await Bun.write(other, "system-symbol-bytes");
+    await utimes(other, PAST, PAST);
+    return staging;
+  }
+
+  function backendWith(
+    dir: string,
+    staging: Awaited<ReturnType<typeof seededCache>>,
+    spawn?: SpawnFn,
+  ) {
+    return new BcDevMcpBackend(
+      {
+        mcpCommand: ["unused"],
+        project: "/al",
+        server: "http://bc",
+        serverInstance: "BC",
+        ...staging,
+      },
+      undefined,
+      makeDeployment(dir, { Codeunits: [] }, spawn !== undefined ? { spawn } : {}),
+    );
+  }
+
+  test("deploy(), compileCheck() and a failed compile leave the cache listing unchanged", async () => {
+    const dir = scratch("lethal-r552-cache-unchanged-");
+    try {
+      await writeDeployInputs(dir);
+      const staging = await seededCache(dir);
+      const before = await listing(staging.packageCachePath);
+      expect(before).toHaveLength(1);
+
+      await backendWith(dir, staging).deploy(dir);
+      expect(await listing(staging.packageCachePath)).toEqual(before);
+
+      await backendWith(dir, staging).compileCheck(dir);
+      expect(await listing(staging.packageCachePath)).toEqual(before);
+
+      const failSpawn: SpawnFn = async () => ({ exitCode: 1, stdout: "", stderr: "AL0001: boom" });
+      await expect(backendWith(dir, staging, failSpawn).deploy(dir)).rejects.toBeInstanceOf(
+        AlcCompileError,
+      );
+      expect(await listing(staging.packageCachePath)).toEqual(before);
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a pre-existing stale lethal-control.app keeps its bytes and mtime, and is named by ONE warning (I1, I6)", async () => {
+    const dir = scratch("lethal-r552-stale-leftover-");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await writeDeployInputs(dir);
+      const staging = await seededCache(dir);
+      const leftover = join(staging.packageCachePath, "lethal-control.app");
+      await Bun.write(leftover, "stale-older-control-bytes");
+      await utimes(leftover, PAST, PAST);
+      const before = await listing(staging.packageCachePath);
+
+      const backend = backendWith(dir, staging);
+      await backend.deploy(dir);
+      await backend.compileCheck(dir);
+
+      expect(await readFile(leftover, "utf8")).toBe("stale-older-control-bytes");
+      expect((await stat(leftover)).mtimeMs).toBe(PAST.getTime());
+      expect(await listing(staging.packageCachePath)).toEqual(before);
+      const naming = warn.mock.calls.filter((c) => String(c[0]).includes(leftover));
+      expect(naming).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the leftover warning matches the name case-insensitively, as the skip does (F3)", async () => {
+    const dir = scratch("lethal-r552-warn-case-");
+    const cache = join(dir, "cache");
+    await mkdir(cache, { recursive: true });
+    expect(controlLeftoverWarning(cache)).toBeUndefined();
+    await Bun.write(join(cache, "Lethal-Control.app"), "stale");
+    expect(controlLeftoverWarning(cache)).toContain(join(cache, "Lethal-Control.app"));
+  });
+
+  /** A spawn that records each alc call's `/packagecachepath:` args and what the copy held. */
+  function recordingSpawn(exitCode = 0) {
+    const calls: { caches: string[]; held: string[]; symbol: Buffer | undefined }[] = [];
+    const spawn: SpawnFn = async (argv) => {
+      if (argv[0]?.includes("alc")) {
+        const caches = argv.filter((a) => a.startsWith("/packagecachepath:"));
+        const path = caches[0]?.slice("/packagecachepath:".length) ?? "";
+        const held = (await readdir(path).catch(() => [])).sort();
+        const symbol = await readFile(join(path, "lethal-control.app")).catch(() => undefined);
+        calls.push({ caches, held, symbol });
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (exitCode === 0 && out !== undefined) {
+          await Bun.write(out, buildFakeApp({ Codeunits: [] }));
+        }
+      }
+      return exitCode === 0
+        ? { exitCode: 0, stdout: "", stderr: "" }
+        : { exitCode, stdout: "", stderr: "AL0001: boom" };
+    };
+    const copyPath = () => calls[0]?.caches[0]?.slice("/packagecachepath:".length) ?? "";
+    return { calls, spawn, copyPath };
+  }
+
+  test("alc gets EXACTLY ONE package-cache path: the backend's copy of the user's packages plus the symbol, reused by every compile", async () => {
+    const dir = scratch("lethal-r552-argv-");
+    try {
+      await writeDeployInputs(dir);
+      const staging = await seededCache(dir);
+      const want = await readFile(staging.controlSymbolPath);
+      const rec = recordingSpawn();
+      const backend = backendWith(dir, staging, rec.spawn);
+      await backend.deploy(dir);
+      await backend.compileCheck(dir);
+      expect(rec.calls).toHaveLength(2);
+      for (const call of rec.calls) {
+        expect(call.caches).toHaveLength(1);
+        expect(call.caches[0]).toBe(`/packagecachepath:${rec.copyPath()}`);
+        expect(call.held).toEqual(["Microsoft_System_1.0.0.0.app", "lethal-control.app"]);
+        expect(call.symbol?.equals(want)).toBe(true);
+      }
+      expect(rec.copyPath()).not.toContain(";");
+      expect(rec.copyPath()).not.toBe(staging.packageCachePath);
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("close() removes the backend's package-cache copy", async () => {
+    const dir = scratch("lethal-r552-close-");
+    try {
+      await writeDeployInputs(dir);
+      const staging = await seededCache(dir);
+      const rec = recordingSpawn();
+      const backend = backendWith(dir, staging, rec.spawn);
+      await backend.deploy(dir);
+      expect((await stat(rec.copyPath())).isDirectory()).toBe(true);
+      await backend.close();
+      await expect(stat(rec.copyPath())).rejects.toThrow();
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a session that throws: the copy outlives the failed compile, and the session's finally (close()) removes it", async () => {
+    const dir = scratch("lethal-r552-finally-");
+    try {
+      await writeDeployInputs(dir);
+      const staging = await seededCache(dir);
+      const rec = recordingSpawn(1);
+      const backend = backendWith(dir, staging, rec.spawn);
+      let existedAfterThrow = false;
+      // The shape of `cli.ts`'s session: the backend is closed in a `finally`.
+      const session = async () => {
+        try {
+          await backend.deploy(dir);
+        } finally {
+          existedAfterThrow = (await stat(rec.copyPath()).catch(() => undefined)) !== undefined;
+          await backend.close();
+        }
+      };
+      await expect(session()).rejects.toBeInstanceOf(AlcCompileError);
+      expect(existedAfterThrow).toBe(true);
+      await expect(stat(rec.copyPath())).rejects.toThrow();
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a throw inside staging after the copy exists leaves no -staged directory", async () => {
+    const dir = scratch("lethal-r552-stage-throw-");
+    try {
+      await writeDeployInputs(dir);
+      await Bun.write(join(dir, "app.json"), "{ not json");
+      const staging = await seededCache(dir);
+      await expect(backendWith(dir, staging).deploy(dir)).rejects.toThrow();
+      await expect(stat(`${dir}-staged`)).rejects.toThrow();
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

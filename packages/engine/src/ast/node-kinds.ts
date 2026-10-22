@@ -33,6 +33,8 @@ export const ALNodeKind = {
    *  2026-07-27 — see `docs/measurements/tableextension-coverage-probe.al`. */
   pageextension: "pageextension_declaration",
   tableextension: "tableextension_declaration",
+  /** R254: also under its own id, as BC object type 22 (scripts/r254-probe/README.md). */
+  reportextension: "reportextension_declaration",
   procedure: "procedure",
   trigger: "trigger_declaration",
   /**

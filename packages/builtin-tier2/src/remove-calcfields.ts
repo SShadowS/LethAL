@@ -46,8 +46,9 @@ const METHOD_NAME = "CalcFields";
  *   - (spec §4 table) no signal when the FlowField is never read afterwards, when
  *     `SetAutoCalcFields` or a second `CalcFields` makes it redundant, or when the call retrieves a
  *     BLOB (where "FlowField stays 0" is the wrong model).
- *   - No site inside a `tableextension`/`pageextension` is ever claimed; see `OBJECT_KINDS` in
- *     `./receiver.ts` for why, and for the rest of that predicate's documented limits.
+ *   - Inside a `tableextension`, `pageextension` or `reportextension` (R30, R-463) only a receiver
+ *     the source proves is claimed: a `pageextension`'s `Rec` and a `reportextension`'s
+ *     `modify(X)` record are refused. See `OBJECT_KINDS` in the engine's `semantic/receiver.ts`.
  */
 export const removeCalcFields: MutationOperator = {
   name: "lethal.remove-calcfields",

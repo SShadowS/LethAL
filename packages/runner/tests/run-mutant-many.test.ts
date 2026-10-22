@@ -1,10 +1,11 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
-import { RunMutantTransport } from "../src/run-mutant-transport";
-import type { RunMutantManyRequest } from "../src/run-mutant-transport";
+import { UnfilteredExtensionsQueryError } from "../src/harness";
+import { ControlDrainTimeoutError, RunMutantTransport } from "../src/run-mutant-transport";
+import type { RunMutantManyRequest, RunMutantManyResult } from "../src/run-mutant-transport";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -128,8 +129,18 @@ const odata = (inner: Record<string, unknown>, status = 200) =>
  */
 function fakes(opts: {
   many: Response | "hold";
-  status?: () => Record<string, unknown> | Error;
-  stopAt?: (body: Record<string, unknown>) => Record<string, unknown>;
+  /**
+   * R503: `"hang"` never answers but rejects on its abort signal; `"deaf"` never answers and
+   * ignores the signal; a promise answers when it resolves (a slow poll).
+   */
+  status?: () =>
+    | Record<string, unknown>
+    | Error
+    | "hang"
+    | "deaf"
+    | Promise<Record<string, unknown>>;
+  /** R-204b: an `Error` rejects the stop (its reply lost); `"hang"` never answers it. */
+  stopAt?: (body: Record<string, unknown>) => Record<string, unknown> | Error | "hang";
   /** R236b: answers `GetOpAnswer`; absent, that action is rejected like any unexpected one. */
   kept?: () => Response | Error;
 }) {
@@ -161,13 +172,25 @@ function fakes(opts: {
       polls += 1;
       const s = opts.status === undefined ? statusOf() : opts.status();
       if (s instanceof Error) return Promise.reject(s);
+      if (s === "deaf") return new Promise<Response>(() => {});
+      if (s === "hang") {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("The operation was aborted.")),
+            { once: true },
+          );
+        });
+      }
+      if (s instanceof Promise) return s.then((body) => odata(body));
       return Promise.resolve(odata(s));
     }
     if (u.includes("_StopHungRunAt")) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       stops.push(body);
       const a = opts.stopAt === undefined ? { stopped: true, sessionId: 9 } : opts.stopAt(body);
-      return Promise.resolve(odata(a));
+      if (a === "hang") return new Promise<Response>(() => {});
+      return a instanceof Error ? Promise.reject(a) : Promise.resolve(odata(a));
     }
     return Promise.reject(new Error(`unexpected action ${u}`));
   }) as typeof fetch;
@@ -700,6 +723,171 @@ describe("runMany — the watchdog (R198 §3.2)", () => {
   });
 });
 
+/**
+ * R-204b Part R, grouped: every stop the watchdog sends ends in a state, inside its own bound, and
+ * the call's state is `refused` only if EVERY attempt was refused. Fake timers, advanced 1 ms at a
+ * time, so `at` is the virtual time the call returned.
+ */
+describe("runMany — R-204b: the call's stop state", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 300; i++) await Promise.resolve();
+  }
+  async function drive(
+    fetchFn: typeof fetch,
+    over: Partial<RunMutantManyRequest> = {},
+  ): Promise<{ r: RunMutantManyResult; at: number }> {
+    let out: RunMutantManyResult | undefined;
+    let t = 0;
+    let at = -1;
+    void transport(fetchFn)
+      .runMany(req({ stopHungSessions: true, ...over }))
+      .then((v) => {
+        out = v;
+        at = t;
+      });
+    for (let i = 0; i < 2000 && out === undefined; i++) {
+      jest.advanceTimersByTime(1);
+      t += 1;
+      await flush();
+    }
+    if (out === undefined) throw new Error("runMany never returned within 2000 virtual ms");
+    return { r: out, at };
+  }
+  const BAD = () => new Response("Cannot establish a connection", { status: 400 });
+
+  test("17a. the stop throws (reply lost): the call's state is unknown", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        queueMicrotask(() => f.release(BAD()));
+        return new Error("ECONNRESET");
+      },
+    });
+    const { r } = await drive(f.fetchFn);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+    expect(r.verdict.stopState).toBe("unknown");
+  });
+
+  test("17b. the stop answers stopped:false: refused", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        queueMicrotask(() => f.release(BAD()));
+        return { stopped: false, reason: "no-session-id" };
+      },
+    });
+    const { r } = await drive(f.fetchFn);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.stopState).toBe("refused");
+  });
+
+  test("17c. the stop answers stopped:true: confirmed", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        queueMicrotask(() => f.release(BAD()));
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const { r } = await drive(f.fetchFn);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.stopState).toBe("confirmed");
+  });
+
+  /** Two stop attempts: method 1 refused `method-completed`, then `second` for method 2. */
+  function twoAttempts(second: Record<string, unknown> | Error) {
+    let index = 1;
+    const f = fakes({
+      many: "hold",
+      status: () =>
+        statusOf({
+          opProgress: {
+            ...(statusOf().opProgress as object),
+            methodIndex: index,
+            method: M[index - 1]?.method,
+            token: `tok-m${index}`,
+          },
+        }),
+      stopAt: (body) => {
+        if (body.methodIndex === 1) {
+          index = 2;
+          return { stopped: false, reason: "method-completed", rowIndex: 2, rowState: "running" };
+        }
+        queueMicrotask(() => f.release(BAD()));
+        return second;
+      },
+    });
+    return f;
+  }
+
+  test("10. refused then unknown: the call is NOT retry-safe (unknown)", async () => {
+    const f = twoAttempts(new Error("ECONNRESET"));
+    const { r } = await drive(f.fetchFn);
+    expect(f.stops.map((s) => s.methodIndex)).toEqual([1, 2]);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.stopState).toBe("unknown");
+  });
+
+  test("10b. refused then refused: the call is refused", async () => {
+    const f = twoAttempts({ stopped: false, reason: "no-session-id" });
+    const { r } = await drive(f.fetchFn);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.stopState).toBe("refused");
+  });
+
+  test("12t. a malformed 2xx after a confirmed stop carries the state as data", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        queueMicrotask(() => f.release(odata(answer({ endedBy: "bogus" }))));
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const { r } = await drive(f.fetchFn);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.cause).toBe("group-answer-malformed");
+    expect(r.verdict.stopState).toBe("confirmed");
+  });
+
+  test("bound: a stop that never answers ends at send time + grace, as unknown", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        queueMicrotask(() => f.release(BAD()));
+        return "hang";
+      },
+    });
+    // Poll at 5, stop sent at 5, grace 100: the call returns at 105, not never.
+    const { r, at } = await drive(f.fetchFn, { stopGraceMs: 100 });
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.stopState).toBe("unknown");
+    expect(at).toBeGreaterThanOrEqual(104);
+    expect(at).toBeLessThanOrEqual(106);
+  });
+
+  test("bound: the hard cap ends a stop sent late in the call, not a fresh grace after it", async () => {
+    const f = fakes({ many: "hold", stopAt: () => "hang" });
+    // Poll at 60, ceiling 50 + grace 100 = hard cap 150: the stop gets 90 ms, not 100.
+    const { r, at } = await drive(f.fetchFn, {
+      requestCeilingMs: 50,
+      stopGraceMs: 100,
+      watchdogPollMs: 60,
+    });
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("deadline-exceeded");
+    expect(r.verdict.stopState).toBe("unknown");
+    expect(at).toBeGreaterThanOrEqual(149);
+    expect(at).toBeLessThanOrEqual(151);
+  });
+});
+
 describe("runMany — the session keys (R206 §2.1)", () => {
   const malformed = async (over: Record<string, unknown>) => {
     const r = await transport(fakes({ many: odata(answer(over)) }).fetchFn).runMany(req());
@@ -903,6 +1091,50 @@ describe("RunMutantTransport.runMany: a lost reply is read back (R236b)", () => 
       expect(v.replyRecovered).toContain("2xx body could not be read");
     }
     expect(f.calls).toEqual(["RunMutantMany", "GetOpAnswer"]);
+  });
+
+  test("R-496: a readback refused as an unfiltered extensions query rejects runMany", async () => {
+    const f = fakes({
+      many: truncated(),
+      kept: () => new UnfilteredExtensionsQueryError("refused readback"),
+    });
+    const err = await transport(f.fetchFn)
+      .runMany(TWO)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.calls).toEqual(["RunMutantMany", "GetOpAnswer"]);
+  });
+
+  test("R-496 T-a: a refused main request rejects runMany even though a kept answer is on file", async () => {
+    const f = fakes({ many: truncated(), kept: found(RAN_TWO) });
+    const fetchFn = ((url: unknown, init?: RequestInit) =>
+      String(url).includes("_RunMutantMany")
+        ? Promise.reject(new UnfilteredExtensionsQueryError("refused main"))
+        : f.fetchFn(url as string, init)) as typeof fetch;
+    const err = await transport(fetchFn)
+      .runMany(TWO)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.calls).toEqual(["GetOpAnswer"]);
+  });
+
+  test("R-496 T-b: a status read refused after a confirmed stop and an AL-stop 408 rejects runMany", async () => {
+    let after408 = false;
+    const f = fakes({
+      many: "hold",
+      status: () => (after408 ? new UnfilteredExtensionsQueryError("refused status") : statusOf()),
+      stopAt: () => {
+        setTimeout(() => {
+          after408 = true;
+          f.release(new Response(AL_STOP_BODY, { status: 408 }));
+        }, 5);
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const err = await transport(f.fetchFn)
+      .runMany(req({ stopHungSessions: true }))
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
   });
 
   test("2. a kept answer carrying runError is not accepted", async () => {
@@ -1148,5 +1380,294 @@ describe("runMany, a connection failure keeps the watchdog's story (R289)", () =
     expect(warnings[0]).toContain("trace write failed 1 times");
     // Bounded: `dispatch`, then the first `poll-sent` that threw, and nothing after it.
     expect(writes.length).toBe(2);
+  });
+});
+
+describe("R-496 review round 3: a refused extensions query stops the watchdog and the call", () => {
+  test("a progress poll refused as an unfiltered extensions query rejects runMany, polling stops", async () => {
+    const f = fakes({
+      many: "hold",
+      status: () => new UnfilteredExtensionsQueryError("refused poll"),
+    });
+    const err = await within(
+      transport(f.fetchFn)
+        .runMany(req())
+        .catch((e: unknown) => e),
+      3_000,
+      "runMany",
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.polls()).toBe(1);
+  });
+
+  test("a StopHungRunAt refused as an unfiltered extensions query rejects runMany", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => new UnfilteredExtensionsQueryError("refused stop"),
+    });
+    const err = await within(
+      transport(f.fetchFn)
+        .runMany(req({ stopHungSessions: true }))
+        .catch((e: unknown) => e),
+      3_000,
+      "runMany",
+    );
+    expect(err).toBeInstanceOf(UnfilteredExtensionsQueryError);
+    expect(f.stops.length).toBe(1);
+  });
+});
+
+describe("R499: a scored runMany waits for control requests still in flight", () => {
+  /** Far above the test timeout: a wait that should not happen times the test out. */
+  const LONG_DRAIN_MS = 60_000;
+  const BAD = () => new Response("Cannot establish a connection", { status: 400 });
+
+  /**
+   * `RunMutantMany` is held until `release`; the poll reads `statusOf()` (10 s elapsed against a
+   * 1 s budget); `StopHungRunAt` is DEAF: it ignores its abort and settles only on `refuseStop`.
+   */
+  function deafStop() {
+    let release: ((r: Response) => void) | undefined;
+    let refuse: ((e: unknown) => void) | undefined;
+    let manyCalls = 0;
+    const fetchFn = ((url: unknown, init?: RequestInit) => {
+      const action = /LethALControl_(\w+)/.exec(String(url))?.[1] ?? String(url);
+      if (action === "RunMutantMany") {
+        manyCalls += 1;
+        return new Promise<Response>((resolve, reject) => {
+          release = resolve;
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      }
+      if (action === "GetOperationStatus") return Promise.resolve(odata(statusOf()));
+      if (action === "StopHungRunAt") {
+        return new Promise<Response>((_resolve, reject) => {
+          refuse = reject;
+        });
+      }
+      return Promise.reject(new Error(`unexpected action ${action}`));
+    }) as typeof fetch;
+    return {
+      fetchFn,
+      manyCalls: () => manyCalls,
+      stopSent: () => refuse !== undefined,
+      release: (r: Response) => {
+        if (release === undefined) throw new Error("RunMutantMany was never called");
+        release(r);
+      },
+      refuseStop: (message: string) => {
+        if (refuse === undefined) throw new Error("StopHungRunAt was never called");
+        refuse(new UnfilteredExtensionsQueryError(message));
+      },
+    };
+  }
+  const settle = <T>(p: Promise<T>): Promise<T | unknown> =>
+    p.then(
+      (v) => v,
+      (e: unknown) => e,
+    );
+
+  test("G1 (a): a StopHungRunAt outliving its bound and refused inside the drain rejects runMany", async () => {
+    const f = deafStop();
+    const t = new RunMutantTransport(CFG, TA, AR, f.fetchFn, { drainMs: LONG_DRAIN_MS });
+    const call = settle(t.runMany(req({ stopHungSessions: true, stopGraceMs: 50 })));
+    await until(f.stopSent, 2_000, "the stop");
+    f.release(odata(answer())); // a valid verdict set, while the stop is still in flight
+    await new Promise((r) => setTimeout(r, 150)); // past the stop's bound
+    f.refuseStop("refused stop");
+    expect(await call).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("G2 (b): an earlier call's orphan refused during the next call rejects that call", async () => {
+    const f = deafStop();
+    const t = new RunMutantTransport(CFG, TA, AR, f.fetchFn, { drainMs: LONG_DRAIN_MS });
+    const first = settle(t.runMany(req({ stopHungSessions: true, stopGraceMs: 50 })));
+    await until(f.stopSent, 2_000, "the stop");
+    f.release(BAD());
+    const r1 = (await first) as RunMutantManyResult;
+    if (r1.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r1.verdict.operation).toBe("in-flight-unknown"); // not scored; the stop is an orphan
+    expect([...t.controlState.orphans.values()]).toEqual(["StopHungRunAt"]);
+    // The warm replay: budgets nothing exceeds, so its watchdog neither stops nor aborts.
+    const second = settle(
+      t.runMany(req({ methods: M.map((r) => ({ ref: r, budgetMs: 60_000 })) })),
+    );
+    await until(() => f.manyCalls() === 2, 2_000, "the second call");
+    f.refuseStop("late refused stop");
+    await new Promise((r) => setTimeout(r, 5));
+    f.release(odata(answer()));
+    expect(await second).toBeInstanceOf(UnfilteredExtensionsQueryError);
+  });
+
+  test("G3: a StopHungRunAt still in flight at the drain bound rejects with ControlDrainTimeoutError, never `verdicts`", async () => {
+    const f = deafStop();
+    const t = new RunMutantTransport(CFG, TA, AR, f.fetchFn, { drainMs: 50 });
+    const call = settle(t.runMany(req({ stopHungSessions: true, stopGraceMs: 50 })));
+    await until(f.stopSent, 2_000, "the stop");
+    f.release(odata(answer()));
+    const got = await call;
+    expect(got).toBeInstanceOf(ControlDrainTimeoutError);
+    expect((got as Error).message).toContain("StopHungRunAt");
+    expect((got as Error).message).toContain("R499");
+  });
+
+  test("G4 control: a stop confirmed in time and a 408 stay `timeout`, with nothing left in flight", async () => {
+    const f = fakes({
+      many: "hold",
+      stopAt: () => {
+        setTimeout(() => f.release(new Response(AL_STOP_BODY, { status: 408 })), 5);
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const t = new RunMutantTransport(CFG, TA, AR, f.fetchFn, { drainMs: LONG_DRAIN_MS });
+    const r = await t.runMany(req({ stopHungSessions: true }));
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.operation).toBeUndefined();
+    expect(r.cause).toBeUndefined();
+    expect(r.verdict.stopState).toBe("confirmed");
+    expect(t.controlState.orphans.size).toBe(0);
+    expect(t.controlState.lateRefusal).toBeUndefined();
+  });
+});
+
+/**
+ * R503: every watchdog poll ends within `pollBoundMs` (clamped to what is left of the hard cap)
+ * and a poll that does not answer is a failed poll; polling goes on. A wrong wait goes red by
+ * `within`'s own timer, never by a wall-clock assert.
+ */
+describe("runMany — R503: the watchdog's GetOperationStatus poll is bounded", () => {
+  const WAIT = 3_000;
+  const tx = (fetchFn: typeof fetch, pollBoundMs: number, drainMs?: number) =>
+    new RunMutantTransport(CFG, TA, AR, fetchFn, {
+      pollBoundMs,
+      ...(drainMs !== undefined ? { drainMs } : {}),
+    });
+  /** The first poll gets `first`; every later poll gets `rest()`. */
+  const firstThen =
+    (
+      first: "hang" | "deaf" | Record<string, unknown>,
+      rest: () => Record<string, unknown> | Promise<Record<string, unknown>>,
+    ) =>
+    () => {
+      let n = 0;
+      return () => (++n === 1 ? first : rest());
+    };
+
+  test("P1: the first poll hangs; the call still scores BC's answer and leaves nothing in flight", async () => {
+    const f = fakes({
+      many: "hold",
+      status: firstThen("hang", () => statusOf({ opProgress: undefined }))(),
+    });
+    const t = tx(f.fetchFn, 20, 50);
+    const p = t.runMany(req());
+    // Poll 2 is sent only after poll 1 ended as a failed poll and the loop went on.
+    await until(() => f.polls() >= 2, WAIT, "a second poll");
+    f.release(odata(answer()));
+    const r = await within(p, WAIT, "runMany");
+    expect(r.kind).toBe("verdicts");
+    expect(t.controlState.orphans.size).toBe(0);
+  });
+
+  test("P2: every poll hangs and the main request is held: the hard cap decides, never a timeout", async () => {
+    const f = fakes({
+      many: "hold",
+      status: () => "hang",
+      kept: () => odata({ found: false, keptAttemptId: "a0", keptOpSeq: 6 }),
+    });
+    const r = await within(
+      tx(f.fetchFn, 20).runMany(
+        req({ stopHungSessions: true, requestCeilingMs: 60, stopGraceMs: 20 }),
+      ),
+      WAIT,
+      "runMany",
+    );
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("deadline-exceeded");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+    expect(r.verdict.failureMessage).toMatch(/polls failed [1-9]/);
+    expect(r.verdict.failureMessage).toContain(
+      "answer readback: the server holds no committed answer for a1/7",
+    );
+    expect(f.calls).toContain("GetOpAnswer");
+    expect(f.calls).not.toContain("StopHungRunAt");
+    expect(f.stops.length).toBe(0);
+  });
+
+  test("P3: polling goes on after a hung poll; the next poll's answer still drives the stop", async () => {
+    const f = fakes({
+      many: "hold",
+      status: firstThen("hang", () => statusOf())(),
+      stopAt: () => {
+        setTimeout(() => f.release(new Response(AL_STOP_BODY, { status: 408 })), 5);
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const r = await within(
+      tx(f.fetchFn, 20).runMany(
+        req({ stopHungSessions: true, requestCeilingMs: 400, stopGraceMs: 100 }),
+      ),
+      WAIT,
+      "runMany",
+    );
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.stopState).toBe("confirmed");
+    expect(f.polls()).toBeGreaterThanOrEqual(2);
+    expect(f.stops.length).toBe(1);
+  });
+
+  test("P4: a poll bound far above the hard cap is clamped to it; the call ends at the cap", async () => {
+    const f = fakes({ many: "hold", status: () => "hang" });
+    const r = await within(
+      tx(f.fetchFn, 60_000).runMany(req({ requestCeilingMs: 60, stopGraceMs: 20 })),
+      WAIT,
+      "runMany",
+    );
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("deadline-exceeded");
+  });
+
+  test("P5: a poll that ignores its abort still ends at the bound; at a scored exit the drain names it", async () => {
+    const f = fakes({ many: "hold", status: () => "deaf" });
+    const p = tx(f.fetchFn, 20, 50)
+      .runMany(req())
+      .then(
+        (v) => v,
+        (e: unknown) => e,
+      );
+    await until(() => f.polls() >= 1, WAIT, "the first poll");
+    f.release(odata(answer()));
+    const got = await within(p, WAIT, "runMany");
+    expect(got).toBeInstanceOf(ControlDrainTimeoutError);
+    expect((got as Error).message).toContain("GetOperationStatus");
+    expect((got as Error).message).toContain("R499");
+  });
+
+  test("P6: a slow poll that answers inside the bound is used (the bound is not the poll interval)", async () => {
+    const f = fakes({
+      many: "hold",
+      status: firstThen(
+        statusOf({ opProgress: undefined }),
+        () => new Promise((r) => setTimeout(() => r(statusOf()), 40)),
+      )(),
+      stopAt: () => {
+        setTimeout(() => f.release(new Response(AL_STOP_BODY, { status: 408 })), 5);
+        return { stopped: true, sessionId: 9 };
+      },
+    });
+    const r = await within(
+      tx(f.fetchFn, 200).runMany(
+        req({ stopHungSessions: true, watchdogPollMs: 5, requestCeilingMs: 400, stopGraceMs: 100 }),
+      ),
+      WAIT,
+      "runMany",
+    );
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("timeout");
+    expect(r.verdict.stopState).toBe("confirmed");
+    expect(f.stops.length).toBe(1);
   });
 });

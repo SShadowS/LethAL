@@ -1,7 +1,7 @@
 import { describeAlRunnerCache } from "./al-runner-cache";
 import type { AlRunnerCacheReport } from "./al-runner-cache";
 import { compareAppVersions } from "./app-version";
-import { MIN_CONTROL_VERSION } from "./harness";
+import { MIN_CONTROL_VERSION, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
 
 /**
@@ -129,6 +129,9 @@ export interface DoctorDeps {
    * `lease` lesson two fields up but the same mistake.
    */
   readonly alRunner?: () => Promise<{ readonly ok: boolean; readonly details: string }>;
+  /** R586: the al-runner-v3 binary: its `--version`, its `.gated` pin and `bcVersion` against the
+   *  package folder. Read-only; the session's contract probe is not run here. */
+  readonly alRunnerV3?: () => Promise<{ readonly ok: boolean; readonly details: string }>;
   /**
    * R131: al-runner's artifact cache, READ. Supplied on every path `buildDoctorDeps` produces —
    * reading a local directory needs no environment to exist — but OPTIONAL on the type since R146,
@@ -226,6 +229,9 @@ async function runCheck(name: string, fn: () => Promise<DoctorCheck>): Promise<D
   try {
     return await fn();
   } catch (err) {
+    // R-496 review: a refused extensions query is a caller-contract violation inside LethAL, not
+    // a statement about the server, so it rejects the whole run rather than reading as one failed check.
+    if (err instanceof UnfilteredExtensionsQueryError) throw err;
     return { name, ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -486,6 +492,7 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     lease,
     toolPaths,
     alRunner,
+    alRunnerV3,
     alRunnerCache,
     companies,
     alcRuntime,
@@ -529,6 +536,14 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
   // cache line.
   if (alRunner !== undefined) {
     checkPromises.push(runCheck("al-runner", async () => checkAlRunner(await alRunner())));
+  }
+  if (alRunnerV3 !== undefined) {
+    checkPromises.push(
+      runCheck("al-runner-v3", async () => {
+        const s = await alRunnerV3();
+        return { name: "al-runner-v3", ok: s.ok, detail: s.details };
+      }),
+    );
   }
   if (toolPaths !== undefined) {
     checkPromises.push(

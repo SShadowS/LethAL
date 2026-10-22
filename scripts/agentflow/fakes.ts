@@ -68,6 +68,12 @@ export function emptyWorld(over: Partial<FakeWorld> = {}): FakeWorld {
   };
 }
 
+/** The sublegs a green leg reports: the exact list when one is required, else `<leg>-<i>`. */
+function fakeSublegs(leg: Leg, challenge: ReceiptChallenge): readonly string[] {
+  const e = challenge.expectedSublegs;
+  return typeof e === "number" ? Array.from({ length: e }, (_, i) => `${leg}-${i}`) : e;
+}
+
 export function fakePorts(w: FakeWorld): Ports {
   const note = (s: string) => {
     w.journal.push(s);
@@ -188,7 +194,7 @@ export function fakePorts(w: FakeWorld): Ports {
             candidateSha: challenge.candidateSha,
             containerGeneration: challenge.containerGeneration,
             status: "passed",
-            sublegs: Array.from({ length: challenge.expectedSublegs }, (_, i) => `${leg}-${i}`),
+            sublegs: fakeSublegs(leg, challenge),
             observedArtifacts: w.observedArtifacts,
           },
           diff: w.legDiffs.get(leg) ?? [],
@@ -204,7 +210,7 @@ export function fakePorts(w: FakeWorld): Ports {
             candidateSha: challenge.candidateSha,
             containerGeneration: challenge.containerGeneration,
             status: "passed",
-            sublegs: Array.from({ length: challenge.expectedSublegs }, (_, i) => `${leg}-${i}`),
+            sublegs: fakeSublegs(leg, challenge),
             observedArtifacts: w.observedArtifacts,
           },
           diff: w.controlDiffs.get(leg) ?? [],

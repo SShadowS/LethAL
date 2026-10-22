@@ -125,7 +125,7 @@ rather than misleading a reader.
 | Operator | Version | Example | What weak test it catches |
 |---|---|---|---|
 | `lethal.conditional-boundary` | 1.0.0 | `A > 0` → `A >= 0` | an off-by-one at a boundary no test pins |
-| `lethal.flip-boolean-literal` | 1.0.0 | `true` → `false` | a flag nobody checks the other setting of |
+| `lethal.flip-boolean-literal` | 1.1.0 | `true` → `false` | a flag nobody checks the other setting of |
 | `lethal.negate-conditional` | 1.0.0 | `Cust.Next() = 0` → `Cust.Next() <> 0` | a branch that is taken but never checked |
 | `lethal.negate-guard` | 1.0.0 | `Cust.Get('X')` → `not (Cust.Get('X'))` | a plain `if Rec.Get(...) then` guard nobody tests the other side of |
 | `lethal.toggle-blank-string` | 1.0.0 | `'FOO'` → `''` | a blank check nobody drives with a blank value |
@@ -156,7 +156,7 @@ Operators that exploit AL/BC semantics to surface weak tests.
 | `lethal.remove-commit` | 1.1.0 | `Commit()` → _(deleted)_ | reliance on an implicit commit |
 | `lethal.swap-rec-xrec` | 1.0.0 | `xRec.Amount` → `Rec.Amount` | before-value gaps in `OnValidate` and `OnRename` |
 | `lethal.swap-find-direction` | 1.0.0 | `Cust.FindFirst()` → `Cust.FindLast()` | a suite whose fixture only ever holds one row |
-| `lethal.validate-to-assign` | 1.1.0 | `Rec.Validate(Name, NewName)` → `Rec.Name := NewName` | the field value asserted, the `OnValidate` side effect not |
+| `lethal.validate-to-assign` | 1.2.0 | `Rec.Validate(Name, NewName)` → `Rec.Name := NewName` | the field value asserted, the `OnValidate` side effect not |
 | `lethal.flip-filter-literal` | 1.0.0 | `Cust.SetFilter("No.", '<>%1', No)` → `Cust.SetFilter("No.", '=%1', No)` | a filter string BC re-parses at run time, never asserted |
 | `lethal.swap-enum-member` | 1.0.0 | `"S"::Open` → `"S"::Released` | a state machine whose resulting state nothing asserts |
 <!-- /operators: tier2 -->

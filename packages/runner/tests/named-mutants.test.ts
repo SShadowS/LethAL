@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -19,6 +19,7 @@ import {
 import { ResultsStore } from "../src/store";
 import { verifyRefusalOf } from "../src/verify";
 import { bundleFor } from "./helpers/bundle";
+import { removeScratchDir } from "./helpers/scratch";
 
 const ARTIFACT_ID = "0123456789abcdef0123456789abcdef";
 const APP_ID = "11111111-1111-1111-1111-111111111111";
@@ -27,7 +28,7 @@ const MANIFEST = {
   selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
   artifactId: ARTIFACT_ID,
   mutants: [
-    { mutantId: "M0001", file: "A.Codeunit.al" },
+    { mutantId: "M0001", file: "A.Codeunit.al", objectType: "codeunit", codeunitId: 79000 },
     {
       mutantId: "M0002",
       file: "A.Codeunit.al",
@@ -86,9 +87,9 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     ref = { fromRunId: runId, batchIndex: 0, appPath, instrumentedDir };
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     store.close();
-    await rm(dir, { recursive: true, force: true });
+    removeScratchDir(dir);
   });
 
   /** R360: records a fresh run whose stored bundle holds these parts, with `over` on the row. */
@@ -286,6 +287,8 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       alSources: [{ path: "src/A.Codeunit.al", text: AL_SOURCE }],
       // R318: from the VERIFIED manifest, for the fenced line map `attach` builds.
       renamedMemberNames: new Map([["codeunit:79000", [["Pick", "Choose"]]]]),
+      // R-307 section 4: the verified manifest's object keys, which `attach` checks.
+      manifestObjectKeys: new Set(["codeunit:79000"]),
     });
   });
 });

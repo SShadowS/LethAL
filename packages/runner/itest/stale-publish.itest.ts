@@ -51,14 +51,14 @@ import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InstrumentedFile, MutantManifest, SelectorConfig } from "@lethal/schemata";
-import { writeInstrumentedProject } from "@lethal/schemata";
+import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import { parseVersionConflict, reserveAppVersion } from "../src/app-version";
-import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
+import { ArtifactCompiler, buildPackageCacheCopy, defaultArtifactIo } from "../src/artifact";
 import type { CompiledArtifact } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import type { LethalConfigFile } from "../src/cli";
-import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { discoverTests } from "../src/discovery";
 import { formatFailure } from "../src/format-failure";
@@ -68,7 +68,13 @@ import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { ContainerDeployerIo, SpawnFn } from "../src/publisher";
 import { RunMutantTransport } from "../src/run-mutant-transport";
-import { itestConfigName, itestConfigPath } from "./config-path";
+import {
+  assertLaunchMatchesConfig,
+  itestConfigName,
+  itestConfigPath,
+  itestLaunchPath,
+  printItestTarget,
+} from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
@@ -84,8 +90,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
-const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
+printItestTarget(CONFIG_LOCAL_PATH);
+const LAUNCH_LOCAL_PATH = itestLaunchPath(PROJECT_DIR);
 
 // Same ids as bcdev.itest.ts / al-runner.itest.ts — must live inside the fixture's declared
 // idRanges (79000-79199), enforced by real alc.exe (AL0297).
@@ -265,6 +272,8 @@ interface Ctx {
   readonly versions: VersionState;
   readonly overBudgetRef: TestMethodRef;
   readonly scratchRoot: string;
+  /** R552: the package-cache copy (`buildPackageCacheCopy`) every compile gets, under scratchRoot. */
+  readonly cacheCopy: string;
   /** Task 8b: proves the serializer, not just BC's final state, actually held the two
    * concurrent Probe B publishes to one-at-a-time — see `instrumentedDeployerIo`. */
   readonly publishTracker: { readonly maxInFlight: () => number; readonly reset: () => void };
@@ -285,14 +294,16 @@ async function compileArtifact(
   appVersion: string,
 ): Promise<CompiledArtifact> {
   await rm(scratchDir, { recursive: true, force: true });
-  await writeInstrumentedProject({
-    targetDir: scratchDir,
-    files: ctx.files,
-    selectorIds: SELECTOR_IDS,
-    artifactId,
-    targetAppId: ctx.appId,
-    operatorTiers,
-  });
+  await writeInstrumentedProject(
+    withRunIdentityOrdinals({
+      targetDir: scratchDir,
+      files: ctx.files,
+      selectorIds: SELECTOR_IDS,
+      artifactId,
+      targetAppId: ctx.appId,
+      operatorTiers,
+    }),
+  );
   // Layer 5C-A: the instrumented target's selector delegates to `Codeunit "LC Control State"`, so
   // it cannot compile without the LethAL Control dependency (+ its symbol staged in the package
   // cache, done once in main()). BcDevMcpBackend.deploy() injects this in a private staging copy;
@@ -343,6 +354,7 @@ async function compileArtifact(
     appVersion,
     mutantManifest,
     appManifest,
+    packageCacheCopyPath: ctx.cacheCopy,
   });
 }
 
@@ -664,6 +676,7 @@ async function main(): Promise<void> {
 
   const configFile = await readJson<LethalConfigFile>(CONFIG_LOCAL_PATH, itestConfigName());
   const bcdev = validateBcDevConfig(configFile.bcdev);
+  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
 
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) {
@@ -680,10 +693,16 @@ async function main(): Promise<void> {
     { alcPath: toolPaths.alcPath, packageCachePath: bcdev.packageCachePath, outputDir },
     defaultArtifactIo,
   );
-  // Stage the LethAL Control symbol into the compiler's package cache so the instrumented target's
-  // `LC Control State` reference resolves (mirrors BcDevMcpBackend.deploy()'s staging; the
-  // dependency itself is injected per-artifact in compileArtifact). Once — the cache persists.
-  await copyFile(bcdev.controlSymbolPath, join(bcdev.packageCachePath, "lethal-control.app"));
+  // R552, as BcDevMcpBackend does: alc gets ONE package cache, a copy of the configured
+  // `packageCachePath` plus the LethAL Control symbol, under `scratchRoot` (removed in the
+  // `finally` below), so the instrumented target's `LC Control State` reference resolves without
+  // writing into the configured cache. The dependency itself is injected per-artifact in
+  // compileArtifact.
+  const cacheCopy = await buildPackageCacheCopy(
+    bcdev.packageCachePath,
+    bcdev.controlSymbolPath,
+    scratchRoot,
+  );
   // Task 8b: instrument the real deployer IO so Probe B can prove the serializer actually held
   // the two concurrent publishes one-at-a-time, not just that BC's final state happened to be
   // B (see `instrumentedDeployerIo`'s doc comment above).
@@ -692,6 +711,7 @@ async function main(): Promise<void> {
     {
       altoolPath: toolPaths.altoolPath,
       server: bcdev.server,
+      ...devPortOf(bcdev),
       serverInstance: bcdev.serverInstance,
       username: bcdev.username,
       password: bcdev.password,
@@ -700,7 +720,7 @@ async function main(): Promise<void> {
     deployerIoTracker.io,
   );
   const odataCfg = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+    ...odataUrlsOf(bcdev),
     company: bcdev.company,
     username: bcdev.username,
     password: bcdev.password,
@@ -738,6 +758,7 @@ async function main(): Promise<void> {
     versions: new VersionState(sourceVersion),
     overBudgetRef,
     scratchRoot,
+    cacheCopy,
     publishTracker: {
       maxInFlight: deployerIoTracker.maxInFlight,
       reset: deployerIoTracker.reset,

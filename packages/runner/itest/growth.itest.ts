@@ -12,7 +12,7 @@
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { writeInstrumentedProject } from "@lethal/schemata";
+import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 
 const PROJECT = join(import.meta.dir, "..", "..", "..", "fixtures", "sandbox-app");
@@ -22,14 +22,16 @@ const mutantCount = files.reduce((n, f) => n + f.specs.length, 0);
 
 const dir = await mkdtemp(join(tmpdir(), "lethal-growth-"));
 try {
-  await writeInstrumentedProject({
-    targetDir: dir,
-    files,
-    selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-    artifactId: "0123456789abcdef0123456789abcdef",
-    targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-    operatorTiers,
-  });
+  await writeInstrumentedProject(
+    withRunIdentityOrdinals({
+      targetDir: dir,
+      files,
+      selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+      artifactId: "0123456789abcdef0123456789abcdef",
+      targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      operatorTiers,
+    }),
+  );
 
   // The Mutation* files (Selector + Register) are fixed scaffolding —
   // written once per artifact, byte-identical no matter how many mutants the

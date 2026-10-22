@@ -11,6 +11,9 @@ import type { HangCapableReason } from "@lethal/engine";
  * the `hang-capable-auto-stop` caveat the design's section 5.4 specifies, which is later plan work
  * (a forced-stop feature this plan does not build) and will look values up here the way
  * `platformArtifactKills`'s screen already looks up `PLATFORM_KILL_MECHANISM_EXPLANATIONS`.
+ *
+ * Since R196's refusal the built-in operators REFUSE these sites instead of tagging them, so only a
+ * plug-in operator can still set the tag; the channel stays for that.
  */
 export const HANG_CAPABLE_EXPLANATIONS: Record<HangCapableReason, string> = {
   "loop-condition-target":

@@ -11,7 +11,11 @@ import {
   visit,
   wrapRoot,
 } from "@lethal/engine";
-import { compileSchemataForFile, writeInstrumentedProject } from "@lethal/schemata";
+import {
+  compileSchemataForFile,
+  withRunIdentityOrdinals,
+  writeInstrumentedProject,
+} from "@lethal/schemata";
 import { tier1Operators } from "../src";
 
 const SRC_PATH = fileURLToPath(new URL("./fixtures/al/mixed-operators.al", import.meta.url));
@@ -58,14 +62,16 @@ describe("end-to-end Layer 3", () => {
     // Write to tmp dir and read back
     const dir = await mkdtemp(join(tmpdir(), "lethal-e2e-"));
     try {
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "mixed.al", source: src, root, specs: kept }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-        operatorTiers: OPERATOR_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "mixed.al", source: src, root, specs: kept }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+          operatorTiers: OPERATOR_TIERS,
+        }),
+      );
       const written = await readFile(join(dir, "mixed.al"), "utf8");
       expect(written).toBe(compiled);
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));

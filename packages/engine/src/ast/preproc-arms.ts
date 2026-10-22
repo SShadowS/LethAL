@@ -105,7 +105,7 @@ function conditionText(marker: ALSyntaxNode): string {
 }
 
 /** The grammar's `extras` that can sit between two statements (tree-sitter-al 4.4.1). */
-const TRIVIA_KINDS: ReadonlySet<string> = new Set([
+export const TRIVIA_KINDS: ReadonlySet<string> = new Set([
   "comment",
   "multiline_comment",
   "pragma",
@@ -114,7 +114,7 @@ const TRIVIA_KINDS: ReadonlySet<string> = new Set([
   "preproc_define",
   "preproc_undef",
 ]);
-const ARM_MARKERS: ReadonlySet<string> = new Set([
+export const ARM_MARKERS: ReadonlySet<string> = new Set([
   "preproc_if",
   "preproc_elif",
   "preproc_else",

@@ -1,13 +1,27 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { initParser } from "@lethal/engine";
 import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
-import { AL_RUNNER_UNCLASSIFIED_ERROR, AlRunnerBackend } from "../src/al-runner-backend";
+import {
+  AL_RUNNER_UNCLASSIFIED_ERROR,
+  AL_RUNNER_UNDECIDED_ARM_MISSING,
+  AlRunnerBackend,
+  AlRunnerServerStopUnsetError,
+  AlRunnerTestNameError,
+  parseReportedStopMs,
+  verdictFromRunnerTest,
+} from "../src/al-runner-backend";
 import type { ServerSpawnFn } from "../src/al-runner-server";
+import type { TestVerdict } from "../src/backend";
+import { refusalLine } from "../src/cli";
 import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
+import { runOnce } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
+import { SessionSafety } from "../src/session-safety";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
+import { fakeAlRunnerServer } from "./helpers/fake-al-runner-server";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -279,6 +293,7 @@ ${"    // pad\n".repeat(pad)}    procedure Reached()
       },
       coveringSpawn(() => line),
     );
+    backend.useBuildSymbols([]); // R-300b: what runSession hands over before the first deploy
     const procs = (v: { coverage?: { entries: readonly { procedure?: string }[] } }) =>
       (v.coverage?.entries ?? []).map((e) => e.procedure ?? "<none>");
     // Batch 1, no shift: line 5 is `exit;` inside Reached.
@@ -304,6 +319,86 @@ ${"    // pad\n".repeat(pad)}    procedure Reached()
     const { first, second } = await coveredProcedures((b, d) => b.compileCheck(d));
     expect(first).toEqual(["Reached"]);
     expect(second).toEqual(["Reached"]);
+  });
+});
+
+// R-307 section 4 (e). With coverage on, deploy() builds the index EAGERLY and checks the manifest's
+// objects against its parsed declarations, so an undeclared one throws before the baseline's first
+// al-runner invocation. The spawn counter is the phase-order evidence: a lazy build would only run
+// after that invocation, which the counter would show as 1.
+describe("AlRunnerBackend.deploy: manifest objects against parsed declarations (R-307)", () => {
+  async function deployThenBaseline(codeunitIds: readonly number[] | "no-manifest") {
+    const dir = scratch("lethal-r307-alrunner-batch-");
+    await writeFile(
+      join(dir, "One.Codeunit.al"),
+      'codeunit 79150 "Probe One"\n{\n    procedure Reached()\n    begin\n        exit;\n    end;\n}\n',
+      "utf8",
+    );
+    await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    if (codeunitIds !== "no-manifest") {
+      await writeFile(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({
+          artifactId: "a".repeat(32),
+          mutants: codeunitIds.map((codeunitId) => ({ objectType: "codeunit", codeunitId })),
+        }),
+        "utf8",
+      );
+    }
+    const workDir = scratch("lethal-r307-alrunner-work-");
+    const { calls, spawn } = okSpawn({
+      tests: [{ name: QUALIFIED, status: "pass", durationMs: 1 }],
+      passed: 1,
+      failed: 0,
+      errors: 0,
+      total: 1,
+      exitCode: 0,
+    });
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: workDir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        coverage: "al-runner",
+      },
+      spawn,
+    );
+    backend.useBuildSymbols([]); // R-300b: what runSession hands over before the first deploy
+    let err: unknown;
+    try {
+      // The orchestrator's order: deploy, then the baseline run.
+      await backend.deploy(dir);
+      await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    } catch (e) {
+      err = e;
+    }
+    await backend.close();
+    return { err, invocations: calls.length, activeDir: join(workDir, "active") };
+  }
+
+  test("an undeclared manifest object throws at deploy, before any baseline invocation", async () => {
+    const { err, invocations } = await deployThenBaseline([79150, 79160]);
+    // First, so a lazy build fails on the ORDER: the baseline's invocation already happened.
+    expect(invocations).toBe(0);
+    expect((err as Error | undefined)?.message).toBe(
+      "a mutant is attributed to codeunit:79160, which the compiled app does not declare. It is not named in the run's coverage refusals, so its mutants would read no-coverage with no reason given.",
+    );
+  });
+
+  test("fix round 1: with coverage on, a MISSING manifest is refused at deploy, naming its path", async () => {
+    // An absent manifest checked as an empty key set would pass with nothing checked.
+    const { err, invocations, activeDir } = await deployThenBaseline("no-manifest");
+    expect(invocations).toBe(0);
+    expect((err as Error | undefined)?.message).toBe(
+      `line-map: ${join(activeDir, "mutant-manifest.json")} does not exist, so the batch's mutant objects cannot be checked against its declarations`,
+    );
+  });
+
+  test("control: a declared one deploys and the baseline runs once", async () => {
+    const { err, invocations } = await deployThenBaseline([79150]);
+    expect(err).toBeUndefined();
+    expect(invocations).toBe(1);
   });
 });
 
@@ -569,13 +664,11 @@ describe("AlRunnerBackend.run", () => {
 
   // The lookup must use the SAME qualified name the `--test` filter sent (one helper builds
   // both). Matching on the bare method would miss every v2 row; matching too loosely would
-  // score a mutant off whatever test happened to be in the payload.
+  // score a mutant off whatever test happened to be in the payload. (Since R488 a payload that ALSO
+  // names another test is never credited at all; see the R488 block below.)
   test("finds the requested test by its qualified name", async () => {
     const { spawn } = okSpawn({
-      tests: [
-        { name: "Codeunit79100.SomeoneElse", status: "fail", message: "not ours" },
-        { name: "Codeunit79100.OverBudgetDetected", status: "pass" },
-      ],
+      tests: [{ name: "Codeunit79100.OverBudgetDetected", status: "pass" }],
     });
     const { backend } = await makeBackend(spawn);
     const v = await backend.run(
@@ -595,7 +688,8 @@ describe("AlRunnerBackend.run", () => {
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain(QUALIFIED);
     expect(v.failureMessage).toContain("Codeunit79100.SomethingElse");
-    expect(v.operation).toBe("pre-dispatch-rejected");
+    // R491: this is R488's refusal, and the test WAS dispatched, so it is not pre-dispatch.
+    expect(v.operation).toBe("completed-accepted");
   });
 
   test("our own deadline is outcome=deadline-exceeded, not timeout", async () => {
@@ -605,25 +699,54 @@ describe("AlRunnerBackend.run", () => {
     expect(v.outcome).toBe("deadline-exceeded");
   });
 
-  // Regression guard for the timeout-margin bug: the backend's own derivation of the runner's
-  // per-test budget (from opts.timeoutMs) must leave al-runner's internal timeout comfortably
-  // BELOW our client deadline, never >= it. Otherwise our AbortController always wins the
-  // Promise.race and the runner-confirmed `outcome: "timeout"` path exercised above becomes
-  // unreachable in real execution — every genuine mutant-induced hang would be misclassified as
-  // deadline-exceeded (infrastructure noise). This drives the real backend.run() path (not a
+  // R490 (closed as a ruling): a look-alike that discovery did NOT see runs in the same call and
+  // hangs it to OUR deadline. That call carries no test list, so nothing is learned, but the
+  // outcome must stay deadline-exceeded (an error), never `timeout`, which scoring reads as a kill.
+  test("a hang from an undiscovered look-alike is deadline-exceeded, never a kill (R490)", async () => {
+    const calls: string[][] = [];
+    const spawn = async (argv: string[]) => {
+      calls.push(argv);
+      return new Promise<never>(() => {});
+    };
+    const { backend } = await makeBackend(spawn as never);
+    backend.useDiscoveredTests([ref]); // discovery saw only the requested test
+    const v = await backend.run(ref, { coverage: "none", timeoutMs: 50 });
+    expect(v.outcome).toBe("deadline-exceeded");
+    expect(v.outcome).not.toBe("timeout");
+    expect(calls.length).toBe(1);
+  });
+
+  // Regression guard for the timeout-margin bug, both directions (R516 T7). The in-run limit
+  // (AL_RUNNER_TEST_TIMEOUT_SEC, timed on the test body) must be AT LEAST the budget the
+  // orchestrator judges the run by: half of it timed a test out under every mutant on a budget of
+  // twice its wall clock (R516). And it must stay BELOW the client deadline actually sent, or our
+  // AbortController always wins the race and every genuine hang reads deadline-exceeded instead of
+  // the runner-confirmed `timeout`. This drives the real backend.run() path (not a
   // re-implementation of the formula) so a regression in the derivation itself fails this test.
-  // v2 delivers the budget as AL_RUNNER_TEST_TIMEOUT_SEC rather than a `--test-timeout` flag;
-  // the value and its reason are unchanged.
-  test("the per-test budget env var leaves real margin below the client deadline", async () => {
-    for (const timeoutMs of [5000, 14000, 120000]) {
+  test("the in-run limit is at least the budget and below the client deadline sent", async () => {
+    for (const timeoutMs of [1500, 5000, 14000, 120000]) {
       const { envs, spawn } = okSpawn({
         tests: [{ name: QUALIFIED, status: "pass" }],
       });
       const { backend } = await makeBackend(spawn);
+      // Record the deadline the backend hands its transport, delegating unchanged.
+      const t = (
+        backend as unknown as {
+          transport: { send: (r: { deadlineMs: number }) => Promise<unknown> };
+        }
+      ).transport;
+      const send = t.send.bind(t);
+      const deadlines: number[] = [];
+      t.send = async (r) => {
+        deadlines.push(r.deadlineMs);
+        return send(r);
+      };
       await backend.run(ref, { coverage: "none", timeoutMs });
       const raw = envs[0]?.AL_RUNNER_TEST_TIMEOUT_SEC;
       expect(raw).toBeDefined();
-      expect(Number(raw) * 1000).toBeLessThan(timeoutMs);
+      expect(deadlines).toHaveLength(1);
+      expect(Number(raw) * 1000).toBeGreaterThanOrEqual(timeoutMs);
+      expect(Number(raw) * 1000).toBeLessThan(deadlines[0] ?? 0);
     }
   });
 
@@ -780,8 +903,38 @@ describe("AlRunnerBackend serverMode (R220)", () => {
       okSpawn({ tests: [] }).spawn,
       fake.spawn,
     );
+    // R517: the session gives every backend its floor before the first run.
+    backend.useMutantBudgetFloor(180_000, 120_000);
     return { backend, runs: fake.runs, dir };
   }
+
+  test("R516 I1: inRunStopIsBudget is false under --server (the daemon's own stop), true one-shot", async () => {
+    const { backend } = await serverBackend([]);
+    const oneShot = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: "/x",
+        testDir: "/tests",
+        selectorObjectId: 50000,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+    expect([backend.inRunStopIsBudget, oneShot.inRunStopIsBudget]).toEqual([false, true]);
+  });
+
+  test("R577: a kill must reproduce on al-runner, on --server and one-shot alike", async () => {
+    const { backend } = await serverBackend([]);
+    const oneShot = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: "/x",
+        testDir: "/tests",
+        selectorObjectId: 50000,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+    expect([backend.killsMustReproduce, oneShot.killsMustReproduce]).toEqual([true, true]);
+  });
 
   test("runs the suite ONCE per activation and serves every test from it", async () => {
     // This is the whole economics of the mode. The server has no per-test filter, so `runTests`
@@ -848,15 +1001,17 @@ describe("AlRunnerBackend serverMode (R220)", () => {
     await backend.close();
   });
 
-  test("a test the suite never reported is an error naming both sides, not a silent pass", async () => {
+  test("a test the suite never reported is a refusal naming both sides, not a silent pass", async () => {
+    // R557: on a CLEAN answer (exit 0, every row a pass run row) a missing test stops the session
+    // (`AlRunnerTestNameError`) rather than reading as a per-test `error`; it still names both sides.
     const { backend } = await serverBackend([{ name: "Codeunit79100.A", status: "pass" }]);
-    const v = await backend.run(
+    const p = backend.run(
       { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "Missing" },
       { coverage: "none", timeoutMs: 1000 },
     );
-    expect(v.outcome).toBe("error");
-    expect(v.failureMessage).toContain("Codeunit79100.Missing");
-    expect(v.failureMessage).toContain("Codeunit79100.A");
+    await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+    await expect(p).rejects.toThrow(/Codeunit79100\.Missing/);
+    await expect(p).rejects.toThrow(/Codeunit79100\.A\b/);
     await backend.close();
   });
 
@@ -921,11 +1076,13 @@ describe("AlRunnerBackend serverMode (R220)", () => {
         okSpawn({ tests: [] }).spawn,
         spy,
       );
+      server.useMutantBudgetFloor(180_000, 120_000);
       const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" };
       await server.run(ref, { coverage: "none", timeoutMs: 1000 });
       await server.close();
 
-      const oneShotSpawn = okSpawn({ tests: [] });
+      // R557: the one-shot fake answers with A's row: a run with no row for A now stops by name.
+      const oneShotSpawn = okSpawn({ tests: [{ name: "Codeunit79100.A", status: "pass" }] });
       const oneShot = new AlRunnerBackend(
         {
           alRunnerPath: "al-runner",
@@ -966,12 +1123,132 @@ describe("AlRunnerBackend serverMode (R220)", () => {
       okSpawn({ tests: [] }).spawn,
       spy,
     );
+    backend.useMutantBudgetFloor(180_000, 120_000);
     await backend.run(
       { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" },
       { coverage: "none", timeoutMs: 1000 },
     );
     await backend.close();
-    expect(serverArgv).toEqual([["al-runner", "--server"]]);
+    expect(serverArgv).toEqual([["al-runner", "--server", "--test-timeout", "180"]]);
+  });
+
+  /** A server-mode backend whose daemon argv is recorded; `floor` is handed over when given. */
+  function argvRecording(floor?: readonly [number, number]) {
+    const fake = fakeServerSpawn([{ name: "Codeunit79100.A", status: "pass" }]);
+    const argvs: string[][] = [];
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: scratch("lethal-alrunner-r517-argv-"),
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        serverMode: true,
+      },
+      okSpawn({ tests: [] }).spawn,
+      (argv) => {
+        argvs.push([...argv]);
+        return fake.spawn(argv);
+      },
+    );
+    if (floor !== undefined) backend.useMutantBudgetFloor(floor[0], floor[1]);
+    return { backend, argvs };
+  }
+  const A = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" };
+  /** Every value that follows `--test-timeout` in one argv. */
+  const stopsOf = (argv: readonly string[] | undefined): string[] =>
+    (argv ?? []).flatMap((a, i) => (a === "--test-timeout" ? [argv?.[i + 1] ?? "<none>"] : []));
+
+  for (const [floor, baseline, sent] of [
+    [180_000, 120_000, "180"],
+    [180_500, 120_000, "181"],
+    // M2: a floor below the baseline timeout must not stop the baseline's tests early.
+    [30_000, 120_000, "120"],
+  ] as const) {
+    test(`R517 D1: useMutantBudgetFloor(${floor}, ${baseline}) starts the daemon with --test-timeout ${sent}, exactly once`, async () => {
+      const { backend, argvs } = argvRecording([floor, baseline]);
+      await backend.run(A, { coverage: "none", timeoutMs: 1000 });
+      await backend.close();
+      expect(argvs.length).toBe(1);
+      expect(stopsOf(argvs[0])).toEqual([sent]);
+    });
+  }
+
+  test("R517 D1: with no floor, run() throws AlRunnerServerStopUnsetError (never an error verdict) and spawns nothing", async () => {
+    const { backend, argvs } = argvRecording();
+    await expect(backend.run(A, { coverage: "none", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      AlRunnerServerStopUnsetError,
+    );
+    expect(argvs).toEqual([]);
+    await backend.close();
+  });
+
+  test("R517 D1: a second useMutantBudgetFloor with other values throws, the same values do not", async () => {
+    const { backend } = argvRecording([180_000, 120_000]);
+    await backend.run(A, { coverage: "none", timeoutMs: 1000 });
+    expect(() => backend.useMutantBudgetFloor(180_000, 120_000)).not.toThrow();
+    expect(() => backend.useMutantBudgetFloor(200_000, 120_000)).toThrow(/one stop for its life/);
+    expect(() => backend.useMutantBudgetFloor(180_000, 130_000)).toThrow(/one stop for its life/);
+    await backend.close();
+  });
+
+  test("R517 D1: inRunStopMs is the daemon's stop under serverMode once set, and undefined one-shot or before", async () => {
+    const { backend } = argvRecording();
+    expect(backend.inRunStopMs).toBeUndefined();
+    backend.useMutantBudgetFloor(180_000, 120_000);
+    expect(backend.inRunStopMs).toBe(180_000);
+    const oneShot = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: "/x",
+        testDir: "/tests",
+        selectorObjectId: 50000,
+      },
+      okSpawn({ tests: [] }).spawn,
+    );
+    oneShot.useMutantBudgetFloor(180_000, 120_000);
+    expect(oneShot.inRunStopMs).toBeUndefined();
+  });
+
+  test("R517 D1: one-shot argv and env are unchanged by the floor (oneShotLimits per call)", async () => {
+    const s = okSpawn({ tests: [{ name: "Codeunit79100.A", status: "pass" }] });
+    const { backend } = await makeBackend(s.spawn);
+    await backend.run(A, { coverage: "none", timeoutMs: 4000 });
+    backend.useMutantBudgetFloor(180_000, 120_000);
+    await backend.run(A, { coverage: "none", timeoutMs: 4000 });
+    const [bare, floored] = s.calls;
+    expect(floored).toEqual(bare ?? []);
+    expect(floored).not.toContain("--test-timeout");
+    expect(s.envs[1]).toEqual(s.envs[0]);
+    expect(s.envs[1]?.AL_RUNNER_TEST_TIMEOUT_SEC).toBe("4");
+  });
+});
+
+describe("parseReportedStopMs (R517)", () => {
+  test("reads N from al-runner's whole timeout message, and nothing else", () => {
+    expect(parseReportedStopMs("Test exceeded 180s timeout.")).toBe(180_000);
+    expect(parseReportedStopMs("Test exceeded 1s timeout.")).toBe(1_000);
+    expect(parseReportedStopMs("Test exceeded 0s timeout.")).toBeUndefined();
+    expect(parseReportedStopMs("TIMEOUT after 5s")).toBeUndefined();
+    expect(parseReportedStopMs("Test exceeded 180s timeout. (and more)")).toBeUndefined();
+    expect(parseReportedStopMs("Error: Test exceeded 180s timeout.")).toBeUndefined();
+    expect(parseReportedStopMs("Assert failed")).toBeUndefined();
+    expect(parseReportedStopMs(undefined)).toBeUndefined();
+  });
+
+  test("a timeout verdict carries it; a timeout in another wording, a fail and an error do not", () => {
+    const r = { codeunitId: 1, codeunitName: "T", method: "M" };
+    const v = (status: string, message: string) =>
+      verdictFromRunnerTest(r, "Codeunit1.M", { status, message }, 10, undefined);
+    expect([
+      v("error", "Test exceeded 60s timeout.").outcome,
+      v("error", "Test exceeded 60s timeout.").reportedStopMs,
+    ]).toEqual(["timeout", 60_000]);
+    expect([
+      v("error", "TIMEOUT after 5s").outcome,
+      v("error", "TIMEOUT after 5s").reportedStopMs,
+    ]).toEqual(["timeout", undefined]);
+    expect(v("fail", "Test exceeded 60s timeout.").reportedStopMs).toBeUndefined();
+    expect(v("error", "SMTP is out of scope").reportedStopMs).toBeUndefined();
   });
 });
 
@@ -982,6 +1259,8 @@ describe("AlRunnerBackend capabilities", () => {
       coverage: "none",
       deploy: "none",
       isolation: "full-reset",
+      // R586 and R553: the backend declares its own identity; the report's screen keys on it.
+      kind: "al-runner",
       authoritative: false,
     });
   });
@@ -1152,5 +1431,1154 @@ describe("AlRunnerBackend.close() removes its coverage scratch directory (R356)"
     expect(await exists(dir)).toBe(true);
     await backend.close();
     expect(await exists(dir)).toBe(false);
+  });
+});
+
+// R488. al-runner's `--test` is a substring match: asking for `...PostingUpdatesTotal` also runs
+// `...PostingUpdatesTotalTwin`, in one process, under one deadline, into one Cobertura file. A
+// fake al-runner that behaves that way, honouring `--exclude-test` by whole name as the real one
+// does (measured on c39ad5de, see the R-488 selector probe).
+describe("AlRunnerBackend one-shot: a result naming any other test is never credited (R488)", () => {
+  const TWIN = `${QUALIFIED}Twin`;
+  const opts = { coverage: "none", timeoutMs: 5000 } as const;
+
+  /** Each test's one covered line in `One.Codeunit.al` (see `COVERED_AL`): 5 is in `Reached`, 10 in
+   *  `Other`. */
+  const LINE: Record<string, number> = { [QUALIFIED]: 5, [TWIN]: 10 };
+  const COVERED_AL = `codeunit 79150 "Probe One"
+{
+    procedure Reached()
+    begin
+        exit;
+    end;
+
+    procedure Other()
+    begin
+        exit;
+    end;
+}
+`;
+
+  /** Selects as the real al-runner does (measured on c39ad5de, R-491 brief / R-488 selector probe):
+   *  `--test` keeps every name CONTAINING it, ignoring case; each `--exclude-test` drops one WHOLE
+   *  name, ignoring case, the requested test included, and excluding that leaves NO tests (exit 0,
+   *  probe row x). `honoursExclude: false` models a runner that ignores the excludes. The wanted
+   *  test FAILS when the twin ran with it and passes alone, so a credited merged result reads as a
+   *  kill, unless `mergedPasses`. With `--coverage-out`, the file holds every test that ran. */
+  function substringRunner(honoursExclude: boolean, mergedPasses = false) {
+    const calls: string[][] = [];
+    const spawn: SpawnFn = async (argv) => {
+      calls.push([...argv]);
+      const pattern = (argv[argv.indexOf("--test") + 1] ?? "").toLowerCase();
+      const excluded = honoursExclude
+        ? argv.filter((_, i) => argv[i - 1] === "--exclude-test").map((n) => n.toLowerCase())
+        : [];
+      const ran = [QUALIFIED, TWIN].filter(
+        (n) => n.toLowerCase().includes(pattern) && !excluded.includes(n.toLowerCase()),
+      );
+      const merged = ran.includes(TWIN);
+      const tests = ran.map((name) =>
+        name === QUALIFIED && merged && !mergedPasses
+          ? { name, status: "fail", durationMs: 1, message: "twin's state" }
+          : { name, status: "pass", durationMs: 1 },
+      );
+      const o = argv.indexOf("--coverage-out");
+      const out = o >= 0 ? argv[o + 1] : undefined;
+      if (out !== undefined) {
+        const lines = ran.map((n) => `<line number="${LINE[n]}" hits="1"/>`).join("");
+        await writeFile(
+          out,
+          `<coverage><packages><package><classes><class name="x" filename="One.Codeunit.al"><lines>${lines}</lines></class></classes></package></packages></coverage>`,
+          "utf8",
+        );
+      }
+      return { exitCode: 0, stdout: alRunnerStdout({ tests }), stderr: "" };
+    };
+    return { calls, spawn };
+  }
+
+  test("the fake is as strict as al-runner: excluding the requested test itself drops it", async () => {
+    const r = substringRunner(true);
+    const names = async (...excl: string[]) => {
+      const argv = [
+        "al-runner",
+        "--test",
+        QUALIFIED,
+        ...excl.flatMap((n) => ["--exclude-test", n]),
+      ];
+      const out = await r.spawn(argv, {});
+      const env = JSON.parse(out.stdout.slice(out.stdout.indexOf("\n{\n") + 1));
+      return (env.tests as { name: string }[]).map((t) => t.name);
+    };
+    expect(await names(QUALIFIED.toLowerCase())).toEqual([TWIN]);
+    expect(await names(QUALIFIED, TWIN)).toEqual([]); // probe row x: exit 0, no tests
+  });
+
+  test("an excluded REQUESTED test is never learned: the run is not emptied by its own exclude", async () => {
+    // A learn step that also excluded `wanted` would get al-runner's empty answer (probe row x).
+    const r = substringRunner(true);
+    const { backend } = await makeBackend(r.spawn);
+    expect((await backend.run(ref, opts)).outcome).toBe("pass");
+    for (const argv of r.calls) {
+      const excludes = argv.filter((_, i) => argv[i - 1] === "--exclude-test");
+      expect(excludes.map((n) => n.toLowerCase())).not.toContain(QUALIFIED.toLowerCase());
+    }
+  });
+
+  test("coverage on: the credited coverage is the re-run's Cobertura, never the merged call's", async () => {
+    const r = substringRunner(true, true);
+    const dir = scratch("lethal-r491-cov-");
+    await writeFile(join(dir, "One.Codeunit.al"), COVERED_AL, "utf8");
+    await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        coverage: "al-runner",
+      },
+      r.spawn,
+    );
+    backend.useBuildSymbols([]); // R-300b: what runSession hands over before the first deploy
+    const v = await backend.run(ref, opts);
+    await backend.close();
+    expect(v.outcome).toBe("pass");
+    expect(r.calls.length).toBe(2);
+    // The merged first call covered BOTH procedures; only the re-run's `Reached` may be credited.
+    expect((v.coverage?.entries ?? []).map((e) => e.procedure)).toEqual(["Reached"]);
+  });
+
+  test("a result listing the requested test TWICE is refused by name, never credited (R491)", async () => {
+    const { calls, spawn } = okSpawn({
+      tests: [
+        { name: QUALIFIED, status: "pass", durationMs: 1 },
+        { name: QUALIFIED, status: "fail", durationMs: 1 },
+      ],
+    });
+    const { backend } = await makeBackend(spawn);
+    // Through `runOnce`, which re-sends a retry-safe failure once: the test WAS dispatched, so the
+    // refusal must be `completed-accepted` and must not be re-sent.
+    const v = await runOnce(backend, new SessionSafety(), ref, opts);
+    expect(v.outcome).toBe("error");
+    expect(v.operation).toBe("completed-accepted");
+    expect(v.failureMessage).toContain(`"${QUALIFIED}"`);
+    expect(v.failureMessage).toContain("2 rows");
+    expect(calls.length).toBe(1);
+  });
+
+  test("two rows equal to the requested test IGNORING CASE are refused the same way (R491)", async () => {
+    const { spawn } = okSpawn({
+      tests: [
+        { name: QUALIFIED, status: "pass", durationMs: 1 },
+        { name: QUALIFIED.toLowerCase(), status: "fail", durationMs: 1 },
+      ],
+    });
+    const { backend } = await makeBackend(spawn);
+    const v = await backend.run(ref, opts);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("2 rows");
+  });
+
+  test("a merged result is discarded and the test re-runs alone with --exclude-test per sibling", async () => {
+    const r = substringRunner(true);
+    const { backend } = await makeBackend(r.spawn);
+    const v = await backend.run(ref, opts);
+    expect(v.outcome).toBe("pass");
+    expect(r.calls.length).toBe(2);
+    expect(r.calls[0]).not.toContain("--exclude-test");
+    const second = r.calls[1] ?? [];
+    expect(second[second.indexOf("--exclude-test") + 1]).toBe(TWIN);
+    // Learned once: the next call excludes up front and runs once.
+    expect((await backend.run(ref, opts)).outcome).toBe("pass");
+    expect(r.calls.length).toBe(3);
+    expect(r.calls[2]).toContain(TWIN);
+  });
+
+  test("with the discovered list, even the FIRST call excludes the look-alike and runs once", async () => {
+    const r = substringRunner(true);
+    const { backend } = await makeBackend(r.spawn);
+    backend.useDiscoveredTests([
+      ref,
+      { ...ref, method: `${ref.method}Twin` },
+      { ...ref, method: "Unrelated" },
+    ]);
+    expect((await backend.run(ref, opts)).outcome).toBe("pass");
+    expect(r.calls.length).toBe(1);
+    const first = r.calls[0] ?? [];
+    expect(first.filter((a) => a === "--exclude-test").length).toBe(1);
+    expect(first[first.indexOf("--exclude-test") + 1]).toBe(TWIN);
+  });
+
+  test("a discovered name equal to the requested one IGNORING CASE is never excluded", async () => {
+    // Excluding it would empty the run: al-runner then exits 0 with no tests (measured).
+    const { calls, spawn } = okSpawn({
+      tests: [{ name: QUALIFIED, status: "pass", durationMs: 1 }],
+    });
+    const { backend } = await makeBackend(spawn);
+    backend.useDiscoveredTests([ref, { ...ref, method: ref.method.toLowerCase() }]);
+    expect((await backend.run(ref, opts)).outcome).toBe("pass");
+    expect(calls[0]).not.toContain("--exclude-test");
+  });
+
+  test("a result that still names another test after its excludes is refused by name", async () => {
+    const r = substringRunner(false);
+    const { backend } = await makeBackend(r.spawn);
+    const v = await backend.run(ref, opts);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain(TWIN);
+    expect(r.calls.length).toBe(2);
+    // R491: the test WAS dispatched and ran, so the refusal is not retry-safe pre-dispatch.
+    expect(v.operation).toBe("completed-accepted");
+  });
+
+  test("an exact single-test result is credited from one call with today's argv", async () => {
+    const { calls, spawn } = okSpawn({
+      tests: [{ name: QUALIFIED, status: "fail", durationMs: 1 }],
+    });
+    const { backend } = await makeBackend(spawn);
+    expect((await backend.run(ref, opts)).outcome).toBe("fail");
+    expect(calls.length).toBe(1);
+    expect(calls[0]).not.toContain("--exclude-test");
+  });
+});
+
+describe("AlRunnerBackend --server: a daemon that overran or timed out is never reused (R517)", () => {
+  type Row = Record<string, unknown>;
+  /**
+   * One fake daemon per spawn. `answer(daemon, request, emit)` writes the lines for runTests
+   * `request` on daemon `daemon` (both 1-based), or returns a function that writes them later
+   * (`releaseHeld`), which is how a test holds an answer past the client's deadline.
+   */
+  function daemons(
+    answer: (daemon: number, request: number, emit: (row: Row) => void) => (() => void) | undefined,
+  ) {
+    const argvs: string[][] = [];
+    const held: Array<() => void> = [];
+    const spawn: ServerSpawnFn = (argv) => {
+      argvs.push([...argv]);
+      const daemon = argvs.length;
+      let requests = 0;
+      const queue: Array<Uint8Array | null> = [];
+      let waiter: (() => void) | undefined;
+      const push = (chunk: Uint8Array | null): void => {
+        queue.push(chunk);
+        waiter?.();
+        waiter = undefined;
+      };
+      const emitLine = (line: string): void => push(new TextEncoder().encode(`${line}\n`));
+      queueMicrotask(() => emitLine('{"ready":true}'));
+      return {
+        write: (line: string) => {
+          const req = JSON.parse(line) as { command?: string };
+          if (req.command === "runTests") {
+            requests += 1;
+            const later = answer(daemon, requests, (row) => emitLine(JSON.stringify(row)));
+            if (later !== undefined) held.push(later);
+          }
+          if (req.command === "shutdown") emitLine('{"status":"shutting down"}');
+        },
+        stdout: {
+          async *[Symbol.asyncIterator]() {
+            for (;;) {
+              if (queue.length === 0) {
+                await new Promise<void>((r) => {
+                  waiter = r;
+                });
+                continue;
+              }
+              const next = queue.shift();
+              if (next === null || next === undefined) return;
+              yield next;
+            }
+          },
+        },
+        stderr: {
+          async *[Symbol.asyncIterator]() {},
+        },
+        kill: () => push(null),
+      };
+    };
+    return {
+      spawn,
+      argvs,
+      releaseHeld: () => {
+        for (const r of held.splice(0)) r();
+      },
+    };
+  }
+
+  function serverOn(spawn: ServerSpawnFn): AlRunnerBackend {
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: scratch("lethal-alrunner-r517-"),
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        serverMode: true,
+      },
+      okSpawn({ tests: [] }).spawn,
+      spawn,
+    );
+    // R517 D1: the session hands every backend its floor before the first run.
+    backend.useMutantBudgetFloor(180_000, 120_000);
+    return backend;
+  }
+
+  const t = (method: string) => ({ codeunitId: 79100, codeunitName: "Sandbox Tests", method });
+  const run = { coverage: "none" as const, timeoutMs: 1000 };
+  const summary = (total: number): Row => ({ type: "summary", exitCode: 1, total });
+
+  test("C1: a runTests that throws (here: no summary before the deadline) ends the daemon, so its late answer is never read as the retry's", async () => {
+    // Every row is a `fail` whose message names the daemon and request it came from.
+    const fake = daemons((daemon, request, emit) => {
+      const rows = (): void => {
+        emit({
+          type: "test",
+          name: "Codeunit79100.A",
+          status: "fail",
+          message: `daemon ${daemon} request ${request}`,
+        });
+        emit(summary(1));
+      };
+      if (daemon === 1 && request === 1) return rows; // answered only after the deadline
+      rows();
+      return undefined;
+    });
+    const backend = serverOn(fake.spawn);
+    let first: TestVerdict | undefined;
+    jest.useFakeTimers();
+    try {
+      void backend.run(t("A"), run).then((v) => {
+        first = v;
+      });
+      for (let i = 0; i < 200 && first === undefined; i++) {
+        jest.advanceTimersByTime(60_000);
+        for (let k = 0; k < 50; k++) await Promise.resolve();
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+    expect(first?.outcome).toBe("error");
+    expect(first?.failureMessage).toContain("no summary line within");
+    // Daemon 1's late answer arrives now; runOnce's retry runs the same activation again.
+    fake.releaseHeld();
+    const retry = await backend.run(t("A"), run);
+    expect([retry.outcome, retry.failureMessage]).toEqual(["fail", "daemon 2 request 1"]);
+    expect(fake.argvs.length).toBe(2);
+    // And the next activation is answered by daemon 2's next request, never daemon 1's.
+    await backend.activate("M0002");
+    const next = await backend.run(t("A"), run);
+    expect([next.outcome, next.failureMessage]).toEqual(["fail", "daemon 2 request 2"]);
+    expect(fake.argvs.length).toBe(2);
+    await backend.close();
+  });
+
+  /** Daemon 1's first suite: A passes, BSlow times out, Later (after it) has no row. Every other
+   *  suite: all three pass. `message` is the timeout row's text (default al-runner's per-test one). */
+  function hungOnce(timeoutRow: boolean, message = "Test exceeded 180s timeout.") {
+    return daemons((daemon, request, emit) => {
+      const first = daemon === 1 && request === 1;
+      emit({ type: "test", name: "Codeunit79100.A", status: "pass", durationMs: 5 });
+      if (first && timeoutRow) {
+        emit({
+          type: "test",
+          name: "Codeunit79100.BSlow",
+          status: "error",
+          errorKind: "timeout",
+          message,
+          durationMs: 180_004,
+        });
+        emit(summary(2));
+        return undefined;
+      }
+      emit({ type: "test", name: "Codeunit79100.BSlow", status: "pass", durationMs: 7 });
+      emit({ type: "test", name: "Codeunit79100.Later", status: "pass", durationMs: 3 });
+      emit(summary(3));
+      return undefined;
+    });
+  }
+
+  test("I2: a suite with a timeout row ends the daemon, and the unmutated confirm runs on a fresh one with the same stop", async () => {
+    const fake = hungOnce(true);
+    const backend = serverOn(fake.spawn);
+    await backend.activate("M0001");
+    expect((await backend.run(t("BSlow"), run)).outcome).toBe("timeout");
+    await backend.activate(null);
+    const confirm = await backend.run(t("BSlow"), run);
+    expect(fake.argvs.length).toBe(2);
+    expect(confirm.outcome).toBe("pass");
+    const [one, two] = fake.argvs;
+    expect(two).toEqual(one);
+    expect(one).toContain("--test-timeout");
+    await backend.close();
+  });
+
+  test("I-1: an OnRun-trigger timeout row (status error, wording the timeout regex does not match) still ends the daemon", async () => {
+    // R534: the measured OnRun wording is now a classified timeout (T2 below). This keeps what I-1
+    // guards, the STRUCTURAL close, with a wording no timeout regex matches.
+    const fake = hungOnce(true, "OnRun trigger did not complete");
+    const backend = serverOn(fake.spawn);
+    await backend.activate("M0001");
+    // The verdict still reads the wording: not a classified timeout, so never a kill.
+    expect((await backend.run(t("BSlow"), run)).outcome).toBe("error");
+    await backend.activate(null);
+    expect((await backend.run(t("BSlow"), run)).outcome).toBe("pass");
+    expect(fake.argvs.length).toBe(2);
+    await backend.close();
+  });
+
+  test("I2 control: a suite with no timeout row keeps its daemon across activations", async () => {
+    const fake = hungOnce(false);
+    const backend = serverOn(fake.spawn);
+    await backend.activate("M0001");
+    expect((await backend.run(t("BSlow"), run)).outcome).toBe("pass");
+    await backend.activate(null);
+    expect((await backend.run(t("BSlow"), run)).outcome).toBe("pass");
+    expect(fake.argvs.length).toBe(1);
+    await backend.close();
+  });
+
+  test("M3: a covering test with no row in a suite that has a timeout row is an error naming the hung test", async () => {
+    const fake = hungOnce(true);
+    const backend = serverOn(fake.spawn);
+    await backend.activate("M0001");
+    await backend.run(t("BSlow"), run);
+    const later = await backend.run(t("Later"), run);
+    expect(later.outcome).toBe("error");
+    expect(later.failureMessage).toContain(
+      'al-runner --server stopped the run at "Codeunit79100.BSlow" (timeout); tests after it have no row',
+    );
+    await backend.close();
+  });
+
+  describe("an answered row never aborts (R534)", () => {
+    /** `backend.run`, counted, so a test can say how many times runOnce sent it. */
+    function counted(backend: AlRunnerBackend): { runs: () => number } {
+      let n = 0;
+      const inner = backend.run.bind(backend);
+      backend.run = async (r, o) => {
+        n += 1;
+        return inner(r, o);
+      };
+      return { runs: () => n };
+    }
+
+    test("T2: the --server OnRun-trigger timeout row (measure.md B verbatim) is a timeout in the OnRun, and the daemon is not reused", async () => {
+      const fake = hungOnce(
+        true,
+        "The test codeunit's OnRun trigger exceeded the 10s timeout, so none of its test methods ran.",
+      );
+      const backend = serverOn(fake.spawn);
+      await backend.activate("M0001");
+      const v = await backend.run(t("BSlow"), run);
+      expect([v.outcome, v.reportedStopMs, v.timeoutIn]).toEqual(["timeout", 10_000, "onrun"]);
+      await backend.activate(null);
+      expect((await backend.run(t("BSlow"), run)).outcome).toBe("pass");
+      expect(fake.argvs.length).toBe(2);
+      await backend.close();
+    });
+
+    test("T6: a covering test with no row after a hung one is runner-test-error, presumed, sent once; with no hung row (a clean answer) it stops by name, sent once (R557)", async () => {
+      const fake = hungOnce(true);
+      const backend = serverOn(fake.spawn);
+      await backend.activate("M0001");
+      await backend.run(t("BSlow"), run);
+      const c = counted(backend);
+      const later = await runOnce(backend, new SessionSafety(), t("Later"), run);
+      expect([later.outcome, later.operation, later.runnerRow]).toEqual([
+        "error",
+        "completed-accepted",
+        "runner-test-error",
+      ]);
+      expect(later.failureMessage).toContain("presumably");
+      expect(c.runs()).toBe(1);
+      await backend.close();
+
+      // Control: the same missing row with no hung test in the suite. Before R557 that was a
+      // per-test `error`, retried once. R557 (I1): the answer is CLEAN (exit 1, every row a pass
+      // run row), so a missing row stops the session by name, sent once and never retried.
+      const plain = daemons((_d, _r, emit) => {
+        emit({ type: "test", name: "Codeunit79100.A", status: "pass", durationMs: 5 });
+        emit(summary(1));
+        return undefined;
+      });
+      const other = serverOn(plain.spawn);
+      await other.activate("M0001");
+      const o = counted(other);
+      await expect(runOnce(other, new SessionSafety(), t("Later"), run)).rejects.toBeInstanceOf(
+        AlRunnerTestNameError,
+      );
+      expect(o.runs()).toBe(1);
+      await other.close();
+    });
+
+    test("T6 OnRun (final review M-a): after an OnRun-wording hang the hung test is named, so a missing row is runner-test-error, sent once", async () => {
+      const fake = hungOnce(
+        true,
+        "The test codeunit's OnRun trigger exceeded the 180s timeout, so none of its test methods ran.",
+      );
+      const backend = serverOn(fake.spawn);
+      await backend.activate("M0001");
+      expect((await backend.run(t("BSlow"), run)).outcome).toBe("timeout");
+      const c = counted(backend);
+      const later = await runOnce(backend, new SessionSafety(), t("Later"), run);
+      expect([later.outcome, later.operation, later.runnerRow]).toEqual([
+        "error",
+        "completed-accepted",
+        "runner-test-error",
+      ]);
+      expect(later.failureMessage).toContain(
+        'al-runner --server stopped the run at "Codeunit79100.BSlow" (timeout)',
+      );
+      expect(c.runs()).toBe(1);
+      await backend.close();
+    });
+  });
+});
+
+describe("AlRunnerBackend one-shot: a test timeout exits 3 (R518)", () => {
+  const opts = { coverage: "none", timeoutMs: 40_000 } as const;
+
+  // The envelope al-runner 2.12.0-main.43f76177 printed for a one-shot run whose test hit its
+  // in-run stop (/coord/handoff/R-518/measure.md run 1), names changed to this file's `ref`.
+  const timeoutExit3 = {
+    tests: [
+      {
+        name: QUALIFIED,
+        status: "error",
+        durationMs: 40_072,
+        message: "Test exceeded 40s timeout.",
+        stackTrace: '"Sandbox Logic"(CodeUnit 79000).SpinFor line 8',
+      },
+    ],
+    passed: 0,
+    failed: 0,
+    errors: 1,
+    skipped: 0,
+    total: 1,
+    exitCode: 3,
+    seed: 598161538,
+    suiteErrors: [
+      {
+        file: "/tests",
+        errors: [
+          "tests: TEST-TIMEOUT-ABORT: Sandbox Tests (Codeunit79100).PostingUpdatesTotal: watchdog timeout aborted the run — 0 further [Test] method(s) in this codeunit did not run (0 total)",
+        ],
+      },
+    ],
+    wallSeconds: 41.8,
+  };
+
+  test("REPRO: a timeout-only exit 3 is a `timeout` with its reported stop, sent once, never an error retried as pre-dispatch-rejected", async () => {
+    const { calls, spawn } = okSpawn(timeoutExit3, 3);
+    const { backend } = await makeBackend(spawn);
+    const v = await runOnce(backend, new SessionSafety(), ref, opts);
+    expect(v.outcome).toBe("timeout");
+    expect(v.reportedStopMs).toBe(40_000);
+    expect(calls.length).toBe(1);
+  });
+
+  // Plan D2's last point: a TEST-TIMEOUT abort whose row is not a known timeout wording (here an
+  // invented one; R534 made al-runner's measured OnRun-trigger wording a classified timeout, T1).
+  // The transport accepts the envelope (the row is explained by the abort); the backend scores it
+  // the fail-closed `error`, never `timeout`, and (R534 D1b) flags the unknown wording.
+  test("an OnRun-trigger exit 3 is accepted as rows but scored a fail-closed error, never timeout", async () => {
+    const onRun = {
+      ...timeoutExit3,
+      tests: [
+        {
+          name: QUALIFIED,
+          status: "error",
+          durationMs: 40_072,
+          message: "OnRun trigger did not complete",
+        },
+      ],
+    };
+    const { calls, spawn } = okSpawn(onRun, 3);
+    const { backend } = await makeBackend(spawn);
+    const v = await backend.run(ref, opts);
+    expect(v.outcome).toBe("error");
+    // The row's own message, so the transport read the envelope (its refusal would carry stderr).
+    expect(v.failureMessage).toContain(AL_RUNNER_UNCLASSIFIED_ERROR);
+    expect(v.failureMessage).toContain("OnRun trigger did not complete");
+    expect(v.reportedStopMs).toBeUndefined();
+    expect(v.timeoutWordingUnknown).toBe(true);
+    expect(calls.length).toBe(1);
+  });
+
+  // `--test` is a substring match (R488). If the look-alike sibling hangs first, its row and the
+  // abort name IT, and the wanted test has no row: the backend learns the sibling and re-sends the
+  // wanted test alone.
+  test("a sibling that hangs first is learned from the exit 3 and the wanted test re-runs alone", async () => {
+    const TWIN = `${QUALIFIED}Twin`;
+    const calls: string[][] = [];
+    const spawn: SpawnFn = async (argv) => {
+      calls.push([...argv]);
+      if (argv.includes("--exclude-test")) {
+        const tests = [{ name: QUALIFIED, status: "pass", durationMs: 3 }];
+        return { exitCode: 0, stdout: alRunnerStdout({ tests }), stderr: "" };
+      }
+      const hung = {
+        ...timeoutExit3,
+        tests: [
+          {
+            name: TWIN,
+            status: "error",
+            durationMs: 40_072,
+            message: "Test exceeded 40s timeout.",
+          },
+        ],
+        suiteErrors: [
+          {
+            file: "/tests",
+            errors: [
+              "tests: TEST-TIMEOUT-ABORT: Sandbox Tests (Codeunit79100).PostingUpdatesTotalTwin: watchdog timeout aborted the run — 0 further [Test] method(s) in this codeunit did not run (0 total)",
+            ],
+          },
+        ],
+      };
+      return { exitCode: 3, stdout: alRunnerStdout(hung), stderr: "stderr text" };
+    };
+    const { backend } = await makeBackend(spawn);
+    const v = await runOnce(backend, new SessionSafety(), ref, opts);
+    expect(v.outcome).toBe("pass");
+    expect(calls.length).toBe(2);
+    const second = calls[1] ?? [];
+    expect(second[second.indexOf("--exclude-test") + 1]).toBe(TWIN);
+  });
+});
+
+/**
+ * R534. An al-runner row is an ANSWER: al-runner ran the test, reported and exited. So it is never
+ * re-sent and never a spec §11 abort. It is a `timeout` when it provably is one (now also the
+ * test codeunit's OnRun trigger), a `runner-refused` error when al-runner refused a surface
+ * (`<Type>: out-of-scope: ...`), and otherwise a `runner-test-error` error. Rows below are the ones
+ * measured on al-runner 2.12.0-main.43f76177 (/coord/handoff/R-534/measure.md), names kept.
+ */
+describe("AlRunnerBackend: an answered row never aborts (R534)", () => {
+  const ONRUN_MESSAGE_20 =
+    "The test codeunit's OnRun trigger exceeded the 20s timeout, so none of its test methods ran.";
+  const hangRef = { codeunitId: 79660, codeunitName: "R534 OnRun Hang", method: "AfterHang" };
+  const hangOpts = { coverage: "none", timeoutMs: 20_000 } as const;
+  // measure.md A1, the one-shot envelope verbatim, with N = the budget (20 s) as LethAL sends it.
+  const onRunExit3 = {
+    tests: [
+      {
+        name: "Codeunit79660.AfterHang",
+        status: "error",
+        durationMs: 20001,
+        message: ONRUN_MESSAGE_20,
+        stackTrace:
+          '"R534 Probe Logic"(CodeUnit 79640).SpinFor line 8 - R534 Probe by LethAL version 1.0.0.0\n"R534 OnRun Hang"(CodeUnit 79660).OnRun(Trigger) line 4 - R534 Probe Tests by LethAL version 1.0.0.0',
+      },
+    ],
+    passed: 0,
+    failed: 0,
+    errors: 1,
+    skipped: 0,
+    total: 1,
+    exitCode: 3,
+    seed: 1953595511,
+    suiteErrors: [
+      {
+        file: "/coord/handoff/R-534/probe/tests",
+        errors: [
+          "tests: TEST-TIMEOUT-ABORT: R534 OnRun Hang (Codeunit79660).AfterHang: watchdog timeout aborted the run — 0 further [Test] method(s) in this codeunit did not run (0 total)",
+        ],
+      },
+    ],
+    wallSeconds: 16.276267,
+  };
+
+  test("T1 REPRO: an OnRun-trigger hang (exit 3) is a timeout in the OnRun, with its reported stop, sent ONCE", async () => {
+    const { calls, spawn } = okSpawn(onRunExit3, 3);
+    const { backend } = await makeBackend(spawn);
+    const v = await runOnce(backend, new SessionSafety(), hangRef, hangOpts);
+    expect([v.outcome, v.reportedStopMs, v.timeoutIn]).toEqual(["timeout", 20_000, "onrun"]);
+    expect(calls.length).toBe(1);
+  });
+
+  test("T1b: a body timeout row, in either measured wording, records timeoutIn body", () => {
+    for (const message of ["Test exceeded 40s timeout.", "TIMEOUT after 30s"]) {
+      const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "error", message }, 10, undefined);
+      expect([v.outcome, v.timeoutIn], message).toEqual(["timeout", "body"]);
+    }
+  });
+
+  // measure.md A, rows HandlerUnused (verbatim), plus the two other shapes al-runner's source
+  // writes as `error` without a test verdict: an unsupported signature and a `skipped` row.
+  const HANDLER_UNUSED = "The following UI handlers were not executed: ConfirmYes";
+  const answeredRows: ReadonlyArray<{ status: string; message?: string }> = [
+    { status: "error", message: HANDLER_UNUSED },
+    { status: "error", message: "unsupported test signature (1 params)" },
+    { status: "skipped" },
+  ];
+
+  test("T3 REPRO: an unexecuted UI handler, an unsupported signature and a skipped row are runner-test-error, completed-accepted, sent ONCE", async () => {
+    for (const row of answeredRows) {
+      const { calls, spawn } = okSpawn(
+        { tests: [{ name: QUALIFIED, durationMs: 71, ...row }], exitCode: 1 },
+        1,
+      );
+      const { backend } = await makeBackend(spawn);
+      const v = await runOnce(backend, new SessionSafety(), ref, {
+        coverage: "none",
+        timeoutMs: 5000,
+      });
+      const label = row.message ?? row.status;
+      expect([v.outcome, v.operation, v.runnerRow], label).toEqual([
+        "error",
+        "completed-accepted",
+        "runner-test-error",
+      ]);
+      expect(v.failureMessage, label).toContain(AL_RUNNER_UNCLASSIFIED_ERROR);
+      expect(v.failureMessage, label).toContain(row.message ?? '"skipped"');
+      expect(v.failureMessage, label).toContain("not re-sent and does not stop the session (R534)");
+      expect(calls.length, label).toBe(1);
+    }
+  });
+
+  test("T4: near-miss timeout wordings stay runner-test-error, never a timeout", () => {
+    for (const message of [
+      "The test codeunit's OnRun trigger exceeded the timeout, so none of its test methods ran.",
+      `${ONRUN_MESSAGE_20} Later`,
+      `TIMEOUT ${ONRUN_MESSAGE_20}`,
+      "An OnAfterTestMethodRun subscriber (codeunit 50100) failed: boom (test result before it: Test exceeded 5s timeout.)",
+      "Test exceeded 5s timeout. extra",
+      // Final review I-A: a user OnBeforeTestMethodRun subscriber raising the timeout wording.
+      // Only `^` refuses these (`$` matches them), so a lost `^` alone would be a false kill.
+      "An OnBeforeTestMethodRun subscriber (codeunit 50100) failed, so the test did not run: NavNCLDialogException: Test exceeded 5s timeout.",
+      `An OnBeforeTestMethodRun subscriber (codeunit 50100) failed, so the test did not run: NavNCLDialogException: ${ONRUN_MESSAGE_20}`,
+    ]) {
+      const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "error", message }, 10, undefined);
+      expect([v.outcome, v.runnerRow, v.reportedStopMs, v.timeoutIn], message).toEqual([
+        "error",
+        "runner-test-error",
+        undefined,
+        undefined,
+      ]);
+    }
+  });
+
+  // measure.md A rows OosInBody and AfterOosOnRun verbatim; the InvalidOperationException row is
+  // the source's Cecil-injected throw (NclCecilRewrite.Reports.cs), same `out-of-scope: ` prefix.
+  const OOS_TASK =
+    "RunnerOutOfScopeException: out-of-scope: TaskScheduler.TaskExists — task-scheduler — the runner has no scheduler and no scheduled-task store, so it cannot say whether a task exists; BC's real body queries the scheduled-task table over a SQL connection that does not exist here. Nothing is ever scheduled: CanCreateTask() is false and CreateTask() is refused by BC's own guard, so no task can have been created either — see docs/scope.md#jobs";
+  const refusals: ReadonlyArray<{ status: string; message: string }> = [
+    { status: "fail", message: OOS_TASK },
+    {
+      status: "fail",
+      message:
+        "InvalidOperationException: out-of-scope: NavReport.Run — reports — see docs/scope.md",
+    },
+    {
+      status: "error",
+      message: `The test codeunit's OnRun trigger failed, so none of its test methods ran (as in BC): ${OOS_TASK}`,
+    },
+  ];
+
+  test("T5: an out-of-scope refusal (any exception type, body or OnRun) is runner-refused, never a kill", async () => {
+    for (const row of refusals) {
+      const { calls, spawn } = okSpawn(
+        { tests: [{ name: QUALIFIED, durationMs: 71, ...row }], exitCode: 1 },
+        1,
+      );
+      const { backend } = await makeBackend(spawn);
+      const v = await runOnce(backend, new SessionSafety(), ref, {
+        coverage: "none",
+        timeoutMs: 5000,
+      });
+      expect([v.outcome, v.operation, v.runnerRow], row.message).toEqual([
+        "error",
+        "completed-accepted",
+        "runner-refused",
+      ]);
+      // The row's own words lead the note (the pre-commitment's B3 reads its start).
+      expect(v.failureMessage?.startsWith(row.message), row.message).toBe(true);
+      expect(calls.length, row.message).toBe(1);
+    }
+  });
+
+  test("T5 near-miss: a user message that merely CONTAINS the phrase stays a fail (a kill)", () => {
+    // The second is final review M-b: a type-shaped word later in the message. Only `^` refuses it.
+    for (const message of [
+      "NavNCLDialogException: expected 3, got out-of-scope: x",
+      "NavNCLDialogException: wrapped Foo: out-of-scope: x",
+    ]) {
+      const v = verdictFromRunnerTest(ref, QUALIFIED, { status: "fail", message }, 10, undefined);
+      expect([v.outcome, v.runnerRow], message).toEqual(["fail", undefined]);
+    }
+  });
+
+  test("T7: a row an exit-3 abort line names, in no known timeout wording, is runner-test-error flagged timeoutWordingUnknown; on exit 1 it is not flagged", async () => {
+    const watchdog = {
+      ...onRunExit3,
+      tests: [{ name: "Codeunit79660.AfterHang", status: "error", message: "Watchdog stop." }],
+    };
+    const proven = await makeBackend(okSpawn(watchdog, 3).spawn);
+    const v = await proven.backend.run(hangRef, hangOpts);
+    expect([v.outcome, v.runnerRow, v.timeoutWordingUnknown]).toEqual([
+      "error",
+      "runner-test-error",
+      true,
+    ]);
+    const { suiteErrors: _, ...noAbort } = watchdog;
+    const plain = await makeBackend(okSpawn({ ...noAbort, exitCode: 1 }, 1).spawn);
+    const w = await plain.backend.run(hangRef, hangOpts);
+    expect([w.outcome, w.runnerRow, w.timeoutWordingUnknown]).toEqual([
+      "error",
+      "runner-test-error",
+      undefined,
+    ]);
+  });
+});
+
+/**
+ * R557: al-runner names a test row by BC's C# identifier for the AL method (`"Dash-Step"` ->
+ * `Dasha45Step`), so LethAL sends and looks up that name; a session-suite test al-runner has no row
+ * for stops the session by name (`AlRunnerTestNameError`), within I1's and I3's limits.
+ */
+describe("AlRunnerBackend: al-runner's test names (R557)", () => {
+  const T = { codeunitId: 78850, codeunitName: "Names Tests" };
+  const dash = { ...T, method: "Dash-Step" };
+  const space = { ...T, method: "Space Step" };
+  const plain = { ...T, method: "PlainControl" };
+  const DASH = "Codeunit78850.Dasha45Step";
+  const PLAIN = "Codeunit78850.PlainControl";
+  const opts = { coverage: "none", timeoutMs: 5000 } as const;
+  const noneSelected = (calls: string[][]): SpawnFn => {
+    return async (argv) => {
+      calls.push([...argv]);
+      return {
+        exitCode: 6,
+        stdout: alRunnerStdout({
+          tests: [],
+          passed: 0,
+          failed: 0,
+          errors: 0,
+          total: 0,
+          exitCode: 6,
+        }),
+        stderr: `--test ${argv[argv.indexOf("--test") + 1]} selected no test in this run\n`,
+      };
+    };
+  };
+
+  test("AlRunnerTestNameError extends Error directly, is named, and the CLI prints it by name", () => {
+    const err = new AlRunnerTestNameError(
+      [{ alName: "Names Tests.Dash-Step", sent: DASH }],
+      "28.5.54151.55132",
+    );
+    expect(Object.getPrototypeOf(AlRunnerTestNameError.prototype)).toBe(Error.prototype);
+    expect(err.name).toBe("AlRunnerTestNameError");
+    const line = refusalLine(err);
+    expect(line).toStartWith("AlRunnerTestNameError: ");
+    for (const s of ["Names Tests.Dash-Step", DASH, "28.5.54151.55132", "R557"]) {
+      expect(line).toContain(s);
+    }
+    expect(line).toContain(
+      "al-runner's naming rule moved, or this build does not compile that test",
+    );
+  });
+
+  test("T2: the exact path sends --test and --test-exact with the mangled name, and credits the caller's ref", async () => {
+    const { calls, spawn } = okSpawn({ tests: [{ name: DASH, status: "pass", durationMs: 1 }] });
+    const { backend } = await makeBackend(spawn);
+    backend.useExactTestSelector(true);
+    const v = await backend.run(dash, opts);
+    expect(v.outcome).toBe("pass");
+    expect(v.ref).toEqual(dash);
+    const argv = calls[0] ?? [];
+    expect(argv[argv.indexOf("--test") + 1]).toBe(DASH);
+    expect(argv[argv.indexOf("--test-exact") + 1]).toBe(DASH);
+  });
+
+  test("T3a: one-shot exit 6 with an empty envelope stops with AlRunnerTestNameError, after 1 spawn", async () => {
+    const calls: string[][] = [];
+    const { backend } = await makeBackend(noneSelected(calls));
+    backend.useExactTestSelector(true);
+    backend.useSessionTests([dash, plain], []);
+    const p = runOnce(backend, new SessionSafety(), dash, opts);
+    await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+    await expect(p).rejects.toThrow(/Names Tests\.Dash-Step/);
+    await expect(p).rejects.toThrow(/Codeunit78850\.Dasha45Step/);
+    await expect(p).rejects.toThrow(/R557/);
+    expect(calls.length).toBe(1);
+  });
+
+  test("T3b: the R488 path's exit 0 with zero rows gives the same refusal", async () => {
+    const { calls, spawn } = okSpawn({ tests: [] });
+    const { backend } = await makeBackend(spawn);
+    backend.useSessionTests([dash, plain], []);
+    const p = runOnce(backend, new SessionSafety(), dash, opts);
+    await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+    await expect(p).rejects.toThrow(/Names Tests\.Dash-Step.*Codeunit78850\.Dasha45Step/s);
+    expect(calls.length).toBe(1);
+  });
+
+  test("T3c: exit 1 with only stderr is still an error, and a fail row named wanted is still a kill", async () => {
+    const broken: SpawnFn = async () => ({ exitCode: 1, stdout: "", stderr: "boom\n" });
+    const b1 = await makeBackend(broken);
+    b1.backend.useSessionTests([dash], []);
+    const v = await b1.backend.run(dash, opts);
+    expect(v.outcome).toBe("error");
+    const b2 = await makeBackend(
+      okSpawn({ tests: [{ name: DASH, status: "fail", message: "DashStep(5) must be 6" }] }, 1)
+        .spawn,
+    );
+    b2.backend.useSessionTests([dash], []);
+    expect((await b2.backend.run(dash, opts)).outcome).toBe("fail");
+  });
+
+  test("T3d: exit 6 for an undecided-kept test keeps a prefixed error, no throw (I3)", async () => {
+    const calls: string[][] = [];
+    const { backend } = await makeBackend(noneSelected(calls));
+    backend.useExactTestSelector(true);
+    backend.useSessionTests([dash, plain], [dash]);
+    const v = await backend.run(dash, opts);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage?.startsWith(AL_RUNNER_UNDECIDED_ARM_MISSING)).toBe(true);
+    expect(v.operation).toBe("pre-dispatch-rejected");
+  });
+
+  test("the stop's message also names the R392 cause: an `#if` arm LethAL decided compiled-in that al-runner compiled out", () => {
+    const m = new AlRunnerTestNameError([
+      { alName: "Names Tests.Dash-Step", sent: "Codeunit78850.Dasha45Step" },
+    ]).message;
+    expect(m).toContain("#if");
+    expect(m).toContain("R392");
+    expect(m).toContain("R557");
+  });
+
+  test("T5: on the R488 path the FIRST call for `Twin Pair` excludes Twin_PairLong by its al-runner name", async () => {
+    const twin = { ...T, method: "Twin Pair" };
+    const { calls, spawn } = okSpawn({
+      tests: [{ name: "Codeunit78850.Twin_Pair", status: "pass", durationMs: 1 }],
+    });
+    const { backend } = await makeBackend(spawn);
+    backend.useDiscoveredTests([twin, { ...T, method: "Twin_PairLong" }, plain]);
+    expect((await backend.run(twin, opts)).outcome).toBe("pass");
+    const first = calls[0] ?? [];
+    expect(first[first.indexOf("--test") + 1]).toBe("Codeunit78850.Twin_Pair");
+    expect(first[first.indexOf("--exclude-test") + 1]).toBe("Codeunit78850.Twin_PairLong");
+    expect(first.filter((a) => a === "--exclude-test").length).toBe(1);
+  });
+
+  describe("--server", () => {
+    const CALC_AL = `codeunit 78800 "Names Calc"
+{
+    procedure DashStep(x: Integer): Integer
+    begin
+        exit(x + 1);
+    end;
+}
+`;
+    async function server(
+      rows: Array<{ name: string; status: string; message?: string }>,
+      extra: { exitCode?: number; perTestCoverage?: readonly unknown[]; coverage?: boolean } = {},
+    ): Promise<AlRunnerBackend> {
+      const dir = scratch("lethal-r557-srv-");
+      await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+      await writeFile(join(dir, "NamesCalc.Codeunit.al"), CALC_AL, "utf8");
+      const fake = fakeAlRunnerServer(rows, {
+        ...(extra.exitCode !== undefined ? { exitCode: extra.exitCode } : {}),
+        ...(extra.perTestCoverage !== undefined ? { perTestCoverage: extra.perTestCoverage } : {}),
+      });
+      const backend = new AlRunnerBackend(
+        {
+          alRunnerPath: "al-runner",
+          instrumentedDir: dir,
+          testDir: "/tests",
+          selectorObjectId: 50000,
+          serverMode: true,
+          ...(extra.coverage === true ? { coverage: "al-runner" as const } : {}),
+        },
+        okSpawn({ tests: [] }).spawn,
+        fake.spawn,
+      );
+      backend.useBuildSymbols([]);
+      backend.useMutantBudgetFloor(180_000, 120_000);
+      return backend;
+    }
+
+    test("T4a: a mangled row and its perTestCoverage are found, so coverage is attached", async () => {
+      await initParser();
+      const backend = await server([{ name: DASH, status: "pass" }], {
+        coverage: true,
+        perTestCoverage: [
+          {
+            test: DASH,
+            coverage: [
+              {
+                file: "NamesCalc.Codeunit.al",
+                statements: [{ line: 5, hits: 1, scope: "DashStep" }],
+              },
+            ],
+          },
+        ],
+      });
+      backend.useSessionTests([dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("pass");
+        expect((v.coverage?.entries ?? []).map((e) => e.procedure)).toEqual(["DashStep"]);
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("T4b: a clean answer missing a session-suite test stops, listing only missing SESSION-SUITE tests", async () => {
+      const backend = await server([{ name: PLAIN, status: "pass" }]);
+      backend.useDiscoveredTests([dash, space, plain, { ...T, method: "Gone Step" }]);
+      backend.useSessionTests([dash, space, plain], []);
+      try {
+        const p = backend.run(dash, opts);
+        await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+        const err = (await p.catch((e: unknown) => e)) as Error;
+        expect(err.message).toContain("Names Tests.Dash-Step");
+        expect(err.message).toContain("Codeunit78850.Dasha45Step");
+        expect(err.message).toContain("Names Tests.Space Step");
+        expect(err.message).toContain("Codeunit78850.Space_Step");
+        expect(err.message).not.toContain("Gone Step");
+        expect(err.message).not.toContain("Gone_Step");
+        expect(err.message).not.toContain("Names Tests.PlainControl");
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("T4c: a miss after a hung test stays R534's runner-test-error", async () => {
+      const backend = await server([
+        { name: PLAIN, status: "error", message: "Test exceeded 5s timeout." },
+      ]);
+      backend.useSessionTests([plain, dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect([v.outcome, v.runnerRow]).toEqual(["error", "runner-test-error"]);
+      } finally {
+        await backend.close();
+      }
+    });
+
+    // R557 (I2): the unclean tests below keep their pass row in ANOTHER codeunit, so the missing
+    // test's own codeunit has no run row: only then is an unclean answer a per-test error.
+    const other = { codeunitId: 78851, codeunitName: "Other Tests", method: "Fine" };
+    const OTHER = "Codeunit78851.Fine";
+
+    test("T4d: exit 3 with an emit-excluded `Names Tests.Dash-Step` row is an error listing it (I1)", async () => {
+      const backend = await server(
+        [
+          { name: OTHER, status: "pass" },
+          { name: "Names Tests.Dash-Step", status: "skipped", message: "not compiled" },
+        ],
+        { exitCode: 3 },
+      );
+      backend.useSessionTests([other, dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("error");
+        expect(v.failureMessage).toContain("Names Tests.Dash-Step");
+        expect(v.failureMessage).toContain("skipped");
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("T4g: exit 3 with every row a pass is still unclean: an error, with no throw (I1)", async () => {
+      const backend = await server([{ name: OTHER, status: "pass" }], { exitCode: 3 });
+      backend.useSessionTests([other, dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("error");
+        expect(v.failureMessage).toContain("exit 3");
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("T4h: a row named otherwise than `Codeunit<id>.`, or a <ctor> row, is unclean whatever its status (I1)", async () => {
+      for (const odd of [
+        { name: "Names Tests.Other", status: "pass" },
+        { name: "Codeunit78850.<ctor>", status: "fail" },
+      ]) {
+        const backend = await server([{ name: OTHER, status: "pass" }, odd]);
+        backend.useSessionTests([other, dash], []);
+        try {
+          const v = await backend.run(dash, opts);
+          expect(v.outcome, odd.name).toBe("error");
+          expect(v.failureMessage).toContain(odd.name);
+        } finally {
+          await backend.close();
+        }
+      }
+    });
+
+    test("T4e: a <ctor> row is an error listing it, with no throw (I1)", async () => {
+      const backend = await server([
+        { name: "Codeunit78850.<ctor>", status: "error", message: "setup failed" },
+      ]);
+      backend.useSessionTests([dash], []);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("error");
+        expect(v.failureMessage).toContain("Codeunit78850.<ctor>");
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("I2: an answer made unclean by ANOTHER codeunit's emit-excluded row still stops when the missing test's own codeunit ran", async () => {
+      const backend = await server(
+        [
+          { name: PLAIN, status: "pass" },
+          { name: "Other Tests.Fine", status: "skipped", message: "DotNet object not compiled" },
+        ],
+        { exitCode: 3 },
+      );
+      backend.useSessionTests([plain, dash, other], []);
+      try {
+        const p = backend.run(dash, opts);
+        await expect(p).rejects.toBeInstanceOf(AlRunnerTestNameError);
+        const err = (await p.catch((e: unknown) => e)) as Error;
+        expect(err.message).toContain("Names Tests.Dash-Step (sent as Codeunit78850.Dasha45Step)");
+        // The emit-excluded codeunit ran nothing, so its test is not named as a naming miss.
+        expect(err.message).not.toContain(`sent as ${OTHER}`);
+      } finally {
+        await backend.close();
+      }
+    });
+
+    test("I2: own-codeunit rows that are not test runs (<ctor>, OnRun, <event>) do not count: an unclean answer stays an error", async () => {
+      for (const method of ["<ctor>", "OnRun", "<event>"]) {
+        const backend = await server(
+          [
+            { name: OTHER, status: "pass" },
+            { name: `Codeunit78850.${method}`, status: "error", message: "setup failed" },
+          ],
+          { exitCode: 3 },
+        );
+        backend.useSessionTests([other, dash], []);
+        try {
+          const v = await backend.run(dash, opts);
+          expect(v.outcome, method).toBe("error");
+          expect(v.failureMessage, method).toContain("not a clean run");
+        } finally {
+          await backend.close();
+        }
+      }
+    });
+
+    test("T4f: a miss for an undecided-kept test is a prefixed error, with no throw (I3)", async () => {
+      const backend = await server([{ name: PLAIN, status: "pass" }]);
+      backend.useSessionTests([plain, dash], [dash]);
+      try {
+        const v = await backend.run(dash, opts);
+        expect(v.outcome).toBe("error");
+        expect(v.failureMessage?.startsWith(AL_RUNNER_UNDECIDED_ARM_MISSING)).toBe(true);
+      } finally {
+        await backend.close();
+      }
+    });
   });
 });

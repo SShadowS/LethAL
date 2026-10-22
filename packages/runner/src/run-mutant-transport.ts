@@ -1,8 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { appendFileSync } from "node:fs";
 import type { ActivationConfig, FetchFn } from "./activation";
-import type { TestMethodRef, TestOutcome, TestVerdict } from "./backend";
-import { bcFetch } from "./bc-fetch";
+import type { StopState, TestMethodRef, TestOutcome, TestVerdict } from "./backend";
+import { bcFetch, bounded } from "./bc-fetch";
 import { describeThrown } from "./describe-error";
+import { UnfilteredExtensionsQueryError } from "./harness";
 import { assertAttemptId, parseOperationStatus } from "./lease";
 import type { LeaseTuple, OperationStatus } from "./lease";
 import { runMutantLineCountMessage } from "./stale-test-app";
@@ -13,12 +15,11 @@ import { runMutantLineCountMessage } from "./stale-test-app";
  * request, classifies dispatch/effect state the 5B way, validates the echoed identity tuple, and
  * maps the terminal result to a `TestVerdict`.
  *
- * Request-shaping (Basic auth, `company`/`tenant` query params, manual AbortController timeout)
- * mirrors `postOData` in activation.ts — deliberately NOT reused: `postOData` classifies a
- * non-2xx as `completed-effect-unknown`, but a `RunMutant` that answered non-2xx may have
- * activated a mutant and never confirmed its run-scoped clear, so the container could be left
- * mutated. That is an `in-flight-unknown` (quarantine), not a benign effect-unknown — the mapping
- * below is RunMutant-specific and must not drift back onto `postOData`'s.
+ * Request-shaping (Basic auth, `company`/`tenant` query params, a manual AbortController timeout,
+ * as every BC client here uses). A `RunMutant` that answered non-2xx may have activated a mutant
+ * and never confirmed its run-scoped clear, so the container could be left mutated: that is an
+ * `in-flight-unknown` (quarantine), not a benign effect-unknown — the mapping below is
+ * RunMutant-specific.
  */
 export interface RunMutantRequest {
   readonly ref: TestMethodRef;
@@ -61,14 +62,85 @@ export interface RunMutantRequest {
    * So the 408 on THIS request is the only signal that proves the session stopped was the session
    * serving THIS request. It is also what makes the finish-just-after-budget case honest: if the
    * run completed instead, this request returns the real result and that is what gets scored.
+   *
+   * R-204b: the hook is handed its own bound (the grace) and RESOLVES with the stop's answer; a
+   * refusal is `{ stopped: false }`, never a rejection. A rejection means the answer is unknown
+   * (the reply was lost), which is not the same thing and is not retry-safe.
    */
-  readonly onBudgetExceeded?: () => Promise<void>;
+  readonly onBudgetExceeded?: (boundMs: number) => Promise<StopHookAnswer>;
   /**
    * How long to keep waiting after `onBudgetExceeded` fires before giving up and aborting. Bounds
    * the hold-open: if BC answers neither the stop nor this request, the run must still end.
    * Ignored when `onBudgetExceeded` is absent.
    */
   readonly stopGraceMs?: number;
+}
+
+/** R-204b: what the single path's stop hook resolves with. */
+export interface StopHookAnswer {
+  readonly stopped: boolean;
+  readonly reason?: string;
+}
+
+/**
+ * R-204b: a grouped call's stop state from its attempts. `refused` only if EVERY attempt was
+ * refused; otherwise the last attempt that was not. Absent when no stop was sent.
+ */
+export function callStopState(attempts: readonly StopState[]): StopState | undefined {
+  if (attempts.length === 0) return undefined;
+  return attempts.filter((s) => s !== "refused").at(-1) ?? "refused";
+}
+
+/** R-204b: copy the call's stop state onto every verdict it carries, as data. */
+function stampManyStop(
+  r: RunMutantManyResult,
+  attempts: readonly StopState[],
+): RunMutantManyResult {
+  const stopState = callStopState(attempts);
+  if (stopState === undefined) return r;
+  return r.kind === "call"
+    ? { ...r, verdict: { ...r.verdict, stopState } }
+    : { ...r, verdicts: r.verdicts.map((v) => ({ ...v, stopState })) };
+}
+
+/** R-204b: the single path's stop, per call. `done` settles `state`; it never rejects. */
+interface StopTracker {
+  fired: boolean;
+  state?: StopState;
+  error?: unknown;
+  refusal?: string;
+  done?: Promise<void>;
+}
+
+/**
+ * R-204b: waits for the single path's stop to settle, but only until `deadline` (the REMAINING
+ * grace), then stamps its state on the verdict. Still unanswered then: `unknown`.
+ */
+async function settleStop(
+  v: TestVerdict,
+  stop: StopTracker,
+  deadline: number,
+): Promise<TestVerdict> {
+  if (!stop.fired) return v;
+  const left = deadline - Date.now();
+  if (stop.state === "issued" && stop.done !== undefined && left > 0) {
+    await bounded(stop.done, left, "the stop").catch(() => {});
+  }
+  const stopState: StopState =
+    stop.state === "issued" || stop.state === undefined ? "unknown" : stop.state;
+  const why =
+    stopState === "refused"
+      ? ` (${stop.refusal ?? "no reason given"})`
+      : stop.error !== undefined
+        ? ` (${describeThrown(stop.error)})`
+        : "";
+  return {
+    ...v,
+    stopState,
+    ...(v.operation === "in-flight-unknown"
+      ? { failureMessage: `${v.failureMessage ?? "no detail"}; LethAL's stop: ${stopState}${why}` }
+      : {}),
+  };
 }
 
 /**
@@ -377,21 +449,242 @@ function parseCoverageStats(result: RunMutantResult): FencedCoverageStats | unde
   return { runMs, serializeMs, scannedRows, emittedRows };
 }
 
+/**
+ * R-496: the per-call record `refusalBoundary` reads; see there. R499: `pending` holds this call's
+ * fetches still in flight (the recording wrapper's own promise, mapped to its action name).
+ */
+type RefusalHolder = {
+  refusal?: UnfilteredExtensionsQueryError;
+  closed?: boolean;
+  readonly pending: Map<Promise<Response>, string>;
+};
+const refusalScope = new AsyncLocalStorage<RefusalHolder>();
+
+/**
+ * R499: the control-request state every transport of one backend shares, so a fetch left in flight
+ * by one transport is drained by the next scored call on ANY of them, and once more at teardown.
+ * `orphans`: fetches still in flight whose call already returned (or that had no call). `lateRefusal`:
+ * a refusal recorded after its call exited; the next call's boundary (or the teardown) throws it.
+ */
+export type ControlState = {
+  readonly orphans: Map<Promise<Response>, string>;
+  lateRefusal?: UnfilteredExtensionsQueryError | undefined;
+};
+
+/** R499: a fresh, empty `ControlState`. */
+export function newControlState(): ControlState {
+  return { orphans: new Map() };
+}
+
+/** R499: how long a scored call (and the teardown) waits for in-flight control requests. */
+export const CONTROL_DRAIN_MS = 5_000;
+
+/**
+ * R499: a scored call's control requests were still in flight when `CONTROL_DRAIN_MS` ran out. The
+ * call publishes nothing and the session ends: a fetch that ignored its own abort this long means a
+ * broken runtime, and a refusal could still land on it.
+ */
+export class ControlDrainTimeoutError extends Error {
+  constructor(actions: readonly string[], boundMs: number) {
+    super(
+      `R499: ${actions.join(", ")} still outstanding after ${boundMs} ms; this call is not scored and the session ends`,
+    );
+    this.name = "ControlDrainTimeoutError";
+  }
+}
+
+/** R-496: the error the teardown throws for a refusal no call has thrown yet. */
+function lateRefusalError(late: UnfilteredExtensionsQueryError): UnfilteredExtensionsQueryError {
+  return new UnfilteredExtensionsQueryError(
+    `a BC redirect to an unfiltered extensions query arrived after the last scored call (from a control request left by a non-scored call), so this session is refused: ${late.message}`,
+  );
+}
+
+/** R-496/R499: hand over (and clear) the refusal `state` holds that no call has thrown yet. */
+export function takeLateRefusal(state: ControlState): UnfilteredExtensionsQueryError | undefined {
+  const late = state.lateRefusal;
+  state.lateRefusal = undefined;
+  return late === undefined ? undefined : lateRefusalError(late);
+}
+
+/** R499: a single-path verdict that is a score (and so waits for in-flight control requests). */
+function isScoredVerdict(v: TestVerdict): boolean {
+  return (
+    v.operation === undefined &&
+    (v.outcome === "pass" || v.outcome === "fail" || v.outcome === "timeout")
+  );
+}
+
+/** R499: the action name in a `.../LethALControl_<action>?...` URL, for messages. */
+function actionOf(url: string | URL | Request): string {
+  const s = url instanceof Request ? url.url : String(url);
+  return /LethALControl_(\w+)/.exec(s)?.[1] ?? s;
+}
+
+/**
+ * R499: wait until every promise in `maps` has settled (re-reading the maps, as a settling fetch
+ * removes itself), or until `ms` runs out. Never throws.
+ */
+export async function drainPending(
+  maps: readonly Map<Promise<Response>, string>[],
+  ms: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let expired = false;
+  const expiry = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      expired = true;
+      resolve();
+    }, ms);
+  });
+  // `seen`: promises already awaited to settlement, so an entry that is never removed cannot spin
+  // this loop on microtasks forever (the expiry timer would never get to run).
+  const seen = new Set<Promise<Response>>();
+  try {
+    for (;;) {
+      const open = maps.flatMap((m) => [...m.keys()]).filter((p) => !seen.has(p));
+      if (open.length === 0 || expired) return;
+      await Promise.race([Promise.allSettled(open), expiry]);
+      if (!expired) for (const p of open) seen.add(p);
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export class RunMutantTransport {
   /** R289: `LETHAL_R289_TRACE`, read once here; an empty string counts as unset. */
   private readonly tracePath: string | undefined;
   private readonly traceWrite: (path: string, line: string) => void;
+  private readonly fetchFn: FetchFn;
+  private readonly state: ControlState;
+  private readonly drainMs: number;
+  private readonly pollBoundMs: number;
+
+  /** R499: the shared control state; `BcDevMcpBackend.bindTransport` checks it is the backend's own. */
+  get controlState(): ControlState {
+    return this.state;
+  }
+
+  /** R-496: hand over (and clear) a refusal no call has thrown yet; the session teardown asks once. */
+  takeLateRefusal(): UnfilteredExtensionsQueryError | undefined {
+    return takeLateRefusal(this.state);
+  }
+
+  /**
+   * R-496: run one public call; if any fetch inside it (a swallowed catch, a stop timer, the status
+   * read) was refused as an unfiltered extensions query, throw that refusal at exit, whatever the
+   * call would otherwise have returned or thrown.
+   *
+   * R499: before a SCORED result (`isScored`) is returned, wait up to `drainMs` for every fetch
+   * still in flight, this call's and the orphans of earlier calls, so a refusal that lands
+   * meanwhile is thrown here rather than after a verdict was published. A fetch still in flight
+   * after the bound throws `ControlDrainTimeoutError`. A non-scored exit does not wait: its fetches
+   * become orphans for the next scored call (or the teardown) to drain.
+   */
+  private async refusalBoundary<T>(fn: () => Promise<T>, isScored: (v: T) => boolean): Promise<T> {
+    // A refusal that landed after an earlier call exited (a stop still pending past its bound) is
+    // thrown here, before anything is sent, and cleared only by being thrown.
+    const late = this.state.lateRefusal;
+    if (late !== undefined) {
+      this.state.lateRefusal = undefined;
+      throw late;
+    }
+    const holder: RefusalHolder = { pending: new Map() };
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+    try {
+      outcome = { ok: true, value: await refusalScope.run(holder, fn) };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+    const scored = outcome.ok && isScored(outcome.value);
+    if (scored) await drainPending([holder.pending, this.state.orphans], this.drainMs);
+    holder.closed = true;
+    const outstanding = [...holder.pending, ...this.state.orphans].map(([, action]) => action);
+    for (const [p, action] of holder.pending) this.state.orphans.set(p, action);
+    holder.pending.clear();
+    if (holder.refusal !== undefined) throw holder.refusal;
+    if (!outcome.ok) throw outcome.error;
+    if (scored) {
+      const lateNow = this.state.lateRefusal;
+      if (lateNow !== undefined) {
+        this.state.lateRefusal = undefined;
+        throw lateNow;
+      }
+      if (outstanding.length > 0) throw new ControlDrainTimeoutError(outstanding, this.drainMs);
+    }
+    return outcome.value;
+  }
 
   constructor(
     private readonly cfg: ActivationConfig,
     private readonly targetAppId: string,
     private readonly artifactId: string,
-    private readonly fetchFn: FetchFn = bcFetch,
-    opts: { readonly traceWrite?: (path: string, line: string) => void } = {},
+    injectedFetch: FetchFn = bcFetch,
+    opts: {
+      readonly traceWrite?: (path: string, line: string) => void;
+      /** R499: the backend's shared state; a fresh one when absent (tests, probes). */
+      readonly controlState?: ControlState;
+      /** R499 test seam: the drain bound, `CONTROL_DRAIN_MS` when absent. */
+      readonly drainMs?: number;
+      /** R503 test seam: the watchdog's per-poll bound, `KEPT_ANSWER_READ_MS` when absent. */
+      readonly pollBoundMs?: number;
+    } = {},
   ) {
+    this.state = opts.controlState ?? newControlState();
+    this.drainMs = opts.drainMs ?? CONTROL_DRAIN_MS;
+    this.pollBoundMs = opts.pollBoundMs ?? KEPT_ANSWER_READ_MS;
+    // R-496: every fetch this transport makes records an unfiltered-extensions refusal for the
+    // CURRENT public call (async-local, so concurrent calls never share a record), then rethrows.
+    // R499: the wrapper's OWN promise is registered as in flight and removed in its `finally`, so a
+    // refusal is recorded before the entry leaves the map and a drain never sees it settled first.
+    const recording = (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const holder = refusalScope.getStore();
+      const map =
+        holder !== undefined && holder.closed !== true ? holder.pending : this.state.orphans;
+      // `self.p` rather than `p` in the `finally`: a fetch that throws synchronously reaches it
+      // before `p` is assigned, and is then never registered.
+      const self: { p?: Promise<Response>; settled?: boolean } = {};
+      const p: Promise<Response> = (async () => {
+        try {
+          return await injectedFetch(url, init);
+        } catch (err) {
+          if (err instanceof UnfilteredExtensionsQueryError) {
+            if (holder === undefined || holder.closed === true) {
+              // outside any call, or after it exited: keep it for the next call (or the teardown)
+              this.recordLate(err);
+            } else if (holder.refusal === undefined) {
+              holder.refusal = err;
+            }
+          }
+          throw err;
+        } finally {
+          self.settled = true;
+          if (self.p !== undefined) {
+            holder?.pending.delete(self.p);
+            this.state.orphans.delete(self.p);
+          }
+        }
+      })();
+      self.p = p;
+      if (self.settled !== true) map.set(p, actionOf(url));
+      return p;
+    };
+    this.fetchFn = Object.assign(recording, { preconnect: injectedFetch.preconnect });
     const p = process.env.LETHAL_R289_TRACE;
     this.tracePath = p === undefined || p === "" ? undefined : p;
     this.traceWrite = opts.traceWrite ?? appendFileSync;
+  }
+
+  /** R499: keep the first late refusal; a later one is warned, never dropped silently. */
+  private recordLate(err: UnfilteredExtensionsQueryError): void {
+    if (this.state.lateRefusal === undefined) {
+      this.state.lateRefusal = err;
+      return;
+    }
+    console.warn(
+      `[lethal] a further refused unfiltered extensions query: ${lateRefusalError(err).message}`,
+    );
   }
 
   /** One fenced mutant/baseline execution, no coverage collected — the unchanged Layer 5C-A path. */
@@ -412,45 +705,34 @@ export class RunMutantTransport {
    * through — stopping a run that already finished, whose recorded session id now names a live
    * pooled session — is the false kill this feature must not produce.
    *
-   * Throws on transport failure; the caller surfaces that in the quarantine note.
+   * Throws on transport failure; the caller surfaces that in the quarantine note. R-204b:
+   * `timeoutMs` bounds the headers AND the body, and holds even for a fetch that ignores its abort.
    */
   async stopHungRun(req: {
     readonly attemptId: string;
     readonly lease: LeaseTuple & { readonly opSeq: number };
+    readonly timeoutMs: number;
   }): Promise<{ stopped: boolean; sessionId?: number; reason?: string }> {
     assertAttemptId(req.attemptId);
-    const params = new URLSearchParams({ company: this.cfg.company });
-    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
-    const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_StopHungRun?${params.toString()}`;
-    const res = await this.fetchFn(url, {
-      method: "POST",
-      headers: {
-        authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        epoch: req.lease.epoch,
-        token: req.lease.token,
-        generation: req.lease.serverGeneration,
-        attemptId: req.attemptId,
-        opSeq: req.lease.opSeq,
-      }),
-    });
-    if (!res.ok) {
-      throw new Error(`StopHungRun failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
-    }
-    const outer: unknown = await res.json();
-    const value = (outer as { value?: unknown }).value;
-    if (typeof value !== "string") {
-      throw new Error(`StopHungRun returned no string \`value\`: ${JSON.stringify(outer)}`);
-    }
-    const parsed: unknown = JSON.parse(value);
-    const stopped = (parsed as { stopped?: unknown }).stopped;
+    const parsed = await bounded(
+      this.postAction(
+        "StopHungRun",
+        {
+          epoch: req.lease.epoch,
+          token: req.lease.token,
+          generation: req.lease.serverGeneration,
+          attemptId: req.attemptId,
+          opSeq: req.lease.opSeq,
+        },
+        req.timeoutMs,
+      ),
+      req.timeoutMs,
+      "StopHungRun",
+    );
+    const { stopped, sessionId, reason } = parsed;
     if (typeof stopped !== "boolean") {
-      throw new Error(`StopHungRun returned no boolean \`stopped\`: ${value}`);
+      throw new Error(`StopHungRun returned no boolean \`stopped\`: ${JSON.stringify(parsed)}`);
     }
-    const sessionId = (parsed as { sessionId?: unknown }).sessionId;
-    const reason = (parsed as { reason?: unknown }).reason;
     return {
       stopped,
       ...(typeof sessionId === "number" ? { sessionId } : {}),
@@ -461,19 +743,27 @@ export class RunMutantTransport {
   /**
    * R198: the watchdog's status read, on this transport's own connection rather than through
    * `LeaseClient`, so `runMany` is testable with one fake fetch. Same wire shape, same parser.
+   * R503: `timeoutMs` is required, so no caller can make an unbounded status read; it arms the
+   * fetch's abort, and both callers here (the watchdog, `completedBeforeStop`) also race the read
+   * with `bounded` at the same number, for a fetch that ignores its abort.
    */
   async getOperationStatus(
     lease: LeaseTuple,
     attemptId: string,
     opSeq: number,
+    timeoutMs: number,
   ): Promise<OperationStatus> {
-    const json = await this.postAction("GetOperationStatus", {
-      epoch: lease.epoch,
-      token: lease.token,
-      generation: lease.serverGeneration,
-      attemptId,
-      opSeq,
-    });
+    const json = await this.postAction(
+      "GetOperationStatus",
+      {
+        epoch: lease.epoch,
+        token: lease.token,
+        generation: lease.serverGeneration,
+        attemptId,
+        opSeq,
+      },
+      timeoutMs,
+    );
     return parseOperationStatus(json);
   }
 
@@ -536,19 +826,39 @@ export class RunMutantTransport {
     fencedOp: { readonly attemptId: string; readonly opSeq: number },
     bound: number,
   ): Promise<KeptAnswer> {
-    let guard: ReturnType<typeof setTimeout> | undefined;
+    return bounded(
+      this.readKeptAnswer(lease, fencedOp.attemptId, fencedOp.opSeq, bound),
+      bound,
+      "GetOpAnswer",
+    );
+  }
+
+  /**
+   * R204: did the op's own progress row record method `methodIndex`'s completion before our stop
+   * landed? One status read, shared by both grains so they cannot drift. Unavailable evidence
+   * (the read throws, no row, a row that is not this attempt's) is `false`: today's answer stands.
+   */
+  private async completedBeforeStop(
+    lease: LeaseTuple & { readonly opSeq: number },
+    attemptId: string,
+    methodIndex: number,
+  ): Promise<boolean> {
     try {
-      return await Promise.race([
-        this.readKeptAnswer(lease, fencedOp.attemptId, fencedOp.opSeq, bound),
-        new Promise<never>((_resolve, reject) => {
-          guard = setTimeout(
-            () => reject(new Error(`GetOpAnswer gave no answer within ${bound} ms`)),
-            bound,
-          );
-        }),
-      ]);
-    } finally {
-      if (guard !== undefined) clearTimeout(guard);
+      // Bounded like the R236b readback: an unanswered read is unavailable evidence, not a hang.
+      const status = await bounded(
+        this.getOperationStatus(lease, attemptId, lease.opSeq, KEPT_ANSWER_READ_MS),
+        KEPT_ANSWER_READ_MS,
+        "GetOperationStatus",
+      );
+      const row = status.opProgress;
+      return (
+        row !== undefined &&
+        row.attemptId === attemptId &&
+        row.opSeq === lease.opSeq &&
+        row.lastCompletedIndex >= methodIndex
+      );
+    } catch {
+      return false;
     }
   }
 
@@ -564,17 +874,27 @@ export class RunMutantTransport {
     readonly lease: LeaseTuple & { readonly opSeq: number };
     readonly methodIndex: number;
     readonly methodToken: string;
+    /** R-204b: bounds headers and body, like `stopHungRun`'s. */
+    readonly timeoutMs: number;
   }): Promise<StopAtAnswer> {
     assertAttemptId(req.attemptId);
-    const parsed = await this.postAction("StopHungRunAt", {
-      epoch: req.lease.epoch,
-      token: req.lease.token,
-      generation: req.lease.serverGeneration,
-      attemptId: req.attemptId,
-      opSeq: req.lease.opSeq,
-      methodIndex: req.methodIndex,
-      methodToken: req.methodToken,
-    });
+    const parsed = await bounded(
+      this.postAction(
+        "StopHungRunAt",
+        {
+          epoch: req.lease.epoch,
+          token: req.lease.token,
+          generation: req.lease.serverGeneration,
+          attemptId: req.attemptId,
+          opSeq: req.lease.opSeq,
+          methodIndex: req.methodIndex,
+          methodToken: req.methodToken,
+        },
+        req.timeoutMs,
+      ),
+      req.timeoutMs,
+      "StopHungRunAt",
+    );
     const stopped = parsed.stopped;
     if (typeof stopped !== "boolean") {
       throw new Error(`StopHungRunAt returned no boolean \`stopped\`: ${JSON.stringify(parsed)}`);
@@ -632,7 +952,10 @@ export class RunMutantTransport {
   }
 
   async run(req: RunMutantRequest): Promise<TestVerdict> {
-    return (await this.execute(req, false)).verdict;
+    return this.refusalBoundary(
+      async () => (await this.execute(req, false)).verdict,
+      isScoredVerdict,
+    );
   }
 
   /**
@@ -652,7 +975,14 @@ export class RunMutantTransport {
    */
   async runMany(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
     const trace = { failures: 0 };
-    const r = await this.runManyScored(req, trace);
+    const r = await this.refusalBoundary(
+      () => this.runManyScored(req, trace),
+      (m) =>
+        m.kind === "verdicts" ||
+        (m.verdict.outcome === "timeout" &&
+          m.verdict.operation === undefined &&
+          m.cause === undefined),
+    );
     // R289: a trace that stopped writing is named once per call on stderr, never in a verdict:
     // a verdict's `failureMessage` feeds `killingTestFailure`, the store and verify.ts's
     // callstack match, so a diagnostic suffix there would change what a kill is classified as.
@@ -669,7 +999,8 @@ export class RunMutantTransport {
     req: RunMutantManyRequest,
     trace: { failures: number },
   ): Promise<RunMutantManyResult> {
-    const first = await this.runManyOnce(req, trace);
+    const stopAttempts: StopState[] = [];
+    const first = stampManyStop(await this.runManyOnce(req, trace, stopAttempts), stopAttempts);
     // Review r2 ruling C2: a call that must abort the session is never replaced, whatever the
     // kept answer says.
     if (
@@ -697,6 +1028,8 @@ export class RunMutantTransport {
       // `KEPT_ANSWER_READ_MS` alone bounds this read: a group's budget is minutes.
       kept = await this.readKeptAnswerBounded(req.lease, fencedOp, KEPT_ANSWER_READ_MS);
     } catch (err) {
+      // R-496: a refused extensions query is thrown, never folded into the unknown's message.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       return keep(`answer readback failed: ${describeThrown(err)}`);
     }
     if (!kept.found) {
@@ -733,10 +1066,14 @@ export class RunMutantTransport {
     return { ...r, verdicts: r.verdicts.map((v) => ({ ...v, replyRecovered: lostText })) };
   }
 
-  /** One `RunMutantMany` dispatch and its scoring; `runMany` adds R236b's readback. */
+  /**
+   * One `RunMutantMany` dispatch and its scoring; `runMany` adds R236b's readback. R-204b: the
+   * watchdog appends one state per stop attempt to `stopAttempts`, final by the time this returns.
+   */
   private async runManyOnce(
     req: RunMutantManyRequest,
     traceState: { failures: number },
+    stopAttempts: StopState[],
   ): Promise<RunMutantManyResult> {
     const { mutantId, attemptId, lease, methods } = req;
     assertAttemptId(attemptId);
@@ -854,6 +1191,14 @@ export class RunMutantTransport {
           r();
         };
       });
+    // R-496: a watchdog request refused as an unfiltered extensions query stops the call: the main
+    // request is aborted and the watchdog rejects with the refusal, which every return path below
+    // reaches through its `await watchdog`.
+    const refuseOnUnfiltered = (err: unknown) => {
+      if (!(err instanceof UnfilteredExtensionsQueryError)) return;
+      controller.abort();
+      throw err;
+    };
     const watchdog = (async () => {
       while (!settled) {
         await sleep(pollMs);
@@ -862,11 +1207,22 @@ export class RunMutantTransport {
         const seq = ++pollSeq;
         const sentAt = Date.now();
         trace("poll-sent", { seq });
+        // R503: bounded like `completedBeforeStop`, clamped to the hard cap like `stopBound`; a
+        // poll that does not answer in time is a failed poll and the loop goes on.
+        const pollBound = Math.max(
+          0,
+          Math.min(this.pollBoundMs, hardCapMs - (Date.now() - started)),
+        );
         try {
-          status = await this.getOperationStatus(lease, attemptId, lease.opSeq);
+          status = await bounded(
+            this.getOperationStatus(lease, attemptId, lease.opSeq, pollBound),
+            pollBound,
+            "GetOperationStatus",
+          );
         } catch (err) {
           pollsFailed++;
           trace("poll-failed", { seq, sentAt, error: describeThrown(err) });
+          refuseOnUnfiltered(err);
           continue; // a failed poll is "nothing yet"
         }
         pollsOk++;
@@ -923,19 +1279,27 @@ export class RunMutantTransport {
         let answer: StopAtAnswer;
         stopSentAt = Date.now() - started;
         trace("stop-sent", { methodIndex: row.methodIndex });
+        // R-204b: each stop ends in a state, inside the EARLIER of send time + grace and the call's
+        // own hard cap, so a stop sent late cannot buy a fresh grace after the cap.
+        const attempt = stopAttempts.push("issued") - 1;
+        const stopBound = Math.max(0, Math.min(req.stopGraceMs, hardCapMs - stopSentAt));
         try {
           answer = await this.stopHungRunAt({
             attemptId,
             lease,
             methodIndex: row.methodIndex,
             methodToken: row.token,
+            timeoutMs: stopBound,
           });
         } catch (err) {
+          stopAttempts[attempt] = "unknown";
           stopAnsweredAt = Date.now() - started;
           trace("stop-threw", { error: describeThrown(err) });
+          refuseOnUnfiltered(err);
           stopHookError = err;
           continue;
         }
+        stopAttempts[attempt] = answer.stopped ? "confirmed" : "refused";
         stopAnsweredAt = Date.now() - started;
         trace("stop-answered", { stopped: answer.stopped, reason: answer.reason });
         if (answer.stopped) {
@@ -958,6 +1322,9 @@ export class RunMutantTransport {
         );
       }
     })();
+    // Handled here so a refusal is not reported as unhandled before the `await watchdog` below
+    // reads it; that await still rejects.
+    watchdog.catch(() => {});
     const settle = () => {
       settled = true;
       clearTimeout(hardTimer);
@@ -1051,19 +1418,7 @@ export class RunMutantTransport {
       // R204's narrowing: one status read; a `between` write that committed before the session
       // died proves the method finished. Unavailable evidence (throw, no row, not ours) keeps
       // today's answer, the timeout.
-      let finished = false;
-      try {
-        const after = await this.getOperationStatus(lease, attemptId, lease.opSeq);
-        const row = after.opProgress;
-        finished =
-          row !== undefined &&
-          row.attemptId === attemptId &&
-          row.opSeq === lease.opSeq &&
-          row.lastCompletedIndex >= decision.methodIndex;
-      } catch {
-        finished = false;
-      }
-      if (finished) {
+      if (await this.completedBeforeStop(lease, attemptId, decision.methodIndex)) {
         return call(
           {
             ref: decision.ref,
@@ -1370,7 +1725,10 @@ export class RunMutantTransport {
    * describe only its own execution and per-test attribution is sound.
    */
   async runWithCoverage(req: RunMutantRequest): Promise<RunMutantWithCoverageResult> {
-    return this.execute(req, true);
+    return this.refusalBoundary(
+      () => this.execute(req, true),
+      (r) => isScoredVerdict(r.verdict),
+    );
   }
 
   /**
@@ -1384,7 +1742,15 @@ export class RunMutantTransport {
     collectCoverage: boolean,
   ): Promise<RunMutantWithCoverageResult> {
     const sink: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats } = {};
-    const first = await this.dispatch(req, collectCoverage, sink);
+    // R-204b: the grace ends at dispatch + budget + grace whatever happens in between, so an answer
+    // arriving late in it cannot buy a fresh grace for the stop's reply.
+    const stopDeadline = Date.now() + req.timeoutMs + (req.stopGraceMs ?? 30_000);
+    const stop: StopTracker = { fired: false };
+    const first = await settleStop(
+      await this.dispatch(req, collectCoverage, sink, stop),
+      stop,
+      stopDeadline,
+    );
     // R236b: every exit that could not read the server's answer asks for the answer the server
     // committed. One place, so no exit is forgotten.
     const verdict =
@@ -1427,6 +1793,8 @@ export class RunMutantTransport {
         Math.min(KEPT_ANSWER_READ_MS, req.timeoutMs),
       );
     } catch (err) {
+      // R-496: a refused extensions query is thrown, never folded into the unknown's message.
+      if (err instanceof UnfilteredExtensionsQueryError) throw err;
       return keep(`answer readback failed: ${describeThrown(err)}`);
     }
     if (!kept.found) {
@@ -1461,6 +1829,7 @@ export class RunMutantTransport {
     req: RunMutantRequest,
     collectCoverage: boolean,
     sink: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats },
+    stop: StopTracker,
   ): Promise<TestVerdict> {
     const { ref, mutantId, attemptId, timeoutMs, lease } = req;
     // Layer 5C-B1: the SAME bound every lease action is held to (`lease.ts`), applied here because
@@ -1526,23 +1895,34 @@ export class RunMutantTransport {
     // neither the stop nor the answer arrives. Without the hook this is byte-for-byte the old
     // behaviour: one timer, abort at the budget.
     const stopHook = req.onBudgetExceeded;
-    let stopFired = false;
-    let stopHookError: unknown;
+    const graceMs = req.stopGraceMs ?? 30_000;
     const timer =
       stopHook === undefined
         ? setTimeout(() => controller.abort(), timeoutMs)
         : setTimeout(() => {
-            stopFired = true;
-            // Deliberately not awaited: this runs off a timer while the request is still open, and
-            // the answer we care about arrives on the request, not from the hook.
-            void stopHook().catch((err: unknown) => {
-              stopHookError = err;
-            });
+            stop.fired = true;
+            stop.state = "issued";
+            // Not awaited here: this runs off a timer while the request is still open, and the
+            // answer we score arrives on the request. R-204b: `execute` awaits `done` (bounded by
+            // the remaining grace) before anyone decides whether a retry is safe.
+            stop.done = stopHook(graceMs).then(
+              (a) => {
+                if (a.stopped === true) stop.state = "confirmed";
+                else if (a.stopped === false) {
+                  stop.state = "refused";
+                  stop.refusal = a.reason ?? "no reason given";
+                } else stop.state = "unknown";
+              },
+              (err: unknown) => {
+                stop.state = "unknown";
+                stop.error = err;
+              },
+            );
           }, timeoutMs);
     const hardTimer =
       stopHook === undefined
         ? undefined
-        : setTimeout(() => controller.abort(), timeoutMs + (req.stopGraceMs ?? 30_000));
+        : setTimeout(() => controller.abort(), timeoutMs + graceMs);
     // R191: the timers stay armed until the BODY is in hand, not until the headers are. `fetch`
     // resolves on headers; BC can stall after them, and a stall there used to fall outside every
     // LethAL timer, so the R53 stop hook never fired and the run ended only when the runtime gave
@@ -1561,10 +1941,10 @@ export class RunMutantTransport {
       // R53: if the stop hook fired and we still ended up aborting, BC never sent the 408 — so
       // name why. A hook that THREW is the likeliest cause and is otherwise invisible here,
       // which is R65's lesson: an unexplained quarantine costs a debugging session.
-      const stopDetail = !stopFired
+      const stopDetail = !stop.fired
         ? ""
-        : stopHookError !== undefined
-          ? ` — the server-side stop was attempted and FAILED (${describeThrown(stopHookError)}), so this run could not be scored and is quarantined instead`
+        : stop.error !== undefined
+          ? ` — the server-side stop was attempted and FAILED (${describeThrown(stop.error)}), so this run could not be scored and is quarantined instead`
           : " — the server-side stop was attempted but BC never answered this request with its stop confirmation, so this run is quarantined rather than scored";
       return {
         ref,
@@ -1609,10 +1989,20 @@ export class RunMutantTransport {
     // No new verdict is introduced; what is new is having EARNED it — BC states the session was
     // stopped, so the operation is over and the tier is not stranded. `operation` is deliberately
     // absent: this is terminal.
-    if (stopFired && res.status === 408) {
+    if (stop.fired && res.status === 408) {
       const body = await res.text().catch(() => "");
       settleTimers();
       if (isAlStopResponse(res.status, body)) {
+        // R204 (R-204b Part A): the same narrowing the grouped call makes, through the same helper.
+        if (await this.completedBeforeStop(lease, attemptId, 1)) {
+          return {
+            ref,
+            outcome: "error",
+            durationMs: Date.now() - started,
+            failureMessage: `RunMutant: BC answered our stop for ${ref.method} with its 408, but the method's own completion was recorded before the session died, so this run is not scored (R204)`,
+            stopRefusal: "stopped-after-completion",
+          };
+        }
         return {
           ref,
           outcome: "timeout",

@@ -1,7 +1,17 @@
-import { IDENTITY_SCHEME, type ReachGrain } from "@lethal/schemata";
+import {
+  IDENTITY_SCHEME,
+  type ReachGrain,
+  clipMutationText,
+  coarseIdentityTupleOf,
+  compareCodeUnits,
+} from "@lethal/schemata";
 import type { CoverageMode } from "./backend";
+import { decodeSource, hashSourceSnapshot } from "./baseline-snapshot";
+import { MARK_REASON_PLACEHOLDER } from "./equivalence-marks";
 import { GapGroupingError, type GapRow, type GapTally, tallyGaps } from "./gaps";
 import type { Interpretation } from "./interpretation";
+import { spanCovered } from "./line-filter";
+import { positionOf } from "./mutation-elements";
 import {
   CAVEAT_INTERPRETATIONS,
   COVERAGE_NOT_MEASURED_INTERPRETATION,
@@ -14,6 +24,7 @@ import {
   STRANDED_SKIP_INTERPRETATION,
   guardEvidenceOf,
   markIdentityOf,
+  markTupleOfRow,
   survivorReachOf,
 } from "./report";
 import type {
@@ -24,8 +35,9 @@ import type {
   ReportValidity,
   SessionReport,
   SurvivorReach,
+  TestMethodRecord,
 } from "./report";
-import { ATTRIBUTION_INTERPRETATIONS } from "./selection";
+import { ATTRIBUTION_INTERPRETATIONS, twinSiteOf } from "./selection";
 import type { CoverageAttribution } from "./selection";
 import type { MutantVerdict } from "./store";
 
@@ -198,8 +210,40 @@ import type { MutantVerdict } from "./store";
  *
  * 10: R403 added the caveat values `tests-compiled-out` and `test-symbols-unverified`. New values,
  * so it bumps (R233).
+ *
+ * 11: R307 added the caveat value `files-refused` (a file refused whole at instrumentation). A new
+ * value, so it bumps (R233); v10 is frozen. R307 added no explain field.
+ * R447 withholds the already optional `gaps[].unobservedBlock` also per file, where a
+ * `hang-refused` row has sites: no new field or value, so no bump.
+ *
+ * 12: R443 added `survivors[].mark`, the whole mark a reader pastes into `lethal.equivalent.json`.
+ * Additive, but `survivors[].markKey` CHANGED MEANING: a mark holding the key alone is now refused
+ * (`no-proof`), so the key is no longer a usable mark by itself. A changed meaning bumps.
+ *
+ * 13: R-204b added the cause value `stop-outcome-unconfirmed` to `$.notMeasured[].cause`. A new
+ * value, so it bumps (R233); v12 is frozen. R275 added the optional `gaps[].verifyCommand`: an
+ * optional additive field, so no bump. R276 changed how a NEW artifact's gap ids are computed (line
+ * span and LF text, not offsets and raw text): the field is an opaque id, read verbatim, so no bump.
+ * R277 keeps `gaps[].unobservedBlock` on a line-narrowed run whose ranges cover the block: same
+ * meaning, present in more cases only where it stays provably true, so no bump.
+ * R274 added the optional `gaps[].source`, present only under `--project`: an optional additive
+ * field, so no bump. R273 added the optional root `suggestions`, present only under `--suggest` and
+ * composed by the CLI outside `ExplainOutput` (explain-suggest.ts): an optional additive field, so
+ * no bump; a value added later to its kind domain bumps (R233).
+ *
+ * 14: R514 added the cause value `reused-budget-stale` to `$.notMeasured[].cause`. A new value, so
+ * it bumps (R233); v13 is frozen.
+ *
+ * 15: R516 added the cause value `timeout-unconfirmed` to `$.notMeasured[].cause`. A new value, so
+ * it bumps (R233); v14 is frozen.
+ *
+ * 16: R534 added the cause values `runner-test-error` and `runner-refused` to
+ * `$.notMeasured[].cause`. New values, so it bumps (R233); v15 is frozen.
+ *
+ * 17: R577 added the cause value `kill-not-reproduced` to `$.notMeasured[].cause`. A new value, so
+ * it bumps (R233); v16 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 10;
+export const EXPLAIN_SCHEMA_VERSION = 17;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
@@ -213,6 +257,26 @@ export class MalformedReportError extends Error {
     this.name = "MalformedReportError";
   }
 }
+
+/**
+ * R274: `lethal explain --project <dir>` will not render source from `<dir>`. `reason` names which
+ * refusal: the report records no `sourceSha256` (written before R274), or `<dir>` hashes to
+ * something else. Extends `Error` directly (CLAUDE.md's typed-error convention).
+ */
+export class ProjectSourceRefusedError extends Error {
+  constructor(
+    readonly reason: "no-source-hash" | "source-mismatch",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ProjectSourceRefusedError";
+  }
+}
+
+/** The marker `scripts/redact-campaign-report.ts` writes over a redacted source field. A fixed
+ *  string, so `--check` is an equality test; `--project` skips its per-site text check on exactly
+ *  this value (R274). */
+export const REDACTION_MARKER = "[redacted: third-party source, see this directory's README]";
 
 /**
  * Every `Interpretation` this projection is allowed to emit — the closed set rule (1) of the
@@ -375,6 +439,34 @@ export interface ExplainSurvivor {
    * `ExplainOutput.markIdentityScheme`, not necessarily under this build's (see `markKeysStale`).
    */
   readonly markKey: string;
+  /**
+   * R443: the mark to paste into `lethal.equivalent.json`'s `marks` array, with its proof. Absent
+   * when the report records no numbering facts (a report from before R443): a mark without proof
+   * is refused, so none is offered.
+   */
+  readonly mark?: ExplainMark;
+}
+
+/**
+ * R443: one ready-to-paste equivalence mark. Every field is what `parseEquivalenceMarks` reads.
+ * `reason` is a placeholder the parser refuses until the reader replaces it.
+ */
+export interface ExplainMark {
+  /** `markKey`, restated so the object pastes alone. */
+  readonly key: string;
+  readonly reason: string;
+  /** The survivor's file, `/` separators. */
+  readonly file: string;
+  /** The report's `numberingDigest`. */
+  readonly numberingDigest: string;
+  /**
+   * True only when the survivor's (file, tuple) is not one of the report's RECORDED `twinSites`,
+   * its coarse tuple is not in `carryHidden.tuples` and its file is not in `carryHidden.files`.
+   * Never counted from the report's rows: a twin a line filter dropped has no row.
+   */
+  readonly fileSingleton: boolean;
+  /** The report's `buildSymbols`, when non-empty: a mark applies only to a build with that set. */
+  readonly preprocessorSymbols?: readonly string[];
 }
 
 /**
@@ -412,14 +504,65 @@ export interface ExplainGap {
   readonly killed: number;
   readonly noCoverage: number;
   readonly other: number;
-  /** Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run, and
-   *  on a quarantined run. */
+  /** Every RECORDED row of the block survived. Absent on an operator-narrowed run, on a
+   *  line-narrowed run unless its line ranges cover the block's every line (R277), on a
+   *  quarantined run, and in a file with a `hang-refused` row with sites (R447). */
   readonly unobservedBlock?: boolean;
   /** The artifact to pass to `lethal verify --artifact` for this gap. Exactly one of this and
    *  `artifactIdAbsent` is present. */
   readonly artifactId?: string;
   /** Why there is no artifact to verify this gap against. Same values as on a survivor. */
   readonly artifactIdAbsent?: ArtifactIdAbsence;
+  /** R275: the `lethal verify` line for this gap (`gapVerifyCommand`), with `<project>` and
+   *  `<tests-dir>` left to fill in. Present exactly when `artifactId` is. */
+  readonly verifyCommand?: string;
+  /**
+   * R272: every test covering one of the gap's survivors, with where it is. Ordered by
+   * `reachedMembers` (most first), then `compareCodeUnits(name)`: a stated heuristic for which
+   * test to look at first, not a measurement. Duration is shown, never a key (R197 measured it
+   * unstable between runs). Absent when the report has no `testMethods` (written before R272),
+   * never meaning "no covering tests".
+   */
+  readonly coveringTests?: readonly ExplainCoveringTest[];
+  /** R272: how many of the gap's survivors have a measured reach (`reachedBy`); the denominator of
+   *  each covering test's `reachedMembers`. Present exactly when `coveringTests` is. */
+  readonly reachMeasuredMembers?: number;
+  /** R274: the block's source, read from `lethal explain --project <dir>` after `<dir>` hashed to
+   *  the report's `sourceSha256`. Present exactly when `--project` was given. TARGET SOURCE: do
+   *  not publish it for a third party's code. */
+  readonly source?: ExplainGapSource;
+}
+
+/** R272: one covering test of a gap, verbatim from `report.testMethods` plus a count. */
+export interface ExplainCoveringTest {
+  readonly name: string;
+  readonly file?: string;
+  readonly line?: number;
+  readonly lineAmbiguous?: true;
+  /** How many of the gap's survivors list this test in `reachedBy`. Absent when the gap's
+   *  `reachMeasuredMembers` is 0. */
+  readonly reachedMembers?: number;
+  readonly baselineDurationMs?: number;
+}
+
+/** R274: a gap block's lines, with each survivor's site marked. Structured, never spliced text. */
+export interface ExplainGapSource {
+  /** The file line `lines[0]` is: the gap's `blockStartLine`. */
+  readonly startLine: number;
+  /** `blockStartLine..blockEndLine`, split on `\n` with one trailing `\r` dropped per line. */
+  readonly lines: readonly string[];
+  /** One per member, in `members` order. */
+  readonly marks: readonly ExplainSourceMark[];
+}
+
+/** R274: a survivor's site in file coordinates: 1-based lines, 1-based UTF-16 columns (a tab is
+ *  one), end exclusive. A site can span lines. */
+export interface ExplainSourceMark {
+  readonly mutantCode: string;
+  readonly startLine: number;
+  readonly startColumn: number;
+  readonly endLine: number;
+  readonly endColumn: number;
 }
 
 /** C02-09: a block with at least one `no-coverage` row. A location list, not a verify input, so it
@@ -721,6 +864,8 @@ const EXPLAINABLE_REPORT_VERSIONS: readonly number[] = [2, REPORT_SCHEMA_VERSION
  *   - every mutant's `gapId` (a string), with positive integer `blockStartLine`/`blockEndLine` and
  *     a `batchIndex`, on all rows or none : C02-09, groups rows; a bad one would merge or split a gap
  *   - `quarantined` / `resumedFrom.skippedStranded` — presence and a `> 0` test emit tool conditions
+ *   - `lines.ranges` (each a string `file` with integer 1 <= `start` <= `end`) : R277, decides
+ *                                            whether a line-narrowed gap keeps `unobservedBlock`
  *
  * `verdict` is the one that shows why the rule has to be mechanical rather than intuitive.
  * Corrupting every `"survived"` to `"Survived"` in a real report produced a projection BYTE-IDENTICAL
@@ -802,6 +947,72 @@ export function assertExplainableReport(value: unknown): SessionReport {
     !(Number.isInteger(identityScheme) && (identityScheme as number) >= 1)
   ) {
     refuse("`identityScheme` is present but is not a positive integer", identityScheme);
+  }
+  // R272: each gap's covering tests are joined to it by name and copied, so every field is read.
+  if (record.testMethods !== undefined) {
+    if (!Array.isArray(record.testMethods)) refuse("`testMethods` is not an array", "…");
+    const seen = new Set<string>();
+    const count = (v: unknown) => v === undefined || (Number.isInteger(v) && (v as number) >= 0);
+    for (const t of record.testMethods as Record<string, unknown>[]) {
+      if (
+        typeof t !== "object" ||
+        t === null ||
+        typeof t.name !== "string" ||
+        seen.has(t.name) ||
+        (t.file !== undefined && typeof t.file !== "string") ||
+        !count(t.line) ||
+        t.line === 0 ||
+        (t.lineAmbiguous !== undefined && t.lineAmbiguous !== true) ||
+        (t.baselineDurationMs !== undefined &&
+          !(typeof t.baselineDurationMs === "number" && t.baselineDurationMs >= 0))
+      ) {
+        refuse("a `testMethods` entry is malformed or repeats a name", t);
+      }
+      seen.add(t.name);
+    }
+  }
+  // R274: `--project` compares it, so a present value must be a digest.
+  if (
+    record.sourceSha256 !== undefined &&
+    (typeof record.sourceSha256 !== "string" || !/^[0-9a-f]{64}$/.test(record.sourceSha256))
+  ) {
+    refuse("`sourceSha256` is not a sha256 hex digest", record.sourceSha256);
+  }
+  // R443: decide every survivor's `mark` (its `numberingDigest` and `fileSingleton`). Written
+  // together by the producer, so some without the others is a corrupt report.
+  const strings = (v: unknown): boolean =>
+    Array.isArray(v) && v.every((s) => typeof s === "string");
+  const numbering = [record.numberingDigest, record.twinSites, record.carryHidden];
+  if (numbering.some((v) => v !== undefined)) {
+    if (numbering.some((v) => v === undefined)) {
+      refuse(
+        "`numberingDigest`, `twinSites` and `carryHidden` are written together, and this report has only some of them",
+        Object.fromEntries(
+          ["numberingDigest", "twinSites", "carryHidden"].map((k, i) => [k, numbering[i]]),
+        ),
+      );
+    }
+    if (
+      typeof record.numberingDigest !== "string" ||
+      !/^[0-9a-f]{64}$/.test(record.numberingDigest)
+    ) {
+      refuse("`numberingDigest` is not a sha256 hex digest", record.numberingDigest);
+    }
+    if (!strings(record.twinSites))
+      refuse("`twinSites` is not an array of strings", record.twinSites);
+    const hidden = record.carryHidden as Record<string, unknown> | null;
+    if (
+      typeof hidden !== "object" ||
+      hidden === null ||
+      !strings(hidden.tuples) ||
+      !strings(hidden.files)
+    ) {
+      refuse("`carryHidden` is not { tuples: string[], files: string[] }", hidden);
+    }
+  }
+  // R443: copied into every mark, and a mark under the wrong set is stale.
+  if (record.buildSymbols !== undefined && !strings(record.buildSymbols)) {
+    refuse("`buildSymbols` is present but is not an array of strings", record.buildSymbols);
   }
   // R252: branched on below (it decides whether a survivor may lack an attribution), so a value
   // outside the closed set is refused rather than read as "not none".
@@ -999,6 +1210,31 @@ export function assertExplainableReport(value: unknown): SessionReport {
   // C02-01: each survivor's `artifactId` is looked up here by `batchIndex`. Two entries for one
   // batch would make that lookup a guess. The id's 32-hex shape is a copied open value and is not
   // checked.
+  // R277: `lines.ranges` decides whether a line-narrowed gap keeps `unobservedBlock`, so a bad
+  // entry is refused rather than read as covering, or not covering, a block.
+  const { lines } = record;
+  if (lines !== undefined) {
+    const ranges =
+      typeof lines === "object" && lines !== null
+        ? (lines as Record<string, unknown>).ranges
+        : undefined;
+    if (!Array.isArray(ranges)) refuse("`lines` is present but has no `ranges` array", lines);
+    for (const r of ranges) {
+      const e = (typeof r === "object" && r !== null ? r : {}) as Record<string, unknown>;
+      const { file, start, end } = e;
+      if (
+        typeof file !== "string" ||
+        typeof start !== "number" ||
+        typeof end !== "number" ||
+        !Number.isInteger(start) ||
+        !Number.isInteger(end) ||
+        start < 1 ||
+        end < start
+      ) {
+        refuse("`lines.ranges` has an entry that is not a file with 1 <= start <= end", r);
+      }
+    }
+  }
   const { artifacts } = record;
   if (artifacts !== undefined) {
     if (!Array.isArray(artifacts)) refuse("`artifacts` is present but is not an array", artifacts);
@@ -1121,6 +1357,15 @@ function keyed<K extends string>(
  * even when this run published the same batch index. Looked up by the entry's `batchIndex` FIELD,
  * never by array position. Never throws; `assertExplainableReport` has checked the inputs.
  */
+/**
+ * R275: the one `lethal verify` line for a gap (the C02-07 recipe), its two ids filled in. The
+ * report records neither the project nor the tests folder, so those stay named placeholders, written
+ * exactly as the agent guide's recipe writes them.
+ */
+export function gapVerifyCommand(artifactId: string, gapId: string): string {
+  return `lethal verify --db <project>/lethal.sqlite --artifact ${artifactId} --survivors ${gapId} --tests <tests-dir>`;
+}
+
 function artifactOf(
   m: MutantOutcome,
   artifacts: SessionReport["artifacts"],
@@ -1133,11 +1378,18 @@ function artifactOf(
     : { artifactIdAbsent: "not-published" };
 }
 
-function survivorOf(
+/**
+ * A survivor's `attribution`, `guardEvidence` and `reach`, the one derivation `survivorOf` and
+ * `lethal explain --suggest` (explain-suggest.ts, R273) both read, so the two cannot disagree.
+ */
+export function survivorEvidenceOf(
   m: MutantOutcome,
-  artifacts: SessionReport["artifacts"],
   coverageMode: CoverageMode | undefined,
-): ExplainSurvivor {
+): {
+  readonly attribution: ExplainAttribution;
+  readonly guardEvidence: GuardEvidence;
+  readonly reach: SurvivorReach;
+} {
   const measured = m.coverageAttribution;
   if (measured === undefined && coverageMode !== "none") {
     // Unreachable via `explain` (validated above); kept because this function is where the claim
@@ -1155,6 +1407,15 @@ function survivorOf(
         ? "reached-unnoticed"
         : "not-decided"
       : survivorReachOf(measured, guardEvidence, m.guardReached, m.reachGrain, m.carried === true);
+  return { attribution, guardEvidence, reach };
+}
+
+function survivorOf(
+  m: MutantOutcome,
+  artifacts: SessionReport["artifacts"],
+  coverageMode: CoverageMode | undefined,
+): ExplainSurvivor {
+  const { attribution, guardEvidence, reach } = survivorEvidenceOf(m, coverageMode);
   return {
     mutantCode: m.mutantCode,
     file: m.file,
@@ -1194,6 +1455,46 @@ function survivorOf(
 }
 
 /**
+ * R272: a gap's covering tests (the union over its survived rows' `coveringTests`), each joined to
+ * `testMethods` by name, ordered by how many of the survivors it reached, then by
+ * `compareCodeUnits(name)` (R481's key). A name missing from `testMethods` is a report
+ * inconsistency and refuses, never a row without a location.
+ */
+function coveringTestsOf(
+  gapId: string,
+  survivors: readonly MutantOutcome[],
+  byName: ReadonlyMap<string, TestMethodRecord>,
+): { readonly coveringTests: ExplainCoveringTest[]; readonly reachMeasuredMembers: number } {
+  const names = [...new Set(survivors.flatMap((m) => m.coveringTests))];
+  const measured = survivors.filter((m) => m.reachedBy !== undefined);
+  const covering = names.map((name): ExplainCoveringTest => {
+    const t = byName.get(name);
+    if (t === undefined) {
+      // Known producers: a test or test codeunit renamed or removed on disk but not republished,
+      // then `--resume` (a reused baseline or a carried batch keeps the old name). Refused.
+      refuse(
+        `gap ${gapId}'s covering test is not in testMethods (a test or test codeunit renamed or removed on disk since a resumed run's earlier session gives this; re-run without --resume)`,
+        name,
+      );
+    }
+    return {
+      name,
+      ...(t.file !== undefined ? { file: t.file } : {}),
+      ...(t.line !== undefined ? { line: t.line } : {}),
+      ...(t.lineAmbiguous === true ? { lineAmbiguous: true as const } : {}),
+      ...(measured.length > 0
+        ? { reachedMembers: measured.filter((m) => m.reachedBy?.includes(name) === true).length }
+        : {}),
+      ...(t.baselineDurationMs !== undefined ? { baselineDurationMs: t.baselineDurationMs } : {}),
+    };
+  });
+  covering.sort(
+    (a, b) => (b.reachedMembers ?? 0) - (a.reachedMembers ?? 0) || compareCodeUnits(a.name, b.name),
+  );
+  return { coveringTests: covering, reachMeasuredMembers: measured.length };
+}
+
+/**
  * C02-09: the report's rows grouped by gap id through `tallyGaps`, the one grouping rule `explain`
  * and `verify` share. `undefined` when no row carries a gap id (a report written before C02-09),
  * so the caller omits both lists rather than emitting `[]`.
@@ -1209,6 +1510,11 @@ function blocksOf(
   | { readonly gaps: ExplainGap[]; readonly noCoverageBlocks: ExplainNoCoverageBlock[] }
   | undefined {
   if (!report.mutants.some((m) => m.gapId !== undefined)) return undefined;
+  // R272: built once, not per gap.
+  const testMethodsByName =
+    report.testMethods !== undefined
+      ? new Map(report.testMethods.map((t) => [t.name, t]))
+      : undefined;
   const firstRow = new Map<string, MutantOutcome>();
   const firstMember = new Map<string, MutantOutcome>();
   const carriedGaps = new Set<string>();
@@ -1261,9 +1567,24 @@ function blocksOf(
   // An operator- or line-narrowed run drops mutants INSIDE a block, and a quarantined run stops
   // scheduling mutants mid-run, so "every recorded row survived" says nothing about the block's
   // unrecorded neighbours.
-  const withhold =
+  const withholdAll =
     report.quarantined !== undefined ||
-    report.validity.caveats.some((c) => c === "operator-narrowed" || c === "line-narrowed");
+    report.validity.caveats.some((c) => c === "operator-narrowed");
+  // R277: a line filter drops only sites that touch no range, so where its ranges cover a block's
+  // EVERY line no site of that block was dropped, and the mark stays true for it. A line-narrowed
+  // run that recorded no ranges keeps withholding.
+  const lineNarrowed = report.validity.caveats.some((c) => c === "line-narrowed");
+  const withhold = (file: string, first: number, last: number): boolean =>
+    withholdAll ||
+    (lineNarrowed &&
+      (report.lines === undefined || !spanCovered(report.lines.ranges, file, first, last)));
+  // R447: per FILE, where R196 refused a loop step (or R487/R501 a report data-item site): that site has no row, so "every recorded row
+  // survived" says nothing about it. Per file, not per block: the row carries no spans.
+  const hangRefusedFiles = new Set(
+    (report.excludedSites?.files ?? [])
+      .filter((f) => f.reason === "hang-refused" && f.sites > 0)
+      .map((f) => f.file),
+  );
   const gaps: { readonly key: string; readonly gap: ExplainGap }[] = [];
   const noCoverageBlocks: { readonly key: string; readonly block: ExplainNoCoverageBlock }[] = [];
   for (const [gapId, t] of tallies) {
@@ -1287,6 +1608,11 @@ function blocksOf(
     if (t.survived > 0) {
       const member = firstMember.get(gapId);
       if (member === undefined) refuse(`gap id ${gapId} has survivors but no member row`, gapId);
+      // `carried` when ANY member is: the gap was not measured by one artifact, and verify
+      // refuses a carried member anyway.
+      const artifact = carriedGaps.has(gapId)
+        ? { artifactIdAbsent: "carried" as const }
+        : artifactOf(member, report.artifacts);
       gaps.push({
         key: gapId,
         gap: {
@@ -1297,12 +1623,22 @@ function blocksOf(
           killed: t.killed,
           noCoverage: t.noCoverage,
           other: t.other,
-          ...(withhold ? {} : { unobservedBlock: t.unobservedBlock }),
-          // `carried` when ANY member is: the gap was not measured by one artifact, and verify
-          // refuses a carried member anyway.
-          ...(carriedGaps.has(gapId)
-            ? { artifactIdAbsent: "carried" as const }
-            : artifactOf(member, report.artifacts)),
+          ...(withhold(r.file, blockStartLine, blockEndLine) || hangRefusedFiles.has(r.file)
+            ? {}
+            : { unobservedBlock: t.unobservedBlock }),
+          ...artifact,
+          // R275: the C02-07 recipe, filled in with this gap's ids; only where there is an
+          // artifact to verify against.
+          ...("artifactId" in artifact
+            ? { verifyCommand: gapVerifyCommand(artifact.artifactId, gapId) }
+            : {}),
+          ...(testMethodsByName !== undefined
+            ? coveringTestsOf(
+                gapId,
+                report.mutants.filter((m) => m.gapId === gapId && m.verdict === "survived"),
+                testMethodsByName,
+              )
+            : {}),
         },
       });
     }
@@ -1413,6 +1749,43 @@ export function rankSurvivors(survivors: readonly ExplainSurvivor[]): ExplainSur
   });
 }
 
+/**
+ * R443: builds each survivor's ready-to-paste mark from the report's RECORDED numbering facts, or
+ * `undefined` when the report has none. `fileSingleton` follows R-443's rule B2: the (file, tuple)
+ * is not a recorded twin site, and nothing this run hid from numbering could be its twin (its
+ * coarse tuple is not in `carryHidden.tuples`, its file not in `carryHidden.files`).
+ */
+function markBuilderOf(report: SessionReport): ((m: MutantOutcome) => ExplainMark) | undefined {
+  const { numberingDigest, twinSites, carryHidden, buildSymbols } = report;
+  if (numberingDigest === undefined || twinSites === undefined || carryHidden === undefined) {
+    return undefined;
+  }
+  const twins = new Set(twinSites);
+  const hiddenTuples = new Set(carryHidden.tuples);
+  const hiddenFiles = new Set(carryHidden.files.map((f) => f.replaceAll("\\", "/")));
+  return (m) => {
+    const file = m.file.replaceAll("\\", "/");
+    const coarse = coarseIdentityTupleOf({
+      astHash: m.astHash,
+      operatorName: m.operatorName,
+      operatorVersion: `${m.operatorMajor}.0.0`,
+    });
+    return {
+      key: markIdentityOf(m),
+      reason: MARK_REASON_PLACEHOLDER,
+      file,
+      numberingDigest,
+      fileSingleton:
+        !twins.has(twinSiteOf(file, markTupleOfRow(m))) &&
+        !hiddenTuples.has(coarse) &&
+        !hiddenFiles.has(file),
+      ...(buildSymbols !== undefined && buildSymbols.length > 0
+        ? { preprocessorSymbols: [...buildSymbols] }
+        : {}),
+    };
+  };
+}
+
 /** What `explain` may be asked to do differently. Absent means the whole projection, in report
  *  order — the behaviour every caller had before R150 added the cap. */
 export interface ExplainOptions {
@@ -1423,6 +1796,94 @@ export interface ExplainOptions {
    * be guessing about completeness. Omit the option to get every survivor.
    */
   readonly topSurvivors?: number;
+  /**
+   * R274: the target project's files as `readTargetSource` reads them. `explain` hashes THIS map
+   * and renders from it, so what it shows is what matched `sourceSha256`; any difference refuses
+   * (`ProjectSourceRefusedError`). Absent: no `gaps[].source`, the output unchanged.
+   */
+  readonly projectSource?: ReadonlyMap<string, Buffer>;
+}
+
+/**
+ * R274: the project's text per `/` path, once `projectSource` hashed to `report.sourceSha256`.
+ * Keyed by `/` (snapshot keys use the OS separator, report files use `/`), and the NORMALISED map
+ * is what is hashed: two keys colliding on normalisation drop one and so refuse, never render.
+ */
+function verifiedProjectText(
+  report: SessionReport,
+  projectSource: ReadonlyMap<string, Buffer>,
+): ReadonlyMap<string, string> {
+  if (report.sourceSha256 === undefined) {
+    throw new ProjectSourceRefusedError(
+      "no-source-hash",
+      "lethal explain --project: this report records no sourceSha256 (it was written before R274), so nothing proves which source its positions refer to. Re-run under this build, then explain with --project.",
+    );
+  }
+  const symbols: unknown = report.preprocessorSymbols;
+  if (!Array.isArray(symbols) || !symbols.every((s) => typeof s === "string")) {
+    refuse("`preprocessorSymbols` is not an array of strings", symbols);
+  }
+  const files = new Map<string, Buffer>();
+  for (const [rel, bytes] of projectSource) files.set(rel.replaceAll("\\", "/"), bytes);
+  const actual = hashSourceSnapshot(files, symbols);
+  if (actual !== report.sourceSha256) {
+    throw new ProjectSourceRefusedError(
+      "source-mismatch",
+      `lethal explain --project: the project is not the source this report's positions refer to (sourceSha256 ${report.sourceSha256}, the project hashes to ${actual}). Every .al file the target build compiles and app.json are hashed as raw bytes, with the config's preprocessor symbols: a CRLF/LF checkout difference, an app.json version bump, a changed symbol, or an edit to a test project nested inside the target all count. Check out the commit the run measured.`,
+    );
+  }
+  return new Map([...files].map(([rel, bytes]) => [rel, decodeSource(bytes)]));
+}
+
+/**
+ * R274: one gap's block lines and its survivors' marks. Every check here can fail only on a
+ * report inconsistent with source it hashed to, so each throws rather than mark the wrong text.
+ */
+function gapSourceOf(
+  gap: ExplainGap,
+  rows: readonly MutantOutcome[],
+  text: string | undefined,
+): ExplainGapSource {
+  if (text === undefined) refuse(`gap ${gap.gapId}'s file is not in the project`, gap.file);
+  const lines = text.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
+  const { blockStartLine: first, blockEndLine: last } = gap;
+  if (last > lines.length || first > last) {
+    refuse(`gap ${gap.gapId}'s block lines are not in ${gap.file}`, [first, last]);
+  }
+  // A gap block is a branch body or a member, never a whole file.
+  if (first === 1 && last >= lines.length - (lines[lines.length - 1] === "" ? 1 : 0)) {
+    refuse(`gap ${gap.gapId}'s block is the whole of ${gap.file}`, [first, last]);
+  }
+  const marks = gap.members.map((code): ExplainSourceMark => {
+    const matching = rows.filter((m) => m.mutantCode === code);
+    const [row] = matching;
+    if (row === undefined || matching.length > 1) {
+      refuse(`gap ${gap.gapId}'s member is not exactly one survived row`, code);
+    }
+    const { startIndex: s, endIndex: e } = row;
+    if (!(Number.isInteger(s) && Number.isInteger(e) && 0 <= s && s <= e && e <= text.length)) {
+      refuse(`${code}'s offsets are not in ${gap.file}`, [s, e]);
+    }
+    if (
+      row.originalText !== REDACTION_MARKER &&
+      clipMutationText(text.slice(s, e)) !== row.originalText
+    ) {
+      refuse(`${code}'s originalText is not the text at its offsets in ${gap.file}`, [s, e]);
+    }
+    const start = positionOf(text, s);
+    const end = positionOf(text, e);
+    if (start.line < first || end.line > last) {
+      refuse(`${code}'s site is outside its gap block`, [start.line, end.line]);
+    }
+    return {
+      mutantCode: code,
+      startLine: start.line,
+      startColumn: start.column,
+      endLine: end.line,
+      endColumn: end.column,
+    };
+  });
+  return { startLine: first, lines: lines.slice(first - 1, last), marks };
 }
 
 /**
@@ -1442,9 +1903,19 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
       `explain: topSurvivors must be a positive integer, got ${JSON.stringify(topSurvivors)}`,
     );
   }
+  // R274: verified before anything is projected, so a refusal leaves nothing half-built.
+  const projectText =
+    options.projectSource !== undefined
+      ? verifiedProjectText(validated, options.projectSource)
+      : undefined;
+  const markOf = markBuilderOf(validated);
   const allSurvivors = validated.mutants
     .filter((m) => m.verdict === "survived")
-    .map((m) => survivorOf(m, validated.artifacts, validated.coverageMode));
+    .map((m) => {
+      const survivor = survivorOf(m, validated.artifacts, validated.coverageMode);
+      const mark = markOf?.(m);
+      return mark !== undefined ? { ...survivor, mark } : survivor;
+    });
   const survivors =
     topSurvivors === undefined ? allSurvivors : rankSurvivors(allSurvivors).slice(0, topSurvivors);
   // C02-09: from ALL rows, before the cap. `--top` bounds survivors only (Q6).
@@ -1482,7 +1953,22 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
     notMeasured: validated.mutants.filter((m) => m.verdict === "error").map(notMeasuredOf),
     toolConditions: toolConditionsOf(validated),
     ...(blocks !== undefined
-      ? { gaps: blocks.gaps, noCoverageBlocks: blocks.noCoverageBlocks }
+      ? {
+          gaps:
+            projectText === undefined
+              ? blocks.gaps
+              : blocks.gaps.map((g) => ({
+                  ...g,
+                  source: gapSourceOf(
+                    g,
+                    validated.mutants.filter(
+                      (m) => m.gapId === g.gapId && m.verdict === "survived",
+                    ),
+                    projectText.get(g.file),
+                  ),
+                })),
+          noCoverageBlocks: blocks.noCoverageBlocks,
+        }
       : {}),
     markIdentityScheme,
     // R325's rule (`applyEquivalenceMarks`): a mark whose scheme is not the run's is stale.

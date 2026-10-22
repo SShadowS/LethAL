@@ -10,11 +10,16 @@ import {
   PRUNED_BY_ENV_TEARDOWN,
   ResultsStore,
   STORE_BUSY_TIMEOUT_MS,
+  runLendsAlRunnerNames,
 } from "../src/store";
 import { tinyBundle } from "./helpers/bundle";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 const APP = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
+/** R442: a run that hid nothing from identity numbering, as `runSession` records a clean one. */
+const NO_HIDDEN = { tuples: [], files: [] };
+/** R496: the proven identity the seeded "T" runs record (hash and dependency fingerprint). */
+const T_APP = { hash: "T", deps: "D" } as const;
 
 function mutantRow(verdict: MutantVerdict, over: Record<string, unknown> = {}) {
   return {
@@ -41,17 +46,20 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.1.1",
+      carryHidden: NO_HIDDEN,
     });
     store.recordTestResult(runId, null, null, ref, "pass", 30);
     store.recordMutant(runId, mutantRow("killed", { killingTest: "PostingUpdatesTotal" }));
     store.recordMutant(runId, mutantRow("survived", { mutantCode: "M0002", astHash: "def456" }));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [])).toEqual(
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(
       new Set(["def456|Sample|Post|conditional-boundary|1"]),
     );
     store.close();
@@ -62,26 +70,32 @@ describe("ResultsStore", () => {
     const r1 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
+      carryHidden: NO_HIDDEN,
     });
     store.recordMutant(r1, mutantRow("survived"));
     store.finishRun(r1, { batchCount: 1, baselineGreen: true });
     const r2 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "2",
+      carryHidden: NO_HIDDEN,
     });
     store.recordMutant(r2, mutantRow("killed"));
     store.finishRun(r2, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", []).size).toBe(0);
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys.size).toBe(0);
     store.close();
   });
 
@@ -96,26 +110,32 @@ describe("ResultsStore", () => {
     const r1 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
+      carryHidden: NO_HIDDEN,
     });
     store.recordMutant(r1, mutantRow("survived"));
     store.finishRun(r1, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [])).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(new Set([key]));
 
     // Run 2 skips re-testing it (skip-known-survivors) and records it as
     // "known-survivor" instead of re-deriving "survived".
     const r2 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "2",
+      carryHidden: NO_HIDDEN,
     });
     store.recordMutant(r2, mutantRow("known-survivor"));
     store.finishRun(r2, { batchCount: 1, baselineGreen: true });
@@ -125,13 +145,15 @@ describe("ResultsStore", () => {
     store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "3",
     });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [])).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(new Set([key]));
     store.close();
   });
 
@@ -144,6 +166,8 @@ describe("ResultsStore", () => {
       const runId = store.createRun({
         coverageMode: "procedure",
         testAppHash: "T",
+        testAppProven: true,
+        testAppDeps: "D",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -162,6 +186,8 @@ describe("ResultsStore", () => {
       const runId = store.createRun({
         coverageMode: "procedure",
         testAppHash: "T",
+        testAppProven: true,
+        testAppDeps: "D",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -188,6 +214,8 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -218,6 +246,8 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -258,6 +288,8 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -306,6 +338,8 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -390,6 +424,8 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -422,6 +458,8 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -480,9 +518,9 @@ describe("ResultsStore", () => {
     store.finishRun(1, { batchCount: 1, baselineGreen: true });
     const seen: unknown[] = [];
     expect(
-      store.priorSurvivorKeys("P", "procedure", "T", [], {
+      store.priorSurvivorKeys("P", "procedure", T_APP, [], [], {
         coverageModeChanged: (i) => seen.push(i),
-      }).size,
+      }).keys.size,
     ).toBe(0);
     expect(seen).toEqual([{ runId: 1, coverageMode: null }]);
     const runId = store.createRun({
@@ -536,17 +574,19 @@ describe("ResultsStore", () => {
     expect(store.getRun(1)?.testAppHash).toBeNull();
     store.recordMutant(1, mutantRow("survived"));
     store.finishRun(1, { batchCount: 1, baselineGreen: true });
-    for (const current of ["T", undefined]) {
+    for (const current of [T_APP, undefined]) {
       const seen: unknown[] = [];
-      const keys = store.priorSurvivorKeys("P", "procedure", current, [], {
+      const keys = store.priorSurvivorKeys("P", "procedure", current, [], [], {
         testAppChanged: (i) => seen.push(i),
-      });
+      }).keys;
       expect(keys.size).toBe(0);
-      expect(seen).toEqual([{ runId: 1, testAppHash: null }]);
+      expect(seen).toEqual([{ runId: 1, testAppHash: null, proven: false, deps: null }]);
     }
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "package:abc",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -554,6 +594,7 @@ describe("ResultsStore", () => {
       appVersion: "0.0.0.0",
     });
     expect(store.getRun(runId)?.testAppHash).toBe("package:abc");
+    expect(store.getRun(runId)?.testAppProven).toBe(true);
     store.close();
     rmSync(path, { force: true });
   });
@@ -607,26 +648,260 @@ describe("ResultsStore", () => {
     rmSync(path, { force: true });
   });
 
+  // R495: a runs table from before R495 gains test_app_proven, and its rows read NULL (not proven):
+  // a recorded hash, even with digests, lends nothing until a run proves it again.
+  test("migrates a pre-R495 runs table: test_app_proven is added and an existing row lends nothing", () => {
+    const path = join(tmpdir(), `lethal-store-r495-${Date.now()}.sqlite`);
+    const legacy = new Database(path);
+    legacy.exec(`CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    project_path TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    batch_count INTEGER,
+    baseline_green INTEGER,
+    app_id TEXT,
+    artifact_id TEXT,
+    artifact_sha256 TEXT,
+    config_fingerprint TEXT,
+    source_sha256 TEXT,
+    identity_scheme INTEGER,
+    coverage_mode TEXT,
+    test_app_hash TEXT,
+    test_digests TEXT
+  );`);
+    legacy.exec(
+      `INSERT INTO runs (project_path, backend, app_version, identity_scheme, coverage_mode, test_app_hash, test_digests) VALUES ('P','bcdev','0.0.0.0', ${IDENTITY_SCHEME}, 'procedure', 'package:a', '{}')`,
+    );
+    legacy.close();
+
+    const store = new ResultsStore(path);
+    const cols = store.db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain("test_app_proven");
+    // R496: the column is added too, and the old row reads NULL.
+    expect(cols.map((c) => c.name)).toContain("test_app_deps");
+    expect(store.getRun(1)?.testAppDeps).toBeNull();
+    expect(store.getRun(1)?.testAppHash).toBe("package:a");
+    expect(store.getRun(1)?.testAppProven).toBe(false);
+    store.setCarryHidden(1, NO_HIDDEN);
+    store.recordMutant(1, mutantRow("survived"));
+    store.finishRun(1, { batchCount: 1, baselineGreen: true });
+    const seen: unknown[] = [];
+    const A = { hash: "package:a", deps: "D" };
+    const keys = store.priorSurvivorKeys("P", "procedure", A, [], [], {
+      testAppChanged: (i) => seen.push(i),
+    }).keys;
+    expect(keys.size).toBe(0);
+    expect(seen).toEqual([{ runId: 1, testAppHash: "package:a", proven: false, deps: null }]);
+    // Control: proven again (and given the facts later checks need), the same row lends.
+    store.setRunTestAppHash(1, "package:a", true, "D");
+    store.db.run("UPDATE runs SET build_symbols = '[]', twin_tuples = '[]' WHERE id = 1");
+    expect(store.priorSurvivorKeys("P", "procedure", A, [], []).keys.size).toBe(1);
+    store.close();
+    rmSync(path, { force: true });
+  });
+
+  // R557 (I1): a runs table from before R557 gains `al_runner_names`, and its rows read NULL. An
+  // al-runner row without the mark lends no survivor; a bcdev row without it lends as before; the
+  // mark, once set, lends again.
+  test("R557: migrates al_runner_names; an unmarked al-runner run lends no survivor, an unmarked bcdev run does", () => {
+    const path = join(tmpdir(), `lethal-store-r557-${Date.now()}.sqlite`);
+    const legacy = new Database(path);
+    legacy.exec(`CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    project_path TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    batch_count INTEGER,
+    baseline_green INTEGER,
+    app_id TEXT,
+    artifact_id TEXT,
+    artifact_sha256 TEXT,
+    config_fingerprint TEXT,
+    source_sha256 TEXT,
+    identity_scheme INTEGER,
+    coverage_mode TEXT
+  );`);
+    legacy.exec(
+      `INSERT INTO runs (project_path, backend, app_version, identity_scheme, coverage_mode) VALUES ('P','al-runner','0.0.0.0', ${IDENTITY_SCHEME}, 'procedure'), ('Q','bcdev','0.0.0.0', ${IDENTITY_SCHEME}, 'procedure')`,
+    );
+    legacy.close();
+
+    const store = new ResultsStore(path);
+    const cols = store.db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain("al_runner_names");
+    expect(store.getRun(1)?.alRunnerNames).toBe(false);
+    expect(store.getRun(2)?.alRunnerNames).toBe(false);
+    const A = { hash: "package:a", deps: "D" };
+    for (const id of [1, 2]) {
+      store.setRunTestAppHash(id, "package:a", true, "D");
+      store.db.run("UPDATE runs SET build_symbols = '[]', twin_tuples = '[]' WHERE id = ?", [id]);
+      store.setCarryHidden(id, NO_HIDDEN);
+      store.recordMutant(id, mutantRow("survived"));
+      store.finishRun(id, { batchCount: 1, baselineGreen: true });
+    }
+    const unmarked: unknown[] = [];
+    const ask = (p: string) =>
+      store.priorSurvivorKeys(p, "procedure", A, [], [], {
+        alRunnerUnmarked: (i) => unmarked.push(i),
+      }).keys.size;
+    expect(ask("P")).toBe(0);
+    expect(unmarked).toEqual([{ runId: 1 }]);
+    expect(ask("Q")).toBe(1);
+    expect(unmarked).toHaveLength(1);
+    // The mark is what lends: set it on the al-runner row and the same survivor comes back.
+    store.db.run("UPDATE runs SET al_runner_names = 1 WHERE id = 1");
+    expect(store.getRun(1)?.alRunnerNames).toBe(true);
+    expect(ask("P")).toBe(1);
+    expect(unmarked).toHaveLength(1);
+    store.close();
+    rmSync(path, { force: true });
+  });
+
+  test("R557: createRun stamps al_runner_names only when asked; runLendsAlRunnerNames reads it per backend", () => {
+    const store = new ResultsStore(":memory:");
+    const make = (backend: string, alRunnerNames?: boolean) =>
+      store.createRun({
+        coverageMode: "procedure",
+        identityScheme: IDENTITY_SCHEME,
+        buildSymbols: [],
+        projectPath: "/p",
+        backend,
+        appVersion: "1",
+        ...(alRunnerNames !== undefined ? { alRunnerNames } : {}),
+      });
+    const lends = (id: number) => {
+      const row = store.getRun(id);
+      if (row === null) throw new Error(`no run ${id}`);
+      return runLendsAlRunnerNames(row);
+    };
+    expect(lends(make("al-runner", true))).toBe(true);
+    expect(lends(make("al-runner"))).toBe(false);
+    expect(lends(make("al-runner", false))).toBe(false);
+    expect(lends(make("bcdev"))).toBe(true);
+    store.close();
+  });
+
   test("priorSurvivorKeys returns a same-test-app run's survivors and none across a change", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "package:a",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
+      carryHidden: NO_HIDDEN,
     });
     store.recordMutant(runId, mutantRow("survived"));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "package:a", []).size).toBe(1);
+    expect(
+      store.priorSurvivorKeys("/p", "procedure", { hash: "package:a", deps: "D" }, [], []).keys
+        .size,
+    ).toBe(1);
     const seen: unknown[] = [];
-    const keys = store.priorSurvivorKeys("/p", "procedure", "package:b", [], {
-      testAppChanged: (i) => seen.push(i),
-    });
+    const keys = store.priorSurvivorKeys(
+      "/p",
+      "procedure",
+      { hash: "package:b", deps: "D" },
+      [],
+      [],
+      { testAppChanged: (i) => seen.push(i) },
+    ).keys;
     expect(keys.size).toBe(0);
-    expect(seen).toEqual([{ runId, testAppHash: "package:a" }]);
+    expect(seen).toEqual([{ runId, testAppHash: "package:a", proven: true, deps: "D" }]);
+    store.close();
+  });
+
+  // R496 (F2, F4): the same proven test app against another dependency closure, or a run that
+  // recorded no fingerprint (an R495-era row), lends no survivor.
+  test("R496: priorSurvivorKeys returns nothing across a dependency change, or from NULL deps", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      coverageMode: "procedure",
+      testAppHash: "package:a",
+      testAppProven: true,
+      testAppDeps: "one",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+      carryHidden: NO_HIDDEN,
+    });
+    store.recordMutant(runId, mutantRow("survived"));
+    store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+    const seen: unknown[] = [];
+    const ask = (deps: string) =>
+      store.priorSurvivorKeys("/p", "procedure", { hash: "package:a", deps }, [], [], {
+        testAppChanged: (i) => seen.push(i),
+      }).keys.size;
+    expect(ask("one")).toBe(1);
+    expect(ask("two")).toBe(0);
+    expect(seen).toEqual([{ runId, testAppHash: "package:a", proven: true, deps: "one" }]);
+    // An R495-era row: proven, the same hash, NULL deps.
+    store.db.run("UPDATE runs SET test_app_deps = NULL WHERE id = ?", [runId]);
+    expect(ask("one")).toBe(0);
+    store.close();
+  });
+
+  // R496: the invariant `test_app_proven = 1` implies `test_app_deps IS NOT NULL`, at both writers.
+  test("R496: a run is recorded proven only with a dependency fingerprint, and a clear clears all three", () => {
+    const store = new ResultsStore(":memory:");
+    const base = {
+      coverageMode: "procedure" as const,
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+    };
+    const noDeps = store.createRun({ ...base, testAppHash: "package:a", testAppProven: true });
+    expect(store.getRun(noDeps)?.testAppProven).toBe(false);
+    expect(store.getRun(noDeps)?.testAppDeps).toBeNull();
+    const unproven = store.createRun({ ...base, testAppHash: "package:a", testAppDeps: "D" });
+    expect(store.getRun(unproven)?.testAppDeps).toBeNull();
+    store.setRunTestAppHash(noDeps, "package:a", true, null);
+    expect(store.getRun(noDeps)?.testAppProven).toBe(false);
+    store.setRunTestAppHash(noDeps, "package:a", true, "D");
+    expect(store.getRun(noDeps)).toMatchObject({
+      testAppHash: "package:a",
+      testAppProven: true,
+      testAppDeps: "D",
+    });
+    store.setRunTestAppHash(noDeps, null, false, null);
+    expect(store.getRun(noDeps)).toMatchObject({
+      testAppHash: null,
+      testAppProven: false,
+      testAppDeps: null,
+    });
+    store.close();
+  });
+
+  // R496 F9: a run's pre-lease digests withdrawn when its dependencies moved under the lease.
+  test("R496: clearRunTestDigests clears the digests and their parts, and refuses an unknown run", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+      testDigests: { "1::m": "a" },
+      testDigestParts: { dependencies: "one" },
+    });
+    store.clearRunTestDigests(runId);
+    expect(store.testDigests(runId)).toBeNull();
+    expect(store.testDigestParts(runId)).toBeNull();
+    expect(() => store.clearRunTestDigests(runId + 1)).toThrow(/no run/);
     store.close();
   });
 
@@ -659,6 +934,8 @@ describe("ResultsStore", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -743,16 +1020,19 @@ CREATE TABLE IF NOT EXISTS mutants (
         const runId = store.createRun({
           coverageMode: "procedure",
           testAppHash: "T",
+          testAppProven: true,
+          testAppDeps: "D",
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
           backend: "bcdev",
           appVersion: "1",
+          carryHidden: NO_HIDDEN,
         });
         store.recordMutant(runId, mutantRow("survived"));
         store.finishRun(runId, { batchCount: 1, baselineGreen: true });
         // The identity must round-trip through the new column, not silently key on the old tuple.
-        expect(store.priorSurvivorKeys("/p", "procedure", "T", [])).toEqual(
+        expect(store.priorSurvivorKeys("/p", "procedure", T_APP, [], []).keys).toEqual(
           new Set(["abc123|Sample|Post|conditional-boundary|1"]),
         );
         store.close();
@@ -784,6 +1064,8 @@ CREATE TABLE IF NOT EXISTS mutants (
         const runId = store.createRun({
           coverageMode: "procedure",
           testAppHash: "T",
+          testAppProven: true,
+          testAppDeps: "D",
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -808,6 +1090,60 @@ CREATE TABLE IF NOT EXISTS mutants (
       }
     });
 
+    test("R577: a pre-R577 database gains kill_reproduced and reproduced_failure; an old kill reads back unmarked, a new one round-trips", () => {
+      const dir = mkdtempSync(join(tmpdir(), "lethal-store-"));
+      const dbPath = join(dir, "lethal.sqlite");
+      try {
+        const old = new Database(dbPath, { create: true });
+        old.exec(PRE_43_SCHEMA);
+        // A kill as an old build left it, before the columns existed.
+        old.exec(
+          "INSERT INTO runs (project_path, backend, app_version) VALUES ('/p', 'al-runner', '1');" +
+            "INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, operator_name," +
+            " operator_major, file, line, verdict, killing_test, duration_ms) VALUES (1, 'M0001'," +
+            " 'old', 'Sample', 'conditional-boundary', 1, 'Sample.Codeunit.al', 12, 'killed', 'T', 40);",
+        );
+        old.close();
+        const store = new ResultsStore(dbPath);
+        const oldRows = store.mutantVerdicts(1);
+        const runId = store.createRun({
+          coverageMode: "procedure",
+          testAppHash: "T",
+          testAppProven: true,
+          testAppDeps: "D",
+          identityScheme: IDENTITY_SCHEME,
+          buildSymbols: [],
+          projectPath: "/p",
+          backend: "al-runner",
+          appVersion: "1",
+        });
+        // A kill the rule reproduced, written after the migration.
+        store.recordMutant(
+          runId,
+          mutantRow("killed", {
+            mutantCode: "M0002",
+            astHash: "new",
+            killingTest: "T",
+            killReproduced: true,
+            reproducedFailure: "failed again",
+          }),
+        );
+        const byHash = new Map(
+          [...oldRows, ...store.mutantVerdicts(runId)].map((r) => [r.astHash, r]),
+        );
+        store.close();
+        expect(byHash.get("old")?.verdict).toBe("killed");
+        expect("killReproduced" in (byHash.get("old") ?? {})).toBe(false);
+        expect("reproducedFailure" in (byHash.get("old") ?? {})).toBe(false);
+        expect(byHash.get("new")).toMatchObject({
+          killReproduced: true,
+          reproducedFailure: "failed again",
+        });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     test("recordMutant persists failure_note at the column level, NULL when absent", () => {
       // Direct column-level coverage (Task 6 Minor): read the value back out
       // of the column itself, not just through the absence of a throw.
@@ -818,6 +1154,8 @@ CREATE TABLE IF NOT EXISTS mutants (
         const runId = store.createRun({
           coverageMode: "procedure",
           testAppHash: "T",
+          testAppProven: true,
+          testAppDeps: "D",
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -857,6 +1195,8 @@ CREATE TABLE IF NOT EXISTS mutants (
         const runId = store.createRun({
           coverageMode: "procedure",
           testAppHash: "T",
+          testAppProven: true,
+          testAppDeps: "D",
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           projectPath: "/p",
@@ -880,6 +1220,8 @@ CREATE TABLE IF NOT EXISTS mutants (
       const runId = store.createRun({
         coverageMode: "procedure",
         testAppHash: "T",
+        testAppProven: true,
+        testAppDeps: "D",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -899,6 +1241,8 @@ CREATE TABLE IF NOT EXISTS mutants (
       const runId = store.createRun({
         coverageMode: "procedure",
         testAppHash: "T",
+        testAppProven: true,
+        testAppDeps: "D",
         identityScheme: IDENTITY_SCHEME,
         buildSymbols: [],
         projectPath: "/p",
@@ -939,6 +1283,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -975,6 +1321,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const other = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "Q",
@@ -998,6 +1346,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1014,6 +1364,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const r1 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1023,6 +1375,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const r2 = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1090,6 +1444,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1128,6 +1484,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1144,6 +1502,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const later = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1163,6 +1523,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const a = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1172,6 +1534,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const b = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1194,22 +1558,27 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const a = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
       configFingerprint: "fp",
+      carryHidden: NO_HIDDEN,
     });
     store.recordArtifact(a, artifact(0, A0, { appPath: "x.app", instrumentedDir: "d" }));
     store.recordMutant(a, mutantRow("survived", { carried: false, coveringTests: [] }));
     store.finishRun(a, { batchCount: 1, baselineGreen: true });
-    const aKeys = store.priorSurvivorKeys("P", "procedure", "T", []);
-    expect(aKeys.size).toBe(1);
+    const aKeys = store.priorSurvivorKeys("P", "procedure", T_APP, [], []);
+    expect(aKeys.keys.size).toBe(1);
     // Run B, the verify row, created exactly as decision 4 says.
     const b = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1226,7 +1595,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       carryableVerdicts: [...CARRYABLE_VERDICTS],
     };
     expect(store.findResumableRun(query)).toBeNull();
-    expect(store.priorSurvivorKeys("P", "procedure", "T", [])).toEqual(aKeys);
+    expect(store.priorSurvivorKeys("P", "procedure", T_APP, [], [])).toEqual(aKeys);
     expect(store.artifactRecordById(A0)?.runId).toBe(a);
 
     // Negative control: a row with A's backend and fingerprint and a survivor IS found, so the
@@ -1234,6 +1603,8 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const c = store.createRun({
       coverageMode: "procedure",
       testAppHash: "T",
+      testAppProven: true,
+      testAppDeps: "D",
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       projectPath: "P",
@@ -1283,6 +1654,18 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     expect(store.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: STORE_BUSY_TIMEOUT_MS });
     expect(STORE_BUSY_TIMEOUT_MS).toBe(5000);
     store.close();
+  });
+
+  test("R449: a file store commits without an fsync per commit (WAL, synchronous NORMAL)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r449-"));
+    const store = new ResultsStore(join(dir, "s.sqlite"));
+    try {
+      expect(store.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+      expect(store.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 1 });
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("review r1 #4: a checkpoint a reader keeps busy warns once, naming the WAL size", () => {
