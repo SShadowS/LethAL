@@ -136,6 +136,8 @@
     "bc-republish.test.ts",
     "r594/cdo-publish.ts",
     "bc-symbol-cache.ts",
-    "bc-symbol-cache.test.ts"
+    "bc-symbol-cache.test.ts",
+    "bc-app-content.ts",
+    "bc-app-content.test.ts"
   ]
 }
