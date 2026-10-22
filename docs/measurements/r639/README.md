@@ -1,8 +1,8 @@
 # R639: BC's own reading on bc1 (2026-10-22)
 
 `bc1-probe.json` holds two runs of `scripts/r639-bc-probe/drive.ts` on `bc1`. Both ran on BC 28.4
-(Base and System Application 28.4.53241.56590) with LethAL Control 1.0.0.23, under lane bugs'
-lease. The plan is `/coord/handoff/R-639/plan.md`, section r3.2.
+(Base and System Application 28.4.53241.56590), measured with LethAL Control 1.0.0.23, under lane
+bugs' lease. The plan is `/coord/handoff/R-639/plan.md`, section r3.2.
 
 | Run | Lease | What it ran | Harness |
 |---|---|---|---|
@@ -18,7 +18,8 @@ Each run's header (lease, app hashes, removal, registry reads) is under `runs`.
 ## What ran
 
 - **Two throwaway apps.** Their sources are in `scripts/r639-bc-probe/`. Both were compiled
-  offline with alc 18.0.43.1464, against bc1's symbol cache and the LethAL Control 1.0.0.23 build.
+  offline with alc 18.0.43.1464, against bc1's symbol cache and the LethAL Control build measured
+  there on 2026-10-22, 1.0.0.23.
   - **The target, "LethAL R639 BC Probe"** (`d371a89d-…`), ids 92900-92909.
     - It holds `table 92900 "Probe Row"`, with exactly `ROW_AL`'s fields and key.
     - It also holds Install codeunit 92901, which registers artifact `d1618dd6…` with the control
