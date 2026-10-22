@@ -976,8 +976,12 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
  * r10 (a) (R647): leg T runs its session, prints, and throws; `judgeLegT` judges. Outside record
  * mode the rows are classified, compared and printed (each its own receipt line) BEFORE any check.
  * The record branch keeps the counts first: a baseline is recorded only from a run matching them.
+ * `main` then runs `assertGateBaseline` on a `pass` (R332's wiring test reads that call in main).
  */
-async function legT(scratch: string, push: (line: string) => void): Promise<"pass" | "held"> {
+async function legT(
+  scratch: string,
+  push: (line: string) => void,
+): Promise<{ readonly outcome: "pass" | "held"; readonly r: SessionReport }> {
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -994,15 +998,6 @@ async function legT(scratch: string, push: (line: string) => void): Promise<"pas
   });
   const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
   const now = normalizeForComparison(r);
-  // A baseline row difference is a figure that differs (gate-fail), never infra (M2).
-  const compare = async (): Promise<void> => {
-    try {
-      await assertGateBaseline(r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
-    } catch (e) {
-      if (e instanceof BaselineRecordedError) throw e;
-      throw new LegFailure(`T: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
   const notes = () =>
     console.log(
       `  T: notes state ${tagged(r, V3_STATE_NOTE_TAG).length}, refused-nearby ${tagged(r, V3_REFUSED_NEARBY_TAG).length}, §6 ${tagged(r, SLEEP_NOTE_TAG).length} (recorded, not predicted)`,
@@ -1020,8 +1015,7 @@ async function legT(scratch: string, push: (line: string) => void): Promise<"pas
     const why = knownDifferencesRefusal(bc, now, TABLES_KNOWN_DIFFERENCES);
     console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 52"}`);
     must(why === undefined, `T: ${why}`);
-    await compare();
-    return "pass";
+    return { outcome: "pass", r };
   }
   const ownBase = await readGateBaseline(TABLES_BASELINE_PATH);
   const own = ownBase.entries;
@@ -1048,9 +1042,7 @@ async function legT(scratch: string, push: (line: string) => void): Promise<"pas
   }
   notes();
   if (j.outcome === "gate-fail") throw new LegFailure(j.failure ?? "T: gate-fail");
-  if (j.outcome === "held") return "held";
-  await compare();
-  return "pass";
+  return { outcome: j.outcome, r };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1094,10 +1086,19 @@ async function main(): Promise<void> {
         else if (leg === "X") await legX(scratch, (l) => lines.push(l));
         else if (leg === "D1" || leg === "D1c") await legD(scratch, leg);
         else if (leg === "T") {
-          if ((await legT(scratch, (l) => lines.push(l))) === "held") {
+          const t = await legT(scratch, (l) => lines.push(l));
+          if (t.outcome === "held") {
             legs[leg] = "held";
             console.log(`leg ${leg}: HELD (${Math.round((Date.now() - t0) / 1000)} s)`);
             continue;
+          }
+          // r10: after the judge's pass (or the record branch's checks), the own-baseline compare.
+          // A baseline row difference is a figure that differs (gate-fail), never infra (M2).
+          try {
+            await assertGateBaseline(t.r, TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`T: ${e instanceof Error ? e.message : String(e)}`);
           }
         } else throw new V3LegEnvironment(`unknown leg ${leg}`);
         legs[leg] = "pass";
