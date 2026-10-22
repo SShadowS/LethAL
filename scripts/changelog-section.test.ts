@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sectionFor } from "./changelog-section";
+import { releaseNotes } from "./release-notes.ts";
 
 /**
  * The release body comes from `CHANGELOG.md`, so an extractor that quietly returns nothing ships a
@@ -45,17 +46,22 @@ describe("changelog section extraction", () => {
     expect(sectionFor(SAMPLE, "1.2")).toBeNull();
   });
 
-  test("the real CHANGELOG has a section for the version being released", () => {
-    // The check that actually fires in practice: bump package.json, forget the changelog, and this
-    // reddens before a tag is pushed rather than after.
+  test("the real tree has a release body for the version being released", () => {
+    // The check that actually fires in practice: bump package.json, forget the notes, and this
+    // reddens before a tag is pushed rather than after. R662: it checks the body the release will
+    // actually use, `release-notes/v<version>.md` when it exists, else the CHANGELOG section, by
+    // the same rules (non-empty, over 80 characters, under the size limit) release.yml applies.
     const root = join(import.meta.dir, "..");
     const version = (
       JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
         version: string;
       }
     ).version;
-    const section = sectionFor(readFileSync(join(root, "CHANGELOG.md"), "utf8"), version);
-    expect(section, `CHANGELOG.md has no entry for ${version}`).not.toBeNull();
-    expect((section ?? "").length).toBeGreaterThan(80);
+    expect(() =>
+      releaseNotes(`v${version}`, (p) => {
+        const path = join(root, p);
+        return existsSync(path) ? readFileSync(path, "utf8") : null;
+      }),
+    ).not.toThrow();
   });
 });

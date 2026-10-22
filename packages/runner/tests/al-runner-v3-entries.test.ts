@@ -2496,3 +2496,632 @@ describe("R652: the bound is checked before each SEND, not at each run()", () =>
     });
   });
 });
+
+/**
+ * R654 S2 (`/coord/handoff/R-654/s2-LR1-finding.md`): the one layout-scoped field a missing
+ * `resetLayoutState()` would carry into the next batch on one-shot is `batchBlind`. Every other
+ * field is rebuilt by `deploy()` or cleared by `activate()`, so no live leg sees the reset go
+ * missing (L-R1 and L-R2 stayed green). This test is the guard: a §6 blind note latched in batch 0
+ * must not refuse batch 1's covering pass.
+ */
+describe("R654 S2: a batch's latched blind note does not cross into the next batch (one-shot)", () => {
+  test("batch 0 latches the note; after the next deploy, a clean covering pass is a pass", async () => {
+    let blindOn = true;
+    const coverage: CoverageFn = (m, cu, a, t) => {
+      const doc = sleepCoverage()(m, cu, a, t) as { coverage: { statements: unknown[] }[] };
+      // The indexed Sleep line 5 missing from the target's statements: §6 case 2, which latches.
+      const target = doc.coverage[1];
+      if (blindOn && target !== undefined) target.statements = [{ line: 6, hits: 0 }];
+      return doc;
+    };
+    const r = await rig({
+      targetAl: SLEEPER_AL,
+      oneShotRows: allPass,
+      oneShotCoverage: coverage,
+      extra: { transport: "one-shot" },
+    });
+    await baseline(r.b, SUITE1);
+    await r.b.activate("M0001");
+    const latched = await r.b.run(ref("A"), OPTS);
+    expect([latched.outcome, latched.failureMessage ?? ""]).toEqual([
+      "error",
+      expect.stringContaining("not in v3's coverage"),
+    ]);
+    // The next batch: a fresh deploy, and v3's coverage is complete again.
+    blindOn = false;
+    await r.b.deploy(r.l.batch);
+    await baseline(r.b, SUITE1);
+    await r.b.activate("M0001");
+    const next = await r.b.run(ref("A"), OPTS);
+    expect([next.outcome, next.failureMessage]).toEqual(["pass", undefined]);
+  });
+});
+
+// R653 (plans 2026-10-22-r653-paired-confirm-r2.md, -r3.md): a cold fail kill's confirm (NONE) and
+// its R577 reproduction (M) in ONE entries request, confirm first. Requests on the fake: 0 the
+// warm-up, 1 the prefetch, 2 the pair (or today's live confirm), 3 today's live reproduction.
+describe("R653 pair", () => {
+  const A = ref("A");
+  const B = ref("B");
+  /** Request 2 on the first daemon: the pair, or today's live confirm (P1 compares the two). */
+  const pairReq = (d: number, n: number) => d === 0 && n === 2;
+  /** Request `n` is a pair: [echo NONE, NONE's codeunit, echo M0001, M0001's codeunit]. */
+  type IsPair = (n: number) => boolean;
+  /** killsM1, except that a PAIR request marks every row of A with where it came from. */
+  const marked = (isPair: IsPair): ServeScript => ({
+    rows: (m, cu, d, n) =>
+      isPair(n)
+        ? allPass(m, cu, d, n).map((x) =>
+            x.method === "A" ? { ...x, status: "fail" as const, message: `from-pair ${m}` } : x,
+          )
+        : killsM1(m, cu, d, n),
+  });
+  /** A pair request's echo for `who` is a row R612 does not keep: the request is cut there. */
+  const cutEcho =
+    (who: string) =>
+    (isPair: IsPair): ServeScript => ({
+      ...marked(isPair),
+      echo: (m, d, n) =>
+        m === who && isPair(n)
+          ? { method: "Echo", status: "error", notRun: true, message: TIMEOUT_1S }
+          : goodEcho(m, d, n),
+    });
+  /** Deployed, baseline, M0001 prefetched, and its kill read (A fails under M0001). */
+  const killed = async (
+    serve: ServeScript | ((isPair: IsPair, isWarmup: (n: number) => boolean) => ServeScript) = {
+      rows: killsM1,
+    },
+  ) => {
+    let reqs: readonly Req[] = [];
+    const isPair: IsPair = (n) => {
+      const ids = reqs[n]?.ids ?? [];
+      return ids.length === 4 && ids[0] === "NONE|echo" && ids[2] === "M0001|echo";
+    };
+    /** Request `n` is its daemon's first: the warm-up. */
+    const isWarmup = (n: number) => reqs.findIndex((q) => q.daemon === reqs[n]?.daemon) === n;
+    const script = typeof serve === "function" ? serve(isPair, isWarmup) : serve;
+    const r = await readyRig({ serve: script, oneShotRows: allPass, mutants: ["M0001"] });
+    reqs = r.serve.requests;
+    await r.b.activate("M0001");
+    expect((await r.b.run(A, OPTS)).outcome).toBe("fail");
+    return r;
+  };
+  type Settled = Omit<TestVerdict, "durationMs"> | { readonly threw: string };
+  const settle = (p: Promise<TestVerdict>): Promise<Settled> =>
+    p.then(
+      ({ durationMs: _d, ...v }) => v,
+      (e: unknown) => ({ threw: e instanceof Error ? `${e.name}: ${e.message}` : String(e) }),
+    );
+  /** The orchestrator's order after a kill: [the pair], activate(null), confirm, activate(M), reproduction. */
+  const confirmAndReproduce = async (r: Rig, pair: boolean) => {
+    if (pair) await r.b.sendKillPair("M0001", A);
+    await r.b.activate(null);
+    const confirm = await settle(r.b.run(A, OPTS));
+    await r.b.activate("M0001");
+    const repro = await settle(r.b.run(A, OPTS));
+    return { confirm, repro };
+  };
+  const withRunEntriesThrowing = async <T>(err: () => Error, body: () => Promise<T>) => {
+    const spy = spyOn(AlRunnerServer.prototype, "runEntries").mockImplementation(async () => {
+      throw err();
+    });
+    try {
+      return await body();
+    } finally {
+      spy.mockRestore();
+    }
+  };
+  const msg = (s: Settled) => ("threw" in s ? s.threw : (s.failureMessage ?? ""));
+
+  describe("P1: the pair's verdicts equal today's two live calls (durationMs aside)", () => {
+    const noneAtPair =
+      (f: (rows: FakeRow[]) => FakeRow[]): RowsFn =>
+      (m, cu, d, n) =>
+        m === "NONE" && pairReq(d, n) ? f(allPass(m, cu, d, n)) : killsM1(m, cu, d, n);
+    const cases: Array<[string, ServeScript, number]> = [
+      ["NONE pass, M fail", { rows: killsM1 }, 1],
+      [
+        "NONE fail, M fail",
+        {
+          rows: noneAtPair((rs) =>
+            rs.map((x) => (x.method === "A" ? { ...x, status: "fail", message: "flaky" } : x)),
+          ),
+        },
+        1,
+      ],
+      [
+        "NONE pass, M pass",
+        {
+          rows: (m, cu, d, n) =>
+            m === "M0001" && n >= 2 ? allPass(m, cu, d, n) : killsM1(m, cu, d, n),
+        },
+        1,
+      ],
+      [
+        "NONE echo mismatch",
+        {
+          rows: killsM1,
+          echo: (m, d, n) =>
+            m === "NONE" && pairReq(d, n)
+              ? { method: "Echo", status: "fail", message: "LETHAL-ECHO:M0001:true" }
+              : goodEcho(m, d, n),
+        },
+        1,
+      ],
+      ["NONE 0 rows", { rows: noneAtPair(() => []) }, 1],
+      [
+        "2 rows for the method",
+        { rows: noneAtPair((rs) => [...rs, { method: "A", status: "pass" }]) },
+        0,
+      ],
+      [
+        "only another codeunit's rows",
+        {
+          rows: killsM1,
+          answer: (req, n, lines) =>
+            pairReq(req.daemon, n)
+              ? {
+                  lines: lines.map((x) =>
+                    x.type === "test" && x.entry === `NONE|${CU}`
+                      ? { ...x, name: String(x.name).replace(`Codeunit${CU}.`, `Codeunit${CU2}.`) }
+                      : x,
+                  ),
+                }
+              : undefined,
+        },
+        0,
+      ],
+      ["a suite test missing", { rows: noneAtPair((rs) => rs.filter((x) => x.method !== "B")) }, 1],
+    ];
+    for (const [name, serve, saved] of cases) {
+      test(`${name}: equal verdicts, ${saved} request(s) saved`, async () => {
+        const today = await killed(serve);
+        const t0 = today.serve.requests.length;
+        const want = await confirmAndReproduce(today, false);
+        const paired = await killed(serve);
+        const p0 = paired.serve.requests.length;
+        const got = await confirmAndReproduce(paired, true);
+        expect(got).toEqual(want);
+        expect(today.serve.requests.length - t0 - (paired.serve.requests.length - p0)).toBe(saved);
+      });
+    }
+  });
+
+  test("P2: one send, confirm FIRST (echo NONE, NONE's codeunit, echo M, M's codeunit); nothing else is sent", async () => {
+    const r = await killed();
+    const s0 = r.b.entriesStats();
+    const n0 = r.serve.requests.length;
+    await r.b.sendKillPair("M0001", A);
+    expect(r.serve.requests.slice(n0).map((q) => q.ids)).toEqual([
+      ["NONE|echo", `NONE|${CU}`, "M0001|echo", `M0001|${CU}`],
+    ]);
+    const s1 = r.b.entriesStats();
+    expect([s1.liveRequests - s0.liveRequests, s1.boundChecks - s0.boundChecks]).toEqual([1, 1]);
+    await r.b.activate(null);
+    expect((await r.b.run(A, OPTS)).outcome).toBe("pass");
+    await r.b.activate("M0001");
+    expect((await r.b.run(A, OPTS)).outcome).toBe("fail");
+    expect(r.serve.requests.length).toBe(n0 + 1);
+    const s2 = r.b.entriesStats();
+    expect([s2.pairRequests, s2.pairFallbacks1, s2.pairFallbacks2]).toEqual([1, 0, 0]);
+    expect([s2.liveRequests - s0.liveRequests, s2.boundChecks - s0.boundChecks]).toEqual([1, 1]);
+  });
+
+  test("P3a (G1): one-shot sends no pair; the confirm is spawned as today", async () => {
+    const r = await rig({ extra: { transport: "one-shot" } });
+    await baseline(r.b, SUITE1);
+    await r.b.activate("M0001");
+    await r.b.run(A, OPTS);
+    const c0 = r.one.calls.length;
+    // Not even attempted: in one-shot a daemon start would fail before any spawn, so only the
+    // entries request itself shows that G1 let the pair through.
+    const request = spyOn(r.b as unknown as { request: () => Promise<unknown> }, "request");
+    await r.b.sendKillPair("M0001", A);
+    expect(request).not.toHaveBeenCalled();
+    request.mockRestore();
+    await r.b.activate(null);
+    expect((await r.b.run(A, OPTS)).outcome).toBe("pass");
+    expect(r.one.calls.length).toBe(c0 + 1);
+    expect(r.serve.daemons).toHaveLength(0);
+  });
+
+  test("P3b (G2, F3): a latched entriesRefused sends no pair; the confirm reads transportFailure, as liveCall gives", async () => {
+    const r = await killed();
+    (r.b as unknown as { entriesRefused?: string }).entriesRefused = "latched by the test";
+    const n0 = r.serve.requests.length;
+    await r.b.sendKillPair("M0001", A);
+    expect(r.serve.requests.length).toBe(n0);
+    await r.b.activate(null);
+    const v = await r.b.run(A, OPTS);
+    expect(outcome(v)).toEqual(["error", "pre-dispatch-rejected"]);
+    expect(v.failureMessage).toContain("latched by the test");
+  });
+
+  test("P3c (G3): inside the baseline bracket no pair is sent", async () => {
+    const r = await killed();
+    const n0 = r.serve.requests.length;
+    r.b.baselinePhase(true);
+    try {
+      await r.b.sendKillPair("M0001", A);
+    } finally {
+      r.b.baselinePhase(false);
+    }
+    expect(r.serve.requests.length).toBe(n0);
+  });
+
+  test("P3d (G4): a pair for a mutant other than the last activated one is not sent", async () => {
+    const r = await killed();
+    const n0 = r.serve.requests.length;
+    await r.b.sendKillPair("M0002", A);
+    expect(r.serve.requests.length).toBe(n0);
+  });
+
+  describe("P4: consumed only in order; anything else runs live", () => {
+    test("activate(M0002) after the pair: the confirm is live", async () => {
+      const r = await killed(marked);
+      await r.b.sendKillPair("M0001", A);
+      await r.b.activate("M0002");
+      await r.b.activate(null);
+      const n0 = r.serve.requests.length;
+      expect(msg(await settle(r.b.run(A, OPTS)))).not.toContain("from-pair");
+      expect(r.serve.requests.length).toBe(n0 + 1);
+    });
+
+    test("a second activate(null): the first confirm is served, the second is live, and so is the reproduction", async () => {
+      const r = await killed(marked);
+      await r.b.sendKillPair("M0001", A);
+      await r.b.activate(null);
+      const n0 = r.serve.requests.length;
+      expect((await r.b.run(A, OPTS)).failureMessage).toBe("from-pair NONE");
+      expect(r.serve.requests.length).toBe(n0);
+      await r.b.activate(null);
+      expect((await r.b.run(A, OPTS)).outcome).toBe("pass");
+      await r.b.activate("M0001");
+      expect((await r.b.run(A, OPTS)).failureMessage).toBe("boom");
+      expect(r.serve.requests.length).toBe(n0 + 2);
+    });
+
+    test("activate(M) before activate(null): both runs are live", async () => {
+      const r = await killed(marked);
+      await r.b.sendKillPair("M0001", A);
+      const n0 = r.serve.requests.length;
+      await r.b.activate("M0001");
+      expect((await r.b.run(A, OPTS)).failureMessage).toBe("boom");
+      await r.b.activate(null);
+      expect((await r.b.run(A, OPTS)).outcome).toBe("pass");
+      expect(r.serve.requests.length).toBe(n0 + 2);
+    });
+  });
+
+  test("P5a: the NONE entry did not stand (its echo cut): pairFallbacks2, confirm and reproduction both live", async () => {
+    const r = await killed(cutEcho("NONE"));
+    await r.b.sendKillPair("M0001", A);
+    const n0 = r.serve.requests.length;
+    const { confirm, repro } = await confirmAndReproduce(r, false);
+    expect(msg(confirm)).toBe("");
+    expect("threw" in confirm ? "threw" : confirm.outcome).toBe("pass");
+    expect(msg(repro)).toBe("boom");
+    // A new daemon: its warm-up, the live confirm, the live reproduction.
+    expect(r.serve.requests.length).toBe(n0 + 3);
+    const s = r.b.entriesStats();
+    expect([s.pairRequests, s.pairFallbacks1, s.pairFallbacks2]).toEqual([1, 0, 1]);
+  });
+
+  test("P5b: the M entry did not stand (its echo cut): pairFallbacks1, the confirm served, the reproduction live; the pair's M rows never scored", async () => {
+    const r = await killed(cutEcho("M0001"));
+    await r.b.sendKillPair("M0001", A);
+    const n0 = r.serve.requests.length;
+    await r.b.activate(null);
+    expect((await r.b.run(A, OPTS)).failureMessage).toBe("from-pair NONE");
+    expect(r.serve.requests.length).toBe(n0);
+    await r.b.activate("M0001");
+    expect((await r.b.run(A, OPTS)).failureMessage).toBe("boom");
+    expect(r.serve.requests.length).toBe(n0 + 2);
+    const s = r.b.entriesStats();
+    expect([s.pairRequests, s.pairFallbacks1, s.pairFallbacks2]).toEqual([1, 1, 0]);
+  });
+
+  describe("P5c, P5d: the pre-committed relation holds for every pair, fallback or not, confirm passed or not", () => {
+    /**
+     * The orchestrator's flow after a cold fail kill: the pair, activate(null), the confirm, and
+     * activate(M) + the reproduction ONLY when the confirm passed (R577). Returns c (1 if it passed)
+     * and every counter's change.
+     */
+    const flow = async (r: Rig) => {
+      const s0 = r.b.entriesStats();
+      await r.b.sendKillPair("M0001", A);
+      await r.b.activate(null);
+      const c = (await r.b.run(A, OPTS)).outcome === "pass" ? 1 : 0;
+      if (c === 1) {
+        await r.b.activate("M0001");
+        await r.b.run(A, OPTS);
+      }
+      const s1 = r.b.entriesStats();
+      const d = (k: keyof typeof s0) => s1[k] - s0[k];
+      const counters = {
+        live: d("liveRequests"),
+        bound: d("boundChecks"),
+        warmups: d("warmups"),
+        P: d("pairRequests"),
+        F1: d("pairFallbacks1"),
+        F1p: d("pairFallbacks1Passed"),
+        F2: d("pairFallbacks2"),
+        F2p: d("pairFallbacks2Passed"),
+      };
+      // Today's cost of one fail kill: the confirm, plus the reproduction when the confirm passed.
+      const old = 1 + c;
+      const want = old - counters.P + counters.F1p + counters.F2 + counters.F2p;
+      expect(counters.live).toBe(want);
+      // boundChecks = warm-ups + prefetch + live + coverage: a restart's warm-up is its own term.
+      expect(counters.bound - counters.warmups).toBe(want);
+      return { c, ...counters };
+    };
+    /** The pair's NONE entry for A: `a`; for B: a timeout R612 does not keep (the cut). */
+    const cutAtNoneCodeunit =
+      (a: FakeRow["status"]) =>
+      (isPair: IsPair): ServeScript => ({
+        rows: (m, cu, d, n) =>
+          m === "NONE" && isPair(n)
+            ? [
+                { method: "A", status: a, ...(a === "fail" ? { message: "flaky" } : {}) },
+                { method: "B", status: "error", notRun: true, message: TIMEOUT_1S },
+              ]
+            : killsM1(m, cu, d, n),
+      });
+
+    test("P5c: a cut at the NONE CODEUNIT entry (it stands: F1), the confirm fails: one request, nothing else", async () => {
+      const r = await killed(cutAtNoneCodeunit("fail"));
+      expect(await flow(r)).toEqual({
+        c: 0,
+        live: 1,
+        bound: 1,
+        warmups: 0,
+        P: 0,
+        F1: 1,
+        F1p: 0,
+        F2: 0,
+        F2p: 0,
+      });
+    });
+
+    test("P5c twin: the same cut, the confirm passes: the reproduction goes live on a new daemon", async () => {
+      const r = await killed(cutAtNoneCodeunit("pass"));
+      expect(await flow(r)).toEqual({
+        c: 1,
+        live: 2,
+        bound: 3,
+        warmups: 1,
+        P: 1,
+        F1: 1,
+        F1p: 1,
+        F2: 0,
+        F2p: 0,
+      });
+    });
+
+    test("P5d: the NONE echo cut (F2), the live confirm fails: two requests", async () => {
+      const r = await killed((isPair, isWarmup) => ({
+        ...cutEcho("NONE")(isPair),
+        rows: (m, cu, d, n) =>
+          m === "NONE" && n > 2 && !isWarmup(n)
+            ? allPass(m, cu, d, n).map((x) =>
+                x.method === "A" ? { ...x, status: "fail" as const, message: "flaky" } : x,
+              )
+            : killsM1(m, cu, d, n),
+      }));
+      expect(await flow(r)).toEqual({
+        c: 0,
+        live: 2,
+        bound: 3,
+        warmups: 1,
+        P: 0,
+        F1: 0,
+        F1p: 0,
+        F2: 1,
+        F2p: 0,
+      });
+    });
+
+    const others: Array<[string, Parameters<typeof killed>[0], number]> = [
+      ["the pair stands, the confirm passes", { rows: killsM1 }, 1],
+      [
+        "the pair stands, the confirm fails",
+        (isPair) => ({
+          rows: (m, cu, d, n) =>
+            m === "NONE" && isPair(n)
+              ? allPass(m, cu, d, n).map((x) =>
+                  x.method === "A" ? { ...x, status: "fail" as const, message: "flaky" } : x,
+                )
+              : killsM1(m, cu, d, n),
+        }),
+        0,
+      ],
+      [
+        "the M echo cut (F1), the confirm passes",
+        (isPair) => ({ ...cutEcho("M0001")(isPair), rows: killsM1 }),
+        1,
+      ],
+      ["the M echo cut (F1), the confirm fails", cutEcho("M0001"), 0],
+      ["the NONE echo cut (F2), the live confirm passes", cutEcho("NONE"), 1],
+    ];
+    for (const [name, serve, c] of others) {
+      test(`the relation: ${name}`, async () => {
+        expect((await flow(await killed(serve))).c).toBe(c);
+      });
+    }
+  });
+
+  describe("P6: a server error on the pair is the confirm's verdict, exactly as liveCall maps it", () => {
+    const errors: Array<[string, () => Error, string[]]> = [
+      [
+        "a request error",
+        () => new AlRunnerServerRequestError("protocol", "a bad answer"),
+        ["error", "pre-dispatch-rejected"],
+      ],
+      [
+        "the deadline",
+        () => new AlRunnerServerRequestError("deadline", "no summary line within 1 ms"),
+        ["deadline-exceeded", ""],
+      ],
+      [
+        "a refusal (latches)",
+        () => new AlRunnerV3EntriesRefusedError("al-runner-v3-test-refused", "refused by the test"),
+        ["error", "pre-dispatch-rejected"],
+      ],
+    ];
+    for (const [name, err, want] of errors) {
+      test(name, async () => {
+        const today = await killed();
+        await today.b.activate(null);
+        const live = await settle(withRunEntriesThrowing(err, () => today.b.run(A, OPTS)));
+        const r = await killed();
+        await withRunEntriesThrowing(err, () => r.b.sendKillPair("M0001", A));
+        await r.b.activate(null);
+        const v = await r.b.run(A, OPTS);
+        expect(outcome(v)).toEqual(want);
+        const { durationMs: _d, ...rest } = v;
+        expect(rest).toEqual(live as typeof rest);
+        if (name.includes("latches")) {
+          const n0 = r.serve.requests.length;
+          await r.b.activate("M0001");
+          expect(outcome(await r.b.run(A, OPTS))).toEqual(["error", "pre-dispatch-rejected"]);
+          expect(r.serve.requests.length).toBe(n0);
+        }
+      });
+    }
+  });
+
+  test("P7: any other throw (a bound change) sends nothing and stores nothing; the confirm's own send throws as today", async () => {
+    const r = await killed();
+    const n0 = r.serve.requests.length;
+    await appendFile(join(r.l.scratch, "active", "Logic.Codeunit.al"), " ");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await r.b.sendKillPair("M0001", A);
+      expect(warn.mock.calls.flat().join("\n")).toContain("AlRunnerV3UnprovenBatchError");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(r.serve.requests.length).toBe(n0);
+    await r.b.activate(null);
+    await expect(r.b.run(A, OPTS)).rejects.toBeInstanceOf(AlRunnerV3UnprovenBatchError);
+    const s = r.b.entriesStats();
+    expect([s.pairRequests, s.pairFallbacks1, s.pairFallbacks2]).toEqual([0, 0, 0]);
+  });
+
+  describe("P8: only the warm-up or a PREFETCH of 2+ groups speaks for the batch", () => {
+    const refusedAt = (at: (d: number, n: number) => boolean): ServeScript => ({
+      rows: (m, cu, d, n) =>
+        at(d, n)
+          ? allPass(m, cu, d, n).map((x) => ({
+              ...x,
+              status: "error" as const,
+              notRun: true,
+              message: UNLISTED,
+            }))
+          : killsM1(m, cu, d, n),
+      echo: (m, d, n) =>
+        at(d, n)
+          ? { method: "Echo", status: "error", notRun: true, message: UNLISTED }
+          : goodEcho(m, d, n),
+    });
+
+    test("a pair whose every row is refused with one unlisted reason does not latch: the confirm runs live", async () => {
+      const r = await killed((isPair) => refusedAt((_d, n) => isPair(n)));
+      await r.b.sendKillPair("M0001", A);
+      await r.b.activate(null);
+      const v = await r.b.run(A, OPTS);
+      expect(v.failureMessage ?? "").not.toContain("batch-refused");
+      expect(v.outcome).toBe("pass");
+      expect(r.b.entriesStats().pairFallbacks2).toBe(1);
+    });
+
+    test("a 1-group prefetch refused the same way does not latch either", async () => {
+      const r = await rig({ serve: refusedAt((d, n) => d === 0 && n === 1), oneShotRows: allPass });
+      await baseline(r.b, SUITE1);
+      await r.b.prefetchMutants(plans(["M0001"]));
+      await r.b.activate("M0001");
+      expect((await r.b.run(A, OPTS)).failureMessage ?? "").not.toContain("batch-refused");
+    });
+    // The other direction (a 2-group prefetch refusal still latches) is test 11 above.
+  });
+
+  describe("P9: a stored pair never outlives its kill: every public method that works drops it", () => {
+    const drops: Array<[string, (r: Rig) => Promise<unknown> | unknown]> = [
+      ["deploy", (r) => r.b.deploy(r.l.batch)],
+      ["compileCheck", (r) => r.b.compileCheck(r.l.batch)],
+      ["compilePlainCheck", (r) => r.b.compilePlainCheck(join(r.l.scratch, "active"))],
+      ["baselinePhase", (r) => r.b.baselinePhase(false)],
+      ["prefetchMutants", (r) => r.b.prefetchMutants([])],
+      ["useCoveringBudgets", (r) => r.b.useCoveringBudgets("M0002", [])],
+      ["useMutantBudgetFloor", (r) => r.b.useMutantBudgetFloor(1000, 1000)],
+      ["useBuildSymbols", (r) => r.b.useBuildSymbols([])],
+      ["useDiscoveredTests", (r) => r.b.useDiscoveredTests(SUITE1)],
+      ["useSessionTests", (r) => r.b.useSessionTests(SUITE1)],
+      ["status", (r) => r.b.status()],
+      ["close (closeDaemon)", (r) => r.b.close()],
+      ["sendKillPair that sends nothing", (r) => r.b.sendKillPair("M0002", A)],
+    ];
+    test("control: with no call in between, the confirm IS served from the pair", async () => {
+      const r = await killed(marked);
+      await r.b.sendKillPair("M0001", A);
+      await r.b.activate(null);
+      expect(msg(await settle(r.b.run(A, OPTS)))).toBe("from-pair NONE");
+    });
+    for (const [name, call] of drops) {
+      test(`${name}, then a Decision 11 style activate(null): nothing is served from the pair`, async () => {
+        const r = await killed(marked);
+        await r.b.sendKillPair("M0001", A);
+        await call(r);
+        await r.b.activate(null);
+        expect(msg(await settle(r.b.run(A, OPTS)))).not.toContain("from-pair");
+      });
+    }
+  });
+
+  test("P10: a stored confirm verdict is returned by one run only; a second run goes live", async () => {
+    const r = await killed();
+    await withRunEntriesThrowing(
+      () => new AlRunnerServerRequestError("protocol", "a bad answer"),
+      () => r.b.sendKillPair("M0001", A),
+    );
+    await r.b.activate(null);
+    expect(outcome(await r.b.run(A, OPTS))).toEqual(["error", "pre-dispatch-rejected"]);
+    const n0 = r.serve.requests.length;
+    expect((await r.b.run(A, OPTS)).outcome).toBe("pass");
+    expect(r.serve.requests.length).toBeGreaterThan(n0);
+  });
+
+  test("P11: the reproduction is served from the pair, with no extra live send", async () => {
+    const r = await killed(marked);
+    await r.b.sendKillPair("M0001", A);
+    const n0 = r.serve.requests.length;
+    await r.b.activate(null);
+    expect((await r.b.run(A, OPTS)).failureMessage).toBe("from-pair NONE");
+    await r.b.activate("M0001");
+    expect((await r.b.run(A, OPTS)).failureMessage).toBe("from-pair M0001");
+    expect(r.serve.requests.length).toBe(n0);
+  });
+
+  describe("P12: a run that is not the pair's own confirm drops the pair", () => {
+    test("a run of a different ref after the confirm: the reproduction is live", async () => {
+      const r = await killed(marked);
+      await r.b.sendKillPair("M0001", A);
+      await r.b.activate(null);
+      expect((await r.b.run(A, OPTS)).failureMessage).toBe("from-pair NONE");
+      await r.b.run(B, OPTS);
+      const n0 = r.serve.requests.length;
+      await r.b.activate("M0001");
+      expect((await r.b.run(A, OPTS)).failureMessage).toBe("boom");
+      expect(r.serve.requests.length).toBe(n0 + 1);
+    });
+
+    test("a run of the pair's own ref BEFORE the consuming activate(null): the confirm is live", async () => {
+      const r = await killed(marked);
+      await r.b.sendKillPair("M0001", A);
+      await r.b.run(A, OPTS);
+      await r.b.activate(null);
+      expect(msg(await settle(r.b.run(A, OPTS)))).not.toContain("from-pair");
+    });
+  });
+});

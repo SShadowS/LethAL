@@ -2964,7 +2964,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   );
   const killsWithText = screenedKills.filter((m) => m.killingTestFailure !== undefined);
   // R553: keyed on the backend's declared identity, never on `authoritative`: only a backend that
-  // says it is al-runner has its `{Type}Exception: ` prefix read past.
+  // says it is al-runner has its `{Type}Exception: ` prefix read past. al-runner-v3 takes bcdev's
+  // rule ON PURPOSE (R657): v3 (Rust) writes BC's own message with no `<Type>: ` prefix, measured on
+  // alpha.2 and edge 57f1e4f98, one-shot and serve. The al-runner rule would strip nothing on v3 and
+  // would put the backend-blame note on every `vacuous` v3 screen.
   const screenBackend = input.caps.kind === "al-runner" ? "al-runner" : "bcdev";
   const flaggedKills = killsWithText.filter(
     (m) => !looksLikeAssertionFailure(screenMessageOf(m.killingTestFailure, screenBackend)),

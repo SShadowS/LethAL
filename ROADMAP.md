@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**96 of 656 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**102 of 666 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -292,6 +292,9 @@ that ordering is the priority.
 - **R647** · al-runner v3 gate: leg T checks its counts before it classifies, so r9 §7's held can never be reached, and X (d) cannot tell a timed-out baseline from a broken Sleep rule · [R647.md](docs/roadmap/R647.md) · done (80491bb9)
 - **R650** · al-runner v3 gate: on leg T's held path the text check runs without R556's bare-hash refusal, so a run whose mutated-text hashes are missing can hide a text change · [R650.md](docs/roadmap/R650.md) · done (dd7215d0)
 - **R658** · a baseline test that outlives LethAL's 120 s client budget keeps running on the BC server: no stop is wired for a baseline, so the op stays in flight and the control-app lease cannot be released · [R658.md](docs/roadmap/R658.md) · open, filed 2026-10-22
+- **R666** · R349's stale-layout check is lost with the .NET al-runner: no al-runner-v3 leg can see a stale layout · [R666.md](docs/roadmap/R666.md) · open, filed 2026-10-22
+- **R661** · bcdev hub coverage modes (`procedure`, `line`) run their baseline outside the fenced transport, so R658's baseline stop never reaches them: a baseline that outlives its budget there is abandoned as before · [R661.md](docs/roadmap/R661.md) · open, filed 2026-10-22
+- **R665** · a mutant run whose stop was confirmed but got no 408 is scored "no verdict, no quarantine" when its op then reads completed: the tombstone is the stop's own, so the BC session may still be alive while the run goes on · [R665.md](docs/roadmap/R665.md) · open, filed 2026-10-22
 
 ## Product gaps a real project hits
 
@@ -694,13 +697,20 @@ that ordering is the priority.
 - **R649** · measure BC's real Sleep behaviour (does Sleep(600000) wait, and hit the test timeout?), then re-cast the v3 gate's X (d) from it · [R649.md](docs/roadmap/R649.md) · done (5be9499a)
 - **R651** · al-runner v3 serve-entries: the itest has no per-phase timers (warm-up, prefetch, coverage pass, §5 windows), so the next CDO speed step cannot target a phase · [R651.md](docs/roadmap/R651.md) · done (e1cd0cd8)
 - **R652** · al-runner v3 serve-entries: assertBound re-hashes the whole tree on every run(), 527 times on CDO (86 s, 62% of the loop); check once per request sent · [R652.md](docs/roadmap/R652.md) · done (ad2d3269)
-- **R653** · al-runner v3 serve-entries: each kill's unmutated confirm is a live NONE request (51 on CDO, about 10 s); answer it from the warm-up's NONE rows · [R653.md](docs/roadmap/R653.md) · open, filed 2026-10-22
+- **R653** · al-runner v3 serve-entries: each kill's unmutated confirm is a live NONE request (51 on CDO, about 10 s); answer it from the warm-up's NONE rows · [R653.md](docs/roadmap/R653.md) · done (0dda9a84): one request [NONE, M] confirms a fail kill; final head 1b4706c6; CDO loop 83.5 -> 57.1 s
 - **R654** · Retire the .NET al-runner backend (v2): the Rust runtime (v3) replaces it · [R654.md](docs/roadmap/R654.md) · open, filed 2026-10-22
 - **R655** · al-runner v3: the bound check hashes active/ with links skipped, so a link added under active/ mid-run is not seen (the test dir refuses one since R631) · [R655.md](docs/roadmap/R655.md) · open, filed 2026-10-22
 - **R656** · `--dry-run --backend al-runner-v3` reads bcdev's package cache, not `alRunnerV3.packagesDir` · [R656.md](docs/roadmap/R656.md) · open, filed 2026-10-22
 - **R659** · roadmap-next-id.ts reads remote branches without fetching them, so an id another lane pushed minutes ago looks free · [R659.md](docs/roadmap/R659.md) · done (3fc23858)
-- **R657** · The R553 assertion screen reads an al-runner-v3 kill as bcdev's: v3's failure-message shape is unmeasured · [R657.md](docs/roadmap/R657.md) · open, filed 2026-10-22
+- **R657** · The R553 assertion screen reads an al-runner-v3 kill as bcdev's: v3's failure-message shape is unmeasured · [R657.md](docs/roadmap/R657.md) · done (b1c1055e)
 - **R660** · ci.yml has no workflow_dispatch trigger: when GitHub drops a push event, a submit head can get no CI run, and nothing can start one by hand · [R660.md](docs/roadmap/R660.md) · done (0ea6960c)
+- **R662** · talk-cut script: tag a given commit and make a DRAFT release with lethal-control.app attached, never publishing it · [R662.md](docs/roadmap/R662.md) · done (03448305)
+- **R663** · bc-demo: a fourth BC on Linux instance on server1 for the talk, outside every lease pool, with an idempotent setup that is also the offline demo reset · [R663.md](docs/roadmap/R663.md) · done (a9bb3ffe)
+- **R664** · gift-card re-freeze script on bc-demo: three agreeing runs, a new frozen baseline at identity scheme 41, and the talk runbook's numbers · [R664.md](docs/roadmap/R664.md) · open, filed 2026-10-22
+- **R667** · al-runner v3: nothing live would catch a future build that prefixes failure messages, which would skew the R553 assertion screen · [R667.md](docs/roadmap/R667.md) · open, filed 2026-10-22
+- **R668** · The batch project copies every non-AL file of the target as a resource, so a lethal.config*.json holding a login is copied into every staged batch dir · [R668.md](docs/roadmap/R668.md) · open, filed 2026-10-22
+- **R669** · bc-linux-setup and the BC itests should refuse a server that has an out-of-use marker (`/coord/machine/out-of-use/<server>.md`): today nothing reads it, so a held-dirty server is kept off only by the coord lease and by messages · [R669.md](docs/roadmap/R669.md) · open, filed 2026-10-22
+- **R670** · the pinned fixture-symbols tar holds `LethAL Sandbox Data` 1.0.0.10 for `sandbox-data-tests`, older than the fixture (1.0.0.13), so `compile:fixtures` from the tar fails that project with AL0185 `Data Band Report` is missing · [R670.md](docs/roadmap/R670.md) · open, filed 2026-10-22
 
 ---
 

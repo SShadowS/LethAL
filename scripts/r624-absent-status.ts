@@ -19,7 +19,12 @@ const c = REAL_DEPS.connect(server as ServerName, readSecretFile());
 for (const publisher of ["LethAL", "Microsoft"]) {
   const name = "R624 No Such App";
   const url = devPackagesUrl(
-    { server: HOST, serverInstance: "BC", tenant: "default", port: SERVERS[c.server].dev },
+    {
+      server: HOST,
+      serverInstance: "BC",
+      tenant: "default",
+      port: SERVERS[server as ServerName].dev,
+    },
     { publisher, name },
   );
   if (url === null) throw new Error("unreachable: devPackagesUrl refused a fixed URL");
