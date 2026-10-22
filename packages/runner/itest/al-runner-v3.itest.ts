@@ -268,8 +268,8 @@ async function legC(scratch: string): Promise<void> {
   });
   for (const f of r.facts)
     console.log(`  C: ${f.fact} = ${f.verdict} | ${f.measured.slice(0, 200)}`);
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail.
-  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 23);
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. r8 (R637): 24.
+  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, 24);
   for (const l of c.lines) console.log(`  C: ${l}`);
   if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);
   if (c.outcome === "infra-fail") throw new V3LegEnvironment(`C: ${c.lines.join("; ")}`);

@@ -241,7 +241,7 @@ export function knownDifferencesRefusal(
 
 /**
  * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632).
- * Every other fact of the 23 is a contract fact and must read `matches`.
+ * Every other fact of the 24 (r8, R637) is a contract fact and must read `matches`.
  */
 export const V3_DEFECT_FACTS = [
   "upstream-compile-errors",

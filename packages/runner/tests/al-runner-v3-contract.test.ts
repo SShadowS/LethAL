@@ -49,6 +49,17 @@ const row = (
   ...(o.notRun === true ? { notRun: true } : {}),
 });
 const doc = (tests: unknown[]) => JSON.stringify({ tests });
+const CUT_TIMEOUT = row(50652, "HangsDirty", "error", {
+  notRun: true,
+  message: "Test exceeded 3s timeout.",
+  durationMs: 3007,
+});
+const CUT_NOT_TRUSTED = row(50652, "ChecksClean", "error", {
+  notRun: true,
+  message:
+    "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HangsDirty: did not run (the test used more than the time limit of 3 s of CPU time and was stopped (--test-timeout-secs)): it can change the global variable Probe Cut.Dirty that this test reads, so the state it would have left is not BC's; this failure is not trusted: dirty",
+});
+const cutRows = [CUT_TIMEOUT, CUT_NOT_TRUSTED];
 
 /** A fake alpha.2 that answers every probe call as measured; `over` replaces one answer by key. */
 function fakeV3(over: Over = {}): SpawnFn {
@@ -197,6 +208,8 @@ function fakeV3(over: Over = {}): SpawnFn {
           }),
         ]),
       },
+      // r8 (R-637), as measured on alpha.2 (/coord/handoff/R-637/r8-measure/out/cut.stdout).
+      "cu50652-n3": { exitCode: 7, stdout: doc(cutRows) },
       cu50655: { exitCode: 0, stdout: doc([row(50655, "DuplicateNamedKey", "pass")]) },
       "cu50660-n3": { exitCode: 1, stdout: doc(sleepRows) },
       cu50660: { exitCode: 1, stdout: doc(sleepRows) },
@@ -277,6 +290,7 @@ describe("§8 the contract probe", () => {
         "compile-failure-not-scorable",
         "upstream-compile-errors",
         "positional-target-wins",
+        "dependent-fail-after-timeout-is-notrun",
       ].sort(),
     );
   });
@@ -379,13 +393,13 @@ describe("§8 the contract probe", () => {
     const before = await probe();
     const f0 = before.facts.find((f) => f.fact === "none-selected-exit");
     expect(f0).toMatchObject({ kind: "defect", verdict: "defect-present" });
-    expect(classifyLegC(before.facts, V3_DEFECT_FACTS, 23).outcome).toBe("pass");
+    expect(classifyLegC(before.facts, V3_DEFECT_FACTS, 24).outcome).toBe("pass");
     // alpha.4 (#5622): exit 6 with a document of 0 rows.
     const r = await probe({ cu0: () => ({ exitCode: 6, stdout: doc([]) }) });
     expect(r.facts.find((f) => f.fact === "none-selected-exit")?.verdict).toBe("gone");
     expect(v3ContractRefusals(r)).toEqual([]);
     expect(v3DefectsGone(r).join("\n")).toMatch(/defect-gone: none-selected-exit/);
-    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 23).outcome).toBe("held");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("held");
   });
 
   test("R632 B (r7): none-selected-exit diverges (refuses, gate-fail) on unparseable output, rows, or another exit", async () => {
@@ -398,8 +412,42 @@ describe("§8 the contract probe", () => {
       const r = await probe({ cu0: () => answer });
       expect(r.facts.find((f) => f.fact === "none-selected-exit")?.verdict).toBe("diverged");
       expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — none-selected-exit/);
-      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 23).outcome).toBe("gate-fail");
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("gate-fail");
     }
+  });
+
+  const DEP = "dependent-fail-after-timeout-is-notrun";
+  test("R637 r8 (a): dependent-fail-after-timeout-is-notrun matches v3's measured not-trusted row", async () => {
+    const r = await probe();
+    expect(r.facts.find((f) => f.fact === DEP)).toMatchObject({
+      kind: "contract",
+      verdict: "matches",
+    });
+    expect(r.facts.length).toBe(24);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("pass");
+  });
+
+  test("R637 r8 (b): a plain fail after the timeout (the guard dropped) diverges, refuses and is gate-fail", async () => {
+    // Exit 1 is the likely shape; exit 7 isolates the row check from the exit-code check.
+    for (const exitCode of [1, 7]) {
+      const r = await probe({
+        "cu50652-n3": () => ({
+          exitCode,
+          stdout: doc([CUT_TIMEOUT, row(50652, "ChecksClean", "fail", { message: "dirty" })]),
+        }),
+      });
+      expect(r.facts.find((f) => f.fact === DEP)?.verdict).toBe("diverged");
+      expect(v3ContractRefusals(r).join("\n")).toMatch(/DIVERGED — dependent-fail-after-timeout/);
+      expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("gate-fail");
+    }
+  });
+
+  test("R637 r8 (c): the not-trusted row missing diverges", async () => {
+    const r = await probe({
+      "cu50652-n3": () => ({ exitCode: 7, stdout: doc([CUT_TIMEOUT]) }),
+    });
+    expect(r.facts.find((f) => f.fact === DEP)?.verdict).toBe("diverged");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 24).outcome).toBe("gate-fail");
   });
 
   test("an unmeasurable defect fact does not refuse but is warned BY NAME (r6)", async () => {

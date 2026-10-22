@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**97 of 634 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**97 of 635 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -285,7 +285,7 @@ that ordering is the priority.
 - **R632** · probe: can a session tell that a BC server restarted (or had apps published) between a crashed run and its resume? R601's same-server rule cannot · [R632.md](docs/roadmap/R632.md) · open, filed 2026-10-22
 - **R633** · al-runner v3 update gate: two wrong-reason verdicts on 2026-10-22 (alpha.3 infra-fail with no D legs run; alpha.4 and edge-7739d8132 gate-fail on #5613's fix read as a contract break), and every receipt deleted · [R633.md](docs/roadmap/R633.md) · done (abac8803)
 - **R634** · When the target app has installed dependents, their hang-capable loops are not in the hang context: a dependent's loop that calls a mutated target procedure can hang a scored run · [R634.md](docs/roadmap/R634.md) · closed 2026-10-22 — measured price 0: adding each same-corpus dependent's source to the target's hang context…
-- **R637** · al-runner v3: a test that fails after a timed-out test of the same codeunit is scored as a kill, although v3 says such a failure is not trusted · [R637.md](docs/roadmap/R637.md) · open, filed 2026-10-22
+- **R637** · al-runner v3: a test that fails after a timed-out test of the same codeunit is scored as a kill, although v3 says such a failure is not trusted · [R637.md](docs/roadmap/R637.md) · closed 2026-10-22 — premise false on alpha.2: v3 marks a failure caused by a stopped sibling notRun…
 
 ## Product gaps a real project hits
 
@@ -679,6 +679,7 @@ that ordering is the priority.
 - **R635** · al-runner v3 backend: use serve's multi-entry runTests (one compile, a resources override per mutant) for bcdev-like speed · [R635.md](docs/roadmap/R635.md) · open, filed 2026-10-22
 - **R636** · R631's link scan caps depth through links, not real depth: a long pnpm link chain with no .al refuses falsely · [R636.md](docs/roadmap/R636.md) · open, filed 2026-10-22
 - **R638** · al-runner v3: a test codeunit's OnRun trigger is not under the per-test CPU limit, so a hang there holds the call until LethAL's own deadline (upstream #5698) · [R638.md](docs/roadmap/R638.md) · open, filed 2026-10-22
+- **R639** · al-runner v3: when LethAL's first covering test is a not-trusted row after a timeout, the mutant ends as error and never reaches the hanging sibling's timeout kill · [R639.md](docs/roadmap/R639.md) · open, filed 2026-10-22
 
 ---
 

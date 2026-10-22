@@ -13,9 +13,13 @@ The leg-by-leg tables live in those pre-commitments and are asserted by the ites
 
 The legs:
 
-- C: the contract probe, 23 facts (`runV3ContractProbe`), contract versus known defect. Since r7
+- C: the contract probe, 24 facts (`runV3ContractProbe`), contract versus known defect. Since r7
   (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r7-none-selected.md`, 16681485), 8 are
-  defect facts (`V3_DEFECT_FACTS` in `al-runner-v3-gate.ts`, `none-selected-exit` included) and 15 contract facts.
+  defect facts (`V3_DEFECT_FACTS` in `al-runner-v3-gate.ts`, `none-selected-exit` included). Since r8
+  (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r8-dependent-notrun.md`, 848371cb), 16 are
+  contract facts, `dependent-fail-after-timeout-is-notrun` included. That fact pins v3's own guard against R637's
+  false kill. A failure caused by a timed-out sibling's state must come back as v3's not-trusted `notRun` row,
+  never as a plain `fail`.
 - S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `itest:alrunner`'s table.
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
@@ -120,3 +124,9 @@ The legs:
     and `gate.log`, and guards the alpha path and `--regate`.
   - `edge.last-seen` was not cleared. edge-7739d8132 is the same upstream commit as alpha.4, so alpha.4's verdict
     stands for it.
+- 2026-10-22: r8 (848371cb, R637) added the contract fact `dependent-fail-after-timeout-is-notrun`, so leg C has
+  24 facts.
+  - It costs about 3 s per leg C and per v3 session: one `--test-timeout-secs 3` call.
+  - On alpha.2 it read `matches` in a standalone run of the same AL (`/coord/handoff/R-637/r8-measure/`). It has not
+    yet been run inside leg C.
+  - R637 was closed by ruling: v3 already marks such a failure not trusted.
