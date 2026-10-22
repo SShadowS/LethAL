@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { openItemHangRefuses, tier1Operators } from "@lethal/builtin-tier1";
@@ -1478,6 +1478,11 @@ export interface SessionConfig {
    * dir when they sit inside the project. Absent means none.
    */
   readonly excludeOutputs?: readonly string[];
+  /**
+   * R668: the run's `--config` file. A project file that IS this file (same device and inode,
+   * whatever its name or path) is never copied into a batch. Absent means none.
+   */
+  readonly configPath?: string;
   readonly selectorIds: SelectorConfig;
   readonly baselineTimeoutMs?: number; // default 120000
   readonly skipKnownSurvivors?: boolean;
@@ -1996,6 +2001,8 @@ async function prepareArtifactDir(args: {
   readonly source: ReadonlyMap<string, Buffer> | undefined;
   /** R363: the run's own output files, never copied into the batch; see `prepareBatchProject`. */
   readonly excludeOutputs: readonly string[];
+  /** R668: the run's `--config` file, never copied into the batch; see `prepareBatchProject`. */
+  readonly configPath: string | undefined;
 }): Promise<readonly AppJsonPathChange[]> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
@@ -2021,6 +2028,7 @@ async function prepareArtifactDir(args: {
     args.source,
     args.excludeOutputs,
     flatNames,
+    args.configPath,
   );
 }
 
@@ -2038,6 +2046,7 @@ async function checkPlainBuild(args: {
   readonly appVersion: string;
   readonly source: ReadonlyMap<string, Buffer> | undefined;
   readonly excludeOutputs: readonly string[];
+  readonly configPath: string | undefined;
   readonly compilePlainCheck: (dir: string) => Promise<void>;
 }): Promise<void> {
   await rm(args.scratchDir, { recursive: true, force: true });
@@ -2050,6 +2059,8 @@ async function checkPlainBuild(args: {
       args.appVersion,
       args.source,
       args.excludeOutputs,
+      undefined,
+      args.configPath,
     );
     try {
       await args.compilePlainCheck(args.scratchDir);
@@ -2118,6 +2129,7 @@ async function bisectAndNote(args: {
   readonly originalErr: unknown;
   readonly source: ReadonlyMap<string, Buffer> | undefined;
   readonly excludeOutputs: readonly string[];
+  readonly configPath: string | undefined;
 }): Promise<string> {
   try {
     const outcome = await bisectFailingMutant(args.subsetMutants, async (subset) => {
@@ -2134,6 +2146,7 @@ async function bisectAndNote(args: {
           artifactId: args.artifactId,
           source: args.source,
           excludeOutputs: args.excludeOutputs,
+          configPath: args.configPath,
         });
       } catch (err) {
         // NOT a compile answer — abort the search rather than feeding it a
@@ -6843,6 +6856,7 @@ async function runSessionBody(
         artifactId,
         source: sourceSnapshot,
         excludeOutputs: cfg.excludeOutputs ?? [],
+        configPath: cfg.configPath,
       });
       if (pathChanges.length > 0 && !appJsonPathsWarned) {
         appJsonPathsWarned = true;
@@ -6851,6 +6865,20 @@ async function runSessionBody(
           code: "app-json-backslash-path",
           message: appJsonPathWarning(pathChanges),
         });
+      }
+      // R668: once per session, after the first batch built (so a link refusal comes from it).
+      if (batchIdx === 0) {
+        for (const rel of await configFilesInResourceFolders(
+          cfg.projectDir,
+          projectManifest,
+          cfg.configPath,
+        )) {
+          emit({
+            type: "warning",
+            code: "lethal-config-resource",
+            message: configResourceWarning(rel),
+          });
+        }
       }
       if (batchIdx === artifacts.length - 1) {
         const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
@@ -7233,6 +7261,7 @@ async function runSessionBody(
             appVersion,
             source: sourceSnapshot,
             excludeOutputs: cfg.excludeOutputs ?? [],
+            configPath: cfg.configPath,
             compilePlainCheck,
           });
         }
@@ -7267,6 +7296,7 @@ async function runSessionBody(
           originalErr: deployErr,
           source: sourceSnapshot,
           excludeOutputs: cfg.excludeOutputs ?? [],
+          configPath: cfg.configPath,
         });
         for (const m of execute)
           record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
@@ -7833,6 +7863,7 @@ async function runSessionBody(
                 originalErr: err,
                 source: sourceSnapshot,
                 excludeOutputs: cfg.excludeOutputs ?? [],
+                configPath: cfg.configPath,
               });
               for (const m of shard) {
                 if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
@@ -11513,7 +11544,75 @@ export function isProjectResource(rel: string): boolean {
   const lower = rel.toLowerCase();
   if (lower.endsWith(".al") || lower.endsWith(".app")) return false;
   if (basename(lower) === "app.json") return false;
+  if (isLethalConfigName(rel)) return false;
   return !isToolResourcePath(rel);
+}
+
+/**
+ * R668: LethAL's own config (`lethal.config.json`, `lethal.config.<name>.json`, any case, any
+ * depth). It holds the server login and its default place is the target folder, so it is never a
+ * batch resource. A `--config` of any other name is caught by identity (`sameFileAs`).
+ */
+function isLethalConfigName(rel: string): boolean {
+  return /^lethal\.config(\.[^/\\]+)?\.json$/i.test(basename(rel.replaceAll("\\", "/")));
+}
+
+/**
+ * R668: a test for "is this the run's `--config` file", by device and inode, so another name, a
+ * letter case, a symlinked parent directory or a hard link all match. The config is stat-ed once,
+ * here; without a config (or with none on disk) nothing matches.
+ */
+async function sameFileAs(
+  configPath: string | undefined,
+): Promise<(p: string) => Promise<boolean>> {
+  const id = configPath === undefined ? undefined : await fileIdentity(configPath);
+  if (id === undefined) return async () => false;
+  return async (p) => (await fileIdentity(p)) === id;
+}
+
+async function fileIdentity(p: string): Promise<string | undefined> {
+  try {
+    const s = await stat(p, { bigint: true });
+    return `${s.dev}:${s.ino}`;
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "ENOENT") return undefined;
+    throw err;
+  }
+}
+
+/**
+ * R668: the project files LethAL leaves out as its config (by name or as the `--config` file) that
+ * app.json's `resourceFolders` covers. The user's own build packs them into the .app; a batch does
+ * not, so a test reading one fails at the baseline. Project-relative, sorted.
+ */
+export async function configFilesInResourceFolders(
+  projectDir: string,
+  projectManifest: Readonly<Record<string, unknown>>,
+  configPath: string | undefined,
+): Promise<readonly string[]> {
+  const raw = projectManifest.resourceFolders;
+  const folders = (Array.isArray(raw) ? raw : [])
+    .filter((f): f is string => typeof f === "string")
+    .map((f) =>
+      f
+        .replaceAll("\\", "/")
+        .replace(/^\.\/?/, "")
+        .replace(/\/+$/, "")
+        .toLowerCase(),
+    );
+  if (folders.length === 0) return [];
+  const isConfig = await sameFileAs(configPath);
+  const out: string[] = [];
+  for (const rel of (await walkFiles(projectDir, { links: "refuse" })).files) {
+    const key = rel.replaceAll("\\", "/").toLowerCase();
+    if (!folders.some((f) => f === "" || key.startsWith(`${f}/`))) continue;
+    if (isLethalConfigName(rel) || (await isConfig(join(projectDir, rel)))) out.push(rel);
+  }
+  return out;
+}
+
+function configResourceWarning(rel: string): string {
+  return `${rel}: LethAL left this config file out of the app it builds for each batch (R668). app.json's resourceFolders covers it, so a test that reads it as a resource fails at the baseline. Your own build still ships it inside the .app, with any login it holds: take it out of resourceFolders.`;
 }
 
 /**
@@ -11571,12 +11670,15 @@ export async function prepareBatchProject(
   excludeOutputs: readonly string[] = [],
   /** R219: the map `writeInstrumentedProject` named its files by; built here when absent. */
   flatNamesIn?: FlatNames,
+  /** R668: the run's `--config` file; a project file that is the same file is never copied. */
+  configPath?: string,
 ): Promise<readonly AppJsonPathChange[]> {
   const pathChanges = await writeStampedAppJson(batchDir, projectManifest, appVersion);
   // R363: the run's own output files (the results database and its sidecars, `--out`,
   // `--progress-out`), named by the caller. Exact paths only: an old report this run did not name
   // is copied like any resource, and nothing is guessed from an extension.
   const excluded = new Set(excludeOutputs.map(outputPathKey));
+  const isConfig = await sameFileAs(configPath);
 
   // R631: a link refuses here too, so a batch never copies a tree alc would compile differently.
   const entries = (await walkFiles(projectDir, { links: "refuse" })).files;
@@ -11641,6 +11743,7 @@ export async function prepareBatchProject(
     const lower = rel.toLowerCase();
     if (!isProjectResource(rel)) continue;
     if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
+    if (await isConfig(join(projectDir, rel))) continue;
     if (lower.replaceAll("\\", "/") === reserved) refuseReserved(rel);
     const dest = join(batchDir, rel);
     await mkdir(dirname(dest), { recursive: true });

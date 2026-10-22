@@ -5645,6 +5645,107 @@ describe("runSession — Layer 5A deployment identity", () => {
     store.close();
   });
 
+  // R668: a config file LethAL leaves out of the batch, but that app.json's resourceFolders
+  // covers. One warning per file per session; no refusal.
+  const configWarning = (rel: string): string =>
+    `${rel}: LethAL left this config file out of the app it builds for each batch (R668). app.json's resourceFolders covers it, so a test that reads it as a resource fails at the baseline. Your own build still ships it inside the .app, with any login it holds: take it out of resourceFolders.`;
+  async function configWarnings(
+    resourceFolders: readonly string[] | undefined,
+    files: readonly string[],
+    configRel?: string,
+  ): Promise<readonly string[]> {
+    const dirs = await twoBatchProject();
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({
+        ...JSON.parse(APP_JSON),
+        ...(resourceFolders !== undefined ? { resourceFolders } : {}),
+      }),
+    );
+    for (const rel of files) await Bun.write(join(dirs.projectDir, rel), '{"dummy":"R668"}');
+    const events: RunEvent[] = [];
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      ...(configRel !== undefined ? { configPath: join(dirs.projectDir, configRel) } : {}),
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.batches).toBe(2);
+    store.close();
+    return events.flatMap((e) =>
+      e.type === "warning" && e.code === "lethal-config-resource" ? [e.message] : [],
+    );
+  }
+
+  test("warns once per dropped config file that resourceFolders covers, across batches (R668)", async () => {
+    const warnings = await configWarnings(
+      ["."],
+      ["lethal.config.json", join("Res", "lethal.config.bc1.json"), join("Res", "a.txt")],
+    );
+    expect([...warnings].sort()).toEqual(
+      [
+        configWarning("lethal.config.json"),
+        configWarning(join("Res", "lethal.config.bc1.json")),
+      ].sort(),
+    );
+  });
+
+  test("warns for the --config file of another name that resourceFolders covers (R668)", async () => {
+    const warnings = await configWarnings(
+      ["Res"],
+      [join("Res", "conn.json")],
+      join("Res", "conn.json"),
+    );
+    expect(warnings).toEqual([configWarning(join("Res", "conn.json"))]);
+  });
+
+  // R668: the session hands its --config to every batch build. Revert: drop `configPath` from the
+  // `prepareArtifactDir` call in `runSession`, and conn.json reaches the deployed dir.
+  test("the --config file of another name never reaches a deployed batch dir (R668)", async () => {
+    const dirs = await twoBatchProject();
+    await Bun.write(join(dirs.projectDir, "conn.json"), '{"dummy":"R668"}');
+    await Bun.write(join(dirs.projectDir, "notes.json"), "{}");
+    const deployed: string[][] = [];
+    class ListingBackend extends PhaseBackend {
+      override async deploy(dir: string): Promise<CompiledArtifact | null> {
+        deployed.push(await readdir(dir));
+        return await super.deploy(dir);
+      }
+    }
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new ListingBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      configPath: join(dirs.projectDir, "conn.json"),
+    });
+    store.close();
+    expect(deployed).toHaveLength(2);
+    for (const names of deployed) {
+      expect(names).toContain("notes.json");
+      expect(names).not.toContain("conn.json");
+    }
+  });
+
+  test("no config warning when resourceFolders is absent or does not cover the file (R668)", async () => {
+    expect(await configWarnings(undefined, ["lethal.config.json"], "lethal.config.json")).toEqual(
+      [],
+    );
+    expect(
+      await configWarnings(
+        ["Res"],
+        ["lethal.config.json", join("Res", "a.txt")],
+        "lethal.config.json",
+      ),
+    ).toEqual([]);
+  });
+
   test("an all-/ project raises no app-json-backslash-path warning (R-422)", async () => {
     const dirs = await twoBatchProject();
     const events: RunEvent[] = [];

@@ -1091,6 +1091,7 @@ describe("runFromCli hands the run's own output paths to the session (R363)", ()
       progressOutPath: join(dir, "events.ndjson"),
     };
     let seen: readonly string[] | undefined;
+    let seenConfig: string | undefined;
     await runFromCli(parsed, {
       validateSelectorIdsForProject: async () => {},
       buildBackend: async () =>
@@ -1102,9 +1103,11 @@ describe("runFromCli hands the run's own output paths to the session (R363)", ()
         }),
       runSession: async (cfg) => {
         seen = cfg.excludeOutputs;
+        seenConfig = cfg.configPath;
         return FAKE_REPORT;
       },
     });
+    // R668: the --config file is excluded too (drift), and handed over for the identity rule.
     expect(seen).toEqual([
       db,
       `${db}-wal`,
@@ -1112,7 +1115,9 @@ describe("runFromCli hands the run's own output paths to the session (R363)", ()
       `${db}-journal`,
       join(dir, "report.json"),
       join(dir, "events.ndjson"),
+      configPath,
     ]);
+    expect(seenConfig).toBe(configPath);
   });
 });
 
