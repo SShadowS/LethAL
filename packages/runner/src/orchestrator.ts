@@ -79,13 +79,14 @@ import type {
   BackendCapabilities,
   CoverageMode,
   ExecutionBackend,
+  PackageUnread,
   RunManyCause,
   RunManyOpts,
   RunManyResult,
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { isAlRunnerV2, isBcdev, isLocalRunner, stopIsRetrySafe } from "./backend";
+import { isAlRunnerV2, isBcdev, isLocalRunner, isUnread, stopIsRetrySafe } from "./backend";
 import {
   decodeSource,
   hashAlTree,
@@ -4947,7 +4948,7 @@ async function batchTestAppReader(
   testDir: string,
   /** R389: the session's closed-world answer, bound into the hash as the run's identity is. */
   closedWorld: ClosedWorld,
-): Promise<() => Promise<string | undefined>> {
+): Promise<() => Promise<string | PackageUnread | undefined>> {
   const packageReader = backend.fetchPublishedAppPackage;
   const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
   return async () => {
@@ -4960,10 +4961,18 @@ async function batchTestAppReader(
               : packageReader.call(backend, { publisher: manifest.publisher, name: manifest.name }),
       testDir,
     );
-    // R389: a snapshot taken under another guard answer is never reused.
-    return h === undefined ? undefined : guardedTestAppHash(h, closedWorld);
+    // R389: a snapshot taken under another guard answer is never reused. R630: a failed read
+    // passes through as itself, so the refusal it leads to can name its cause.
+    return typeof h === "string" ? guardedTestAppHash(h, closedWorld) : h;
   };
 }
+
+/** R630: a test-app read as the hash it gives, or `undefined` (failed or unknown). Every use as a
+ *  hash goes through this ONCE per site, so a failed read is never compared or reused as one. */
+const hashOf = (r: string | PackageUnread | undefined): string | undefined =>
+  typeof r === "string" ? r : undefined;
+const unreadOf = (r: string | PackageUnread | undefined): string | undefined =>
+  typeof r === "object" ? r.unread : undefined;
 
 /**
  * R495: a session that PROVED its test app (`proven`) and reads a different one (`now`) at a batch
@@ -4978,12 +4987,13 @@ function assertNoTestAppDrift(
   store: ResultsStore,
   runId: number,
   proven: string | undefined,
-  now: string | undefined,
+  read: string | PackageUnread | undefined,
   batchIdx: number,
 ): void {
+  const now = hashOf(read);
   if (proven === undefined || now === proven) return;
   store.setRunTestAppHash(runId, null, false, null);
-  throw new TestAppDriftedError(proven, now, batchIdx);
+  throw new TestAppDriftedError(proven, now, batchIdx, unreadOf(read));
 }
 
 async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<ScoreBatchResult> {
@@ -5028,14 +5038,18 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     | undefined;
   let reused: BaselineSnapshot | undefined;
   // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
-  let hashTestApp: (() => Promise<string | undefined>) | undefined;
+  let hashTestApp: (() => Promise<string | PackageUnread | undefined>) | undefined;
+  // R630: why the read before the baseline failed, for the refusal below.
+  let firstUnread: string | undefined;
   if (input.snapshot !== undefined) {
     const { batchDir, testDir, allowReuse, closedWorld, provenTestApp } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
     hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
-    const testAppHash = await hashTestApp();
+    const read = await hashTestApp();
     // R495: before `select` carries anything or a snapshot is reused.
-    assertNoTestAppDrift(store, runId, provenTestApp?.hash, testAppHash, batchIdx);
+    assertNoTestAppDrift(store, runId, provenTestApp?.hash, read, batchIdx);
+    const testAppHash = hashOf(read);
+    firstUnread = unreadOf(read);
     // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
     // here that differs from it (or a session with nothing proven) reuses nothing.
     // R496: and the snapshot's run must have recorded the same dependency fingerprint.
@@ -5285,13 +5299,19 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   });
   if (missingFromServer.length > 0) {
     // R462: a failed re-read proves nothing, so it is `undefined`, never a guess.
-    const after = await hashTestApp?.().catch(() => undefined);
+    const reread = await hashTestApp?.().catch(() => undefined);
+    const after = hashOf(reread);
     // R495 (sol, final review): a re-read that is not the proven test app (changed, or unreadable)
     // withdraws the run's proof, so neither this run's snapshots, the one just recorded included,
     // nor its verdicts lend anything later.
     const proven = input.snapshot?.provenTestApp?.hash;
     if (proven !== undefined && after !== proven) store.setRunTestAppHash(runId, null, false, null);
-    throw testAppRefusal(missingFromServer, snapshotKey?.testAppHash, after);
+    throw testAppRefusal(
+      missingFromServer,
+      snapshotKey?.testAppHash,
+      after,
+      unreadOf(reread) ?? firstUnread,
+    );
   }
 
   const plan = input.select(baseline);
@@ -8941,8 +8961,8 @@ type PublishedTestAppRead =
   | { readonly kind: "no-fetch" }
   /** Nothing was requested: no readable test `app.json`, or the backend could not form it. */
   | { readonly kind: "not-requested" }
-  /** The server could not answer (`null`). */
-  | { readonly kind: "failed"; readonly name: string }
+  /** The server could not answer; `cause` says why (R630). */
+  | { readonly kind: "failed"; readonly name: string; readonly cause: string }
   | {
       readonly kind: "bytes";
       readonly bytes: Uint8Array;
@@ -8965,9 +8985,9 @@ async function fetchPublishedTestApp(cfg: SessionConfig): Promise<PublishedTestA
   }
   const bytes = await fetchPackage.call(cfg.backend, { publisher, name });
   // `undefined` means the backend could not form the request at all — nothing was tried, so there
-  // is nothing to report. Only a genuine failed READ (`null`) is worth an operator's attention.
+  // is nothing to report. Only a genuine failed READ (`{ unread }`) is worth an operator's attention.
   if (bytes === undefined) return { kind: "not-requested" };
-  if (bytes === null) return { kind: "failed", name };
+  if (isUnread(bytes)) return { kind: "failed", name, cause: bytes.unread };
   return { kind: "bytes", bytes, name, version };
 }
 
@@ -9049,7 +9069,7 @@ function resolveTestArmEvidence(
     case "not-requested":
       return { evidence: noTestArmEvidence(NO_PUBLISHED_READ, discovery) };
     case "failed":
-      return { evidence: noTestArmEvidence(UNREADABLE, discovery) };
+      return { evidence: noTestArmEvidence(unreadable(read.cause), discovery) };
     case "bytes": {
       const m = compiledMembershipOf(read.bytes);
       if (m.kind === "none") {
@@ -9101,8 +9121,8 @@ async function reportPublishedTestApp(
 }> {
   // R247: this session's test-app identity, from the ONE package read (`testAppHashFor`'s rule:
   // the package's hash when it was read, `undefined` when the read failed, else the test source
-  // tree's hash).
-  const sourceHash = () => testAppHashFor(undefined, cfg.testDir);
+  // tree's hash). With no package reader it can only be a hash or `undefined`.
+  const sourceHash = async () => hashOf(await testAppHashFor(undefined, cfg.testDir));
   const warn: RunEmitter = judge ? emit : () => {};
   if (read.kind === "no-fetch") {
     return { testAppHash: await sourceHash(), sources: { kind: "not-published" } };
@@ -9118,9 +9138,12 @@ async function reportPublishedTestApp(
     warn({
       type: "warning",
       code: "published-test-app-unreadable",
-      message: `[lethal] could not read the published test app "${name}" from the server, so this run did not verify that the container holds the suite this project's source declares. A stale test app is still caught at baseline, one round trip later.`,
+      message: `[lethal] could not read the published test app "${name}" from the server (${read.cause}), so this run did not verify that the container holds the suite this project's source declares. A stale test app is still caught at baseline, one round trip later.`,
     });
-    return { testAppHash: undefined, sources: { kind: "unavailable", why: UNREADABLE } };
+    return {
+      testAppHash: undefined,
+      sources: { kind: "unavailable", why: unreadable(read.cause) },
+    };
   }
   const { bytes, version } = read;
   const testAppHash = `package:${hashPackage(bytes)}`;
@@ -9180,6 +9203,8 @@ const NO_PUBLISHED_READ =
   "the published test app could not be requested from the server (no dev server, no dev-endpoint credentials, or no readable test app.json), and the source on disk is not known to be the body it runs";
 const UNREADABLE =
   "the published test app could not be read (on an env-tool session this is the read before its own publish; the published-test-app-unreadable warning appears only if the read after the publish fails too)";
+/** R630: `UNREADABLE`, with the read's cause. */
+const unreadable = (cause: string): string => `${UNREADABLE}: ${cause}`;
 
 /** R389: a closed-world answer not yet confirmed after execution, and the digests it would give. */
 interface PendingClosedWorld {
@@ -9515,9 +9540,9 @@ async function proveReadBack(
     );
     for (const app of publishes.apps) {
       const bytes = await fetchPackage({ publisher: app.publisher, name: app.name });
-      if (bytes === null || bytes === undefined) {
+      if (!(bytes instanceof Uint8Array)) {
         throw new DependencyUnreadableError(
-          `the package of "${app.name}" (${app.id}) could not be read back`,
+          `the package of "${app.name}" (${app.id}) could not be read back${isUnread(bytes) ? ` (${bytes.unread})` : ""}`,
         );
       }
       let served: ReturnType<typeof readAppIdentity>;

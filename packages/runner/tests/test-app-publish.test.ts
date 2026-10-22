@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readPackageEntry } from "../src/app-package";
 import { AlcCompileError, ArtifactCompiler, ArtifactPrepareError } from "../src/artifact";
-import type { BoundArtifact } from "../src/backend";
+import type { BoundArtifact, PublishedPackageRead } from "../src/backend";
 import { hashPackage, testAppHashFor } from "../src/baseline-snapshot";
 import { decidePublishOutcome } from "../src/deployment-verifier";
 import type { LeaseFence } from "../src/orchestrator";
@@ -18,6 +18,7 @@ import {
 } from "../src/test-app-publish";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { removeScratchDirs } from "./helpers/scratch";
+import { CAUSES, HTTP_500, UNREAD } from "./helpers/unread";
 
 const TARGET_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a"; // fixtures/sandbox-app
 const TESTS_ID = "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7"; // fixtures/sandbox-tests
@@ -423,7 +424,7 @@ function loggingFence(log: string[]): LeaseFence {
     },
   };
 }
-function deps(log: string[], reads: Array<Uint8Array | null | undefined>, publishFails?: string) {
+function deps(log: string[], reads: Array<PublishedPackageRead>, publishFails?: string) {
   const queue = [...reads];
   return {
     publisher: {
@@ -512,7 +513,7 @@ test("publishTestApp: altool success but the server still holds the old package 
 });
 
 test("publishTestApp: a read-back that fails after an exit 0 is publish-indeterminate", async () => {
-  const err = await publishTestApp(loggingFence([]), COMPILED, deps([], [OLD, null])).catch(
+  const err = await publishTestApp(loggingFence([]), COMPILED, deps([], [OLD, UNREAD])).catch(
     (e) => e,
   );
   expect(err).toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
@@ -522,7 +523,7 @@ test("publishTestApp: a failed exit with an unreadable read-back is publish-inde
   const err = await publishTestApp(
     loggingFence([]),
     COMPILED,
-    deps([], [OLD, null], DOWNGRADE),
+    deps([], [OLD, UNREAD], DOWNGRADE),
   ).catch((e) => e);
   expect(err).toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
   expect(
@@ -588,12 +589,65 @@ test("publishTestApp: a failed exit whose bytes landed anyway is publish-anomalo
 
 test("publishTestApp refuses an unreadable resident package before the fence, claiming no marker (R248)", async () => {
   const log: string[] = [];
-  const err = await publishTestApp(loggingFence(log), COMPILED, deps(log, [null])).catch((e) => e);
+  // R630: the credentials hint now follows only a refused login.
+  const refused = { unread: "HTTP 401 (the dev endpoint refused the login)" };
+  const err = await publishTestApp(loggingFence(log), COMPILED, deps(log, [refused])).catch(
+    (e) => e,
+  );
   expect(err).toMatchObject({ reason: "resident-unreadable", confirmedTerminal: true });
   expect(log).toEqual(["read"]);
   expect((err as Error).message).toContain("BC_DEV_USER");
   expect((err as Error).message).not.toContain("undefined");
 });
+
+// R630 C3a: the pre-fence refusal names the read's cause, and stays the same refusal: reason
+// `resident-unreadable` (terminal), before the fence, the publisher never called.
+for (const cause of CAUSES) {
+  test(`R630 C3a: an unread resident package refuses before the fence and names ${JSON.stringify(cause.unread)}`, async () => {
+    const log: string[] = [];
+    const err = await publishTestApp(loggingFence(log), COMPILED, deps(log, [cause])).catch(
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(TestAppError);
+    expect(err).toMatchObject({ reason: "resident-unreadable", confirmedTerminal: true });
+    expect(log).toEqual(["read"]);
+    expect((err as TestAppError).detail).toContain(`(${cause.unread})`);
+  });
+}
+
+// R630 C3a: the credentials hint is said only when the cause is a refused login.
+test("R630 C3a: the credentials hint follows a 401, not a 500", async () => {
+  const of = async (unread: string) =>
+    (
+      (await publishTestApp(loggingFence([]), COMPILED, deps([], [{ unread }])).catch(
+        (e) => e,
+      )) as TestAppError
+    ).detail;
+  expect(await of(HTTP_500.unread)).not.toContain("BC_DEV_USER");
+  expect(await of("HTTP 401 (the dev endpoint refused the login)")).toContain("BC_DEV_USER");
+});
+
+// R630 C3b: a read-back that fails inside the fence names its cause, and is never accepted.
+for (const cause of CAUSES) {
+  test(`R630 C3b: an unread read-back after the publish is publish-indeterminate and names ${JSON.stringify(cause.unread)}`, async () => {
+    const log: string[] = [];
+    const err = await publishTestApp(loggingFence(log), COMPILED, deps(log, [OLD, cause])).catch(
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(TestAppError);
+    expect(err).toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
+    expect(log).not.toContain("end");
+    expect((err as TestAppError).detail).toContain(`(${cause.unread})`);
+    // altool failed too: still indeterminate, never failed or accepted.
+    const both = await publishTestApp(
+      loggingFence([]),
+      COMPILED,
+      deps([], [OLD, cause], DOWNGRADE),
+    ).catch((e) => e);
+    expect(both).toMatchObject({ reason: "publish-indeterminate" });
+    expect((both as TestAppError).detail).toContain(`(${cause.unread})`);
+  });
+}
 
 test("publishTestApp refuses a configuration that cannot read the package back, before the fence", async () => {
   const log: string[] = [];
