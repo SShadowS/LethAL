@@ -13,7 +13,9 @@ The leg-by-leg tables live in those pre-commitments and are asserted by the ites
 
 The legs:
 
-- C: the contract probe, 23 facts (`runV3ContractProbe`), contract versus known defect.
+- C: the contract probe, 23 facts (`runV3ContractProbe`), contract versus known defect. Since r7
+  (`docs/superpowers/specs/2026-10-22-r586-alrunner-v3-precommitment-r7-none-selected.md`, 16681485), 8 are
+  defect facts (`V3_DEFECT_FACTS` in `al-runner-v3-gate.ts`, `none-selected-exit` included) and 15 contract facts.
 - S1, S3: `fixtures/sandbox-app`, one-shot, per mutant equal to `itest:alrunner`'s table.
 - N1: the names fixture (R557's tests are unselectable on v3, upstream #5572).
 - X (a) to (f): the compile proof, the binding checks and the Sleep rule (§6) on `scripts/r586-probe`.
@@ -39,6 +41,18 @@ The legs:
   `.gated` does not name (`AlRunnerV3UngatedBuildError`), unless `LETHAL_ALRUNNER_V3_CANDIDATE=1`.
 - The pin is never moved by hand. `bun scripts/al-runner-v3-update.ts` gates newer `v3.0.0-alpha.N` releases, and
   `--edge` gates the daily `edge` release by download.
+- The script passes `LETHAL_ITEST_V3_CDO` to the gate itself: the caller's value, or `V3_CDO_DEFAULT`
+  (`/work/lethal-wt/cdo-r396`). Without it the gate runs no D leg, and a receipt that lacks legs is `infra-fail`,
+  with `why` naming the missing legs ([[R633]]).
+- The D legs make every gate a corpus job, so the alpha path, `--regate` and `--edge` are all skipped for the day,
+  with the reason logged, when 2 or more heavy jobs run container-wide or `free -g` shows under 10 GB available. A
+  skipped `--regate` exits 2, so a `&&` chain after it stops.
+- The evidence is kept. The gate's stdout and stderr go to `gate.log` beside the receipt, on every exit. Both are
+  copied beside the outcome they gave: `failed/<tag>@<commit>/`, `held/<tag>/`, `infra/<tag>.receipt.json` and
+  `infra/<tag>.gate.log`, and `regate/<commit>.receipt.json` and `regate/<commit>.gate.log`, each file when it
+  exists. A failed copy is logged and never blocks the verdict, `.gated` or the count. The log line carries the
+  receipt's `lines`, and leg C's lines carry each non-passing fact's measured value. A `failed/` hit that skips the
+  gate is logged too, with the `--regate` hint.
 - In both, the checksum is checked before anything is extracted, and the gate runs at `.gated`'s commit, in a
   worktree it prepares first (`bun install --frozen-lockfile`, the native parser, the fixture `.alpackages` from
   the symbol tar pinned by sha256) or refuses by name (`al-runner-v3-gate-worktree-unprepared`,
@@ -98,3 +112,11 @@ The legs:
   `/work/src/do-lethal`, which has no `Test/.alpackages`, so the contract probe's alc compile failed
   (`/coord/handoff/R-586/gate/r6/D1.infra-fail-no-alpackages.log`). It re-ran on `/work/lethal-wt/cdo-r396`, the
   same commit, and passed. The checkout guard above was then added, so that another checkout cannot slip in.
+- 2026-10-22: the first daily update run gave two verdicts for the wrong reason, and it kept no receipt ([[R633]],
+  `/coord/handoff/al-runner-v3-update/diagnosis-2026-10-22.md`).
+  - alpha.3 was `infra-fail` because the script never passed `LETHAL_ITEST_V3_CDO`, so no D leg ran.
+  - alpha.4 and edge-7739d8132 were `gate-fail`. The probe read upstream's fix of #5613 as a contract break.
+  - r7 (16681485) made `none-selected-exit` a defect fact. The script now passes the CDO checkout, keeps receipts
+    and `gate.log`, and guards the alpha path and `--regate`.
+  - `edge.last-seen` was not cleared. edge-7739d8132 is the same upstream commit as alpha.4, so alpha.4's verdict
+    stands for it.
